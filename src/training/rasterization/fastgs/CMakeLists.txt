@@ -29,8 +29,10 @@ target_include_directories(fastlfs_backend
         ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/include
         ${CMAKE_CURRENT_SOURCE_DIR}/utils
         ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src/core/include
         ${CUDAToolkit_INCLUDE_DIRS}
         PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/training/include
 )
 
 # Pure CUDA libraries only
@@ -44,7 +46,7 @@ target_link_libraries(fastlfs_backend
 
 target_compile_options(fastlfs_backend PRIVATE
   # CUDA device code + MSVC host compiler flags (Windows only)
-  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g ${LFS_CUDA_DEVICE_DEBUG_FLAGS} -lineinfo -Xcompiler=/Od -Xcompiler=/Z7>
+  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g -lineinfo -Xcompiler=/Od -Xcompiler=/Z7>
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 --use_fast_math --expt-relaxed-constexpr --diag-suppress=20012,186,221 -Xcompiler=/O2 -Xcompiler=/DNDEBUG>
 
   # CUDA on Windows: Pass /utf-8 to MSVC when invoked by nvcc
@@ -68,10 +70,4 @@ if(MSVC)
     target_compile_definitions(fastlfs_backend PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
-endif()
-
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_compile_definitions(fastlfs_backend PRIVATE _DEBUG DEBUG_BUILD)
-elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-    target_compile_definitions(fastlfs_backend PRIVATE RELEASE_BUILD)
 endif()

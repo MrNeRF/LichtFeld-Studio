@@ -41,7 +41,7 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_FALSE((*parsed)->cli_bg_color_set);
     EXPECT_EQ((*parsed)->dataset.max_width, 3840);
     EXPECT_EQ((*parsed)->dataset.resize_factor, 1);
-    EXPECT_EQ((*parsed)->optimization.depth_loss_mode, "adaptive-warped-l1");
+    EXPECT_EQ((*parsed)->optimization.depth_loss_mode, "ssi");
 }
 
 TEST(ArgumentParserTest, MaxWidthCanBeExplicitlySet) {
@@ -230,14 +230,14 @@ TEST(ArgumentParserTest, TrainingParsesExplicitDepthLossOptions) {
         "--depth-loss-weight",
         "3.25",
         "--depth-loss-mode",
-        "adaptive-warped-l1"};
+        "ssi-disparity"};
 
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_TRUE((*parsed)->optimization.use_depth_loss);
     EXPECT_FLOAT_EQ((*parsed)->optimization.depth_loss_weight, 3.25f);
-    EXPECT_EQ((*parsed)->optimization.depth_loss_mode, "adaptive-warped-l1");
+    EXPECT_EQ((*parsed)->optimization.depth_loss_mode, "ssi-disparity");
 }
 
 TEST(ArgumentParserTest, TrainingRejectsLegacyDepthLossAlias) {
@@ -257,7 +257,35 @@ TEST(ArgumentParserTest, TrainingRejectsLegacyDepthLossAlias) {
 
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_FALSE(parsed.has_value());
-    EXPECT_NE(parsed.error().find("depth_loss_mode must be 'pearson' or 'adaptive-warped-l1'"), std::string::npos);
+    EXPECT_NE(parsed.error().find("depth_loss_mode must be 'ssi', 'ssi-disparity', or 'ssi-depth'"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
+    const auto data_path = make_test_path("lfs_arg_parser_normal_loss_data");
+    const auto output_path = make_test_path("lfs_arg_parser_normal_loss_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--use-normal-loss",
+        "--normal-loss-weight",
+        "0.75",
+        "--normal-consistency-weight",
+        "0.25",
+        "--normal-flatten-weight",
+        "5.0"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->optimization.use_normal_loss);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.normal_loss_weight, 0.75f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.normal_consistency_weight, 0.25f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.normal_flatten_weight, 5.0f);
 }
 
 TEST(ArgumentParserTest, TrainingParsesBackgroundModeModulation) {

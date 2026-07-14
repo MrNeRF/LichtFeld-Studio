@@ -466,6 +466,21 @@ body {
     min-width: 0;
 }
 
+#gt-compare-mode-block .viewport-gt-compare-panel {
+    padding: 5dp 6dp;
+    border-radius: 6dp;
+    gap: 0;
+    min-width: 0;
+}
+
+#gt-compare-mode-block .viewport-gt-compare-mode-select {
+    width: 120dp;
+    min-width: 120dp;
+    height: 22dp;
+    min-height: 22dp;
+    line-height: 20dp;
+}
+
 .viewport-transform-panel.viewport-export-panel {
     width: 470dp;
     min-width: 470dp;

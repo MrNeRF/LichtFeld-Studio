@@ -9,7 +9,7 @@
 #include "scene/scene_manager.hpp"
 #include "viewport_request_builder.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-#include <cassert>
+#include "window/vulkan_result.hpp"
 #include <format>
 
 namespace lfs::vis {
@@ -56,8 +56,17 @@ namespace lfs::vis {
             const glm::ivec2 render_size,
             const size_t visible_node_count,
             const size_t visible_node_index) {
-            assert(ctx.model);
-            assert(visible_node_index < visible_node_count);
+            LFS_VK_DEBUG_ASSERT(
+                ctx.model != nullptr,
+                "PLY comparison panel requires a combined scene model (model={:#x}, visible_node_index={}, visible_node_count={})",
+                reinterpret_cast<std::uintptr_t>(ctx.model),
+                visible_node_index,
+                visible_node_count);
+            LFS_VK_DEBUG_ASSERT(
+                visible_node_index < visible_node_count,
+                "PLY comparison panel node index must be inside the visibility mask (visible_node_index={}, visible_node_count={})",
+                visible_node_index,
+                visible_node_count);
 
             auto content = buildModelPanelContent(
                 ctx,
@@ -183,8 +192,20 @@ namespace lfs::vis {
 
             const size_t left_idx = ctx.settings.split_view_offset % visible_nodes.size();
             const size_t right_idx = (ctx.settings.split_view_offset + 1) % visible_nodes.size();
-            assert(visible_nodes[left_idx]->model);
-            assert(visible_nodes[right_idx]->model);
+            LFS_VK_DEBUG_ASSERT(
+                visible_nodes[left_idx]->model != nullptr,
+                "PLY comparison left node must own a renderable model (left_index={}, visible_node_count={}, node_id={}, model={:#x})",
+                left_idx,
+                visible_nodes.size(),
+                visible_nodes[left_idx]->id,
+                reinterpret_cast<std::uintptr_t>(visible_nodes[left_idx]->model.get()));
+            LFS_VK_DEBUG_ASSERT(
+                visible_nodes[right_idx]->model != nullptr,
+                "PLY comparison right node must own a renderable model (right_index={}, visible_node_count={}, node_id={}, model={:#x})",
+                right_idx,
+                visible_nodes.size(),
+                visible_nodes[right_idx]->id,
+                reinterpret_cast<std::uintptr_t>(visible_nodes[right_idx]->model.get()));
 
             const bool use_combined_scene_masks = ctx.model && !ctx.settings.point_cloud_mode;
 

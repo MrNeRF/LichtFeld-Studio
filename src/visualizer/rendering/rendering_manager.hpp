@@ -569,6 +569,7 @@ namespace lfs::vis {
         [[nodiscard]] static PreviewImageReadbackConfig previewImageReadbackConfig(
             PreviewImageReadback readback,
             bool has_background_color_override);
+        void clearVulkanViewportImageState(glm::ivec2 size = {0, 0}, bool flip_y = false);
 
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
             SceneManager* scene_manager,
@@ -683,6 +684,7 @@ namespace lfs::vis {
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
+        std::string last_logged_vksplat_render_error_;
         std::uint64_t viewport_projection_generation_ = 1;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
@@ -710,6 +712,13 @@ namespace lfs::vis {
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
+        struct GTComparisonImageCache {
+            int camera_uid = -1;
+            bool undistort_requested = false;
+            std::filesystem::path image_path;
+            std::shared_ptr<lfs::core::Tensor> image;
+            glm::ivec2 image_size{0, 0};
+        } gt_comparison_image_cache_;
         TrainerManager* resize_training_pause_trainer_ = nullptr;
         bool resize_training_pause_active_ = false;
 

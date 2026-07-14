@@ -6,6 +6,7 @@
 
 #include <expected>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,8 +24,13 @@ namespace lfs::rendering {
         }
     };
 
-    // Loads the environment map as float RGB through a process-wide single-entry
-    // cache keyed by the resolved path.
+    // Shared hot-path view of the process-wide single-entry cache. Callers keep
+    // the decoded pixels alive without copying the full float RGB image.
+    std::expected<std::shared_ptr<const EnvironmentImage>, std::string>
+    loadEnvironmentImageShared(const std::filesystem::path& environment_path);
+
+    // Compatibility/value API for callers that need independent ownership.
     std::expected<EnvironmentImage, std::string> loadEnvironmentImage(const std::filesystem::path& environment_path);
+    void releaseEnvironmentImageCache();
 
 } // namespace lfs::rendering

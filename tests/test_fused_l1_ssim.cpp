@@ -18,6 +18,7 @@
 #include "training/losses/photometric_loss.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
+#include <limits>
 
 using namespace lfs::core;
 using namespace lfs::training::kernels;
@@ -336,6 +337,42 @@ TEST_F(FusedL1SSIMTest, PhotometricLossUsesFusedKernel) {
     EXPECT_FALSE(std::isnan(ctx.grad_image.abs().max().item<float>()));
 }
 
+TEST_F(FusedL1SSIMTest, RejectsInvalidImageContractsBeforeKernelLaunch) {
+    auto valid = Tensor::zeros({1, 3, 16, 16}, Device::CUDA);
+    FusedL1SSIMWorkspace workspace;
+
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            Tensor::zeros({3, 16}, Device::CUDA), valid, 0.2f, workspace, true),
+        std::exception);
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            Tensor::zeros({1, 3, 8, 16}, Device::CUDA), valid, 0.2f, workspace, true),
+        std::exception);
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            valid, valid.to(DataType::Int32), 0.2f, workspace, true),
+        std::exception);
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            valid, valid, std::numeric_limits<float>::quiet_NaN(), workspace, true),
+        std::exception);
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            Tensor::empty({0, 3, 16, 16}, Device::CUDA),
+            Tensor::empty({0, 3, 16, 16}, Device::CUDA),
+            0.2f, workspace, true),
+        std::exception);
+
+    lfs::training::losses::PhotometricLoss photometric;
+    auto result = photometric.forward(
+        valid, valid.cpu(), {.lambda_dssim = 0.2f});
+    EXPECT_FALSE(result.has_value());
+    result = photometric.forward(
+        valid, valid, {.lambda_dssim = std::numeric_limits<float>::infinity()});
+    EXPECT_FALSE(result.has_value());
+}
+
 TEST_F(FusedL1SSIMTest, UInt8TargetMatchesFloatReference) {
     const int N = 1, C = 3, H = 64, W = 64;
     auto pred = Tensor::rand({N, C, H, W}, Device::CUDA);
@@ -429,7 +466,7 @@ TEST_F(MaskedFusedL1SSIMTest, ForwardBasic) {
     auto mask = Tensor::ones({H, W}, Device::CUDA).to(DataType::UInt8);
     // Mask out a region
     auto mask_view = mask.slice(0, 0, H / 2).slice(1, 0, W / 2);
-    mask_view.fill_(0.0f, nullptr);
+    mask_view.zero_();
     cudaDeviceSynchronize();
 
     const float ssim_weight = 0.2f;

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/environment.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -16,10 +17,10 @@ using namespace lfs::io;
 
 namespace {
     // Get test data path from environment or use default.
-    // Set LICHTFELD_TEST_DATA_PATH to your dataset root (e.g., /media/user/data)
+    // Set LFS_TEST_DATA_PATH to your dataset root (e.g., /media/user/data)
     std::filesystem::path get_test_data_root() {
-        if (const char* env = std::getenv("LICHTFELD_TEST_DATA_PATH")) {
-            return std::filesystem::path(env);
+        if (const auto env = lfs::core::environment::value("LFS_TEST_DATA_PATH")) {
+            return std::filesystem::path(*env);
         }
         return std::filesystem::path("/media/paja/T7"); // Default fallback
     }

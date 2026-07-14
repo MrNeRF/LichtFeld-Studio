@@ -114,3 +114,44 @@ TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
     // It should manage at least some real acquisitions across 400 iterations.
     EXPECT_GT(metrics_acquired.load(), 0);
 }
+
+TEST_F(ArenaMetricsContentionTest, FullResetDecommitsVmmHighWater) {
+    constexpr size_t MiB = 1024 * 1024;
+    RasterizerMemoryArena::Config config;
+    config.virtual_size = 1ULL * 1024 * MiB;
+    config.initial_commit = 64 * MiB;
+    config.max_physical = 512 * MiB;
+    config.granularity = 2 * MiB;
+    RasterizerMemoryArena arena(config);
+
+    const uint64_t frame = arena.begin_frame(nullptr, false);
+    auto allocate = arena.get_allocator(frame);
+    ASSERT_NE(allocate(192 * MiB), nullptr);
+    arena.end_frame(frame, nullptr, false);
+
+    const auto grown = arena.get_statistics();
+    ASSERT_GT(grown.capacity, config.initial_commit);
+
+    arena.full_reset();
+
+    const auto reset = arena.get_statistics();
+    EXPECT_EQ(reset.current_usage, 0u);
+    EXPECT_EQ(reset.capacity, config.initial_commit);
+}
+
+TEST_F(ArenaMetricsContentionTest, FallbackGrowthAppliesMultiplierOnce) {
+    constexpr size_t MiB = 1024 * 1024;
+    RasterizerMemoryArena::Config config;
+    config.initial_commit = 64 * MiB;
+    config.max_physical = 512 * MiB;
+    config.enable_vmm = false;
+    RasterizerMemoryArena arena(config);
+
+    const uint64_t frame = arena.begin_frame(nullptr, false);
+    auto allocate = arena.get_allocator(frame);
+    ASSERT_NE(allocate(128 * MiB), nullptr);
+
+    const auto grown = arena.get_statistics();
+    EXPECT_EQ(grown.capacity, 256 * MiB);
+    arena.end_frame(frame, nullptr, false);
+}

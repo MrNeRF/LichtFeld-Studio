@@ -90,10 +90,6 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] std::filesystem::path plySequenceCacheRoot() {
-            if (const char* explicit_dir = std::getenv("LFS_PLY_SEQUENCE_CACHE_DIR");
-                explicit_dir && *explicit_dir) {
-                return lfs::core::utf8_to_path(explicit_dir);
-            }
 #ifdef _WIN32
             if (const char* local_app_data = std::getenv("LOCALAPPDATA");
                 local_app_data && *local_app_data) {

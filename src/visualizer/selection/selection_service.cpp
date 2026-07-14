@@ -1940,12 +1940,10 @@ namespace lfs::vis {
             return {false, 0, "Invalid selection mask"};
         }
 
-        const cudaStream_t selection_stream =
-            (selection_mask.device() == core::Device::CUDA) ? selection_mask.stream() : nullptr;
-        if (selection_stream != nullptr) {
-            LOG_TIMER("commitSelection.wait_selection_stream");
+        if (selection_mask.device() == core::Device::CUDA) {
+            LOG_TIMER("commitSelection.sync_selection_stream");
             try {
-                core::waitForCUDAStream(core::getCurrentCUDAStream(), selection_stream);
+                selection_mask.sync_to_stream(core::getCurrentCUDAStream());
             } catch (const std::exception& e) {
                 return {false, 0, e.what()};
             }

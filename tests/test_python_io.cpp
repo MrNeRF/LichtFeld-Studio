@@ -2,21 +2,29 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "core/image_io.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
+#include "io/formats/transforms.hpp"
 #include "io/loader.hpp"
+#include "io/nvcodec_image_loader.hpp"
+#include "io/pipelined_image_loader.hpp"
 #include "tinyply.hpp"
 
 namespace fs = std::filesystem;
@@ -516,6 +524,52 @@ TEST_F(PythonIOTest, LoadTransformsDatasetCanBeCancelled) {
     EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
 }
 
+TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstruction) {
+    const fs::path transforms_path = temp_dir / "malformed_transforms.json";
+    const auto expect_rejected = [&](nlohmann::json transforms) {
+        write_text_file(transforms_path, transforms.dump());
+        EXPECT_THROW(
+            (void)read_transforms_cameras_and_images(transforms_path, {}),
+            std::runtime_error);
+    };
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json valid = {
+        {"w", 64},
+        {"h", 64},
+        {"fl_x", 50.0},
+        {"fl_y", 50.0},
+        {"frames", nlohmann::json::array({
+                       {{"file_path", "frame.png"}, {"transform_matrix", identity_matrix}},
+                   })},
+    };
+
+    auto invalid = valid;
+    invalid["w"] = 0;
+    expect_rejected(std::move(invalid));
+
+    invalid = valid;
+    invalid["fl_x"] = 0.0;
+    expect_rejected(std::move(invalid));
+
+    invalid = valid;
+    invalid["frames"][0]["transform_matrix"][2] = nlohmann::json::array({0.0, 0.0, 1.0});
+    expect_rejected(std::move(invalid));
+
+    invalid = valid;
+    invalid["frames"][0]["transform_matrix"][2] = nlohmann::json::array({0.0, 0.0, 0.0, 0.0});
+    expect_rejected(std::move(invalid));
+
+    invalid = valid;
+    invalid["frames"][0]["transform_matrix"][3] = nlohmann::json::array({0.0, 0.0, 1.0, 1.0});
+    expect_rejected(std::move(invalid));
+}
+
 // Test loading COLMAP dataset
 TEST_F(PythonIOTest, LoadCOLMAPDataset) {
     if (!fs::exists(bicycle_dir / "sparse")) {
@@ -731,6 +785,57 @@ TEST_F(PythonIOTest, PlyLoadRejectsPartialRotationSchema) {
     ASSERT_FALSE(loaded.has_value());
     EXPECT_NE(loaded.error().find("rotation properties must include rot_0, rot_1, rot_2, and rot_3"),
               std::string::npos);
+}
+
+TEST_F(PythonIOTest, PlyLoadRejectsNonemptyElementsBeforeVertices) {
+    const fs::path input_path = temp_dir / "pre_vertex_element.ply";
+    std::string body;
+    append_float(body, 123.0f);
+    append_floats(body, std::array<float, 11>{
+                            1.0f, 2.0f, 3.0f,
+                            -2.0f, -2.0f, -2.0f,
+                            0.25f,
+                            1.0f, 0.0f, 0.0f, 0.0f});
+    write_binary_test_ply(
+        input_path,
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        "element metadata 1\n"
+        "property float value\n"
+        "element vertex 1\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "property float scale_0\n"
+        "property float scale_1\n"
+        "property float scale_2\n"
+        "property float opacity\n"
+        "property float rot_0\n"
+        "property float rot_1\n"
+        "property float rot_2\n"
+        "property float rot_3\n"
+        "end_header\n",
+        body);
+
+    const auto result = load_ply(input_path);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("before vertex"), std::string::npos);
+}
+
+TEST_F(PythonIOTest, PlyClassifiersRequireBoundedCompleteHeaders) {
+    const fs::path input_path = temp_dir / "unterminated_header.ply";
+    std::string contents =
+        "ply\n"
+        "format ascii 1.0\n"
+        "element face 1\n"
+        "property float opacity\n"
+        "property float scale_0\n"
+        "property float rot_0\n";
+    contents.append(2 * 1024 * 1024, 'x');
+    write_text_file(input_path, contents);
+
+    EXPECT_FALSE(ply_has_faces(input_path));
+    EXPECT_FALSE(is_gaussian_splat_ply(input_path));
 }
 
 TEST_F(PythonIOTest, PlyLoadAccountsForNonFloatVertexProperties) {
@@ -1317,5 +1422,119 @@ TEST_F(PythonIOTest, PlySaveRejectsEmptyExtraAttributesWhenDeletedMaskPresent) {
 
     const auto result = save_ply(splat, options);
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().format().find("must not be empty"), std::string::npos);
+    EXPECT_NE(result.error().format().find("must be valid"), std::string::npos);
+}
+
+TEST_F(PythonIOTest, PipelinedLoaderStatsRemainResponsiveDuringCompletions) {
+    const auto image_path = temp_dir / "stats_source.png";
+    write_png(image_path);
+
+    PipelinedLoaderConfig config;
+    config.jpeg_batch_size = 4;
+    config.decoder_pool_size = 4;
+    config.prefetch_count = 64;
+    config.output_queue_size = 64;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+    config.use_filesystem_cache = false;
+
+    PipelinedImageLoader loader(config);
+    LoadParams params{.resize_factor = 1, .max_width = 0};
+    constexpr size_t request_count = 256;
+    for (size_t i = 0; i < request_count; ++i) {
+        loader.prefetch(i, image_path, params);
+    }
+
+    std::atomic<bool> stop_polling{false};
+    auto poller = std::async(std::launch::async, [&] {
+        while (!stop_polling.load(std::memory_order_acquire)) {
+            (void)loader.get_stats();
+        }
+    });
+
+    for (size_t i = 0; i < request_count; ++i) {
+        const auto ready = loader.get();
+        EXPECT_TRUE(ready.tensor.is_valid());
+    }
+    stop_polling.store(true, std::memory_order_release);
+
+    ASSERT_EQ(poller.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    poller.get();
+    EXPECT_EQ(loader.get_stats().total_images_loaded, request_count);
+}
+
+TEST_F(PythonIOTest, PipelinedLoaderReportsPrimaryImageFailure) {
+    PipelinedLoaderConfig config;
+    config.jpeg_batch_size = 1;
+    config.decoder_pool_size = 1;
+    config.prefetch_count = 1;
+    config.output_queue_size = 1;
+    config.io_threads = 1;
+    config.cold_process_threads = 1;
+    config.use_filesystem_cache = false;
+
+    PipelinedImageLoader loader(config);
+    const auto missing_path = temp_dir / "missing_training_image.png";
+    loader.prefetch(17, missing_path, LoadParams{});
+
+    try {
+        (void)loader.get();
+        FAIL() << "Expected the primary image failure to reach the consumer";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("missing_training_image.png"), std::string::npos);
+    }
+    EXPECT_EQ(loader.in_flight_count(), 0u);
+}
+
+TEST_F(PythonIOTest, PipelinedLoaderShutdownReleasesQueuedGpuTensorsBeforeDecodeStream) {
+    if (!NvCodecImageLoader::is_available()) {
+        GTEST_SKIP() << "nvImageCodec is unavailable";
+    }
+
+    constexpr size_t width = 320;
+    constexpr size_t height = 240;
+    const auto image_path = temp_dir / "shutdown_stream_source.jpg";
+    auto image = Tensor::empty(
+        {height, width, size_t{3}}, Device::CPU, DataType::UInt8);
+    std::fill_n(image.ptr<uint8_t>(), image.numel(), uint8_t{127});
+    save_image_u8(image_path, std::move(image));
+
+    PipelinedLoaderConfig config;
+    config.jpeg_batch_size = 1;
+    config.decoder_pool_size = 1;
+    config.prefetch_count = 1;
+    config.output_queue_size = 1;
+    config.io_threads = 1;
+    config.cold_process_threads = 1;
+    config.use_filesystem_cache = false;
+
+    PipelinedImageLoader loader(config);
+    loader.prefetch(0, image_path, LoadParams{});
+
+    const auto ready_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (loader.ready_count() == 0 &&
+           std::chrono::steady_clock::now() < ready_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(loader.ready_count(), 1u);
+    EXPECT_GT(loader.get_gpu_memory_stats().total_bytes(), 0u);
+
+    // Do not consume the output. shutdown() must retire this stream-owned tensor
+    // before it releases the allocator's stream references and destroys the stream.
+    loader.shutdown();
+
+    const auto stats = loader.get_stats();
+    EXPECT_EQ(stats.prefetch_queue_size, 0u);
+    EXPECT_EQ(stats.hot_queue_size, 0u);
+    EXPECT_EQ(stats.cold_queue_size, 0u);
+    EXPECT_EQ(stats.output_queue_size, 0u);
+    EXPECT_EQ(stats.pending_pairs_count, 0u);
+    EXPECT_EQ(loader.get_gpu_memory_stats().total_bytes(), 0u);
+    EXPECT_EQ(loader.in_flight_count(), 0u);
+
+    void* probe = nullptr;
+    ASSERT_EQ(cudaMallocAsync(&probe, 4096, nullptr), cudaSuccess);
+    ASSERT_EQ(cudaFreeAsync(probe, nullptr), cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }

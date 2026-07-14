@@ -49,6 +49,7 @@ class TestOptimizationParams:
         assert isinstance(params.use_bilateral_grid, bool)
         assert isinstance(params.invert_masks, bool)
         assert isinstance(params.use_depth_loss, bool)
+        assert isinstance(params.use_normal_loss, bool)
         assert isinstance(params.random, bool)
         assert isinstance(params.enable_sparsity, bool)
 
@@ -62,16 +63,41 @@ class TestOptimizationParams:
 
         try:
             params.use_depth_loss = True
-            params.depth_loss_mode = "adaptive-warped-l1"
+            params.depth_loss_mode = "ssi-depth"
             params.depth_loss_weight = 3.25
 
             assert params.use_depth_loss is True
-            assert params.depth_loss_mode == "adaptive-warped-l1"
+            assert params.depth_loss_mode == "ssi-depth"
             assert params.depth_loss_weight == pytest.approx(3.25)
         finally:
             params.use_depth_loss = original_enabled
             params.depth_loss_mode = original_mode
             params.depth_loss_weight = original_weight
+
+    def test_normal_loss_properties_are_editable(self, lf):
+        """Normal loading/loss controls should be exposed through Python params."""
+        params = lf.optimization_params()
+
+        original_enabled = params.use_normal_loss
+        original_weight = params.normal_loss_weight
+        original_consistency = params.normal_consistency_weight
+        original_flatten = params.normal_flatten_weight
+
+        try:
+            params.use_normal_loss = True
+            params.normal_loss_weight = 0.75
+            params.normal_consistency_weight = 0.25
+            params.normal_flatten_weight = 5.0
+
+            assert params.use_normal_loss is True
+            assert params.normal_loss_weight == pytest.approx(0.75)
+            assert params.normal_consistency_weight == pytest.approx(0.25)
+            assert params.normal_flatten_weight == pytest.approx(5.0)
+        finally:
+            params.use_normal_loss = original_enabled
+            params.normal_loss_weight = original_weight
+            params.normal_consistency_weight = original_consistency
+            params.normal_flatten_weight = original_flatten
 
     def test_get_string_property(self, lf):
         """Should be able to read strategy string property."""

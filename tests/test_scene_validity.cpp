@@ -3,19 +3,27 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <cstddef>
+#include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
+#include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
+#include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "python/python_runtime.hpp"
+#include "training/components/bilateral_grid.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
+#include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
@@ -24,6 +32,194 @@
 #include "visualizer/training/training_manager.hpp"
 
 namespace lfs::python {
+
+    TEST(TrainingStateMachineTest, PublishesFinishReasonBeforeFinishedCallback) {
+        vis::TrainingStateMachine state_machine;
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Paused));
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Stopping));
+
+        vis::FinishReason callback_reason = vis::FinishReason::None;
+        state_machine.setStateChangeCallback([&](vis::TrainingState, vis::TrainingState new_state) {
+            if (new_state == vis::TrainingState::Finished) {
+                callback_reason = state_machine.getFinishReason();
+            }
+        });
+
+        ASSERT_TRUE(state_machine.transitionToFinished(vis::FinishReason::UserStopped));
+        EXPECT_EQ(callback_reason, vis::FinishReason::UserStopped);
+        EXPECT_EQ(state_machine.getFinishReason(), vis::FinishReason::UserStopped);
+    }
+
+    TEST(TrainingStateMachineTest, SerializesConcurrentTransitionsThroughCallbacks) {
+        vis::TrainingStateMachine state_machine;
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Ready));
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Running));
+
+        std::promise<void> pause_callback_entered;
+        std::promise<void> release_pause_callback;
+        auto release_future = release_pause_callback.get_future().share();
+        state_machine.setStateChangeCallback(
+            [&](vis::TrainingState, vis::TrainingState new_state) {
+                if (new_state == vis::TrainingState::Paused) {
+                    pause_callback_entered.set_value();
+                    release_future.wait();
+                }
+            });
+
+        bool pause_succeeded = false;
+        std::thread pause_thread([&] {
+            pause_succeeded = state_machine.transitionTo(vis::TrainingState::Paused);
+        });
+        pause_callback_entered.get_future().wait();
+
+        auto stop_future = std::async(std::launch::async, [&] {
+            return state_machine.transitionTo(vis::TrainingState::Stopping);
+        });
+        EXPECT_EQ(stop_future.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+
+        release_pause_callback.set_value();
+        pause_thread.join();
+        EXPECT_TRUE(pause_succeeded);
+        EXPECT_TRUE(stop_future.get());
+        EXPECT_EQ(state_machine.getState(), vis::TrainingState::Stopping);
+    }
+
+    TEST(BilateralGridValidationTest, RejectsInvalidConstructorAndImageContracts) {
+        EXPECT_THROW((lfs::training::BilateralGrid(0, 16, 16, 8, 100)), std::invalid_argument);
+        EXPECT_THROW((lfs::training::BilateralGrid(1, -1, 16, 8, 100)), std::invalid_argument);
+        EXPECT_THROW((lfs::training::BilateralGrid(1, 2, 2, 2, 100,
+                                                   {.warmup_steps = -1})),
+                     std::invalid_argument);
+        EXPECT_THROW((lfs::training::BilateralGrid(1, 50'000, 50'000, 1, 100)), std::length_error);
+
+        lfs::training::BilateralGrid grid(1, 2, 2, 2, 100);
+        auto cpu_image = core::Tensor::ones({3, 2, 2}, core::Device::CPU);
+        auto wrong_channels = core::Tensor::ones({2, 2, 2}, core::Device::CUDA);
+        auto image = core::Tensor::ones({3, 2, 2}, core::Device::CUDA);
+        auto wrong_grad = core::Tensor::ones({3, 2, 1}, core::Device::CUDA);
+
+        EXPECT_THROW((void)grid.apply(cpu_image, 0), std::invalid_argument);
+        EXPECT_THROW((void)grid.apply(wrong_channels, 0), std::invalid_argument);
+        EXPECT_THROW((void)grid.backward(image, wrong_grad, 0), std::invalid_argument);
+    }
+
+    TEST(BilateralGridValidationTest, SingletonImageAxesRemainFinite) {
+        lfs::training::BilateralGrid grid(1, 2, 2, 2, 100);
+        auto image = core::Tensor::ones({3, 1, 1}, core::Device::CUDA);
+        auto grad = core::Tensor::ones({3, 1, 1}, core::Device::CUDA);
+
+        const auto output = grid.apply(image, 0).cpu().to_vector();
+        const auto grad_input = grid.backward(image, grad, 0).cpu().to_vector();
+        ASSERT_EQ(output.size(), 3u);
+        ASSERT_EQ(grad_input.size(), 3u);
+        for (const float value : output)
+            EXPECT_TRUE(std::isfinite(value));
+        for (const float value : grad_input)
+            EXPECT_TRUE(std::isfinite(value));
+    }
+
+    TEST(TrainerConstructionTest, RejectsInvalidSceneBeforeAllocatingCudaResources) {
+        core::Scene scene;
+        const auto before = core::PinnedMemoryAllocator::instance().get_stats();
+
+        try {
+            training::Trainer trainer(scene);
+            FAIL() << "Trainer accepted a scene without cameras";
+        } catch (const std::runtime_error& error) {
+            EXPECT_NE(std::string_view(error.what()).find("Scene has no cameras"),
+                      std::string_view::npos);
+        }
+
+        const auto after = core::PinnedMemoryAllocator::instance().get_stats();
+        EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
+        EXPECT_EQ(after.cached_bytes, before.cached_bytes);
+        EXPECT_EQ(after.num_allocs, before.num_allocs);
+        EXPECT_EQ(after.num_deallocs, before.num_deallocs);
+    }
+
+    TEST(TrainerConstructionTest, CreatesAndReleasesCudaResourcesForValidScene) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        const auto before = core::PinnedMemoryAllocator::instance().get_stats();
+
+        {
+            training::Trainer trainer(scene);
+            const auto active = core::PinnedMemoryAllocator::instance().get_stats();
+            EXPECT_GT(active.allocated_bytes, before.allocated_bytes);
+        }
+
+        const auto after = core::PinnedMemoryAllocator::instance().get_stats();
+        EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
+        EXPECT_GT(after.num_deallocs, before.num_deallocs);
+    }
+
+    TEST(TrainerConstructionTest, ParameterSnapshotsStayGenerationConsistent) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        training::Trainer trainer(scene);
+
+        core::param::TrainingParameters initial;
+        initial.optimization.iterations = 1;
+        initial.dataset.output_name = "generation_1";
+        trainer.setParams(initial);
+
+        std::atomic<bool> writer_done{false};
+        std::thread writer([&] {
+            for (size_t generation = 2; generation <= 2'000; ++generation) {
+                auto params = trainer.getParams();
+                params.optimization.iterations = generation;
+                params.dataset.output_name = "generation_" + std::to_string(generation);
+                trainer.setParams(params);
+            }
+            writer_done.store(true, std::memory_order_release);
+        });
+
+        while (!writer_done.load(std::memory_order_acquire)) {
+            const auto snapshot = trainer.getParams();
+            EXPECT_EQ(snapshot.dataset.output_name,
+                      "generation_" + std::to_string(snapshot.optimization.iterations));
+        }
+        writer.join();
+    }
+
+    TEST(TrainerConstructionTest, InitializeRejectsInvalidIntervalsBeforeTraining) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        training::Trainer trainer(scene);
+
+        core::param::TrainingParameters params;
+        params.optimization.refine_every = 0;
+        const auto result = trainer.initialize(params);
+
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().find("refine_every"), std::string::npos);
+        EXPECT_FALSE(trainer.isInitialized());
+    }
+
+    TEST(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        const auto before = core::PinnedMemoryAllocator::instance().get_stats();
+
+        manager.setTrainer(std::make_unique<training::Trainer>(scene));
+        const auto active = core::PinnedMemoryAllocator::instance().get_stats();
+        ASSERT_TRUE(manager.hasTrainer());
+        EXPECT_GT(active.allocated_bytes, before.allocated_bytes);
+
+        ASSERT_TRUE(manager.clearTrainer());
+
+        const auto after = core::PinnedMemoryAllocator::instance().get_stats();
+        EXPECT_FALSE(manager.hasTrainer());
+        EXPECT_EQ(manager.splatExportableStorage(), nullptr);
+        EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
+        EXPECT_EQ(after.cached_bytes, 0u);
+    }
 
     namespace {
         std::unique_ptr<core::SplatData> make_test_splat(size_t count, const int sh_degree = 0) {
@@ -57,6 +253,27 @@ namespace lfs::python {
             return std::make_shared<core::PointCloud>(
                 core::Tensor::from_vector(means, {count, size_t{3}}, core::Device::CPU),
                 core::Tensor::from_vector(colors, {count, size_t{3}}, core::Device::CPU));
+        }
+
+        core::MeshData make_test_mesh_data(const float x_offset = 0.0f) {
+            return core::MeshData(
+                core::Tensor::from_vector(
+                    std::vector<float>{x_offset - 1.0f, -1.0f, 0.0f,
+                                       x_offset + 1.0f, -1.0f, 0.0f,
+                                       x_offset, 1.0f, 0.0f},
+                    {size_t{3}, size_t{3}}, core::Device::CPU),
+                core::Tensor::from_vector(
+                    std::vector<int32_t>{0, 1, 2},
+                    {size_t{1}, size_t{3}}, core::Device::CPU));
+        }
+
+        std::shared_ptr<core::MeshData> make_test_mesh(const core::Device device = core::Device::CPU) {
+            auto mesh = std::make_shared<core::MeshData>(make_test_mesh_data());
+            if (device == core::Device::CUDA) {
+                mesh->vertices = mesh->vertices.to(device);
+                mesh->indices = mesh->indices.to(device);
+            }
+            return mesh;
         }
 
         struct TrainingSceneNodes {
@@ -255,6 +472,24 @@ namespace lfs::python {
         selection.selectNode(7);
 
         EXPECT_EQ(lfs::vis::app_store().selection_generation.get(), selection.generation());
+    }
+
+    TEST_F(SceneValidityTest, SelectionNodeMaskQueriesReturnOwnedSnapshots) {
+        const auto first_id = dummy_scene_.addSplat("first", make_test_splat(1));
+        const auto second_id = dummy_scene_.addSplat("second", make_test_splat(1));
+        lfs::vis::SelectionState selection;
+        static_assert(std::is_same_v<decltype(selection.getNodeMask(dummy_scene_)), std::vector<bool>>);
+
+        selection.selectNode(first_id);
+        const auto first_snapshot = selection.getNodeMask(dummy_scene_);
+        ASSERT_EQ(first_snapshot.size(), 2u);
+        EXPECT_TRUE(first_snapshot[0]);
+        EXPECT_FALSE(first_snapshot[1]);
+
+        selection.selectNode(second_id);
+        const auto second_snapshot = selection.getNodeMask(dummy_scene_);
+        EXPECT_EQ(first_snapshot, (std::vector<bool>{true, false}));
+        EXPECT_EQ(second_snapshot, (std::vector<bool>{false, true}));
     }
 
     TEST_F(SceneValidityTest, ClearResetsDatasetMetadata) {
@@ -618,6 +853,52 @@ namespace lfs::python {
         EXPECT_EQ(get_application_scene(), &scene_manager.getScene());
         EXPECT_EQ(scene_manager.getContentType(), lfs::vis::SceneManager::ContentType::Empty);
         EXPECT_EQ(scene_manager.getScene().getNodeCount(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, SceneManagerClearReleasesMeshRayPickCpuCache) {
+        lfs::vis::SceneManager scene_manager;
+        auto mesh = make_test_mesh(core::Device::CUDA);
+        ASSERT_NE(scene_manager.getScene().addMesh("Triangle", mesh), core::NULL_NODE);
+        const auto before_pick = core::PinnedMemoryAllocator::instance().get_stats();
+
+        EXPECT_EQ(scene_manager.pickNodeByRay({0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}),
+                  "Triangle");
+        const auto after_pick = core::PinnedMemoryAllocator::instance().get_stats();
+        ASSERT_GT(after_pick.allocated_bytes, before_pick.allocated_bytes);
+
+        ASSERT_TRUE(scene_manager.clear());
+
+        const auto after_clear = core::PinnedMemoryAllocator::instance().get_stats();
+        EXPECT_EQ(after_clear.allocated_bytes, before_pick.allocated_bytes);
+    }
+
+    TEST_F(SceneValidityTest, MeshRayPickCacheRejectsReusedObjectAddressAndNodeId) {
+        alignas(core::MeshData) std::byte storage[sizeof(core::MeshData)];
+        lfs::vis::SceneManager scene_manager;
+        const auto construct_mesh = [&](const float x_offset) {
+            auto* mesh = std::construct_at(
+                reinterpret_cast<core::MeshData*>(storage),
+                make_test_mesh_data(x_offset));
+            return std::shared_ptr<core::MeshData>(mesh, [](core::MeshData* value) {
+                std::destroy_at(value);
+            });
+        };
+
+        auto original = construct_mesh(0.0f);
+        const core::NodeId original_id = scene_manager.getScene().addMesh("Original", original);
+        ASSERT_NE(original_id, core::NULL_NODE);
+        ASSERT_EQ(scene_manager.pickNodeByRay({0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}),
+                  "Original");
+
+        // Bypass the manager cache clear to exercise the identity guard directly.
+        scene_manager.getScene().clear();
+        original.reset();
+        auto replacement = construct_mesh(10.0f);
+        const core::NodeId replacement_id =
+            scene_manager.getScene().addMesh("Replacement", replacement);
+        ASSERT_EQ(replacement_id, original_id);
+
+        EXPECT_TRUE(scene_manager.pickNodeByRay({0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}).empty());
     }
 
     TEST_F(SceneValidityTest, MoveNodeIntoGroupAppendsAsChild) {

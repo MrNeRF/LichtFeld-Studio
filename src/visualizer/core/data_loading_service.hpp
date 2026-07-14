@@ -9,6 +9,7 @@
 #include <expected>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace lfs::vis {
     class SceneManager;
@@ -29,6 +30,8 @@ namespace lfs::vis {
         std::expected<void, std::string> loadPLY(const std::filesystem::path& path);
         std::expected<void, std::string> loadSOG(const std::filesystem::path& path);
         std::expected<void, std::string> loadSplatFile(const std::filesystem::path& path);
+        std::expected<void, std::string> loadSplatFiles(
+            const std::vector<std::filesystem::path>& paths);
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path);
         std::expected<void, std::string> loadCheckpointForTraining(
             const std::filesystem::path& checkpoint_path,

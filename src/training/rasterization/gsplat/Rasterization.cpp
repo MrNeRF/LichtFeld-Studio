@@ -47,14 +47,14 @@ namespace gsplat_lfs {
         float* alphas,
         int32_t* last_ids,
         cudaStream_t stream) {
-        GSPLAT_CHECK_CUDA_PTR(means, "means");
-        GSPLAT_CHECK_CUDA_PTR(quats, "quats");
-        GSPLAT_CHECK_CUDA_PTR(scales, "scales");
-        GSPLAT_CHECK_CUDA_PTR(colors, "colors");
-        GSPLAT_CHECK_CUDA_PTR(opacities, "opacities");
-        GSPLAT_CHECK_CUDA_PTR(renders, "renders");
-        GSPLAT_CHECK_CUDA_PTR(alphas, "alphas");
-        GSPLAT_CHECK_CUDA_PTR(last_ids, "last_ids");
+        gsplat_lfs::debug_validate_cuda_pointer(means, "means");
+        gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
+        gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
+        gsplat_lfs::debug_validate_cuda_pointer(colors, "colors");
+        gsplat_lfs::debug_validate_cuda_pointer(opacities, "opacities");
+        gsplat_lfs::debug_validate_cuda_pointer(renders, "renders");
+        gsplat_lfs::debug_validate_cuda_pointer(alphas, "alphas");
+        gsplat_lfs::debug_validate_cuda_pointer(last_ids, "last_ids");
 
 #define __LAUNCH_KERNEL__(CDIM)                                      \
     case CDIM:                                                       \
@@ -139,16 +139,16 @@ namespace gsplat_lfs {
         float* densification_info,
         const float* densification_error_map,
         cudaStream_t stream) {
-        GSPLAT_CHECK_CUDA_PTR(means, "means");
-        GSPLAT_CHECK_CUDA_PTR(quats, "quats");
-        GSPLAT_CHECK_CUDA_PTR(scales, "scales");
-        GSPLAT_CHECK_CUDA_PTR(colors, "colors");
-        GSPLAT_CHECK_CUDA_PTR(opacities, "opacities");
-        GSPLAT_CHECK_CUDA_PTR(v_means, "v_means");
-        GSPLAT_CHECK_CUDA_PTR(v_quats, "v_quats");
-        GSPLAT_CHECK_CUDA_PTR(v_scales, "v_scales");
-        GSPLAT_CHECK_CUDA_PTR(v_colors, "v_colors");
-        GSPLAT_CHECK_CUDA_PTR(v_opacities, "v_opacities");
+        gsplat_lfs::debug_validate_cuda_pointer(means, "means");
+        gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
+        gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
+        gsplat_lfs::debug_validate_cuda_pointer(colors, "colors");
+        gsplat_lfs::debug_validate_cuda_pointer(opacities, "opacities");
+        gsplat_lfs::debug_validate_cuda_pointer(v_means, "v_means");
+        gsplat_lfs::debug_validate_cuda_pointer(v_quats, "v_quats");
+        gsplat_lfs::debug_validate_cuda_pointer(v_scales, "v_scales");
+        gsplat_lfs::debug_validate_cuda_pointer(v_colors, "v_colors");
+        gsplat_lfs::debug_validate_cuda_pointer(v_opacities, "v_opacities");
 
         if (n_isects == 0) {
             // Skip kernel launch if no intersections
@@ -237,11 +237,11 @@ namespace gsplat_lfs {
         const float* thin_prism_coeffs,
         RasterizeWithSHResult& result,
         cudaStream_t stream) {
-        GSPLAT_CHECK_CUDA_PTR(means, "means");
-        GSPLAT_CHECK_CUDA_PTR(quats, "quats");
-        GSPLAT_CHECK_CUDA_PTR(scales, "scales");
-        GSPLAT_CHECK_CUDA_PTR(opacities, "opacities");
-        GSPLAT_CHECK_CUDA_PTR(sh0, "sh0");
+        gsplat_lfs::debug_validate_cuda_pointer(means, "means");
+        gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
+        gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
+        gsplat_lfs::debug_validate_cuda_pointer(opacities, "opacities");
+        gsplat_lfs::debug_validate_cuda_pointer(sh0, "sh0");
 
         const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
         const uint32_t tile_height = (image_height + tile_size - 1) / tile_size;
@@ -377,16 +377,18 @@ namespace gsplat_lfs {
             channels = 4;
         }
 
-        // Temporary buffers for gradients — stream-ordered alloc/free so the
-        // scratch is ordered with the backward kernels that use it (a plain
-        // cudaMalloc/cudaFree only synchronizes against the legacy stream).
-        float* v_colors = nullptr;
-#if CUDART_VERSION >= 11020
-        cudaMallocAsync(&v_colors, C * N * channels * sizeof(float), stream);
-#else
-        cudaMalloc(&v_colors, C * N * channels * sizeof(float));
-#endif
-        cudaMemsetAsync(v_colors, 0, C * N * channels * sizeof(float), stream);
+        const size_t color_values = checked_multiply(
+            checked_multiply(static_cast<size_t>(C), static_cast<size_t>(N),
+                             "gsplat backward color elements"),
+            static_cast<size_t>(channels), "gsplat backward color elements");
+        const size_t color_bytes = checked_bytes(
+            color_values, sizeof(float), "gsplat backward color gradients");
+        StreamOrderedDeviceBuffer color_gradients(
+            color_bytes, stream, "rasterizer.gsplat.color_gradients");
+        auto* v_colors = color_gradients.as<float>();
+        LFS_CUDA_CHECK_MSG(
+            cudaMemsetAsync(v_colors, 0, color_bytes, stream),
+            "gsplat backward color-gradient initialization");
 
         // Backward through rasterization
         rasterize_to_pixels_from_world_3dgs_bwd(
@@ -424,12 +426,6 @@ namespace gsplat_lfs {
         if (scaling_modifier != 1.0f) {
             // TODO: Scale v_scales by scaling_modifier
         }
-
-#if CUDART_VERSION >= 11020
-        cudaFreeAsync(v_colors, stream);
-#else
-        cudaFree(v_colors);
-#endif
     }
 
 } // namespace gsplat_lfs

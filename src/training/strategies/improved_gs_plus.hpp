@@ -14,7 +14,7 @@
 
 namespace lfs::training {
 
-    class ImprovedGSPlus : public IStrategy {
+    class ImprovedGSPlus : public IStrategy, public ICheckpointStateAdopter {
     public:
         ImprovedGSPlus() = delete;
 
@@ -52,6 +52,9 @@ namespace lfs::training {
         // Serialization for checkpoints
         void serialize(std::ostream& os) const override;
         void deserialize(std::istream& is) override;
+        bool has_checkpoint_runtime_state() const noexcept override { return static_cast<bool>(_optimizer); }
+        bool can_adopt_checkpoint_state(const IStrategy& loaded) const noexcept override;
+        void adopt_checkpoint_state(IStrategy& loaded) noexcept override;
         const char* strategy_type() const override { return "igs+"; }
 
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)

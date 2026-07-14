@@ -20,6 +20,7 @@
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -109,9 +110,10 @@ namespace {
 
     class TensorResidencyEntry final : public lfs::vis::op::UndoEntry {
     public:
-        explicit TensorResidencyEntry(std::string name)
+        explicit TensorResidencyEntry(std::string name, const size_t estimated_bytes = 0)
             : name_(std::move(name)),
-              tensor_(Tensor::ones({16}, Device::CUDA, DataType::Float32)) {}
+              tensor_(Tensor::ones({16}, Device::CUDA, DataType::Float32)),
+              estimated_bytes_(estimated_bytes == 0 ? tensor_.bytes() : estimated_bytes) {}
 
         void undo() override {
             undo_device_ = tensor_.device();
@@ -122,7 +124,7 @@ namespace {
         }
 
         [[nodiscard]] std::string name() const override { return name_; }
-        [[nodiscard]] size_t estimatedBytes() const override { return tensor_.bytes(); }
+        [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_; }
         [[nodiscard]] lfs::vis::op::UndoMemoryBreakdown memoryBreakdown() const override {
             return tensor_.device() == Device::CUDA
                        ? lfs::vis::op::UndoMemoryBreakdown{.cpu_bytes = 0, .gpu_bytes = tensor_.bytes()}
@@ -145,6 +147,7 @@ namespace {
     private:
         std::string name_;
         Tensor tensor_;
+        size_t estimated_bytes_ = 0;
         Device undo_device_ = Device::CPU;
         Device redo_device_ = Device::CPU;
     };
@@ -426,6 +429,21 @@ TEST_F(UndoHistoryTest, OversizedSingleUndoEntryIsRetained) {
     EXPECT_EQ(history.undoCount(), 1u);
     EXPECT_EQ(history.undoName(), "huge.entry");
     EXPECT_EQ(history.undoBytes(), 600ull * 1024ull * 1024ull);
+}
+
+TEST_F(UndoHistoryTest, OversizedSingleUndoEntryIsDemotedToCpu) {
+    auto& history = lfs::vis::op::undoHistory();
+    auto entry = std::make_unique<TensorResidencyEntry>(
+        "huge.tensor.entry", lfs::vis::op::UndoHistory::MAX_BYTES + 1);
+    auto* entry_ptr = entry.get();
+
+    history.push(std::move(entry));
+
+    ASSERT_NE(entry_ptr, nullptr);
+    EXPECT_EQ(history.undoCount(), 1u);
+    EXPECT_EQ(entry_ptr->device(), Device::CPU);
+    EXPECT_EQ(history.undoMemory().gpu_bytes, 0u);
+    EXPECT_GT(history.undoMemory().cpu_bytes, 0u);
 }
 
 TEST_F(UndoHistoryTest, UndoAndRedoNamesReturnNewestFirst) {
@@ -1132,6 +1150,93 @@ TEST_F(UndoHistoryTest, GaussianFieldWritePushesUndoableTensorEntries) {
     undo_result = lfs::vis::op::undoHistory().undo();
     EXPECT_TRUE(undo_result.success);
     EXPECT_TRUE((node->model->means_raw() == original_means).all().item<bool>());
+}
+
+TEST_F(UndoHistoryTest, GaussianFieldWriteRejectsInvalidRawStateWithoutMutation) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(2));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+
+    const auto original_opacity = node->model->opacity_raw().clone();
+    const auto original_scaling = node->model->scaling_raw().clone();
+    const auto original_rotation = node->model->rotation_raw().clone();
+    const auto original_means = node->model->means_raw().clone();
+
+    auto result = lfs::vis::cap::writeGaussianField(
+        *scene_manager,
+        rendering_manager.get(),
+        "model",
+        "opacity_raw",
+        {0},
+        {std::numeric_limits<float>::quiet_NaN()});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("finite"), std::string::npos);
+
+    result = lfs::vis::cap::writeGaussianField(
+        *scene_manager, rendering_manager.get(), "model", "scaling_raw", {0}, {81.0f, 0.0f, 0.0f});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("safe range"), std::string::npos);
+
+    result = lfs::vis::cap::writeGaussianField(
+        *scene_manager, rendering_manager.get(), "model", "rotation_raw", {0}, {0.0f, 0.0f, 0.0f, 0.0f});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("non-zero"), std::string::npos);
+
+    result = lfs::vis::cap::writeGaussianField(
+        *scene_manager, rendering_manager.get(), "model", "means", {0, 0}, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("duplicates"), std::string::npos);
+
+    EXPECT_TRUE((node->model->opacity_raw() == original_opacity).all().item<bool>());
+    EXPECT_TRUE((node->model->scaling_raw() == original_scaling).all().item<bool>());
+    EXPECT_TRUE((node->model->rotation_raw() == original_rotation).all().item<bool>());
+    EXPECT_TRUE((node->model->means_raw() == original_means).all().item<bool>());
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+}
+
+TEST_F(UndoHistoryTest, GaussianShWriteScattersOnlySelectedRowsAndIsUndoable) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_patterned_sh_rest_splat(40));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+
+    const auto untouched_before = sh_rest_row_values(*node->model, 2);
+    const auto row_one_before = sh_rest_row_values(*node->model, 1);
+    const auto row_thirty_three_before = sh_rest_row_values(*node->model, 33);
+    std::vector<float> replacement(18);
+    for (size_t i = 0; i < replacement.size(); ++i)
+        replacement[i] = -100.0f - static_cast<float>(i);
+
+    const auto result = lfs::vis::cap::writeGaussianField(
+        *scene_manager, rendering_manager.get(), "model", "shN", {1, 33}, replacement);
+    ASSERT_TRUE(result) << result.error();
+    EXPECT_EQ(sh_rest_row_values(*node->model, 2), untouched_before);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 1),
+              std::vector<float>(replacement.begin(), replacement.begin() + 9));
+    EXPECT_EQ(sh_rest_row_values(*node->model, 33),
+              std::vector<float>(replacement.begin() + 9, replacement.end()));
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 1), row_one_before);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 33), row_thirty_three_before);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 2), untouched_before);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 1),
+              std::vector<float>(replacement.begin(), replacement.begin() + 9));
+    EXPECT_EQ(sh_rest_row_values(*node->model, 33),
+              std::vector<float>(replacement.begin() + 9, replacement.end()));
 }
 
 TEST_F(UndoHistoryTest, CropBoxCapabilityUndoRestoresRenderSettings) {

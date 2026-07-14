@@ -18,6 +18,7 @@ from urllib.parse import quote
 import lichtfeld as lf
 
 from . import rml_widgets
+from .environment import value as environment_value
 from .asset_manager_integration import (
     clear_active_asset_manager_panel,
     ensure_dataset_catalog_context,
@@ -51,15 +52,7 @@ ASSET_CARD_PREFERRED_WIDTH_DP = 208.0
 ASSET_CARD_MIN_WIDTH_DP = 1.0
 ASSET_CARD_GRID_HORIZONTAL_CHROME_DP = 48.0
 
-
-def _read_perf_log_threshold_ms() -> float:
-    try:
-        return float(os.environ.get("LFS_ASSET_MANAGER_PERF_LOG_MS", "50"))
-    except (TypeError, ValueError):
-        return 50.0
-
-
-ASSET_MANAGER_PERF_LOG_THRESHOLD_MS = _read_perf_log_threshold_ms()
+ASSET_MANAGER_PERF_LOG_THRESHOLD_MS = 50.0
 
 try:
     from .asset_index import (
@@ -148,25 +141,21 @@ class AssetManagerPanel(Panel):
     def _storage_candidates(cls) -> List[Path]:
         candidates: List[Path] = []
 
-        for env_name in (
-            "LICHTFELD_ASSET_MANAGER_DIR",
-            "LFS_ASSET_MANAGER_DIR",
-        ):
-            env_value = os.environ.get(env_name, "").strip()
-            if env_value:
-                candidates.append(Path(env_value))
+        env_value = environment_value("LFS_ASSET_MANAGER_DIR")
+        if env_value:
+            candidates.append(Path(env_value))
 
         candidates.append(resolve_asset_manager_storage_path())
 
-        xdg_data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+        xdg_data_home = environment_value("XDG_DATA_HOME")
         if xdg_data_home:
             candidates.append(Path(xdg_data_home) / "LichtFeldStudio" / "asset_manager")
 
-        appdata = os.environ.get("APPDATA", "").strip()
+        appdata = environment_value("APPDATA")
         if appdata:
             candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
 
-        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        local_appdata = environment_value("LOCALAPPDATA")
         if local_appdata:
             candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
 

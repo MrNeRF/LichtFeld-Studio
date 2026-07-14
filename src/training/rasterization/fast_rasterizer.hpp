@@ -40,6 +40,7 @@ namespace lfs::training {
         lfs::core::Tensor image;
         lfs::core::Tensor alpha;
         lfs::core::Tensor depth;
+        lfs::core::Tensor normal;   // [3, H, W] camera-space accumulated normals, empty unless rendered
         lfs::core::Tensor bg_color; // Saved for alpha gradient computation
 
         // Gaussian parameters (saved to avoid re-fetching in backward)
@@ -102,6 +103,7 @@ namespace lfs::training {
             image = std::move(other.image);
             alpha = std::move(other.alpha);
             depth = std::move(other.depth);
+            normal = std::move(other.normal);
             bg_color = std::move(other.bg_color);
             means = std::move(other.means);
             raw_scales = std::move(other.raw_scales);
@@ -132,6 +134,7 @@ namespace lfs::training {
 
     struct FastGSFusedExtraGradients {
         float scale_reg_weight = 0.0f;
+        float flatten_reg_weight = 0.0f;
         float opacity_reg_weight = 0.0f;
         const float* sparsity_opa_sigmoid = nullptr;
         const float* sparsity_z = nullptr;
@@ -153,7 +156,8 @@ namespace lfs::training {
         int tile_width = 0,
         int tile_height = 0,
         bool mip_filter = false,
-        const lfs::core::Tensor& bg_image = {});
+        const lfs::core::Tensor& bg_image = {},
+        bool render_normal = false);
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(
@@ -167,7 +171,7 @@ namespace lfs::training {
         int iteration = 0,
         const FastGSFusedExtraGradients& fused_extra_gradients = {},
         const lfs::core::Tensor& grad_depth = {},
-        bool detach_depth_weights = false);
+        const lfs::core::Tensor& grad_normal = {});
 
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(

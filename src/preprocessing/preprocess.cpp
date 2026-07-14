@@ -4,7 +4,12 @@
 
 #include "preprocessing/preprocess.hpp"
 
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/point_cloud.hpp"
+#include "core/tensor.hpp"
+#include "depth_anchor_cache.hpp"
+#include "io/loader.hpp"
 
 #include "indicators.hpp"
 #include <OpenImageIO/imagebuf.h>
@@ -549,17 +554,31 @@ namespace {
         return chw;
     }
 
-    std::vector<fs::path> collect_images(const fs::path& images_dir) {
+    std::vector<fs::path> collect_images(const fs::path& images_dir, bool recursive) {
         if (!fs::is_directory(images_dir))
             throw std::runtime_error("Images directory does not exist: " + path_to_string(images_dir));
 
         std::vector<fs::path> images;
-        for (fs::recursive_directory_iterator it(images_dir), end; it != end; ++it) {
-            if (it->is_regular_file() && is_image_file(it->path()))
-                images.push_back(it->path());
+        const auto add_if_image = [&images](const fs::directory_entry& entry) {
+            if (entry.is_regular_file() && is_image_file(entry.path()))
+                images.push_back(entry.path());
+        };
+        if (recursive) {
+            for (fs::recursive_directory_iterator it(images_dir), end; it != end; ++it)
+                add_if_image(*it);
+        } else {
+            for (fs::directory_iterator it(images_dir), end; it != end; ++it)
+                add_if_image(*it);
         }
         std::sort(images.begin(), images.end());
         return images;
+    }
+
+    bool is_same_directory(const fs::path& lhs, const fs::path& rhs) {
+        std::error_code ec;
+        if (fs::equivalent(lhs, rhs, ec) && !ec)
+            return true;
+        return lhs.lexically_normal() == rhs.lexically_normal();
     }
 
     fs::path output_path_for(const fs::path& dataset_root,
@@ -571,12 +590,16 @@ namespace {
         return dataset_root / std::string(folder) / rel;
     }
 
-    void write_u8_png(const fs::path& path,
-                      int width,
-                      int height,
-                      int channels,
-                      const std::vector<uint8_t>& data,
-                      int png_compression) {
+    template <typename PixelT>
+    void write_png(const fs::path& path,
+                   int width,
+                   int height,
+                   int channels,
+                   const std::vector<PixelT>& data,
+                   int png_compression) {
+        static_assert(std::is_same_v<PixelT, uint8_t> || std::is_same_v<PixelT, uint16_t>);
+        constexpr auto kFormat = std::is_same_v<PixelT, uint16_t> ? OIIO::TypeDesc::UINT16
+                                                                  : OIIO::TypeDesc::UINT8;
         if (channels < 1 || channels > 4)
             throw std::runtime_error("Internal error: invalid image channel count");
         if (data.size() != static_cast<std::size_t>(width) * height * channels)
@@ -587,7 +610,7 @@ namespace {
         if (!output)
             throw std::runtime_error("Failed to create image output: " + path_to_string(path));
 
-        OIIO::ImageSpec spec(width, height, channels, OIIO::TypeDesc::UINT8);
+        OIIO::ImageSpec spec(width, height, channels, kFormat);
         const int compression = std::clamp(png_compression, 0, 9);
         spec.attribute("png:compressionLevel", compression);
         if (compression == 0) {
@@ -600,7 +623,7 @@ namespace {
             output->close();
             throw std::runtime_error("Failed to open image output: " + path_to_string(path) + ": " + error);
         }
-        if (!output->write_image(OIIO::TypeDesc::UINT8, data.data())) {
+        if (!output->write_image(kFormat, data.data())) {
             const auto error = output->geterror();
             output->close();
             throw std::runtime_error("Failed to write image output: " + path_to_string(path) + ": " + error);
@@ -831,10 +854,12 @@ namespace {
         std::string_view provider_;
     };
 
-    std::vector<uint8_t> build_depth_png(const SpatialMap& mask,
-                                         const VectorMap& points,
-                                         int out_width,
-                                         int out_height) {
+    template <typename PixelT>
+    std::vector<PixelT> build_depth_png(const SpatialMap& mask,
+                                        const VectorMap& points,
+                                        int out_width,
+                                        int out_height) {
+        constexpr long kMaxValue = static_cast<long>(std::numeric_limits<PixelT>::max());
         if (mask.width != points.width || mask.height != points.height)
             throw std::runtime_error("Mask and point outputs have different spatial sizes");
 
@@ -851,7 +876,7 @@ namespace {
             }
         }
 
-        std::vector<uint8_t> low(pixels, 0);
+        std::vector<PixelT> low(pixels, 0);
         if (std::isfinite(min_z) && std::isfinite(max_z)) {
             const float denom = std::max(max_z - min_z, 1e-6f);
             for (std::size_t i = 0; i < pixels; ++i) {
@@ -859,12 +884,12 @@ namespace {
                 const float z = points.xyz_hwc[i * 3 + 2];
                 if (std::isfinite(valid) && valid >= 0.5f && std::isfinite(z) && z > 0.0f) {
                     const float normalized = 0.02f + 0.98f * ((z - min_z) / denom);
-                    low[i] = static_cast<uint8_t>(std::clamp(std::lround(normalized * 255.0f), 1l, 255l));
+                    low[i] = static_cast<PixelT>(std::clamp(std::lround(normalized * kMaxValue), 1l, kMaxValue));
                 }
             }
         }
 
-        std::vector<uint8_t> out(static_cast<std::size_t>(out_width) * out_height);
+        std::vector<PixelT> out(static_cast<std::size_t>(out_width) * out_height);
         for (int y = 0; y < out_height; ++y) {
             const int sy = std::min(points.height - 1, static_cast<int>((static_cast<int64_t>(y) * points.height) / out_height));
             for (int x = 0; x < out_width; ++x) {
@@ -876,14 +901,17 @@ namespace {
         return out;
     }
 
-    std::vector<uint8_t> build_normals_png(const SpatialMap& mask,
-                                           const VectorMap& normals,
-                                           int out_width,
-                                           int out_height) {
+    template <typename PixelT>
+    std::vector<PixelT> build_normals_png(const SpatialMap& mask,
+                                          const VectorMap& normals,
+                                          int out_width,
+                                          int out_height) {
+        constexpr long kMaxValue = static_cast<long>(std::numeric_limits<PixelT>::max());
+        constexpr PixelT kNeutral = static_cast<PixelT>((kMaxValue + 1) / 2);
         if (mask.width != normals.width || mask.height != normals.height)
             throw std::runtime_error("Mask and normal outputs have different spatial sizes");
 
-        std::vector<uint8_t> low(static_cast<std::size_t>(normals.width) * normals.height * 3, 128);
+        std::vector<PixelT> low(static_cast<std::size_t>(normals.width) * normals.height * 3, kNeutral);
         for (int y = 0; y < normals.height; ++y) {
             for (int x = 0; x < normals.width; ++x) {
                 const std::size_t i = static_cast<std::size_t>(y) * normals.width + x;
@@ -893,12 +921,12 @@ namespace {
                 for (int c = 0; c < 3; ++c) {
                     const float n = normals.xyz_hwc[i * 3 + c];
                     const float encoded = std::isfinite(n) ? (n * 0.5f + 0.5f) : 0.5f;
-                    low[i * 3 + c] = static_cast<uint8_t>(std::clamp(std::lround(encoded * 255.0f), 0l, 255l));
+                    low[i * 3 + c] = static_cast<PixelT>(std::clamp(std::lround(encoded * kMaxValue), 0l, kMaxValue));
                 }
             }
         }
 
-        std::vector<uint8_t> out(static_cast<std::size_t>(out_width) * out_height * 3);
+        std::vector<PixelT> out(static_cast<std::size_t>(out_width) * out_height * 3);
         for (int y = 0; y < out_height; ++y) {
             const int sy = std::min(normals.height - 1, static_cast<int>((static_cast<int64_t>(y) * normals.height) / out_height));
             for (int x = 0; x < out_width; ++x) {
@@ -921,6 +949,77 @@ namespace {
     bool needs_normals(lfs::core::param::PreprocessOutputMode mode) {
         return mode == lfs::core::param::PreprocessOutputMode::Normals ||
                mode == lfs::core::param::PreprocessOutputMode::Both;
+    }
+
+    // Fits each camera's depth prior against the COLMAP point cloud once and
+    // writes a sidecar next to the depth maps, so depth-loss training skips the
+    // per-camera anchor fit at startup. Requires a COLMAP scene; a bare image
+    // folder is skipped (the trainer fits and caches it on first run instead).
+    void precompute_depth_anchors(const lfs::core::param::PreprocessParameters& params) {
+        if (!needs_depth(params.mode)) {
+            return;
+        }
+        try {
+            auto loader = lfs::io::Loader::create();
+            lfs::io::LoadOptions options;
+            options.images_folder = params.images_folder;
+            auto result = loader->load(params.dataset_path, options);
+            if (!result) {
+                LOG_INFO("Depth anchors: scene load failed ({}); trainer will fit at startup",
+                         result.error().format());
+                return;
+            }
+            const auto* scene = std::get_if<lfs::io::LoadedScene>(&result->data);
+            if (!scene || !scene->point_cloud || scene->cameras.empty()) {
+                LOG_INFO("Depth anchors: no COLMAP point cloud; trainer will fit at startup");
+                return;
+            }
+
+            const auto sidecar = lfs::training::depthAnchorSidecarPath(scene->cameras);
+            if (sidecar.empty()) {
+                LOG_INFO("Depth anchors: no depth priors resolved for any camera; skipping");
+                return;
+            }
+
+            auto means = scene->point_cloud->means;
+            if (!means.is_valid() || means.numel() == 0) {
+                LOG_INFO("Depth anchors: empty point cloud; skipping");
+                return;
+            }
+            means = means.to(lfs::core::Device::CUDA);
+
+            const auto fingerprint = lfs::training::computeAnchorFingerprint(scene->cameras);
+
+            std::optional<indicators::ProgressBar> anchor_bar;
+            lfs::training::DepthAnchorProgress progress;
+            if (stdout_is_tty()) {
+                anchor_bar.emplace();
+                style_progress_bar(*anchor_bar, "Depth anchors ");
+                progress = [&anchor_bar](std::size_t done, std::size_t total) {
+                    if (total == 0)
+                        return;
+                    anchor_bar->set_option(indicators::option::PostfixText(std::format("{}/{}", done, total)));
+                    anchor_bar->set_progress(done * 100 / total);
+                };
+            }
+
+            const auto anchors = lfs::training::computeRawDepthAnchors(means, scene->cameras, -1, 0, progress);
+
+            if (anchor_bar && !anchor_bar->is_completed()) {
+                anchor_bar->set_progress(100);
+                anchor_bar->mark_as_completed();
+                std::cout << std::endl;
+            }
+
+            if (lfs::training::writeDepthAnchorSidecar(sidecar, anchors, fingerprint)) {
+                std::cout << "Depth anchors: wrote " << anchors.size() << " anchors to "
+                          << path_to_string(sidecar) << "\n";
+            } else {
+                LOG_WARN("Depth anchors: failed to write sidecar {}", path_to_string(sidecar));
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Depth anchors: precompute failed: {}", e.what());
+        }
     }
 
     bool should_write_output(bool output_requested,
@@ -989,7 +1088,22 @@ namespace {
         PreprocessPlan plan;
         plan.dataset_root = fs::absolute(params.dataset_path);
         plan.images_dir = plan.dataset_root / params.images_folder;
-        plan.images = collect_images(plan.images_dir);
+
+        // Flat COLMAP exports keep the images next to the sparse model files. Scan the
+        // root non-recursively there so generated depth/normals outputs are never
+        // picked up as inputs on a rerun.
+        bool flat_layout = is_same_directory(plan.images_dir, plan.dataset_root);
+        if (!flat_layout && !fs::is_directory(plan.images_dir) &&
+            fs::is_directory(plan.dataset_root) &&
+            !collect_images(plan.dataset_root, false).empty()) {
+            std::cout << "Images folder '" << params.images_folder
+                      << "' not found; using images in the dataset root (flat layout)\n";
+            flat_layout = true;
+        }
+        if (flat_layout)
+            plan.images_dir = plan.dataset_root;
+
+        plan.images = collect_images(plan.images_dir, !flat_layout);
         if (plan.images.empty())
             throw std::runtime_error("No images found under " + path_to_string(plan.images_dir));
 
@@ -1081,13 +1195,24 @@ namespace {
                         ~SlotRelease() { slots.release(); }
                     } release{write_slots};
 
-                    if (job.write_depth) {
-                        const auto depth = build_depth_png(outputs->mask, outputs->points, width, height);
-                        write_u8_png(job.depth_path, width, height, 1, depth, params.png_compression);
-                    }
-                    if (job.write_normals) {
-                        const auto normals = build_normals_png(outputs->mask, outputs->normals, width, height);
-                        write_u8_png(job.normals_path, width, height, 3, normals, params.png_compression);
+                    if (params.bit_depth == 16) {
+                        if (job.write_depth) {
+                            const auto depth = build_depth_png<uint16_t>(outputs->mask, outputs->points, width, height);
+                            write_png(job.depth_path, width, height, 1, depth, params.png_compression);
+                        }
+                        if (job.write_normals) {
+                            const auto normals = build_normals_png<uint16_t>(outputs->mask, outputs->normals, width, height);
+                            write_png(job.normals_path, width, height, 3, normals, params.png_compression);
+                        }
+                    } else {
+                        if (job.write_depth) {
+                            const auto depth = build_depth_png<uint8_t>(outputs->mask, outputs->points, width, height);
+                            write_png(job.depth_path, width, height, 1, depth, params.png_compression);
+                        }
+                        if (job.write_normals) {
+                            const auto normals = build_normals_png<uint8_t>(outputs->mask, outputs->normals, width, height);
+                            write_png(job.normals_path, width, height, 3, normals, params.png_compression);
+                        }
                     }
                 }));
         }
@@ -1118,6 +1243,7 @@ namespace lfs::preprocessing {
             if (plan.jobs.empty()) {
                 print_plan_summary(params, plan, nullptr);
                 std::cout << "No outputs need preprocessing; model inference skipped.\n";
+                precompute_depth_anchors(params);
                 std::cout << "Done. processed=0 skipped=" << plan.skipped << "\n";
                 return 0;
             }
@@ -1130,6 +1256,7 @@ namespace lfs::preprocessing {
                 throw std::runtime_error("Model file does not exist: " + path_to_string(model_path));
 
             process_dataset(params, model_path, plan);
+            precompute_depth_anchors(params);
             return 0;
         } catch (const std::exception& e) {
             std::cerr << "preprocess: " << e.what() << "\n";

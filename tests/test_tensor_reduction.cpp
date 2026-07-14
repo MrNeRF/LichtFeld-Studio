@@ -2,10 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cub_workspace.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <torch/torch.h>
 
 using namespace lfs::core;
@@ -71,6 +73,10 @@ protected:
         gen.seed(42);
     }
 
+    void TearDown() override {
+        tensor_ops::set_cub_workspace_failure_for_testing(false);
+    }
+
     std::mt19937 gen;
     std::uniform_real_distribution<float> dist{-10.0f, 10.0f};
 };
@@ -88,6 +94,16 @@ TEST_F(TensorReductionTest, Sum) {
 
     compare_scalars(custom_sum, torch_sum, 1e-4f, "Sum");
     EXPECT_FLOAT_EQ(custom_sum, 55.0f);
+}
+
+TEST_F(TensorReductionTest, CubWorkspaceFailureThrowsBeforeExecution) {
+    auto input = Tensor::ones({4096}, Device::CUDA);
+    tensor_ops::set_cub_workspace_failure_for_testing(true);
+
+    EXPECT_THROW((void)input.sum_scalar(), std::runtime_error);
+
+    tensor_ops::set_cub_workspace_failure_for_testing(false);
+    EXPECT_FLOAT_EQ(input.sum_scalar(), 4096.0f);
 }
 
 TEST_F(TensorReductionTest, SumMultiDim) {
@@ -306,10 +322,7 @@ TEST_F(TensorReductionTest, ItemMultiElement) {
     std::vector<float> vec_data = {1.0f, 2.0f, 3.0f};
     auto custom_tensor = Tensor::from_vector(vec_data, {3}, Device::CUDA);
 
-    // Should return 0 or fail gracefully
-    float value = custom_tensor.item();
-    // Just verify it doesn't crash - implementation defined behavior
-    EXPECT_TRUE(true);
+    EXPECT_THROW((void)custom_tensor.item(), std::runtime_error);
 }
 
 // ============= Dimensional Reductions =============

@@ -142,6 +142,11 @@ namespace {
         const auto path = make_temp_path("ppisp_sidecar_metadata");
         auto save_result = lfs::training::save_ppisp_file(path, source, &source_controller, &metadata);
         ASSERT_TRUE(save_result) << save_result.error();
+        const std::string temp_prefix = path.filename().string() + ".";
+        for (const auto& entry : std::filesystem::directory_iterator(path.parent_path())) {
+            const std::string name = entry.path().filename().string();
+            EXPECT_FALSE(name.starts_with(temp_prefix) && name.ends_with(".tmp"));
+        }
 
         PPISP loaded(1);
         PPISPControllerPool loaded_controller(2, 1, controller_config);

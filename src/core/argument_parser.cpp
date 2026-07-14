@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/argument_parser.hpp"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -187,7 +188,7 @@ namespace {
                 "lichtfeld-studio plugin create my_plugin\n"
                 "\n"
                 "ENVIRONMENT:\n"
-                "LOG_LEVEL -- Set log level (trace/debug/info/perf/warn/error)\n");
+                "LFS_LOG_LEVEL -- Set log level (trace/debug/info/perf/warn/error)\n");
             parser.helpParams.width = 240;
 
             // =============================================================================
@@ -287,10 +288,10 @@ namespace {
                                                                      {"by_cameras", "by_cameras"}});
 
             // =============================================================================
-            // MASK / DEPTH OPTIONS
+            // MASK / DEPTH / NORMAL OPTIONS
             // =============================================================================
             ::args::Group mask_sep(parser, " ");
-            ::args::Group mask_group(parser, "MASK / DEPTH OPTIONS:");
+            ::args::Group mask_group(parser, "MASK / DEPTH / NORMAL OPTIONS:");
             ::args::MapFlag<std::string, lfs::core::param::MaskMode> mask_mode(mask_group, "mask_mode",
                                                                                "Mask mode: none, segment, ignore, segment_and_ignore, alpha_consistent (default: none)",
                                                                                {"mask-mode"},
@@ -304,7 +305,12 @@ namespace {
             ::args::Flag no_alpha_as_mask(mask_group, "no_alpha_as_mask", "Disable automatic alpha-as-mask for RGBA images", {"no-alpha-as-mask"});
             ::args::Flag use_depth_loss(mask_group, "use_depth_loss", "Load depth maps and enable depth-map supervision", {"use-depth-loss"});
             ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", "Depth loss weight (default: 2.0)", {"depth-loss-weight"});
-            ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", "Depth loss mode: pearson, adaptive-warped-l1 (default: adaptive-warped-l1)", {"depth-loss-mode"});
+            ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", "Depth prior convention: ssi (auto-detect), ssi-disparity, ssi-depth (default: ssi)", {"depth-loss-mode"});
+            ::args::Flag use_normal_loss(mask_group, "use_normal_loss", "Load normal maps and enable normal supervision", {"use-normal-loss"});
+            ::args::ValueFlag<float> normal_loss_weight(mask_group, "normal_loss_weight", "Prior normal loss weight (default: 0.05)", {"normal-loss-weight"});
+            ::args::ValueFlag<float> normal_consistency_weight(mask_group, "normal_consistency_weight", "Depth-normal consistency weight (default: 0.05)", {"normal-consistency-weight"});
+            ::args::ValueFlag<float> normal_flatten_weight(mask_group, "normal_flatten_weight", "Min-axis scale flattening weight while normal supervision is active (default: 1.0)", {"normal-flatten-weight"});
+            ::args::ValueFlag<std::string> normal_loss_space(mask_group, "normal_loss_space", "Normal prior space: auto, camera-opencv, camera-opengl, world (default: auto)", {"normal-loss-space"});
 
             // =============================================================================
             // SPARSITY OPTIMIZATION
@@ -394,8 +400,8 @@ namespace {
                 std::string filter_pattern;
 
                 // Check environment variable first
-                if (const char* env_level = std::getenv("LOG_LEVEL")) {
-                    level = parse_log_level(env_level);
+                if (const auto env_level = lfs::core::environment::value("LFS_LOG_LEVEL")) {
+                    level = parse_log_level(std::string(*env_level));
                 }
                 // Verbose/quiet flags override environment variable
                 if (verbose) {
@@ -776,6 +782,10 @@ namespace {
                                         mask_mode_val = cli_option_present({"--mask-mode"}) ? std::optional<lfs::core::param::MaskMode>(::args::get(mask_mode)) : std::optional<lfs::core::param::MaskMode>(),
                                         depth_loss_weight_val = cli_option_present({"--depth-loss-weight"}) ? std::optional<float>(::args::get(depth_loss_weight)) : std::optional<float>(),
                                         depth_loss_mode_val = cli_option_present({"--depth-loss-mode"}) ? std::optional<std::string>(::args::get(depth_loss_mode)) : std::optional<std::string>(),
+                                        normal_loss_weight_val = cli_option_present({"--normal-loss-weight"}) ? std::optional<float>(::args::get(normal_loss_weight)) : std::optional<float>(),
+                                        normal_consistency_weight_val = cli_option_present({"--normal-consistency-weight"}) ? std::optional<float>(::args::get(normal_consistency_weight)) : std::optional<float>(),
+                                        normal_flatten_weight_val = cli_option_present({"--normal-flatten-weight"}) ? std::optional<float>(::args::get(normal_flatten_weight)) : std::optional<float>(),
+                                        normal_loss_space_val = cli_option_present({"--normal-loss-space"}) ? std::optional<std::string>(::args::get(normal_loss_space)) : std::optional<std::string>(),
                                         // Python scripts
                                         python_scripts_val = cli_option_present({"--python-script"}) ? std::optional<std::vector<std::string>>(::args::get(python_scripts)) : std::optional<std::vector<std::string>>(),
                                         centralize_val = cli_option_present({"--centralize"}) ? std::optional<std::string>(::args::get(centralize)) : std::optional<std::string>(),
@@ -807,6 +817,7 @@ namespace {
                                         invert_masks_flag = bool(invert_masks),
                                         no_alpha_as_mask_flag = bool(no_alpha_as_mask),
                                         use_depth_loss_flag = bool(use_depth_loss),
+                                        use_normal_loss_flag = bool(use_normal_loss),
                                         no_error_map_flag = bool(no_error_map),
                                         no_edge_map_flag = bool(no_edge_map),
                                         exclude_export_flag = bool(exclude_export),
@@ -909,6 +920,11 @@ namespace {
                 if (depth_loss_mode_val) {
                     opt.depth_loss_mode = *depth_loss_mode_val;
                 }
+                setFlag(use_normal_loss_flag, opt.use_normal_loss);
+                setVal(normal_loss_weight_val, opt.normal_loss_weight);
+                setVal(normal_consistency_weight_val, opt.normal_consistency_weight);
+                setVal(normal_flatten_weight_val, opt.normal_flatten_weight);
+                setVal(normal_loss_space_val, opt.normal_loss_space);
                 // Also propagate to dataset config for loading
                 ds.invert_masks = opt.invert_masks;
                 ds.mask_threshold = opt.mask_threshold;
@@ -1331,6 +1347,7 @@ namespace {
         ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
         ::args::ValueFlag<int> threads(parser, "count", "ONNX Runtime CPU threads (default: all available cores)", {"threads"});
         ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 1; 0 is fastest/largest)", {"png-compression"});
+        ::args::ValueFlag<int> bit_depth(parser, "bits", "Output PNG bit depth, 8 or 16 (default: 16; 8-bit depth priors quantize visibly)", {"bit-depth"});
         ::args::Flag cpu(parser, "cpu", "Force CPU inference even if CUDA is available", {"cpu"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
         ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
@@ -1374,6 +1391,9 @@ namespace {
         if (png_compression) {
             params.png_compression = ::args::get(png_compression);
         }
+        if (bit_depth) {
+            params.bit_depth = ::args::get(bit_depth);
+        }
         params.force_cpu = cpu;
         params.overwrite = overwrite;
         params.no_download = no_download;
@@ -1401,6 +1421,9 @@ namespace {
         }
         if (params.png_compression < 0 || params.png_compression > 9) {
             return std::unexpected("--png-compression must be between 0 and 9");
+        }
+        if (params.bit_depth != 8 && params.bit_depth != 16) {
+            return std::unexpected("--bit-depth must be 8 or 16");
         }
         if (!params.model_path.empty() && !std::filesystem::exists(params.model_path)) {
             return std::unexpected(std::format("Model not found: {}", lfs::core::path_to_utf8(params.model_path)));

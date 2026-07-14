@@ -22,8 +22,8 @@
 namespace lfs::core {
 
 // Enable/disable profiling at compile time (controlled by CMake)
-#ifndef ENABLE_ALLOCATION_PROFILING
-#define ENABLE_ALLOCATION_PROFILING 0 // Default to disabled if not set by CMake
+#ifndef LFS_ALLOCATION_PROFILING_ENABLED
+#define LFS_ALLOCATION_PROFILING_ENABLED 0 // Default to disabled if not set by CMake
 #endif
 
     struct TensorAllocation {
@@ -107,7 +107,7 @@ namespace lfs::core {
 
         // Capture stack trace and record allocation
         void record_allocation(size_t bytes, int skip_frames = 2) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -124,7 +124,7 @@ namespace lfs::core {
 
         // Set current iteration number (call from training loop)
         void set_iteration(int iteration) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
             current_iteration_.store(iteration, std::memory_order_relaxed);
@@ -133,7 +133,7 @@ namespace lfs::core {
         // Record tensor allocation with shape and dtype (with pointer tracking for lifetime analysis)
         void record_tensor_allocation(void* ptr, const std::vector<size_t>& shape, size_t bytes,
                                       const std::string& dtype, int skip_frames = 2) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -169,7 +169,7 @@ namespace lfs::core {
 
         // Record tensor deallocation (for lifetime tracking)
         void record_deallocation(void* ptr) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -310,7 +310,7 @@ namespace lfs::core {
     public:
         // Print top N allocation sites
         void print_top_allocators(int top_n = 20) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -333,7 +333,9 @@ namespace lfs::core {
             printf("%s\n", std::string(160, '-').c_str());
 
             int count = 0;
-            for (const auto& [location, site] : sites_vec) {
+            for (const auto& entry : sites_vec) {
+                const auto& location = entry.first;
+                const auto& site = entry.second;
                 if (count++ >= top_n)
                     break;
 
@@ -359,7 +361,9 @@ namespace lfs::core {
                     }
 
                     // Print tensor details
-                    for (const auto& [shape_dtype, tensors] : shape_groups) {
+                    for (const auto& entry : shape_groups) {
+                        const auto& shape_dtype = entry.first;
+                        const auto& tensors = entry.second;
                         double total_tensor_mb = 0;
                         for (const auto* t : tensors) {
                             total_tensor_mb += t->mb();
@@ -384,7 +388,7 @@ namespace lfs::core {
 
         // Print detailed tensor allocations grouped by shape
         void print_tensor_allocations(int limit = 50) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -401,7 +405,9 @@ namespace lfs::core {
 
             std::map<std::string, TensorGroup> groups;
 
-            for (const auto& [location, site] : sites_) {
+            for (const auto& entry : sites_) {
+                const auto& location = entry.first;
+                const auto& site = entry.second;
                 for (const auto& tensor : site.tensors) {
                     // Use the full location string - NO truncation
                     std::string origin = location;
@@ -422,8 +428,8 @@ namespace lfs::core {
 
             // Convert to vector for sorting
             std::vector<TensorGroup> sorted_groups;
-            for (const auto& [key, group] : groups) {
-                sorted_groups.push_back(group);
+            for (const auto& entry : groups) {
+                sorted_groups.push_back(entry.second);
             }
 
             // Sort by total bytes
@@ -454,7 +460,7 @@ namespace lfs::core {
 
         // Print lifetime statistics (how long tensors live before being freed)
         void print_lifetime_stats(int limit = 20) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -480,7 +486,9 @@ namespace lfs::core {
             };
 
             std::vector<LifetimeSummary> summaries;
-            for (const auto& [key, lifetimes] : lifetime_stats_) {
+            for (const auto& entry : lifetime_stats_) {
+                const auto& key = entry.first;
+                const auto& lifetimes = entry.second;
                 if (lifetimes.empty())
                     continue;
 
@@ -526,7 +534,7 @@ namespace lfs::core {
 
         // Print detailed lifetime statistics by origin (where allocations come from)
         void print_lifetime_stats_by_origin(int limit = 20) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -550,7 +558,9 @@ namespace lfs::core {
             };
 
             std::vector<OriginSummary> summaries;
-            for (const auto& [detailed_key, lifetimes] : lifetime_stats_by_origin_) {
+            for (const auto& entry : lifetime_stats_by_origin_) {
+                const auto& detailed_key = entry.first;
+                const auto& lifetimes = entry.second;
                 if (lifetimes.empty())
                     continue;
 
@@ -606,7 +616,7 @@ namespace lfs::core {
         }
 
         void print_active_allocations(int limit = 50) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -630,7 +640,8 @@ namespace lfs::core {
             std::map<std::string, ActiveGroup> groups;
             size_t total_active_bytes = 0;
 
-            for (const auto& [ptr, meta] : active_allocations_) {
+            for (const auto& entry : active_allocations_) {
+                const auto& meta = entry.second;
                 std::string key = meta.shape_str() + "|" + meta.dtype + "|" + meta.location;
                 auto& g = groups[key];
                 if (g.count == 0) {
@@ -648,8 +659,8 @@ namespace lfs::core {
             }
 
             std::vector<ActiveGroup> sorted;
-            for (const auto& [k, g] : groups)
-                sorted.push_back(g);
+            for (const auto& entry : groups)
+                sorted.push_back(entry.second);
             std::sort(sorted.begin(), sorted.end(),
                       [](const auto& a, const auto& b) { return a.total_bytes > b.total_bytes; });
 

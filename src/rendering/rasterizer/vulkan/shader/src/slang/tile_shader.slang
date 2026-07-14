@@ -96,7 +96,8 @@ void main(
     int offset = depth_rank == 0 ? 0 : index_buffer_offset[depth_rank-1];
     int offset_max = index_buffer_offset[depth_rank];
     const int sort_capacity = int(uniforms.sort_capacity);
-    if (sort_capacity <= 0 || offset >= sort_capacity || offset >= offset_max)
+    if (sort_capacity <= 0 || offset < 0 || offset_max < 0 ||
+        offset >= sort_capacity || offset >= offset_max)
         return;
     offset_max = min(offset_max, sort_capacity);
 
@@ -213,10 +214,7 @@ void main(
 
 layout(binding=0) StructuredBuffer<sortingKey_t> sorted_keys;
 layout(binding=1) RWStructuredBuffer<int32_t> out_tile_ranges;
-layout(binding=2) StructuredBuffer<int32_t> index_buffer_offset_in;
-#if LFS_VISIBLE_BOUNDED
-layout(binding=3) StructuredBuffer<uint32_t> visible_count;
-#endif
+layout(binding=2) StructuredBuffer<uint32_t> tile_instance_count;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -230,19 +228,7 @@ void main(
     const uint grid_width = uniforms.grid_width;
     const uint32_t num_tiles = grid_height*grid_width;
 
-    // num_isects (= num_indices) is read directly from the GPU-resident cumsum
-    // tail, then clamped to the CPU-chosen sort capacity so stale estimates from
-    // resize/camera jumps cannot read past the sorted buffers.
-#if LFS_VISIBLE_BOUNDED
-    const uint32_t tail = min(visible_count[0], uint32_t(uniforms.num_splats));
-    uint32_t num_isects = tail == 0u ? 0u : (uint32_t)index_buffer_offset_in[tail - 1u];
-#else
-    uint32_t num_isects =
-        uniforms.num_splats == 0u
-            ? 0u
-            : (uint32_t)index_buffer_offset_in[uniforms.num_splats - 1u];
-#endif
-    num_isects = min(num_isects, uniforms.sort_capacity);
+    const uint32_t num_isects = min(tile_instance_count[0], uniforms.sort_capacity);
     if (globalIdx > num_isects)
         return;
 

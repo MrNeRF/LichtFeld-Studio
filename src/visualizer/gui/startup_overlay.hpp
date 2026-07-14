@@ -34,8 +34,9 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render(const ViewportLayout& viewport, bool drag_hovering);
         void dismiss();
-        void setPluginLoadState(bool active, float progress, std::string stage);
+        void setPluginLoadState(bool started, bool active, float progress, std::string stage);
         [[nodiscard]] bool isVisible() const { return visible_; }
+        [[nodiscard]] bool blocksUnderlayInput() const;
         [[nodiscard]] bool isPluginLoadComplete() const;
         [[nodiscard]] bool needsAnimationFrame() const;
 

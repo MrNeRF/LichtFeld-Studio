@@ -21,6 +21,8 @@
 #include "window/window_manager.hpp"
 #include <cassert>
 #include <chrono>
+#include <cstdint>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -153,6 +155,12 @@ namespace lfs::vis {
         bool allowclose();
         void wakeMainLoop() const;
 
+        // Frame exception boundary. Contains an OOM or other error escaping a
+        // frame so the loop never aborts: OOM triggers one render-safe pressure
+        // episode, other errors escalate under a rate limit.
+        void handleFrameException(std::exception_ptr eptr) noexcept;
+        void onFrameCompleted() noexcept;
+
         // Event system
         void setupEventHandlers();
         void setupComponentConnections();
@@ -249,6 +257,11 @@ namespace lfs::vis {
         std::unique_ptr<ParameterManager> parameter_manager_;
         std::unique_ptr<MainLoop> main_loop_;
 
+        // Frame exception boundary state (viewer thread only).
+        int consecutive_oom_frames_ = 0;
+        uint64_t suppressed_frame_errors_ = 0;
+        std::chrono::steady_clock::time_point last_frame_error_log_{};
+
         // Tools
         std::shared_ptr<tools::AlignTool> align_tool_;
         std::shared_ptr<tools::SelectionTool> selection_tool_;
@@ -282,6 +295,9 @@ namespace lfs::vis {
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
         bool startup_plugin_preload_started_ = false;
+        std::uint64_t startup_plugin_load_status_revision_ = 0;
+        bool plugin_preload_timing_active_ = false;
+        std::chrono::nanoseconds plugin_preload_max_update_stall_{};
         bool update_work_processed_ = false;
         std::chrono::high_resolution_clock::time_point last_frame_time_ = std::chrono::high_resolution_clock::now();
         bool sequencer_ui_initialized_ = false;

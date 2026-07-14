@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/environment.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
@@ -11,7 +12,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 
 namespace {
@@ -61,10 +61,10 @@ namespace {
 } // namespace
 
 TEST(RadIoBenchmark, LoadSaveRoundtrip) {
-    const char* env_path = std::getenv("LFS_RAD_BENCH_FILE");
+    const auto env_path = lfs::core::environment::value("LFS_RAD_BENCH_FILE");
     const std::filesystem::path input =
-        env_path != nullptr ? std::filesystem::path(env_path)
-                            : std::filesystem::path(PROJECT_ROOT_PATH) / "splat_30000.rad";
+        env_path ? std::filesystem::path(*env_path)
+                 : std::filesystem::path(PROJECT_ROOT_PATH) / "splat_30000.rad";
     ASSERT_TRUE(std::filesystem::exists(input)) << "Benchmark input missing: " << input;
 
     const auto input_size = std::filesystem::file_size(input);

@@ -48,8 +48,14 @@ namespace PerfTimer {
     double hostTimeDelta = -1.0;
 
     void hostTic() {
-        if (hostHold)
-            _THROW_ERROR("hostTic");
+        if (hostHold) {
+            _THROW_ERROR(std::format(
+                "PerfTimer::hostTic cannot start an already-running host interval (host_hold={}, accumulated_seconds={}, marker_count={}, pushed_marker_count={})",
+                hostHold,
+                hostTimeDelta,
+                marks.size(),
+                pushedMarks.size()));
+        }
         hostHold = true;
         hostStartTime = std::chrono::high_resolution_clock::now();
     }
@@ -59,8 +65,14 @@ namespace PerfTimer {
             hostTimeDelta = 0.0;
             return;
         }
-        if (!hostHold)
-            _THROW_ERROR("hostToc");
+        if (!hostHold) {
+            _THROW_ERROR(std::format(
+                "PerfTimer::hostToc requires a running host interval (host_hold={}, accumulated_seconds={}, marker_count={}, pushed_marker_count={})",
+                hostHold,
+                hostTimeDelta,
+                marks.size(),
+                pushedMarks.size()));
+        }
         hostHold = false;
         auto hostEndTime = std::chrono::high_resolution_clock::now();
         hostTimeDelta += std::chrono::duration<double>(hostEndTime - hostStartTime).count();
@@ -83,8 +95,13 @@ namespace PerfTimer {
 
     void pushMarker(VulkanGSPipeline* module) {
 
-        if (!module->writeTimestamp(-1))
-            _THROW_ERROR("Failed to write exit timestamp in pushMarker");
+        if (!module->writeTimestamp(-1)) {
+            _THROW_ERROR(std::format(
+                "PerfTimer::pushMarker could not write an exit timestamp (module={:#x}, marker_count={}, pushed_marker_count={})",
+                lfs::rendering::vkHandleValue(module),
+                marks.size(),
+                pushedMarks.size()));
+        }
 
         int depth = 1;
         for (int i = (int)marks.size() - 1; i >= 0; --i) {
@@ -96,7 +113,12 @@ namespace PerfTimer {
                 return;
             }
         }
-        _THROW_ERROR("Empty stack in pushMarker");
+        _THROW_ERROR(std::format(
+            "PerfTimer::pushMarker found no matching open marker (module={:#x}, marker_count={}, pushed_marker_count={}, search_depth={})",
+            lfs::rendering::vkHandleValue(module),
+            marks.size(),
+            pushedMarks.size(),
+            depth));
     }
 
     void popMarkers(VulkanGSPipeline* module) {
@@ -104,8 +126,14 @@ namespace PerfTimer {
             auto stage = pushedMarks.back();
             pushedMarks.pop_back();
             PerfTimer::stages[int(stage)].total_time += hostTimeDelta;
-            if (!module->writeTimestamp(1))
-                _THROW_ERROR("Failed to write enter timestamp in popMarkers");
+            if (!module->writeTimestamp(1)) {
+                _THROW_ERROR(std::format(
+                    "PerfTimer::popMarkers could not reopen a paused marker (module={:#x}, stage={}, remaining_pushed={}, marker_count={})",
+                    lfs::rendering::vkHandleValue(module),
+                    static_cast<int>(stage),
+                    pushedMarks.size(),
+                    marks.size()));
+            }
             marks.emplace_back(static_cast<int>(stage), 1);
         }
         hostTimeDelta = 0.0;
@@ -117,25 +145,43 @@ namespace PerfTimer {
         return result;
     }
 
+    void discardMarkers() noexcept {
+        marks.clear();
+        pushedMarks.clear();
+    }
+
     std::vector<std::pair<size_t, double>> update(std::vector<double> times,
                                                   const std::vector<Marker>& batch_marks) {
-        if (times.size() != batch_marks.size())
-            _THROW_ERROR(
-                "Number of timestamps (" + std::to_string(times.size()) +
-                ") and number of marks (" + std::to_string(batch_marks.size()) +
-                ") mismatch in batch time update");
+        if (times.size() != batch_marks.size()) {
+            _THROW_ERROR(std::format(
+                "PerfTimer batch update requires one marker per timestamp (timestamp_count={}, marker_count={})",
+                times.size(),
+                batch_marks.size()));
+        }
         std::vector<std::pair<size_t, double>> results(TrainStage::END, {0, 0.0});
         std::vector<std::pair<TrainStage, double>> stack;
         for (size_t i = 0; i < times.size(); i++) {
             auto [stage_int, delta] = batch_marks[i];
-            if (stage_int < 0 || stage_int >= static_cast<int>(TrainStage::END))
-                _THROW_ERROR("Invalid timer stage in batch time update");
+            LFS_VK_DEBUG_ASSERT(
+                stage_int >= 0 && stage_int < static_cast<int>(TrainStage::END),
+                "PerfTimer marker stage is outside the stage enum (index={}, stage={}, delta={}, stage_count={}, stack_depth={})",
+                i,
+                stage_int,
+                delta,
+                static_cast<int>(TrainStage::END),
+                stack.size());
             const auto stage = static_cast<TrainStage>(stage_int);
             if (delta == 1) {
                 stack.emplace_back(stage, times[i]);
             } else {
-                if (stack.empty() || stack.back().first != stage)
-                    _THROW_ERROR("Unbalanced timer markers in batch time update");
+                LFS_VK_DEBUG_ASSERT(
+                    !stack.empty() && stack.back().first == stage,
+                    "PerfTimer exit marker does not match the open marker stack (index={}, exit_stage={}, delta={}, stack_depth={}, open_stage={})",
+                    i,
+                    stage_int,
+                    delta,
+                    stack.size(),
+                    stack.empty() ? -1 : static_cast<int>(stack.back().first));
                 double dt = times[i] - stack.back().second;
                 PerfTimer::stages[int(stage)].total_time += dt;
                 stack.pop_back();
@@ -143,8 +189,14 @@ namespace PerfTimer {
                 results[stage].second += dt;
             }
         }
-        if (!stack.empty())
-            _THROW_ERROR("Unclosed timer markers in batch time update");
+        if (!stack.empty()) {
+            _THROW_ERROR(std::format(
+                "PerfTimer batch ended with unclosed markers (remaining_depth={}, top_stage={}, timestamp_count={}, marker_count={})",
+                stack.size(),
+                static_cast<int>(stack.back().first),
+                times.size(),
+                batch_marks.size()));
+        }
         for (int stage = 0; stage < int(TrainStage::END); ++stage) {
             const auto [count, elapsed_seconds] = results[stage];
             const char* const scope = count > 0

@@ -64,15 +64,18 @@ __device__ __forceinline__ void ppisp_mul_mat_bwd(const float3x3& A, const float
 }
 
 // Parameter transformation gradients
-__device__ __forceinline__ float ppisp_bounded_positive_backward(float raw, float min_value, float grad_output) {
-    float exp_x = __expf(raw);
-    float sigmoid = __fdividef(exp_x, 1.0f + exp_x);
-    return grad_output * sigmoid;
+__device__ __forceinline__ float ppisp_bounded_positive_backward(float raw, float /*min_value*/, float grad_output) {
+    if (!isfinite(raw) || !isfinite(grad_output) || raw >= PPISP_MAX_SHAPE_RAW)
+        return 0.0f;
+    return grad_output * ppisp_sigmoid(raw);
 }
 
 __device__ __forceinline__ float ppisp_clamped_backward(float raw, float grad_output) {
-    float exp_neg_x = __expf(-raw);
-    float sigmoid = __fdividef(1.0f, 1.0f + exp_neg_x);
+    if (!isfinite(raw) || !isfinite(grad_output))
+        return 0.0f;
+    const float sigmoid = ppisp_sigmoid(raw);
+    if (sigmoid <= PPISP_CENTER_EPSILON || sigmoid >= 1.0f - PPISP_CENTER_EPSILON)
+        return 0.0f;
     return grad_output * sigmoid * (1.0f - sigmoid);
 }
 
@@ -80,9 +83,16 @@ __device__ __forceinline__ float ppisp_clamped_backward(float raw, float grad_ou
 __device__ __forceinline__ void ppisp_apply_exposure_bwd(const float3& rgb_in, float exposure_param,
                                                          const float3& grad_rgb_out, float3& grad_rgb_in,
                                                          float& grad_exposure_param) {
-    float exposure_factor = exp2f(exposure_param);
-    float3 rgb_out = rgb_in * exposure_factor;
-    grad_exposure_param = ppisp_dot(grad_rgb_out, rgb_out) * 0.69314718f;
+    const float exposure_factor = exp2f(ppisp_exposure_value(exposure_param));
+    const float3 rgb_out = rgb_in * exposure_factor;
+    const bool exposure_has_gradient = isfinite(exposure_param) &&
+                                       exposure_param > PPISP_MIN_EXPOSURE_EV &&
+                                       exposure_param < PPISP_MAX_EXPOSURE_EV;
+    grad_exposure_param = exposure_has_gradient
+                              ? ppisp_dot(grad_rgb_out, rgb_out) * 0.69314718f
+                              : 0.0f;
+    if (!isfinite(grad_exposure_param))
+        grad_exposure_param = 0.0f;
     grad_rgb_in = grad_rgb_out * exposure_factor;
 }
 
@@ -105,14 +115,18 @@ __device__ __forceinline__ void ppisp_apply_vignetting_bwd(const float3& rgb_in,
     for (int i = 0; i < 3; i++) {
         const VignettingChannelParams& params = vignetting_params[i];
 
-        float dx = uv.x - params.cx;
-        float dy = uv.y - params.cy;
+        const float cx = ppisp_finite_or_zero(params.cx);
+        const float cy = ppisp_finite_or_zero(params.cy);
+        const float alpha0 = ppisp_finite_or_zero(params.alpha0);
+        const float alpha1 = ppisp_finite_or_zero(params.alpha1);
+        const float alpha2 = ppisp_finite_or_zero(params.alpha2);
+        float dx = uv.x - cx;
+        float dy = uv.y - cy;
         float r2 = __fmaf_rn(dx, dx, dy * dy);
         float r4 = r2 * r2;
         float r6 = r4 * r2;
 
-        float falloff =
-            __fmaf_rn(params.alpha2, r6, __fmaf_rn(params.alpha1, r4, __fmaf_rn(params.alpha0, r2, 1.0f)));
+        float falloff = __fmaf_rn(alpha2, r6, __fmaf_rn(alpha1, r4, __fmaf_rn(alpha0, r2, 1.0f)));
         float falloff_clamped = fmaxf(0.0f, fminf(1.0f, falloff));
 
         grad_rgb_in_arr[i] = grad_rgb_out_arr[i] * falloff_clamped;
@@ -123,8 +137,9 @@ __device__ __forceinline__ void ppisp_apply_vignetting_bwd(const float3& rgb_in,
             grad_vignetting_params[i].alpha1 += grad_falloff * r4;
             grad_vignetting_params[i].alpha2 += grad_falloff * r6;
 
-            float grad_r2 = grad_falloff * __fmaf_rn(3.0f * params.alpha2, r4,
-                                                     __fmaf_rn(2.0f * params.alpha1, r2, params.alpha0));
+            float grad_r2 = grad_falloff *
+                            __fmaf_rn(3.0f * alpha2, r4,
+                                      __fmaf_rn(2.0f * alpha1, r2, alpha0));
             grad_vignetting_params[i].cx += -grad_r2 * 2.0f * dx;
             grad_vignetting_params[i].cy += -grad_r2 * 2.0f * dy;
         }
@@ -249,10 +264,10 @@ __device__ __forceinline__ void ppisp_compute_homography_nullspace_computation_b
 __device__ __forceinline__ void ppisp_compute_homography_bwd(const ColorPPISPParams* color_params,
                                                              const float3x3& grad_H,
                                                              ColorPPISPParams* grad_color_params) {
-    const float2& b_lat = color_params->b;
-    const float2& r_lat = color_params->r;
-    const float2& g_lat = color_params->g;
-    const float2& n_lat = color_params->n;
+    const float2 b_lat = ppisp_finite_or_zero(color_params->b);
+    const float2 r_lat = ppisp_finite_or_zero(color_params->r);
+    const float2 g_lat = ppisp_finite_or_zero(color_params->g);
+    const float2 n_lat = ppisp_finite_or_zero(color_params->n);
 
     float2x2 zca_b, zca_r, zca_g, zca_n;
     zca_b.m[0] = PPISP_COLOR_PINV_BLOCKS[0][0];

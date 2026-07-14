@@ -440,6 +440,24 @@ namespace lfs::core {
         return instance;
     }
 
+    void Logger::init() {
+        init(LogLevel::Info, std::string{}, std::string{}, false);
+    }
+
+    void Logger::init(const LogLevel console_level) {
+        init(console_level, std::string{}, std::string{}, false);
+    }
+
+    void Logger::init(const LogLevel console_level, const std::string& log_file) {
+        init(console_level, log_file, std::string{}, false);
+    }
+
+    void Logger::init(const LogLevel console_level,
+                      const std::string& log_file,
+                      const std::string& filter_pattern) {
+        init(console_level, log_file, filter_pattern, false);
+    }
+
     void Logger::init(const LogLevel console_level, const std::string& log_file,
                       const std::string& filter_pattern, const bool use_stderr) {
         std::lock_guard lock(impl_->mutex);
@@ -489,7 +507,7 @@ namespace lfs::core {
             handlers.end());
     }
 
-    void Logger::log(const LogLevel level, const std::source_location& loc, const std::string_view msg) {
+    void Logger::log(const LogLevel level, const SourceSite& loc, const std::string_view msg) {
         if (!impl_->logger)
             return;
 
@@ -576,7 +594,7 @@ namespace lfs::core {
         return impl_->memory_sink ? impl_->memory_sink->text() : std::string{};
     }
 
-    ScopedTimer::ScopedTimer(std::string name, const LogLevel level, const std::source_location loc)
+    ScopedTimer::ScopedTimer(std::string name, const LogLevel level, const SourceSite loc)
         : start_(std::chrono::high_resolution_clock::now()),
           name_(std::move(name)),
           level_(level),
@@ -592,7 +610,7 @@ namespace lfs::core {
     }
 
     ScopedTimer::ScopedTimer(std::string name, const double min_log_ms,
-                             const LogLevel level, const std::source_location loc)
+                             const LogLevel level, const SourceSite loc)
         : ScopedTimer(std::move(name), level, loc) {
         min_log_ms_ = min_log_ms;
     }

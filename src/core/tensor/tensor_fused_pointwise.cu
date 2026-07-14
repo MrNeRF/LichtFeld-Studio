@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/cuda_debug.hpp"
+#include "core/cuda_error.hpp"
 #include "internal/gpu_config.hpp"
 #include "internal/lazy_executor.hpp"
 #include "internal/tensor_impl.hpp"
@@ -281,7 +281,7 @@ namespace lfs::core::tensor_ops {
         const int grid_size = gpu.optimal_grid_size(BLOCK_SIZE);
 
         float* partial = nullptr;
-        CHECK_CUDA(cudaMallocAsync(&partial, grid_size * sizeof(float), stream));
+        LFS_CUDA_CHECK(cudaMallocAsync(&partial, grid_size * sizeof(float), stream));
         assert(partial != nullptr);
 
         fused_transform_reduce_stage1_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
@@ -295,7 +295,8 @@ namespace lfs::core::tensor_ops {
             launch_fused_affine_transform(output, output, 1, scale, 0.0f, stream);
         }
 
-        cudaFreeAsync(partial, stream);
+        LFS_CUDA_CHECK_MSG(cudaFreeAsync(partial, stream),
+                           "fused transform-reduce partial buffer");
     }
 
     // ============= Fused Segmented Transform-Reduce (Last-Dim) =============

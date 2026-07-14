@@ -31,6 +31,7 @@ namespace lfs::vis::gui {
 
     namespace {
         VulkanContext* g_texture_context = nullptr;
+        lfs::rendering::CudaVulkanUploadStream g_texture_upload_stream;
 
         [[nodiscard]] std::vector<std::uint8_t> toRgba(const std::uint8_t* pixels,
                                                        const int width,
@@ -112,6 +113,16 @@ namespace lfs::vis::gui {
     } // namespace
 
     void setVulkanUiTextureContext(VulkanContext* const context) {
+        if (context == nullptr) {
+            if (!g_texture_upload_stream.synchronize()) {
+                LOG_WARN("CUDA/Vulkan UI texture stream synchronization failed during shutdown: {}",
+                         g_texture_upload_stream.lastError());
+            }
+            g_texture_upload_stream.reset();
+        } else if (!g_texture_upload_stream.valid() && !g_texture_upload_stream.init()) {
+            LOG_ERROR("Could not create the non-blocking CUDA/Vulkan UI texture stream: {}",
+                      g_texture_upload_stream.lastError());
+        }
         g_texture_context = context;
     }
 
@@ -154,15 +165,6 @@ namespace lfs::vis::gui {
         static constexpr std::size_t kMaxPendingUploads = 3;
         std::vector<PendingUpload> pending_uploads;
 
-        // Deferred destruction queue: when the image is resized the old handles are kept alive
-        // here until the next destroyImage() so that in-flight RmlUI descriptor set references
-        // remain valid and do not cause GPU corruption.
-        struct RetiredImage {
-            VkImage image = VK_NULL_HANDLE;
-            VkImageView image_view = VK_NULL_HANDLE;
-            VmaAllocation allocation = VK_NULL_HANDLE;
-        };
-        std::vector<RetiredImage> retired_images_;
         int width = 0;
         int height = 0;
 
@@ -338,9 +340,9 @@ namespace lfs::vis::gui {
                 return false;
             }
             std::memcpy(mapped, source, static_cast<std::size_t>(size));
-            vmaFlushAllocation(allocator, allocation, 0, size);
+            const VkResult flush_result = vmaFlushAllocation(allocator, allocation, 0, size);
             vmaUnmapMemory(allocator, allocation);
-            return true;
+            return flush_result == VK_SUCCESS;
         }
 
         [[nodiscard]] VkCommandBuffer beginSingleTimeCommands() const {
@@ -417,14 +419,32 @@ namespace lfs::vis::gui {
                 return true;
             }
 
-            // Save old image to deferred queue so in-flight RmlUI descriptor set references
-            // remain valid while we create the new one. The queue is drained in destroyImage().
             if (image != VK_NULL_HANDLE) {
                 waitAndReleasePendingUpload();
-                retired_images_.push_back({image, image_view, image_allocation});
+                // Descriptor updates and image destruction are only legal once
+                // every submitted RmlUI draw that can reference the old view has
+                // retired. Resize is already a cold path; pay the bounded fence
+                // wait here instead of retaining every historical image forever.
+                if (context != nullptr && !context->waitForSubmittedFrames()) {
+                    LOG_ERROR("Vulkan UI texture resize could not drain submitted frames: {}",
+                              context->lastError());
+                    return false;
+                }
+                if (!image_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.ui_texture.image",
+                        image_vram_label,
+                        0);
+                }
+                image_barriers.forgetImage(image);
+                if (image_view != VK_NULL_HANDLE) {
+                    vkDestroyImageView(device, image_view, nullptr);
+                }
+                vmaDestroyImage(allocator, image, image_allocation);
                 image = VK_NULL_HANDLE;
                 image_view = VK_NULL_HANDLE;
                 image_allocation = VK_NULL_HANDLE;
+                image_vram_label.clear();
             }
             width = new_width;
             height = new_height;
@@ -475,6 +495,16 @@ namespace lfs::vis::gui {
                 destroyImage();
                 return false;
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                         image,
+                                         "ui.texture.cpu[{}x{}]",
+                                         new_width,
+                                         new_height);
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                         image_view,
+                                         "ui.texture.cpu[{}x{}].view",
+                                         new_width,
+                                         new_height);
             image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
 
             if (descriptor_set == VK_NULL_HANDLE) {
@@ -539,10 +569,23 @@ namespace lfs::vis::gui {
                 interop_disabled = true;
                 return false;
             }
+            const std::uint64_t vulkan_ready_value = ++interop_timeline_value;
             if (!context->transitionImageLayoutImmediate(interop_image.image,
                                                          VK_IMAGE_LAYOUT_UNDEFINED,
-                                                         VK_IMAGE_LAYOUT_GENERAL)) {
+                                                         VK_IMAGE_LAYOUT_GENERAL,
+                                                         VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                             {interop_semaphore.semaphore, vulkan_ready_value}))) {
                 LOG_WARN("Vulkan UI texture interop initial transition failed: {}", context->lastError());
+                destroyImage();
+                interop_disabled = true;
+                return false;
+            }
+            // Retire the initial Vulkan signal before CUDA can advance the
+            // exported timeline. Per-upload ownership transfers below stay
+            // asynchronous; this is the one-time cross-API handoff boundary.
+            if (!context->waitForImmediateSubmits()) {
+                LOG_WARN("Vulkan UI texture interop initialization handoff failed: {}",
+                         context->lastError());
                 destroyImage();
                 interop_disabled = true;
                 return false;
@@ -572,7 +615,6 @@ namespace lfs::vis::gui {
             image_view = interop_image.view;
             image_layout = VK_IMAGE_LAYOUT_GENERAL;
             image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-            interop_timeline_value = 0;
             mode = Mode::CudaInterop;
 
             // Skip allocating an internal descriptor set: the interop path is consumed via RmlUi
@@ -589,7 +631,7 @@ namespace lfs::vis::gui {
                 return false;
             }
             VulkanContext* const ctx = getVulkanUiTextureContext();
-            if (!ctx || !init(*ctx)) {
+            if (!ctx || !g_texture_upload_stream.valid() || !init(*ctx)) {
                 return false;
             }
             if (!ensureInteropImage(expected_width, expected_height)) {
@@ -597,32 +639,40 @@ namespace lfs::vis::gui {
             }
 
             if (image_layout != VK_IMAGE_LAYOUT_GENERAL) {
+                const std::uint64_t vulkan_ready_value = ++interop_timeline_value;
                 if (!ctx->transitionImageLayoutImmediate(image,
                                                          image_layout,
-                                                         VK_IMAGE_LAYOUT_GENERAL)) {
+                                                         VK_IMAGE_LAYOUT_GENERAL,
+                                                         VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                             {interop_semaphore.semaphore, vulkan_ready_value}))) {
                     LOG_ERROR("Vulkan UI texture interop transition to GENERAL failed: {}", ctx->lastError());
                     return false;
                 }
                 image_layout = VK_IMAGE_LAYOUT_GENERAL;
             }
 
-            if (!interop.copyTensorToSurface(tensor, /*stream=*/nullptr, flip_y)) {
+            const cudaStream_t upload_stream = g_texture_upload_stream.stream();
+            if (!interop.wait(interop_timeline_value, upload_stream)) {
+                LOG_ERROR("Vulkan UI texture CUDA wait for Vulkan image release failed: {}",
+                          interop.lastError());
+                return false;
+            }
+            if (!interop.copyTensorToSurface(tensor, upload_stream, flip_y)) {
                 LOG_ERROR("Vulkan UI texture CUDA copy failed: {}", interop.lastError());
                 return false;
             }
 
             const std::uint64_t signal_value = ++interop_timeline_value;
-            if (!interop.signal(signal_value)) {
+            if (!interop.signal(signal_value, upload_stream)) {
                 LOG_ERROR("Vulkan UI texture CUDA signal failed: {}", interop.lastError());
                 return false;
             }
             if (!ctx->transitionImageLayoutImmediate(image,
                                                      VK_IMAGE_LAYOUT_GENERAL,
                                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                     VK_IMAGE_ASPECT_COLOR_BIT,
-                                                     interop_semaphore.semaphore,
-                                                     signal_value,
-                                                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+                                                     VulkanContext::ImmediateTransitionOptions::waitOn(
+                                                         {interop_semaphore.semaphore, signal_value},
+                                                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))) {
                 LOG_ERROR("Vulkan UI texture interop transition to read-only failed: {}", ctx->lastError());
                 return false;
             }
@@ -775,22 +825,27 @@ namespace lfs::vis::gui {
             return uploadRgba(toRgba(pixels, new_width, new_height, channels), new_width, new_height);
         }
 
-        void destroyRetiredImages() {
-            for (auto& r : retired_images_) {
-                if (r.image_view != VK_NULL_HANDLE)
-                    vkDestroyImageView(device, r.image_view, nullptr);
-                if (r.image != VK_NULL_HANDLE) {
-                    image_barriers.forgetImage(r.image);
-                    vmaDestroyImage(allocator, r.image, r.allocation);
-                }
-            }
-            retired_images_.clear();
-        }
-
         void destroyImage() {
             waitAndReleasePendingUpload();
-            destroyRetiredImages();
-            if (mode == Mode::CudaInterop) {
+            const bool has_interop_resources =
+                mode == Mode::CudaInterop || interop.valid() ||
+                interop_image.image != VK_NULL_HANDLE ||
+                interop_semaphore.semaphore != VK_NULL_HANDLE;
+            if (has_interop_resources) {
+                if (g_texture_upload_stream.valid() && !g_texture_upload_stream.synchronize()) {
+                    LOG_WARN("Vulkan UI texture CUDA upload drain failed during image destruction: {}",
+                             g_texture_upload_stream.lastError());
+                }
+                if (context != nullptr) {
+                    if (!context->waitForSubmittedFrames()) {
+                        LOG_WARN("Vulkan UI texture could not drain submitted frames before image destruction: {}",
+                                 context->lastError());
+                    }
+                    if (!context->waitForImmediateSubmits()) {
+                        LOG_WARN("Vulkan UI texture could not drain immediate transitions before image destruction: {}",
+                                 context->lastError());
+                    }
+                }
                 if (image != VK_NULL_HANDLE) {
                     image_barriers.forgetImage(image);
                 }

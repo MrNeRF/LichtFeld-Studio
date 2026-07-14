@@ -332,7 +332,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexSelectWithClampMode) {
     auto t_torch = torch::arange(0, 5, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{-1, 0, 3, 10};
-    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CUDA);
 
     // PyTorch clamps by default in index_select when indices are clamped manually
     std::vector<int64_t> indices_clamped;
@@ -352,7 +352,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexSelectWithWrapMode) {
     auto t_torch = torch::arange(0, 5, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{-1, 0, 5, 7};
-    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CUDA);
 
     // PyTorch wraps with modulo
     std::vector<int64_t> indices_wrapped;
@@ -518,7 +518,7 @@ TEST_F(TensorIndexingAdvancedTest, GatherBasic) {
     auto t_torch = torch::arange(0, 10, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{0, 2, 4, 6, 8};
-    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CUDA);
     auto indices_torch = torch::tensor(indices_vec, torch::kInt64);
 
     auto result_custom = t_custom.gather(0, indices_custom);
@@ -575,7 +575,7 @@ TEST_F(TensorIndexingAdvancedTest, ComplexIndexingChain) {
 
     // Select specific rows
     auto row_vec = std::vector<int>{0, 5, 9};
-    auto row_idx_custom = Tensor::from_vector(row_vec, {3}, Device::CPU);
+    auto row_idx_custom = Tensor::from_vector(row_vec, {3}, Device::CUDA);
     auto row_idx_torch = torch::tensor(row_vec, torch::kInt64);
 
     auto rows_custom = t_custom.index_select(0, row_idx_custom);
@@ -583,7 +583,7 @@ TEST_F(TensorIndexingAdvancedTest, ComplexIndexingChain) {
 
     // Then select specific columns
     auto col_vec = std::vector<int>{0, 5, 9};
-    auto col_idx_custom = Tensor::from_vector(col_vec, {3}, Device::CPU);
+    auto col_idx_custom = Tensor::from_vector(col_vec, {3}, Device::CUDA);
     auto col_idx_torch = torch::tensor(col_vec, torch::kInt64);
 
     auto result_custom = rows_custom.index_select(1, col_idx_custom);
@@ -597,7 +597,7 @@ TEST_F(TensorIndexingAdvancedTest, ScatterGatherRoundtrip) {
     auto original_torch = torch::arange(0, 10, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{0, 2, 4, 6, 8};
-    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CUDA);
     auto indices_torch = torch::tensor(indices_vec, torch::kInt64);
 
     // Gather
@@ -605,7 +605,7 @@ TEST_F(TensorIndexingAdvancedTest, ScatterGatherRoundtrip) {
     auto gathered_torch = original_torch.gather(0, indices_torch);
 
     // Scatter back
-    auto result_custom = Tensor::zeros({10}, Device::CPU);
+    auto result_custom = Tensor::zeros({10}, Device::CUDA);
     auto result_torch = torch::zeros({10});
 
     result_custom.scatter_(0, indices_custom, gathered_custom);
@@ -620,7 +620,7 @@ TEST_F(TensorIndexingAdvancedTest, EmptyIndices) {
     auto t_custom = Tensor::arange(0.0f, 10.0f);
     auto t_torch = torch::arange(0, 10, torch::kFloat32);
 
-    auto indices_custom = Tensor::from_vector(std::vector<int>{}, {0}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(std::vector<int>{}, {0}, Device::CUDA);
     auto indices_torch = torch::tensor({}, torch::kInt64);
 
     auto result_custom = t_custom.gather(0, indices_custom);

@@ -8,10 +8,11 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
-#include <optional>
-#include <string>
+#include <mutex>
 #include <string_view>
+#include <thread>
 
 namespace lfs::vis {
 
@@ -48,22 +49,11 @@ namespace lfs::vis {
         Error        // Error occurred
     };
 
-    // Resources that need cleanup
-    struct TrainingResources {
-        bool has_trainer = false;
-        bool has_training_thread = false;
-        bool has_scene_data = false;
-        bool has_gpu_tensors = false;
-        std::string training_node_name;
-        std::string dataset_path;
-    };
-
     // State machine configuration
     class LFS_VIS_API TrainingStateMachine {
     public:
         // State transition callback signatures
         using StateChangeCallback = std::function<void(TrainingState old_state, TrainingState new_state)>;
-        using CleanupCallback = std::function<void(const TrainingResources& resources)>;
 
         TrainingStateMachine();
 
@@ -71,7 +61,7 @@ namespace lfs::vis {
         [[nodiscard]] TrainingState getState() const { return state_.load(std::memory_order_acquire); }
         [[nodiscard]] bool isInState(TrainingState state) const { return getState() == state; }
         [[nodiscard]] bool isActive() const; // Running or Paused
-        [[nodiscard]] FinishReason getFinishReason() const { return finish_reason_; }
+        [[nodiscard]] FinishReason getFinishReason() const;
 
         // Action permission checks - call BEFORE attempting action
         [[nodiscard]] bool canPerform(TrainingAction action) const;
@@ -81,14 +71,8 @@ namespace lfs::vis {
         [[nodiscard]] bool transitionTo(TrainingState new_state);
         [[nodiscard]] bool transitionToFinished(FinishReason reason);
 
-        // Resource tracking
-        void setResources(const TrainingResources& resources);
-        [[nodiscard]] const TrainingResources& getResources() const { return resources_; }
-        void clearResourceTracking();
-
         // Callbacks
-        void setStateChangeCallback(StateChangeCallback callback) { on_state_change_ = std::move(callback); }
-        void setCleanupCallback(CleanupCallback callback) { on_cleanup_ = std::move(callback); }
+        void setStateChangeCallback(StateChangeCallback callback);
 
         // Utility
         [[nodiscard]] static std::string_view stateName(TrainingState state);
@@ -96,15 +80,17 @@ namespace lfs::vis {
 
     private:
         [[nodiscard]] bool isValidTransition(TrainingState from, TrainingState to) const;
-        void executeExitActions(TrainingState old_state);
-        void executeEntryActions(TrainingState new_state);
+        [[nodiscard]] bool transitionToImpl(TrainingState new_state, FinishReason finish_reason);
+        void finishCallbackDispatch() noexcept;
 
         std::atomic<TrainingState> state_{TrainingState::Idle};
+        mutable std::mutex mutex_;
+        std::condition_variable callback_dispatch_idle_;
+        std::thread::id callback_dispatch_owner_;
+        bool callback_dispatch_active_ = false;
         FinishReason finish_reason_{FinishReason::None};
-        TrainingResources resources_;
 
         StateChangeCallback on_state_change_;
-        CleanupCallback on_cleanup_;
 
         // Transition table: [from][to] = allowed
         static constexpr size_t STATE_COUNT = 6;

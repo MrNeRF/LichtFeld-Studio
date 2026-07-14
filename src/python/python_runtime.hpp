@@ -97,12 +97,22 @@ namespace lfs::python {
     using MainLoopWakeCallback = void (*)();
     LFS_PYTHON_RUNTIME_API void set_main_loop_wake_callback(MainLoopWakeCallback cb);
 
-    using StartupPluginLoadStateCallback = void (*)(bool active, float progress, const char* stage);
-    LFS_PYTHON_RUNTIME_API void set_startup_plugin_load_state_callback(
-        StartupPluginLoadStateCallback cb);
-    LFS_PYTHON_RUNTIME_API void notify_startup_plugin_load_state(bool active,
-                                                                 float progress,
-                                                                 const char* stage);
+    struct StartupPluginLoadStatus {
+        std::string state = "not_started";
+        std::string phase = "idle";
+        std::string plugin;
+        std::string detail;
+        std::size_t attempted = 0;
+        std::size_t total = 0;
+        std::size_t failed = 0;
+        float progress = 0.0f;
+        bool active = false;
+        std::uint64_t revision = 0;
+    };
+
+    LFS_PYTHON_RUNTIME_API void set_startup_plugin_load_status(
+        const StartupPluginLoadStatus& status);
+    LFS_PYTHON_RUNTIME_API StartupPluginLoadStatus get_startup_plugin_load_status();
 
     using CleanupCallback = void (*)();
     using EnsureInitializedCallback = void (*)();
@@ -605,6 +615,7 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_ui_texture_service(CreateTextureFn create, DeleteTextureFn del,
                                                        MaxTextureSizeFn max_size);
+    LFS_PYTHON_RUNTIME_API void require_ui_texture_creation_thread();
     LFS_PYTHON_RUNTIME_API TextureResult create_ui_texture(const unsigned char* data, int w, int h, int channels);
     LFS_PYTHON_RUNTIME_API void delete_ui_texture(uint64_t texture_id);
     LFS_PYTHON_RUNTIME_API int get_max_texture_size();

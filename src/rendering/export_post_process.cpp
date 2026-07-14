@@ -4,6 +4,7 @@
 
 #include "rendering/export_post_process.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "environment_image.hpp"
 #include "export_post_process_kernels.cuh"
 #include <cmath>
@@ -63,29 +64,71 @@ namespace lfs::rendering {
 
     ExportResult<std::shared_ptr<const CudaEnvironmentMap>> getOrLoadCudaEnvironmentMap(
         const std::filesystem::path& path) {
-        auto image = loadEnvironmentImage(path);
+        auto image = loadEnvironmentImageShared(path);
         if (!image) {
             return std::unexpected(image.error());
         }
 
         auto& cache = cudaEnvironmentMapCache();
         std::lock_guard lock(cache.mutex);
-        if (cache.map && cache.path == image->path) {
+        if (cache.map && cache.path == (*image)->path) {
             return cache.map;
         }
 
         auto map = std::make_shared<CudaEnvironmentMap>();
-        map->width = image->width;
-        map->height = image->height;
-        map->pixels = lfs::core::Tensor::from_vector(
-            image->pixels,
-            {static_cast<size_t>(image->height), static_cast<size_t>(image->width), size_t{3}},
-            lfs::core::Device::CUDA);
+        map->width = (*image)->width;
+        map->height = (*image)->height;
+        cudaStream_t upload_stream = nullptr;
+        cudaError_t status = cudaStreamCreateWithFlags(&upload_stream, cudaStreamNonBlocking);
+        if (status != cudaSuccess) {
+            return std::unexpected(std::format("failed to create environment upload stream: {} ({})",
+                                               cudaGetErrorName(status),
+                                               cudaGetErrorString(status)));
+        }
+        {
+            lfs::core::CUDAStreamGuard stream_guard(upload_stream);
+            map->pixels = lfs::core::Tensor::empty(
+                {static_cast<size_t>((*image)->height),
+                 static_cast<size_t>((*image)->width),
+                 size_t{3}},
+                lfs::core::Device::CUDA,
+                lfs::core::DataType::Float32);
+        }
         if (!map->pixels.is_valid()) {
-            return std::unexpected(std::format("failed to upload environment map {} to CUDA", image->path.string()));
+            lfs::core::CudaMemoryPool::instance().release_stream(upload_stream);
+            (void)cudaStreamDestroy(upload_stream);
+            return std::unexpected(std::format("failed to allocate CUDA environment map {}",
+                                               (*image)->path.string()));
         }
 
-        cache.path = image->path;
+        if (status == cudaSuccess) {
+            status = cudaMemcpyAsync(map->pixels.data_ptr(),
+                                     (*image)->pixels.data(),
+                                     map->pixels.bytes(),
+                                     cudaMemcpyHostToDevice,
+                                     upload_stream);
+        }
+        if (status == cudaSuccess) {
+            status = cudaStreamSynchronize(upload_stream);
+        }
+        // The cached tensor was allocated on this temporary lane. Sever every
+        // allocator reference before destroying the stream so a later cache
+        // release never dereferences a dead cudaStream_t.
+        lfs::core::CudaMemoryPool::instance().release_stream(upload_stream);
+        const cudaError_t destroy_status = cudaStreamDestroy(upload_stream);
+        if (status != cudaSuccess) {
+            return std::unexpected(std::format("failed to upload environment map {} to CUDA: {} ({})",
+                                               (*image)->path.string(),
+                                               cudaGetErrorName(status),
+                                               cudaGetErrorString(status)));
+        }
+        if (destroy_status != cudaSuccess) {
+            return std::unexpected(std::format("failed to destroy environment upload stream: {} ({})",
+                                               cudaGetErrorName(destroy_status),
+                                               cudaGetErrorString(destroy_status)));
+        }
+
+        cache.path = (*image)->path;
         cache.map = map;
         return cache.map;
     }
@@ -95,6 +138,11 @@ namespace lfs::rendering {
         std::lock_guard lock(cache.mutex);
         cache.map.reset();
         cache.path.clear();
+    }
+
+    void releaseEnvironmentMapCaches() {
+        releaseCudaEnvironmentMapCache();
+        releaseEnvironmentImageCache();
     }
 
     ExportResult<void> unpackU8HwcBandToChwFloat(const lfs::core::Tensor& band_u8_hwc,
@@ -223,11 +271,22 @@ namespace lfs::rendering {
         device_params.env_width = env.width;
         device_params.env_height = env.height;
 
-        return launchStatus("composite_environment_band_kernel",
-                            exportpp::launchCompositeEnvironmentBand(device_params, env.pixels.ptr<float>(),
-                                                                     rgb_chw.ptr<float>(), alpha.ptr<float>(),
-                                                                     band_u8_hwc_out.ptr<unsigned char>(),
-                                                                     resolveExportStream(stream)));
+        const cudaStream_t execution_stream = resolveExportStream(stream);
+        // The environment upload is complete before it enters the cache, so
+        // only lifetime tracking is needed here. The band inputs may still be
+        // produced elsewhere and need explicit ordering onto this stream.
+        env.pixels.record_stream(execution_stream);
+        rgb_chw.sync_to_stream(execution_stream);
+        alpha.sync_to_stream(execution_stream);
+        band_u8_hwc_out.set_stream(execution_stream);
+        return launchStatus(
+            "composite_environment_band_kernel",
+            exportpp::launchCompositeEnvironmentBand(device_params,
+                                                     env.pixels.ptr<float>(),
+                                                     rgb_chw.ptr<float>(),
+                                                     alpha.ptr<float>(),
+                                                     band_u8_hwc_out.ptr<unsigned char>(),
+                                                     execution_stream));
     }
 
 } // namespace lfs::rendering

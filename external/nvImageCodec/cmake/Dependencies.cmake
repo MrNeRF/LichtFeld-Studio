@@ -53,13 +53,25 @@ include_directories(SYSTEM ${PROJECT_SOURCE_DIR}/external/dlpack/include)
 if (BUILD_NVJPEG2K_EXT)
     if (WITH_DYNAMIC_NVJPEG2K)
         include(FetchContent)
+        if(WIN32)
+            set(_nvjpeg2k_redist_url
+                https://developer.download.nvidia.com/compute/nvjpeg2000/redist/libnvjpeg_2k/windows-x86_64/libnvjpeg_2k-windows-x86_64-0.9.0.43-archive.zip)
+            set(_nvjpeg2k_redist_hash
+                SHA512=f4bcd9e6bb23fffc47bbb02b6ce295332da531fa8f76bb208478b8059a62bea22547bd8208af2ce410c2451a0d6a9ea00b339582e645a08ba1d49569280c4f9d)
+        else()
+            set(_nvjpeg2k_redist_url
+                https://developer.download.nvidia.com/compute/nvjpeg2000/redist/libnvjpeg_2k/linux-x86_64/libnvjpeg_2k-linux-x86_64-0.9.0.43-archive.tar.xz)
+            set(_nvjpeg2k_redist_hash
+                SHA512=22d14a20af67ba414956fd7c4223cf3fd519cec9ccbd0ae27603416ab143eae92457ab0434205fe66617bcc5a54805bfc6183f89205ea2d0068d497321a43783)
+        endif()
         FetchContent_Declare(
             nvjpeg2k_headers
-            URL      https://developer.download.nvidia.com/compute/nvjpeg2000/redist/libnvjpeg_2k/linux-x86_64/libnvjpeg_2k-linux-x86_64-0.9.0.43-archive.tar.xz
-            URL_HASH SHA512=22d14a20af67ba414956fd7c4223cf3fd519cec9ccbd0ae27603416ab143eae92457ab0434205fe66617bcc5a54805bfc6183f89205ea2d0068d497321a43783
+            URL      ${_nvjpeg2k_redist_url}
+            URL_HASH ${_nvjpeg2k_redist_hash}
         )
         FetchContent_Populate(nvjpeg2k_headers)
         set(NVJPEG2K_SEARCH_PATHS "${nvjpeg2k_headers_SOURCE_DIR}/include")
+        set(NVJPEG2K_REDIST_ROOT "${nvjpeg2k_headers_SOURCE_DIR}" CACHE INTERNAL "nvJPEG2000 redist root")
     else()
         set(NVJPEG2K_SEARCH_PATHS ${CTK_SEARCH_PATHS})
         find_library(NVJPEG2K_LIBRARY nvjpeg2k_static PATH_SUFFIXES lib lib64)

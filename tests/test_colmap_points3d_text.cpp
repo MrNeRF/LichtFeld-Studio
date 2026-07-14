@@ -45,19 +45,12 @@ TEST(ColmapPoints3DText, ReportsStatsAndFiltersByMinimumTrackLength) {
     EXPECT_EQ(result.point_cloud.size(), 1u);
 }
 
-TEST(ColmapPoints3DText, IgnoresDanglingOddTrackTokenWhenFiltering) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
-    }
-
-    const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(
-        fixture_dir("dangling_track_token"),
-        lfs::io::LoadOptions{.min_track_length = 2});
-
-    EXPECT_TRUE(result.track_filter_applied);
-    EXPECT_EQ(result.total_points, 2u);
-    EXPECT_EQ(result.points_after_filtering, 1u);
-    EXPECT_EQ(result.point_cloud.size(), 1u);
+TEST(ColmapPoints3DText, RejectsDanglingOddTrackTokenWhenFiltering) {
+    EXPECT_THROW(
+        (void)lfs::io::read_colmap_point_cloud_text_with_stats(
+            fixture_dir("dangling_track_token"),
+            lfs::io::LoadOptions{.min_track_length = 2}),
+        std::runtime_error);
 }
 
 TEST(ColmapPoints3DText, LoadsSinglePointStatsThroughPublicApi) {

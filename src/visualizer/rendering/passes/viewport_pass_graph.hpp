@@ -8,9 +8,9 @@
 // Not part of the public DLL surface, so no LFS_VIS_API.
 
 #include "vulkan_viewport_pass.hpp"
+#include "window/vulkan_result.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cstdint>
 #include <functional>
 #include <glm/glm.hpp>
@@ -148,7 +148,15 @@ namespace lfs::vis {
                     const std::function<void()>& restore_viewport_quad_state) {
             // Recording before finalize() would draw passes in registration order, not phase order —
             // a silent z-ordering bug. The driver finalizes once in init().
-            assert(finalized_ && "ViewportPassGraph::record before finalize()");
+            LFS_VK_DEBUG_ASSERT(
+                finalized_,
+                "Viewport pass graph must be finalized before command recording (finalized={}, registered_passes={}, command_buffer={:#x}, frame_slot={}, extent={}x{})",
+                finalized_,
+                entries_.size(),
+                vkHandleValue(ctx.cmd),
+                ctx.frame_slot,
+                ctx.extent.width,
+                ctx.extent.height);
             for (auto& e : entries_) {
                 if (!e.pass->active(params)) {
                     continue;

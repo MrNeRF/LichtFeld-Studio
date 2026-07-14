@@ -46,17 +46,28 @@ namespace lfs::vis {
                 break;
             }
 
-            if (update_callback_) {
-                update_callback_();
-            }
+            try {
+                if (update_callback_) {
+                    update_callback_();
+                }
 
-            if (should_close_callback_ && should_close_callback_()) {
-                LOG_DEBUG("Should close callback requested exit after update");
-                break;
-            }
+                if (should_close_callback_ && should_close_callback_()) {
+                    LOG_DEBUG("Should close callback requested exit after update");
+                    break;
+                }
 
-            if (render_callback_) {
-                render_callback_();
+                if (render_callback_) {
+                    render_callback_();
+                }
+
+                if (frame_completed_callback_) {
+                    frame_completed_callback_();
+                }
+            } catch (...) {
+                if (!frame_error_callback_) {
+                    throw;
+                }
+                frame_error_callback_(std::current_exception());
             }
         }
 

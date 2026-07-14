@@ -40,7 +40,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -4747,17 +4746,16 @@ namespace lfs::io {
         RadMetaInlineWriter meta_writer;
 
         // GPU chunk quantization (bit-identical planes; DEFLATE stays on the
-        // CPU). LFS_RAD_GPU_ENCODE=0 forces the CPU encoders; any CUDA
-        // failure falls back permanently for this writer.
+        // CPU). Any CUDA failure falls back permanently for this writer.
+        RadGpuQuantization gpu_quantization = RadGpuQuantization::Auto;
         std::unique_ptr<cuda::RadEncodeGpuQuantizer> gpu_quant;
         bool gpu_quant_resolved = false;
 
         bool gpuQuantEnabled() {
             if (!gpu_quant_resolved) {
                 gpu_quant_resolved = true;
-                const char* const env = std::getenv("LFS_RAD_GPU_ENCODE");
-                const bool env_off = env != nullptr && env[0] == '0';
-                if (!env_off && cuda::rad_encode_gpu_available()) {
+                if (gpu_quantization == RadGpuQuantization::Auto &&
+                    cuda::rad_encode_gpu_available()) {
                     gpu_quant = std::make_unique<cuda::RadEncodeGpuQuantizer>();
                 }
             }
@@ -4776,7 +4774,8 @@ namespace lfs::io {
                                      const bool lod_tree,
                                      const int compression_level,
                                      const bool emit_meta_sidecar,
-                                     const std::uint32_t chunk_size)
+                                     const std::uint32_t chunk_size,
+                                     const RadGpuQuantization gpu_quantization)
         : impl_(std::make_unique<Impl>()) {
         impl_->output_path = std::move(output_path);
         impl_->total_count = total_count;
@@ -4789,6 +4788,7 @@ namespace lfs::io {
                 ? compression_level
                 : GZ_LEVEL;
         impl_->emit_meta_sidecar = emit_meta_sidecar && lod_tree;
+        impl_->gpu_quantization = gpu_quantization;
     }
 
     RadStreamWriter::~RadStreamWriter() = default;

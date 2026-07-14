@@ -121,6 +121,7 @@ namespace lfs::vis::gui {
         virtual bool wantsExternalFloatingShadow() const { return true; }
         virtual void setPanelSpace(PanelSpace space) { (void)space; }
         virtual void reloadRmlResources() {}
+        virtual void releaseRendererResources() {}
     };
 
     struct PanelInfo {

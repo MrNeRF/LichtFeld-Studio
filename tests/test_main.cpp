@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
 #include <c10/cuda/CUDACachingAllocator.h>
-#include <cstdlib>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <torch/torch.h>
@@ -62,10 +62,10 @@ public:
 };
 
 int main(int argc, char** argv) {
-    // Initialize loggers - check LOG_LEVEL env var
+    // Initialize loggers
     auto log_level = lfs::core::LogLevel::Info;
-    if (const char* env = std::getenv("LOG_LEVEL")) {
-        std::string level(env);
+    if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL")) {
+        std::string level(*env);
         if (level == "trace")
             log_level = lfs::core::LogLevel::Trace;
         else if (level == "debug")
@@ -91,5 +91,11 @@ int main(int argc, char** argv) {
     // This eliminates cold-start penalties (e.g., 23.8ms for 4K allocations)
     lfs::core::PinnedMemoryAllocator::instance().prewarm();
 
-    return RUN_ALL_TESTS();
+    const int result = RUN_ALL_TESTS();
+
+    // Preserve singleton dependency order: pinned blocks return pooled events
+    // before the CUDA memory pool shuts that event pool down.
+    lfs::core::PinnedMemoryAllocator::instance().shutdown();
+    lfs::core::Tensor::shutdown_memory_pool();
+    return result;
 }

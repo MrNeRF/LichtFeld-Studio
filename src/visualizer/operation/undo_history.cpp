@@ -368,14 +368,16 @@ namespace lfs::vis::op {
     }
 
     void UndoHistory::refreshResidencyLocked() {
-        const auto refresh_stack = [](std::deque<UndoEntryPtr>& stack) {
+        const auto refresh_stack = [this](std::deque<UndoEntryPtr>& stack) {
             const size_t hot_start = stack.size() > HOT_ENTRIES ? stack.size() - HOT_ENTRIES : 0;
             for (size_t index = 0; index < stack.size(); ++index) {
                 auto& entry = stack[index];
                 if (!entry) {
                     continue;
                 }
-                if (index < hot_start) {
+                // Keep an oversized final entry for undo semantics, but never let
+                // the count-based hot set override the GPU-residency byte ceiling.
+                if (entryBytes(entry) > max_bytes_ || index < hot_start) {
                     entry->offloadToCPU();
                 } else {
                     entry->restoreToPreferredDevice();

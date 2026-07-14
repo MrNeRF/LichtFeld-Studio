@@ -148,6 +148,7 @@ namespace lfs::python {
             PyDynamicTexture& operator=(PyDynamicTexture&&) = delete;
 
             void update(const PyTensor& py_tensor) {
+                lfs::python::require_ui_texture_creation_thread();
                 auto t = py_tensor.tensor();
                 if (t.ndim() != 3)
                     throw std::invalid_argument("DynamicTexture requires 3D tensor [H, W, C]");
@@ -380,6 +381,7 @@ namespace lfs::python {
                     return it->second;
                 }
             }
+            lfs::python::require_ui_texture_creation_thread();
             try {
                 return load_icon_from_path(lfs::vis::getAssetPath("icon/" + std::string(DEFAULT_ICON)), DEFAULT_ICON);
             } catch (const std::exception& e) {
@@ -396,6 +398,8 @@ namespace lfs::python {
                     return it->second;
                 }
             }
+
+            lfs::python::require_ui_texture_creation_thread();
 
             try {
                 return load_icon_from_path(lfs::vis::getAssetPath("icon/" + icon_name), icon_name);
@@ -414,6 +418,8 @@ namespace lfs::python {
                     return it->second;
                 }
             }
+
+            lfs::python::require_ui_texture_creation_thread();
 
             try {
                 return load_icon_from_path(lfs::vis::getAssetPath("icon/scene/" + icon_name + ".png"), cache_key);
@@ -435,6 +441,8 @@ namespace lfs::python {
                     return it->second;
                 }
             }
+
+            lfs::python::require_ui_texture_creation_thread();
 
             std::filesystem::path icon_path = lfs::core::utf8_to_path(plugin_path) / "icons" / (icon_name + ".png");
 
@@ -595,6 +603,7 @@ namespace lfs::python {
             if (!data || width <= 0 || height <= 0)
                 return {0, 0, 0};
 
+            lfs::python::require_ui_texture_creation_thread();
             ensure_max_texture_size();
 
             const auto result = lfs::python::create_ui_texture(data, width, height, channels);
@@ -3346,6 +3355,70 @@ namespace lfs::python {
                 return rm && rm->isGTComparisonActive();
             },
             "Returns true if ground-truth comparison split view is currently enabled.");
+
+        m.def(
+            "get_gt_comparison_mode",
+            []() -> const char* {
+                auto* rm = lfs::python::get_rendering_manager();
+                if (!rm)
+                    return "rgb";
+                switch (rm->getSettings().gt_comparison_mode) {
+                case vis::GTComparisonMode::Normal: return "normal";
+                case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::RGB:
+                default: return "rgb";
+                }
+            },
+            "Get ground-truth comparison mode: rgb, normal, or depth.");
+
+        m.def(
+            "set_gt_comparison_mode",
+            [](const std::string& mode) {
+                auto* rm = lfs::python::get_rendering_manager();
+                if (!rm)
+                    return;
+                auto settings = rm->getSettings();
+                if (mode == "rgb" || mode == "color" || mode == "image") {
+                    settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
+                } else if (mode == "normal" || mode == "normals") {
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
+                } else if (mode == "depth") {
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
+                } else {
+                    throw nb::value_error("GT comparison mode must be 'rgb', 'normal', or 'depth'");
+                }
+                rm->updateSettings(settings, vis::DirtyFlag::ALL);
+            },
+            nb::arg("mode"), "Set ground-truth comparison mode.");
+
+        m.def(
+            "cycle_gt_comparison_mode",
+            []() -> const char* {
+                auto* rm = lfs::python::get_rendering_manager();
+                if (!rm)
+                    return "rgb";
+                auto settings = rm->getSettings();
+                switch (settings.gt_comparison_mode) {
+                case vis::GTComparisonMode::RGB:
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
+                    break;
+                case vis::GTComparisonMode::Normal:
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
+                    break;
+                case vis::GTComparisonMode::Depth:
+                default:
+                    settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
+                    break;
+                }
+                rm->updateSettings(settings, vis::DirtyFlag::ALL);
+                switch (settings.gt_comparison_mode) {
+                case vis::GTComparisonMode::Normal: return "normal";
+                case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::RGB:
+                default: return "rgb";
+                }
+            },
+            "Cycle ground-truth comparison mode: rgb -> normal -> depth -> rgb.");
 
         m.def(
             "reveal_in_file_manager",

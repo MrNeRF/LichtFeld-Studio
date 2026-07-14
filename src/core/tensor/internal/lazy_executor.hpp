@@ -104,9 +104,8 @@ namespace lfs::core {
         LFS_CORE_API void lazy_executor_reset_diagnostics_for_testing();
         LFS_CORE_API LazyExecutorDiagnosticsSnapshot lazy_executor_diagnostics_snapshot_for_testing();
 
-        // Optional runtime diagnostics dump gate (env + testing override).
+        // Optional diagnostics dump gate used by focused tests.
         LFS_CORE_API void lazy_executor_set_debug_dump_override_for_testing(std::optional<bool> enabled);
-        LFS_CORE_API void lazy_executor_clear_debug_dump_cache_for_testing();
         LFS_CORE_API bool lazy_executor_debug_dump_enabled_for_testing();
 
         // Pointwise fusion scaffold gate (on by default in lazy mode).

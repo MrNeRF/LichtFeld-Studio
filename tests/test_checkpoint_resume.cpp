@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/camera.hpp"
+#include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -44,6 +45,33 @@ namespace {
             lfs::core::Tensor::from_vector(rotations, {count, size_t{4}}, lfs::core::Device::CPU),
             lfs::core::Tensor::zeros({count, size_t{1}}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
             1.0f);
+    }
+
+    std::streamoff first_model_tensor_header_offset(const std::filesystem::path& checkpoint) {
+        std::ifstream file(checkpoint, std::ios::binary);
+        if (!file)
+            return -1;
+        file.seekg(static_cast<std::streamoff>(sizeof(lfs::core::CheckpointHeader)));
+        uint32_t strategy_name_size = 0;
+        file.read(reinterpret_cast<char*>(&strategy_name_size), sizeof(strategy_name_size));
+        file.seekg(static_cast<std::streamoff>(strategy_name_size), std::ios::cur);
+        constexpr std::streamoff splat_prefix_bytes =
+            sizeof(uint32_t) * 2 + sizeof(int32_t) * 2 + sizeof(float);
+        file.seekg(splat_prefix_bytes, std::ios::cur);
+        return file ? static_cast<std::streamoff>(file.tellg()) : -1;
+    }
+
+    template <typename T>
+    bool overwrite_checkpoint_field(const std::filesystem::path& checkpoint,
+                                    const std::streamoff offset,
+                                    const T& value) {
+        std::fstream file(checkpoint, std::ios::binary | std::ios::in | std::ios::out);
+        if (!file)
+            return false;
+        file.seekp(offset);
+        file.write(reinterpret_cast<const char*>(&value), sizeof(value));
+        file.flush();
+        return file.good();
     }
 
     TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsFullInitPointCloudUntilTrainingStarts) {
@@ -168,6 +196,117 @@ namespace {
         for (const auto& call : calls) {
             EXPECT_GE(call.capacity, max_cap) << call.name;
         }
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointInputValidationTest, RejectsInvalidTensorDtypeAndPreservesLiveModel) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_invalid_tensor_dtype";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir;
+        params.optimization.strategy = "mcmc";
+        params.optimization.max_cap = 16;
+
+        auto source_model = make_checkpoint_test_splat(4);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::training::save_checkpoint(temp_dir, 7, source_strategy, params).has_value());
+
+        const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir);
+        const auto tensor_offset = first_model_tensor_header_offset(checkpoint);
+        ASSERT_GE(tensor_offset, 0);
+        constexpr uint8_t invalid_dtype = 0xff;
+        ASSERT_TRUE(overwrite_checkpoint_field(
+            checkpoint,
+            tensor_offset + static_cast<std::streamoff>(offsetof(lfs::core::TensorFileHeader, dtype)),
+            invalid_dtype));
+
+        auto target_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC target_strategy(*target_model);
+        auto loaded_params = params;
+        const auto result = lfs::training::load_checkpoint(
+            checkpoint, target_strategy, loaded_params, nullptr, nullptr, nullptr);
+
+        ASSERT_FALSE(result.has_value());
+        EXPECT_NE(result.error().find("unsupported dtype"), std::string::npos);
+        ASSERT_EQ(target_strategy.get_model().size(), 2);
+        const auto means = target_strategy.get_model().means().cpu().to_vector();
+        ASSERT_EQ(means.size(), 6u);
+        EXPECT_FLOAT_EQ(means[3], 1.0f);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointInputValidationTest, RejectsLateStrategyCorruptionWithoutPartialCommit) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_late_corruption";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir;
+        params.optimization.strategy = "mcmc";
+        params.optimization.max_cap = 16;
+
+        auto source_model = make_checkpoint_test_splat(4);
+        lfs::training::MCMC source_strategy(*source_model);
+        source_strategy.initialize(params.optimization);
+        ASSERT_TRUE(lfs::training::save_checkpoint(temp_dir, 9, source_strategy, params).has_value());
+
+        const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir);
+        const auto header = lfs::core::load_checkpoint_header(checkpoint);
+        ASSERT_TRUE(header.has_value()) << header.error();
+        ASSERT_GT(header->params_json_offset, 0u);
+        constexpr uint8_t invalid_scheduler_parameter = 0xff;
+        ASSERT_TRUE(overwrite_checkpoint_field(
+            checkpoint,
+            static_cast<std::streamoff>(header->params_json_offset - 1),
+            invalid_scheduler_parameter));
+
+        auto target_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC target_strategy(*target_model);
+        target_strategy.initialize(params.optimization);
+        target_strategy.get_optimizer().set_lr(0.123f);
+        auto loaded_params = params;
+
+        const auto result = lfs::training::load_checkpoint(
+            checkpoint, target_strategy, loaded_params, nullptr, nullptr, nullptr);
+
+        ASSERT_FALSE(result.has_value());
+        EXPECT_NE(result.error().find("invalid parameter id"), std::string::npos);
+        EXPECT_EQ(target_strategy.get_model().size(), 2);
+        EXPECT_FLOAT_EQ(target_strategy.get_optimizer().get_lr(), 0.123f);
+        EXPECT_EQ(loaded_params.optimization.max_cap, params.optimization.max_cap);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointInputValidationTest, RejectsJsonRangeOutsideFileBeforeStateMutation) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_invalid_json_range";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir;
+        params.optimization.strategy = "mcmc";
+        auto source_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::training::save_checkpoint(temp_dir, 3, source_strategy, params).has_value());
+
+        const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir);
+        constexpr uint64_t oversized_json = lfs::core::MAX_CHECKPOINT_JSON_BYTES + 1;
+        ASSERT_TRUE(overwrite_checkpoint_field(
+            checkpoint,
+            static_cast<std::streamoff>(offsetof(lfs::core::CheckpointHeader, params_json_size)),
+            oversized_json));
+
+        const auto header = lfs::core::load_checkpoint_header(checkpoint);
+        ASSERT_FALSE(header.has_value());
+        EXPECT_NE(header.error().find("JSON exceeds byte budget"), std::string::npos);
 
         std::filesystem::remove_all(temp_dir, ec);
     }
@@ -316,7 +455,8 @@ namespace {
 
     std::string TestName(const ::testing::TestParamInfo<CheckpointResumeTest::ParamType>& info) {
         auto name = std::format("{}_{}", std::get<0>(info.param), std::get<1>(info.param));
-        std::replace_if(name.begin(), name.end(), [](const unsigned char c) { return !std::isalnum(c); }, '_');
+        std::replace_if(
+            name.begin(), name.end(), [](const unsigned char c) { return !std::isalnum(c); }, '_');
         return name;
     }
 

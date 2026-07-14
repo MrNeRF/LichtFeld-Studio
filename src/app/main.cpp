@@ -4,13 +4,17 @@
 
 #include "app/application.hpp"
 #include "app/converter.hpp"
+#include "core/abi.hpp"
 #include "core/argument_parser.hpp"
+#include "core/crash_handler.hpp"
+#include "core/cuda_error.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
 #include "gui/gpu_memory_query.hpp"
+#include "lfs_core_abi_stamp.h"
 #include "preprocessing/preprocess.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
@@ -181,6 +185,19 @@ namespace {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    const char* const loaded_core_stamp = lfs_core_abi_stamp();
+    if (loaded_core_stamp == nullptr || !lfs_core_abi_matches(LFS_CORE_ABI_STAMP)) {
+        std::println(stderr,
+                     "Fatal: lfs_core ABI mismatch. The application expects '{}' but loaded '{}'. "
+                     "Remove stale binaries and rebuild LichtFeld Studio.",
+                     LFS_CORE_ABI_STAMP,
+                     loaded_core_stamp != nullptr ? loaded_core_stamp : "<null>");
+        return 2;
+    }
+
+    lfs::core::install_crash_handlers();
+    lfs::core::initialize_cuda_diagnostics();
+
     auto result = lfs::core::args::parse_args(argc, argv);
     if (!result) {
         std::println(stderr, "Error: {}", result.error());

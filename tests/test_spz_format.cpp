@@ -4,11 +4,14 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
+#include "io/formats/spz.hpp"
 #include "io/loader.hpp"
+#include "load-spz.h"
 
 namespace fs = std::filesystem;
 using namespace lfs::core;
@@ -96,7 +99,86 @@ protected:
             std::move(opacity),
             0.5f);
     }
+
+    static std::vector<uint8_t> make_spz_header(
+        const uint32_t point_count,
+        const uint8_t sh_degree,
+        const uint8_t fractional_bits) {
+        std::vector<uint8_t> bytes;
+        const auto append_u32 = [&](const uint32_t value) {
+            bytes.push_back(static_cast<uint8_t>(value));
+            bytes.push_back(static_cast<uint8_t>(value >> 8));
+            bytes.push_back(static_cast<uint8_t>(value >> 16));
+            bytes.push_back(static_cast<uint8_t>(value >> 24));
+        };
+        append_u32(0x5053474e);
+        append_u32(3);
+        append_u32(point_count);
+        bytes.push_back(sh_degree);
+        bytes.push_back(fractional_bits);
+        bytes.push_back(0);
+        bytes.push_back(0);
+        return bytes;
+    }
+
+    static bool write_gzipped_spz(
+        const fs::path& path,
+        const std::vector<uint8_t>& unpacked) {
+        std::vector<uint8_t> compressed;
+        if (!spz::compressGzipped(
+                unpacked.data(), unpacked.size(), &compressed)) {
+            return false;
+        }
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        stream.write(reinterpret_cast<const char*>(compressed.data()),
+                     static_cast<std::streamsize>(compressed.size()));
+        return stream.good();
+    }
 };
+
+TEST_F(SpzFormatTest, RejectsOversizedHeaderBeforePayloadAllocation) {
+    const fs::path path = temp_dir / "oversized_header.spz";
+    ASSERT_TRUE(write_gzipped_spz(
+        path,
+        make_spz_header(spz::kMaxSpzPoints + 1, 3, 12)));
+
+    const auto result = load_spz(path);
+
+    EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(SpzFormatTest, RejectsInvalidFractionalBitsBeforePayloadAllocation) {
+    const fs::path path = temp_dir / "invalid_fractional_bits.spz";
+    ASSERT_TRUE(write_gzipped_spz(
+        path,
+        make_spz_header(1, 0, spz::kMaxSpzFractionalBits + 1)));
+
+    const auto result = load_spz(path);
+
+    EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(SpzFormatTest, RejectsTruncatedPayloadBeforeAttributeAllocation) {
+    const fs::path path = temp_dir / "truncated_payload.spz";
+    ASSERT_TRUE(write_gzipped_spz(path, make_spz_header(1, 0, 12)));
+
+    const auto result = load_spz(path);
+
+    EXPECT_FALSE(result.has_value());
+}
+
+TEST_F(SpzFormatTest, ExtremeEncodedOpacityLoadsAsFinite) {
+    auto original = create_test_splat(1, 0);
+    original.opacity_raw().ptr<float>()[0] = 1000.0f;
+    const fs::path path = temp_dir / "finite_opacity.spz";
+    ASSERT_TRUE(save_spz(original, {.output_path = path}).has_value());
+
+    const auto result = load_spz(path);
+
+    ASSERT_TRUE(result.has_value()) << result.error();
+    const auto opacity = result->opacity_raw().cpu();
+    EXPECT_TRUE(std::isfinite(opacity.ptr<float>()[0]));
+}
 
 // CRITICAL: Verify sh0 tensor shape is [N, 1, 3] - this caught our color bug
 TEST_F(SpzFormatTest, Sh0TensorShapeIsCorrect) {
@@ -253,7 +335,10 @@ TEST_F(SpzFormatTest, ShDegree0) {
     const auto& loaded = **splat_ptr;
 
     EXPECT_EQ(loaded.get_max_sh_degree(), 0);
-    EXPECT_FALSE(loaded.shN().is_valid());
+    // SplatData keeps a valid zero-length swizzled buffer at degree 0 so every
+    // renderer can use one storage contract regardless of SH degree.
+    EXPECT_TRUE(loaded.shN().is_valid());
+    EXPECT_EQ(loaded.shN().numel(), 0);
 }
 
 // Test with real PLY file if available

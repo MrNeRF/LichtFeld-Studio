@@ -4,14 +4,14 @@
 
 #pragma once
 
+#include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "helper_math.h"
 #include "rasterization_config.h"
 #include "utils.h"
 #include <cstdint>
-#include <cstdlib>
 #include <cub/cub.cuh>
 #include <cuda_fp16.h>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -126,6 +126,10 @@ namespace fast_lfs::rasterization {
         }
         const cudaError_t err = cudaMemcpy(&status, device_status, sizeof(status), cudaMemcpyDeviceToHost);
         if (err != cudaSuccess) {
+            lfs::core::ensure_cuda_success(
+                err, "cudaMemcpy(FastGS forward status)", {},
+                LFS_SOURCE_SITE_CURRENT(),
+                lfs::core::CudaFailureDisposition::LogOnly);
             cudaGetLastError();
             return false;
         }
@@ -158,32 +162,18 @@ namespace fast_lfs::rasterization {
             return;
         }
 
-        std::string message = std::string("CUDA error in ") + name + " - " +
-                              cudaGetErrorName(err) + ": " + cudaGetErrorString(err);
+        std::string message;
         FastGSForwardStatus status{};
         if (try_read_fastgs_forward_status(device_status, status)) {
-            const std::string status_message = format_fastgs_forward_status(status, phase, n_primitives, n_tiles);
-            if (!status_message.empty()) {
-                message += "; " + status_message;
-            }
+            message = format_fastgs_forward_status(status, phase, n_primitives, n_tiles);
+        }
+        if (message.empty()) {
+            message = lfs::core::detail::format_cuda_safe(
+                "FastGS phase={} (n_primitives={}, n_tiles={})",
+                phase ? phase : "<unknown>", n_primitives, n_tiles);
         }
 
-        std::cerr << "\n[CUDA ERROR] " << message;
-        throw std::runtime_error(message);
-    }
-
-    inline bool fastgs_diag_sync_enabled() {
-        static const bool enabled = [] {
-            const char* raw = std::getenv("LFS_FASTGS_DIAG_SYNC");
-            return raw != nullptr &&
-                   raw[0] != '\0' &&
-                   raw[0] != '0' &&
-                   raw[0] != 'f' &&
-                   raw[0] != 'F' &&
-                   raw[0] != 'n' &&
-                   raw[0] != 'N';
-        }();
-        return enabled;
+        LFS_ENSURE_CUDA_SUCCESS_MSG(err, name, message);
     }
 
     inline void sync_fastgs_phase_if_requested(
@@ -192,7 +182,7 @@ namespace fast_lfs::rasterization {
         const char* phase,
         const uint64_t n_primitives,
         const uint64_t n_tiles) {
-        if (!fastgs_diag_sync_enabled()) {
+        if (!lfs::core::cuda_sync_debug_enabled()) {
             return;
         }
         check_cuda_with_fastgs_status(
@@ -283,27 +273,15 @@ namespace fast_lfs::rasterization {
             obtain(blob, buffers.conic_opacity, n_primitives, 128);
             obtain(blob, buffers.color, n_primitives, 128);
             obtain(blob, buffers.forward_status, 1, 128);
-            const cudaError_t scan_err = cub::DeviceScan::InclusiveSum(
-                nullptr, buffers.cub_workspace_size,
-                buffers.n_touched_tiles, buffers.offset,
-                n_primitives);
-            if (scan_err != cudaSuccess) {
-                int device_count = -1;
-                int current_device = -1;
-                const cudaError_t count_err = cudaGetDeviceCount(&device_count);
-                const cudaError_t device_err = cudaGetDevice(&current_device);
-                const std::string message =
-                    std::string("CUDA error in cub::DeviceScan::InclusiveSum workspace query at ") +
-                    __FILE__ + ":" + std::to_string(__LINE__) +
-                    " (n_primitives=" + std::to_string(n_primitives) +
-                    ", current_device=" + std::to_string(current_device) +
-                    ", device_count=" + std::to_string(device_count) +
-                    ", cudaGetDevice=" + cudaGetErrorName(device_err) +
-                    ", cudaGetDeviceCount=" + cudaGetErrorName(count_err) +
-                    ") - " + cudaGetErrorName(scan_err) + ": " + cudaGetErrorString(scan_err);
-                std::cerr << "\n[CUDA ERROR] " << message;
-                throw std::runtime_error(message);
-            }
+            LFS_CUDA_CHECK_MSG(
+                cub::DeviceScan::InclusiveSum(
+                    nullptr, buffers.cub_workspace_size,
+                    buffers.n_touched_tiles, buffers.offset,
+                    n_primitives),
+                "FastGS workspace query (n_primitives={})", n_primitives);
+            LFS_ASSERT_MSG(
+                buffers.cub_workspace_size > 0,
+                "FastGS CUB scan returned an empty workspace for nonempty primitive input");
             obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
             return buffers;
         }

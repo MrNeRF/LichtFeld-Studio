@@ -151,6 +151,7 @@ namespace lfs::training {
         // Serialization
         void serialize(std::ostream& os) const;
         void deserialize(std::istream& is);
+        void adopt_checkpoint_state(AdamOptimizer& loaded) noexcept;
         void reserve_capacity(size_t capacity);
 
         // Control notifications for external mutations

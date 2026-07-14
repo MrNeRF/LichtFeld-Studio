@@ -427,7 +427,8 @@ namespace {
             expected_albedo,
             EPSILON);
 
-        const auto expected_specular = tensor_to_vector(original.shN().reshape({static_cast<int>(original.size()), static_cast<int>(original.shN().size(1) * 3)}));
+        const auto expected_specular =
+            tensor_to_vector(original.shN_canonical_cpu());
         expect_vectors_near(
             decode_half_field(state_dict, ".gaussians_nodes.gaussians.features_specular"),
             expected_specular,

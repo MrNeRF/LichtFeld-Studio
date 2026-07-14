@@ -23,10 +23,12 @@ class MRNFStrategyTest_SerializeRoundTripPreservesFreeMask_Test;
 class MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;
 class MRNFStrategyTest_DeserializeResizesTransientBuffersToLoadedModel_Test;
 class MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test;
+class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_Test;
+class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 
 namespace lfs::training {
 
-    class MRNF : public IStrategy {
+    class MRNF : public IStrategy, public ICheckpointStateAdopter {
     public:
         MRNF() = delete;
         explicit MRNF(lfs::core::SplatData& splat_data);
@@ -52,6 +54,9 @@ namespace lfs::training {
 
         void serialize(std::ostream& os) const override;
         void deserialize(std::istream& is) override;
+        bool has_checkpoint_runtime_state() const noexcept override { return static_cast<bool>(_optimizer); }
+        bool can_adopt_checkpoint_state(const IStrategy& loaded) const noexcept override;
+        void adopt_checkpoint_state(IStrategy& loaded) noexcept override;
         const char* strategy_type() const override { return "mrnf"; }
 
         void reserve_optimizer_capacity(size_t capacity) override;
@@ -71,6 +76,8 @@ namespace lfs::training {
         friend class ::MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;
         friend class ::MRNFStrategyTest_DeserializeResizesTransientBuffersToLoadedModel_Test;
         friend class ::MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test;
+        friend class ::MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_Test;
+        friend class ::MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 
         void refine(int iter);
         void grow_and_split(int iter, int pruned_count);

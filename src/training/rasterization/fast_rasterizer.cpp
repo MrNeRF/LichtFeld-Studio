@@ -263,7 +263,8 @@ namespace lfs::training {
         int tile_width,
         int tile_height,
         bool mip_filter,
-        const core::Tensor& bg_image) {
+        const core::Tensor& bg_image,
+        bool render_normal) {
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -308,23 +309,48 @@ namespace lfs::training {
         thread_local core::Tensor image;
         thread_local core::Tensor alpha;
         thread_local core::Tensor depth;
+        thread_local core::Tensor normal;
         thread_local int last_width = -1;
         thread_local int last_height = -1;
 
-        // Only reallocate if dimensions changed
-        if (last_width != width || last_height != height) {
+        // Thread-local outputs can survive a Trainer. A same-sized render on the
+        // next Trainer must not reuse tensors whose stream handle was destroyed
+        // during the previous Trainer's shutdown.
+        const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream()
+                                               ? lfs::core::getCurrentCUDAStream()
+                                               : means.stream();
+
+        // Reallocate when either the shape or owning stream changes. Calling
+        // Tensor::set_stream on a cache backed by a destroyed stream would try
+        // to bridge from that dead handle before re-homing it.
+        if (!image.is_valid() || !alpha.is_valid() || !depth.is_valid() ||
+            last_width != width || last_height != height ||
+            image.stream() != raster_stream || alpha.stream() != raster_stream ||
+            depth.stream() != raster_stream) {
             image = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
             alpha = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
             depth = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
+            normal = core::Tensor();
+            if (image.stream() != raster_stream)
+                image.set_stream(raster_stream);
+            if (alpha.stream() != raster_stream)
+                alpha.set_stream(raster_stream);
+            if (depth.stream() != raster_stream)
+                depth.set_stream(raster_stream);
             last_width = width;
             last_height = height;
+        }
+        if (render_normal &&
+            (!normal.is_valid() ||
+             normal.shape() != core::TensorShape({3, static_cast<size_t>(height), static_cast<size_t>(width)}) ||
+             normal.stream() != raster_stream)) {
+            normal = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
+            if (normal.stream() != raster_stream)
+                normal.set_stream(raster_stream);
         }
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
-        const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream()
-                                               ? lfs::core::getCurrentCUDAStream()
-                                               : image.stream();
         fast_lfs::rasterization::ForwardContext forward_ctx;
         try {
             forward_ctx = fast_lfs::rasterization::forward_raw(
@@ -339,6 +365,7 @@ namespace lfs::training {
                 image.ptr<float>(),
                 alpha.ptr<float>(),
                 depth.ptr<float>(),
+                render_normal ? normal.ptr<float>() : nullptr,
                 n_primitives,
                 active_sh_bases,
                 sh_layout_bases,
@@ -419,6 +446,9 @@ namespace lfs::training {
         render_output.image = image;
         render_output.alpha = alpha;
         render_output.depth = depth;
+        if (render_normal) {
+            render_output.normal = normal;
+        }
         render_output.width = width;
         render_output.height = height;
 
@@ -426,6 +456,9 @@ namespace lfs::training {
         ctx.image = image;
         ctx.alpha = alpha;
         ctx.depth = depth;
+        if (render_normal) {
+            ctx.normal = normal;
+        }
         ctx.bg_color = bg_color; // Save bg_color for alpha gradient
         ctx.bg_image = bg_image; // Save bg_image for alpha gradient
 
@@ -471,7 +504,7 @@ namespace lfs::training {
         int iteration,
         const FastGSFusedExtraGradients& fused_extra_gradients,
         const core::Tensor& grad_depth,
-        bool detach_depth_weights) {
+        const core::Tensor& grad_normal) {
 
         // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
         int H, W;
@@ -491,14 +524,16 @@ namespace lfs::training {
 
         thread_local core::Tensor cached_grad_alpha;
         thread_local int cached_ga_h = 0, cached_ga_w = 0;
-        if (!cached_grad_alpha.is_valid() || cached_ga_h != H || cached_ga_w != W) {
+        const cudaStream_t stream = grad_image.stream();
+        if (!cached_grad_alpha.is_valid() || cached_ga_h != H || cached_ga_w != W ||
+            cached_grad_alpha.stream() != stream) {
             cached_grad_alpha = core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, core::Device::CUDA);
+            if (cached_grad_alpha.stream() != stream)
+                cached_grad_alpha.set_stream(stream);
             cached_ga_h = H;
             cached_ga_w = W;
         }
         auto& grad_alpha = cached_grad_alpha;
-        const cudaStream_t stream = grad_image.stream();
-        grad_alpha.set_stream(stream);
 
         // Use background image kernel if available, otherwise use solid color kernel
         if (has_background_image(ctx.bg_image) && is_chw_layout) {
@@ -543,6 +578,24 @@ namespace lfs::training {
                 grad_depth_2d = grad_depth_2d.contiguous();
             }
             grad_depth_ptr = grad_depth_2d.ptr<float>();
+        }
+
+        core::Tensor grad_normal_chw;
+        const float* grad_normal_ptr = nullptr;
+        if (grad_normal.is_valid() && grad_normal.numel() > 0) {
+            grad_normal_chw = grad_normal;
+            assert(grad_normal_chw.ndim() == 3 &&
+                   grad_normal_chw.shape()[0] == 3 &&
+                   checked_dim_to_int(grad_normal_chw.shape()[1], "grad_normal height") == H &&
+                   checked_dim_to_int(grad_normal_chw.shape()[2], "grad_normal width") == W &&
+                   "grad_normal must have shape [3, H, W]");
+            if (grad_normal_chw.device() != core::Device::CUDA) {
+                grad_normal_chw = grad_normal_chw.cuda();
+            }
+            if (!grad_normal_chw.is_contiguous()) {
+                grad_normal_chw = grad_normal_chw.contiguous();
+            }
+            grad_normal_ptr = grad_normal_chw.ptr<float>();
         }
 
         const int n_primitives = checked_dim_to_int(ctx.means.shape()[0], "n_primitives");
@@ -597,6 +650,7 @@ namespace lfs::training {
         fused_adam.beta2 = optimizer_fused.beta2;
         fused_adam.eps = optimizer_fused.eps;
         fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
+        fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
         fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
         fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
         fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
@@ -620,6 +674,7 @@ namespace lfs::training {
             grad_image.ptr<float>(),
             grad_alpha.ptr<float>(),
             grad_depth_ptr,
+            grad_normal_ptr,
             raw_image.ptr<float>(),
             ctx.alpha.ptr<float>(),
             ctx.means.ptr<float>(),
@@ -642,8 +697,7 @@ namespace lfs::training {
             ctx.center_y,
             ctx.mip_filter,
             densification_type,
-            &fused_adam,
-            detach_depth_weights);
+            &fused_adam);
 
         ctx.mark_forward_context_released();
 

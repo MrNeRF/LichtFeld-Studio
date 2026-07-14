@@ -8,7 +8,9 @@
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
 #include "load-spz.h"
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <fstream>
 
@@ -23,6 +25,41 @@ namespace lfs::io {
         // SH coefficient count per degree: 0->0, 1->3, 2->8, 3->15
         constexpr int SH_COEFFS_FOR_DEGREE[] = {0, 3, 8, 15};
         constexpr float SCENE_SCALE = 0.5f; // Match PLY loader
+
+        std::expected<void, std::string> validate_spz_cloud(
+            const spz::GaussianCloud& cloud) {
+            if (cloud.numPoints <= 0 ||
+                static_cast<uint32_t>(cloud.numPoints) > spz::kMaxSpzPoints ||
+                cloud.shDegree < 0 || cloud.shDegree > 3) {
+                return std::unexpected("SPZ header contains invalid point or SH metadata");
+            }
+
+            const size_t count = static_cast<size_t>(cloud.numPoints);
+            const size_t sh_coefficients =
+                cloud.shDegree > 0
+                    ? static_cast<size_t>(SH_COEFFS_FOR_DEGREE[cloud.shDegree])
+                    : 0;
+            if (cloud.positions.size() != count * 3 ||
+                cloud.scales.size() != count * 3 ||
+                cloud.rotations.size() != count * 4 ||
+                cloud.alphas.size() != count ||
+                cloud.colors.size() != count * 3 ||
+                cloud.sh.size() != count * sh_coefficients * 3) {
+                return std::unexpected("SPZ decoded attribute sizes do not match the point count");
+            }
+
+            const auto finite = [](const std::vector<float>& values) {
+                return std::ranges::all_of(values, [](const float value) {
+                    return std::isfinite(value);
+                });
+            };
+            if (!finite(cloud.positions) || !finite(cloud.scales) ||
+                !finite(cloud.rotations) || !finite(cloud.alphas) ||
+                !finite(cloud.colors) || !finite(cloud.sh)) {
+                return std::unexpected("SPZ decoded attributes contain a non-finite value");
+            }
+            return {};
+        }
 
         SplatData convert_from_spz(const spz::GaussianCloud& cloud) {
             const auto num_points = static_cast<size_t>(cloud.numPoints);
@@ -140,44 +177,54 @@ namespace lfs::io {
 
         LOG_INFO("Loading SPZ file: {}", lfs::core::path_to_utf8(filepath));
 
-        std::ifstream in;
-        if (!lfs::core::open_file_for_read(filepath, std::ios::binary | std::ios::ate, in)) {
-            return std::unexpected(std::format("Failed to open SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+        try {
+            std::ifstream in;
+            if (!lfs::core::open_file_for_read(filepath, std::ios::binary | std::ios::ate, in)) {
+                return std::unexpected(std::format("Failed to open SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+            }
+
+            const auto size = in.tellg();
+            if (size <= 0 ||
+                static_cast<uint64_t>(size) > spz::kMaxSpzCompressedBytes) {
+                return std::unexpected(std::format(
+                    "SPZ file must contain 1..{} compressed bytes: {}",
+                    spz::kMaxSpzCompressedBytes,
+                    lfs::core::path_to_utf8(filepath)));
+            }
+
+            std::vector<uint8_t> data(static_cast<size_t>(size));
+            in.seekg(0, std::ios::beg);
+            if (!in.read(reinterpret_cast<char*>(data.data()),
+                         static_cast<std::streamsize>(data.size()))) {
+                return std::unexpected(std::format("Failed to read SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+            }
+
+            // Load through the in-memory API to avoid narrow-path handling in the bundled SPZ library.
+            spz::UnpackOptions options;
+            options.to = spz::CoordinateSystem::RDF;
+            auto cloud = spz::loadSpz(data, options);
+            if (auto validation = validate_spz_cloud(cloud); !validation) {
+                return std::unexpected(std::format(
+                    "Failed to load SPZ file '{}': {}",
+                    lfs::core::path_to_utf8(filepath),
+                    validation.error()));
+            }
+
+            LOG_DEBUG("SPZ loaded: {} points, SH degree {}", cloud.numPoints, cloud.shDegree);
+
+            auto splat = convert_from_spz(cloud);
+
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::high_resolution_clock::now() - start);
+            LOG_INFO("SPZ loaded: {} gaussians with SH degree {} in {}ms",
+                     splat.size(), splat.get_max_sh_degree(), elapsed.count());
+
+            return splat;
+        } catch (const std::bad_alloc&) {
+            return std::unexpected("SPZ input exceeds available memory");
+        } catch (const std::exception& error) {
+            return std::unexpected(std::format("Failed to load SPZ: {}", error.what()));
         }
-
-        const auto size = in.tellg();
-        if (size < 0) {
-            return std::unexpected(std::format("Failed to read SPZ file size: {}", lfs::core::path_to_utf8(filepath)));
-        }
-
-        std::vector<uint8_t> data(static_cast<size_t>(size));
-        in.seekg(0, std::ios::beg);
-        in.read(reinterpret_cast<char*>(data.data()), size);
-        in.close();
-
-        if (!in.good()) {
-            return std::unexpected(std::format("Failed to read SPZ file: {}", lfs::core::path_to_utf8(filepath)));
-        }
-
-        // Load through the in-memory API to avoid narrow-path handling in the bundled SPZ library.
-        spz::UnpackOptions options;
-        options.to = spz::CoordinateSystem::RDF;
-        auto cloud = spz::loadSpz(data, options);
-
-        if (cloud.numPoints == 0) {
-            return std::unexpected(std::format("Failed to load SPZ file: {}", lfs::core::path_to_utf8(filepath)));
-        }
-
-        LOG_DEBUG("SPZ loaded: {} points, SH degree {}", cloud.numPoints, cloud.shDegree);
-
-        auto splat = convert_from_spz(cloud);
-
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::high_resolution_clock::now() - start);
-        LOG_INFO("SPZ loaded: {} gaussians with SH degree {} in {}ms",
-                 splat.size(), splat.get_max_sh_degree(), elapsed.count());
-
-        return splat;
     }
 
     Result<void> save_spz(const SplatData& splat_data, const SpzSaveOptions& options) {
@@ -187,6 +234,12 @@ namespace lfs::io {
 
         if (!report_export_progress(options.progress_callback, 0.0f, "Preparing SPZ")) {
             return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
+        }
+        if (splat_data.size() == 0 || splat_data.size() > spz::kMaxSpzPoints) {
+            return make_error(
+                ErrorCode::INVALID_DATASET,
+                std::format("SPZ export supports 1..{} splats", spz::kMaxSpzPoints),
+                options.output_path);
         }
 
         auto cloud = convert_to_spz(splat_data);

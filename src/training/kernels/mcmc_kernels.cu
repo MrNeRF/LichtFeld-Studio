@@ -2,13 +2,17 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
+#include "lfs/cuda_scratch.hpp"
 #include "mcmc_kernels.hpp"
+#include <cassert>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
 #include <thrust/adjacent_difference.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
@@ -42,7 +46,10 @@ namespace lfs::training::mcmc {
                     binom *= static_cast<float>(n - k) / static_cast<float>(k + 1);
             }
         }
-        cudaMemcpyToSymbol(d_relocation_coefficients, coeffs.data(), RELOCATION_N_MAX * RELOCATION_N_MAX * sizeof(float));
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyToSymbol(d_relocation_coefficients, coeffs.data(),
+                               RELOCATION_N_MAX * RELOCATION_N_MAX * sizeof(float)),
+            "MCMC relocation coefficient upload (n_max={})", n_max);
     }
 
     // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
@@ -910,6 +917,9 @@ namespace lfs::training::mcmc {
         if (n_samples == 0 || n_alive == 0)
             return;
 
+        LFS_ASSERT_MSG(n_alive <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "MCMC multinomial input exceeds CUB's int item-count limit");
+
         const cudaStream_t cuda_stream = resolve_stream(stream);
         // Home the scan/sampling temporaries on the launch stream so the
         // stream-aware pool cannot recycle them before this work completes.
@@ -924,13 +934,18 @@ namespace lfs::training::mcmc {
                           thrust::device_ptr<float>(alive_probs.ptr<float>()),
                           [=] __device__(int i) { return sampling_weights[alive_indices[i]]; });
 
-        void* d_temp_storage = nullptr;
-        size_t temp_storage_bytes = 0;
-        cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      alive_probs.ptr<float>(), cumsum_buf.ptr<float>(), n_alive, cuda_stream);
-        cudaMallocAsync(&d_temp_storage, temp_storage_bytes, cuda_stream);
-        cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      alive_probs.ptr<float>(), cumsum_buf.ptr<float>(), n_alive, cuda_stream);
+        cuda_scratch::CubWorkspace cub_workspace(
+            "cub::DeviceScan::InclusiveSum", cuda_stream,
+            [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceScan::InclusiveSum(
+                    workspace, workspace_bytes,
+                    alive_probs.ptr<float>(), cumsum_buf.ptr<float>(), n_alive, cuda_stream);
+            });
+        cub_workspace.run([&](void* workspace, size_t& workspace_bytes) {
+            return cub::DeviceScan::InclusiveSum(
+                workspace, workspace_bytes,
+                alive_probs.ptr<float>(), cumsum_buf.ptr<float>(), n_alive, cuda_stream);
+        });
 
         const dim3 sample_threads(256);
         const dim3 sample_grid((n_samples + sample_threads.x - 1) / sample_threads.x);
@@ -947,8 +962,7 @@ namespace lfs::training::mcmc {
             sampled_opacities,
             sampled_scales,
             N);
-
-        cudaFreeAsync(d_temp_storage, cuda_stream);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MCMC multinomial gather kernel launch");
     }
 
     // Multinomial sampling from all N weights (no alive_indices indirection)
@@ -1018,19 +1032,27 @@ namespace lfs::training::mcmc {
         if (n_samples == 0 || N == 0)
             return;
 
+        LFS_ASSERT_MSG(N <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "MCMC multinomial input exceeds CUB's int item-count limit");
+
         const cudaStream_t cuda_stream = resolve_stream(stream);
         // Home the scan temporary on the launch stream (see launch_multinomial_sample).
         const lfs::core::CUDAStreamGuard stream_guard(cuda_stream);
 
         auto cumsum_buf = lfs::core::Tensor::empty({N}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-        void* d_temp_storage = nullptr;
-        size_t temp_storage_bytes = 0;
-        cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
-        cudaMallocAsync(&d_temp_storage, temp_storage_bytes, cuda_stream);
-        cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
+        cuda_scratch::CubWorkspace cub_workspace(
+            "cub::DeviceScan::InclusiveSum", cuda_stream,
+            [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceScan::InclusiveSum(
+                    workspace, workspace_bytes,
+                    sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
+            });
+        cub_workspace.run([&](void* workspace, size_t& workspace_bytes) {
+            return cub::DeviceScan::InclusiveSum(
+                workspace, workspace_bytes,
+                sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
+        });
 
         const dim3 sample_threads(256);
         const dim3 sample_grid((n_samples + sample_threads.x - 1) / sample_threads.x);
@@ -1045,8 +1067,7 @@ namespace lfs::training::mcmc {
             sampled_indices,
             sampled_opacities,
             sampled_scales);
-
-        cudaFreeAsync(d_temp_storage, cuda_stream);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MCMC multinomial kernel launch");
     }
 
     // Compute rotation magnitude squared kernel (eliminates [N,4] intermediate tensor)

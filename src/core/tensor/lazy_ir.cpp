@@ -7,6 +7,7 @@
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -24,6 +25,8 @@ namespace lfs::core::internal {
             DataType dtype = static_cast<DataType>(0);
             std::string shape;
             size_t buffer_bytes = 0;
+            size_t tensor_owners = 0;
+            size_t dependents = 0;
         };
 
         struct LazyIrRuntime {
@@ -31,11 +34,87 @@ namespace lfs::core::internal {
             uint64_t next_node_id = 1;
             std::unordered_map<uint64_t, LazyExprNode> nodes;
             std::unordered_map<size_t, uint64_t> tensor_to_node;
+            std::optional<size_t> node_limit_override;
         };
 
         LazyIrRuntime& lazy_ir_runtime() {
             static LazyIrRuntime runtime;
             return runtime;
+        }
+
+        constexpr size_t kDefaultLazyIrNodeLimit = 65'536;
+
+        size_t configured_node_limit() {
+            return kDefaultLazyIrNodeLimit;
+        }
+
+        size_t node_limit_locked(const LazyIrRuntime& runtime) {
+            return runtime.node_limit_override.value_or(configured_node_limit());
+        }
+
+        void publish_registry_counts_locked(const LazyIrRuntime& runtime) {
+            telemetry_publish_expr_registry_counts(runtime.nodes.size(),
+                                                   runtime.tensor_to_node.size(),
+                                                   node_limit_locked(runtime));
+        }
+
+        void collect_unreferenced_node_locked(LazyIrRuntime& runtime, const uint64_t initial_node_id) {
+            std::vector<uint64_t> pending{initial_node_id};
+            while (!pending.empty()) {
+                const uint64_t node_id = pending.back();
+                pending.pop_back();
+
+                const auto node_it = runtime.nodes.find(node_id);
+                if (node_it == runtime.nodes.end() ||
+                    node_it->second.tensor_owners != 0 ||
+                    node_it->second.dependents != 0) {
+                    continue;
+                }
+
+                const std::vector<uint64_t> inputs = std::move(node_it->second.input_ids);
+                runtime.nodes.erase(node_it);
+                for (const uint64_t input_id : inputs) {
+                    const auto input_it = runtime.nodes.find(input_id);
+                    if (input_it == runtime.nodes.end() || input_it->second.dependents == 0) {
+                        continue;
+                    }
+                    --input_it->second.dependents;
+                    if (input_it->second.tensor_owners == 0 && input_it->second.dependents == 0) {
+                        pending.push_back(input_id);
+                    }
+                }
+            }
+        }
+
+        void unregister_tensor_locked(LazyIrRuntime& runtime, const size_t tensor_id) {
+            const auto mapping_it = runtime.tensor_to_node.find(tensor_id);
+            if (mapping_it == runtime.tensor_to_node.end()) {
+                return;
+            }
+
+            const uint64_t node_id = mapping_it->second;
+            runtime.tensor_to_node.erase(mapping_it);
+            const auto node_it = runtime.nodes.find(node_id);
+            if (node_it != runtime.nodes.end() && node_it->second.tensor_owners != 0) {
+                --node_it->second.tensor_owners;
+            }
+            collect_unreferenced_node_locked(runtime, node_id);
+        }
+
+        std::vector<uint64_t> normalize_inputs_locked(const LazyIrRuntime& runtime,
+                                                      const uint64_t output_node_id,
+                                                      const std::vector<uint64_t>& inputs) {
+            std::vector<uint64_t> normalized;
+            normalized.reserve(inputs.size());
+            for (const uint64_t input_id : inputs) {
+                if (input_id == 0 || input_id == output_node_id ||
+                    runtime.nodes.find(input_id) == runtime.nodes.end() ||
+                    std::find(normalized.begin(), normalized.end(), input_id) != normalized.end()) {
+                    continue;
+                }
+                normalized.push_back(input_id);
+            }
+            return normalized;
         }
 
         uint64_t register_node_locked(LazyIrRuntime& runtime,
@@ -44,8 +123,22 @@ namespace lfs::core::internal {
                                       std::string_view op_name,
                                       std::vector<uint64_t> inputs,
                                       const Tensor& tensor) {
+            unregister_tensor_locked(runtime, tensor_id);
+            LazyIrTensorAccess::set_registered(tensor, false);
+            if (runtime.nodes.size() >= node_limit_locked(runtime)) {
+                // Lazy execution is an optimization: an unregistered deferred tensor
+                // still owns its direct materializer and remains fully functional.
+                telemetry_record_expr_node_drop(1);
+                publish_registry_counts_locked(runtime);
+                return 0;
+            }
+
             const uint64_t node_id = runtime.next_node_id++;
             const size_t bytes = tensor.shape().elements() * dtype_size(tensor.dtype());
+            inputs = normalize_inputs_locked(runtime, node_id, inputs);
+            for (const uint64_t input_id : inputs) {
+                ++runtime.nodes.at(input_id).dependents;
+            }
             runtime.nodes.emplace(node_id, LazyExprNode{
                                                node_id,
                                                kind,
@@ -54,9 +147,13 @@ namespace lfs::core::internal {
                                                tensor.device(),
                                                tensor.dtype(),
                                                tensor.shape().str(),
-                                               bytes});
+                                               bytes,
+                                               1,
+                                               0});
             runtime.tensor_to_node[tensor_id] = node_id;
+            LazyIrTensorAccess::set_registered(tensor, true);
             telemetry_record_expr_node(1);
+            publish_registry_counts_locked(runtime);
             return node_id;
         }
 
@@ -85,6 +182,10 @@ namespace lfs::core::internal {
 
     } // namespace
 
+    void LazyIrTensorAccess::set_registered(const Tensor& tensor, const bool registered) noexcept {
+        tensor.lazy_ir_registered_ = registered;
+    }
+
     bool lazy_ir_active() {
         return true;
     }
@@ -95,6 +196,24 @@ namespace lfs::core::internal {
         runtime.next_node_id = 1;
         runtime.nodes.clear();
         runtime.tensor_to_node.clear();
+        publish_registry_counts_locked(runtime);
+    }
+
+    void lazy_ir_set_node_limit_override_for_testing(const std::optional<size_t> limit) {
+        auto& runtime = lazy_ir_runtime();
+        std::lock_guard<std::mutex> lock(runtime.mutex);
+        runtime.node_limit_override = limit;
+        publish_registry_counts_locked(runtime);
+    }
+
+    void lazy_ir_unregister_tensor(const size_t tensor_id) {
+        if (tensor_id == 0) {
+            return;
+        }
+        auto& runtime = lazy_ir_runtime();
+        std::lock_guard<std::mutex> lock(runtime.mutex);
+        unregister_tensor_locked(runtime, tensor_id);
+        publish_registry_counts_locked(runtime);
     }
 
     bool tensor_has_lazy_expr(const Tensor& tensor) {
@@ -171,17 +290,6 @@ namespace lfs::core::internal {
             return false;
         }
 
-        std::vector<uint64_t> deduped_inputs;
-        deduped_inputs.reserve(input_ids.size());
-        for (uint64_t input_id : input_ids) {
-            if (input_id == 0) {
-                continue;
-            }
-            if (std::find(deduped_inputs.begin(), deduped_inputs.end(), input_id) == deduped_inputs.end()) {
-                deduped_inputs.push_back(input_id);
-            }
-        }
-
         auto& runtime = lazy_ir_runtime();
         std::lock_guard<std::mutex> lock(runtime.mutex);
         const auto it = runtime.nodes.find(node_id);
@@ -189,7 +297,24 @@ namespace lfs::core::internal {
             return false;
         }
 
-        it->second.input_ids = std::move(deduped_inputs);
+        std::vector<uint64_t> normalized_inputs = normalize_inputs_locked(runtime, node_id, input_ids);
+        const std::vector<uint64_t> previous_inputs = it->second.input_ids;
+
+        for (const uint64_t input_id : previous_inputs) {
+            const auto input_it = runtime.nodes.find(input_id);
+            if (input_it != runtime.nodes.end() && input_it->second.dependents != 0) {
+                --input_it->second.dependents;
+            }
+        }
+        for (const uint64_t input_id : normalized_inputs) {
+            ++runtime.nodes.at(input_id).dependents;
+        }
+        it->second.input_ids = std::move(normalized_inputs);
+
+        for (const uint64_t input_id : previous_inputs) {
+            collect_unreferenced_node_locked(runtime, input_id);
+        }
+        publish_registry_counts_locked(runtime);
         return true;
     }
 
@@ -272,6 +397,14 @@ namespace lfs::core::internal {
         std::lock_guard<std::mutex> lock(runtime.mutex);
         std::vector<uint64_t> inputs = {ensure_leaf_node_locked(runtime, input)};
         register_node_locked(runtime, output.debug_id(), LazyOpKind::Reduce, op_name, std::move(inputs), output);
+    }
+
+    uint64_t lazy_ir_record_deferred(const Tensor& output) {
+        return lazy_ir_record_deferred(output, "deferred_expr", {});
+    }
+
+    uint64_t lazy_ir_record_deferred(const Tensor& output, const std::string_view op_name) {
+        return lazy_ir_record_deferred(output, op_name, {});
     }
 
     uint64_t lazy_ir_record_deferred(const Tensor& output,

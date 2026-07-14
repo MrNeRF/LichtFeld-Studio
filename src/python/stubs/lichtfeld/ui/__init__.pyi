@@ -921,6 +921,9 @@ def remove_hook(panel: str, section: str, callback: object) -> None:
 def clear_hooks(panel: str, section: str = '') -> None:
     """Clear all hooks for a panel or panel/section"""
 
+def clear_hooks_for_module(module_prefix: str) -> None:
+    """Clear all hooks registered by a given module prefix"""
+
 def clear_all_hooks() -> None:
     """Clear all registered UI hooks"""
 
@@ -2190,6 +2193,15 @@ def is_gt_comparison_active() -> bool:
     """
     Returns true if ground-truth comparison split view is currently enabled.
     """
+
+def get_gt_comparison_mode() -> str:
+    """Get ground-truth comparison mode: rgb, normal, or depth."""
+
+def set_gt_comparison_mode(mode: str) -> None:
+    """Set ground-truth comparison mode."""
+
+def cycle_gt_comparison_mode() -> str:
+    """Cycle ground-truth comparison mode: rgb -> normal -> depth -> rgb."""
 
 def reveal_in_file_manager(path: str) -> bool:
     """

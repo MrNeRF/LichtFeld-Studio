@@ -13,23 +13,36 @@ endif()
 
 cmake_minimum_required(VERSION 3.30)
 
+# Keep test-only packages out of the application dependency graph. Command-line
+# cache values are visible before project(), when the vcpkg toolchain resolves
+# manifest features.
+list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY)
+    list(APPEND VCPKG_MANIFEST_FEATURES tests)
+    list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
+endif()
+
 # vcpkg manifest install runs during CMake configure/regeneration, outside the
 # native build tool's `cmake --build -j ...` limit. Cap vcpkg separately before
 # the toolchain is loaded by project().
-set(LFS_VCPKG_MAX_CONCURRENCY "" CACHE STRING "Maximum number of concurrent jobs vcpkg may use while building packages; empty uses environment or caps auto-detection at 16")
+set(LFS_VCPKG_MAX_CONCURRENCY "" CACHE STRING "Maximum number of concurrent jobs vcpkg may use while building packages; empty uses an explicit vcpkg setting or caps auto-detection at 6")
 set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "${LFS_VCPKG_MAX_CONCURRENCY}")
 if(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY STREQUAL "")
     if(DEFINED ENV{VCPKG_MAX_CONCURRENCY} AND NOT "$ENV{VCPKG_MAX_CONCURRENCY}" STREQUAL "")
         set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "$ENV{VCPKG_MAX_CONCURRENCY}")
     elseif(DEFINED ENV{CMAKE_BUILD_PARALLEL_LEVEL} AND NOT "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}" STREQUAL "")
         set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}")
+        if(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY MATCHES "^[1-9][0-9]*$" AND
+           _LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY GREATER 6)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 6)
+        endif()
     else()
         include(ProcessorCount)
         ProcessorCount(_LFS_HOST_PROCESSOR_COUNT)
         if(_LFS_HOST_PROCESSOR_COUNT EQUAL 0)
-            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 16)
-        elseif(_LFS_HOST_PROCESSOR_COUNT GREATER 16)
-            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 16)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 6)
+        elseif(_LFS_HOST_PROCESSOR_COUNT GREATER 6)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 6)
         else()
             set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "${_LFS_HOST_PROCESSOR_COUNT}")
         endif()
@@ -116,44 +129,46 @@ endif()
 # Disable C++20 module scanning
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-# Get git version info
-execute_process(
-    COMMAND git rev-parse --short HEAD
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_COMMIT_HASH_SHORT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
+set(GIT_SRC_DIR "${CMAKE_SOURCE_DIR}")
+set(GIT_VERSION_HEADER "${CMAKE_BINARY_DIR}/include/git_version.h")
+include("${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake")
+add_custom_target(lfs_git_version ALL
+    BYPRODUCTS "${CMAKE_BINARY_DIR}/include/git_version.h"
+    COMMAND ${CMAKE_COMMAND}
+            "-DGIT_SRC_DIR=${CMAKE_SOURCE_DIR}"
+            "-DGIT_VERSION_HEADER=${CMAKE_BINARY_DIR}/include/git_version.h"
+            -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
+    COMMENT "Refreshing git_version.h"
+    VERBATIM
 )
-execute_process(
-    COMMAND git describe --tags --dirty --always --match "v*"
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_TAGGED_VERSION
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT GIT_COMMIT_HASH_SHORT AND DEFINED ENV{GITHUB_SHA} AND NOT "$ENV{GITHUB_SHA}" STREQUAL "")
-    string(SUBSTRING "$ENV{GITHUB_SHA}" 0 7 GIT_COMMIT_HASH_SHORT)
-endif()
-if(NOT GIT_TAGGED_VERSION)
-    if(DEFINED ENV{GITHUB_REF_TYPE} AND "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag" AND
-       DEFINED ENV{GITHUB_REF_NAME} AND NOT "$ENV{GITHUB_REF_NAME}" STREQUAL "")
-        set(GIT_TAGGED_VERSION "$ENV{GITHUB_REF_NAME}")
-    elseif(GIT_COMMIT_HASH_SHORT)
-        set(GIT_TAGGED_VERSION "${GIT_COMMIT_HASH_SHORT}")
-    endif()
-endif()
-if(NOT GIT_COMMIT_HASH_SHORT)
-    set(GIT_COMMIT_HASH_SHORT "unknown")
-endif()
-if(NOT GIT_TAGGED_VERSION)
-    set(GIT_TAGGED_VERSION "unknown")
-endif()
 
-# Generate git_version.h at configure time
-file(WRITE "${CMAKE_BINARY_DIR}/include/git_version.h"
-"#pragma once\n\
-#define GIT_COMMIT_HASH_SHORT \"${GIT_COMMIT_HASH_SHORT}\"\n\
-#define GIT_TAGGED_VERSION \"${GIT_TAGGED_VERSION}\"\n"
+# App/core ABI tripwire. Hash every lfs_core implementation and interface input,
+# because a dirty-worktree rebuild cannot rely on the Git commit alone to
+# distinguish a newly linked app from a stale shared library.
+file(GLOB_RECURSE LFS_CORE_BUILD_INPUTS CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src/core/*.cpp"
+    "${CMAKE_SOURCE_DIR}/src/core/*.cu"
+    "${CMAKE_SOURCE_DIR}/src/core/*.cuh"
+    "${CMAKE_SOURCE_DIR}/src/core/*.hpp"
+)
+list(APPEND LFS_CORE_BUILD_INPUTS
+    "${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt"
+)
+list(SORT LFS_CORE_BUILD_INPUTS)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${LFS_CORE_BUILD_INPUTS}
+)
+set(_lfs_core_abi_material
+    "${PROJECT_VERSION}|${GIT_COMMIT_HASH_SHORT}|${CMAKE_BUILD_TYPE}|${CMAKE_SYSTEM_NAME}|${CMAKE_SIZEOF_VOID_P}|${CMAKE_CXX_COMPILER_ID}|${CMAKE_CXX_COMPILER_VERSION}|${CMAKE_CUDA_COMPILER_ID}|${CMAKE_CUDA_COMPILER_VERSION}|${CMAKE_CUDA_ARCHITECTURES}|${VCPKG_TARGET_TRIPLET}")
+foreach(_lfs_core_build_input IN LISTS LFS_CORE_BUILD_INPUTS)
+    file(SHA256 "${_lfs_core_build_input}" _lfs_core_build_input_hash)
+    string(APPEND _lfs_core_abi_material "|${_lfs_core_build_input_hash}")
+endforeach()
+string(SHA256 LFS_CORE_ABI_STAMP "${_lfs_core_abi_material}")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/lfs_core_abi_stamp.h.in"
+    "${CMAKE_BINARY_DIR}/include/lfs_core_abi_stamp.h"
+    @ONLY
 )
 
 # Setup
@@ -161,14 +176,29 @@ get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
-option(ENABLE_ALLOCATION_PROFILING "Enable tensor allocation profiling" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Debug options
-option(ENABLE_TENSOR_VALIDATION "Enable runtime tensor NaN/Inf validation" OFF)
-option(ENABLE_CUDA_DEBUG_SYNC "Enable synchronous CUDA kernel checking (slow)" OFF)
-option(ENABLE_TENSOR_OP_TRACING "Enable tensor operation tracing" OFF)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeveloperOptions.cmake")
+
+# Keep immutable third-party archives outside individual build trees. A clean
+# configure still verifies each declared checksum and extracts into its own
+# tree, but it does not redownload hundreds of MiB already fetched locally.
+if(WIN32 AND DEFINED ENV{LOCALAPPDATA})
+    file(TO_CMAKE_PATH "$ENV{LOCALAPPDATA}/LichtFeldStudio/downloads" _lfs_download_cache_default)
+elseif(APPLE AND DEFINED ENV{HOME})
+    set(_lfs_download_cache_default "$ENV{HOME}/Library/Caches/LichtFeldStudio/downloads")
+elseif(DEFINED ENV{XDG_CACHE_HOME} AND NOT "$ENV{XDG_CACHE_HOME}" STREQUAL "")
+    set(_lfs_download_cache_default "$ENV{XDG_CACHE_HOME}/lichtfeld/downloads")
+elseif(DEFINED ENV{HOME})
+    set(_lfs_download_cache_default "$ENV{HOME}/.cache/lichtfeld/downloads")
+else()
+    set(_lfs_download_cache_default "${CMAKE_BINARY_DIR}/_downloads")
+endif()
+set(LFS_DOWNLOAD_CACHE_DIR "${_lfs_download_cache_default}" CACHE PATH
+    "Shared cache for checksum-pinned third-party download archives")
+file(MAKE_DIRECTORY "${LFS_DOWNLOAD_CACHE_DIR}")
+unset(_lfs_download_cache_default)
 
 # Add -rdynamic for backtrace symbol resolution
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -187,9 +217,9 @@ if(BUILD_PORTABLE)
     message(STATUS "Portable: PTX-only, tests disabled")
 endif()
 
-# Compiler cache is opt-in. Auto-enabling a broken local launcher can silently
-# poison object files and make the build non-reproducible.
-option(ENABLE_COMPILER_CACHE "Enable sccache/ccache compiler launchers when available" OFF)
+# Compiler caching is part of the default developer loop. Disable it for clean
+# compiler benchmarks or when diagnosing a launcher-specific problem.
+option(ENABLE_COMPILER_CACHE "Auto-detect and use sccache/ccache compiler launchers" ON)
 if(ENABLE_COMPILER_CACHE)
     # CUDA caching disabled on Windows due to nvcc compatibility issues.
     find_program(SCCACHE_PROGRAM sccache)
@@ -226,18 +256,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-
-# Parallel build
-include(ProcessorCount)
-ProcessorCount(total_cores)
-if(total_cores GREATER 1)
-    math(EXPR used_cores "${total_cores} - 2")
-    if(used_cores GREATER 20)
-        set(used_cores 20)
-    endif()
-    set(ENV{MAKEFLAGS} "-j${used_cores}")
-    message(STATUS "Building with ${used_cores} cores")
-endif()
 
 # CUDA setup
 # On Windows, nvidia-smi.exe is in System32, but CMake might be running as 32-bit
@@ -442,6 +460,29 @@ find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 
+# OpenImageIO's static vcpkg target exposes fmt::fmt-header-only through
+# OpenImageIO_Util. That definition is needed by TUs which include OIIO, but it
+# otherwise makes every source in a consumer instantiate fmt. Preserve OIIO's
+# own public compile interface while making the static archive closure link-only;
+# each of our five OIIO source files opts into FMT_HEADER_ONLY explicitly.
+add_library(lfs_oiio INTERFACE)
+target_link_libraries(lfs_oiio INTERFACE "$<LINK_ONLY:OpenImageIO::OpenImageIO>")
+get_target_property(_lfs_oiio_includes OpenImageIO::OpenImageIO INTERFACE_INCLUDE_DIRECTORIES)
+if(_lfs_oiio_includes)
+    target_include_directories(lfs_oiio SYSTEM INTERFACE ${_lfs_oiio_includes})
+endif()
+get_target_property(_lfs_oiio_definitions OpenImageIO::OpenImageIO INTERFACE_COMPILE_DEFINITIONS)
+if(_lfs_oiio_definitions)
+    target_compile_definitions(lfs_oiio INTERFACE ${_lfs_oiio_definitions})
+endif()
+get_target_property(_lfs_oiio_features OpenImageIO::OpenImageIO INTERFACE_COMPILE_FEATURES)
+if(_lfs_oiio_features)
+    target_compile_features(lfs_oiio INTERFACE ${_lfs_oiio_features})
+endif()
+unset(_lfs_oiio_includes)
+unset(_lfs_oiio_definitions)
+unset(_lfs_oiio_features)
+
 # Vulkan-native depth: glm::perspective/ortho/frustum must emit clip-space z in
 # [0, 1], not OpenGL's [-1, 1]. Keeps gl_FragDepth, the grid pass, the depth-
 # blit pass and the CPU-side NDC bound checks on a single convention.
@@ -464,26 +505,33 @@ configure_file(
 # Project-wide definitions
 add_definitions(-DPROJECT_ROOT_PATH="${PROJ_ROOT_DIR}")
 
-# CUDA device debugging (-G flag) generates huge object files. Disable in CI.
-option(CUDA_DEVICE_DEBUG "Enable CUDA device debugging (-G flag)" ON)
-
-if(CUDA_DEVICE_DEBUG)
-    set(LFS_CUDA_DEVICE_DEBUG_FLAGS "-G" CACHE INTERNAL "")
-else()
-    set(LFS_CUDA_DEVICE_DEBUG_FLAGS "" CACHE INTERNAL "")
-endif()
-
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
-    if(CUDA_DEVICE_DEBUG)
-        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -G -O0")
-    else()
-        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
-    endif()
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
 endif()
 
 # External dependencies (EXCLUDE_FROM_ALL to handle install ourselves)
 add_subdirectory(external EXCLUDE_FROM_ALL)
+
+# Keep LichtFeld's ordinary MSVC translation units on nvcc's conforming host
+# preprocessor and report the selected C++ language version accurately.
+# This is intentionally added after external/ so vendored targets keep their
+# upstream compiler settings.
+if(MSVC)
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
+    )
+endif()
+
+if(LFS_ENABLE_CUDA_DEVICE_DEBUG)
+    add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
+endif()
+
+add_compile_definitions(
+    $<$<CONFIG:Debug>:DEBUG_BUILD>
+    $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:RELEASE_BUILD>
+)
 
 # =============================================================================
 # LIBRARY MODULES
@@ -520,6 +568,16 @@ add_executable(${PROJECT_NAME}
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
 )
+
+foreach(_lfs_git_version_consumer IN ITEMS
+        ${PROJECT_NAME}
+        lfs_visualizer
+        lfs_py
+        lfs_mcp)
+    if(TARGET ${_lfs_git_version_consumer})
+        add_dependencies(${_lfs_git_version_consumer} lfs_git_version)
+    endif()
+endforeach()
 
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -571,7 +629,6 @@ target_link_libraries(${PROJECT_NAME}
         CUDA::curand
         spdlog::spdlog
         taywee::args
-        OpenImageIO::OpenImageIO
         SDL3::SDL3
 )
 
@@ -793,6 +850,58 @@ if(TARGET nvjpeg2k_ext)
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions/"
         COMMENT "Copying nvjpeg2k extension binary only"
     )
+
+    if(WITH_DYNAMIC_NVJPEG2K)
+        if(CUDAToolkit_VERSION_MAJOR)
+            set(_lfs_nvjpeg2k_cuda_major "${CUDAToolkit_VERSION_MAJOR}")
+        else()
+            set(_lfs_nvjpeg2k_cuda_major "12")
+        endif()
+        set(_lfs_nvjpeg2k_runtime_dir
+            "${CMAKE_BINARY_DIR}/_deps/nvjpeg2k_headers-src/lib/${_lfs_nvjpeg2k_cuda_major}")
+        if(WIN32)
+            set(_lfs_nvjpeg2k_runtime_name "nvjpeg2k_0.dll")
+            set(_lfs_nvjpeg2k_runtime_file
+                "${_lfs_nvjpeg2k_runtime_dir}/${_lfs_nvjpeg2k_runtime_name}")
+            if(EXISTS "${_lfs_nvjpeg2k_runtime_file}")
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_lfs_nvjpeg2k_runtime_file}"
+                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/${_lfs_nvjpeg2k_runtime_name}"
+                    COMMENT "Copying nvjpeg2k runtime library"
+                )
+            else()
+                message(WARNING
+                    "WITH_DYNAMIC_NVJPEG2K is ON but nvjpeg2k_0.dll was not found in "
+                    "${_lfs_nvjpeg2k_runtime_dir}")
+            endif()
+        elseif(UNIX)
+            file(GLOB _lfs_nvjpeg2k_runtime_candidates
+                "${_lfs_nvjpeg2k_runtime_dir}/libnvjpeg2k.so.*.*")
+            list(SORT _lfs_nvjpeg2k_runtime_candidates)
+            if(_lfs_nvjpeg2k_runtime_candidates)
+                list(GET _lfs_nvjpeg2k_runtime_candidates -1 _lfs_nvjpeg2k_runtime_file)
+                get_filename_component(_lfs_nvjpeg2k_runtime_name
+                    "${_lfs_nvjpeg2k_runtime_file}" NAME)
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_lfs_nvjpeg2k_runtime_file}"
+                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/${_lfs_nvjpeg2k_runtime_name}"
+                    COMMAND ${CMAKE_COMMAND} -E create_symlink
+                        "${_lfs_nvjpeg2k_runtime_name}"
+                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/libnvjpeg2k.so.0"
+                    COMMAND ${CMAKE_COMMAND} -E create_symlink
+                        "libnvjpeg2k.so.0"
+                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/libnvjpeg2k.so"
+                    COMMENT "Copying nvjpeg2k runtime library"
+                )
+            else()
+                message(WARNING
+                    "WITH_DYNAMIC_NVJPEG2K is ON but no libnvjpeg2k.so runtime was found in "
+                    "${_lfs_nvjpeg2k_runtime_dir}")
+            endif()
+        endif()
+    endif()
 endif()
 
 # =============================================================================
@@ -1046,58 +1155,16 @@ elseif(WIN32)
     endif()
 endif()
 
-# Build type configuration function
-function(configure_build_type target)
-    get_target_property(target_type ${target} TYPE)
-
-    if(target_type STREQUAL "INTERFACE_LIBRARY")
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} INTERFACE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release|RelWithDebInfo|MinSizeRel")
-            target_compile_definitions(${target} INTERFACE RELEASE_BUILD)
-        endif()
-        # Debug options for interface libraries
-        if(ENABLE_TENSOR_VALIDATION)
-            target_compile_definitions(${target} INTERFACE TENSOR_VALIDATION_ENABLED)
-        endif()
-        if(ENABLE_CUDA_DEBUG_SYNC)
-            target_compile_definitions(${target} INTERFACE CUDA_DEBUG_SYNC)
-        endif()
-        if(ENABLE_TENSOR_OP_TRACING)
-            target_compile_definitions(${target} INTERFACE TENSOR_OP_TRACING)
-        endif()
-    else()
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} PRIVATE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release|RelWithDebInfo|MinSizeRel")
-            target_compile_definitions(${target} PRIVATE RELEASE_BUILD)
-        endif()
-        # Debug options for regular libraries
-        if(ENABLE_TENSOR_VALIDATION)
-            target_compile_definitions(${target} PRIVATE TENSOR_VALIDATION_ENABLED)
-        endif()
-        if(ENABLE_CUDA_DEBUG_SYNC)
-            target_compile_definitions(${target} PRIVATE CUDA_DEBUG_SYNC)
-        endif()
-        if(ENABLE_TENSOR_OP_TRACING)
-            target_compile_definitions(${target} PRIVATE TENSOR_OP_TRACING)
-        endif()
-    endif()
-endfunction()
-
-# Apply build configuration to all targets
-configure_build_type(fastlfs_backend)
-configure_build_type(lfs_core)
-configure_build_type(lfs_core_cuda)
-configure_build_type(lfs_training)
-configure_build_type(lfs_preprocessing)
-configure_build_type(lfs_rendering_tensor)
-configure_build_type(lfs_rendering)
-configure_build_type(lfs_visualizer)
-configure_build_type(lfs_io)
-configure_build_type(lfs_geometry)
-configure_build_type(lfs_tcp)
-configure_build_type(${PROJECT_NAME})
+if(UNIX)
+    add_custom_target(validate-gui
+        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_vulkan_validation.sh"
+                --binary "$<TARGET_FILE:${PROJECT_NAME}>"
+        DEPENDS ${PROJECT_NAME}
+        USES_TERMINAL
+        COMMENT "Launching LichtFeld Studio with source-built Vulkan validation"
+        VERBATIM
+    )
+endif()
 
 if(LFS_FAST_COMPILE AND MSVC)
     function(lfs_enable_fast_cxx_compile target)
@@ -1288,6 +1355,23 @@ if(TARGET nvimgcodec)
             LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/extensions"
             RUNTIME DESTINATION "extensions"
         )
+        if(WITH_DYNAMIC_NVJPEG2K AND DEFINED _lfs_nvjpeg2k_runtime_file AND EXISTS "${_lfs_nvjpeg2k_runtime_file}")
+            if(WIN32)
+                install(FILES "${_lfs_nvjpeg2k_runtime_file}" DESTINATION ${CMAKE_INSTALL_BINDIR})
+            elseif(UNIX)
+                install(FILES "${_lfs_nvjpeg2k_runtime_file}" DESTINATION ${CMAKE_INSTALL_LIBDIR})
+                install(CODE "
+                    execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink
+                        \"${_lfs_nvjpeg2k_runtime_name}\"
+                        \"libnvjpeg2k.so.0\"
+                        WORKING_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+                    execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink
+                        \"libnvjpeg2k.so.0\"
+                        \"libnvjpeg2k.so\"
+                        WORKING_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+                ")
+            endif()
+        endif()
     endif()
 endif()
 

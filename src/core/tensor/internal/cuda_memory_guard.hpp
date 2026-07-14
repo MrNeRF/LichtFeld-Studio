@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/cuda_error.hpp"
+
 #include <cuda_runtime.h>
 #include <memory>
 
@@ -20,8 +22,14 @@ namespace lfs::core {
 
         explicit CudaDeviceMemory(size_t count) : size_(count) {
             if (count > 0) {
-                cudaError_t err = cudaMalloc(&ptr_, count * sizeof(T));
+                const cudaError_t err = cudaMalloc(&ptr_, count * sizeof(T));
                 if (err != cudaSuccess) {
+                    ensure_cuda_success(
+                        err, "cudaMalloc(CudaDeviceMemory)",
+                        detail::format_cuda_safe(
+                            "element_count={}, element_bytes={}, requested_bytes={}",
+                            count, sizeof(T), count * sizeof(T)),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     ptr_ = nullptr;
                     size_ = 0;
                 }
@@ -30,7 +38,12 @@ namespace lfs::core {
 
         ~CudaDeviceMemory() {
             if (ptr_) {
-                cudaFree(ptr_);
+                const cudaError_t status = cudaFree(ptr_);
+                if (status != cudaSuccess) {
+                    ensure_cuda_success(
+                        status, "cudaFree(CudaDeviceMemory destruction)", {},
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                }
             }
         }
 
@@ -50,7 +63,12 @@ namespace lfs::core {
         CudaDeviceMemory& operator=(CudaDeviceMemory&& other) noexcept {
             if (this != &other) {
                 if (ptr_) {
-                    cudaFree(ptr_);
+                    const cudaError_t status = cudaFree(ptr_);
+                    if (status != cudaSuccess) {
+                        ensure_cuda_success(
+                            status, "cudaFree(CudaDeviceMemory move assignment)", {},
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    }
                 }
                 ptr_ = other.ptr_;
                 size_ = other.size_;
@@ -74,7 +92,12 @@ namespace lfs::core {
 
         void reset(T* ptr = nullptr, size_t size = 0) {
             if (ptr_ && ptr_ != ptr) {
-                cudaFree(ptr_);
+                const cudaError_t status = cudaFree(ptr_);
+                if (status != cudaSuccess) {
+                    ensure_cuda_success(
+                        status, "cudaFree(CudaDeviceMemory reset)", {},
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                }
             }
             ptr_ = ptr;
             size_ = size;

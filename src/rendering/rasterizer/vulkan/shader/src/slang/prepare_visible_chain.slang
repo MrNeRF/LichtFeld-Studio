@@ -5,6 +5,7 @@
 // the visible_flags / visible_prefix / compact passes of the N-wide path.
 
 #include "config.slang"
+#include "indirect_layout.inc"
 
 struct Uniforms {
     uint32_t visible_capacity;
@@ -19,8 +20,7 @@ layout(binding=0) StructuredBuffer<uint32_t> emit_count;
 // [0] = clamped visible count; [1] = raw emit total (unclamped, drives the
 // visible-capacity high-water mark after a clamped frame).
 layout(binding=1) RWStructuredBuffer<uint32_t> out_visible_count;
-// [0..2] radix-sort args, [3..5] 64-thread per-element args,
-// [6..8] cumsum blockScan level-0 args, [9..11] cumsum level-1 args.
+// Layout is defined by LFS_VK_VISIBLE_CHAIN_DISPATCH_* in indirect_layout.inc.
 layout(binding=2) RWStructuredBuffer<uint32_t> out_dispatch;
 // Indirect cumsum element counts per level: [0]=visible, [1]=ceil(v/1024),
 // [2]=ceil([1]/1024), [3]=1.
@@ -35,22 +35,28 @@ void main(uniform Uniforms uniforms) {
     out_visible_count[1] = raw;
 
     const uint32_t partition_size = max(uniforms.sort_partition_size, 1u);
-    out_dispatch[0] = max((visible + partition_size - 1u) / partition_size, 1u);
-    out_dispatch[1] = 1u;
-    out_dispatch[2] = 1u;
+    const uint32_t radix = LFS_VK_VISIBLE_CHAIN_DISPATCH_RADIX_WORD_OFFSET;
+    out_dispatch[radix + LFS_VK_DISPATCH_X_WORD_OFFSET] =
+        max((visible + partition_size - 1u) / partition_size, 1u);
+    out_dispatch[radix + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+    out_dispatch[radix + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
 
-    out_dispatch[3] = max((visible + 63u) / 64u, 1u);
-    out_dispatch[4] = 1u;
-    out_dispatch[5] = 1u;
+    const uint32_t per_element = LFS_VK_VISIBLE_CHAIN_DISPATCH_PER_ELEMENT_WORD_OFFSET;
+    out_dispatch[per_element + LFS_VK_DISPATCH_X_WORD_OFFSET] =
+        max((visible + 63u) / 64u, 1u);
+    out_dispatch[per_element + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+    out_dispatch[per_element + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
 
     const uint32_t c1 = (visible + CUMSUM_BLOCK - 1u) / CUMSUM_BLOCK;
     const uint32_t c2 = (c1 + CUMSUM_BLOCK - 1u) / CUMSUM_BLOCK;
-    out_dispatch[6] = max(c1, 1u);
-    out_dispatch[7] = 1u;
-    out_dispatch[8] = 1u;
-    out_dispatch[9] = max(c2, 1u);
-    out_dispatch[10] = 1u;
-    out_dispatch[11] = 1u;
+    const uint32_t cumsum_l0 = LFS_VK_VISIBLE_CHAIN_DISPATCH_CUMSUM_L0_WORD_OFFSET;
+    out_dispatch[cumsum_l0 + LFS_VK_DISPATCH_X_WORD_OFFSET] = max(c1, 1u);
+    out_dispatch[cumsum_l0 + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+    out_dispatch[cumsum_l0 + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
+    const uint32_t cumsum_l1 = LFS_VK_VISIBLE_CHAIN_DISPATCH_CUMSUM_L1_WORD_OFFSET;
+    out_dispatch[cumsum_l1 + LFS_VK_DISPATCH_X_WORD_OFFSET] = max(c2, 1u);
+    out_dispatch[cumsum_l1 + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+    out_dispatch[cumsum_l1 + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
 
     out_cumsum_counts[0] = int32_t(visible);
     out_cumsum_counts[1] = int32_t(c1);

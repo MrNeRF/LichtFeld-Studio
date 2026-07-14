@@ -4,6 +4,7 @@
 
 #include "py_plugins.hpp"
 #include "py_ui.hpp"
+#include "python_runtime.hpp"
 
 #include "core/logger.hpp"
 
@@ -83,6 +84,23 @@ namespace lfs::python {
         plugins.def(
             "get_traceback", [](const std::string& name) { return get_plugin_manager().attr("get_traceback")(name); },
             nb::arg("name"), "Get plugin error traceback");
+
+        plugins.def(
+            "startup_load_status", []() {
+                const auto status = get_startup_plugin_load_status();
+                nb::dict result;
+                result["state"] = status.state;
+                result["phase"] = status.phase;
+                result["plugin"] = status.plugin;
+                result["detail"] = status.detail;
+                result["attempted"] = status.attempted;
+                result["total"] = status.total;
+                result["failed"] = status.failed;
+                result["progress"] = status.progress;
+                result["active"] = status.active;
+                return result;
+            },
+            "Return a thread-safe snapshot of startup plugin loading");
 
         plugins.def(
             "install",

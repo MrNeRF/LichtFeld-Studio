@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "internal/cuda_event_pool.hpp"
-#include "core/logger.hpp"
+#include "core/cuda_error.hpp"
+
+#include <format>
 
 namespace lfs::core {
 
@@ -23,7 +25,13 @@ namespace lfs::core {
         }
 
         cudaEvent_t event = nullptr;
-        if (cudaEventCreateWithFlags(&event, cudaEventDisableTiming) != cudaSuccess) {
+        const cudaError_t create_status =
+            cudaEventCreateWithFlags(&event, cudaEventDisableTiming);
+        if (create_status != cudaSuccess) {
+            ensure_cuda_success(
+                create_status, "cudaEventCreateWithFlags(tensor event pool)",
+                "fallback=stream synchronization", LFS_SOURCE_SITE_CURRENT(),
+                CudaFailureDisposition::LogOnly);
             return nullptr;
         }
         stats_.created.fetch_add(1, std::memory_order_relaxed);
@@ -40,7 +48,12 @@ namespace lfs::core {
                 return;
             }
         }
-        cudaEventDestroy(event);
+        const cudaError_t destroy_status = cudaEventDestroy(event);
+        if (destroy_status != cudaSuccess) {
+            ensure_cuda_success(
+                destroy_status, "cudaEventDestroy(tensor event pool release)", {},
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+        }
     }
 
     void CudaEventPool::shutdown() {
@@ -49,7 +62,12 @@ namespace lfs::core {
             return;
         std::lock_guard<std::mutex> lock(mutex_);
         for (cudaEvent_t event : pool_) {
-            cudaEventDestroy(event);
+            const cudaError_t destroy_status = cudaEventDestroy(event);
+            if (destroy_status != cudaSuccess) {
+                ensure_cuda_success(
+                    destroy_status, "cudaEventDestroy(tensor event pool shutdown)", {},
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            }
         }
         pool_.clear();
     }
@@ -64,20 +82,37 @@ namespace lfs::core {
         }
 
         if (cudaEvent_t edge = CudaEventPool::instance().acquire()) {
-            const bool bridged =
-                cudaEventRecord(edge, from) == cudaSuccess &&
-                cudaStreamWaitEvent(to, edge, 0) == cudaSuccess;
+            const cudaError_t record_status = cudaEventRecord(edge, from);
+            cudaError_t wait_status = cudaErrorUnknown;
+            if (record_status == cudaSuccess) {
+                wait_status = cudaStreamWaitEvent(to, edge, 0);
+            } else {
+                ensure_cuda_success(
+                    record_status, "cudaEventRecord(tensor stream bridge)",
+                    std::format("from_stream={}, to_stream={}; fallback=stream sync",
+                                static_cast<void*>(from), static_cast<void*>(to)),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            }
+            if (record_status == cudaSuccess && wait_status != cudaSuccess) {
+                ensure_cuda_success(
+                    wait_status, "cudaStreamWaitEvent(tensor stream bridge)",
+                    std::format("from_stream={}, to_stream={}; fallback=stream sync",
+                                static_cast<void*>(from), static_cast<void*>(to)),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            }
             CudaEventPool::instance().release(edge);
-            if (bridged) {
+            if (record_status == cudaSuccess && wait_status == cudaSuccess) {
                 return;
             }
         }
 
         const cudaError_t sync_status = cudaStreamSynchronize(from);
         if (sync_status != cudaSuccess) {
-            LOG_WARN("bridgeStreams: event edge and fallback sync both failed ({}); "
-                     "stream may have been destroyed with pending work",
-                     cudaGetErrorString(sync_status));
+            ensure_cuda_success(
+                sync_status, "cudaStreamSynchronize(tensor stream bridge fallback)",
+                std::format("from_stream={}, to_stream={}; event edge also failed",
+                            static_cast<void*>(from), static_cast<void*>(to)),
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
         }
     }
 

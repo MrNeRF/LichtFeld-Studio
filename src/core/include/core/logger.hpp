@@ -4,15 +4,21 @@
 
 #pragma once
 #include "core/export.hpp"
+#include "core/source_site.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <source_location>
+#if defined(__CUDACC__)
+#include <cstdio>
+#else
+#include <format>
+#endif
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
@@ -51,23 +57,29 @@ namespace lfs::core {
         std::string message;
     };
 
-    using LogHandler = std::function<void(LogLevel level, const std::source_location& loc, std::string_view msg)>;
+    using LogHandler = std::function<void(LogLevel level, const SourceSite& loc, std::string_view msg)>;
     using LogHandlerToken = uint32_t;
 
     class LFS_LOGGER_API Logger {
     public:
         static Logger& get();
 
-        void init(LogLevel console_level = LogLevel::Info,
-                  const std::string& log_file = "",
-                  const std::string& filter_pattern = "",
-                  bool use_stderr = false);
+        void init();
+        void init(LogLevel console_level);
+        void init(LogLevel console_level, const std::string& log_file);
+        void init(LogLevel console_level,
+                  const std::string& log_file,
+                  const std::string& filter_pattern);
+        void init(LogLevel console_level,
+                  const std::string& log_file,
+                  const std::string& filter_pattern,
+                  bool use_stderr);
 
         LogHandlerToken add_log_handler(LogHandler handler);
         void remove_log_handler(LogHandlerToken handler_token);
 
         // Log a pre-formatted message (called by macros)
-        void log(LogLevel level, const std::source_location& loc, std::string_view msg);
+        void log(LogLevel level, const SourceSite& loc, std::string_view msg);
 
         // Module control
         void enable_module(LogModule module, bool enabled = true);
@@ -86,7 +98,7 @@ namespace lfs::core {
 
         // Runtime string logging - no format args, works for both CUDA and non-CUDA
         // Use this when you need to log a dynamically constructed string
-        void log_internal(LogLevel level, const std::source_location& loc, const std::string& msg) {
+        void log_internal(LogLevel level, const SourceSite& loc, const std::string& msg) {
             if (!should_emit(level))
                 return;
             log(level, loc, msg);
@@ -97,7 +109,7 @@ namespace lfs::core {
         // If the log level is below the global threshold, skip formatting entirely.
         // This reduces LOG_DEBUG overhead from ~1-5μs to <50ns when debug logging is disabled.
         template <typename... Args>
-        void log_internal(LogLevel level, const std::source_location& loc,
+        void log_internal(LogLevel level, const SourceSite& loc,
 #ifdef __CUDACC__
                           const char* fmt, Args&&... args) {
             // Fast path: skip formatting if the message would be dropped by all active sinks.
@@ -186,11 +198,9 @@ namespace lfs::core {
     // Scoped timer for performance measurement
     class LFS_LOGGER_API ScopedTimer {
     public:
-        explicit ScopedTimer(std::string name, LogLevel level = LogLevel::Performance,
-                             std::source_location loc = std::source_location::current());
+        explicit ScopedTimer(std::string name, LogLevel level, SourceSite loc);
         ScopedTimer(std::string name, double min_log_ms,
-                    LogLevel level = LogLevel::Performance,
-                    std::source_location loc = std::source_location::current());
+                    LogLevel level, SourceSite loc);
         ~ScopedTimer();
 
     private:
@@ -198,7 +208,7 @@ namespace lfs::core {
         std::string name_;
         double min_log_ms_ = 0.0;
         LogLevel level_;
-        std::source_location loc_;
+        SourceSite loc_;
         bool diagnostics_scope_active_ = false;
     };
 
@@ -206,34 +216,42 @@ namespace lfs::core {
 
 // Global macros
 #define LOG_TRACE(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Trace, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Trace, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_DEBUG(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Debug, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Debug, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_INFO(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Info, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Info, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_PERF(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Performance, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_WARN(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Warn, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Warn, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_ERROR(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Error, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Error, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_CRITICAL(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Critical, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Critical, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 // Helper macros to force expansion of __COUNTER__ before concatenation
 #define _LOG_TIMER_CONCAT_IMPL(x, y)  x##y
 #define _LOG_TIMER_MACRO_CONCAT(x, y) _LOG_TIMER_CONCAT_IMPL(x, y)
 
-#define LOG_TIMER(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name)
-#define LOG_TIMER_THRESHOLD(name, min_log_ms) \
-    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, min_log_ms)
-#define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Trace)
-#define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Debug)
+#define LOG_TIMER(name)                                                     \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)( \
+        (name), ::lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT())
+#define LOG_TIMER_THRESHOLD(name, min_log_ms)                               \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)( \
+        (name), (min_log_ms), ::lfs::core::LogLevel::Performance,           \
+        LFS_SOURCE_SITE_CURRENT())
+#define LOG_TIMER_TRACE(name)                                               \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)( \
+        (name), ::lfs::core::LogLevel::Trace, LFS_SOURCE_SITE_CURRENT())
+#define LOG_TIMER_DEBUG(name)                                               \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)( \
+        (name), ::lfs::core::LogLevel::Debug, LFS_SOURCE_SITE_CURRENT())
 
 // Memory logging: use LOG_DEBUG("[MEM] ...") and filter with --log-filter "*MEM*"

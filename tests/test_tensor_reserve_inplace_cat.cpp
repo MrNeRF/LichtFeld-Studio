@@ -2,7 +2,11 @@
  * Test for tensor reserve() + in-place cat() functionality
  */
 #include "core/tensor.hpp"
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <limits>
+#include <string>
+#include <vector>
 
 using namespace lfs::core;
 
@@ -160,4 +164,49 @@ TEST(TensorReserveInplaceCat, MultipleInplaceCats) {
     // Verify we can read the data
     auto cpu_result = base.cpu();
     EXPECT_EQ(cpu_result.shape()[0], 35);
+}
+
+TEST(TensorReserveInplaceCat, AllocationFailurePreservesInstalledStorage) {
+    auto tensor = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::CUDA);
+    void* const original_ptr = tensor.data_ptr();
+    const size_t original_capacity = tensor.capacity();
+    const size_t original_logical_size = tensor.logical_size();
+
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_bytes, &total_bytes), cudaSuccess);
+    const size_t impossible_rows = total_bytes / sizeof(float) + 1;
+
+    try {
+        tensor.reserve(impossible_rows);
+        FAIL() << "reserve unexpectedly allocated more than total device memory";
+    } catch (const std::runtime_error& error) {
+        EXPECT_NE(std::string(error.what()).find("reserve CUDA allocation failed"), std::string::npos);
+    }
+
+    EXPECT_EQ(tensor.data_ptr(), original_ptr);
+    EXPECT_EQ(tensor.capacity(), original_capacity);
+    EXPECT_EQ(tensor.logical_size(), original_logical_size);
+    EXPECT_EQ(tensor.shape(), TensorShape({4}));
+
+    const auto values = tensor.to(Device::CPU).to_vector();
+    EXPECT_EQ(values, (std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}));
+}
+
+TEST(TensorReserveInplaceCat, OverflowFailurePreservesInstalledStorage) {
+    auto tensor = Tensor::ones({1, 2}, Device::CUDA);
+    void* const original_ptr = tensor.data_ptr();
+    const size_t original_capacity = tensor.capacity();
+    const size_t original_logical_size = tensor.logical_size();
+
+    EXPECT_THROW(tensor.reserve(std::numeric_limits<size_t>::max()), std::runtime_error);
+
+    EXPECT_EQ(tensor.data_ptr(), original_ptr);
+    EXPECT_EQ(tensor.capacity(), original_capacity);
+    EXPECT_EQ(tensor.logical_size(), original_logical_size);
+    EXPECT_EQ(tensor.shape(), TensorShape({1, 2}));
+
+    const auto values = tensor.to(Device::CPU).to_vector();
+    EXPECT_EQ(values, (std::vector<float>{1.0f, 1.0f}));
 }

@@ -58,8 +58,8 @@ TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {
     ASSERT_NE(means_state, nullptr);
     // grad is allocated lazily via get_grad(); force allocation before fill/assertions.
     strategy.get_optimizer().get_grad(ParamType::Means);
-    means_state->exp_avg.fill_(1.0f);
-    means_state->exp_avg_sq.fill_(2.0f);
+    means_state->exp_avg_scale.fill_(1.0f);
+    means_state->exp_avg_sq_scale.fill_(2.0f);
     ASSERT_TRUE(means_state->grad.is_valid());
     means_state->grad.fill_(3.0f);
 
@@ -85,15 +85,21 @@ TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {
         EXPECT_FLOAT_EQ(rotations[i], 0.0f);
     }
 
-    const auto exp_avg = means_state->exp_avg.cpu().to_vector();
-    const auto exp_avg_sq = means_state->exp_avg_sq.cpu().to_vector();
+    const auto exp_avg_scale = means_state->exp_avg_scale.cpu().to_vector();
+    const auto exp_avg_sq_scale = means_state->exp_avg_sq_scale.cpu().to_vector();
     const auto grad = means_state->grad.cpu().to_vector();
-    ASSERT_EQ(exp_avg.size(), 50 * 3);
-    ASSERT_EQ(exp_avg_sq.size(), 50 * 3);
+    ASSERT_EQ(exp_avg_scale.size(), 50);
+    ASSERT_EQ(exp_avg_sq_scale.size(), 50);
     ASSERT_EQ(grad.size(), 50 * 3);
+    for (int i = 0; i < 10; ++i) {
+        EXPECT_FLOAT_EQ(exp_avg_scale[i], 0.0f);
+        EXPECT_FLOAT_EQ(exp_avg_sq_scale[i], 0.0f);
+    }
+    for (int i = 10; i < 50; ++i) {
+        EXPECT_FLOAT_EQ(exp_avg_scale[i], 1.0f);
+        EXPECT_FLOAT_EQ(exp_avg_sq_scale[i], 2.0f);
+    }
     for (int i = 0; i < 10 * 3; ++i) {
-        EXPECT_FLOAT_EQ(exp_avg[i], 0.0f);
-        EXPECT_FLOAT_EQ(exp_avg_sq[i], 0.0f);
         EXPECT_FLOAT_EQ(grad[i], 0.0f);
     }
 }
@@ -120,6 +126,20 @@ TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     for (float value : deleted) {
         EXPECT_FLOAT_EQ(value, 0.0f);
     }
+}
+
+TEST(MCMCTest, RelocateGrowsRatioWorkspaceWhenMaxCapIsDisabled) {
+    auto splat_data = create_test_splat_data(12);
+    MCMC strategy(splat_data);
+
+    param::OptimizationParameters opt_params;
+    opt_params.iterations = 100;
+    opt_params.max_cap = 0;
+    strategy.initialize(opt_params);
+
+    strategy.remove_gaussians(make_mask(12, 3));
+    EXPECT_EQ(strategy.relocate_gs_test(), 3);
+    EXPECT_EQ(strategy.get_model().visible_count(), 12);
 }
 
 TEST(MCMCTest, AddNewGaussiansExtendsDeletedMask) {

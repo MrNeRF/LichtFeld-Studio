@@ -11,6 +11,7 @@
 // chunks whose alpha stays <=1, f16 for merged-interior chunks above 1).
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/environment.hpp"
 #include "io/formats/rad.hpp"
 #include "io/formats/rad_dequant_math.hpp"
 #include "io/ply_to_rad_lod.hpp"
@@ -19,7 +20,6 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
-#include <cstdlib>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -416,11 +416,11 @@ namespace {
     // sink) vs inflate-only packed decode (new sink). Informational; run with
     // LFS_RAD_BENCH_FILE=<file.rad> pointing at a RAD with a .rad.meta.
     TEST(LodPageDequant, SinkCpuCostBenchmark) {
-        const char* const bench = std::getenv("LFS_RAD_BENCH_FILE");
-        if (bench == nullptr) {
+        const auto bench = lfs::core::environment::value("LFS_RAD_BENCH_FILE");
+        if (!bench) {
             GTEST_SKIP() << "set LFS_RAD_BENCH_FILE to run";
         }
-        const std::filesystem::path rad_path(bench);
+        const std::filesystem::path rad_path(*bench);
         auto loaded = lfs::io::load_rad(rad_path);
         ASSERT_TRUE(loaded.has_value()) << loaded.error();
         ASSERT_TRUE(loaded->lod_tree && loaded->lod_tree->rad_source.valid());

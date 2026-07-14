@@ -33,6 +33,8 @@ namespace fast_lfs::rasterization {
         float* image,
         float* alpha,
         float* depth,
+        float* normal,             // [3*H*W] or nullptr
+        float3* primitive_normals, // [N] scratch, required when normal != nullptr
         const int n_primitives,
         const int active_sh_bases,
         const int sh_layout_bases,

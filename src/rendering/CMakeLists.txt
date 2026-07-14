@@ -31,10 +31,12 @@ target_link_libraries(lfs_rendering_tensor
         glslang::glslang
         glslang::SPIRV
         glslang::glslang-default-resource-limits
-        OpenImageIO::OpenImageIO
+        lfs_oiio
         spdlog::spdlog
         TBB::tbb
 )
+
+set_property(SOURCE raster_rendering_engine.cpp APPEND PROPERTY COMPILE_DEFINITIONS FMT_HEADER_ONLY=1)
 
 target_include_directories(lfs_rendering_tensor
         PUBLIC

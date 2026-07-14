@@ -2,15 +2,14 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include <cinttypes>
 #include <cooperative_groups.h>
-#include <cstdio>
 #include <cuda_runtime.h>
 
 #include "Cameras.cuh"
 #include "Common.h"
 #include "Rasterization.h"
 #include "Utils.cuh"
+#include "core/cuda_safe_format.hpp"
 
 // Use standard CUDA atomic add
 #ifndef gpuAtomicAdd
@@ -507,10 +506,12 @@ namespace gsplat_lfs {
             cudaFuncAttributeMaxDynamicSharedMemorySize,
             shmem_size);
         if (err != cudaSuccess) {
-            fprintf(stderr,
-                    "GSPLAT ERROR: Failed to set maximum shared memory size "
-                    "(requested %" PRId64 " bytes), try lowering tile_size. CUDA error: %s\n",
-                    shmem_size, cudaGetErrorString(err));
+            lfs::core::ensure_cuda_success(
+                err, "cudaFuncSetAttribute(gsplat backward shared memory)",
+                lfs::core::detail::format_cuda_safe(
+                    "requested_bytes={}, try lowering tile_size", shmem_size),
+                LFS_SOURCE_SITE_CURRENT(),
+                lfs::core::CudaFailureDisposition::LogOnly);
             return;
         }
 

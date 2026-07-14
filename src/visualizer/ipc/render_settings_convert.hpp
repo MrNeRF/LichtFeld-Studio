@@ -57,6 +57,7 @@ namespace lfs::vis {
         p.eval_camera_color = detail::to_array(s.eval_camera_color);
         p.show_pivot = s.show_pivot;
         p.split_view_mode = static_cast<int>(s.split_view_mode);
+        p.gt_comparison_mode = static_cast<int>(s.gt_comparison_mode);
         p.split_position = s.split_position;
         p.raster_backend = static_cast<int>(s.raster_backend);
         p.gut = lfs::rendering::isGutBackend(s.raster_backend);
@@ -139,6 +140,8 @@ namespace lfs::vis {
         s.eval_camera_color = detail::to_vec3(p.eval_camera_color);
         s.show_pivot = p.show_pivot;
         s.split_view_mode = static_cast<SplitViewMode>(p.split_view_mode);
+        s.gt_comparison_mode = static_cast<GTComparisonMode>(p.gt_comparison_mode);
+        sanitizeGTComparisonSettings(s);
         s.split_position = p.split_position;
         const auto previous_backend = s.raster_backend;
         const bool previous_gut = s.gut;

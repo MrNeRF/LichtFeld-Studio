@@ -32,11 +32,15 @@ target_link_libraries(lfs_preprocessing
     PUBLIC
         lfs_core
     PRIVATE
+        lfs_io                  # Scene import (Loader) for depth-anchor precompute
+        lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
         ${LFS_ONNXRUNTIME_TARGET}
         CURL::libcurl
         OpenSSL::Crypto
-        OpenImageIO::OpenImageIO
+        lfs_oiio
 )
+
+set_property(SOURCE preprocess.cpp APPEND PROPERTY COMPILE_DEFINITIONS FMT_HEADER_ONLY=1)
 
 target_compile_features(lfs_preprocessing PUBLIC cxx_std_23)
 

@@ -52,7 +52,6 @@ def pytest_configure(config):
     # (import/collection time). Per-test fixtures override this with their own
     # temp dir; this baseline only guarantees nothing resolves to production.
     session_catalog = Path(tempfile.gettempdir()) / "lfs-test-asset-manager"
-    os.environ.setdefault("LICHTFELD_ASSET_MANAGER_DIR", str(session_catalog))
     os.environ.setdefault("LFS_ASSET_MANAGER_DIR", str(session_catalog))
 
 
@@ -83,11 +82,10 @@ def isolate_asset_manager_catalog(tmp_path, monkeypatch):
     register_catalog_asset_path -> load_asset_index) otherwise write into the
     user's real ~/.lichtfeld/asset_manager/library.json, leaving dead entries
     that point at deleted pytest tmp dirs. resolve_asset_manager_storage_path()
-    reads these env vars first on every call, so the redirect is binding-proof;
+    reads this env var first on every call, so the redirect is binding-proof;
     pinning the legacy path to the temp dir suppresses the real-catalog copy.
     """
     catalog_dir = tmp_path / "asset_manager"
-    monkeypatch.setenv("LICHTFELD_ASSET_MANAGER_DIR", str(catalog_dir))
     monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(catalog_dir))
     try:
         from lfs_plugins import asset_index

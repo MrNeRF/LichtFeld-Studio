@@ -110,6 +110,8 @@ set(BENCHMARK_FILES
 
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
+    test_assert_hardening.cpp
+    test_cuda_error.cpp
     test_loss_gradients.cpp
     test_regularization_comparison.cpp
     test_gut_rasterizer_gradients.cpp
@@ -206,6 +208,9 @@ set(TEST_FILES
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
+    test_atomic_output.cpp
+    test_training_terminal_state.cpp
+    test_headless_run_coordinator.cpp
     test_argument_parser.cpp
     test_logger.cpp
     test_parameter_manager.cpp
@@ -213,6 +218,7 @@ set(TEST_FILES
     test_mcp_app_utils.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
+    test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
     test_visualizer_post_work.cpp
@@ -267,7 +273,10 @@ set(TEST_FILES
     test_selection_operator_modal.cpp
     test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
+    test_normal_prior_decode.cpp
     test_background_image.cpp
+    test_nvcodec_jpeg2k_16bit.cpp
+    test_pipelined_loader_sidecar_jpeg2k.cpp
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
     test_rml_path_utils.cpp
@@ -302,6 +311,7 @@ set(TEST_FILES
     test_arena_metrics_contention.cpp
     test_tensor_memory_planner.cpp
     test_vram_profiler_metrics.cpp
+    test_memory_pressure.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)
@@ -370,11 +380,12 @@ target_compile_definitions(lichtfeld_tests PRIVATE
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_TEST_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_mcp,lfs_visualizer,lfs_sequencer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,lfs_video,fastlfs_backend,spz_lib,lfs_python_utils>"
+        "$<LINK_GROUP:RESCAN,lfs_mcp,lfs_tcp,lfs_visualizer,lfs_sequencer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,lfs_video,fastlfs_backend,spz_lib,lfs_python_utils>"
     )
 else()
     set(LFS_TEST_INTERNAL_LINK_LIBS
         lfs_mcp
+        lfs_tcp
         lfs_visualizer
         lfs_sequencer
         lfs_rendering
@@ -414,7 +425,7 @@ target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulk
 
 # Compiler options for CUDA debugging
 target_compile_options(lichtfeld_tests PRIVATE
-    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:${LFS_CUDA_DEVICE_DEBUG_FLAGS} -lineinfo>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-lineinfo>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
 )
@@ -479,7 +490,7 @@ target_link_libraries(lichtfeld_benchmarks PRIVATE
 )
 
 target_compile_options(lichtfeld_benchmarks PRIVATE
-    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:${LFS_CUDA_DEVICE_DEBUG_FLAGS} -lineinfo>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-lineinfo>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
 )
@@ -559,6 +570,14 @@ if(WIN32)
                     "$<TARGET_FILE_DIR:${TEST_TARGET}>/extensions/"
                 COMMENT "Copying nvjpeg2k extension for ${TEST_TARGET}"
             )
+            if(WITH_DYNAMIC_NVJPEG2K AND DEFINED _lfs_nvjpeg2k_runtime_file AND EXISTS "${_lfs_nvjpeg2k_runtime_file}")
+                add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_lfs_nvjpeg2k_runtime_file}"
+                        "$<TARGET_FILE_DIR:${TEST_TARGET}>"
+                    COMMENT "Copying nvjpeg2k runtime library for ${TEST_TARGET}"
+                )
+            endif()
         endif()
     endforeach()
 endif()

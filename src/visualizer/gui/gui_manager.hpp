@@ -27,6 +27,7 @@
 #include "gui/startup_overlay.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
@@ -130,8 +131,12 @@ namespace lfs::vis {
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
+            [[nodiscard]] bool isStartupBlockingInput() const {
+                return startup_overlay_.blocksUnderlayInput();
+            }
             void dismissStartupOverlay();
-            void setStartupPluginLoadState(bool active, float progress, const std::string& stage);
+            void setStartupPluginLoadState(bool started, bool active, float progress,
+                                           const std::string& stage);
             void captureKey(int physical_key, int logical_key, int mods);
             void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
             void captureMouseButtonRelease(int button);
@@ -332,6 +337,7 @@ namespace lfs::vis {
 
             // Deferred CUDA version warning (emitted on first drawFrame)
             std::optional<lfs::core::CudaVersionInfo> pending_cuda_warning_;
+            bool cuda_unavailable_notified_ = false;
 
             // File association prompt (Windows only, one-shot)
             bool file_association_checked_ = false;
@@ -340,6 +346,7 @@ namespace lfs::vis {
             // RmlUI integration
             RmlUIManager rmlui_manager_;
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
+            lfs::rendering::CudaVulkanUploadStream vulkan_interop_upload_stream_;
             std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_scene_interop_;
             std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
             std::uint64_t vulkan_scene_image_generation_ = 0;

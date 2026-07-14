@@ -103,6 +103,7 @@ namespace lfs::vis {
         std::array<float, 3> eval_camera_color{1.0f, 0.0f, 0.0f};
         bool show_pivot = false;
         int split_view_mode = 0;
+        int gt_comparison_mode = 0;
         float split_position = 0.5f;
         int raster_backend = 2;
         bool gut = false;

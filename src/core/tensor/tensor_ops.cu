@@ -1,14 +1,16 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/cuda_debug.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "internal/cub_workspace.hpp"
 #include "internal/memory_pool.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include "internal/warp_reduce.cuh"
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <cmath>
 #include <cub/device/device_reduce.cuh>
@@ -18,7 +20,6 @@
 #include <limits>
 
 // Thrust headers
-#include <mutex>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
@@ -33,125 +34,78 @@
 #include <thrust/sort.h>
 #include <thrust/transform.h>
 #include <thrust/tuple.h>
-#include <unordered_map>
-
-// CHECK_CUDA provided by core/cuda_debug.hpp
 
 namespace lfs::core::tensor_ops {
 
-    // Pooled CUB temp storage - grows as needed, never shrinks
-    class CubTempStoragePool {
-    public:
-        static CubTempStoragePool& instance() {
-            static CubTempStoragePool pool;
-            return pool;
-        }
+    namespace {
+        std::atomic_bool force_cub_workspace_failure{false};
 
-        void* get(size_t bytes, cudaStream_t) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (bytes <= capacity_ && buffer_)
-                return buffer_;
-            if (buffer_)
-                cudaFree(buffer_);
-            size_t alloc_size = std::max(((bytes + 1024 * 1024 - 1) / (1024 * 1024)) * (1024 * 1024), size_t(4 * 1024 * 1024));
-            if (cudaMalloc(&buffer_, alloc_size) != cudaSuccess) {
-                buffer_ = nullptr;
-                capacity_ = 0;
-                return nullptr;
+        template <typename Operation>
+        float direct_reduce_scalar(const float* data,
+                                   const size_t n,
+                                   const float empty_value,
+                                   const cudaStream_t stream,
+                                   const std::string_view name,
+                                   Operation&& operation) {
+            if (n == 0) {
+                return empty_value;
             }
-            capacity_ = alloc_size;
-            return buffer_;
+
+            ScopedDeviceBuffer result_buffer(sizeof(float), stream, "tensor.scalar_reduction");
+            run_cub_operation(name, stream, [&](void* workspace, size_t& workspace_bytes) {
+                return operation(workspace, workspace_bytes, result_buffer.as<float>());
+            });
+
+            float result = 0.0f;
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpyAsync(&result, result_buffer.get(), sizeof(float),
+                                cudaMemcpyDeviceToHost, stream),
+                "scalar reduction readback");
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
+                               "scalar reduction stream sync");
+            return result;
         }
+    } // namespace
 
-        ~CubTempStoragePool() {
-            if (buffer_)
-                cudaFree(buffer_);
-        }
-
-    private:
-        CubTempStoragePool() = default;
-        void* buffer_ = nullptr;
-        size_t capacity_ = 0;
-        std::mutex mutex_;
-    };
-
-    inline void* get_cub_temp_storage(size_t bytes, cudaStream_t stream) {
-        return CubTempStoragePool::instance().get(bytes, stream);
+    bool cub_workspace_failure_is_forced() {
+        return force_cub_workspace_failure.load(std::memory_order_acquire);
     }
 
-    // Pre-allocated buffers for scalar reductions with pinned host memory
-    class ScalarReductionCache {
-    public:
-        static ScalarReductionCache& instance() {
-            static ScalarReductionCache cache;
-            return cache;
-        }
-
-        float reduce_sum(const float* data, size_t n, cudaStream_t stream) {
-            if (n == 0)
-                return 0.0f;
-            size_t temp_bytes = temp_capacity_;
-            cub::DeviceReduce::Sum(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
-            cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
-            return *h_scalar_;
-        }
-
-        float reduce_mean(const float* data, size_t n, cudaStream_t stream) {
-            return n ? reduce_sum(data, n, stream) / static_cast<float>(n) : 0.0f;
-        }
-
-        float reduce_max(const float* data, size_t n, cudaStream_t stream) {
-            if (n == 0)
-                return -std::numeric_limits<float>::infinity();
-            size_t temp_bytes = temp_capacity_;
-            cub::DeviceReduce::Max(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
-            cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
-            return *h_scalar_;
-        }
-
-        float reduce_min(const float* data, size_t n, cudaStream_t stream) {
-            if (n == 0)
-                return std::numeric_limits<float>::infinity();
-            size_t temp_bytes = temp_capacity_;
-            cub::DeviceReduce::Min(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
-            cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
-            return *h_scalar_;
-        }
-
-        ~ScalarReductionCache() {
-            if (d_scalar_)
-                cudaFree(d_scalar_);
-            if (h_scalar_)
-                cudaFreeHost(h_scalar_);
-            if (temp_storage_)
-                cudaFree(temp_storage_);
-        }
-
-    private:
-        ScalarReductionCache() {
-            cudaMalloc(&d_scalar_, sizeof(float));
-            cudaMallocHost(&h_scalar_, sizeof(float));
-            temp_capacity_ = 32 * 1024 * 1024;
-            cudaMalloc(&temp_storage_, temp_capacity_);
-        }
-
-        float* d_scalar_ = nullptr;
-        float* h_scalar_ = nullptr;
-        void* temp_storage_ = nullptr;
-        size_t temp_capacity_ = 0;
-    };
-
-    float direct_sum_scalar(const float* data, size_t n, cudaStream_t stream) {
-        return ScalarReductionCache::instance().reduce_sum(data, n, stream);
+    void set_cub_workspace_failure_for_testing(const bool fail) {
+        force_cub_workspace_failure.store(fail, std::memory_order_release);
     }
-    float direct_mean_scalar(const float* data, size_t n, cudaStream_t stream) {
-        return ScalarReductionCache::instance().reduce_mean(data, n, stream);
+
+    float direct_sum_scalar(const float* data, const size_t n, const cudaStream_t stream) {
+        return direct_reduce_scalar(
+            data, n, 0.0f, stream, "cub::DeviceReduce::Sum",
+            [=](void* workspace, size_t& workspace_bytes, float* output) {
+                return cub::DeviceReduce::Sum(
+                    workspace, workspace_bytes, data, output, n, stream);
+            });
     }
-    float direct_max_scalar(const float* data, size_t n, cudaStream_t stream) {
-        return ScalarReductionCache::instance().reduce_max(data, n, stream);
+
+    float direct_mean_scalar(const float* data, const size_t n, const cudaStream_t stream) {
+        return n ? direct_sum_scalar(data, n, stream) / static_cast<float>(n) : 0.0f;
     }
-    float direct_min_scalar(const float* data, size_t n, cudaStream_t stream) {
-        return ScalarReductionCache::instance().reduce_min(data, n, stream);
+
+    float direct_max_scalar(const float* data, const size_t n, const cudaStream_t stream) {
+        return direct_reduce_scalar(
+            data, n, -std::numeric_limits<float>::infinity(), stream,
+            "cub::DeviceReduce::Max",
+            [=](void* workspace, size_t& workspace_bytes, float* output) {
+                return cub::DeviceReduce::Max(
+                    workspace, workspace_bytes, data, output, n, stream);
+            });
+    }
+
+    float direct_min_scalar(const float* data, const size_t n, const cudaStream_t stream) {
+        return direct_reduce_scalar(
+            data, n, std::numeric_limits<float>::infinity(), stream,
+            "cub::DeviceReduce::Min",
+            [=](void* workspace, size_t& workspace_bytes, float* output) {
+                return cub::DeviceReduce::Min(
+                    workspace, workspace_bytes, data, output, n, stream);
+            });
     }
 
     // ============= GENERIC OPERATIONS - NOW IN HEADER =============
@@ -431,45 +385,21 @@ namespace lfs::core::tensor_ops {
                     return i * static_cast<int>(reduce_size);
                 });
 
-            void* d_temp_storage = nullptr;
-            size_t temp_storage_bytes = 0;
-
-            // First call to determine temp storage size needed
-            cub::DeviceSegmentedReduce::Reduce(
-                d_temp_storage,
-                temp_storage_bytes,
-                input,
-                output,
-                static_cast<int>(outer_size),
-                begin_offsets,
-                end_offsets,
-                op,
-                init_value,
-                stream);
-
-            // Allocate temp storage from memory pool (fast!)
-            d_temp_storage = CudaMemoryPool::instance().allocate(temp_storage_bytes, stream);
-            if (!d_temp_storage) {
-                LOG_ERROR("Failed to allocate {} bytes for CUB temp storage from memory pool",
-                          temp_storage_bytes);
-                return;
-            }
-
-            // Actual reduction with temp storage
-            cub::DeviceSegmentedReduce::Reduce(
-                d_temp_storage,
-                temp_storage_bytes,
-                input,
-                output,
-                static_cast<int>(outer_size),
-                begin_offsets,
-                end_offsets,
-                op,
-                init_value,
-                stream);
-
-            // Return temp storage to memory pool (instant, cached for reuse)
-            CudaMemoryPool::instance().deallocate(d_temp_storage, stream);
+            run_cub_operation(
+                "cub::DeviceSegmentedReduce::Reduce", stream,
+                [&](void* workspace, size_t& workspace_bytes) {
+                    return cub::DeviceSegmentedReduce::Reduce(
+                        workspace,
+                        workspace_bytes,
+                        input,
+                        output,
+                        static_cast<int>(outer_size),
+                        begin_offsets,
+                        end_offsets,
+                        op,
+                        init_value,
+                        stream);
+                });
             return;
         }
 
@@ -690,20 +620,22 @@ namespace lfs::core::tensor_ops {
                 return;
             }
 
-            // CUB DeviceReduce with pooled temp storage (no allocation overhead!)
-            void* d_temp_storage = nullptr;
-            size_t temp_storage_bytes = 0;
-
             switch (op) {
             case ReduceOp::Sum:
-                cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                d_temp_storage = get_cub_temp_storage(temp_storage_bytes, stream);
-                cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
+                run_cub_operation(
+                    "cub::DeviceReduce::Sum", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Sum(
+                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                    });
                 break;
             case ReduceOp::Mean: {
-                cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                d_temp_storage = get_cub_temp_storage(temp_storage_bytes, stream);
-                cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
+                run_cub_operation(
+                    "cub::DeviceReduce::Sum", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Sum(
+                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                    });
                 // Divide by n using a simple kernel (faster than Thrust for single value)
                 auto out_ptr = thrust::device_pointer_cast(d_out);
                 run_with_thrust_policy(stream, [&](auto policy) {
@@ -713,14 +645,20 @@ namespace lfs::core::tensor_ops {
                 break;
             }
             case ReduceOp::Max:
-                cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                d_temp_storage = get_cub_temp_storage(temp_storage_bytes, stream);
-                cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
+                run_cub_operation(
+                    "cub::DeviceReduce::Max", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Max(
+                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                    });
                 break;
             case ReduceOp::Min:
-                cub::DeviceReduce::Min(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                d_temp_storage = get_cub_temp_storage(temp_storage_bytes, stream);
-                cub::DeviceReduce::Min(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
+                run_cub_operation(
+                    "cub::DeviceReduce::Min", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Min(
+                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                    });
                 break;
             case ReduceOp::Prod: {
                 float result = 0.0f;
@@ -1030,16 +968,15 @@ namespace lfs::core::tensor_ops {
 
         // Only support full reduction for Int32
         if (num_axes == 0 || num_axes == rank) {
-            void* d_temp_storage = nullptr;
-            size_t temp_storage_bytes = 0;
-
             switch (op) {
             case ReduceOp::Sum:
             case ReduceOp::Mean:
-                cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
-                cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaFreeAsync(d_temp_storage, stream);
+                run_cub_operation(
+                    "cub::DeviceReduce::Sum", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Sum(
+                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                    });
                 if (op == ReduceOp::Mean) {
                     // Divide by count for mean - use Thrust directly
                     auto out_ptr = thrust::device_pointer_cast(d_out);
@@ -1049,16 +986,20 @@ namespace lfs::core::tensor_ops {
                 }
                 break;
             case ReduceOp::Max:
-                cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
-                cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaFreeAsync(d_temp_storage, stream);
+                run_cub_operation(
+                    "cub::DeviceReduce::Max", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Max(
+                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                    });
                 break;
             case ReduceOp::Min:
-                cub::DeviceReduce::Min(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
-                cub::DeviceReduce::Min(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaFreeAsync(d_temp_storage, stream);
+                run_cub_operation(
+                    "cub::DeviceReduce::Min", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Min(
+                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                    });
                 break;
             case ReduceOp::Prod: {
                 auto in_ptr = thrust::device_pointer_cast(d_in);
@@ -1133,20 +1074,19 @@ namespace lfs::core::tensor_ops {
 
         // Full reduction
         if (num_axes == 0 || num_axes == rank) {
-            void* d_temp_storage = nullptr;
-            size_t temp_storage_bytes = 0;
-
             switch (op) {
             case ReduceOp::Sum:
             case ReduceOp::Mean: {
                 auto transform_iter = thrust::make_transform_iterator(
                     thrust::device_pointer_cast(d_in), BoolToInt64Op());
 
-                cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes,
-                                       transform_iter, d_out_int64, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
-                cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes,
-                                       transform_iter, d_out_int64, n, stream);
+                run_cub_operation(
+                    "cub::DeviceReduce::Sum", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Sum(
+                            workspace, workspace_bytes,
+                            transform_iter, d_out_int64, n, stream);
+                    });
 
                 if (op == ReduceOp::Mean) {
                     const int64_t count = static_cast<int64_t>(n);
@@ -1154,7 +1094,6 @@ namespace lfs::core::tensor_ops {
                     thrust::transform(thrust::cuda::par_nosync.on(stream), out_ptr, out_ptr + 1, out_ptr,
                                       [count] __device__(int64_t val) { return val / count; });
                 }
-                cudaFreeAsync(d_temp_storage, stream);
             } break;
 
             case ReduceOp::Max:
@@ -1162,14 +1101,16 @@ namespace lfs::core::tensor_ops {
                 auto transform_iter = thrust::make_transform_iterator(
                     thrust::device_pointer_cast(d_in), BoolToInt64Op());
 
-                int64_t* d_temp_result;
-                cudaMallocAsync(&d_temp_result, sizeof(int64_t), stream);
-
-                cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes,
-                                       transform_iter, d_temp_result, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
-                cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes,
-                                       transform_iter, d_temp_result, n, stream);
+                ScopedDeviceBuffer temp_result(
+                    sizeof(int64_t), stream, "tensor.bool_reduction_result");
+                auto* d_temp_result = temp_result.as<int64_t>();
+                run_cub_operation(
+                    "cub::DeviceReduce::Max", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Max(
+                            workspace, workspace_bytes,
+                            transform_iter, d_temp_result, n, stream);
+                    });
 
                 if (op == ReduceOp::Any) {
                     thrust::transform(thrust::cuda::par_nosync.on(stream),
@@ -1178,10 +1119,11 @@ namespace lfs::core::tensor_ops {
                                       thrust::device_pointer_cast(d_out_bool),
                                       [] __device__(int64_t val) { return val != 0; });
                 } else {
-                    cudaMemcpyAsync(d_out_int64, d_temp_result, sizeof(int64_t), cudaMemcpyDeviceToDevice, stream);
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpyAsync(d_out_int64, d_temp_result, sizeof(int64_t),
+                                        cudaMemcpyDeviceToDevice, stream),
+                        "bool max reduction output copy");
                 }
-                cudaFreeAsync(d_temp_result, stream);
-                cudaFreeAsync(d_temp_storage, stream);
             } break;
 
             case ReduceOp::Min:
@@ -1190,14 +1132,16 @@ namespace lfs::core::tensor_ops {
                 auto transform_iter = thrust::make_transform_iterator(
                     thrust::device_pointer_cast(d_in), BoolToInt64Op());
 
-                int64_t* d_temp_result;
-                cudaMallocAsync(&d_temp_result, sizeof(int64_t), stream);
-
-                cub::DeviceReduce::Min(d_temp_storage, temp_storage_bytes,
-                                       transform_iter, d_temp_result, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
-                cub::DeviceReduce::Min(d_temp_storage, temp_storage_bytes,
-                                       transform_iter, d_temp_result, n, stream);
+                ScopedDeviceBuffer temp_result(
+                    sizeof(int64_t), stream, "tensor.bool_reduction_result");
+                auto* d_temp_result = temp_result.as<int64_t>();
+                run_cub_operation(
+                    "cub::DeviceReduce::Min", stream,
+                    [&](void* workspace, size_t& workspace_bytes) {
+                        return cub::DeviceReduce::Min(
+                            workspace, workspace_bytes,
+                            transform_iter, d_temp_result, n, stream);
+                    });
 
                 if (op == ReduceOp::All) {
                     thrust::transform(thrust::cuda::par_nosync.on(stream),
@@ -1206,10 +1150,11 @@ namespace lfs::core::tensor_ops {
                                       thrust::device_pointer_cast(d_out_bool),
                                       [] __device__(int64_t val) { return val != 0; });
                 } else {
-                    cudaMemcpyAsync(d_out_int64, d_temp_result, sizeof(int64_t), cudaMemcpyDeviceToDevice, stream);
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpyAsync(d_out_int64, d_temp_result, sizeof(int64_t),
+                                        cudaMemcpyDeviceToDevice, stream),
+                        "bool min reduction output copy");
                 }
-                cudaFreeAsync(d_temp_result, stream);
-                cudaFreeAsync(d_temp_storage, stream);
             } break;
 
             default:
@@ -1905,10 +1850,14 @@ namespace lfs::core::tensor_ops {
             h_input_sizes[i] = tensors[i].shape()[tensors[i].shape().rank() - 1];
         }
 
-        cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
-                        num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
-                        num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
+                            num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream),
+            "cat metadata pointer copy (tensor_count={})", num_tensors);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
+                            num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream),
+            "cat metadata size copy (tensor_count={})", num_tensors);
 
         int block_size = 256;
         size_t num_blocks = (num_rows + block_size - 1) / block_size;
@@ -2015,10 +1964,14 @@ namespace lfs::core::tensor_ops {
             h_input_sizes[i] = tensors[i].shape()[resolved_dim];
         }
 
-        cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
-                        num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
-                        num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
+                            num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream),
+            "cat-middle metadata pointer copy (tensor_count={})", num_tensors);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
+                            num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream),
+            "cat-middle metadata size copy (tensor_count={})", num_tensors);
 
         int block_size = 256;
         size_t num_blocks = (total_elements + block_size - 1) / block_size;
@@ -2718,7 +2671,7 @@ namespace lfs::core::tensor_ops {
                     data, value, shape[0], strides[0], storage_offset);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2736,7 +2689,7 @@ namespace lfs::core::tensor_ops {
                     data, value, storage_offset, strides[0], n);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2760,7 +2713,7 @@ namespace lfs::core::tensor_ops {
                     storage_offset, n);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2784,7 +2737,7 @@ namespace lfs::core::tensor_ops {
                     storage_offset, n);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2808,7 +2761,7 @@ namespace lfs::core::tensor_ops {
                     data, value, meta, storage_offset, ndim, n);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2819,10 +2772,10 @@ namespace lfs::core::tensor_ops {
         // Copy shape and strides to device
         size_t* d_shape;
         size_t* d_strides;
-        CHECK_CUDA(cudaMalloc(&d_shape, ndim * sizeof(size_t)));
-        CHECK_CUDA(cudaMalloc(&d_strides, ndim * sizeof(size_t)));
-        CHECK_CUDA(cudaMemcpy(d_shape, shape.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
-        CHECK_CUDA(cudaMemcpy(d_strides, strides.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
+        LFS_CUDA_CHECK(cudaMalloc(&d_shape, ndim * sizeof(size_t)));
+        LFS_CUDA_CHECK(cudaMalloc(&d_strides, ndim * sizeof(size_t)));
+        LFS_CUDA_CHECK(cudaMemcpy(d_shape, shape.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
+        LFS_CUDA_CHECK(cudaMemcpy(d_strides, strides.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
 
         // Use 2D grid for large arrays to avoid exceeding grid dimension limits
         if (num_blocks <= max_blocks_x) {
@@ -2835,14 +2788,14 @@ namespace lfs::core::tensor_ops {
                 data, value, d_shape, d_strides, storage_offset, ndim, n);
         }
 
-        CHECK_CUDA(cudaGetLastError());
+        LFS_CUDA_CHECK(cudaGetLastError());
         if (stream == nullptr) {
-            CHECK_CUDA(cudaDeviceSynchronize());
+            LFS_CUDA_CHECK(cudaDeviceSynchronize());
         }
 
         // Clean up device memory
-        CHECK_CUDA(cudaFree(d_shape));
-        CHECK_CUDA(cudaFree(d_strides));
+        LFS_CUDA_CHECK(cudaFree(d_shape));
+        LFS_CUDA_CHECK(cudaFree(d_strides));
     }
 
     // Explicit instantiations
@@ -2919,16 +2872,26 @@ namespace lfs::core::tensor_ops {
 
             void init() {
                 if (!initialized) {
-                    CHECK_CUDA(cudaMalloc(&d_result, sizeof(int)));
-                    CHECK_CUDA(cudaMallocHost(&h_result_pinned, sizeof(int))); // Pinned memory
+                    LFS_CUDA_CHECK(cudaMalloc(&d_result, sizeof(int)));
+                    LFS_CUDA_CHECK(cudaMallocHost(&h_result_pinned, sizeof(int))); // Pinned memory
                     initialized = true;
                 }
             }
 
             ~NaNCheckBuffers() {
                 if (initialized) {
-                    cudaFree(d_result);
-                    cudaFreeHost(h_result_pinned);
+                    const cudaError_t device_status = cudaFree(d_result);
+                    if (device_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            device_status, "cudaFree(NaN-check device buffer)", {},
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    }
+                    const cudaError_t host_status = cudaFreeHost(h_result_pinned);
+                    if (host_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            host_status, "cudaFreeHost(NaN-check pinned buffer)", {},
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    }
                 }
             }
         };
@@ -2947,7 +2910,7 @@ namespace lfs::core::tensor_ops {
 
         // Zero the result flag
         *h_result = 0;
-        CHECK_CUDA(cudaMemcpyAsync(d_result, h_result, sizeof(int), cudaMemcpyHostToDevice, stream));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(d_result, h_result, sizeof(int), cudaMemcpyHostToDevice, stream));
 
         // Launch kernel
         constexpr int BLOCK_SIZE = 256;
@@ -2964,8 +2927,8 @@ namespace lfs::core::tensor_ops {
         }
 
         // Copy result back using pinned memory (very fast!)
-        CHECK_CUDA(cudaMemcpyAsync(h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost, stream));
-        CHECK_CUDA(cudaStreamSynchronize(stream));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost, stream));
+        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
 
         return *h_result != 0;
     }

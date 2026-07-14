@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 #include <filesystem>
 #include <memory>
+#include <utility>
 #include <vector>
 
 // Forward declarations to avoid including nvImageCodec headers in public API
@@ -109,7 +110,44 @@ namespace lfs::io {
         // Encode GPU tensor to JPEG2k bytes (RGB 16bits)
         std::vector<uint8_t> encode_to_jpeg2k(
             const lfs::core::Tensor& image,
-            void* cuda_stream = nullptr);
+            void* cuda_stream = nullptr,
+            bool high_throughput = true);
+
+        /**
+         * @brief Encode grayscale GPU tensor to lossless 16-bit JPEG2000 bytes
+         *
+         * @param image Float32 CUDA tensor in [H,W] layout, normalized [0,1].
+         * @param cuda_stream Optional CUDA stream for async operations.
+         * @param high_throughput Use JPEG2000 HT block coding.
+         * @return JPEG2000 bytes preserving uint16 sample precision.
+         */
+        std::vector<uint8_t> encode_grayscale_to_jpeg2k(
+            const lfs::core::Tensor& image,
+            void* cuda_stream = nullptr,
+            bool high_throughput = true);
+
+        /**
+         * @brief Decode lossless 16-bit JPEG2000 bytes from memory to GPU float32
+         *
+         * Decodes UINT16 JPEG2000 into a normalized Float32 CUDA tensor without
+         * truncating to 8 bits. Grayscale returns [H,W]; RGB returns interleaved
+         * [H,W,3]. Values round-trip bit-exact for samples representable as
+         * uint16 / 65535.0f.
+         *
+         * @param jpeg2k_data Raw JPEG2000 bytes.
+         * @param cuda_stream Optional CUDA stream for async operations.
+         * @param synchronize Wait for device completion before returning.
+         * @return Float32 CUDA tensor, [H,W] for grayscale or [H,W,3] for RGB.
+         */
+        lfs::core::Tensor decode_jpeg2k_16bit_from_memory_gpu(
+            const std::vector<uint8_t>& jpeg2k_data,
+            void* cuda_stream = nullptr,
+            bool synchronize = true);
+
+        std::vector<lfs::core::Tensor> decode_jpeg2k_16bit_batch_from_spans(
+            const std::vector<std::pair<const uint8_t*, size_t>>& jpeg2k_spans,
+            void* cuda_stream = nullptr,
+            bool synchronize = true);
 
         /**
          * @brief Encode grayscale GPU tensor to JPEG bytes
