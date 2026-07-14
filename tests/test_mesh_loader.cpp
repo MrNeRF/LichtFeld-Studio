@@ -70,8 +70,8 @@ TEST_F(MeshLoaderTest, LoadsGeometryNormalsAndBoundedIndices) {
     EXPECT_EQ(mesh.normals.shape(), TensorShape({3, 3}));
     EXPECT_EQ(mesh.indices.shape(), TensorShape({1, 3}));
 
-    const auto vertices = mesh.vertices.accessor<float, 2>();
-    const auto normals = mesh.normals.accessor<float, 2>();
+    auto vertices = mesh.vertices.accessor<float, 2>();
+    auto normals = mesh.normals.accessor<float, 2>();
     for (int64_t i = 0; i < mesh.vertex_count(); ++i) {
         const float length = std::sqrt(normals(i, 0) * normals(i, 0) +
                                        normals(i, 1) * normals(i, 1) +
@@ -83,7 +83,7 @@ TEST_F(MeshLoaderTest, LoadsGeometryNormalsAndBoundedIndices) {
         }
     }
 
-    const auto indices = mesh.indices.accessor<int32_t, 2>();
+    auto indices = mesh.indices.accessor<int32_t, 2>();
     for (int axis = 0; axis < 3; ++axis) {
         EXPECT_GE(indices(0, axis), 0);
         EXPECT_LT(indices(0, axis), mesh.vertex_count());
