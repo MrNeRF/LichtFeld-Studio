@@ -460,28 +460,32 @@ TEST_F(TypePromotionTest, SystematicAllCombinations) {
         for (auto rhs_type : all_types) {
             auto lhs = Tensor::from_vector({1.0f, 2.0f}, {2}, Device::CUDA).to(lhs_type);
             auto rhs = Tensor::from_vector({1.0f, 1.0f}, {2}, Device::CUDA).to(rhs_type);
+            const bool unsupported_bool_arithmetic =
+                lhs_type == DataType::Bool && rhs_type == DataType::Bool;
 
             // Test multiplication
-            try {
+            if (unsupported_bool_arithmetic) {
+                EXPECT_THROW(lhs * rhs, std::runtime_error);
+                pass_count++;
+            } else {
                 auto result = lhs * rhs;
                 verify_no_garbage(result,
                                   std::string(dtype_name(lhs_type)) + " * " + std::string(dtype_name(rhs_type)),
                                   lhs_type, rhs_type);
                 pass_count++;
-            } catch (...) {
-                FAIL() << "Failed: " << dtype_name(lhs_type) << " * " << dtype_name(rhs_type);
             }
             test_count++;
 
             // Test addition
-            try {
+            if (unsupported_bool_arithmetic) {
+                EXPECT_THROW(lhs + rhs, std::runtime_error);
+                pass_count++;
+            } else {
                 auto result = lhs + rhs;
                 verify_no_garbage(result,
                                   std::string(dtype_name(lhs_type)) + " + " + std::string(dtype_name(rhs_type)),
                                   lhs_type, rhs_type);
                 pass_count++;
-            } catch (...) {
-                FAIL() << "Failed: " << dtype_name(lhs_type) << " + " << dtype_name(rhs_type);
             }
             test_count++;
         }

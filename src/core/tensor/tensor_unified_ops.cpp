@@ -2327,8 +2327,8 @@ namespace lfs::core {
                        "clamp requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
                        "clamp currently supports only Float32 and Int32");
-        LFS_ASSERT_MSG(std::isfinite(min_val) && std::isfinite(max_val) && min_val <= max_val,
-                       "clamp bounds must be finite and ordered");
+        LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
+                       "clamp bounds must not be NaN and must be ordered");
 
         if (numel() == 0) {
             return empty(shape_, device_, dtype_);

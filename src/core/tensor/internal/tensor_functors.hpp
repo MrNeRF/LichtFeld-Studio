@@ -993,6 +993,14 @@ namespace lfs::core {
             }
         };
 
+        struct index_stride_op {
+            size_t stride;
+            HOST_DEVICE constexpr explicit index_stride_op(size_t s) : stride(s) {}
+            HOST_DEVICE constexpr size_t operator()(size_t idx) const {
+                return idx * stride;
+            }
+        };
+
         struct index_wrap_op {
             size_t size;
             HOST_DEVICE constexpr index_wrap_op(size_t s) : size(s) {}

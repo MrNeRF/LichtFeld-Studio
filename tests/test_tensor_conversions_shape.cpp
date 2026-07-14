@@ -364,9 +364,7 @@ TEST_F(TensorConversionsShapesTest, ReshapeInvalidSize) {
     auto custom_t = Tensor::from_vector(data, {24}, Device::CUDA);
 
     // Try to reshape 24 elements to 25 elements
-    auto custom_result = custom_t.reshape({5, 5});
-
-    EXPECT_FALSE(custom_result.is_valid());
+    EXPECT_THROW(custom_t.reshape({5, 5}), std::runtime_error);
 }
 
 TEST_F(TensorConversionsShapesTest, ViewAlias) {

@@ -161,10 +161,7 @@ TEST_F(TensorBitwiseTest, BitwiseNotAllFalse) {
 
 TEST_F(TensorBitwiseTest, BitwiseNotOnNonBoolFails) {
     auto t = Tensor::ones({4}, Device::CPU, DataType::Float32);
-    auto result = ~t;
-
-    // Should fail gracefully
-    EXPECT_FALSE(result.is_valid());
+    EXPECT_THROW((void)~t, std::runtime_error);
 }
 
 // ============= Bitwise OR (|) Tests =============
@@ -279,9 +276,7 @@ TEST_F(TensorBitwiseTest, BitwiseOrAllCombinations) {
 TEST_F(TensorBitwiseTest, BitwiseOrOnNonBoolFails) {
     auto a = Tensor::ones({4}, Device::CPU);
     auto b = Tensor::zeros({4}, Device::CPU);
-    auto result = a | b;
-
-    EXPECT_FALSE(result.is_valid());
+    EXPECT_THROW((void)(a | b), std::runtime_error);
 }
 
 // ============= Logical vs Bitwise Operations =============

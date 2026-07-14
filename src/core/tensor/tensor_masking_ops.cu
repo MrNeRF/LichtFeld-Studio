@@ -1085,6 +1085,9 @@ namespace lfs::core::tensor_ops {
                              size_t input_size, size_t index_size,
                              size_t stride1, size_t stride2,
                              cudaStream_t stream) {
+        if (input_size == 0 || index_size == 0)
+            return;
+
         auto in1_ptr = thrust::device_pointer_cast(input1);
         auto in2_ptr = thrust::device_pointer_cast(input2);
         auto idx_ptr = thrust::device_pointer_cast(indices);
@@ -1095,12 +1098,11 @@ namespace lfs::core::tensor_ops {
         auto clamped_idx = thrust::make_transform_iterator(idx_ptr,
                                                            ops::index_clamp_op(input_size));
 
-        // Create zip iterator for inputs - combines two sequences
-        auto zipped_input = thrust::make_zip_iterator(
-            thrust::make_tuple(in1_ptr, in2_ptr));
-
-        // Create permutation iterator - applies gather lazily
-        auto permuted = thrust::make_permutation_iterator(zipped_input, clamped_idx);
+        auto input1_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride1));
+        auto input2_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride2));
+        auto gathered1 = thrust::make_permutation_iterator(in1_ptr, input1_idx);
+        auto gathered2 = thrust::make_permutation_iterator(in2_ptr, input2_idx);
+        auto gathered = thrust::make_zip_iterator(thrust::make_tuple(gathered1, gathered2));
 
         // Create zip iterator for outputs
         auto zipped_output = thrust::make_zip_iterator(
@@ -1108,7 +1110,7 @@ namespace lfs::core::tensor_ops {
 
         // Single gather operation copies both tensors!
         thrust::copy(thrust::cuda::par.on(stream),
-                     permuted, permuted + index_size,
+                     gathered, gathered + index_size,
                      zipped_output);
     }
 
@@ -1118,6 +1120,9 @@ namespace lfs::core::tensor_ops {
                              size_t input_size, size_t index_size,
                              size_t stride1, size_t stride2, size_t stride3,
                              cudaStream_t stream) {
+        if (input_size == 0 || index_size == 0)
+            return;
+
         auto in1_ptr = thrust::device_pointer_cast(input1);
         auto in2_ptr = thrust::device_pointer_cast(input2);
         auto in3_ptr = thrust::device_pointer_cast(input3);
@@ -1130,12 +1135,13 @@ namespace lfs::core::tensor_ops {
         auto clamped_idx = thrust::make_transform_iterator(idx_ptr,
                                                            ops::index_clamp_op(input_size));
 
-        // Zip three input sequences
-        auto zipped_input = thrust::make_zip_iterator(
-            thrust::make_tuple(in1_ptr, in2_ptr, in3_ptr));
-
-        // Permuted gather view
-        auto permuted = thrust::make_permutation_iterator(zipped_input, clamped_idx);
+        auto input1_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride1));
+        auto input2_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride2));
+        auto input3_idx = thrust::make_transform_iterator(clamped_idx, ops::index_stride_op(stride3));
+        auto gathered1 = thrust::make_permutation_iterator(in1_ptr, input1_idx);
+        auto gathered2 = thrust::make_permutation_iterator(in2_ptr, input2_idx);
+        auto gathered3 = thrust::make_permutation_iterator(in3_ptr, input3_idx);
+        auto gathered = thrust::make_zip_iterator(thrust::make_tuple(gathered1, gathered2, gathered3));
 
         // Zip three output sequences
         auto zipped_output = thrust::make_zip_iterator(
@@ -1143,7 +1149,7 @@ namespace lfs::core::tensor_ops {
 
         // Single gather for all three tensors!
         thrust::copy(thrust::cuda::par.on(stream),
-                     permuted, permuted + index_size,
+                     gathered, gathered + index_size,
                      zipped_output);
     }
 

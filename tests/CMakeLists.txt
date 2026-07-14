@@ -93,7 +93,6 @@ set(BENCHMARK_FILES
     test_tensor_benchmark.cpp
     test_fusion_benchmark.cpp
     test_gather_benchmark.cpp
-    test_zip_gather_benchmark.cpp
     test_permute_upload_benchmark.cpp
 )
 
@@ -124,6 +123,7 @@ set(TEST_FILES
     test_tensor_random.cpp
     test_tensor_broadcast.cpp
     test_tensor_masking.cpp
+    test_zip_gather.cpp
     test_tensor_masked_select_rows.cpp
     test_tensor_bitwise.cpp
     test_tensor_accessor.cpp

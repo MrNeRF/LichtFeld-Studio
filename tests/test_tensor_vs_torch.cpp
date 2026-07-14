@@ -733,13 +733,12 @@ TEST_F(TensorVsTorchTest, KMeansPlusPlusInitialization) {
 
     // TORCH IMPLEMENTATION
     auto torch_centroids = torch::zeros({k, d}, torch::kCUDA);
-    auto torch_distances = torch::full({n}, INFINITY, torch::kCUDA);
+    torch::Tensor torch_distances;
 
     // GS IMPLEMENTATION
     auto gs_centroids = lfs::core::Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(d)},
                                                  lfs::core::Device::CUDA);
-    auto gs_distances = lfs::core::Tensor::full({static_cast<size_t>(n)}, INFINITY,
-                                                lfs::core::Device::CUDA);
+    lfs::core::Tensor gs_distances;
 
     // Choose first centroid using SHARED random value
     torch::manual_seed(123);

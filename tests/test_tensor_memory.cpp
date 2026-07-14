@@ -134,8 +134,7 @@ TEST_F(TensorMemoryTest, MoveSemantics) {
         auto custom_t2 = std::move(custom_t1);
         EXPECT_EQ(custom_t2.data_ptr(), original_ptr);
         EXPECT_TRUE(custom_t2.owns_memory());
-        EXPECT_EQ(custom_t1.data_ptr(), nullptr);
-        EXPECT_FALSE(custom_t1.owns_memory());
+        EXPECT_FALSE(custom_t1.is_valid());
 
         // Verify data is correct
         auto torch_t = torch::ones({50, 50}, torch::TensorOptions().device(torch::kCUDA));
@@ -153,7 +152,7 @@ TEST_F(TensorMemoryTest, MoveSemantics) {
         custom_t2 = std::move(custom_t1);
 
         EXPECT_EQ(custom_t2.data_ptr(), ptr1);
-        EXPECT_EQ(custom_t1.data_ptr(), nullptr);
+        EXPECT_FALSE(custom_t1.is_valid());
 
         // Verify data is zeros
         auto torch_zeros = torch::zeros({30, 30}, torch::TensorOptions().device(torch::kCUDA));
@@ -454,18 +453,11 @@ TEST_F(TensorMemoryTest, InvalidTensorOperations) {
     Tensor custom_invalid;
 
     EXPECT_FALSE(custom_invalid.is_valid());
-    EXPECT_EQ(custom_invalid.data_ptr(), nullptr);
-    EXPECT_FALSE(custom_invalid.owns_memory());
 
-    // Operations on invalid tensor should return invalid tensors
-    auto result1 = custom_invalid.clone();
-    EXPECT_FALSE(result1.is_valid());
-
-    auto result2 = custom_invalid.to(Device::CPU);
-    EXPECT_FALSE(result2.is_valid());
-
-    auto result3 = custom_invalid.view({2, 2});
-    EXPECT_FALSE(result3.is_valid());
+    EXPECT_THROW(custom_invalid.data_ptr(), std::runtime_error);
+    EXPECT_THROW(custom_invalid.clone(), std::runtime_error);
+    EXPECT_THROW(custom_invalid.to(Device::CPU), std::runtime_error);
+    EXPECT_THROW(custom_invalid.view({2, 2}), std::runtime_error);
 }
 
 TEST_F(TensorMemoryTest, EmptyTensor) {

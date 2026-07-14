@@ -555,8 +555,7 @@ TEST_F(TensorMatrixTest, InvalidMatMulDimensionMismatch) {
     auto a = Tensor::ones({2, 3}, Device::CUDA);
     auto b = Tensor::ones({4, 5}, Device::CUDA);
 
-    auto result = a.matmul(b);
-    EXPECT_FALSE(result.is_valid()) << "MatMul should fail with mismatched dimensions";
+    EXPECT_THROW(a.matmul(b), std::runtime_error);
 }
 
 TEST_F(TensorMatrixTest, InvalidBatchMatMulDimensionMismatch) {
@@ -564,8 +563,7 @@ TEST_F(TensorMatrixTest, InvalidBatchMatMulDimensionMismatch) {
     auto a = Tensor::ones({2, 3, 4}, Device::CUDA);
     auto b = Tensor::ones({3, 4, 5}, Device::CUDA);
 
-    auto result = a.bmm(b);
-    EXPECT_FALSE(result.is_valid()) << "BMM should fail with mismatched batch dimensions";
+    EXPECT_THROW(a.bmm(b), std::runtime_error);
 }
 
 TEST_F(TensorMatrixTest, InvalidDotProductDimensionMismatch) {
@@ -573,8 +571,7 @@ TEST_F(TensorMatrixTest, InvalidDotProductDimensionMismatch) {
     auto a = Tensor::ones({3}, Device::CUDA);
     auto b = Tensor::ones({4}, Device::CUDA);
 
-    auto result = a.dot(b);
-    EXPECT_FALSE(result.is_valid()) << "Dot product should fail with mismatched sizes";
+    EXPECT_THROW(a.dot(b), std::runtime_error);
 }
 
 // ============= CPU vs CUDA Tests =============

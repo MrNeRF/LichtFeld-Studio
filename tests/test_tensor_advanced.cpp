@@ -89,8 +89,7 @@ TEST_F(TensorAdvancedTest, Linspace) {
     compare_tensors(t3_custom, t3_torch, 1e-5f, 1e-6f, "Linspace_Single");
 
     // Test invalid (0 steps)
-    auto invalid = Tensor::linspace(0, 1, 0);
-    EXPECT_FALSE(invalid.is_valid());
+    EXPECT_THROW(Tensor::linspace(0, 1, 0), std::runtime_error);
 }
 
 TEST_F(TensorAdvancedTest, Stack) {
@@ -121,8 +120,7 @@ TEST_F(TensorAdvancedTest, Stack) {
 
     // Test stacking empty list
     std::vector<Tensor> empty_list;
-    auto invalid = Tensor::stack(std::move(empty_list));
-    EXPECT_FALSE(invalid.is_valid());
+    EXPECT_THROW(Tensor::stack(std::move(empty_list)), std::runtime_error);
 }
 
 TEST_F(TensorAdvancedTest, Concatenate) {
@@ -210,11 +208,8 @@ TEST_F(TensorAdvancedTest, ErrorHandlingInvalidTensor) {
     Tensor invalid;
     EXPECT_FALSE(invalid.is_valid());
 
-    auto result2 = invalid.add(1.0f);
-    EXPECT_FALSE(result2.is_valid());
-
-    auto result3 = invalid.clone();
-    EXPECT_FALSE(result3.is_valid());
+    EXPECT_THROW(invalid.add(1.0f), std::runtime_error);
+    EXPECT_THROW(invalid.clone(), std::runtime_error);
 }
 
 // ============= Batch Processing Tests =============

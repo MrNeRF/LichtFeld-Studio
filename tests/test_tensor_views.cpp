@@ -190,15 +190,13 @@ TEST_F(TensorViewTest, InvalidView) {
     auto [tensor_custom, tensor_torch] = create_test_tensors({2, 3, 4});
 
     // Wrong number of elements
-    auto invalid_custom = tensor_custom.view({5, 5});
-    EXPECT_FALSE(invalid_custom.is_valid());
+    EXPECT_THROW(tensor_custom.view({5, 5}), std::runtime_error);
 
     // PyTorch throws exception
     EXPECT_THROW(tensor_torch.view({5, 5}), std::exception);
 
     // Multiple -1
-    auto invalid2_custom = tensor_custom.view({-1, -1});
-    EXPECT_FALSE(invalid2_custom.is_valid());
+    EXPECT_THROW(tensor_custom.view({-1, -1}), std::runtime_error);
 
     EXPECT_THROW(tensor_torch.view({-1, -1}), std::exception);
 }
@@ -253,21 +251,13 @@ TEST_F(TensorViewTest, InvalidSlice) {
     auto [tensor_custom, tensor_torch] = create_test_tensors({10, 5});
 
     // Out of range dimension
-    auto invalid1_custom = tensor_custom.slice(2, 0, 1);
-    EXPECT_FALSE(invalid1_custom.is_valid());
+    EXPECT_THROW(tensor_custom.slice(2, 0, 1), std::runtime_error);
 
     // Invalid range (start > end)
-    auto invalid2_custom = tensor_custom.slice(0, 5, 3);
-    EXPECT_FALSE(invalid2_custom.is_valid());
+    EXPECT_THROW(tensor_custom.slice(0, 5, 3), std::runtime_error);
 
-    // end > size - PyTorch allows this and clamps
-    auto slice_custom = tensor_custom.slice(0, 0, 11);
-    auto slice_torch = tensor_torch.slice(0, 0, 11); // PyTorch clamps to 10
-
-    // Either should fail or clamp to size
-    if (slice_custom.is_valid()) {
-        compare_tensors(slice_custom, slice_torch, 1e-5f, 1e-7f, "SliceClamp");
-    }
+    // Unlike PyTorch's clamping slice, the LFS API rejects an invalid range.
+    EXPECT_THROW(tensor_custom.slice(0, 0, 11), std::runtime_error);
 }
 
 // ============= Squeeze/Unsqueeze Tests =============
@@ -387,8 +377,7 @@ TEST_F(TensorViewTest, ExpandErrors) {
     auto [tensor_custom, tensor_torch] = create_test_tensors({3, 4});
 
     // Cannot expand non-singleton dimension to different size
-    auto invalid_custom = tensor_custom.expand({3, 5});
-    EXPECT_FALSE(invalid_custom.is_valid());
+    EXPECT_THROW(tensor_custom.expand({3, 5}), std::runtime_error);
     EXPECT_THROW(tensor_torch.expand({3, 5}), std::exception);
 
     // Valid expand from singleton

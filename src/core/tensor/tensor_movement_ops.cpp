@@ -98,12 +98,28 @@ namespace lfs::core {
 
         case MovementOp::Expand: {
             if (auto* vec = std::get_if<std::vector<int>>(&args.args)) {
+                LFS_ASSERT_MSG(vec->size() >= shape_.rank(),
+                               "expand cannot reduce tensor rank");
+
+                std::vector<size_t> padded_shape = shape_.dims();
+                while (padded_shape.size() < vec->size()) {
+                    padded_shape.insert(padded_shape.begin(), 1);
+                }
+
                 std::vector<size_t> target_shape;
+                target_shape.reserve(vec->size());
+                const size_t leading_dimensions = vec->size() - shape_.rank();
                 for (size_t i = 0; i < vec->size(); ++i) {
                     const int dim = (*vec)[i];
                     LFS_ASSERT_MSG(dim >= -1,
                                    "expand dimensions must be non-negative or -1");
-                    target_shape.push_back(static_cast<size_t>(dim));
+                    if (dim == -1) {
+                        LFS_ASSERT_MSG(i >= leading_dimensions,
+                                       "expand cannot use -1 for a new leading dimension");
+                        target_shape.push_back(padded_shape[i]);
+                    } else {
+                        target_shape.push_back(static_cast<size_t>(dim));
+                    }
                 }
                 return expand(TensorShape(target_shape));
             }

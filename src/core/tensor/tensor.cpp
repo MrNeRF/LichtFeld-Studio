@@ -2040,8 +2040,6 @@ namespace lfs::core {
                        "bitwise OR requires Bool tensors");
         LFS_ASSERT_MSG(device_ == other.device(),
                        "bitwise OR requires tensors on the same device");
-        LFS_ASSERT_MSG(shape_ == other.shape(),
-                       "bitwise OR requires matching shapes");
 
         return logical_or(other);
     }
@@ -2053,8 +2051,8 @@ namespace lfs::core {
                        "clamp_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
                        "clamp_ currently supports only Float32 and Int32");
-        LFS_ASSERT_MSG(std::isfinite(min_val) && std::isfinite(max_val) && min_val <= max_val,
-                       "clamp_ bounds must be finite and ordered");
+        LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
+                       "clamp_ bounds must not be NaN and must be ordered");
         if (numel() == 0) {
             return *this;
         }

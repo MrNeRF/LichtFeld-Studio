@@ -206,9 +206,7 @@ TEST_F(TensorSlicingSafetyTest, SliceOutOfBounds) {
     const size_t N = 1000;
     Tensor full = Tensor::zeros({N, 3}, Device::CUDA);
 
-    // Slicing beyond bounds returns an invalid (empty) tensor
-    Tensor slice = full.slice(0, 0, 2000);
-    EXPECT_FALSE(slice.is_valid());
+    EXPECT_THROW(full.slice(0, 0, 2000), std::runtime_error);
 }
 
 /**
