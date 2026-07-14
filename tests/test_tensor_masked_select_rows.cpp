@@ -339,7 +339,7 @@ TEST_F(MaskedSelectRowsTest, LogicalNotFiltersDeletedRows) {
     const auto deleted = Tensor::from_vector(
         std::vector<bool>{false, true, false, true}, {4}, Device::CUDA);
 
-    const auto kept = rows[~deleted];
+    const Tensor kept = rows[~deleted];
     EXPECT_EQ(kept.shape(), TensorShape({2, 2}));
     EXPECT_EQ(kept.cpu().to_vector(),
               (std::vector<float>{1.0f, 10.0f, 3.0f, 30.0f}));
