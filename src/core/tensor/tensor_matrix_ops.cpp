@@ -3,6 +3,7 @@
 
 #include "core/logger.hpp"
 #include "core/tensor_trace.hpp"
+#include "internal/cuda_stream_context.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 
@@ -54,6 +55,7 @@ namespace lfs::core {
         // GPU: use tiled CUDA sgemm kernel
         if (device_ == Device::CUDA) {
             auto result = empty({m, n}, Device::CUDA, dtype_);
+            prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_sgemm(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
                                      m, n, k, result.stream());
             return result;
@@ -94,6 +96,7 @@ namespace lfs::core {
         // GPU: use tiled CUDA batched sgemm kernel
         if (device_ == Device::CUDA) {
             auto result = empty({batch_size, m, n}, Device::CUDA, dtype_);
+            prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_sgemm_batched(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
                                              batch_size, m, n, k, result.stream());
             return result;
@@ -161,7 +164,31 @@ namespace lfs::core {
 
         // Batch matrix multiply: [B, m, k] @ [B, k, n] -> [B, m, n]
         if (a.shape_.rank() == 3 && b.shape_.rank() == 3) {
-            return a.bmm(b);
+            LFS_ASSERT_MSG(a.shape_[2] == b.shape_[1],
+                           "matmul batched matrix dimensions must match");
+            const size_t a_batch = a.shape_[0];
+            const size_t b_batch = b.shape_[0];
+            LFS_ASSERT_MSG(a_batch == b_batch || a_batch == 1 || b_batch == 1,
+                           std::format("matmul batch dimensions are not broadcastable: {} and {}",
+                                       a_batch, b_batch));
+            if (a_batch == b_batch) {
+                return a.bmm(b);
+            }
+
+            const size_t batch = a_batch == 1 ? b_batch : a_batch;
+            Tensor a_broadcast;
+            Tensor b_broadcast;
+            const Tensor* a_operand = &a;
+            const Tensor* b_operand = &b;
+            if (a_batch == 1) {
+                a_broadcast = a.broadcast_to({batch, a.shape_[1], a.shape_[2]});
+                a_operand = &a_broadcast;
+            }
+            if (b_batch == 1) {
+                b_broadcast = b.broadcast_to({batch, b.shape_[1], b.shape_[2]});
+                b_operand = &b_broadcast;
+            }
+            return a_operand->bmm(*b_operand);
         }
 
         // 2D @ 3D: broadcast [m, k] @ [B, k, n] -> [B, m, n]
@@ -214,6 +241,7 @@ namespace lfs::core {
         // GPU: Use optimized CUDA kernel
         if (device_ == Device::CUDA) {
             auto result = empty({}, Device::CUDA, dtype_);
+            prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_dot_product(
                 a.ptr<float>(),
                 b.ptr<float>(),
@@ -235,6 +263,7 @@ namespace lfs::core {
         // Return as scalar (rank-0 view)
         Tensor scalar(result.data_ptr(), TensorShape(std::vector<size_t>{}), Device::CPU, dtype_);
         scalar.data_owner_ = result.data_owner_;
+        scalar.storage_meta_ = result.storage_meta_;
         scalar.is_view_ = true;
         return scalar;
     }

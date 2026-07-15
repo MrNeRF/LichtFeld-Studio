@@ -24,10 +24,6 @@ namespace lfs::core {
             return src.clone();
         }
 
-        if (src.numel() == 0 || target.elements() == 0) {
-            return Tensor::empty(target, src.device(), src.dtype());
-        }
-
         // Check if shapes are compatible for broadcasting
         auto src_dims = src.shape().dims();
         auto target_dims = target.dims();
@@ -37,11 +33,13 @@ namespace lfs::core {
         LFS_ASSERT_MSG(!broadcast_shape.empty() && broadcast_shape == target_dims,
                        std::format("Cannot broadcast shape {} to {}", src.shape().str(), target.str()));
 
+        if (src.numel() == 0 || target.elements() == 0) {
+            return Tensor::empty(target, src.device(), src.dtype());
+        }
+
         Tensor result;
         if (src.device() == Device::CUDA) {
-            const cudaStream_t execution_stream =
-                getCurrentCUDAStream() ? getCurrentCUDAStream() : src.stream();
-            src.sync_to_stream(execution_stream);
+            const cudaStream_t execution_stream = prepare_inputs_for_stream({&src});
             CUDAStreamGuard guard(execution_stream);
             result = Tensor::empty(target, src.device(), src.dtype());
         } else {

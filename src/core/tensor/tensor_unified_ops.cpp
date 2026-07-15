@@ -20,7 +20,6 @@
 #include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
-#include <curand.h>
 #include <format>
 #include <numeric>
 #include <optional>
@@ -29,24 +28,297 @@
 namespace lfs::core {
 
     namespace {
-
-        cudaStream_t resolve_cuda_execution_stream(const Tensor& tensor) {
-            cudaStream_t execution_stream = getCurrentCUDAStream();
-            if (execution_stream == nullptr && tensor.device() == Device::CUDA) {
-                execution_stream = tensor.stream();
-            }
-            return execution_stream;
-        }
-
         Tensor empty_on_tensor_stream(const TensorShape& shape, Device device, DataType dtype, const Tensor& tensor) {
             if (device != Device::CUDA) {
                 return Tensor::empty(shape, device, dtype);
             }
 
-            const cudaStream_t execution_stream = resolve_cuda_execution_stream(tensor);
-            tensor.sync_to_stream(execution_stream);
+            const cudaStream_t execution_stream = prepare_inputs_for_stream({&tensor});
             CUDAStreamGuard guard(execution_stream);
             return Tensor::empty(shape, device, dtype);
+        }
+
+        std::optional<std::vector<Tensor>> promote_tensor_list(
+            const std::vector<Tensor>& tensors) {
+            DataType result_dtype = tensors.front().dtype();
+            for (const Tensor& tensor : tensors) {
+                result_dtype = promote_dtypes(result_dtype, tensor.dtype());
+            }
+
+            const bool needs_promotion = std::any_of(
+                tensors.begin(), tensors.end(),
+                [result_dtype](const Tensor& tensor) {
+                    return tensor.dtype() != result_dtype;
+                });
+            if (!needs_promotion)
+                return std::nullopt;
+
+            std::vector<Tensor> promoted;
+            promoted.reserve(tensors.size());
+            for (const Tensor& tensor : tensors) {
+                promoted.push_back(tensor.dtype() == result_dtype
+                                       ? tensor
+                                       : tensor.to(result_dtype));
+            }
+            return promoted;
+        }
+
+        struct ReductionPlan {
+            std::vector<int> axes;
+            std::vector<size_t> output_shape;
+            DataType result_dtype = DataType::Float32;
+            size_t reduce_count = 1;
+        };
+
+        ReductionPlan make_reduction_plan(const TensorShape& shape,
+                                          const DataType input_dtype,
+                                          const ReduceOp op,
+                                          const ReduceArgs& args) {
+            const size_t rank = shape.rank();
+            LFS_ASSERT_MSG(rank <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                           "reduction rank exceeds supported axis index range");
+
+            ReductionPlan plan;
+            std::vector<bool> reduced(rank, false);
+            if (args.axes.empty()) {
+                plan.axes.resize(rank);
+                std::iota(plan.axes.begin(), plan.axes.end(), 0);
+                std::fill(reduced.begin(), reduced.end(), true);
+            } else if (rank == 0) {
+                bool scalar_axis_seen = false;
+                for (const int axis : args.axes) {
+                    const int resolved = detail::resolve_tensor_dim(axis, rank);
+                    LFS_ASSERT_MSG(detail::tensor_dim_is_valid(resolved, rank),
+                                   std::format("reduce axis {} is out of range for rank {}",
+                                               axis, rank));
+                    LFS_ASSERT_MSG(!scalar_axis_seen,
+                                   "reduce axes must be unique");
+                    scalar_axis_seen = true;
+                }
+            } else {
+                plan.axes.reserve(args.axes.size());
+                for (const int axis : args.axes) {
+                    const int resolved = axis < 0 ? axis + static_cast<int>(rank) : axis;
+                    LFS_ASSERT_MSG(resolved >= 0 && resolved < static_cast<int>(rank),
+                                   std::format("reduce axis {} is out of range for rank {}",
+                                               axis, rank));
+                    LFS_ASSERT_MSG(!reduced[static_cast<size_t>(resolved)],
+                                   "reduce axes must be unique");
+                    reduced[static_cast<size_t>(resolved)] = true;
+                    plan.axes.push_back(resolved);
+                }
+                std::sort(plan.axes.begin(), plan.axes.end());
+            }
+
+            for (size_t dim = 0; dim < rank; ++dim) {
+                if (reduced[dim]) {
+                    plan.reduce_count *= shape[dim];
+                }
+                if (!reduced[dim] || args.keepdim) {
+                    plan.output_shape.push_back(reduced[dim] ? 1 : shape[dim]);
+                }
+            }
+
+            if (op == ReduceOp::Mean) {
+                LFS_ASSERT_MSG(input_dtype == DataType::Float32 ||
+                                   input_dtype == DataType::Float16,
+                               "mean requires a floating-point tensor");
+            }
+
+            if (op == ReduceOp::Any || op == ReduceOp::All ||
+                ((op == ReduceOp::Max || op == ReduceOp::Min) &&
+                 input_dtype == DataType::Bool)) {
+                plan.result_dtype = DataType::Bool;
+            } else if ((op == ReduceOp::Sum || op == ReduceOp::Prod) &&
+                       (input_dtype == DataType::Int32 || input_dtype == DataType::Bool ||
+                        input_dtype == DataType::UInt8)) {
+                plan.result_dtype = DataType::Int64;
+            } else if (input_dtype == DataType::Bool) {
+                plan.result_dtype = DataType::Int64;
+            } else {
+                plan.result_dtype = input_dtype;
+            }
+
+            return plan;
+        }
+
+        Tensor make_empty_reduction_result(const ReductionPlan& plan,
+                                           const Device device,
+                                           const ReduceOp op) {
+            const TensorShape output_shape(plan.output_shape);
+            if (output_shape.elements() == 0) {
+                return Tensor::empty(output_shape, device, plan.result_dtype);
+            }
+
+            float value = 0.0f;
+            switch (op) {
+            case ReduceOp::Sum:
+            case ReduceOp::Any:
+                value = 0.0f;
+                break;
+            case ReduceOp::Prod:
+            case ReduceOp::All:
+                value = 1.0f;
+                break;
+            case ReduceOp::Mean:
+            case ReduceOp::Std:
+            case ReduceOp::Var:
+                value = std::numeric_limits<float>::quiet_NaN();
+                break;
+            case ReduceOp::Max:
+            case ReduceOp::Min:
+                LFS_ASSERT_MSG(false,
+                               "max/min reduction has no identity for an empty reduction slice");
+                break;
+            default:
+                LFS_ASSERT_MSG(false,
+                               "empty reduction encountered an unsupported operation");
+            }
+            return Tensor::full(output_shape, value, device, plan.result_dtype);
+        }
+
+        void reduce_int32_cpu(const int32_t* input,
+                              void* output,
+                              const TensorShape& shape,
+                              const std::vector<size_t>& strides,
+                              const ReductionPlan& plan,
+                              const ReduceOp op,
+                              const size_t output_elements) {
+            const size_t rank = shape.rank();
+            LFS_ASSERT_MSG(input != nullptr && output != nullptr,
+                           "Int32 CPU reduction requires valid input and output pointers");
+            LFS_ASSERT_MSG(strides.size() == rank,
+                           "Int32 CPU reduction shape and stride ranks must match");
+
+            if (plan.axes.size() == rank) {
+                LFS_ASSERT_MSG(output_elements == 1,
+                               "full Int32 reduction must produce one output element");
+                switch (op) {
+                case ReduceOp::Sum: {
+                    LFS_ASSERT_MSG(plan.result_dtype == DataType::Int64,
+                                   "Int32 sum requires Int64 output");
+                    int64_t sum = 0;
+                    for (size_t i = 0; i < plan.reduce_count; ++i) {
+                        sum += static_cast<int64_t>(input[i]);
+                    }
+                    static_cast<int64_t*>(output)[0] = sum;
+                    return;
+                }
+                case ReduceOp::Prod: {
+                    LFS_ASSERT_MSG(plan.result_dtype == DataType::Int64,
+                                   "Int32 product requires Int64 output");
+                    int64_t product = 1;
+                    for (size_t i = 0; i < plan.reduce_count; ++i) {
+                        product *= static_cast<int64_t>(input[i]);
+                    }
+                    static_cast<int64_t*>(output)[0] = product;
+                    return;
+                }
+                case ReduceOp::Max:
+                    LFS_ASSERT_MSG(plan.result_dtype == DataType::Int32,
+                                   "Int32 max requires Int32 output");
+                    static_cast<int32_t*>(output)[0] =
+                        *std::max_element(input, input + plan.reduce_count);
+                    return;
+                case ReduceOp::Min:
+                    LFS_ASSERT_MSG(plan.result_dtype == DataType::Int32,
+                                   "Int32 min requires Int32 output");
+                    static_cast<int32_t*>(output)[0] =
+                        *std::min_element(input, input + plan.reduce_count);
+                    return;
+                default:
+                    LFS_ASSERT_MSG(false,
+                                   "full Int32 CPU reduction encountered an unsupported operation");
+                }
+            }
+
+            std::vector<bool> reduced(rank, false);
+            for (const int axis : plan.axes) {
+                reduced[static_cast<size_t>(axis)] = true;
+            }
+
+            std::vector<size_t> reduced_dims;
+            std::vector<size_t> retained_dims;
+            for (size_t dim = 0; dim < rank; ++dim) {
+                (reduced[dim] ? reduced_dims : retained_dims).push_back(dim);
+            }
+
+            const auto input_offset = [&](const size_t output_index,
+                                          const size_t reduction_index) {
+                size_t offset = 0;
+                size_t remainder = output_index;
+                for (auto it = retained_dims.rbegin(); it != retained_dims.rend(); ++it) {
+                    const size_t dim = *it;
+                    offset += (remainder % shape[dim]) * strides[dim];
+                    remainder /= shape[dim];
+                }
+
+                remainder = reduction_index;
+                for (auto it = reduced_dims.rbegin(); it != reduced_dims.rend(); ++it) {
+                    const size_t dim = *it;
+                    offset += (remainder % shape[dim]) * strides[dim];
+                    remainder /= shape[dim];
+                }
+                return offset;
+            };
+
+            switch (op) {
+            case ReduceOp::Sum: {
+                LFS_ASSERT_MSG(plan.result_dtype == DataType::Int64,
+                               "Int32 sum requires Int64 output");
+                auto* result = static_cast<int64_t*>(output);
+                for (size_t out_idx = 0; out_idx < output_elements; ++out_idx) {
+                    int64_t sum = 0;
+                    for (size_t r = 0; r < plan.reduce_count; ++r) {
+                        sum += static_cast<int64_t>(input[input_offset(out_idx, r)]);
+                    }
+                    result[out_idx] = sum;
+                }
+                break;
+            }
+            case ReduceOp::Prod: {
+                LFS_ASSERT_MSG(plan.result_dtype == DataType::Int64,
+                               "Int32 product requires Int64 output");
+                auto* result = static_cast<int64_t*>(output);
+                for (size_t out_idx = 0; out_idx < output_elements; ++out_idx) {
+                    int64_t product = 1;
+                    for (size_t r = 0; r < plan.reduce_count; ++r) {
+                        product *= static_cast<int64_t>(input[input_offset(out_idx, r)]);
+                    }
+                    result[out_idx] = product;
+                }
+                break;
+            }
+            case ReduceOp::Max: {
+                LFS_ASSERT_MSG(plan.result_dtype == DataType::Int32,
+                               "Int32 max requires Int32 output");
+                auto* result = static_cast<int32_t*>(output);
+                for (size_t out_idx = 0; out_idx < output_elements; ++out_idx) {
+                    int32_t value = std::numeric_limits<int32_t>::lowest();
+                    for (size_t r = 0; r < plan.reduce_count; ++r) {
+                        value = std::max(value, input[input_offset(out_idx, r)]);
+                    }
+                    result[out_idx] = value;
+                }
+                break;
+            }
+            case ReduceOp::Min: {
+                LFS_ASSERT_MSG(plan.result_dtype == DataType::Int32,
+                               "Int32 min requires Int32 output");
+                auto* result = static_cast<int32_t*>(output);
+                for (size_t out_idx = 0; out_idx < output_elements; ++out_idx) {
+                    int32_t value = std::numeric_limits<int32_t>::max();
+                    for (size_t r = 0; r < plan.reduce_count; ++r) {
+                        value = std::min(value, input[input_offset(out_idx, r)]);
+                    }
+                    result[out_idx] = value;
+                }
+                break;
+            }
+            default:
+                LFS_ASSERT_MSG(false,
+                               "Int32 CPU reduction encountered an unsupported operation");
+            }
         }
 
     } // namespace
@@ -102,7 +374,7 @@ namespace lfs::core {
                     void* dummy = allocate_cuda_storage(1, s);
                     LFS_ASSERT_MSG(dummy != nullptr,
                                    "failed to allocate CUDA sentinel storage for an empty tensor");
-                    result.data_owner_ = std::shared_ptr<void>(dummy, [s](void* p) {
+                    result.adopt_storage(dummy, [s](void* p) {
                         CudaMemoryPool::instance().deallocate(p, s);
                     });
                 } else {
@@ -112,7 +384,7 @@ namespace lfs::core {
                         LFS_ASSERT_MSG(dummy != nullptr,
                                        "failed to allocate pinned sentinel storage for an empty tensor");
                         cudaStream_t s = result.stream();
-                        result.data_owner_ = std::shared_ptr<void>(dummy, [s](void* p) {
+                        result.adopt_storage(dummy, [s](void* p) {
                             if (p)
                                 PinnedMemoryAllocator::instance().deallocate(p, s);
                         });
@@ -120,7 +392,7 @@ namespace lfs::core {
                         dummy = std::malloc(1);
                         LFS_ASSERT_MSG(dummy != nullptr,
                                        "failed to allocate sentinel storage for an empty tensor");
-                        result.data_owner_ = std::shared_ptr<void>(dummy, [](void* p) {
+                        result.adopt_storage(dummy, [](void* p) {
                             std::free(p);
                         });
                     }
@@ -132,7 +404,7 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
                 void* ptr = allocate_cuda_storage(bytes, s);
-                result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
+                result.adopt_storage(ptr, [s](void* p) {
                     CudaMemoryPool::instance().deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
@@ -156,7 +428,7 @@ namespace lfs::core {
                             bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                     }
                     cudaStream_t s = result.stream();
-                    result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
+                    result.adopt_storage(ptr, [s](void* p) {
                         if (p)
                             PinnedMemoryAllocator::instance().deallocate(p, s);
                     });
@@ -168,7 +440,7 @@ namespace lfs::core {
                             "Out of memory: failed to allocate {} bytes ({:.2f} GB) of CPU memory.",
                             bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                     }
-                    result.data_owner_ = std::shared_ptr<void>(ptr, [](void* p) {
+                    result.adopt_storage(ptr, [](void* p) {
                         std::free(p);
                     });
                 }
@@ -411,8 +683,10 @@ namespace lfs::core {
             auto [low, high] = std::get<std::pair<float, float>>(args.args);
             LFS_ASSERT_MSG(args.dtype == DataType::Float32 || args.dtype == DataType::Int32,
                            "uniform/rand supports only Float32 and Int32");
-            LFS_ASSERT_MSG(std::isfinite(low) && std::isfinite(high) && low < high,
-                           "uniform/rand bounds must be finite and low < high");
+            LFS_ASSERT_MSG(std::isfinite(low) && std::isfinite(high) &&
+                               ((args.dtype == DataType::Float32 && low <= high) ||
+                                (args.dtype == DataType::Int32 && low < high)),
+                           "uniform/rand bounds must be finite and ordered");
             LFS_ASSERT_MSG(args.dtype != DataType::Int32 ||
                                (low >= static_cast<float>(std::numeric_limits<int32_t>::lowest()) &&
                                 high <= std::nextafter(
@@ -463,34 +737,34 @@ namespace lfs::core {
             auto [mean, std] = std::get<std::pair<float, float>>(args.args);
             LFS_ASSERT_MSG(args.dtype == DataType::Float32,
                            "normal/randn supports only Float32");
-            LFS_ASSERT_MSG(std::isfinite(mean) && std::isfinite(std) && std > 0.0f,
-                           "normal/randn requires finite mean and std > 0");
+            LFS_ASSERT_MSG(std::isfinite(mean) && std::isfinite(std) && std >= 0.0f,
+                           "normal/randn requires finite mean and std >= 0");
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
                 return result;
 
-            if (result.device_ == Device::CUDA) {
-                // Use Philox RNG without resetting offset (stateful like PyTorch - much faster!)
-                curandGenerator_t* gen = static_cast<curandGenerator_t*>(
-                    RandomGenerator::instance().get_generator(Device::CUDA));
+            if (std == 0.0f) {
+                result.fill_(mean);
+                break;
+            }
 
+            if (result.device_ == Device::CUDA) {
                 size_t n = result.numel();
                 if (n % 2 == 1) {
                     auto scratch = Tensor::empty({n + 1}, Device::CUDA, DataType::Float32);
-                    const auto status = curandGenerateNormal(*gen, scratch.ptr<float>(), n + 1, mean, std);
-                    LFS_ASSERT_MSG(status == CURAND_STATUS_SUCCESS,
-                                   "normal/randn cuRAND generation failed");
+                    RandomGenerator::instance().generate_cuda_normal(
+                        scratch.ptr<float>(), n + 1, mean, std, result.stream());
                     LFS_CUDA_CHECK_MSG(
-                        cudaMemcpy(result.ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
-                                   cudaMemcpyDeviceToDevice),
+                        cudaMemcpyAsync(result.ptr<float>(), scratch.ptr<float>(),
+                                        n * sizeof(float), cudaMemcpyDeviceToDevice,
+                                        result.stream()),
                         "normal/randn scratch copy (bytes={}, requested_count={})",
                         n * sizeof(float), n);
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(result.stream()));
                 } else {
-                    const auto status = curandGenerateNormal(*gen, result.ptr<float>(), n, mean, std);
-                    LFS_ASSERT_MSG(status == CURAND_STATUS_SUCCESS,
-                                   "normal/randn cuRAND generation failed");
+                    RandomGenerator::instance().generate_cuda_normal(
+                        result.ptr<float>(), n, mean, std, result.stream());
                 }
-                // curandGenerateNormal is blocking, no need for explicit sync
             } else {
                 auto& gen = *static_cast<std::mt19937_64*>(
                     RandomGenerator::instance().get_generator(Device::CPU));
@@ -619,6 +893,9 @@ namespace lfs::core {
             LFS_ASSERT_MSG(args.dtype == DataType::Int64,
                            "multinomial output must use Int64 dtype");
 
+            Tensor weights_materialized;
+            weights = &weights->contiguous_read(weights_materialized);
+
             size_t n = weights->numel();
             size_t num_samples = args.shape.elements();
             LFS_ASSERT_MSG(n > 0 && num_samples > 0,
@@ -631,6 +908,7 @@ namespace lfs::core {
                 return result;
 
             if (weights->device() == Device::CUDA) {
+                prepare_inputs_for_stream({weights}, result.stream());
                 tensor_ops::launch_multinomial(weights->ptr<float>(), result.ptr<int64_t>(),
                                                n, num_samples, replacement,
                                                RandomGenerator::instance().get_next_cuda_seed(), result.stream());
@@ -638,11 +916,16 @@ namespace lfs::core {
             } else {
                 auto weights_data = weights->to_vector();
 
-                float sum = std::accumulate(weights_data.begin(), weights_data.end(), 0.0f);
+                LFS_ASSERT_MSG(
+                    std::all_of(weights_data.begin(), weights_data.end(), [](float weight) {
+                        return std::isfinite(weight) && weight >= 0.0f;
+                    }),
+                    "multinomial weights must be finite and non-negative");
+                double sum = std::accumulate(weights_data.begin(), weights_data.end(), 0.0);
                 LFS_ASSERT_MSG(std::isfinite(sum) && sum > 0.0f,
                                "multinomial weights must have a positive finite sum");
 
-                std::vector<float> cdf(n);
+                std::vector<double> cdf(n);
                 cdf[0] = weights_data[0] / sum;
                 for (size_t i = 1; i < n; ++i) {
                     cdf[i] = cdf[i - 1] + weights_data[i] / sum;
@@ -650,13 +933,13 @@ namespace lfs::core {
 
                 auto& gen = *static_cast<std::mt19937_64*>(
                     RandomGenerator::instance().get_generator(Device::CPU));
-                std::uniform_real_distribution<float> dis(0.0f, 1.0f);
+                std::uniform_real_distribution<double> dis(0.0, 1.0);
 
                 int64_t* samples = result.ptr<int64_t>();
 
                 if (replacement) {
                     for (size_t i = 0; i < num_samples; ++i) {
-                        float u = dis(gen);
+                        double u = dis(gen);
                         auto it = std::lower_bound(cdf.begin(), cdf.end(), u);
                         samples[i] = static_cast<int64_t>(std::distance(cdf.begin(), it));
                     }
@@ -796,32 +1079,45 @@ namespace lfs::core {
         debug::OpTraceGuard trace(op_name, *this, LFS_SOURCE_SITE_CURRENT());
 
         validate_unary_op();
-        LFS_ASSERT_MSG(op != ReduceOp::Argmax && op != ReduceOp::Argmin,
-                       "argmax and argmin are not implemented by the reduction backend");
+        if (op == ReduceOp::Argmax || op == ReduceOp::Argmin) {
+            LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                           "argmax and argmin currently require Float32 input");
+            LFS_ASSERT_MSG(args.axes.size() <= 1,
+                           "argmax and argmin accept at most one dimension");
+            if (!args.axes.empty()) {
+                return op == ReduceOp::Argmax
+                           ? max_with_indices(args.axes.front(), args.keepdim).second
+                           : min_with_indices(args.axes.front(), args.keepdim).second;
+            }
+
+            auto flattened = reshape(TensorShape({numel()}));
+            Tensor indices = op == ReduceOp::Argmax
+                                 ? flattened.max_with_indices(0, false).second
+                                 : flattened.min_with_indices(0, false).second;
+            if (args.keepdim && ndim() > 0) {
+                indices = indices.reshape(
+                    TensorShape(std::vector<size_t>(ndim(), 1)));
+            }
+            return indices;
+        }
         LFS_ASSERT_MSG(op != ReduceOp::CountNonzero && op != ReduceOp::Norm,
                        "count_nonzero and norm must use their dedicated tensor operations");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 ||
                            dtype_ == DataType::Bool,
                        "reduce currently supports only Float32, Int32, and Bool");
-        std::vector<bool> seen_axes(shape_.rank(), false);
-        for (const int axis : args.axes) {
-            const int resolved = resolve_dim(axis);
-            LFS_ASSERT_MSG(resolved >= 0 && resolved < static_cast<int>(shape_.rank()),
-                           std::format("reduce axis {} is out of range for rank {}", axis, shape_.rank()));
-            LFS_ASSERT_MSG(!seen_axes[resolved],
-                           "reduce axes must be unique");
-            seen_axes[resolved] = true;
+        if (dtype_ == DataType::Bool && op == ReduceOp::Max) {
+            return reduce(ReduceOp::Any, args);
         }
+        if (dtype_ == DataType::Bool && op == ReduceOp::Min) {
+            return reduce(ReduceOp::All, args);
+        }
+        const ReductionPlan reduction = make_reduction_plan(shape_, dtype_, op, args);
         if ((op == ReduceOp::Std || op == ReduceOp::Var || op == ReduceOp::Norm)) {
             LFS_ASSERT_MSG(dtype_ == DataType::Float32,
                            "std, var, and norm reductions currently require Float32");
         }
-        if (dtype_ == DataType::Int32 && !args.axes.empty()) {
-            LFS_ASSERT_MSG(args.axes.size() == shape_.rank(),
-                           "Int32 partial reductions are unsupported");
-        }
         if (dtype_ == DataType::Int32) {
-            LFS_ASSERT_MSG(op == ReduceOp::Sum || op == ReduceOp::Mean ||
+            LFS_ASSERT_MSG(op == ReduceOp::Sum ||
                                op == ReduceOp::Max || op == ReduceOp::Min ||
                                op == ReduceOp::Prod,
                            "Int32 reduction encountered an unsupported operation");
@@ -829,6 +1125,9 @@ namespace lfs::core {
         if (dtype_ == DataType::Float32) {
             LFS_ASSERT_MSG(op != ReduceOp::Any && op != ReduceOp::All,
                            "Float32 any/all reductions are unsupported");
+        }
+        if (numel() == 0) {
+            return make_empty_reduction_result(reduction, device_, op);
         }
         if (dtype_ == DataType::Bool && device_ == Device::CPU &&
             !args.axes.empty() && args.axes.size() != shape_.rank()) {
@@ -887,8 +1186,7 @@ namespace lfs::core {
                     const size_t n = fused_source.numel();
                     Tensor result;
                     {
-                        const cudaStream_t execution_stream = resolve_cuda_execution_stream(fused_source);
-                        fused_source.sync_to_stream(execution_stream);
+                        const cudaStream_t execution_stream = prepare_inputs_for_stream({&fused_source});
                         CUDAStreamGuard guard(execution_stream);
                         result = Tensor::empty(
                             TensorShape(args.keepdim
@@ -975,8 +1273,7 @@ namespace lfs::core {
 
                     Tensor result;
                     {
-                        const cudaStream_t execution_stream = resolve_cuda_execution_stream(fused_source);
-                        fused_source.sync_to_stream(execution_stream);
+                        const cudaStream_t execution_stream = prepare_inputs_for_stream({&fused_source});
                         CUDAStreamGuard guard(execution_stream);
                         result = Tensor::empty(TensorShape(out_shape), Device::CUDA, DataType::Float32);
                         tensor_ops::launch_fused_segmented_transform_reduce(
@@ -1074,7 +1371,16 @@ namespace lfs::core {
                     ReduceArgs new_args = args;
                     new_args.axes = {static_cast<int>(transposed.shape().rank()) - 1}; // Use transposed.shape()!
 
-                    return transposed.reduce(op, new_args);
+                    Tensor reduced = transposed.reduce(op, new_args);
+                    if (!args.keepdim) {
+                        return reduced;
+                    }
+
+                    std::vector<int> inverse_perm(perm.size());
+                    for (size_t i = 0; i < perm.size(); ++i) {
+                        inverse_perm[static_cast<size_t>(perm[i])] = static_cast<int>(i);
+                    }
+                    return reduced.permute(inverse_perm);
                 }
             }
         }
@@ -1093,7 +1399,8 @@ namespace lfs::core {
             bool unbiased = args.unbiased;
 
             ReduceArgs mean_args = args;
-            mean_args.args = std::monostate{}; // Clear variant args for mean calculation
+            mean_args.args = std::monostate{};
+            mean_args.keepdim = true;
             auto mean_tensor = reduce(ReduceOp::Mean, mean_args);
 
             Tensor mean_broadcast = (mean_tensor.shape() == shape_)
@@ -1104,7 +1411,9 @@ namespace lfs::core {
             auto squared = diff.mul(diff);
 
             // Compute sum of squared differences
-            auto sum_sq = squared.reduce(ReduceOp::Sum, mean_args);
+            ReduceArgs sum_args = args;
+            sum_args.args = std::monostate{};
+            auto sum_sq = squared.reduce(ReduceOp::Sum, sum_args);
 
             // Calculate N (number of elements being reduced)
             std::vector<int> axes = args.axes;
@@ -1121,11 +1430,8 @@ namespace lfs::core {
                 }
             }
 
-            // Apply Bessel's correction if unbiased and N > 1
-            float correction = static_cast<float>(reduce_count);
-            if (unbiased && reduce_count > 1) {
-                correction = static_cast<float>(reduce_count - 1);
-            }
+            const float correction = static_cast<float>(reduce_count) -
+                                     (unbiased ? 1.0f : 0.0f);
 
             auto variance = sum_sq.div(correction);
 
@@ -1136,145 +1442,17 @@ namespace lfs::core {
             }
         }
 
-        std::vector<int> axes = args.axes;
-        if (axes.empty()) {
-            axes.resize(input->shape_.rank());
-            std::iota(axes.begin(), axes.end(), 0);
-        }
-
-        // Resolve negative indices to positive indices
-        for (auto& ax : axes) {
-            ax = input->resolve_dim(ax);
-        }
-
-        std::vector<size_t> out_shape;
-        for (size_t i = 0; i < input->shape_.rank(); ++i) {
-            bool is_reduced = std::find(axes.begin(), axes.end(), static_cast<int>(i)) != axes.end();
-            if (!is_reduced || args.keepdim) {
-                out_shape.push_back(is_reduced ? 1 : input->shape_[i]);
-            }
-        }
-
-        DataType out_dtype = input->dtype_;
-        if (op == ReduceOp::Any || op == ReduceOp::All) {
-            out_dtype = DataType::Bool;
-        } else if (op == ReduceOp::Argmax || op == ReduceOp::Argmin) {
-            out_dtype = DataType::Int64;
-        } else if (input->dtype_ == DataType::Bool) {
-            // Bool reductions return Int64 (PyTorch behavior)
-            out_dtype = DataType::Int64;
-        }
+        const std::vector<int>& axes = reduction.axes;
+        const std::vector<size_t>& out_shape = reduction.output_shape;
+        const DataType out_dtype = reduction.result_dtype;
 
         std::optional<CUDAStreamGuard> execution_guard;
         if (input->device_ == Device::CUDA) {
-            const cudaStream_t execution_stream = resolve_cuda_execution_stream(*input);
-            input->sync_to_stream(execution_stream);
+            const cudaStream_t execution_stream = prepare_inputs_for_stream({input});
             execution_guard.emplace(execution_stream);
         }
 
         auto result = Tensor::empty(TensorShape(out_shape), input->device_, out_dtype);
-
-        if (input->numel() == 0) {
-            float identity_value = 0.0f;
-            switch (op) {
-            case ReduceOp::Sum:
-            case ReduceOp::Mean:
-                identity_value = 0.0f;
-                break;
-            case ReduceOp::Prod:
-                identity_value = 1.0f;
-                break;
-            case ReduceOp::Max:
-                identity_value = input->dtype_ == DataType::Bool
-                                     ? 0.0f
-                                     : -std::numeric_limits<float>::infinity();
-                break;
-            case ReduceOp::Min:
-                identity_value = input->dtype_ == DataType::Bool
-                                     ? 1.0f
-                                     : std::numeric_limits<float>::infinity();
-                break;
-            case ReduceOp::Any:
-                identity_value = 0.0f;
-                break;
-            case ReduceOp::All:
-                identity_value = 1.0f;
-                break;
-            default:
-                LFS_ASSERT_MSG(false,
-                               "empty reduction encountered an unsupported operation");
-            }
-
-            if (input->dtype_ == DataType::Int32 &&
-                (op == ReduceOp::Max || op == ReduceOp::Min)) {
-                LFS_ASSERT_MSG(false,
-                               "empty Int32 max/min reductions have no identity value");
-            }
-
-            if (result.numel() == 0) {
-                return result;
-            }
-
-            if (input->device_ == Device::CUDA) {
-                if (out_dtype == DataType::Float32) {
-                    std::vector<float> temp(result.numel(), identity_value);
-                    LFS_CUDA_CHECK_MSG(
-                        cudaMemcpy(result.data_ptr(), temp.data(), result.bytes(),
-                                   cudaMemcpyHostToDevice),
-                        "empty reduction CUDA copy");
-                } else if (out_dtype == DataType::Bool) {
-                    unsigned char bool_val = (identity_value != 0.0f) ? 1 : 0;
-                    LFS_CUDA_CHECK_MSG(
-                        cudaMemset(result.data_ptr(), bool_val, result.bytes()),
-                        "empty reduction CUDA memset");
-                } else if (out_dtype == DataType::Int32) {
-                    if (identity_value == 0.0f) {
-                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_ptr(), 0, result.bytes()),
-                                           "empty Int32 reduction CUDA memset");
-                    } else {
-                        std::vector<int32_t> temp(
-                            result.numel(), static_cast<int32_t>(identity_value));
-                        LFS_CUDA_CHECK_MSG(
-                            cudaMemcpy(result.data_ptr(), temp.data(), result.bytes(),
-                                       cudaMemcpyHostToDevice),
-                            "empty Int32 reduction CUDA copy");
-                    }
-                } else if (out_dtype == DataType::Int64) {
-                    if (identity_value == 0.0f) {
-                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_ptr(), 0, result.bytes()),
-                                           "empty Int64 reduction CUDA memset");
-                    } else {
-                        std::vector<int64_t> temp(
-                            result.numel(), static_cast<int64_t>(identity_value));
-                        LFS_CUDA_CHECK_MSG(
-                            cudaMemcpy(result.data_ptr(), temp.data(), result.bytes(),
-                                       cudaMemcpyHostToDevice),
-                            "empty Int64 reduction CUDA copy");
-                    }
-                } else {
-                    LFS_ASSERT_MSG(false,
-                                   "empty CUDA reduction encountered an unsupported output dtype");
-                }
-            } else {
-                if (out_dtype == DataType::Float32) {
-                    float* ptr = static_cast<float*>(result.data_ptr());
-                    std::fill_n(ptr, result.numel(), identity_value);
-                } else if (out_dtype == DataType::Bool) {
-                    unsigned char* ptr = static_cast<unsigned char*>(result.data_ptr());
-                    std::fill_n(ptr, result.numel(), identity_value != 0.0f ? 1 : 0);
-                } else if (out_dtype == DataType::Int32) {
-                    int32_t* ptr = static_cast<int32_t*>(result.data_ptr());
-                    std::fill_n(ptr, result.numel(), static_cast<int32_t>(identity_value));
-                } else if (out_dtype == DataType::Int64) {
-                    int64_t* ptr = static_cast<int64_t*>(result.data_ptr());
-                    std::fill_n(ptr, result.numel(), static_cast<int64_t>(identity_value));
-                } else {
-                    LFS_ASSERT_MSG(false,
-                                   "empty CPU reduction encountered an unsupported output dtype");
-                }
-            }
-            return result;
-        }
 
         if (input->device_ == Device::CUDA) {
             tensor_ops::launch_reduce_op(
@@ -1282,52 +1460,16 @@ namespace lfs::core {
                 input->shape_.dims().data(), input->shape_.rank(),
                 axes.data(), axes.size(),
                 args.keepdim, op,
-                input->dtype_, result.stream());
+                input->dtype_, out_dtype, result.stream());
             // No sync - tensor operation
         } else {
             // CPU implementation
 
             // Handle Int32 dtype
             if (input->dtype_ == DataType::Int32) {
-                const int* src = static_cast<const int*>(input->data_ptr());
-                int* dst = static_cast<int*>(result.data_ptr());
-
-                // Full reduction to scalar (only mode supported for Int32)
-                if (axes.size() == input->shape_.rank()) {
-                    if (op == ReduceOp::Sum) {
-                        int sum = 0;
-                        for (size_t i = 0; i < input->numel(); ++i) {
-                            sum += src[i];
-                        }
-                        dst[0] = sum;
-                    } else if (op == ReduceOp::Mean) {
-                        int sum = 0;
-                        for (size_t i = 0; i < input->numel(); ++i) {
-                            sum += src[i];
-                        }
-                        dst[0] = sum / static_cast<int>(input->numel());
-                    } else if (op == ReduceOp::Max) {
-                        int max_val = src[0];
-                        for (size_t i = 1; i < input->numel(); ++i) {
-                            max_val = std::max(max_val, src[i]);
-                        }
-                        dst[0] = max_val;
-                    } else if (op == ReduceOp::Min) {
-                        int min_val = src[0];
-                        for (size_t i = 1; i < input->numel(); ++i) {
-                            min_val = std::min(min_val, src[i]);
-                        }
-                        dst[0] = min_val;
-                    } else if (op == ReduceOp::Prod) {
-                        int prod = 1;
-                        for (size_t i = 0; i < input->numel(); ++i) {
-                            prod *= src[i];
-                        }
-                        dst[0] = prod;
-                    }
-                    return result;
-                }
-                // Partial reductions not supported for Int32
+                reduce_int32_cpu(
+                    static_cast<const int32_t*>(input->data_ptr()), result.data_ptr(),
+                    input->shape_, input->strides_, reduction, op, result.numel());
                 return result;
             }
 
@@ -1530,13 +1672,13 @@ namespace lfs::core {
                 } else if (op == ReduceOp::Max) {
                     float max_val = src[0];
                     for (size_t i = 1; i < input->numel(); ++i) {
-                        max_val = std::max(max_val, src[i]);
+                        max_val = ops::max_reduce_op{}(max_val, src[i]);
                     }
                     dst[0] = max_val;
                 } else if (op == ReduceOp::Min) {
                     float min_val = src[0];
                     for (size_t i = 1; i < input->numel(); ++i) {
-                        min_val = std::min(min_val, src[i]);
+                        min_val = ops::min_reduce_op{}(min_val, src[i]);
                     }
                     dst[0] = min_val;
                 } else if (op == ReduceOp::Prod) {
@@ -1545,6 +1687,9 @@ namespace lfs::core {
                         prod *= src[i];
                     }
                     dst[0] = prod;
+                } else {
+                    LFS_ASSERT_MSG(false,
+                                   "full CPU Float32 reduction encountered an unsupported operation");
                 }
                 return result;
             }
@@ -1653,16 +1798,17 @@ namespace lfs::core {
                         result_val_double += val; // Use double accumulation
                         break;
                     case ReduceOp::Max:
-                        result_val_float = std::max(result_val_float, val);
+                        result_val_float = ops::max_reduce_op{}(result_val_float, val);
                         break;
                     case ReduceOp::Min:
-                        result_val_float = std::min(result_val_float, val);
+                        result_val_float = ops::min_reduce_op{}(result_val_float, val);
                         break;
                     case ReduceOp::Prod:
                         result_val_float *= val;
                         break;
                     default:
-                        break;
+                        LFS_ASSERT_MSG(false,
+                                       "CPU Float32 reduction encountered an unsupported operation");
                     }
                 }
 
@@ -1689,24 +1835,24 @@ namespace lfs::core {
                        "where condition must have Bool dtype");
 
         if (numel() == 0 || b.numel() == 0 || c.numel() == 0) {
-            auto shape_ab = this->broadcast_shape(b.shape());
-            LFS_ASSERT_MSG(shape_ab.rank() != 0,
+            LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), b.shape().dims()),
                            "where inputs have incompatible broadcast shapes");
+            auto shape_ab = this->broadcast_shape(b.shape());
 
             auto shape_abc_vec = broadcast::shape(shape_ab.dims(), c.shape().dims());
-            LFS_ASSERT_MSG(!shape_abc_vec.empty(),
+            LFS_ASSERT_MSG(broadcast::can_broadcast(shape_ab.dims(), c.shape().dims()),
                            "where inputs have incompatible broadcast shapes");
 
             DataType out_dtype = promote_types(b.dtype(), c.dtype());
             return empty(TensorShape(shape_abc_vec), device_, out_dtype);
         }
 
-        auto shape_ab = this->broadcast_shape(b.shape());
-        LFS_ASSERT_MSG(shape_ab.rank() != 0,
+        LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), b.shape().dims()),
                        "where condition and x shapes are incompatible");
+        auto shape_ab = this->broadcast_shape(b.shape());
 
         auto shape_abc_vec = broadcast::shape(shape_ab.dims(), c.shape().dims());
-        LFS_ASSERT_MSG(!shape_abc_vec.empty(),
+        LFS_ASSERT_MSG(broadcast::can_broadcast(shape_ab.dims(), c.shape().dims()),
                        "where input shapes are incompatible");
 
         TensorShape shape_abc(shape_abc_vec);
@@ -1741,6 +1887,8 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA && out_dtype == DataType::Float32) {
             auto result = Tensor::empty(shape_abc, device_, out_dtype);
+            prepare_inputs_for_stream(
+                {&a_broadcast, &b_cast, &c_cast}, result.stream());
             tensor_ops::launch_where(
                 a_broadcast.ptr<unsigned char>(),
                 b_cast.ptr<float>(),
@@ -1814,8 +1962,11 @@ namespace lfs::core {
             return std::sqrt(squared.sum_scalar());
         } else if (p == 1.0f) {
             return this->abs().sum_scalar();
+        } else if (p == 0.0f) {
+            return this->ne(0.0f).sum_scalar();
         } else if (std::isinf(p)) {
-            return this->abs().max_scalar();
+            return p > 0.0f ? this->abs().max_scalar()
+                            : this->abs().min_scalar();
         } else {
             auto abs_vals = this->abs();
             auto powered = abs_vals.pow(p);
@@ -1832,24 +1983,6 @@ namespace lfs::core {
         LFS_ASSERT_MSG(!std::isnan(p),
                        "norm order cannot be NaN");
         (void)resolve_dims(dims);
-
-        if (numel() == 0) {
-            // Return appropriate empty tensor
-            std::vector<size_t> out_shape;
-            for (size_t i = 0; i < shape_.rank(); ++i) {
-                bool is_reduced = false;
-                for (int d : dims) {
-                    if (resolve_dim(d) == static_cast<int>(i)) {
-                        is_reduced = true;
-                        break;
-                    }
-                }
-                if (!is_reduced || keepdim) {
-                    out_shape.push_back(is_reduced ? 1 : shape_[i]);
-                }
-            }
-            return empty(TensorShape(out_shape), device_, dtype_);
-        }
 
         // Special cases for common norms
         if (p == 2.0f) {
@@ -1889,7 +2022,7 @@ namespace lfs::core {
                        "broadcast operands must be on the same device");
 
         auto bcast_shape = this->broadcast_shape(other.shape());
-        LFS_ASSERT_MSG(bcast_shape.rank() != 0,
+        LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), other.shape().dims()),
                        "broadcast shapes are incompatible");
 
         Tensor a_broadcast = (shape_ == bcast_shape) ? this->clone() : broadcast_to(bcast_shape);
@@ -1915,9 +2048,25 @@ namespace lfs::core {
         if (tensors.empty()) {
             throw std::invalid_argument("Cannot concatenate empty vector of tensors");
         }
+        bool has_non_contiguous_input = false;
         for (const auto& tensor : tensors) {
             tensor_contract::require_valid(
                 tensor, "cat", "input", LFS_SOURCE_SITE_CURRENT());
+            has_non_contiguous_input |= !tensor.is_contiguous();
+        }
+
+        if (auto promoted = promote_tensor_list(tensors)) {
+            return cat(*promoted, dim);
+        }
+
+        if (has_non_contiguous_input) {
+            std::vector<Tensor> materialized;
+            materialized.reserve(tensors.size());
+            for (const Tensor& tensor : tensors) {
+                Tensor storage;
+                materialized.push_back(tensor.contiguous_read(storage));
+            }
+            return cat(materialized, dim);
         }
 
         if (tensors.size() == 1) {
@@ -2050,6 +2199,7 @@ namespace lfs::core {
             result.dtype_ = first_dtype;
             result.data_ = tensors[0].data_;
             result.data_owner_ = tensors[0].data_owner_; // Share ownership
+            result.storage_meta_ = tensors[0].storage_meta_;
             result.state_ = std::make_shared<Tensor::TensorState>(*tensors[0].state_);
             result.state_->capacity = tensors[0].capacity();
             result.state_->logical_size = total_size_along_dim;
@@ -2113,6 +2263,9 @@ namespace lfs::core {
         auto result = Tensor::empty(TensorShape(result_dims), first_device, first_dtype);
         LOG_DEBUG("  Created new tensor: id={}, data_ptr={}, capacity={}",
                   result.id_, result.data_ptr(), result.capacity());
+
+        if (result.numel() == 0)
+            return result;
 
         size_t element_size = dtype_size(first_dtype);
 
@@ -2243,6 +2396,7 @@ namespace lfs::core {
         const auto first_dtype = tensors[0].dtype();
 
         // Validate all tensors have same shape, device, and dtype
+        bool has_non_contiguous_input = !tensors[0].is_contiguous();
         for (size_t i = 1; i < tensors.size(); ++i) {
             tensor_contract::require_valid(
                 tensors[i], "stack", "input", LFS_SOURCE_SITE_CURRENT());
@@ -2252,8 +2406,21 @@ namespace lfs::core {
             tensor_contract::require_same_device(
                 tensors[0], tensors[i], "stack", "reference", "input",
                 LFS_SOURCE_SITE_CURRENT());
-            tensor_contract::require_dtype(
-                tensors[i], first_dtype, "stack", "input", LFS_SOURCE_SITE_CURRENT());
+            has_non_contiguous_input |= !tensors[i].is_contiguous();
+        }
+
+        if (auto promoted = promote_tensor_list(tensors)) {
+            return stack(*promoted, dim);
+        }
+
+        if (has_non_contiguous_input) {
+            std::vector<Tensor> materialized;
+            materialized.reserve(tensors.size());
+            for (const Tensor& tensor : tensors) {
+                Tensor storage;
+                materialized.push_back(tensor.contiguous_read(storage));
+            }
+            return stack(materialized, dim);
         }
 
         // Build output shape with new dimension inserted at 'dim'
@@ -2308,6 +2475,23 @@ namespace lfs::core {
         LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
                        "clamp bounds must not be NaN and must be ordered");
 
+        Tensor input_materialized;
+        const Tensor& input = contiguous_read(input_materialized);
+        if (&input != this) {
+            return input.clamp(min_val, max_val);
+        }
+
+        if (dtype_ == DataType::Int32) {
+            const bool integer_bounds =
+                (min_val == -std::numeric_limits<float>::infinity() ||
+                 detail::is_exact_int32_scalar(min_val)) &&
+                (max_val == std::numeric_limits<float>::infinity() ||
+                 detail::is_exact_int32_scalar(max_val));
+            if (!integer_bounds) {
+                return to(DataType::Float32).clamp(min_val, max_val);
+            }
+        }
+
         if (numel() == 0) {
             return empty(shape_, device_, dtype_);
         }
@@ -2328,9 +2512,14 @@ namespace lfs::core {
                 LFS_CUDA_CHECK_MSG(
                     cudaMemcpy(result.data_, data_ptr(), bytes(), cudaMemcpyDeviceToDevice),
                     "Int32 clamp CUDA copy");
+                const int min_int = min_val == -std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::lowest()
+                                        : static_cast<int>(min_val);
+                const int max_int = max_val == std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::max()
+                                        : static_cast<int>(max_val);
                 tensor_ops::launch_clamp_scalar_int(result.ptr<int>(),
-                                                    static_cast<int>(min_val),
-                                                    static_cast<int>(max_val),
+                                                    min_int, max_int,
                                                     numel(), result.stream());
             }
         } else {
@@ -2344,8 +2533,12 @@ namespace lfs::core {
             } else if (dtype_ == DataType::Int32) {
                 const int* src = ptr<int>();
                 int* dst = result.ptr<int>();
-                int min_int = static_cast<int>(min_val);
-                int max_int = static_cast<int>(max_val);
+                const int min_int = min_val == -std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::lowest()
+                                        : static_cast<int>(min_val);
+                const int max_int = max_val == std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::max()
+                                        : static_cast<int>(max_val);
                 for (size_t i = 0; i < numel(); ++i) {
                     dst[i] = std::clamp(src[i], min_int, max_int);
                 }

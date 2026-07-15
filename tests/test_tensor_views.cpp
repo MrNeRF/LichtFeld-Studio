@@ -592,15 +592,11 @@ TEST_F(TensorViewTest, SqueezeEdgeCases) {
     auto squeezed_custom = all_ones_custom.squeeze();
     auto squeezed_torch = all_ones_torch.squeeze();
 
-    // Known difference: Custom implementation keeps at least rank 1,
-    // PyTorch goes to rank 0 (scalar tensor)
-    EXPECT_EQ(squeezed_custom.ndim(), 1); // Custom: shape {1}
-    EXPECT_EQ(squeezed_torch.dim(), 0);   // PyTorch: 0-D scalar
+    EXPECT_EQ(squeezed_custom.ndim(), 0);
+    EXPECT_EQ(squeezed_torch.dim(), 0);
 
     // Values should still match
     EXPECT_FLOAT_EQ(squeezed_custom.item(), squeezed_torch.item<float>());
-
-    std::cout << "WARNING: squeeze() on all-1 dims keeps rank 1, PyTorch goes to rank 0 (known difference)\n";
 
     // No dimensions of size 1
     auto [no_ones_custom, no_ones_torch] = create_test_tensors({2, 3, 4});

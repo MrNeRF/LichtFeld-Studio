@@ -22,23 +22,29 @@ namespace lfs::core {
                        "cdist requires rank-2 tensors");
         LFS_ASSERT_MSG(size(1) == other.size(1),
                        "cdist feature dimensions must match");
-        LFS_ASSERT_MSG(std::isfinite(p) && p > 0.0f,
-                       "cdist p must be finite and positive");
+        LFS_ASSERT_MSG(!std::isnan(p) && p >= 0.0f,
+                       "cdist p must be non-negative");
+
+        Tensor lhs_materialized;
+        Tensor rhs_materialized;
+        const Tensor& lhs = contiguous_read(lhs_materialized);
+        const Tensor& rhs = other.contiguous_read(rhs_materialized);
 
         size_t N = size(0);
         size_t M = other.size(0);
         size_t D = size(1);
 
-        auto other_same_device = other.clone();
         auto result = empty({N, M}, device_, dtype_);
 
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_cdist(ptr<float>(), other_same_device.ptr<float>(),
-                                     result.ptr<float>(), N, M, D, p, 0);
+            const cudaStream_t execution_stream =
+                prepare_inputs_for_stream({&lhs, &rhs}, result.stream());
+            tensor_ops::launch_cdist(lhs.ptr<float>(), rhs.ptr<float>(),
+                                     result.ptr<float>(), N, M, D, p, execution_stream);
             // No sync - returns tensor
         } else {
-            const float* a_data = ptr<float>();
-            const float* b_data = other_same_device.ptr<float>();
+            const float* a_data = lhs.ptr<float>();
+            const float* b_data = rhs.ptr<float>();
             float* out_data = result.ptr<float>();
 
             if (p == 2.0f) {
@@ -62,6 +68,27 @@ namespace lfs::core {
                         out_data[i * M + j] = dist;
                     }
                 }
+            } else if (p == 0.0f) {
+                for (size_t i = 0; i < N; ++i) {
+                    for (size_t j = 0; j < M; ++j) {
+                        float dist = 0.0f;
+                        for (size_t d = 0; d < D; ++d) {
+                            dist += a_data[i * D + d] != b_data[j * D + d] ? 1.0f : 0.0f;
+                        }
+                        out_data[i * M + j] = dist;
+                    }
+                }
+            } else if (std::isinf(p)) {
+                for (size_t i = 0; i < N; ++i) {
+                    for (size_t j = 0; j < M; ++j) {
+                        float dist = 0.0f;
+                        for (size_t d = 0; d < D; ++d) {
+                            const float diff = std::abs(a_data[i * D + d] - b_data[j * D + d]);
+                            dist = ops::maximum_op{}(dist, diff);
+                        }
+                        out_data[i * M + j] = dist;
+                    }
+                }
             } else {
                 for (size_t i = 0; i < N; ++i) {
                     for (size_t j = 0; j < M; ++j) {
@@ -79,418 +106,132 @@ namespace lfs::core {
         return result;
     }
 
+    namespace {
+        std::pair<Tensor, Tensor> indexed_extreme_with_indices(
+            const Tensor& input, int dim, const bool keepdim, const bool find_maximum) {
+            LFS_ASSERT_MSG(input.is_valid(),
+                           "indexed extrema require a valid tensor");
+            LFS_ASSERT_MSG(input.dtype() == DataType::Float32,
+                           "indexed extrema currently support only Float32");
+
+            const size_t rank = input.ndim();
+            if (rank == 0) {
+                LFS_ASSERT_MSG(dim == 0 || dim == -1,
+                               "scalar indexed-extrema dimension is out of range");
+                dim = 0;
+            } else {
+                if (dim < 0)
+                    dim += static_cast<int>(rank);
+                LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(rank),
+                               "indexed-extrema dimension is out of range");
+            }
+
+            Tensor cpu = input.device() == Device::CPU
+                             ? input.contiguous()
+                             : input.to(Device::CPU).contiguous();
+            const size_t dim_size = rank == 0 ? 1 : cpu.size(static_cast<size_t>(dim));
+
+            std::vector<size_t> output_shape;
+            if (rank > 0) {
+                output_shape.reserve(rank - (keepdim ? 0 : 1));
+                for (size_t axis = 0; axis < rank; ++axis) {
+                    if (static_cast<int>(axis) == dim) {
+                        if (keepdim)
+                            output_shape.push_back(1);
+                    } else {
+                        output_shape.push_back(cpu.size(axis));
+                    }
+                }
+            }
+
+            Tensor values = Tensor::empty(
+                TensorShape(output_shape), Device::CPU, DataType::Float32);
+            Tensor indices = Tensor::empty(
+                TensorShape(output_shape), Device::CPU, DataType::Int64);
+            if (values.numel() > 0) {
+                LFS_ASSERT_MSG(dim_size > 0,
+                               "indexed extrema cannot reduce an empty dimension");
+
+                size_t outer_size = 1;
+                size_t inner_size = 1;
+                if (rank > 0) {
+                    for (int axis = 0; axis < dim; ++axis) {
+                        outer_size *= cpu.size(static_cast<size_t>(axis));
+                    }
+                    for (size_t axis = static_cast<size_t>(dim) + 1;
+                         axis < rank; ++axis) {
+                        inner_size *= cpu.size(axis);
+                    }
+                }
+
+                const float* src = cpu.ptr<float>();
+                float* dst_values = values.ptr<float>();
+                int64_t* dst_indices = indices.ptr<int64_t>();
+                for (size_t outer = 0; outer < outer_size; ++outer) {
+                    for (size_t inner = 0; inner < inner_size; ++inner) {
+                        const size_t base = outer * dim_size * inner_size + inner;
+                        float selected = src[base];
+                        int64_t selected_index = 0;
+                        for (size_t index = 1; index < dim_size; ++index) {
+                            const float candidate = src[base + index * inner_size];
+                            if (std::isnan(candidate)) {
+                                selected = candidate;
+                                selected_index = static_cast<int64_t>(index);
+                                break;
+                            }
+                            if (!std::isnan(selected) &&
+                                (find_maximum ? candidate > selected
+                                              : candidate < selected)) {
+                                selected = candidate;
+                                selected_index = static_cast<int64_t>(index);
+                            }
+                        }
+                        const size_t output_index = outer * inner_size + inner;
+                        dst_values[output_index] = selected;
+                        dst_indices[output_index] = selected_index;
+                    }
+                }
+            }
+
+            if (input.device() == Device::CUDA) {
+                return {values.to(Device::CUDA), indices.to(Device::CUDA)};
+            }
+            return {values, indices};
+        }
+    } // namespace
+
     // ============= MIN/MAX WITH INDICES =============
     std::pair<Tensor, Tensor> Tensor::min_with_indices(int dim, bool keepdim) const {
-        LOG_DEBUG("=== min_with_indices START ===");
-        LOG_DEBUG("  Input shape: {}", shape_.str());
-        LOG_DEBUG("  Input device: {}", device_name(device_));
-        LOG_DEBUG("  Input dtype: {}", dtype_name(dtype_));
-        LOG_DEBUG("  dim: {}, keepdim: {}", dim, keepdim);
-        LOG_DEBUG("  numel: {}", numel());
-
-        LFS_ASSERT_MSG(is_valid(),
-                       "min_with_indices requires a valid tensor");
-        LFS_ASSERT_MSG(numel() > 0,
-                       "min_with_indices requires a non-empty tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       "min_with_indices currently supports only Float32");
-
-        // Move to CPU for computation
-        LOG_DEBUG("  Moving to CPU if needed...");
-        auto cpu_tensor = (device_ == Device::CPU) ? clone() : to(Device::CPU);
-        LOG_DEBUG("  CPU tensor created, shape: {}", cpu_tensor.shape().str());
-
-        // Resolve dimension
-        dim = cpu_tensor.resolve_dim(dim);
-        LOG_DEBUG("  Resolved dim: {}", dim);
-
-        LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(cpu_tensor.ndim()),
-                       "min_with_indices dimension is out of range");
-
-        // Handle 1D scalar reduction
-        if (cpu_tensor.ndim() == 1 && dim == 0 && !keepdim) {
-            LOG_DEBUG("  1D scalar reduction path");
-            auto values = cpu_tensor.to_vector();
-            LOG_DEBUG("  Got {} values from vector", values.size());
-
-            auto min_it = std::min_element(values.begin(), values.end());
-            size_t min_idx = std::distance(values.begin(), min_it);
-            LOG_DEBUG("  Min value: {}, index: {}", *min_it, min_idx);
-
-            // Create scalar value tensor
-            LOG_DEBUG("  Creating scalar value tensor...");
-            auto val = Tensor::empty({1}, Device::CPU, dtype_);
-            LOG_DEBUG("  Val tensor created, setting value...");
-            *val.ptr<float>() = *min_it;
-            LOG_DEBUG("  Value set, squeezing...");
-            val = val.squeeze();
-            LOG_DEBUG("  Val squeezed, shape: {}", val.shape().str());
-
-            // Create scalar index tensor - CRITICAL: proper Int64 handling
-            LOG_DEBUG("  Creating scalar index tensor with Int64...");
-            auto idx = Tensor::empty({1}, Device::CPU, DataType::Int64);
-            LOG_DEBUG("  Idx tensor created, bytes: {}", idx.bytes());
-            LOG_DEBUG("  Idx tensor data_ptr: {}", static_cast<void*>(idx.data_ptr()));
-
-            int64_t* idx_ptr = reinterpret_cast<int64_t*>(idx.data_ptr());
-            LOG_DEBUG("  Idx pointer obtained: {}", static_cast<void*>(idx_ptr));
-            LOG_DEBUG("  Setting index value to: {}", static_cast<int64_t>(min_idx));
-            *idx_ptr = static_cast<int64_t>(min_idx);
-            LOG_DEBUG("  Index value set, squeezing...");
-            idx = idx.squeeze();
-            LOG_DEBUG("  Idx squeezed, shape: {}", idx.shape().str());
-
-            // Move back to original device if needed
-            if (device_ == Device::CUDA) {
-                LOG_DEBUG("  Moving results to CUDA...");
-                auto val_cuda = val.to(Device::CUDA);
-                LOG_DEBUG("  Val moved to CUDA");
-                auto idx_cuda = idx.to(Device::CUDA);
-                LOG_DEBUG("  Idx moved to CUDA");
-                LOG_DEBUG("=== min_with_indices END (1D scalar) ===");
-                return {val_cuda, idx_cuda};
-            }
-            LOG_DEBUG("=== min_with_indices END (1D scalar CPU) ===");
-            return {val, idx};
-        }
-
-        // Calculate output shape
-        LOG_DEBUG("  Calculating output shape...");
-        std::vector<size_t> out_shape;
-        for (size_t i = 0; i < cpu_tensor.ndim(); ++i) {
-            if (static_cast<int>(i) != dim) {
-                out_shape.push_back(cpu_tensor.size(i));
-            } else if (keepdim) {
-                out_shape.push_back(1);
-            }
-        }
-        if (out_shape.empty())
-            out_shape.push_back(1);
-
-        LOG_DEBUG("  Output shape: [{}]", [&]() {
-            std::string s;
-            for (size_t i = 0; i < out_shape.size(); ++i) {
-                if (i > 0)
-                    s += ", ";
-                s += std::to_string(out_shape[i]);
-            }
-            return s;
-        }());
-
-        // Create output tensors
-        LOG_DEBUG("  Creating output tensors...");
-        auto values = Tensor::empty(TensorShape(out_shape), Device::CPU, dtype_);
-        LOG_DEBUG("  Values tensor created, numel: {}, bytes: {}", values.numel(), values.bytes());
-
-        auto indices = Tensor::empty(TensorShape(out_shape), Device::CPU, DataType::Int64);
-        LOG_DEBUG("  Indices tensor created, numel: {}, bytes: {}", indices.numel(), indices.bytes());
-
-        const float* src = cpu_tensor.ptr<float>();
-        LOG_DEBUG("  Source pointer: {}", static_cast<const void*>(src));
-
-        float* vals = values.ptr<float>();
-        LOG_DEBUG("  Values pointer: {}", static_cast<void*>(vals));
-
-        int64_t* idxs = reinterpret_cast<int64_t*>(indices.data_ptr());
-        LOG_DEBUG("  Indices pointer: {}", static_cast<void*>(idxs));
-
-        // 2D optimized path
-        if (cpu_tensor.ndim() == 2) {
-            LOG_DEBUG("  Using 2D optimized path");
-            size_t rows = cpu_tensor.size(0);
-            size_t cols = cpu_tensor.size(1);
-            LOG_DEBUG("  Rows: {}, Cols: {}", rows, cols);
-
-            if (dim == 0) {
-                LOG_DEBUG("  Reducing along dim 0 (rows)");
-                // Reduce along rows -> output is (cols,) or (1, cols)
-                for (size_t c = 0; c < cols; ++c) {
-                    if (c % 100 == 0) {
-                        LOG_DEBUG("    Processing column {}/{}", c, cols);
-                    }
-                    float min_val = src[c];
-                    int64_t min_row = 0;
-                    for (size_t r = 1; r < rows; ++r) {
-                        float v = src[r * cols + c];
-                        if (v < min_val) {
-                            min_val = v;
-                            min_row = static_cast<int64_t>(r);
-                        }
-                    }
-                    vals[c] = min_val;
-                    idxs[c] = min_row;
-                }
-                LOG_DEBUG("  Finished reducing along dim 0");
-            } else {
-                LOG_DEBUG("  Reducing along dim 1 (cols)");
-                // Reduce along cols -> output is (rows,) or (rows, 1)
-                for (size_t r = 0; r < rows; ++r) {
-                    if (r % 100 == 0) {
-                        LOG_DEBUG("    Processing row {}/{}", r, rows);
-                    }
-                    float min_val = src[r * cols];
-                    int64_t min_col = 0;
-                    for (size_t c = 1; c < cols; ++c) {
-                        float v = src[r * cols + c];
-                        if (v < min_val) {
-                            min_val = v;
-                            min_col = static_cast<int64_t>(c);
-                        }
-                    }
-                    vals[r] = min_val;
-                    idxs[r] = min_col;
-                }
-                LOG_DEBUG("  Finished reducing along dim 1");
-            }
-        } else {
-            // N-dimensional case - general implementation
-            LOG_DEBUG("  Using N-D general path for rank {}", cpu_tensor.ndim());
-            size_t dim_size = cpu_tensor.size(dim);
-            size_t outer_size = 1;
-            size_t inner_size = 1;
-
-            for (int i = 0; i < dim; ++i) {
-                outer_size *= cpu_tensor.size(i);
-            }
-            for (size_t i = dim + 1; i < cpu_tensor.ndim(); ++i) {
-                inner_size *= cpu_tensor.size(i);
-            }
-
-            LOG_DEBUG("  dim_size: {}, outer_size: {}, inner_size: {}", dim_size, outer_size, inner_size);
-
-            for (size_t outer = 0; outer < outer_size; ++outer) {
-                for (size_t inner = 0; inner < inner_size; ++inner) {
-                    size_t base_idx = outer * dim_size * inner_size + inner;
-
-                    float min_val = src[base_idx];
-                    int64_t min_idx = 0;
-
-                    for (size_t d = 1; d < dim_size; ++d) {
-                        size_t idx = base_idx + d * inner_size;
-                        if (src[idx] < min_val) {
-                            min_val = src[idx];
-                            min_idx = static_cast<int64_t>(d);
-                        }
-                    }
-
-                    size_t out_idx = outer * inner_size + inner;
-                    vals[out_idx] = min_val;
-                    idxs[out_idx] = min_idx;
-                }
-            }
-            LOG_DEBUG("  Finished N-D reduction");
-        }
-
-        LOG_DEBUG("  Reduction complete, preparing return values");
-        LOG_DEBUG("  Values tensor valid: {}, numel: {}", values.is_valid(), values.numel());
-        LOG_DEBUG("  Indices tensor valid: {}, numel: {}", indices.is_valid(), indices.numel());
-
-        // Move back to original device if needed
-        if (device_ == Device::CUDA) {
-            LOG_DEBUG("  Moving results to CUDA...");
-            auto values_cuda = values.to(Device::CUDA);
-            LOG_DEBUG("  Values moved to CUDA");
-            auto indices_cuda = indices.to(Device::CUDA);
-            LOG_DEBUG("  Indices moved to CUDA");
-            LOG_DEBUG("=== min_with_indices END (2D CUDA) ===");
-            return {values_cuda, indices_cuda};
-        }
-
-        LOG_DEBUG("=== min_with_indices END (2D CPU) ===");
-        return {values, indices};
+        return indexed_extreme_with_indices(*this, dim, keepdim, false);
     }
 
     std::pair<Tensor, Tensor> Tensor::max_with_indices(int dim, bool keepdim) const {
-        LOG_DEBUG("=== max_with_indices START ===");
-        LOG_DEBUG("  Input shape: {}", shape_.str());
-        LOG_DEBUG("  Input device: {}", device_name(device_));
-        LOG_DEBUG("  dim: {}, keepdim: {}", dim, keepdim);
-
-        LFS_ASSERT_MSG(is_valid(),
-                       "max_with_indices requires a valid tensor");
-        LFS_ASSERT_MSG(numel() > 0,
-                       "max_with_indices requires a non-empty tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       "max_with_indices currently supports only Float32");
-
-        // Move to CPU for computation
-        LOG_DEBUG("  Moving to CPU if needed...");
-        auto cpu_tensor = (device_ == Device::CPU) ? clone() : to(Device::CPU);
-        LOG_DEBUG("  CPU tensor shape: {}", cpu_tensor.shape().str());
-
-        // Resolve dimension
-        dim = cpu_tensor.resolve_dim(dim);
-        LOG_DEBUG("  Resolved dim: {}", dim);
-
-        LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(cpu_tensor.ndim()),
-                       "max_with_indices dimension is out of range");
-
-        // For 1D tensors with dim=0 (returns scalar)
-        if (cpu_tensor.ndim() == 1 && dim == 0 && !keepdim) {
-            LOG_DEBUG("  1D scalar reduction path");
-            auto values = cpu_tensor.to_vector();
-            auto max_it = std::max_element(values.begin(), values.end());
-            size_t max_idx = std::distance(values.begin(), max_it);
-
-            auto val = Tensor::empty({1}, Device::CPU, dtype_);
-            *val.ptr<float>() = *max_it;
-            val = val.squeeze();
-
-            auto idx = Tensor::empty({1}, Device::CPU, DataType::Int64);
-            int64_t* idx_ptr = reinterpret_cast<int64_t*>(idx.data_ptr());
-            *idx_ptr = static_cast<int64_t>(max_idx);
-            idx = idx.squeeze();
-
-            if (device_ == Device::CUDA) {
-                LOG_DEBUG("  Moving to CUDA...");
-                return {val.to(Device::CUDA), idx.to(Device::CUDA)};
-            }
-            LOG_DEBUG("=== max_with_indices END (1D) ===");
-            return {val, idx};
-        }
-
-        // Calculate output shape
-        LOG_DEBUG("  Calculating output shape...");
-        std::vector<size_t> out_shape;
-        for (size_t i = 0; i < cpu_tensor.ndim(); ++i) {
-            if (static_cast<int>(i) != dim || keepdim) {
-                out_shape.push_back((static_cast<int>(i) == dim) ? 1 : cpu_tensor.size(i));
-            }
-        }
-        if (out_shape.empty()) {
-            out_shape.push_back(1);
-        }
-
-        LOG_DEBUG("  Creating output tensors...");
-        auto values = Tensor::empty(TensorShape(out_shape), Device::CPU, dtype_);
-        auto indices = Tensor::empty(TensorShape(out_shape), Device::CPU, DataType::Int64);
-
-        const float* data = cpu_tensor.ptr<float>();
-        float* val_data = values.ptr<float>();
-        int64_t* idx_data = reinterpret_cast<int64_t*>(indices.data_ptr());
-
-        LOG_DEBUG("  Pointers - data: {}, val_data: {}, idx_data: {}",
-                  static_cast<const void*>(data),
-                  static_cast<void*>(val_data),
-                  static_cast<void*>(idx_data));
-
-        // Special case for 2D tensors
-        if (cpu_tensor.ndim() == 2) {
-            LOG_DEBUG("  Using 2D optimized path");
-            size_t rows = cpu_tensor.size(0);
-            size_t cols = cpu_tensor.size(1);
-            LOG_DEBUG("  Rows: {}, Cols: {}", rows, cols);
-
-            if (dim == 0) {
-                LOG_DEBUG("  Reducing along dim 0 (rows)");
-                // Max along rows (across columns)
-                for (size_t col = 0; col < cols; ++col) {
-                    if (col % 100 == 0) {
-                        LOG_DEBUG("    Processing column {}/{}", col, cols);
-                    }
-                    float max_val = data[col];
-                    int64_t max_idx = 0;
-
-                    for (size_t row = 1; row < rows; ++row) {
-                        float val = data[row * cols + col];
-                        if (val > max_val) {
-                            max_val = val;
-                            max_idx = static_cast<int64_t>(row);
-                        }
-                    }
-
-                    val_data[col] = max_val;
-                    idx_data[col] = max_idx;
-                }
-            } else if (dim == 1) {
-                LOG_DEBUG("  Reducing along dim 1 (cols)");
-                // Max along columns (across rows)
-                for (size_t row = 0; row < rows; ++row) {
-                    if (row % 100 == 0) {
-                        LOG_DEBUG("    Processing row {}/{}", row, rows);
-                    }
-                    float max_val = data[row * cols];
-                    int64_t max_idx = 0;
-
-                    for (size_t col = 1; col < cols; ++col) {
-                        float val = data[row * cols + col];
-                        if (val > max_val) {
-                            max_val = val;
-                            max_idx = static_cast<int64_t>(col);
-                        }
-                    }
-
-                    val_data[row] = max_val;
-                    idx_data[row] = max_idx;
-                }
-            }
-            LOG_DEBUG("  Reduction complete");
-        } else {
-            // General N-dimensional case
-            LOG_DEBUG("  Using N-D general path");
-            size_t dim_size = cpu_tensor.size(dim);
-            size_t outer_size = 1;
-            size_t inner_size = 1;
-
-            for (size_t i = 0; i < static_cast<size_t>(dim); ++i) {
-                outer_size *= cpu_tensor.size(i);
-            }
-            for (size_t i = dim + 1; i < cpu_tensor.ndim(); ++i) {
-                inner_size *= cpu_tensor.size(i);
-            }
-
-            for (size_t outer = 0; outer < outer_size; ++outer) {
-                for (size_t inner = 0; inner < inner_size; ++inner) {
-                    size_t base_idx = outer * dim_size * inner_size + inner;
-
-                    float max_val = data[base_idx];
-                    int64_t max_idx = 0;
-
-                    for (size_t d = 1; d < dim_size; ++d) {
-                        size_t idx = base_idx + d * inner_size;
-                        if (data[idx] > max_val) {
-                            max_val = data[idx];
-                            max_idx = static_cast<int64_t>(d);
-                        }
-                    }
-
-                    size_t out_idx = outer * inner_size + inner;
-                    val_data[out_idx] = max_val;
-                    idx_data[out_idx] = max_idx;
-                }
-            }
-        }
-
-        LOG_DEBUG("  Moving to original device if needed...");
-        if (device_ == Device::CUDA) {
-            LOG_DEBUG("  Moving to CUDA...");
-            auto values_cuda = values.to(Device::CUDA);
-            LOG_DEBUG("  Values moved");
-            auto indices_cuda = indices.to(Device::CUDA);
-            LOG_DEBUG("  Indices moved");
-            LOG_DEBUG("=== max_with_indices END (CUDA) ===");
-            return {values_cuda, indices_cuda};
-        }
-        LOG_DEBUG("=== max_with_indices END (CPU) ===");
-        return {values, indices};
+        return indexed_extreme_with_indices(*this, dim, keepdim, true);
     }
-
     // ============= SORTING =============
     std::pair<Tensor, Tensor> Tensor::sort(int dim, bool descending) const {
         LFS_ASSERT_MSG(is_valid(),
                        "sort requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
                        "sort currently supports only Float32");
-        LFS_ASSERT_MSG(numel() > 0,
-                       "sort requires a non-empty tensor");
+        if (ndim() == 0) {
+            LFS_ASSERT_MSG(dim == 0 || dim == -1,
+                           "scalar sort dimension is out of range");
+            return {clone(), Tensor::zeros(TensorShape{}, device_, DataType::Int64)};
+        }
 
         dim = resolve_dim(dim);
         LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(ndim()),
                        "sort dimension is out of range");
 
+        Tensor materialized;
+        const Tensor& source = contiguous_read(materialized);
+
         // Create output tensors on same device
-        auto sorted = clone();
+        auto sorted = source.clone();
         auto indices = Tensor::empty(shape_, device_, DataType::Int64);
+        if (numel() == 0)
+            return {sorted, indices};
 
         // 1D case - optimized path
         if (ndim() == 1 && dim == 0) {
@@ -506,11 +247,15 @@ namespace lfs::core {
                 std::iota(idx_vec.begin(), idx_vec.end(), 0);
 
                 if (descending) {
-                    std::sort(idx_vec.begin(), idx_vec.end(),
-                              [&](size_t a, size_t b) { return values_vec[a] > values_vec[b]; });
+                    std::stable_sort(idx_vec.begin(), idx_vec.end(),
+                                     [&](size_t a, size_t b) {
+                                         return ops::sort_greater_op{}(values_vec[a], values_vec[b]);
+                                     });
                 } else {
-                    std::sort(idx_vec.begin(), idx_vec.end(),
-                              [&](size_t a, size_t b) { return values_vec[a] < values_vec[b]; });
+                    std::stable_sort(idx_vec.begin(), idx_vec.end(),
+                                     [&](size_t a, size_t b) {
+                                         return ops::sort_less_op{}(values_vec[a], values_vec[b]);
+                                     });
                 }
 
                 float* sorted_data = sorted.ptr<float>();
@@ -545,7 +290,7 @@ namespace lfs::core {
             // No sync - returns tensors
         } else {
             // CPU implementation
-            const float* src_data = ptr<float>();
+            const float* src_data = source.ptr<float>();
             float* sorted_data = sorted.ptr<float>();
             int64_t* idx_data = reinterpret_cast<int64_t*>(indices.data_ptr());
 
@@ -561,11 +306,15 @@ namespace lfs::core {
 
                     // Sort the slice
                     if (descending) {
-                        std::sort(slice_data.begin(), slice_data.end(),
-                                  [](const auto& a, const auto& b) { return a.first > b.first; });
+                        std::stable_sort(slice_data.begin(), slice_data.end(),
+                                         [](const auto& a, const auto& b) {
+                                             return ops::sort_greater_op{}(a.first, b.first);
+                                         });
                     } else {
-                        std::sort(slice_data.begin(), slice_data.end(),
-                                  [](const auto& a, const auto& b) { return a.first < b.first; });
+                        std::stable_sort(slice_data.begin(), slice_data.end(),
+                                         [](const auto& a, const auto& b) {
+                                             return ops::sort_less_op{}(a.first, b.first);
+                                         });
                     }
 
                     // Write back sorted values and indices

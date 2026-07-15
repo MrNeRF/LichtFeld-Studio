@@ -218,6 +218,8 @@ set(TEST_FILES
     test_tensor_stream.cpp
     test_cuda_event_pool.cpp
     test_tensor_multistream.cpp
+    test_tensor_discovery.cpp
+    test_tensor_discovery_fuzz.cpp
     test_mcmc_multinomial.cpp
     test_arena_metrics_contention.cpp
     test_tensor_memory_planner.cpp
@@ -333,6 +335,47 @@ target_compile_options(lichtfeld_tests PRIVATE
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
 )
 
+# Tensor-library hardening is intentionally isolated from the default test
+# tiers.  During the hardening phases these oracle tests are expected to expose
+# known failures, and crash-prone reproducers must not terminate the monolithic
+# test process before unrelated tests run.
+add_executable(tensor_hardening_tests
+    test_main.cpp
+    tensor_hardening_cuda_utils.cu
+    test_tensor_hardening_theme_a.cpp
+    test_tensor_hardening_theme_b.cpp
+    test_tensor_hardening_theme_c.cpp
+    test_tensor_hardening_theme_d.cpp
+    test_tensor_hardening_theme_e.cpp
+    test_tensor_hardening_theme_f.cpp
+)
+
+set_target_properties(tensor_hardening_tests PROPERTIES
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+
+target_include_directories(tensor_hardening_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/tests
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+
+target_link_libraries(tensor_hardening_tests PRIVATE
+    lfs_core
+    GTest::gtest
+    ${TORCH_LIBRARIES}
+    CUDA::cudart
+    CUDA::curand
+)
+
+target_compile_options(tensor_hardening_tests PRIVATE
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
+)
+
 # =============================================================================
 # CTest registration
 # =============================================================================
@@ -398,7 +441,7 @@ string(CONCAT LFS_SLOW_TEST_FILTER
 )
 
 set(LFS_NON_FAST_TEST_FILTER
-    "${LFS_SLOW_TEST_FILTER}:${LFS_NIGHTLY_TEST_FILTER}")
+    "${LFS_SLOW_TEST_FILTER}:${LFS_NIGHTLY_TEST_FILTER}:DiscoveryFuzz.*:DiscoverySweep.*")
 
 add_test(NAME lichtfeld.fast
     COMMAND $<TARGET_FILE:lichtfeld_tests>
@@ -430,6 +473,28 @@ add_test(NAME lichtfeld.nightly
 set_tests_properties(lichtfeld.nightly PROPERTIES
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     LABELS "nightly;gpu"
+    TIMEOUT 1800
+)
+
+add_test(NAME tensor.hardening
+    COMMAND $<TARGET_FILE:tensor_hardening_tests>
+        --gtest_color=no
+        --gtest_death_test_style=threadsafe
+)
+set_tests_properties(tensor.hardening PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "hardening;gpu"
+    TIMEOUT 900
+)
+
+add_test(NAME lichtfeld.discovery
+    COMMAND $<TARGET_FILE:lichtfeld_tests>
+        "--gtest_filter=DiscoveryFuzz.*:DiscoverySweep.*"
+        --gtest_color=no
+)
+set_tests_properties(lichtfeld.discovery PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "discovery;gpu"
     TIMEOUT 1800
 )
 

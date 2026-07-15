@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cuda_runtime.h>
+#include <limits>
 
 static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::AddScalar) == 0);
 static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::Abs) == 10);
@@ -77,25 +78,25 @@ namespace lfs::core::tensor_ops {
 
         __device__ __forceinline__ float apply_pointwise_op(float x, const FusedPointwiseOp& op) {
             switch (op.kind) {
-            case 0: return x + op.scalar;             // AddScalar
-            case 1: return x - op.scalar;             // SubScalar
-            case 2: return x * op.scalar;             // MulScalar
-            case 3: return x / op.scalar;             // DivScalar
-            case 10: return fabsf(x);                 // Abs
-            case 11: return -x;                       // Neg
-            case 12: return expf(x);                  // Exp
-            case 13: return logf(fmaxf(x, 1e-10f));   // Log
-            case 14: return sqrtf(fmaxf(x, 0.0f));    // Sqrt
-            case 15: return 1.0f / (1.0f + expf(-x)); // Sigmoid
-            case 16: return fmaxf(x, 0.0f);           // Relu
-            case 17: return x * x;                    // Square
-            case 18: return tanhf(x);                 // Tanh
-            case 19: return rsqrtf(fmaxf(x, 1e-10f)); // Rsqrt
-            case 20: return float((x > 0) - (x < 0)); // Sign
-            case 21: return 1.0f / (x + 1e-8f);       // Reciprocal
-            case 22: return floorf(x);                // Floor
-            case 23: return ceilf(x);                 // Ceil
-            case 24: return roundf(x);                // Round
+            case 0: return x + op.scalar;                  // AddScalar
+            case 1: return x - op.scalar;                  // SubScalar
+            case 2: return x * op.scalar;                  // MulScalar
+            case 3: return x / op.scalar;                  // DivScalar
+            case 10: return fabsf(x);                      // Abs
+            case 11: return -x;                            // Neg
+            case 12: return expf(x);                       // Exp
+            case 13: return logf(x);                       // Log
+            case 14: return sqrtf(x);                      // Sqrt
+            case 15: return 1.0f / (1.0f + expf(-x));      // Sigmoid
+            case 16: return isnan(x) ? x : fmaxf(x, 0.0f); // Relu
+            case 17: return x * x;                         // Square
+            case 18: return tanhf(x);                      // Tanh
+            case 19: return rsqrtf(x);                     // Rsqrt
+            case 20: return float((x > 0) - (x < 0));      // Sign
+            case 21: return 1.0f / x;                      // Reciprocal
+            case 22: return floorf(x);                     // Floor
+            case 23: return ceilf(x);                      // Ceil
+            case 24: return ops::round_op{}(x);            // Round
             default: return x;
             }
         }
@@ -166,11 +167,11 @@ namespace lfs::core::tensor_ops {
 
         __device__ __forceinline__ float reduce_identity(int reduce_op_int) {
             switch (reduce_op_int) {
-            case 0: return 0.0f;     // Sum
-            case 1: return 0.0f;     // Mean (accumulates like sum)
-            case 2: return -FLT_MAX; // Max
-            case 3: return FLT_MAX;  // Min
-            case 4: return 1.0f;     // Prod
+            case 0: return 0.0f;                                    // Sum
+            case 1: return 0.0f;                                    // Mean (accumulates like sum)
+            case 2: return -std::numeric_limits<float>::infinity(); // Max
+            case 3: return std::numeric_limits<float>::infinity();  // Min
+            case 4: return 1.0f;                                    // Prod
             default: return 0.0f;
             }
         }
@@ -179,19 +180,49 @@ namespace lfs::core::tensor_ops {
             switch (reduce_op_int) {
             case 0: return a + b;
             case 1: return a + b;
-            case 2: return fmaxf(a, b);
-            case 3: return fminf(a, b);
+            case 2: return (isnan(a) || isnan(b)) ? a + b : fmaxf(a, b);
+            case 3: return (isnan(a) || isnan(b)) ? a + b : fminf(a, b);
             case 4: return a * b;
             default: return a + b;
             }
+        }
+
+        __device__ __forceinline__ float warp_reduce_extrema(float val, int reduce_op_int) {
+#pragma unroll
+            for (int offset = 16; offset > 0; offset /= 2) {
+                val = reduce_combine(
+                    val, __shfl_xor_sync(0xffffffff, val, offset), reduce_op_int);
+            }
+            return val;
+        }
+
+        __device__ __forceinline__ float block_reduce_extrema(float val,
+                                                              int reduce_op_int) {
+            static __shared__ float shared[32];
+            const int lane = threadIdx.x % 32;
+            const int warp_id = threadIdx.x / 32;
+
+            val = warp_reduce_extrema(val, reduce_op_int);
+            if (lane == 0) {
+                shared[warp_id] = val;
+            }
+            __syncthreads();
+
+            if (warp_id == 0) {
+                val = threadIdx.x < (blockDim.x + 31) / 32
+                          ? shared[lane]
+                          : reduce_identity(reduce_op_int);
+                val = warp_reduce_extrema(val, reduce_op_int);
+            }
+            return val;
         }
 
         __device__ __forceinline__ float block_reduce_op(float val, int reduce_op_int) {
             switch (reduce_op_int) {
             case 0: return warp_ops::block_reduce_sum(val);
             case 1: return warp_ops::block_reduce_sum(val);
-            case 2: return warp_ops::block_reduce_max(val);
-            case 3: return warp_ops::block_reduce_min(val);
+            case 2: return block_reduce_extrema(val, reduce_op_int);
+            case 3: return block_reduce_extrema(val, reduce_op_int);
             case 4: return warp_ops::block_reduce_prod(val);
             default: return warp_ops::block_reduce_sum(val);
             }

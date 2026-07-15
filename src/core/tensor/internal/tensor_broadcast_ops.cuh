@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include "core/cuda_error.hpp"
-#include "core/logger.hpp"
-#include "memory_pool.hpp"
+#include "core/assert.hpp"
+#include "core/tensor_fwd.hpp"
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <type_traits>
 
@@ -726,59 +726,70 @@ namespace lfs::core::tensor_ops {
     // BINARY BROADCAST KERNEL (Generic fallback)
     // ============================================================================
 
+    struct BroadcastBinaryParams {
+        size_t a_shape[MAX_TENSOR_RANK];
+        size_t b_shape[MAX_TENSOR_RANK];
+        size_t c_shape[MAX_TENSOR_RANK];
+        int a_rank;
+        int b_rank;
+        int c_rank;
+        size_t c_elements;
+    };
+
     template <typename T, typename OutputT, typename BinaryOp>
     __global__ void broadcast_binary_kernel(
-        const T* a, const T* b, OutputT* c,
-        const int* a_shape, const int* b_shape, const int* c_shape,
-        int a_rank, int b_rank, int c_rank,
-        size_t c_elements, BinaryOp op) {
+        const T* a, const T* b, OutputT* c, BroadcastBinaryParams params,
+        BinaryOp op) {
         size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= c_elements)
+        if (idx >= params.c_elements)
             return;
 
         // Compute strides inline
-        int c_strides[8], a_strides[8], b_strides[8];
+        size_t c_strides[MAX_TENSOR_RANK];
+        size_t a_strides[MAX_TENSOR_RANK];
+        size_t b_strides[MAX_TENSOR_RANK];
 
-        c_strides[c_rank - 1] = 1;
-        for (int i = c_rank - 2; i >= 0; --i) {
-            c_strides[i] = c_strides[i + 1] * c_shape[i + 1];
+        c_strides[params.c_rank - 1] = 1;
+        for (int i = params.c_rank - 2; i >= 0; --i) {
+            c_strides[i] = c_strides[i + 1] * params.c_shape[i + 1];
         }
 
-        if (a_rank > 0) {
-            a_strides[a_rank - 1] = 1;
-            for (int i = a_rank - 2; i >= 0; --i) {
-                a_strides[i] = a_strides[i + 1] * a_shape[i + 1];
+        if (params.a_rank > 0) {
+            a_strides[params.a_rank - 1] = 1;
+            for (int i = params.a_rank - 2; i >= 0; --i) {
+                a_strides[i] = a_strides[i + 1] * params.a_shape[i + 1];
             }
         }
 
-        if (b_rank > 0) {
-            b_strides[b_rank - 1] = 1;
-            for (int i = b_rank - 2; i >= 0; --i) {
-                b_strides[i] = b_strides[i + 1] * b_shape[i + 1];
+        if (params.b_rank > 0) {
+            b_strides[params.b_rank - 1] = 1;
+            for (int i = params.b_rank - 2; i >= 0; --i) {
+                b_strides[i] = b_strides[i + 1] * params.b_shape[i + 1];
             }
         }
 
         // Broadcast indexing
-        int a_idx = 0, b_idx = 0;
+        size_t a_idx = 0;
+        size_t b_idx = 0;
         size_t remaining = idx;
 
-        for (int i = 0; i < c_rank; ++i) {
-            int c_coord = remaining / c_strides[i];
+        for (int i = 0; i < params.c_rank; ++i) {
+            const size_t c_coord = remaining / c_strides[i];
             remaining %= c_strides[i];
 
             // Map to a's coordinate
-            int offset_a = c_rank - a_rank;
+            const int offset_a = params.c_rank - params.a_rank;
             if (i >= offset_a) {
-                int dim = i - offset_a;
-                int coord = (a_shape[dim] == 1) ? 0 : c_coord;
+                const int dim = i - offset_a;
+                const size_t coord = (params.a_shape[dim] == 1) ? 0 : c_coord;
                 a_idx += coord * a_strides[dim];
             }
 
             // Map to b's coordinate
-            int offset_b = c_rank - b_rank;
+            const int offset_b = params.c_rank - params.b_rank;
             if (i >= offset_b) {
-                int dim = i - offset_b;
-                int coord = (b_shape[dim] == 1) ? 0 : c_coord;
+                const int dim = i - offset_b;
+                const size_t coord = (params.b_shape[dim] == 1) ? 0 : c_coord;
                 b_idx += coord * b_strides[dim];
             }
         }
@@ -797,6 +808,10 @@ namespace lfs::core::tensor_ops {
                                  const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
                                  size_t a_rank, size_t b_rank, size_t c_rank,
                                  size_t c_elements, BinaryOp op, cudaStream_t stream) {
+        LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK &&
+                           b_rank <= MAX_TENSOR_RANK &&
+                           c_rank <= MAX_TENSOR_RANK,
+                       "Binary broadcast rank exceeds MAX_TENSOR_RANK");
         if (c_elements == 0)
             return;
 
@@ -1028,56 +1043,25 @@ namespace lfs::core::tensor_ops {
         // Generic kernel for all types and complex patterns
         const int block_size = 256;
 
-        // Generic N-D broadcast - use existing implementation
-        int* d_a_shape = static_cast<int*>(
-            CudaMemoryPool::instance().allocate(a_rank * sizeof(int), stream));
-        int* d_b_shape = static_cast<int*>(
-            CudaMemoryPool::instance().allocate(b_rank * sizeof(int), stream));
-        int* d_c_shape = static_cast<int*>(
-            CudaMemoryPool::instance().allocate(c_rank * sizeof(int), stream));
-
-        if (!d_a_shape || !d_b_shape || !d_c_shape) {
-            LOG_ERROR("Failed to allocate shape arrays from memory pool");
-            if (d_a_shape)
-                CudaMemoryPool::instance().deallocate(d_a_shape, stream);
-            if (d_b_shape)
-                CudaMemoryPool::instance().deallocate(d_b_shape, stream);
-            if (d_c_shape)
-                CudaMemoryPool::instance().deallocate(d_c_shape, stream);
-            return;
-        }
-
-        std::vector<int> a_vec(a_shape, a_shape + a_rank);
-        std::vector<int> b_vec(b_shape, b_shape + b_rank);
-        std::vector<int> c_vec(c_shape, c_shape + c_rank);
-
-        // Use async memcpy to avoid synchronization overhead
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(d_a_shape, a_vec.data(), a_rank * sizeof(int),
-                            cudaMemcpyHostToDevice, stream),
-            "broadcast lhs shape copy (rank={})", a_rank);
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(d_b_shape, b_vec.data(), b_rank * sizeof(int),
-                            cudaMemcpyHostToDevice, stream),
-            "broadcast rhs shape copy (rank={})", b_rank);
-        LFS_CUDA_CHECK_MSG(
-            cudaMemcpyAsync(d_c_shape, c_vec.data(), c_rank * sizeof(int),
-                            cudaMemcpyHostToDevice, stream),
-            "broadcast output shape copy (rank={})", c_rank);
+        LFS_ASSERT_MSG(c_rank > 0,
+                       "Generic binary broadcast requires a non-scalar output");
+        BroadcastBinaryParams params{};
+        params.a_rank = static_cast<int>(a_rank);
+        params.b_rank = static_cast<int>(b_rank);
+        params.c_rank = static_cast<int>(c_rank);
+        params.c_elements = c_elements;
+        std::copy_n(a_shape, a_rank, params.a_shape);
+        std::copy_n(b_shape, b_rank, params.b_shape);
+        std::copy_n(c_shape, c_rank, params.c_shape);
 
         const int grid_size = (c_elements + block_size - 1) / block_size;
 
 #ifdef __CUDACC__
         broadcast_binary_kernel<<<grid_size, block_size, 0, stream>>>(
-            a, b, c, d_a_shape, d_b_shape, d_c_shape,
-            a_rank, b_rank, c_rank, c_elements, op);
+            a, b, c, params, op);
 #else
         static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
-
-        CudaMemoryPool::instance().deallocate(d_a_shape, stream);
-        CudaMemoryPool::instance().deallocate(d_b_shape, stream);
-        CudaMemoryPool::instance().deallocate(d_c_shape, stream);
     }
 
 } // namespace lfs::core::tensor_ops

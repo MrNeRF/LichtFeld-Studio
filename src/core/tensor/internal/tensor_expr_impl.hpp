@@ -36,6 +36,7 @@ namespace lfs::core {
             return expr.eval();
         }
 
+        expr = expr.snapshot();
         const cudaStream_t stream_hint = expr.stream_hint_impl();
         Tensor deferred = Tensor::make_deferred_expr_tensor(
             shape, device, dtype,
@@ -50,35 +51,6 @@ namespace lfs::core {
 
     // Helper struct for eval_impl dispatch based on operation return type
     namespace detail {
-        inline cudaStream_t resolve_cuda_execution_stream(const Tensor& primary) {
-            cudaStream_t execution_stream = getCurrentCUDAStream();
-            if (execution_stream == nullptr && primary.device() == Device::CUDA) {
-                execution_stream = primary.stream();
-            }
-            return execution_stream;
-        }
-
-        inline cudaStream_t resolve_cuda_execution_stream(const Tensor& primary, const Tensor& secondary) {
-            cudaStream_t execution_stream = resolve_cuda_execution_stream(primary);
-            if (execution_stream == nullptr && secondary.device() == Device::CUDA) {
-                execution_stream = secondary.stream();
-            }
-            return execution_stream;
-        }
-
-        inline cudaStream_t prepare_cuda_execution_stream(const Tensor& primary) {
-            const cudaStream_t execution_stream = resolve_cuda_execution_stream(primary);
-            primary.sync_to_stream(execution_stream);
-            return execution_stream;
-        }
-
-        inline cudaStream_t prepare_cuda_execution_stream(const Tensor& primary, const Tensor& secondary) {
-            const cudaStream_t execution_stream = resolve_cuda_execution_stream(primary, secondary);
-            primary.sync_to_stream(execution_stream);
-            secondary.sync_to_stream(execution_stream);
-            return execution_stream;
-        }
-
         inline void validate_permutation_indices(const Tensor& input, const Tensor& indices) {
             if (indices.numel() == 0) {
                 return;
@@ -115,7 +87,7 @@ namespace lfs::core {
 
                 std::optional<CUDAStreamGuard> execution_guard;
                 if (device == Device::CUDA) {
-                    execution_guard.emplace(prepare_cuda_execution_stream(input_tensor));
+                    execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
                 }
 
                 // Create result tensor (needs Tensor::empty)
@@ -180,7 +152,7 @@ namespace lfs::core {
                 } else {
                     // Float -> Float operations (default case)
                     if (device == Device::CUDA) {
-                        tensor_ops::launch_unary_op_generic(
+                        tensor_ops::launch_float_unary_with_numeric_policy(
                             input_tensor.template ptr<float>(),
                             result.template ptr<float>(),
                             result.numel(), op, result.stream());
@@ -213,7 +185,7 @@ namespace lfs::core {
 
                 std::optional<CUDAStreamGuard> execution_guard;
                 if (device == Device::CUDA) {
-                    execution_guard.emplace(prepare_cuda_execution_stream(input_tensor));
+                    execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
                 }
 
                 // Create result tensor (Bool dtype)
@@ -317,7 +289,7 @@ namespace lfs::core {
 
         std::optional<CUDAStreamGuard> execution_guard;
         if (device_ == Device::CUDA) {
-            execution_guard.emplace(detail::prepare_cuda_execution_stream(base));
+            execution_guard.emplace(prepare_inputs_for_stream({&base}));
         }
 
         // Create result tensor
@@ -362,7 +334,7 @@ namespace lfs::core {
 
                 std::optional<CUDAStreamGuard> execution_guard;
                 if (device == Device::CUDA) {
-                    execution_guard.emplace(prepare_cuda_execution_stream(left_tensor, right_tensor));
+                    execution_guard.emplace(prepare_inputs_for_stream({&left_tensor, &right_tensor}));
                 }
 
                 // Create result tensor
@@ -582,7 +554,7 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             // Use broadcast binary kernel
-                            tensor_ops::launch_broadcast_binary(
+                            tensor_ops::launch_float_broadcast_with_numeric_policy(
                                 left_tensor.template ptr<float>(),
                                 right_tensor.template ptr<float>(),
                                 result.template ptr<float>(),
@@ -593,7 +565,7 @@ namespace lfs::core {
                                 result.numel(), op, result.stream());
                         } else {
                             // Element-wise binary operation (no broadcasting)
-                            tensor_ops::launch_binary_op_generic(
+                            tensor_ops::launch_float_binary_with_numeric_policy(
                                 left_tensor.template ptr<float>(),
                                 right_tensor.template ptr<float>(),
                                 result.template ptr<float>(),
@@ -650,7 +622,7 @@ namespace lfs::core {
 
                 std::optional<CUDAStreamGuard> execution_guard;
                 if (device == Device::CUDA) {
-                    execution_guard.emplace(prepare_cuda_execution_stream(left_tensor, right_tensor));
+                    execution_guard.emplace(prepare_inputs_for_stream({&left_tensor, &right_tensor}));
                 }
 
                 // Create result tensor (Bool dtype)
@@ -987,7 +959,7 @@ namespace lfs::core {
 
         std::optional<CUDAStreamGuard> execution_guard;
         if (device_ == Device::CUDA) {
-            execution_guard.emplace(detail::prepare_cuda_execution_stream(input_tensor));
+            execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
         }
 
         Tensor result = Tensor::empty(shape_, device_, dtype_);
@@ -1057,7 +1029,7 @@ namespace lfs::core {
 
         std::optional<CUDAStreamGuard> execution_guard;
         if (device_ == Device::CUDA) {
-            execution_guard.emplace(detail::prepare_cuda_execution_stream(flat_input, indices_tensor));
+            execution_guard.emplace(prepare_inputs_for_stream({&flat_input, &indices_tensor}));
         }
 
         // Create result tensor

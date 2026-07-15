@@ -72,8 +72,6 @@ namespace lfs::core {
         case MovementOp::Reshape: {
             if (auto* vec = std::get_if<std::vector<int>>(&args.args)) {
                 auto new_shape = infer_shape(*vec, numel());
-                LFS_ASSERT_MSG(!new_shape.empty(),
-                               "reshape requires at least one output dimension");
 
                 size_t total = 1;
                 for (auto d : new_shape)
@@ -132,9 +130,13 @@ namespace lfs::core {
                 int dim1 = resolve_dim(pair->first);
                 int dim2 = resolve_dim(pair->second);
 
-                LFS_ASSERT_MSG(dim1 >= 0 && dim1 < static_cast<int>(shape_.rank()) &&
-                                   dim2 >= 0 && dim2 < static_cast<int>(shape_.rank()),
+                LFS_ASSERT_MSG(detail::tensor_dim_is_valid(dim1, shape_.rank()) &&
+                                   detail::tensor_dim_is_valid(dim2, shape_.rank()),
                                "transpose dimensions are out of range");
+
+                if (shape_.rank() == 0) {
+                    return create_strided_view(shape_, strides_);
+                }
 
                 if (state_ && state_->has_deferred_expr) {
                     std::vector<int> axes(shape_.rank());
@@ -170,7 +172,7 @@ namespace lfs::core {
                 return view;
             }
             if (shape_.rank() < 2)
-                return clone();
+                return create_strided_view(shape_, strides_);
             return transpose(-2, -1);
         }
 
@@ -178,6 +180,7 @@ namespace lfs::core {
             if (auto* dim_ptr = std::get_if<int>(&args.args)) {
                 int dim = *dim_ptr;
                 std::vector<size_t> new_shape;
+                std::vector<size_t> new_strides;
 
                 // Check if this is "squeeze all" (using sentinel value)
                 bool squeeze_all = (dim == std::numeric_limits<int>::min());
@@ -187,14 +190,17 @@ namespace lfs::core {
                     for (size_t i = 0; i < shape_.rank(); ++i) {
                         if (shape_[i] != 1) {
                             new_shape.push_back(shape_[i]);
+                            new_strides.push_back(strides_[i]);
                         }
                     }
 
-                    // If all dims were 1, keep at least one dimension
-                    if (new_shape.empty()) {
-                        new_shape.push_back(1);
-                    }
                 } else {
+                    if (shape_.rank() == 0) {
+                        LFS_ASSERT_MSG(dim == 0 || dim == -1,
+                                       "scalar squeeze dimension is out of range");
+                        return create_strided_view(shape_, strides_);
+                    }
+
                     // Squeeze specific dimension
                     int resolved = resolve_dim(dim);
 
@@ -203,25 +209,22 @@ namespace lfs::core {
 
                     // Check if the dimension has size 1
                     if (shape_[resolved] != 1) {
-                        LOG_WARN("Squeeze dimension {} has size {}, not 1. Returning clone.",
-                                 dim, shape_[resolved]);
-                        return clone();
+                        return create_strided_view(shape_, strides_);
                     }
 
                     // Build new shape without this dimension
                     for (size_t i = 0; i < shape_.rank(); ++i) {
                         if (i != static_cast<size_t>(resolved)) {
                             new_shape.push_back(shape_[i]);
+                            new_strides.push_back(strides_[i]);
                         }
-                    }
-
-                    // Ensure we have at least one dimension
-                    if (new_shape.empty()) {
-                        new_shape.push_back(1);
                     }
                 }
 
-                return create_view(TensorShape(new_shape));
+                if (state_ && state_->has_deferred_expr) {
+                    return create_view(TensorShape(new_shape));
+                }
+                return create_strided_view(TensorShape(new_shape), std::move(new_strides));
             }
 
             LFS_ASSERT_MSG(false,
@@ -239,15 +242,25 @@ namespace lfs::core {
                                "unsqueeze dimension is out of range");
 
                 std::vector<size_t> new_shape;
+                std::vector<size_t> new_strides;
                 for (int i = 0; i < resolved; ++i) {
                     new_shape.push_back(shape_[i]);
+                    new_strides.push_back(strides_[i]);
                 }
                 new_shape.push_back(1);
+                new_strides.push_back(
+                    resolved == static_cast<int>(shape_.rank())
+                        ? 1
+                        : shape_[resolved] * strides_[resolved]);
                 for (size_t i = resolved; i < shape_.rank(); ++i) {
                     new_shape.push_back(shape_[i]);
+                    new_strides.push_back(strides_[i]);
                 }
 
-                return create_view(TensorShape(new_shape));
+                if (state_ && state_->has_deferred_expr) {
+                    return create_view(TensorShape(new_shape));
+                }
+                return create_strided_view(TensorShape(new_shape), std::move(new_strides));
             }
             LFS_ASSERT_MSG(false,
                            "unsqueeze requires an integer dimension");
@@ -258,9 +271,13 @@ namespace lfs::core {
                 int start = resolve_dim(pair->first);
                 int end = resolve_dim(pair->second);
 
-                LFS_ASSERT_MSG(start >= 0 && start < static_cast<int>(shape_.rank()) &&
-                                   end >= 0 && end < static_cast<int>(shape_.rank()) && start <= end,
+                LFS_ASSERT_MSG(detail::tensor_dim_is_valid(start, shape_.rank()) &&
+                                   detail::tensor_dim_is_valid(end, shape_.rank()) && start <= end,
                                "flatten dimensions are invalid");
+
+                if (shape_.rank() == 0) {
+                    return create_view(TensorShape({1}));
+                }
 
                 std::vector<size_t> new_shape;
                 for (int i = 0; i < start; ++i) {

@@ -220,7 +220,7 @@ TEST_F(TensorSerializationTest, RejectsExcessiveRankBeforeReadingDimensions) {
         .version = TENSOR_FILE_VERSION,
         .dtype = static_cast<uint8_t>(DataType::Float32),
         .device = static_cast<uint8_t>(Device::CPU),
-        .rank = static_cast<uint16_t>(MAX_SERIALIZED_TENSOR_RANK + 1),
+        .rank = static_cast<uint16_t>(MAX_TENSOR_RANK + 1),
         .numel = 1,
     };
     ss.write(reinterpret_cast<const char*>(&header), sizeof(header));

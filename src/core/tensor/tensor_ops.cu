@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "internal/cub_workspace.hpp"
 #include "internal/memory_pool.hpp"
+#include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
@@ -40,6 +41,24 @@ namespace lfs::core::tensor_ops {
     namespace {
         std::atomic_bool force_cub_workspace_failure{false};
 
+        struct ieee_round_float_op {
+            __host__ __device__ float operator()(const float value) const {
+                return ops::round_op{}(value);
+            }
+        };
+
+        struct ieee_maximum_float_op {
+            __host__ __device__ float operator()(const float lhs, const float rhs) const {
+                return ops::maximum_op{}(lhs, rhs);
+            }
+        };
+
+        struct ieee_minimum_float_op {
+            __host__ __device__ float operator()(const float lhs, const float rhs) const {
+                return ops::minimum_op{}(lhs, rhs);
+            }
+        };
+
         template <typename Operation>
         float direct_reduce_scalar(const float* data,
                                    const size_t n,
@@ -66,6 +85,21 @@ namespace lfs::core::tensor_ops {
             return result;
         }
     } // namespace
+
+    void launch_ieee_round_float(const float* input, float* output,
+                                 const size_t n, const cudaStream_t stream) {
+        launch_unary_op_generic(input, output, n, ieee_round_float_op{}, stream);
+    }
+
+    void launch_ieee_maximum_float(const float* lhs, const float* rhs, float* output,
+                                   const size_t n, const cudaStream_t stream) {
+        launch_binary_op_generic(lhs, rhs, output, n, ieee_maximum_float_op{}, stream);
+    }
+
+    void launch_ieee_minimum_float(const float* lhs, const float* rhs, float* output,
+                                   const size_t n, const cudaStream_t stream) {
+        launch_binary_op_generic(lhs, rhs, output, n, ieee_minimum_float_op{}, stream);
+    }
 
     bool cub_workspace_failure_is_forced() {
         return force_cub_workspace_failure.load(std::memory_order_acquire);
@@ -297,26 +331,32 @@ namespace lfs::core::tensor_ops {
         }
     };
 
-    // Specializations for clamping conversions
+    // Numeric-to-byte casts follow Torch's truncation and modulo semantics.
     template <>
     struct ConvertFunctor<float, uint8_t> {
         __device__ uint8_t operator()(float x) const {
-            return static_cast<uint8_t>(fminf(fmaxf(roundf(x), 0.0f), 255.0f));
+            return detail::torch_uint8_cast(x);
         }
     };
 
     template <>
     struct ConvertFunctor<int, uint8_t> {
         __device__ uint8_t operator()(int x) const {
-            return static_cast<uint8_t>(max(0, min(255, x)));
+            return detail::torch_uint8_cast(x);
         }
     };
 
     template <>
     struct ConvertFunctor<int64_t, uint8_t> {
         __device__ uint8_t operator()(int64_t x) const {
-            return static_cast<uint8_t>(max(static_cast<int64_t>(0),
-                                            min(static_cast<int64_t>(255), x)));
+            return detail::torch_uint8_cast(x);
+        }
+    };
+
+    template <>
+    struct ConvertFunctor<__half, uint8_t> {
+        __device__ uint8_t operator()(__half x) const {
+            return detail::torch_uint8_cast(x);
         }
     };
 
@@ -437,23 +477,23 @@ namespace lfs::core::tensor_ops {
 
     // ============= MULTI-AXIS REDUCTION (USING FUNCTORS) =============
 
-    template <typename Op>
+    template <typename InputT, typename OutputT, typename AccumulatorT, typename Op>
     __global__ void multi_axis_reduce_kernel(
-        const float* input, float* output,
+        const InputT* input, OutputT* output,
         const size_t* input_shape, const bool* is_reduced_dim,
-        size_t input_rank, size_t output_elements, float init_val,
+        size_t input_rank, size_t output_elements, AccumulatorT init_val,
         Op op) {
         size_t out_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (out_idx >= output_elements)
             return;
 
-        size_t input_strides[10];
+        size_t input_strides[MAX_TENSOR_RANK];
         input_strides[input_rank - 1] = 1;
         for (int i = input_rank - 2; i >= 0; --i) {
             input_strides[i] = input_strides[i + 1] * input_shape[i + 1];
         }
 
-        size_t out_shape[10];
+        size_t out_shape[MAX_TENSOR_RANK];
         size_t out_rank = 0;
         for (size_t i = 0; i < input_rank; ++i) {
             if (!is_reduced_dim[i]) {
@@ -461,7 +501,7 @@ namespace lfs::core::tensor_ops {
             }
         }
 
-        size_t output_strides[10];
+        size_t output_strides[MAX_TENSOR_RANK];
         if (out_rank > 0) {
             output_strides[out_rank - 1] = 1;
             for (int i = out_rank - 2; i >= 0; --i) {
@@ -469,21 +509,21 @@ namespace lfs::core::tensor_ops {
             }
         }
 
-        size_t out_coords[10] = {0};
+        size_t out_coords[MAX_TENSOR_RANK] = {0};
         size_t temp = out_idx;
         for (size_t i = 0; i < out_rank; ++i) {
             out_coords[i] = temp / output_strides[i];
             temp %= output_strides[i];
         }
 
-        size_t base_input_coords[10];
+        size_t base_input_coords[MAX_TENSOR_RANK];
         size_t out_coord_idx = 0;
         for (size_t i = 0; i < input_rank; ++i) {
             base_input_coords[i] = is_reduced_dim[i] ? 0 : out_coords[out_coord_idx++];
         }
 
         size_t reduce_count = 1;
-        size_t reduced_dims[10];
+        size_t reduced_dims[MAX_TENSOR_RANK];
         size_t num_reduced = 0;
         for (size_t i = 0; i < input_rank; ++i) {
             if (is_reduced_dim[i]) {
@@ -492,10 +532,10 @@ namespace lfs::core::tensor_ops {
             }
         }
 
-        float result = init_val;
+        AccumulatorT result = init_val;
         for (size_t r = 0; r < reduce_count; ++r) {
             size_t temp_r = r;
-            size_t full_input_coords[10];
+            size_t full_input_coords[MAX_TENSOR_RANK];
 
             for (size_t i = 0; i < input_rank; ++i) {
                 full_input_coords[i] = base_input_coords[i];
@@ -512,10 +552,10 @@ namespace lfs::core::tensor_ops {
                 in_idx += full_input_coords[i] * input_strides[i];
             }
 
-            result = op(result, input[in_idx]);
+            result = op(result, static_cast<AccumulatorT>(input[in_idx]));
         }
 
-        output[out_idx] = result;
+        output[out_idx] = static_cast<OutputT>(result);
     }
 
     void launch_multi_axis_reduce(
@@ -523,6 +563,8 @@ namespace lfs::core::tensor_ops {
         const size_t* input_shape, const bool* is_reduced_dim,
         size_t input_rank, size_t output_elements,
         float init_val, ReduceOp op, cudaStream_t stream) {
+        LFS_ASSERT_MSG(input_rank > 0 && input_rank <= MAX_TENSOR_RANK,
+                       "multi-axis reduction rank exceeds MAX_TENSOR_RANK");
         int blocks = (output_elements + 255) / 256;
 
         switch (op) {
@@ -547,6 +589,9 @@ namespace lfs::core::tensor_ops {
                 input, output, input_shape, is_reduced_dim,
                 input_rank, output_elements, init_val, ops::mul_op{});
             break;
+        default:
+            LFS_ASSERT_MSG(false,
+                           "multi-axis reduction encountered an unsupported operation");
         }
     }
 
@@ -595,6 +640,9 @@ namespace lfs::core::tensor_ops {
                 case ReduceOp::Prod:
                     init_val = 1.0f;
                     break;
+                default:
+                    LFS_ASSERT_MSG(false,
+                                   "full Float32 reduction encountered an unsupported operation");
                 }
                 init_scalar_gpu(d_out, init_val, stream); // GPU init instead of CPU→GPU upload!
 
@@ -638,18 +686,22 @@ namespace lfs::core::tensor_ops {
             }
             case ReduceOp::Max:
                 run_cub_operation(
-                    "cub::DeviceReduce::Max", stream,
+                    "cub::DeviceReduce::Reduce(max)", stream,
                     [&](void* workspace, size_t& workspace_bytes) {
-                        return cub::DeviceReduce::Max(
-                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                        return cub::DeviceReduce::Reduce(
+                            workspace, workspace_bytes, d_in, d_out, n,
+                            ops::max_reduce_op{},
+                            -std::numeric_limits<float>::infinity(), stream);
                     });
                 break;
             case ReduceOp::Min:
                 run_cub_operation(
-                    "cub::DeviceReduce::Min", stream,
+                    "cub::DeviceReduce::Reduce(min)", stream,
                     [&](void* workspace, size_t& workspace_bytes) {
-                        return cub::DeviceReduce::Min(
-                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                        return cub::DeviceReduce::Reduce(
+                            workspace, workspace_bytes, d_in, d_out, n,
+                            ops::min_reduce_op{},
+                            std::numeric_limits<float>::infinity(), stream);
                     });
                 break;
             case ReduceOp::Prod: {
@@ -661,8 +713,8 @@ namespace lfs::core::tensor_ops {
                 break;
             }
             default:
-                init_scalar_gpu(static_cast<float*>(output), 0.0f, stream);
-                break;
+                LFS_ASSERT_MSG(false,
+                               "full Float32 reduction encountered an unsupported operation");
             }
             return;
         }
@@ -755,7 +807,8 @@ namespace lfs::core::tensor_ops {
                                         init_val, ops::mul_op{}, stream);
                 break;
             default:
-                break;
+                LFS_ASSERT_MSG(false,
+                               "single-axis Float32 reduction encountered an unsupported operation");
             }
             return;
         }
@@ -831,6 +884,9 @@ namespace lfs::core::tensor_ops {
                         case ReduceOp::Prod:
                             init_val = 1.0f;
                             break;
+                        default:
+                            LFS_ASSERT_MSG(false,
+                                           "multi-axis Float32 reduction encountered an unsupported operation");
                         }
                         init_scalar_gpu(output_f, init_val, stream); // GPU init instead of CPU→GPU upload!
                         launch_warp_reduce_full(input_f, output_f, n, op, stream);
@@ -849,14 +905,6 @@ namespace lfs::core::tensor_ops {
                 // If inner_size == 1, we can treat this as segmented reduction
                 if (inner_size == 1 && should_use_warp_reduce(n, outer_size)) {
                     launch_warp_segmented_reduce(input_f, output_f, outer_size, reduce_count, op, stream);
-
-                    if (op == ReduceOp::Mean) {
-                        auto out_ptr = thrust::device_pointer_cast(output_f);
-                        run_with_thrust_policy(stream, [&](auto policy) {
-                            thrust::transform(policy, out_ptr, out_ptr + outer_size, out_ptr,
-                                              DivideByFunctor(static_cast<float>(reduce_count)));
-                        });
-                    }
                     return;
                 }
 
@@ -878,15 +926,8 @@ namespace lfs::core::tensor_ops {
                                            n < 100000000;
 
                 if (use_warp_multi_axis) {
-                    launch_warp_multi_axis_reduce(input_f, output_f, output_size, reduce_count, op, stream);
-
-                    if (op == ReduceOp::Mean) {
-                        auto out_ptr = thrust::device_pointer_cast(output_f);
-                        run_with_thrust_policy(stream, [&](auto policy) {
-                            thrust::transform(policy, out_ptr, out_ptr + output_size, out_ptr,
-                                              DivideByFunctor(static_cast<float>(reduce_count)));
-                        });
-                    }
+                    launch_warp_multi_axis_reduce(
+                        input_f, output_f, outer_size, reduce_count, inner_size, op, stream);
                     return;
                 }
             }
@@ -922,6 +963,9 @@ namespace lfs::core::tensor_ops {
         case ReduceOp::Prod:
             init_val = 1.0f;
             break;
+        default:
+            LFS_ASSERT_MSG(false,
+                           "generic Float32 reduction encountered an unsupported operation");
         }
 
         launch_multi_axis_reduce(
@@ -945,68 +989,154 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    // Internal Int32 implementation (simplified - only handles full reductions)
+    struct Int32ToInt64Op {
+        __host__ __device__ __forceinline__ int64_t operator()(const int32_t value) const {
+            return static_cast<int64_t>(value);
+        }
+    };
+
+    struct IntegerMaximumOp {
+        template <typename T>
+        __host__ __device__ __forceinline__ T operator()(const T lhs, const T rhs) const {
+            return lhs < rhs ? rhs : lhs;
+        }
+    };
+
+    struct IntegerMinimumOp {
+        template <typename T>
+        __host__ __device__ __forceinline__ T operator()(const T lhs, const T rhs) const {
+            return rhs < lhs ? rhs : lhs;
+        }
+    };
+
     void launch_reduce_op_int32(const void* input, void* output, const size_t* shape, size_t rank,
                                 const int* axes, size_t num_axes, bool keepdim, ReduceOp op,
-                                cudaStream_t stream) {
+                                DataType output_dtype, cudaStream_t stream) {
         size_t n = 1;
         for (size_t i = 0; i < rank; ++i)
             n *= shape[i];
         if (n == 0)
             return;
+        LFS_ASSERT_MSG(rank <= MAX_TENSOR_RANK,
+                       "Int32 reduction rank exceeds MAX_TENSOR_RANK");
 
-        const int* d_in = static_cast<const int*>(input);
-        int* d_out = static_cast<int*>(output);
+        const auto* d_in = static_cast<const int32_t*>(input);
 
-        // Only support full reduction for Int32
         if (num_axes == 0 || num_axes == rank) {
             switch (op) {
-            case ReduceOp::Sum:
-            case ReduceOp::Mean:
+            case ReduceOp::Sum: {
+                LFS_ASSERT_MSG(output_dtype == DataType::Int64,
+                               "Int32 sum requires Int64 output");
+                auto transformed = thrust::make_transform_iterator(
+                    thrust::device_pointer_cast(d_in), Int32ToInt64Op{});
                 run_cub_operation(
                     "cub::DeviceReduce::Sum", stream,
                     [&](void* workspace, size_t& workspace_bytes) {
                         return cub::DeviceReduce::Sum(
-                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                            workspace, workspace_bytes, transformed,
+                            static_cast<int64_t*>(output), n, stream);
                     });
-                if (op == ReduceOp::Mean) {
-                    // Divide by count for mean - use Thrust directly
-                    auto out_ptr = thrust::device_pointer_cast(d_out);
-                    const int count = static_cast<int>(n);
-                    thrust::transform(thrust::cuda::par_nosync.on(stream), out_ptr, out_ptr + 1, out_ptr,
-                                      [count] __device__(int val) { return val / count; });
-                }
-                break;
+            } break;
             case ReduceOp::Max:
+                LFS_ASSERT_MSG(output_dtype == DataType::Int32,
+                               "Int32 max requires Int32 output");
                 run_cub_operation(
                     "cub::DeviceReduce::Max", stream,
                     [&](void* workspace, size_t& workspace_bytes) {
                         return cub::DeviceReduce::Max(
-                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                            workspace, workspace_bytes, d_in,
+                            static_cast<int32_t*>(output), n, stream);
                     });
                 break;
             case ReduceOp::Min:
+                LFS_ASSERT_MSG(output_dtype == DataType::Int32,
+                               "Int32 min requires Int32 output");
                 run_cub_operation(
                     "cub::DeviceReduce::Min", stream,
                     [&](void* workspace, size_t& workspace_bytes) {
                         return cub::DeviceReduce::Min(
-                            workspace, workspace_bytes, d_in, d_out, n, stream);
+                            workspace, workspace_bytes, d_in,
+                            static_cast<int32_t*>(output), n, stream);
                     });
                 break;
             case ReduceOp::Prod: {
+                LFS_ASSERT_MSG(output_dtype == DataType::Int64,
+                               "Int32 product requires Int64 output");
                 auto in_ptr = thrust::device_pointer_cast(d_in);
-                int result = 1;
+                int64_t result = 1;
                 run_with_thrust_policy(stream, [&](auto policy) {
-                    result = thrust::reduce(policy, in_ptr, in_ptr + n, 1, ops::mul_op{});
+                    result = thrust::transform_reduce(
+                        policy, in_ptr, in_ptr + n, Int32ToInt64Op{}, int64_t{1},
+                        thrust::multiplies<int64_t>{});
                 });
-                init_scalar_gpu(d_out, result, stream); // GPU init instead of CPU→GPU upload!
+                init_scalar_gpu(static_cast<int64_t*>(output), result, stream);
             } break;
-            default: {
-                init_scalar_gpu(d_out, 0, stream); // GPU init instead of CPU→GPU upload!
-            } break;
+            default:
+                LFS_ASSERT_MSG(false,
+                               "Int32 reduction encountered an unsupported operation");
+            }
+            return;
+        }
+
+        std::vector<bool> reduced(rank, false);
+        for (size_t i = 0; i < num_axes; ++i) {
+            LFS_ASSERT_MSG(axes[i] >= 0 && axes[i] < static_cast<int>(rank),
+                           "Int32 reduction axis is out of range");
+            reduced[static_cast<size_t>(axes[i])] = true;
+        }
+
+        size_t output_elements = 1;
+        for (size_t i = 0; i < rank; ++i) {
+            if (!reduced[i] || keepdim) {
+                output_elements *= reduced[i] ? 1 : shape[i];
             }
         }
-        // Partial reductions not supported for Int32 yet
+
+        thrust::device_vector<bool> d_reduced(reduced.begin(), reduced.end());
+        thrust::device_vector<size_t> d_shape(shape, shape + rank);
+        const int blocks = static_cast<int>((output_elements + 255) / 256);
+
+        switch (op) {
+        case ReduceOp::Sum:
+            LFS_ASSERT_MSG(output_dtype == DataType::Int64,
+                           "Int32 sum requires Int64 output");
+            multi_axis_reduce_kernel<<<blocks, 256, 0, stream>>>(
+                d_in, static_cast<int64_t*>(output),
+                thrust::raw_pointer_cast(d_shape.data()),
+                thrust::raw_pointer_cast(d_reduced.data()),
+                rank, output_elements, int64_t{0}, ops::add_op{});
+            break;
+        case ReduceOp::Prod:
+            LFS_ASSERT_MSG(output_dtype == DataType::Int64,
+                           "Int32 product requires Int64 output");
+            multi_axis_reduce_kernel<<<blocks, 256, 0, stream>>>(
+                d_in, static_cast<int64_t*>(output),
+                thrust::raw_pointer_cast(d_shape.data()),
+                thrust::raw_pointer_cast(d_reduced.data()),
+                rank, output_elements, int64_t{1}, ops::mul_op{});
+            break;
+        case ReduceOp::Max:
+            LFS_ASSERT_MSG(output_dtype == DataType::Int32,
+                           "Int32 max requires Int32 output");
+            multi_axis_reduce_kernel<<<blocks, 256, 0, stream>>>(
+                d_in, static_cast<int32_t*>(output),
+                thrust::raw_pointer_cast(d_shape.data()),
+                thrust::raw_pointer_cast(d_reduced.data()),
+                rank, output_elements, std::numeric_limits<int32_t>::lowest(), IntegerMaximumOp{});
+            break;
+        case ReduceOp::Min:
+            LFS_ASSERT_MSG(output_dtype == DataType::Int32,
+                           "Int32 min requires Int32 output");
+            multi_axis_reduce_kernel<<<blocks, 256, 0, stream>>>(
+                d_in, static_cast<int32_t*>(output),
+                thrust::raw_pointer_cast(d_shape.data()),
+                thrust::raw_pointer_cast(d_reduced.data()),
+                rank, output_elements, std::numeric_limits<int32_t>::max(), IntegerMinimumOp{});
+            break;
+        default:
+            LFS_ASSERT_MSG(false,
+                           "partial Int32 reduction encountered an unsupported operation");
+        }
     }
 
     // Bool to int64 conversion functor for CUB
@@ -1053,7 +1183,7 @@ namespace lfs::core::tensor_ops {
     // Bool reduction implementation
     void launch_reduce_op_bool(const void* input, void* output, const size_t* shape, const size_t rank,
                                const int* axes, const size_t num_axes, const bool keepdim, const ReduceOp op,
-                               cudaStream_t stream) {
+                               const DataType output_dtype, cudaStream_t stream) {
         size_t n = 1;
         for (size_t i = 0; i < rank; ++i)
             n *= shape[i];
@@ -1063,12 +1193,17 @@ namespace lfs::core::tensor_ops {
         const bool* d_in = static_cast<const bool*>(input);
         bool* d_out_bool = static_cast<bool*>(output);
         int64_t* d_out_int64 = static_cast<int64_t*>(output);
+        LFS_ASSERT_MSG(op != ReduceOp::Mean,
+                       "mean requires a floating-point tensor");
 
         // Full reduction
         if (num_axes == 0 || num_axes == rank) {
+            const DataType expected_output_dtype =
+                (op == ReduceOp::Any || op == ReduceOp::All) ? DataType::Bool : DataType::Int64;
+            LFS_ASSERT_MSG(output_dtype == expected_output_dtype,
+                           "Bool reduction output dtype does not match its operation");
             switch (op) {
-            case ReduceOp::Sum:
-            case ReduceOp::Mean: {
+            case ReduceOp::Sum: {
                 auto transform_iter = thrust::make_transform_iterator(
                     thrust::device_pointer_cast(d_in), BoolToInt64Op());
 
@@ -1080,12 +1215,6 @@ namespace lfs::core::tensor_ops {
                             transform_iter, d_out_int64, n, stream);
                     });
 
-                if (op == ReduceOp::Mean) {
-                    const int64_t count = static_cast<int64_t>(n);
-                    auto out_ptr = thrust::device_pointer_cast(d_out_int64);
-                    thrust::transform(thrust::cuda::par_nosync.on(stream), out_ptr, out_ptr + 1, out_ptr,
-                                      [count] __device__(int64_t val) { return val / count; });
-                }
             } break;
 
             case ReduceOp::Max:
@@ -1150,13 +1279,17 @@ namespace lfs::core::tensor_ops {
             } break;
 
             default:
-                init_scalar_gpu(d_out_int64, static_cast<int64_t>(0), stream);
-                break;
+                LFS_ASSERT_MSG(false,
+                               "Bool reduction encountered an unsupported operation");
             }
             return;
         }
 
         // Partial reduction for Any/All
+        LFS_ASSERT_MSG(output_dtype == DataType::Bool,
+                       "partial Bool reduction requires Bool output");
+        LFS_ASSERT_MSG(op == ReduceOp::Any || op == ReduceOp::All,
+                       "partial Bool reduction supports only any and all");
         if (op == ReduceOp::Any || op == ReduceOp::All) {
             const int dim = axes[0];
             size_t outer_size = 1;
@@ -1215,15 +1348,26 @@ namespace lfs::core::tensor_ops {
     // Public dispatcher function
     void launch_reduce_op(const void* input, void* output, const size_t* shape, size_t rank,
                           const int* axes, size_t num_axes, bool keepdim, ReduceOp op,
-                          DataType dtype, cudaStream_t stream) {
-        if (dtype == DataType::Float32) {
-            launch_reduce_op_float32(input, output, shape, rank, axes, num_axes, keepdim, op, stream);
-        } else if (dtype == DataType::Int32) {
-            launch_reduce_op_int32(input, output, shape, rank, axes, num_axes, keepdim, op, stream);
-        } else if (dtype == DataType::Bool) {
-            launch_reduce_op_bool(input, output, shape, rank, axes, num_axes, keepdim, op, stream);
-        }
-        // Other dtypes not supported
+                          DataType input_dtype, DataType output_dtype, cudaStream_t stream) {
+        detail::dispatch_dtype(input_dtype, [&]<typename T>() {
+            if constexpr (std::is_same_v<T, float>) {
+                LFS_ASSERT_MSG(output_dtype == DataType::Float32,
+                               "Float32 reduction requires Float32 output");
+                launch_reduce_op_float32(
+                    input, output, shape, rank, axes, num_axes, keepdim, op, stream);
+            } else if constexpr (std::is_same_v<T, int32_t>) {
+                launch_reduce_op_int32(
+                    input, output, shape, rank, axes, num_axes, keepdim, op,
+                    output_dtype, stream);
+            } else if constexpr (std::is_same_v<T, bool>) {
+                launch_reduce_op_bool(
+                    input, output, shape, rank, axes, num_axes, keepdim, op,
+                    output_dtype, stream);
+            } else {
+                LFS_ASSERT_MSG(false,
+                               "reduction encountered an unsupported input dtype");
+            }
+        });
     }
 
     // ============= TERNARY OPERATIONS =============
@@ -1524,9 +1668,15 @@ namespace lfs::core::tensor_ops {
         float dist = 0.0f;
         for (size_t d = 0; d < D; ++d) {
             float diff = fabsf(a[i * D + d] - b[j * D + d]);
-            dist += powf(diff, p);
+            if (p == 0.0f) {
+                dist += diff != 0.0f ? 1.0f : 0.0f;
+            } else if (isinf(p)) {
+                dist = ops::maximum_op{}(dist, diff);
+            } else {
+                dist += powf(diff, p);
+            }
         }
-        out[i * M + j] = powf(dist, 1.0f / p);
+        out[i * M + j] = (p == 0.0f || isinf(p)) ? dist : powf(dist, 1.0f / p);
     }
 
     void launch_cdist(const float* a, const float* b, float* out,
@@ -1589,18 +1739,18 @@ namespace lfs::core::tensor_ops {
         if (stream) {
             if (descending) {
                 thrust::sort_by_key(thrust::cuda::par_nosync.on(stream), values_ptr, values_ptr + n,
-                                    indices_ptr, thrust::greater<float>());
+                                    indices_ptr, ops::sort_greater_op{});
             } else {
                 thrust::sort_by_key(thrust::cuda::par_nosync.on(stream), values_ptr, values_ptr + n,
-                                    indices_ptr, thrust::less<float>());
+                                    indices_ptr, ops::sort_less_op{});
             }
         } else {
             if (descending) {
                 thrust::sort_by_key(thrust::cuda::par_nosync, values_ptr, values_ptr + n,
-                                    indices_ptr, thrust::greater<float>());
+                                    indices_ptr, ops::sort_greater_op{});
             } else {
                 thrust::sort_by_key(thrust::cuda::par_nosync, values_ptr, values_ptr + n,
-                                    indices_ptr, thrust::less<float>());
+                                    indices_ptr, ops::sort_less_op{});
             }
         }
     }
@@ -1648,11 +1798,11 @@ namespace lfs::core::tensor_ops {
                 if (descending) {
                     thrust::sort_by_key(thrust::cuda::par_nosync.on(stream),
                                         temp_vals.begin(), temp_vals.end(), temp_idx.begin(),
-                                        thrust::greater<float>());
+                                        ops::sort_greater_op{});
                 } else {
                     thrust::sort_by_key(thrust::cuda::par_nosync.on(stream),
                                         temp_vals.begin(), temp_vals.end(), temp_idx.begin(),
-                                        thrust::less<float>());
+                                        ops::sort_less_op{});
                 }
 
                 write_slice_kernel<<<blocks, 256, 0, stream>>>(
@@ -1671,8 +1821,8 @@ namespace lfs::core::tensor_ops {
     __global__ void cat_rgb_to_rgba_kernel(
         float* output,
         const float* rgb,
-        size_t num_pixels,
-        float alpha_value) {
+        const float* alpha,
+        size_t num_pixels) {
         size_t pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (pixel_idx >= num_pixels)
             return;
@@ -1685,6 +1835,7 @@ namespace lfs::core::tensor_ops {
             rgb[rgb_offset + 0],
             rgb[rgb_offset + 1],
             rgb[rgb_offset + 2]);
+        const float alpha_value = alpha[pixel_idx];
 
         // Check alignment for float4 output
         bool out_aligned = (reinterpret_cast<uintptr_t>(&output[rgba_offset]) % 16) == 0;
@@ -1800,20 +1951,19 @@ namespace lfs::core::tensor_ops {
         if (num_tensors == 2 &&
             tensors[0].shape()[tensors[0].shape().rank() - 1] == 3 &&
             tensors[1].shape()[tensors[1].shape().rank() - 1] == 1 &&
+            tensors[0].dtype() == DataType::Float32 &&
+            tensors[1].dtype() == DataType::Float32 &&
             element_size == sizeof(float)) {
             // Special case: cat([RGB, alpha]) → RGBA
             size_t num_pixels = num_rows;
             int block_size = 256;
             int grid_size = (num_pixels + block_size - 1) / block_size;
 
-            // Assume alpha is constant (most common case)
-            float alpha_value = 1.0f; // Default alpha = 1.0 for opaque
-
             cat_rgb_to_rgba_kernel<<<grid_size, block_size, 0, stream>>>(
                 static_cast<float*>(output),
                 static_cast<const float*>(tensors[0].data_ptr()),
-                num_pixels,
-                alpha_value);
+                static_cast<const float*>(tensors[1].data_ptr()),
+                num_pixels);
             return;
         }
 
@@ -2070,10 +2220,6 @@ namespace lfs::core::tensor_ops {
         const float*, float*, size_t, ops::ceil_op, cudaStream_t);
     template void launch_unary_op_generic<int, int, ops::ceil_op>(
         const int*, int*, size_t, ops::ceil_op, cudaStream_t);
-    template void launch_unary_op_generic<float, float, ops::round_op>(
-        const float*, float*, size_t, ops::round_op, cudaStream_t);
-    template void launch_unary_op_generic<int, int, ops::round_op>(
-        const int*, int*, size_t, ops::round_op, cudaStream_t);
     template void launch_unary_op_generic<float, float, ops::sin_op>(
         const float*, float*, size_t, ops::sin_op, cudaStream_t);
     template void launch_unary_op_generic<int, int, ops::sin_op>(
@@ -2194,14 +2340,6 @@ namespace lfs::core::tensor_ops {
         const float*, const float*, float*, size_t, ops::div_op, cudaStream_t);
     template void launch_binary_op_generic<int, int, ops::div_op>(
         const int*, const int*, int*, size_t, ops::div_op, cudaStream_t);
-    template void launch_binary_op_generic<float, float, ops::minimum_op>(
-        const float*, const float*, float*, size_t, ops::minimum_op, cudaStream_t);
-    template void launch_binary_op_generic<int, int, ops::minimum_op>(
-        const int*, const int*, int*, size_t, ops::minimum_op, cudaStream_t);
-    template void launch_binary_op_generic<float, float, ops::maximum_op>(
-        const float*, const float*, float*, size_t, ops::maximum_op, cudaStream_t);
-    template void launch_binary_op_generic<int, int, ops::maximum_op>(
-        const int*, const int*, int*, size_t, ops::maximum_op, cudaStream_t);
     template void launch_binary_op_generic<float, float, ops::pow_op>(
         const float*, const float*, float*, size_t, ops::pow_op, cudaStream_t);
     template void launch_binary_op_generic<int, int, ops::pow_op>(
@@ -2343,6 +2481,49 @@ namespace lfs::core::tensor_ops {
     template void launch_unary_op_generic<int, int, ops::scalar_right_op<ops::mod_op, float>>(
         const int*, int*, size_t, ops::scalar_right_op<ops::mod_op, float>, cudaStream_t);
 
+#define LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(OP)                                \
+    template void launch_unary_op_generic<float, float,                            \
+                                          ops::scalar_right_op<ops::OP, int32_t>>( \
+        const float*, float*, size_t, ops::scalar_right_op<ops::OP, int32_t>,      \
+        cudaStream_t);                                                             \
+    template void launch_unary_op_generic<int, int,                                \
+                                          ops::scalar_right_op<ops::OP, int32_t>>( \
+        const int*, int*, size_t, ops::scalar_right_op<ops::OP, int32_t>, cudaStream_t);
+
+    LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(add_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(sub_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(mul_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(div_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(pow_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(mod_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(maximum_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC(minimum_op)
+
+#undef LFS_INSTANTIATE_TYPED_SCALAR_ARITHMETIC
+
+#define LFS_INSTANTIATE_TYPED_SCALAR_COMPARISON(OP)                                   \
+    template void launch_unary_op_generic<float, unsigned char,                       \
+                                          ops::scalar_right_op<ops::OP, int32_t>>(    \
+        const float*, unsigned char*, size_t, ops::scalar_right_op<ops::OP, int32_t>, \
+        cudaStream_t);                                                                \
+    template void launch_unary_op_generic<int, unsigned char,                         \
+                                          ops::scalar_right_op<ops::OP, int32_t>>(    \
+        const int*, unsigned char*, size_t, ops::scalar_right_op<ops::OP, int32_t>,   \
+        cudaStream_t);                                                                \
+    template void launch_unary_op_generic<unsigned char, unsigned char,               \
+                                          ops::scalar_right_op<ops::OP, int32_t>>(    \
+        const unsigned char*, unsigned char*, size_t,                                 \
+        ops::scalar_right_op<ops::OP, int32_t>, cudaStream_t);
+
+    LFS_INSTANTIATE_TYPED_SCALAR_COMPARISON(equal_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_COMPARISON(not_equal_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_COMPARISON(less_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_COMPARISON(less_equal_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_COMPARISON(greater_op)
+    LFS_INSTANTIATE_TYPED_SCALAR_COMPARISON(greater_equal_op)
+
+#undef LFS_INSTANTIATE_TYPED_SCALAR_COMPARISON
+
     // Composed unary operations (expression template fusion) - test-specific
     template void launch_unary_op_generic<float, float, ops::composed_unary_op<ops::exp_op, ops::scalar_right_op<ops::mul_op, float>>>(
         const float*, float*, size_t, ops::composed_unary_op<ops::exp_op, ops::scalar_right_op<ops::mul_op, float>>, cudaStream_t);
@@ -2371,10 +2552,6 @@ namespace lfs::core::tensor_ops {
         const __half*, const __half*, __half*, size_t, ops::mul_op, cudaStream_t);
     template void launch_binary_op_generic<__half, __half, ops::div_op>(
         const __half*, const __half*, __half*, size_t, ops::div_op, cudaStream_t);
-    template void launch_binary_op_generic<__half, __half, ops::maximum_op>(
-        const __half*, const __half*, __half*, size_t, ops::maximum_op, cudaStream_t);
-    template void launch_binary_op_generic<__half, __half, ops::minimum_op>(
-        const __half*, const __half*, __half*, size_t, ops::minimum_op, cudaStream_t);
     template void launch_binary_op_generic<__half, __half, ops::pow_op>(
         const __half*, const __half*, __half*, size_t, ops::pow_op, cudaStream_t);
 
@@ -2387,10 +2564,6 @@ namespace lfs::core::tensor_ops {
         const int64_t*, const int64_t*, int64_t*, size_t, ops::mul_op, cudaStream_t);
     template void launch_binary_op_generic<int64_t, int64_t, ops::div_op>(
         const int64_t*, const int64_t*, int64_t*, size_t, ops::div_op, cudaStream_t);
-    template void launch_binary_op_generic<int64_t, int64_t, ops::maximum_op>(
-        const int64_t*, const int64_t*, int64_t*, size_t, ops::maximum_op, cudaStream_t);
-    template void launch_binary_op_generic<int64_t, int64_t, ops::minimum_op>(
-        const int64_t*, const int64_t*, int64_t*, size_t, ops::minimum_op, cudaStream_t);
     template void launch_binary_op_generic<int64_t, int64_t, ops::pow_op>(
         const int64_t*, const int64_t*, int64_t*, size_t, ops::pow_op, cudaStream_t);
     template void launch_binary_op_generic<int64_t, int64_t, ops::mod_op>(
@@ -2405,10 +2578,6 @@ namespace lfs::core::tensor_ops {
         const uint8_t*, const uint8_t*, uint8_t*, size_t, ops::mul_op, cudaStream_t);
     template void launch_binary_op_generic<uint8_t, uint8_t, ops::div_op>(
         const uint8_t*, const uint8_t*, uint8_t*, size_t, ops::div_op, cudaStream_t);
-    template void launch_binary_op_generic<uint8_t, uint8_t, ops::maximum_op>(
-        const uint8_t*, const uint8_t*, uint8_t*, size_t, ops::maximum_op, cudaStream_t);
-    template void launch_binary_op_generic<uint8_t, uint8_t, ops::minimum_op>(
-        const uint8_t*, const uint8_t*, uint8_t*, size_t, ops::minimum_op, cudaStream_t);
     template void launch_binary_op_generic<uint8_t, uint8_t, ops::pow_op>(
         const uint8_t*, const uint8_t*, uint8_t*, size_t, ops::pow_op, cudaStream_t);
 

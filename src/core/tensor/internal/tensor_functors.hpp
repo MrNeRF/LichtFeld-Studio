@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <type_traits>
 
 #ifndef M_PI
@@ -20,6 +22,52 @@
 
 namespace lfs::core {
     namespace ops {
+
+        HOST_DEVICE inline uint32_t float_bits(float value) {
+#ifdef __CUDA_ARCH__
+            return __float_as_uint(value);
+#else
+            return std::bit_cast<uint32_t>(value);
+#endif
+        }
+
+        HOST_DEVICE inline bool float_is_nan(float value) {
+            const uint32_t bits = float_bits(value);
+            return (bits & 0x7f800000U) == 0x7f800000U &&
+                   (bits & 0x007fffffU) != 0;
+        }
+
+        HOST_DEVICE inline bool float_is_finite(float value) {
+            return (float_bits(value) & 0x7f800000U) != 0x7f800000U;
+        }
+
+        HOST_DEVICE inline bool float_sign_bit(float value) {
+            return (float_bits(value) & 0x80000000U) != 0;
+        }
+
+        struct sort_less_op {
+            HOST_DEVICE bool operator()(float a, float b) const {
+                const bool a_nan = float_is_nan(a);
+                const bool b_nan = float_is_nan(b);
+                if (a_nan != b_nan)
+                    return !a_nan;
+                if (a_nan)
+                    return false;
+                return a < b;
+            }
+        };
+
+        struct sort_greater_op {
+            HOST_DEVICE bool operator()(float a, float b) const {
+                const bool a_nan = float_is_nan(a);
+                const bool b_nan = float_is_nan(b);
+                if (a_nan != b_nan)
+                    return a_nan;
+                if (a_nan)
+                    return false;
+                return a > b;
+            }
+        };
 
         // Helper for clamping (std::clamp not always available in CUDA)
         template <typename T>
@@ -62,7 +110,7 @@ namespace lfs::core {
         struct reciprocal_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
-                return T(1) / (x + T(1e-8));
+                return T(1) / x;
             }
         };
 
@@ -103,9 +151,9 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return logf(fmaxf(x, T(1e-10)));
+                return logf(x);
 #else
-                return std::log(std::max(x, T(1e-10)));
+                return std::log(x);
 #endif
             }
         };
@@ -114,9 +162,9 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return log2f(fmaxf(x, T(1e-10)));
+                return log2f(x);
 #else
-                return std::log2(std::max(x, T(1e-10)));
+                return std::log2(x);
 #endif
             }
         };
@@ -125,9 +173,9 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return log10f(fmaxf(x, T(1e-10)));
+                return log10f(x);
 #else
-                return std::log10(std::max(x, T(1e-10)));
+                return std::log10(x);
 #endif
             }
         };
@@ -147,9 +195,9 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return sqrtf(fmaxf(x, T(0)));
+                return sqrtf(x);
 #else
-                return std::sqrt(std::max(x, T(0)));
+                return std::sqrt(x);
 #endif
             }
         };
@@ -158,9 +206,9 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return rsqrtf(fmaxf(x, T(1e-10)));
+                return rsqrtf(x);
 #else
-                return T(1) / std::sqrt(std::max(x, T(1e-10)));
+                return T(1) / std::sqrt(x);
 #endif
             }
         };
@@ -297,9 +345,9 @@ namespace lfs::core {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
 #ifdef __CUDA_ARCH__
-                return fmaxf(x, T(0));
+                return isnan(static_cast<float>(x)) ? x : fmaxf(x, T(0));
 #else
-                return std::max(x, T(0));
+                return std::isnan(static_cast<float>(x)) ? x : std::max(x, T(0));
 #endif
             }
         };
@@ -364,11 +412,40 @@ namespace lfs::core {
                 if constexpr (std::is_integral_v<T>)
                     return x;
                 else {
+                    if constexpr (std::is_same_v<T, float>) {
+                        if (!float_is_finite(x))
+                            return x;
 #ifdef __CUDA_ARCH__
-                    return roundf(x);
+                        const T lower = floorf(x);
+                        const T fraction = x - lower;
+                        T rounded = fraction < T(0.5f)
+                                        ? lower
+                                    : fraction > T(0.5f)
+                                        ? lower + T(1)
+                                        : (fmodf(lower, T(2)) == T(0)
+                                               ? lower
+                                               : lower + T(1));
 #else
-                    return std::round(x);
+                        const T lower = std::floor(x);
+                        const T fraction = x - lower;
+                        T rounded = fraction < T(0.5f)
+                                        ? lower
+                                    : fraction > T(0.5f)
+                                        ? lower + T(1)
+                                        : (std::fmod(lower, T(2)) == T(0)
+                                               ? lower
+                                               : lower + T(1));
 #endif
+                        if (rounded == T(0) && float_sign_bit(x))
+                            return T(-0.0f);
+                        return rounded;
+                    } else {
+#ifdef __CUDA_ARCH__
+                        return nearbyint(x);
+#else
+                        return std::nearbyint(x);
+#endif
+                    }
                 }
             }
         };
@@ -491,9 +568,9 @@ namespace lfs::core {
         struct mod_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& a, const T& b) const {
-                if constexpr (std::is_integral_v<T>)
-                    return a % b;
-                else {
+                if constexpr (std::is_integral_v<T>) {
+                    return b == 0 ? T{0} : a % b;
+                } else {
 #ifdef __CUDA_ARCH__
                     return fmodf(a, b);
 #else
@@ -528,22 +605,60 @@ namespace lfs::core {
         struct maximum_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& a, const T& b) const {
+                if constexpr (std::is_floating_point_v<T>) {
 #ifdef __CUDA_ARCH__
-                return fmaxf(a, b);
+                    if constexpr (std::is_same_v<T, float>) {
+                        if (float_is_nan(a))
+                            return a;
+                        if (float_is_nan(b))
+                            return b;
+                        if (a == T(0) && b == T(0)) {
+                            return float_sign_bit(a) && float_sign_bit(b) ? T(-0.0f) : T(0.0f);
+                        }
+                    } else {
+                        if (isnan(a))
+                            return a;
+                        if (isnan(b))
+                            return b;
+                    }
 #else
-                return std::max(a, b);
+                    if (std::isnan(a))
+                        return a;
+                    if (std::isnan(b))
+                        return b;
 #endif
+                }
+                return a < b ? b : a;
             }
         };
 
         struct minimum_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& a, const T& b) const {
+                if constexpr (std::is_floating_point_v<T>) {
 #ifdef __CUDA_ARCH__
-                return fminf(a, b);
+                    if constexpr (std::is_same_v<T, float>) {
+                        if (float_is_nan(a))
+                            return a;
+                        if (float_is_nan(b))
+                            return b;
+                        if (a == T(0) && b == T(0)) {
+                            return float_sign_bit(a) || float_sign_bit(b) ? T(-0.0f) : T(0.0f);
+                        }
+                    } else {
+                        if (isnan(a))
+                            return a;
+                        if (isnan(b))
+                            return b;
+                    }
 #else
-                return std::min(a, b);
+                    if (std::isnan(a))
+                        return a;
+                    if (std::isnan(b))
+                        return b;
 #endif
+                }
+                return b < a ? b : a;
             }
         };
 
@@ -785,22 +900,48 @@ namespace lfs::core {
         struct max_reduce_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& a, const T& b) const {
-#ifdef __CUDA_ARCH__
-                return fmaxf(a, b);
-#else
-                return std::max(a, b);
-#endif
+                if constexpr (std::is_floating_point_v<T>) {
+                    if constexpr (std::is_same_v<T, float>) {
+                        if (float_is_nan(a))
+                            return a;
+                        if (float_is_nan(b))
+                            return b;
+                        if (a == T(0) && b == T(0)) {
+                            return float_sign_bit(a) && float_sign_bit(b) ? T(-0.0f) : T(0.0f);
+                        }
+                    } else {
+                        if (std::isnan(a))
+                            return a;
+                        if (std::isnan(b))
+                            return b;
+                    }
+                    return a < b ? b : a;
+                }
+                return a < b ? b : a;
             }
         };
 
         struct min_reduce_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& a, const T& b) const {
-#ifdef __CUDA_ARCH__
-                return fminf(a, b);
-#else
-                return std::min(a, b);
-#endif
+                if constexpr (std::is_floating_point_v<T>) {
+                    if constexpr (std::is_same_v<T, float>) {
+                        if (float_is_nan(a))
+                            return a;
+                        if (float_is_nan(b))
+                            return b;
+                        if (a == T(0) && b == T(0)) {
+                            return float_sign_bit(a) || float_sign_bit(b) ? T(-0.0f) : T(0.0f);
+                        }
+                    } else {
+                        if (std::isnan(a))
+                            return a;
+                        if (std::isnan(b))
+                            return b;
+                    }
+                    return b < a ? b : a;
+                }
+                return b < a ? b : a;
             }
         };
 
@@ -1138,8 +1279,11 @@ namespace lfs::core {
             HOST_DEVICE constexpr T operator()(size_t idx) const {
                 if (steps <= 1)
                     return start;
-                T t = static_cast<T>(idx) / static_cast<T>(steps - 1);
-                return start + t * (end - start);
+                const T step = (end - start) / static_cast<T>(steps - 1);
+                if (idx < steps / 2) {
+                    return start + step * static_cast<T>(idx);
+                }
+                return end - step * static_cast<T>(steps - idx - 1);
             }
         };
 

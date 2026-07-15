@@ -215,9 +215,9 @@ namespace {
         constexpr size_t width = 2;
         constexpr size_t height = 2;
 
-        // Simulate raw bottom-left-origin readback: the logical bottom row is bright.
+        // Simulate raw bottom-left-origin readback: the logical top row is stored last.
         for (size_t col = 0; col < width; ++col) {
-            ptr[0 * height * width + col * height + 0] = 10.0f;
+            ptr[0 * height * width + (height - 1) * width + col] = 10.0f;
         }
 
         return std::make_shared<lfs::core::Tensor>(std::move(image));

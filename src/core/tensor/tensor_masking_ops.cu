@@ -14,6 +14,7 @@
 
 // Thrust headers
 #include "core/assert.hpp"
+#include "core/tensor_fwd.hpp"
 #include <thrust/copy.h>
 #include <thrust/count.h>
 #include <thrust/device_ptr.h>
@@ -30,6 +31,27 @@
 #include <thrust/tuple.h>
 
 namespace lfs::core::tensor_ops {
+
+    inline constexpr size_t BINARY_BROADCAST_SHAPE_SLOTS = 3 * MAX_TENSOR_RANK;
+    inline constexpr size_t TERNARY_BROADCAST_SHAPE_SLOTS = 4 * MAX_TENSOR_RANK;
+
+    struct BinaryBroadcastShapes {
+        size_t values[BINARY_BROADCAST_SHAPE_SLOTS]{};
+    };
+
+    struct TernaryBroadcastShapes {
+        size_t values[TERNARY_BROADCAST_SHAPE_SLOTS]{};
+    };
+
+    BinaryBroadcastShapes pack_binary_broadcast_shapes(
+        const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
+        const size_t a_rank, const size_t b_rank, const size_t c_rank) {
+        BinaryBroadcastShapes shapes;
+        std::copy(a_shape, a_shape + a_rank, shapes.values);
+        std::copy(b_shape, b_shape + b_rank, shapes.values + MAX_TENSOR_RANK);
+        std::copy(c_shape, c_shape + c_rank, shapes.values + 2 * MAX_TENSOR_RANK);
+        return shapes;
+    }
 
     namespace {
         template <typename T>
@@ -94,7 +116,9 @@ namespace lfs::core::tensor_ops {
 
     // ============= Comparison Kernels (with broadcasting) =============
     __global__ void compare_eq_kernel(const float* a, const float* b, unsigned char* c,
-                                      const size_t* shapes, size_t info, size_t total) {
+                                      const BinaryBroadcastShapes shape_storage,
+                                      size_t info, size_t total) {
+        const size_t* shapes = shape_storage.values;
         size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= total)
             return;
@@ -107,14 +131,19 @@ namespace lfs::core::tensor_ops {
         if (fast_path) {
             c[idx] = (a[idx] == b[idx]) ? 1 : 0;
         } else {
-            size_t a_idx = compute_broadcast_index(idx, shapes, a_rank, shapes + 20, c_rank);
-            size_t b_idx = compute_broadcast_index(idx, shapes + 10, b_rank, shapes + 20, c_rank);
+            size_t a_idx = compute_broadcast_index(
+                idx, shapes, a_rank, shapes + 2 * MAX_TENSOR_RANK, c_rank);
+            size_t b_idx = compute_broadcast_index(
+                idx, shapes + MAX_TENSOR_RANK, b_rank,
+                shapes + 2 * MAX_TENSOR_RANK, c_rank);
             c[idx] = (a[a_idx] == b[b_idx]) ? 1 : 0;
         }
     }
 
     __global__ void compare_lt_kernel(const float* a, const float* b, unsigned char* c,
-                                      const size_t* shapes, size_t info, size_t total) {
+                                      const BinaryBroadcastShapes shape_storage,
+                                      size_t info, size_t total) {
+        const size_t* shapes = shape_storage.values;
         size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= total)
             return;
@@ -127,14 +156,19 @@ namespace lfs::core::tensor_ops {
         if (fast_path) {
             c[idx] = (a[idx] < b[idx]) ? 1 : 0;
         } else {
-            size_t a_idx = compute_broadcast_index(idx, shapes, a_rank, shapes + 20, c_rank);
-            size_t b_idx = compute_broadcast_index(idx, shapes + 10, b_rank, shapes + 20, c_rank);
+            size_t a_idx = compute_broadcast_index(
+                idx, shapes, a_rank, shapes + 2 * MAX_TENSOR_RANK, c_rank);
+            size_t b_idx = compute_broadcast_index(
+                idx, shapes + MAX_TENSOR_RANK, b_rank,
+                shapes + 2 * MAX_TENSOR_RANK, c_rank);
             c[idx] = (a[a_idx] < b[b_idx]) ? 1 : 0;
         }
     }
 
     __global__ void compare_gt_kernel(const float* a, const float* b, unsigned char* c,
-                                      const size_t* shapes, size_t info, size_t total) {
+                                      const BinaryBroadcastShapes shape_storage,
+                                      size_t info, size_t total) {
+        const size_t* shapes = shape_storage.values;
         size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= total)
             return;
@@ -147,8 +181,11 @@ namespace lfs::core::tensor_ops {
         if (fast_path) {
             c[idx] = (a[idx] > b[idx]) ? 1 : 0;
         } else {
-            size_t a_idx = compute_broadcast_index(idx, shapes, a_rank, shapes + 20, c_rank);
-            size_t b_idx = compute_broadcast_index(idx, shapes + 10, b_rank, shapes + 20, c_rank);
+            size_t a_idx = compute_broadcast_index(
+                idx, shapes, a_rank, shapes + 2 * MAX_TENSOR_RANK, c_rank);
+            size_t b_idx = compute_broadcast_index(
+                idx, shapes + MAX_TENSOR_RANK, b_rank,
+                shapes + 2 * MAX_TENSOR_RANK, c_rank);
             c[idx] = (a[a_idx] > b[b_idx]) ? 1 : 0;
         }
     }
@@ -177,8 +214,9 @@ namespace lfs::core::tensor_ops {
 
     // ============= Logical Operation Kernels (with broadcasting) =============
     __global__ void logical_and_kernel(const unsigned char* a, const unsigned char* b,
-                                       unsigned char* c, const size_t* shapes,
+                                       unsigned char* c, const BinaryBroadcastShapes shape_storage,
                                        size_t info, size_t total) {
+        const size_t* shapes = shape_storage.values;
         size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= total)
             return;
@@ -191,15 +229,19 @@ namespace lfs::core::tensor_ops {
         if (fast_path) {
             c[idx] = (a[idx] && b[idx]) ? 1 : 0;
         } else {
-            size_t a_idx = compute_broadcast_index(idx, shapes, a_rank, shapes + 20, c_rank);
-            size_t b_idx = compute_broadcast_index(idx, shapes + 10, b_rank, shapes + 20, c_rank);
+            size_t a_idx = compute_broadcast_index(
+                idx, shapes, a_rank, shapes + 2 * MAX_TENSOR_RANK, c_rank);
+            size_t b_idx = compute_broadcast_index(
+                idx, shapes + MAX_TENSOR_RANK, b_rank,
+                shapes + 2 * MAX_TENSOR_RANK, c_rank);
             c[idx] = (a[a_idx] && b[b_idx]) ? 1 : 0;
         }
     }
 
     __global__ void logical_or_kernel(const unsigned char* a, const unsigned char* b,
-                                      unsigned char* c, const size_t* shapes,
+                                      unsigned char* c, const BinaryBroadcastShapes shape_storage,
                                       size_t info, size_t total) {
+        const size_t* shapes = shape_storage.values;
         size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= total)
             return;
@@ -212,15 +254,19 @@ namespace lfs::core::tensor_ops {
         if (fast_path) {
             c[idx] = (a[idx] || b[idx]) ? 1 : 0;
         } else {
-            size_t a_idx = compute_broadcast_index(idx, shapes, a_rank, shapes + 20, c_rank);
-            size_t b_idx = compute_broadcast_index(idx, shapes + 10, b_rank, shapes + 20, c_rank);
+            size_t a_idx = compute_broadcast_index(
+                idx, shapes, a_rank, shapes + 2 * MAX_TENSOR_RANK, c_rank);
+            size_t b_idx = compute_broadcast_index(
+                idx, shapes + MAX_TENSOR_RANK, b_rank,
+                shapes + 2 * MAX_TENSOR_RANK, c_rank);
             c[idx] = (a[a_idx] || b[b_idx]) ? 1 : 0;
         }
     }
 
     __global__ void logical_xor_kernel(const unsigned char* a, const unsigned char* b,
-                                       unsigned char* c, const size_t* shapes,
+                                       unsigned char* c, const BinaryBroadcastShapes shape_storage,
                                        size_t info, size_t total) {
+        const size_t* shapes = shape_storage.values;
         size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= total)
             return;
@@ -233,8 +279,11 @@ namespace lfs::core::tensor_ops {
         if (fast_path) {
             c[idx] = ((a[idx] != 0) != (b[idx] != 0)) ? 1 : 0;
         } else {
-            size_t a_idx = compute_broadcast_index(idx, shapes, a_rank, shapes + 20, c_rank);
-            size_t b_idx = compute_broadcast_index(idx, shapes + 10, b_rank, shapes + 20, c_rank);
+            size_t a_idx = compute_broadcast_index(
+                idx, shapes, a_rank, shapes + 2 * MAX_TENSOR_RANK, c_rank);
+            size_t b_idx = compute_broadcast_index(
+                idx, shapes + MAX_TENSOR_RANK, b_rank,
+                shapes + 2 * MAX_TENSOR_RANK, c_rank);
             c[idx] = ((a[a_idx] != 0) != (b[b_idx] != 0)) ? 1 : 0;
         }
     }
@@ -251,12 +300,11 @@ namespace lfs::core::tensor_ops {
                            const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
                            size_t a_rank, size_t b_rank, size_t c_rank,
                            size_t c_elements, cudaStream_t stream) {
-        static thread_local CudaDeviceMemory<size_t> shapes(30);
-        size_t h_shapes[30] = {0};
-        std::copy(a_shape, a_shape + a_rank, h_shapes);
-        std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
-        std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
+        LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK && b_rank <= MAX_TENSOR_RANK &&
+                           c_rank <= MAX_TENSOR_RANK,
+                       "comparison broadcast rank exceeds MAX_TENSOR_RANK");
+        const auto shapes = pack_binary_broadcast_shapes(
+            a_shape, b_shape, c_shape, a_rank, b_rank, c_rank);
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -264,19 +312,18 @@ namespace lfs::core::tensor_ops {
         size_t info = a_rank | (b_rank << 5) | (c_rank << 10) | (fast_path << 15);
 
         int blocks = (c_elements + 255) / 256;
-        compare_eq_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes.get(), info, c_elements);
+        compare_eq_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
     }
 
     void launch_compare_lt(const float* a, const float* b, unsigned char* c,
                            const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
                            size_t a_rank, size_t b_rank, size_t c_rank,
                            size_t c_elements, cudaStream_t stream) {
-        static thread_local CudaDeviceMemory<size_t> shapes(30);
-        size_t h_shapes[30] = {0};
-        std::copy(a_shape, a_shape + a_rank, h_shapes);
-        std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
-        std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
+        LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK && b_rank <= MAX_TENSOR_RANK &&
+                           c_rank <= MAX_TENSOR_RANK,
+                       "comparison broadcast rank exceeds MAX_TENSOR_RANK");
+        const auto shapes = pack_binary_broadcast_shapes(
+            a_shape, b_shape, c_shape, a_rank, b_rank, c_rank);
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -284,19 +331,18 @@ namespace lfs::core::tensor_ops {
         size_t info = a_rank | (b_rank << 5) | (c_rank << 10) | (fast_path << 15);
 
         int blocks = (c_elements + 255) / 256;
-        compare_lt_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes.get(), info, c_elements);
+        compare_lt_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
     }
 
     void launch_compare_gt(const float* a, const float* b, unsigned char* c,
                            const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
                            size_t a_rank, size_t b_rank, size_t c_rank,
                            size_t c_elements, cudaStream_t stream) {
-        static thread_local CudaDeviceMemory<size_t> shapes(30);
-        size_t h_shapes[30] = {0};
-        std::copy(a_shape, a_shape + a_rank, h_shapes);
-        std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
-        std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
+        LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK && b_rank <= MAX_TENSOR_RANK &&
+                           c_rank <= MAX_TENSOR_RANK,
+                       "comparison broadcast rank exceeds MAX_TENSOR_RANK");
+        const auto shapes = pack_binary_broadcast_shapes(
+            a_shape, b_shape, c_shape, a_rank, b_rank, c_rank);
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -304,19 +350,18 @@ namespace lfs::core::tensor_ops {
         size_t info = a_rank | (b_rank << 5) | (c_rank << 10) | (fast_path << 15);
 
         int blocks = (c_elements + 255) / 256;
-        compare_gt_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes.get(), info, c_elements);
+        compare_gt_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
     }
 
     void launch_logical_and(const unsigned char* a, const unsigned char* b, unsigned char* c,
                             const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
                             size_t a_rank, size_t b_rank, size_t c_rank,
                             size_t c_elements, cudaStream_t stream) {
-        static thread_local CudaDeviceMemory<size_t> shapes(30);
-        size_t h_shapes[30] = {0};
-        std::copy(a_shape, a_shape + a_rank, h_shapes);
-        std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
-        std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
+        LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK && b_rank <= MAX_TENSOR_RANK &&
+                           c_rank <= MAX_TENSOR_RANK,
+                       "logical broadcast rank exceeds MAX_TENSOR_RANK");
+        const auto shapes = pack_binary_broadcast_shapes(
+            a_shape, b_shape, c_shape, a_rank, b_rank, c_rank);
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -324,19 +369,18 @@ namespace lfs::core::tensor_ops {
         size_t info = a_rank | (b_rank << 5) | (c_rank << 10) | (fast_path << 15);
 
         int blocks = (c_elements + 255) / 256;
-        logical_and_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes.get(), info, c_elements);
+        logical_and_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
     }
 
     void launch_logical_or(const unsigned char* a, const unsigned char* b, unsigned char* c,
                            const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
                            size_t a_rank, size_t b_rank, size_t c_rank,
                            size_t c_elements, cudaStream_t stream) {
-        static thread_local CudaDeviceMemory<size_t> shapes(30);
-        size_t h_shapes[30] = {0};
-        std::copy(a_shape, a_shape + a_rank, h_shapes);
-        std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
-        std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
+        LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK && b_rank <= MAX_TENSOR_RANK &&
+                           c_rank <= MAX_TENSOR_RANK,
+                       "logical broadcast rank exceeds MAX_TENSOR_RANK");
+        const auto shapes = pack_binary_broadcast_shapes(
+            a_shape, b_shape, c_shape, a_rank, b_rank, c_rank);
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -344,19 +388,18 @@ namespace lfs::core::tensor_ops {
         size_t info = a_rank | (b_rank << 5) | (c_rank << 10) | (fast_path << 15);
 
         int blocks = (c_elements + 255) / 256;
-        logical_or_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes.get(), info, c_elements);
+        logical_or_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
     }
 
     void launch_logical_xor(const unsigned char* a, const unsigned char* b, unsigned char* c,
                             const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
                             size_t a_rank, size_t b_rank, size_t c_rank,
                             size_t c_elements, cudaStream_t stream) {
-        static thread_local CudaDeviceMemory<size_t> shapes(30);
-        size_t h_shapes[30] = {0};
-        std::copy(a_shape, a_shape + a_rank, h_shapes);
-        std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
-        std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
+        LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK && b_rank <= MAX_TENSOR_RANK &&
+                           c_rank <= MAX_TENSOR_RANK,
+                       "logical broadcast rank exceeds MAX_TENSOR_RANK");
+        const auto shapes = pack_binary_broadcast_shapes(
+            a_shape, b_shape, c_shape, a_rank, b_rank, c_rank);
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -364,7 +407,7 @@ namespace lfs::core::tensor_ops {
         size_t info = a_rank | (b_rank << 5) | (c_rank << 10) | (fast_path << 15);
 
         int blocks = (c_elements + 255) / 256;
-        logical_xor_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes.get(), info, c_elements);
+        logical_xor_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
     }
 
     // ============= Masking Operations =============
@@ -469,17 +512,23 @@ namespace lfs::core::tensor_ops {
 
     // ============= Where Operation =============
     __global__ void where_kernel(const unsigned char* cond, const float* x, const float* y,
-                                 float* r, const size_t* shapes,
+                                 float* r, const TernaryBroadcastShapes shape_storage,
                                  size_t cr, size_t xr, size_t yr, size_t rr, size_t n) {
+        const size_t* shapes = shape_storage.values;
         // Support both 1D and 2D grids for large arrays
         size_t block_id = blockIdx.y * gridDim.x + blockIdx.x;
         size_t idx = block_id * blockDim.x + threadIdx.x;
         if (idx >= n)
             return;
 
-        size_t c_idx = compute_broadcast_index(idx, shapes, cr, shapes + 30, rr);
-        size_t x_idx = compute_broadcast_index(idx, shapes + 10, xr, shapes + 30, rr);
-        size_t y_idx = compute_broadcast_index(idx, shapes + 20, yr, shapes + 30, rr);
+        size_t c_idx = compute_broadcast_index(
+            idx, shapes, cr, shapes + 3 * MAX_TENSOR_RANK, rr);
+        size_t x_idx = compute_broadcast_index(
+            idx, shapes + MAX_TENSOR_RANK, xr,
+            shapes + 3 * MAX_TENSOR_RANK, rr);
+        size_t y_idx = compute_broadcast_index(
+            idx, shapes + 2 * MAX_TENSOR_RANK, yr,
+            shapes + 3 * MAX_TENSOR_RANK, rr);
 
         r[idx] = cond[c_idx] ? x[x_idx] : y[y_idx];
     }
@@ -490,13 +539,14 @@ namespace lfs::core::tensor_ops {
                       size_t cond_rank, size_t x_rank, size_t y_rank, size_t r_rank,
                       size_t total, cudaStream_t stream) {
 
-        static thread_local CudaDeviceMemory<size_t> shapes(40);
-        size_t h_shapes[40] = {0};
-        std::copy(cond_shape, cond_shape + cond_rank, h_shapes);
-        std::copy(x_shape, x_shape + x_rank, h_shapes + 10);
-        std::copy(y_shape, y_shape + y_rank, h_shapes + 20);
-        std::copy(r_shape, r_shape + r_rank, h_shapes + 30);
-        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 40));
+        LFS_ASSERT_MSG(cond_rank <= MAX_TENSOR_RANK && x_rank <= MAX_TENSOR_RANK &&
+                           y_rank <= MAX_TENSOR_RANK && r_rank <= MAX_TENSOR_RANK,
+                       "where rank exceeds MAX_TENSOR_RANK");
+        TernaryBroadcastShapes shapes;
+        std::copy(cond_shape, cond_shape + cond_rank, shapes.values);
+        std::copy(x_shape, x_shape + x_rank, shapes.values + MAX_TENSOR_RANK);
+        std::copy(y_shape, y_shape + y_rank, shapes.values + 2 * MAX_TENSOR_RANK);
+        std::copy(r_shape, r_shape + r_rank, shapes.values + 3 * MAX_TENSOR_RANK);
 
         // Use 2D grid for large arrays to avoid exceeding grid dimension limits
         size_t num_blocks = (total + 255) / 256;
@@ -504,12 +554,12 @@ namespace lfs::core::tensor_ops {
 
         if (num_blocks <= max_blocks_x) {
             where_kernel<<<num_blocks, 256, 0, stream>>>(
-                cond, x, y, r, shapes.get(), cond_rank, x_rank, y_rank, r_rank, total);
+                cond, x, y, r, shapes, cond_rank, x_rank, y_rank, r_rank, total);
         } else {
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             where_kernel<<<grid, 256, 0, stream>>>(
-                cond, x, y, r, shapes.get(), cond_rank, x_rank, y_rank, r_rank, total);
+                cond, x, y, r, shapes, cond_rank, x_rank, y_rank, r_rank, total);
         }
     }
 
@@ -744,19 +794,19 @@ namespace lfs::core::tensor_ops {
         if (tid >= total)
             return;
 
-        size_t in_strides[10];
+        size_t in_strides[MAX_TENSOR_RANK];
         in_strides[in_rank - 1] = 1;
         for (int i = in_rank - 2; i >= 0; --i) {
             in_strides[i] = in_strides[i + 1] * in_shape[i + 1];
         }
 
-        size_t out_strides[10];
+        size_t out_strides[MAX_TENSOR_RANK];
         out_strides[idx_rank - 1] = 1;
         for (int i = idx_rank - 2; i >= 0; --i) {
             out_strides[i] = out_strides[i + 1] * idx_shape[i + 1];
         }
 
-        size_t out_coords[10] = {0};
+        size_t out_coords[MAX_TENSOR_RANK] = {0};
         size_t temp = tid;
         for (size_t d = 0; d < idx_rank; ++d) {
             out_coords[d] = temp / out_strides[d];
@@ -818,105 +868,39 @@ namespace lfs::core::tensor_ops {
     void launch_gather(const float* in, const int* idx, float* out,
                        const size_t* in_shape, const size_t* idx_shape,
                        size_t rank, int dim, size_t total, int boundary, cudaStream_t stream) {
+        LFS_ASSERT_MSG(rank > 0 && rank <= MAX_TENSOR_RANK,
+                       "gather rank exceeds MAX_TENSOR_RANK");
         if (total == 0) {
             return;
         }
-        CudaDeviceMemory<size_t> d_in_shape(10);
-        CudaDeviceMemory<size_t> d_idx_shape(10);
-
-        size_t h_in_shape[10] = {0};
-        size_t h_idx_shape[10] = {0};
-
-        size_t idx_rank = rank;
-        size_t idx_elements = 1;
-        for (size_t i = 0; i < rank; ++i) {
-            if (idx_shape[i] > 0) {
-                h_idx_shape[i] = idx_shape[i];
-                idx_elements *= idx_shape[i];
-            } else {
-                break;
-            }
-        }
-
-        idx_rank = 0;
-        size_t check_elements = 1;
-        for (size_t i = 0; i < 10; ++i) {
-            if (idx_shape[i] > 0) {
-                check_elements *= idx_shape[i];
-                idx_rank++;
-                if (check_elements == total)
-                    break;
-            } else {
-                break;
-            }
-        }
-
-        if (idx_rank == 0)
-            idx_rank = 1;
-
-        for (size_t i = 0; i < rank; ++i) {
-            h_in_shape[i] = in_shape[i];
-        }
-
-        LFS_CUDA_CHECK(d_in_shape.copy_from_host(h_in_shape, 10));
-        LFS_CUDA_CHECK(d_idx_shape.copy_from_host(h_idx_shape, 10));
+        CudaDeviceMemory<size_t> d_in_shape(rank);
+        CudaDeviceMemory<size_t> d_idx_shape(rank);
+        LFS_CUDA_CHECK(d_in_shape.copy_from_host(in_shape, rank));
+        LFS_CUDA_CHECK(d_idx_shape.copy_from_host(idx_shape, rank));
 
         int blocks = (total + 255) / 256;
         gather_kernel<float><<<blocks, 256, 0, stream>>>(
             in, idx, out, d_in_shape.get(), d_idx_shape.get(),
-            rank, idx_rank, dim, total, boundary);
+            rank, rank, dim, total, boundary);
     }
 
     void launch_gather(const int64_t* in, const int* idx, int64_t* out,
                        const size_t* in_shape, const size_t* idx_shape,
                        size_t rank, int dim, size_t total, int boundary, cudaStream_t stream) {
+        LFS_ASSERT_MSG(rank > 0 && rank <= MAX_TENSOR_RANK,
+                       "gather rank exceeds MAX_TENSOR_RANK");
         if (total == 0) {
             return;
         }
-        CudaDeviceMemory<size_t> d_in_shape(10);
-        CudaDeviceMemory<size_t> d_idx_shape(10);
-
-        size_t h_in_shape[10] = {0};
-        size_t h_idx_shape[10] = {0};
-
-        size_t idx_rank = rank;
-        size_t idx_elements = 1;
-        for (size_t i = 0; i < rank; ++i) {
-            if (idx_shape[i] > 0) {
-                h_idx_shape[i] = idx_shape[i];
-                idx_elements *= idx_shape[i];
-            } else {
-                break;
-            }
-        }
-
-        idx_rank = 0;
-        size_t check_elements = 1;
-        for (size_t i = 0; i < 10; ++i) {
-            if (idx_shape[i] > 0) {
-                check_elements *= idx_shape[i];
-                idx_rank++;
-                if (check_elements == total)
-                    break;
-            } else {
-                break;
-            }
-        }
-
-        if (idx_rank == 0)
-            idx_rank = 1;
-
-        for (size_t i = 0; i < rank; ++i) {
-            h_in_shape[i] = in_shape[i];
-        }
-
-        LFS_CUDA_CHECK(d_in_shape.copy_from_host(h_in_shape, 10));
-        LFS_CUDA_CHECK(d_idx_shape.copy_from_host(h_idx_shape, 10));
+        CudaDeviceMemory<size_t> d_in_shape(rank);
+        CudaDeviceMemory<size_t> d_idx_shape(rank);
+        LFS_CUDA_CHECK(d_in_shape.copy_from_host(in_shape, rank));
+        LFS_CUDA_CHECK(d_idx_shape.copy_from_host(idx_shape, rank));
 
         int blocks = (total + 255) / 256;
         gather_kernel<int64_t><<<blocks, 256, 0, stream>>>(
             in, idx, out, d_in_shape.get(), d_idx_shape.get(),
-            rank, idx_rank, dim, total, boundary);
+            rank, rank, dim, total, boundary);
     }
 
     void launch_take(const float* in, const int* idx, float* out,
@@ -1009,6 +993,8 @@ namespace lfs::core::tensor_ops {
     void launch_scatter(T* out, const int* idx, const T* in,
                         const size_t* out_shape, const size_t* in_shape,
                         size_t rank, int dim, size_t /*total*/, int mode, cudaStream_t stream) {
+        LFS_ASSERT_MSG(rank > 0 && rank <= MAX_TENSOR_RANK,
+                       "scatter rank exceeds MAX_TENSOR_RANK");
         size_t outer = 1, inner = 1;
         for (int i = 0; i < dim; ++i)
             outer *= out_shape[i];
@@ -1039,7 +1025,7 @@ namespace lfs::core::tensor_ops {
         auto val_ptr = thrust::device_pointer_cast(val_buffer.get());
         thrust::fill(thrust::cuda::par.on(stream), val_ptr, val_ptr + n_idx, val);
 
-        size_t in_shape[10] = {0};
+        size_t in_shape[MAX_TENSOR_RANK] = {0};
         std::copy(shape, shape + rank, in_shape);
         in_shape[dim] = n_idx;
         launch_scatter<T>(data, idx, val_buffer.get(), shape, in_shape, rank, dim, n_idx, 0, stream);
@@ -1049,7 +1035,7 @@ namespace lfs::core::tensor_ops {
     void launch_index_copy(T* dst, const int* idx, const T* src,
                            const size_t* shape, size_t rank, int dim,
                            size_t n_idx, cudaStream_t stream) {
-        size_t in_shape[10] = {0};
+        size_t in_shape[MAX_TENSOR_RANK] = {0};
         std::copy(shape, shape + rank, in_shape);
         in_shape[dim] = n_idx;
         launch_scatter<T>(dst, idx, src, shape, in_shape, rank, dim, n_idx, 0, stream);
@@ -1059,7 +1045,7 @@ namespace lfs::core::tensor_ops {
     void launch_index_add(T* dst, const int* idx, const T* src,
                           const size_t* shape, size_t rank, int dim,
                           size_t n_idx, cudaStream_t stream) {
-        size_t in_shape[10] = {0};
+        size_t in_shape[MAX_TENSOR_RANK] = {0};
         std::copy(shape, shape + rank, in_shape);
         in_shape[dim] = n_idx;
         launch_scatter<T>(dst, idx, src, shape, in_shape, rank, dim, n_idx, 1, stream);

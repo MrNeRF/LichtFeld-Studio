@@ -150,16 +150,13 @@ TEST_F(TensorReductionTest, Mean) {
     EXPECT_FLOAT_EQ(custom_mean, 6.0f);
 }
 
-TEST_F(TensorReductionTest, Int32MeanPreservesDtypeAndTruncates) {
+TEST_F(TensorReductionTest, Int32MeanRejectsLikeTorch) {
     for (const auto device : {Device::CPU, Device::CUDA}) {
         const auto values = Tensor::from_vector(
                                 std::vector<int>{1, 2, 3, 4}, {4}, Device::CPU)
                                 .to(device);
 
-        const auto mean = values.mean();
-
-        EXPECT_EQ(mean.dtype(), DataType::Int32) << device_name(device);
-        EXPECT_EQ(mean.item<int>(), 2) << device_name(device);
+        EXPECT_THROW(static_cast<void>(values.mean()), std::exception) << device_name(device);
     }
 }
 

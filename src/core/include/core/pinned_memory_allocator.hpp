@@ -74,6 +74,9 @@ namespace lfs::core {
          */
         void record_stream(void* ptr, cudaStream_t stream);
 
+        /** Returns whether an active allocation can be read directly by CUDA kernels. */
+        bool is_cuda_host_allocation(const void* ptr) const;
+
         /**
          * @brief Severs references to `stream` before it is destroyed: waits for
          * its pending work, then drops it from all recorded uses.

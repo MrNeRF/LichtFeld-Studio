@@ -508,6 +508,15 @@ namespace lfs::core {
         }
     }
 
+    bool PinnedMemoryAllocator::is_cuda_host_allocation(const void* ptr) const {
+        if (!ptr) {
+            return false;
+        }
+        std::lock_guard lock(mutex_);
+        const auto it = allocated_blocks_.find(const_cast<void*>(ptr));
+        return it != allocated_blocks_.end() && it->second.backend == Backend::CudaHost;
+    }
+
     void PinnedMemoryAllocator::release_stream(const cudaStream_t stream) {
         if (!stream) {
             return;
