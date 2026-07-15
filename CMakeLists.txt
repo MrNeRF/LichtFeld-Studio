@@ -171,9 +171,6 @@ configure_file(
     @ONLY
 )
 
-# Setup
-get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
-
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
@@ -221,29 +218,91 @@ endif()
 # compiler benchmarks or when diagnosing a launcher-specific problem.
 option(ENABLE_COMPILER_CACHE "Auto-detect and use sccache/ccache compiler launchers" ON)
 if(ENABLE_COMPILER_CACHE)
+    if(NOT WIN32 AND
+       NOT MSVC AND
+       CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
+        option(COMPILER_CACHE_PATH_INDEPENDENT
+            "Normalize checkout-local compiler paths for cross-worktree cache hits in Release/MinSizeRel builds"
+            ON)
+    endif()
+
     # CUDA caching disabled on Windows due to nvcc compatibility issues.
     find_program(SCCACHE_PROGRAM sccache)
     find_program(CCACHE_PROGRAM ccache)
     if(SCCACHE_PROGRAM)
-        set(CMAKE_C_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-        set(CMAKE_CXX_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-        if(WIN32)
-            message(STATUS "Compiler cache: sccache (C/C++ only, CUDA uncached)")
-        else()
-            set(CMAKE_CUDA_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-            message(STATUS "Compiler cache: sccache")
-        endif()
+        set(_lfs_compiler_cache_program "${SCCACHE_PROGRAM}")
+        set(_lfs_compiler_cache_name "sccache")
     elseif(CCACHE_PROGRAM)
-        set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-        set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-        if(WIN32)
-            message(STATUS "Compiler cache: ccache (C/C++ only, CUDA uncached)")
-        else()
-            set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-            message(STATUS "Compiler cache: ccache")
-        endif()
+        set(_lfs_compiler_cache_program "${CCACHE_PROGRAM}")
+        set(_lfs_compiler_cache_name "ccache")
     else()
         message(STATUS "Compiler cache: requested, but no launcher was found")
+    endif()
+
+    if(_lfs_compiler_cache_program)
+        set(_lfs_compiler_cache_launcher "${_lfs_compiler_cache_program}")
+        set(_lfs_compiler_cache_paths_normalized OFF)
+
+        # MSVC has no equivalent prefix-map support, and the existing Windows
+        # launcher behavior (including uncached CUDA) must remain unchanged.
+        if(NOT WIN32 AND
+           NOT MSVC AND
+           CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" AND
+           COMPILER_CACHE_PATH_INDEPENDENT AND
+           NOT _IS_MULTI_CONFIG AND
+           CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
+            # Prefix maps normalize __FILE__, but older cache versions still
+            # hash absolute input paths and the map argument itself.
+            set(_lfs_compiler_cache_source_alias "${CMAKE_BINARY_DIR}/.lfs-cache-source")
+            if(EXISTS "${_lfs_compiler_cache_source_alias}" OR
+               IS_SYMLINK "${_lfs_compiler_cache_source_alias}")
+                file(REMOVE "${_lfs_compiler_cache_source_alias}")
+            endif()
+            file(CREATE_LINK
+                "${CMAKE_SOURCE_DIR}"
+                "${_lfs_compiler_cache_source_alias}"
+                SYMBOLIC
+                RESULT _lfs_compiler_cache_link_result)
+            if(NOT _lfs_compiler_cache_link_result STREQUAL "0")
+                message(FATAL_ERROR
+                    "Failed to create compiler-cache source alias: ${_lfs_compiler_cache_link_result}")
+            endif()
+
+            set(_lfs_compiler_cache_launcher
+                "${CMAKE_COMMAND}"
+                "-DLFS_COMPILER_CACHE_PROGRAM=${_lfs_compiler_cache_program}"
+                "-DLFS_COMPILER_CACHE_SOURCE_ROOT=${CMAKE_SOURCE_DIR}"
+                "-DLFS_COMPILER_CACHE_BINARY_ROOT=${CMAKE_BINARY_DIR}"
+                -P "${CMAKE_SOURCE_DIR}/cmake/CompilerCacheLauncher.cmake"
+                --)
+
+            add_compile_options(
+                "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-ffile-prefix-map=.lfs-cache-source=.>"
+                "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-ffile-prefix-map=.lfs-cache-source=.>")
+            set(_lfs_compiler_cache_paths_normalized ON)
+        endif()
+
+        set(CMAKE_C_COMPILER_LAUNCHER ${_lfs_compiler_cache_launcher})
+        set(CMAKE_CXX_COMPILER_LAUNCHER ${_lfs_compiler_cache_launcher})
+        if(WIN32)
+            message(STATUS "Compiler cache: ${_lfs_compiler_cache_name} (C/C++ only, CUDA uncached)")
+        else()
+            # Keep the existing CUDA launcher unchanged. sccache decomposes
+            # nvcc compilations after canonicalizing their input path, so the
+            # C/C++ source alias does not provide cross-worktree CUDA hits.
+            set(CMAKE_CUDA_COMPILER_LAUNCHER "${_lfs_compiler_cache_program}")
+            message(STATUS "Compiler cache: ${_lfs_compiler_cache_name}")
+            if(_lfs_compiler_cache_paths_normalized)
+                message(STATUS "Compiler cache: C/C++ checkout-local paths normalized")
+            endif()
+        endif()
+
+        unset(_lfs_compiler_cache_launcher)
+        unset(_lfs_compiler_cache_link_result)
+        unset(_lfs_compiler_cache_name)
+        unset(_lfs_compiler_cache_paths_normalized)
+        unset(_lfs_compiler_cache_program)
+        unset(_lfs_compiler_cache_source_alias)
     endif()
 else()
     message(STATUS "Compiler cache: disabled")
@@ -502,10 +561,6 @@ configure_file(
         "${CMAKE_CURRENT_BINARY_DIR}/include/config.h"
         @ONLY
 )
-
-
-# Project-wide definitions
-add_definitions(-DPROJECT_ROOT_PATH="${PROJ_ROOT_DIR}")
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
