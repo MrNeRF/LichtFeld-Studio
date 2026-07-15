@@ -17,7 +17,8 @@ namespace gsplat_lfs {
         scalar_t* scales,       // [N, 3] - modified in-place
         const int* ratios,      // [N] - integer split counts
         const scalar_t* binoms, // [n_max, n_max]
-        int n_max) {
+        int n_max,
+        float min_opacity) {
         int idx = threadIdx.x + blockIdx.x * blockDim.x;
         if (idx >= N)
             return;
@@ -29,7 +30,7 @@ namespace gsplat_lfs {
         float old_opacity = opacities[idx];
 
         // Compute new opacity
-        float new_opacity = 1.0f - powf(1.0f - old_opacity, 1.0f / n_idx);
+        float new_opacity = fmaxf(1.0f - powf(1.0f - old_opacity, 1.0f / n_idx), min_opacity);
 
         // Compute denominator sum for scale
         for (int i = 1; i <= n_idx; ++i) {
@@ -58,6 +59,7 @@ namespace gsplat_lfs {
         const float* binoms,   // [n_max, n_max]
         int64_t N,
         int32_t n_max,
+        float min_opacity,
         cudaStream_t stream) {
         int64_t n_elements = N;
         dim3 threads(256);
@@ -76,7 +78,8 @@ namespace gsplat_lfs {
                 scales,
                 ratios,
                 binoms,
-                n_max);
+                n_max,
+                min_opacity);
     }
 
     inline __device__ mat3 raw_quat_to_rotmat(const vec4 raw_quat) {

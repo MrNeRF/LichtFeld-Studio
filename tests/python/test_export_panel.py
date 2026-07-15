@@ -201,6 +201,9 @@ def test_export_panel_progress_updates_bound_value(export_panel_module):
     assert panel._progress_value == "0.5"
     assert panel._cached_export_state["stage"] == "writing"
     assert panel._handle.dirty_fields == [
+        "__update__",
+        "show_form",
+        "show_progress",
         "progress_value",
         "progress_title",
         "progress_pct",

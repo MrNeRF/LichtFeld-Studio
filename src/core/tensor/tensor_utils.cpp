@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "internal/cuda_stream_context.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include <algorithm>
@@ -29,9 +30,11 @@ namespace lfs::core {
 
         // Generate on CPU first
         std::vector<float> data(steps);
-        float step = (end - start) / (steps - 1);
+        const float step = (end - start) / static_cast<float>(steps - 1);
         for (size_t i = 0; i < steps; ++i) {
-            data[i] = start + i * step;
+            data[i] = i < steps / 2
+                          ? start + step * static_cast<float>(i)
+                          : end - step * static_cast<float>(steps - i - 1);
         }
 
         if (device == Device::CUDA) {
@@ -52,6 +55,12 @@ namespace lfs::core {
         LFS_ASSERT_MSG(diagonal.dtype() == DataType::Float32,
                        "diag currently supports only Float32");
 
+        Tensor materialized;
+        const Tensor& dense_diagonal = diagonal.contiguous_read(materialized);
+        if (&dense_diagonal != &diagonal) {
+            return diag(dense_diagonal);
+        }
+
         size_t n = diagonal.numel();
         auto result = Tensor::zeros({n, n}, diagonal.device());
         if (n == 0) {
@@ -59,8 +68,9 @@ namespace lfs::core {
         }
 
         if (diagonal.device() == Device::CUDA) {
+            prepare_inputs_for_stream({&dense_diagonal}, result.stream());
             LFS_CUDA_CHECK(cudaGetLastError());
-            tensor_ops::launch_diag(diagonal.ptr<float>(), result.ptr<float>(), n, result.stream());
+            tensor_ops::launch_diag(dense_diagonal.ptr<float>(), result.ptr<float>(), n, result.stream());
             LFS_CUDA_CHECK(cudaGetLastError());
             // No sync - returns tensor
         } else {

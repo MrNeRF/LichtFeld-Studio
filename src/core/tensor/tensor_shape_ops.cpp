@@ -32,7 +32,7 @@ namespace lfs::core {
                        "t() requires a valid tensor");
 
         if (shape_.rank() <= 1) {
-            return clone();
+            return create_strided_view(shape_, strides_);
         }
 
         return transpose(-2, -1);
@@ -230,20 +230,28 @@ namespace lfs::core {
             return deferred;
         }
 
-        bool is_contiguous = is_contiguous_slice(starts, ends);
+        Tensor view;
+        view.data_ = data_;
+        view.data_owner_ = data_owner_;
+        view.shape_ = TensorShape(new_shape);
+        view.strides_ = strides_;
+        view.storage_offset_ = storage_offset_ + calculate_offset(starts);
+        view.device_ = device_;
+        view.dtype_ = dtype_;
+        view.is_view_ = true;
+        view.id_ = profiling_enabled_ ? next_id_++ : 0;
 
-        if (is_contiguous) {
-            size_t offset = calculate_offset(starts);
-            void* new_data = static_cast<char*>(data_) + offset * dtype_size(dtype_);
-
-            Tensor view(new_data, TensorShape(new_shape), device_, dtype_);
-            view.data_owner_ = data_owner_;
-            view.is_view_ = true;
-            propagate_view_meta(view);
-            return view;
-        } else {
-            return copy_slice(starts, ends, new_shape);
+        size_t expected_stride = 1;
+        view.is_contiguous_ = true;
+        for (int i = static_cast<int>(view.shape_.rank()) - 1; i >= 0; --i) {
+            if (view.strides_[i] != expected_stride) {
+                view.is_contiguous_ = false;
+                break;
+            }
+            expected_stride *= view.shape_[i];
         }
+        propagate_view_meta(view);
+        return view;
     }
 
     Tensor Tensor::slice(size_t dim, size_t start, size_t end) const {
@@ -397,7 +405,7 @@ namespace lfs::core {
 
         for (int dim : dims) {
             int r = resolve_dim(dim);
-            LFS_ASSERT_MSG(r >= 0 && r < static_cast<int>(shape_.rank()),
+            LFS_ASSERT_MSG(detail::tensor_dim_is_valid(r, shape_.rank()),
                            std::format("dimension {} is out of range for rank {}", dim, shape_.rank()));
             resolved.push_back(static_cast<size_t>(r));
         }

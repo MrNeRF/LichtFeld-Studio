@@ -42,14 +42,41 @@ of the application build.
 ## Compiler cache behavior
 
 `ENABLE_COMPILER_CACHE` defaults to `ON`. CMake prefers `sccache`, falls back to
-`ccache`, and continues without a launcher when neither is installed. On
-non-Windows CUDA builds the launcher covers C, C++, and CUDA. On Windows CUDA
-remains uncached because the supported nvcc/launcher combinations are less
-reliable there.
+`ccache`, and continues without a launcher when neither is installed.
+
+Single-config GNU and Clang Release builds also default
+`COMPILER_CACHE_PATH_INDEPENDENT` to `ON`. CMake compiles C and C++ through a
+build-local source alias, makes build-tree paths relative, and applies
+`-ffile-prefix-map` so identical commits can share objects across Git
+worktrees. Consequently, `__FILE__` is repository-relative (for example,
+`./src/core/scene.cpp`) and remains useful in logs and assertions. Disable this
+behavior independently when exact checkout paths are required:
+
+```sh
+cmake -S . -B build/dev-release -DCOMPILER_CACHE_PATH_INDEPENDENT=OFF
+```
+
+Debug, RelWithDebInfo, multi-config, MSVC, and Windows builds retain their
+original source paths. This keeps debugger source lookup unchanged; a build
+that deliberately enables relative debug paths would need the debugger's
+source-map equivalent.
+
+On non-Windows CUDA builds the existing launcher still covers CUDA. sccache's
+nvcc decomposition canonicalizes the input source, however, so CUDA does not
+have the same cross-worktree guarantee as C and C++. On Windows CUDA remains
+uncached because the supported nvcc/launcher combinations are less reliable
+there. The current tree does not use project precompiled headers. If PCH is
+reintroduced, validate cache hits for PCH consumers explicitly; in particular,
+prefer include-style PCH entries over absolute header paths, because CMake
+otherwise embeds the checkout path in its generated PCH wrapper. MSVC PCH
+consumers also have substantial sccache limitations.
 
 Inspect the active cache with `sccache --show-stats` or `ccache --show-stats`.
 Disable the launcher for compiler diagnostics, cold-build comparisons, or when
-investigating a cache-specific failure.
+investigating a cache-specific failure. Size the cache for the complete active
+working set: sccache's default 10 GiB cache can evict entries during a large
+multi-worktree build. Set `SCCACHE_CACHE_SIZE` before starting the server, or
+configure the equivalent disk-cache size in sccache's configuration file.
 
 ## Parallelism and vcpkg
 

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -32,6 +33,18 @@
 #include "visualizer/training/training_manager.hpp"
 
 namespace lfs::python {
+
+    namespace {
+        std::shared_ptr<core::Camera> make_test_camera() {
+            return std::make_shared<core::Camera>(
+                core::Tensor::eye(3, core::Device::CPU),
+                core::Tensor::zeros({3}, core::Device::CPU),
+                100.0f, 100.0f, 32.0f, 32.0f,
+                core::Tensor(), core::Tensor(), core::CameraModelType::PINHOLE,
+                "camera.png", std::filesystem::path{}, std::filesystem::path{},
+                64, 64, 0);
+        }
+    } // namespace
 
     TEST(TrainingStateMachineTest, PublishesFinishReasonBeforeFinishedCallback) {
         vis::TrainingStateMachine state_machine;
@@ -140,7 +153,7 @@ namespace lfs::python {
     TEST(TrainerConstructionTest, CreatesAndReleasesCudaResourcesForValidScene) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
-        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        scene.addCamera("camera.png", cameras, make_test_camera());
         const auto before = core::PinnedMemoryAllocator::instance().get_stats();
 
         {
@@ -157,7 +170,7 @@ namespace lfs::python {
     TEST(TrainerConstructionTest, ParameterSnapshotsStayGenerationConsistent) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
-        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        scene.addCamera("camera.png", cameras, make_test_camera());
         training::Trainer trainer(scene);
 
         core::param::TrainingParameters initial;
@@ -182,12 +195,16 @@ namespace lfs::python {
                       "generation_" + std::to_string(snapshot.optimization.iterations));
         }
         writer.join();
+
+        const auto final_snapshot = trainer.getParams();
+        EXPECT_EQ(final_snapshot.dataset.output_name,
+                  "generation_" + std::to_string(final_snapshot.optimization.iterations));
     }
 
     TEST(TrainerConstructionTest, InitializeRejectsInvalidIntervalsBeforeTraining) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
-        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        scene.addCamera("camera.png", cameras, make_test_camera());
         training::Trainer trainer(scene);
 
         core::param::TrainingParameters params;
@@ -202,7 +219,7 @@ namespace lfs::python {
     TEST(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");
-        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        scene.addCamera("camera.png", cameras, make_test_camera());
         lfs::vis::TrainerManager manager;
         manager.setScene(&scene);
         const auto before = core::PinnedMemoryAllocator::instance().get_stats();
@@ -297,7 +314,7 @@ namespace lfs::python {
             scene.setTrainingModelNode("Model");
             nodes.cameras = scene.addGroup("Cameras", nodes.dataset);
             nodes.train_group = scene.addCameraGroup("Training (1)", nodes.cameras, 1);
-            nodes.camera = scene.addCamera("cam_0001.png", nodes.train_group, std::make_shared<core::Camera>());
+            nodes.camera = scene.addCamera("cam_0001.png", nodes.train_group, make_test_camera());
             return nodes;
         }
 
@@ -503,7 +520,7 @@ namespace lfs::python {
         const auto dataset_id = dummy_scene_.addDataset("Dataset");
         const auto cameras_group_id = dummy_scene_.addGroup("Cameras", dataset_id);
         const auto train_group_id = dummy_scene_.addCameraGroup("Training (1)", cameras_group_id, 1);
-        dummy_scene_.addCamera("cam_0001.png", train_group_id, std::make_shared<core::Camera>());
+        dummy_scene_.addCamera("cam_0001.png", train_group_id, make_test_camera());
 
         ASSERT_TRUE(dummy_scene_.getInitialPointCloud());
         ASSERT_TRUE(dummy_scene_.getSceneCenter().is_valid());

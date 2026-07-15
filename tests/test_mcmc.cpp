@@ -113,6 +113,11 @@ TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     opt_params.max_cap = 24;
     strategy.initialize(opt_params);
 
+    auto* means_state = strategy.get_optimizer().get_state_mutable(ParamType::Means);
+    ASSERT_NE(means_state, nullptr);
+    means_state->exp_avg_scale.fill_(1.0f);
+    means_state->exp_avg_sq_scale.fill_(2.0f);
+
     strategy.remove_gaussians(make_mask(12, 3));
     ASSERT_TRUE(strategy.get_model().has_deleted_mask());
     EXPECT_EQ(strategy.get_model().visible_count(), 9);
@@ -126,6 +131,22 @@ TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
     for (float value : deleted) {
         EXPECT_FLOAT_EQ(value, 0.0f);
     }
+
+    const auto first_moment_scale = means_state->exp_avg_scale.cpu().to_vector();
+    const auto second_moment_scale = means_state->exp_avg_sq_scale.cpu().to_vector();
+    ASSERT_EQ(first_moment_scale.size(), 12u);
+    ASSERT_EQ(second_moment_scale.size(), 12u);
+    size_t reset_live_sources = 0;
+    for (size_t i = 0; i < 12; ++i) {
+        if (i < 3) {
+            EXPECT_FLOAT_EQ(first_moment_scale[i], 0.0f);
+            EXPECT_FLOAT_EQ(second_moment_scale[i], 0.0f);
+        } else if (first_moment_scale[i] == 0.0f && second_moment_scale[i] == 0.0f) {
+            ++reset_live_sources;
+        }
+    }
+    EXPECT_GE(reset_live_sources, 1u)
+        << "relocation must reset at least one sampled source row as well as destination rows";
 }
 
 TEST(MCMCTest, RelocateGrowsRatioWorkspaceWhenMaxCapIsDisabled) {

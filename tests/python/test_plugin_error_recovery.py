@@ -15,7 +15,7 @@ import pytest
 
 
 @pytest.fixture
-def error_plugins_dir(monkeypatch):
+def error_plugins_dir(monkeypatch, bypass_plugin_installer):
     """Create temporary plugins directory for error recovery tests."""
     with tempfile.TemporaryDirectory() as tmpdir:
         plugins_dir = Path(tmpdir) / "plugins"
@@ -120,6 +120,7 @@ def on_load():
         # Check module namespace not polluted - module should be cleaned up on failure
         modules_after = set(sys.modules.keys())
         plugin_modules = [m for m in (modules_after - modules_before) if "import_fail" in m]
+        assert plugin_modules == []
         assert "lfs_plugins.import_fail" not in sys.modules
 
     def test_corrupt_manifest_handling(self, error_plugins_dir):
@@ -203,16 +204,13 @@ def on_load():
 
         mgr.on_plugin_loaded(bad_callback)
 
-        # Load may still succeed despite callback failure
-        # Or may fail - implementation dependent
         result = mgr.load("cb_test")
 
-        # Callback should have been called
+        assert result is True
         assert callback_called[0]
+        assert mgr.get_state("cb_test") == PluginState.ACTIVE
 
-        # Cleanup
-        if mgr.get_state("cb_test") == PluginState.ACTIVE:
-            mgr.unload("cb_test")
+        mgr.unload("cb_test")
 
     def test_on_unload_exception_handled(self, error_plugins_dir):
         """Exception in on_unload() should not prevent unloading."""
@@ -234,79 +232,11 @@ def on_unload():
         mgr.load("unload_fail")
 
         # Unload should still work (plugin marked as unloaded)
-        result = mgr.unload("unload_fail")
+        mgr.unload("unload_fail")
 
         # State should be unloaded despite exception
         state = mgr.get_state("unload_fail")
         assert state == PluginState.UNLOADED
-
-
-class TestPluginModuleIsolation:
-    """Tests for plugin module isolation."""
-
-    def test_plugin_does_not_pollute_builtins(self, error_plugins_dir):
-        """Plugin should not be able to modify builtins."""
-        from lfs_plugins import PluginManager, PluginState
-
-        create_plugin(
-            error_plugins_dir / "polluter",
-            "polluter",
-            """
-import builtins
-builtins.POLLUTED_VALUE = 42
-
-def on_load():
-    pass
-
-def on_unload():
-    if hasattr(builtins, 'POLLUTED_VALUE'):
-        delattr(builtins, 'POLLUTED_VALUE')
-""",
-        )
-
-        mgr = PluginManager.instance()
-        mgr.load("polluter")
-
-        # Plugin may succeed in setting the value
-        import builtins
-
-        had_pollution = hasattr(builtins, "POLLUTED_VALUE")
-
-        mgr.unload("polluter")
-
-        # After unload, should be cleaned
-        # (implementation may or may not enforce this)
-
-    def test_plugin_sys_path_isolation(self, error_plugins_dir):
-        """Plugin should not permanently modify sys.path."""
-        from lfs_plugins import PluginManager, PluginState
-
-        create_plugin(
-            error_plugins_dir / "path_mod",
-            "path_mod",
-            """
-import sys
-sys.path.append("/fake/path/for/testing")
-
-def on_load():
-    pass
-
-def on_unload():
-    import sys
-    if "/fake/path/for/testing" in sys.path:
-        sys.path.remove("/fake/path/for/testing")
-""",
-        )
-
-        path_before = sys.path.copy()
-
-        mgr = PluginManager.instance()
-        mgr.load("path_mod")
-        mgr.unload("path_mod")
-
-        # sys.path might be modified but should be restored
-        # (depending on implementation)
-        assert "/fake/path/for/testing" not in sys.path or True  # Implementation may vary
 
 
 class TestPluginStateTransitions:
@@ -342,9 +272,9 @@ def on_unload():
         assert initial_state == PluginState.ACTIVE
         assert second_state == PluginState.ACTIVE
 
-        # Check load count
         module = sys.modules.get("lfs_plugins.double_load")
-        # Load count may be 1 or 2 depending on implementation
+        assert module is not None
+        assert module.LOAD_COUNT == 1
 
         mgr.unload("double_load")
 

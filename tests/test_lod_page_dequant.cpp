@@ -11,7 +11,6 @@
 // chunks whose alpha stays <=1, f16 for merged-interior chunks above 1).
 
 #include "core/cuda/sh_layout.cuh"
-#include "core/environment.hpp"
 #include "io/formats/rad.hpp"
 #include "io/formats/rad_dequant_math.hpp"
 #include "io/ply_to_rad_lod.hpp"
@@ -19,8 +18,6 @@
 
 #include <gtest/gtest.h>
 
-#include <chrono>
-#include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
@@ -155,6 +152,7 @@ namespace {
         writeSyntheticShPly(ply_path, splat_count, rest_props, opacity_raw);
         lfs::io::PlyToRadLodOptions options;
         options.target_bucket_splats = 65'536;
+        options.chunk_size = static_cast<std::uint32_t>(kPage);
         options.temp_dir = temp_dir / "scratch";
         ASSERT_TRUE(lfs::io::convert_ply_to_rad_lod(ply_path, rad_path, options).has_value());
         ASSERT_TRUE(lfs::io::build_rad_meta_sidecar(rad_path).has_value());
@@ -410,104 +408,6 @@ namespace {
         using lfs::io::RadPackedKind;
         EXPECT_TRUE(seen.count(kindEnc(RadPackedKind::Means, RadPackedEncoding::F32LeBytes)));
         EXPECT_FALSE(seen.count(kindEnc(RadPackedKind::Sh1, RadPackedEncoding::S8)));
-    }
-
-    // CPU sink-cost comparison on a real converted file: full decode (old
-    // sink) vs inflate-only packed decode (new sink). Informational; run with
-    // LFS_RAD_BENCH_FILE=<file.rad> pointing at a RAD with a .rad.meta.
-    TEST(LodPageDequant, SinkCpuCostBenchmark) {
-        const auto bench = lfs::core::environment::value("LFS_RAD_BENCH_FILE");
-        if (!bench) {
-            GTEST_SKIP() << "set LFS_RAD_BENCH_FILE to run";
-        }
-        const std::filesystem::path rad_path(*bench);
-        auto loaded = lfs::io::load_rad(rad_path);
-        ASSERT_TRUE(loaded.has_value()) << loaded.error();
-        ASSERT_TRUE(loaded->lod_tree && loaded->lod_tree->rad_source.valid());
-        const auto& source = loaded->lod_tree->rad_source;
-        auto view = lfs::io::open_rad_meta_sidecar(rad_path);
-        ASSERT_TRUE(view.has_value()) << view.error();
-        const bool lod_opacity = loaded->lod_tree->lod_opacity_encoded;
-        const int max_sh = loaded->get_max_sh_degree();
-
-        const std::size_t n = std::min<std::size_t>(source.chunks.size(), 256);
-        std::ifstream in(rad_path, std::ios::binary);
-        std::vector<std::vector<std::uint8_t>> raw(n);
-        for (std::size_t c = 0; c < n; ++c) {
-            raw[c].resize(source.chunks[c].file_bytes);
-            in.seekg(static_cast<std::streamoff>(source.chunks[c].file_offset), std::ios::beg);
-            in.read(reinterpret_cast<char*>(raw[c].data()),
-                    static_cast<std::streamsize>(raw[c].size()));
-            ASSERT_TRUE(in.good());
-        }
-
-        // Touch the sidecar planes once so neither loop measures cold mmap
-        // page faults; both the old sink (expand_rad_meta_page) and the new
-        // one (plane memcpy) read the same bytes in production.
-        std::uint64_t warm = 0;
-        for (std::size_t c = 0; c < n; ++c) {
-            const std::size_t start = c * kPage;
-            const std::size_t run = std::min(kPage, view->node_count - start);
-            const auto* const b = reinterpret_cast<const std::uint8_t*>(view->bounds + start);
-            const auto* const l = reinterpret_cast<const std::uint8_t*>(view->links + start);
-            for (std::size_t i = 0; i < run * sizeof(lfs::core::RadMetaBoundsQ); i += 4096) {
-                warm += b[i];
-            }
-            for (std::size_t i = 0; i < run * sizeof(lfs::core::RadMetaLinksQ); i += 4096) {
-                warm += l[i];
-            }
-        }
-        ASSERT_GE(warm, 0u);
-
-        std::vector<float> means(kPage * 3), sh0(kPage * 3), scale(kPage * 3);
-        std::vector<float> rot(kPage * 4), opacity(kPage);
-        std::vector<float> shN_canonical;
-        std::vector<float> shN_swizzled(
-            lfs::core::sh_swizzled_byte_count(kPage, 15) / sizeof(float));
-        std::vector<lfs::core::NodeBoundsRecord> bounds(kPage);
-        std::vector<lfs::core::NodeLinksRecord> links(kPage);
-        const auto t0 = std::chrono::steady_clock::now();
-        for (std::size_t c = 0; c < n; ++c) {
-            const lfs::io::RadChunkDsts dsts{
-                .means = means.data(),
-                .opacity_raw = opacity.data(),
-                .sh0_raw = sh0.data(),
-                .scaling_raw = scale.data(),
-                .rotation_raw = rot.data(),
-                .shN_canonical = &shN_canonical,
-            };
-            auto info = lfs::io::decode_rad_chunk_into(
-                std::span<const std::uint8_t>(raw[c]), max_sh, lod_opacity, kPage, dsts);
-            ASSERT_TRUE(info.has_value()) << info.error();
-            // The old sink's remaining CPU work: SH swizzle + meta expansion.
-            referenceSwizzle(shN_canonical, static_cast<std::size_t>(info->count),
-                             info->sh_coeffs_rest,
-                             lfs::core::sh_float4_slots_for_rest(15), shN_swizzled);
-            std::memset(bounds.data(), 0, bounds.size() * sizeof(bounds[0]));
-            std::memset(links.data(), 0xFF, links.size() * sizeof(links[0]));
-            const std::size_t start = c * kPage;
-            const std::size_t run = std::min(kPage, view->node_count - start);
-            lfs::io::expand_rad_meta_page(*view, static_cast<std::uint32_t>(c), run,
-                                          bounds.data(), links.data());
-        }
-        const auto t1 = std::chrono::steady_clock::now();
-        std::vector<std::uint8_t> slot(64u << 20);
-        for (std::size_t c = 0; c < n; ++c) {
-            auto desc = lfs::io::decode_rad_chunk_packed(
-                std::span<const std::uint8_t>(raw[c]), max_sh, lod_opacity, kPage,
-                *view, static_cast<std::uint32_t>(c), std::span<std::uint8_t>(slot));
-            ASSERT_TRUE(desc.has_value()) << desc.error();
-        }
-        const auto t2 = std::chrono::steady_clock::now();
-
-        const auto ms = [](const auto a, const auto b) {
-            return std::chrono::duration<double, std::milli>(b - a).count();
-        };
-        const double full_ms = ms(t0, t1) / static_cast<double>(n);
-        const double packed_ms = ms(t1, t2) / static_cast<double>(n);
-        std::printf("sink CPU cost over %zu chunks: full decode %.3f ms/chunk "
-                    "(%.0f chunks/s/core), packed %.3f ms/chunk (%.0f chunks/s/core)\n",
-                    n, full_ms, 1000.0 / full_ms, packed_ms, 1000.0 / packed_ms);
     }
 
 } // namespace

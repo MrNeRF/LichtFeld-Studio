@@ -4,6 +4,7 @@
 #include "internal/cuda_stream_context.hpp"
 #include "core/cuda_error.hpp"
 #include "internal/cuda_event_pool.hpp"
+#include "internal/tensor_impl.hpp"
 
 #include <format>
 
@@ -61,6 +62,33 @@ namespace lfs::core {
                                 static_cast<void*>(execution_stream)));
             }
         }
+    }
+
+    cudaStream_t prepare_inputs_for_stream(
+        const std::initializer_list<const Tensor*> inputs,
+        const std::optional<cudaStream_t> requested_stream) {
+        cudaStream_t execution_stream = requested_stream.has_value()
+                                            ? *requested_stream
+                                            : getCurrentCUDAStream();
+        if (!requested_stream.has_value() && execution_stream == nullptr) {
+            for (const Tensor* input : inputs) {
+                LFS_ASSERT_MSG(input != nullptr && input->is_valid(),
+                               "stream preparation requires valid tensor inputs");
+                if (input->device() == Device::CUDA) {
+                    execution_stream = input->stream();
+                    break;
+                }
+            }
+        }
+
+        for (const Tensor* input : inputs) {
+            LFS_ASSERT_MSG(input != nullptr && input->is_valid(),
+                           "stream preparation requires valid tensor inputs");
+            if (input->device() == Device::CUDA) {
+                input->sync_to_stream(execution_stream);
+            }
+        }
+        return execution_stream;
     }
 
 } // namespace lfs::core

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -21,6 +22,7 @@
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
+#include "io/formats/rad.hpp"
 #include "io/formats/transforms.hpp"
 #include "io/loader.hpp"
 #include "io/nvcodec_image_loader.hpp"
@@ -150,7 +152,7 @@ protected:
         if (sh_coeffs > 0) {
             auto* shN_ptr = shN.ptr<float>();
             for (size_t i = 0; i < num_points * sh_coeffs * 3; ++i) {
-                shN_ptr[i] = 0.1f * static_cast<float>((i % 10) - 5);
+                shN_ptr[i] = 0.1f * static_cast<float>(static_cast<int>(i % 10) - 5);
             }
         }
 
@@ -578,8 +580,9 @@ TEST_F(PythonIOTest, LoadCOLMAPDataset) {
 
     auto loader = Loader::create();
     LoadOptions options;
-    options.resize_factor = 8; // Downscale for faster test
-    options.images_folder = "images_8";
+    // The committed masks are quarter-resolution and intentionally pair with images_4.
+    options.resize_factor = 4;
+    options.images_folder = "images_4";
 
     auto result = loader->load(bicycle_dir, options);
     ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error().format();
@@ -1080,6 +1083,48 @@ TEST_F(PythonIOTest, RadSaveReportsProgressToCompletion) {
     EXPECT_TRUE(fs::exists(output_path));
     EXPECT_GT(fs::file_size(output_path), 0);
     expect_progress_completed(updates);
+}
+
+TEST_F(PythonIOTest, RadSaveLoadRoundtripPreservesCompactSplat) {
+    const auto original = create_test_splat(64, 1);
+    const auto output_path = temp_dir / "compact_roundtrip.rad";
+
+    RadSaveOptions options;
+    options.output_path = output_path;
+    options.compression_level = 1;
+    const auto save_result = save_rad(original, options);
+    ASSERT_TRUE(save_result.has_value()) << save_result.error().format();
+
+    const auto loaded = load_rad(output_path);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    ASSERT_TRUE(loaded->lod_tree);
+    ASSERT_TRUE(loaded->lod_tree->has_tree());
+    EXPECT_GE(loaded->size(), original.size());
+    EXPECT_EQ(loaded->get_max_sh_degree(), original.get_max_sh_degree());
+
+    const auto original_means = original.means_raw().cpu().contiguous();
+    const auto loaded_means = loaded->means_raw().cpu().contiguous();
+    const auto* original_ptr = original_means.ptr<float>();
+    const auto* loaded_ptr = loaded_means.ptr<float>();
+
+    std::vector<std::array<float, 3>> expected_positions;
+    expected_positions.reserve(original.size());
+    for (size_t i = 0; i < original.size(); ++i) {
+        expected_positions.push_back(
+            {original_ptr[i * 3], original_ptr[i * 3 + 1], original_ptr[i * 3 + 2]});
+    }
+
+    std::vector<std::array<float, 3>> leaf_positions;
+    for (size_t i = 0; i < static_cast<size_t>(loaded->size()); ++i) {
+        if (loaded->lod_tree->child_count_at(i) == 0) {
+            leaf_positions.push_back(
+                {loaded_ptr[i * 3], loaded_ptr[i * 3 + 1], loaded_ptr[i * 3 + 2]});
+        }
+    }
+
+    std::sort(expected_positions.begin(), expected_positions.end());
+    std::sort(leaf_positions.begin(), leaf_positions.end());
+    EXPECT_EQ(leaf_positions, expected_positions);
 }
 
 // Test progress callback

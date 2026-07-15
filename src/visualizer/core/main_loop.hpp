@@ -16,6 +16,7 @@ namespace lfs::vis {
         using RenderCallback = std::function<void()>;
         using ShutdownCallback = std::function<void()>;
         using ShouldCloseCallback = std::function<bool()>;
+        using InterruptCallback = std::function<void()>;
         // Handles an exception escaping update/render. It must contain the error
         // and return; it must never rethrow, so the frame loop never aborts.
         using FrameErrorCallback = std::function<void(std::exception_ptr)>;
@@ -27,6 +28,7 @@ namespace lfs::vis {
         void setRenderCallback(RenderCallback cb) { render_callback_ = cb; }
         void setShutdownCallback(ShutdownCallback cb) { shutdown_callback_ = cb; }
         void setShouldCloseCallback(ShouldCloseCallback cb) { should_close_callback_ = cb; }
+        void setInterruptCallback(InterruptCallback cb) { interrupt_callback_ = cb; }
         void setFrameErrorCallback(FrameErrorCallback cb) { frame_error_callback_ = cb; }
         void setFrameCompletedCallback(FrameCompletedCallback cb) { frame_completed_callback_ = cb; }
 
@@ -38,6 +40,7 @@ namespace lfs::vis {
         RenderCallback render_callback_;
         ShutdownCallback shutdown_callback_;
         ShouldCloseCallback should_close_callback_;
+        InterruptCallback interrupt_callback_;
         FrameErrorCallback frame_error_callback_;
         FrameCompletedCallback frame_completed_callback_;
     };

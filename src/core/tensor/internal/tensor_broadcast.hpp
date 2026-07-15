@@ -3,11 +3,16 @@
 
 #pragma once
 
-#include "tensor_impl.hpp"
 #include <algorithm>
+#include <cstddef>
 #include <ranges>
+#include <span>
+#include <vector>
 
 namespace lfs::core {
+
+    class Tensor;
+    class TensorShape;
 
     // Pure functions for broadcasting - no classes!
     namespace broadcast {
@@ -21,7 +26,7 @@ namespace lfs::core {
          * - Aligns shapes from the right
          * - Dimensions must either match or one must be 1
          * - Result takes the maximum of each dimension
-         * - Handles zero dimensions: 0 can only broadcast with another 0
+         * - A size-1 dimension broadcasts to zero, producing a zero dimension
          */
         inline std::vector<size_t> shape(std::span<const size_t> a, std::span<const size_t> b) {
             size_t max_rank = std::max(a.size(), b.size());
@@ -32,16 +37,14 @@ namespace lfs::core {
                 size_t dim_a = (i < a.size()) ? a[a.size() - 1 - i] : 1;
                 size_t dim_b = (i < b.size()) ? b[b.size() - 1 - i] : 1;
 
-                // Handle zero dimensions
-                if (dim_a == 0 && dim_b == 0) {
-                    result[max_rank - 1 - i] = 0;
-                } else if (dim_a == 0 || dim_b == 0) {
-                    // Can't broadcast 0 with non-zero (except matching 0)
-                    return {}; // Incompatible
-                } else if (dim_a != dim_b && dim_a != 1 && dim_b != 1) {
-                    return {}; // Incompatible
+                if (dim_a == dim_b) {
+                    result[max_rank - 1 - i] = dim_a;
+                } else if (dim_a == 1) {
+                    result[max_rank - 1 - i] = dim_b;
+                } else if (dim_b == 1) {
+                    result[max_rank - 1 - i] = dim_a;
                 } else {
-                    result[max_rank - 1 - i] = std::max(dim_a, dim_b);
+                    return {}; // Incompatible
                 }
             }
             return result;
@@ -58,10 +61,6 @@ namespace lfs::core {
             for (size_t i = 0; i < max_rank; ++i) {
                 size_t dim_a = (i < a.size()) ? a[a.size() - 1 - i] : 1;
                 size_t dim_b = (i < b.size()) ? b[b.size() - 1 - i] : 1;
-                if (dim_a == 0 && dim_b == 0)
-                    continue;
-                if (dim_a == 0 || dim_b == 0)
-                    return false;
                 if (dim_a != dim_b && dim_a != 1 && dim_b != 1)
                     return false;
             }

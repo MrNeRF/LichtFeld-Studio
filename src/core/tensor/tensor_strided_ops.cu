@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
+#include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include <algorithm>
@@ -121,42 +122,27 @@ namespace lfs::core {
             const size_t* shape, const size_t* strides,
             const size_t rank, const size_t n,
             const DataType dtype, cudaStream_t stream) {
+            if (n == 0)
+                return;
+            LFS_ASSERT_MSG(input != nullptr && output != nullptr,
+                           "strided scatter requires valid input and output pointers");
+            LFS_ASSERT_MSG(shape != nullptr && strides != nullptr && rank > 0,
+                           "strided scatter requires non-empty shape metadata");
             const int blocks = static_cast<int>(std::min(
                 (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE,
                 static_cast<size_t>(MAX_GRID)));
 
-#define LAUNCH_RANK2(T)                                                      \
-    strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
-        static_cast<const T*>(input), static_cast<T*>(output),               \
-        shape[0], shape[1], strides[0], strides[1], n)
-
-#define LAUNCH_GENERIC(T)                                              \
-    strided_scatter_kernel<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
-        static_cast<const T*>(input), static_cast<T*>(output),         \
-        shape, strides, rank, n)
-
-            if (rank == 2) {
-                switch (dtype) {
-                case DataType::Float32: LAUNCH_RANK2(float); break;
-                case DataType::Int32: LAUNCH_RANK2(int32_t); break;
-                case DataType::Int64: LAUNCH_RANK2(int64_t); break;
-                case DataType::UInt8: LAUNCH_RANK2(uint8_t); break;
-                case DataType::Bool: LAUNCH_RANK2(bool); break;
-                default: break;
+            detail::dispatch_dtype(dtype, [&]<typename T>() {
+                if (rank == 2) {
+                    strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
+                        static_cast<const T*>(input), static_cast<T*>(output),
+                        shape[0], shape[1], strides[0], strides[1], n);
+                } else {
+                    strided_scatter_kernel<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
+                        static_cast<const T*>(input), static_cast<T*>(output),
+                        shape, strides, rank, n);
                 }
-            } else {
-                switch (dtype) {
-                case DataType::Float32: LAUNCH_GENERIC(float); break;
-                case DataType::Int32: LAUNCH_GENERIC(int32_t); break;
-                case DataType::Int64: LAUNCH_GENERIC(int64_t); break;
-                case DataType::UInt8: LAUNCH_GENERIC(uint8_t); break;
-                case DataType::Bool: LAUNCH_GENERIC(bool); break;
-                default: break;
-                }
-            }
-
-#undef LAUNCH_RANK2
-#undef LAUNCH_GENERIC
+            });
             LFS_CUDA_CHECK(cudaGetLastError());
         }
 
@@ -166,49 +152,34 @@ namespace lfs::core {
             const size_t n, const DataType dtype, cudaStream_t stream) {
             if (n == 0)
                 return;
+            LFS_ASSERT_MSG(input != nullptr && output != nullptr,
+                           "strided scatter requires valid input and output pointers");
+            LFS_ASSERT_MSG(shape.size() == strides.size(),
+                           "strided scatter shape and stride ranks must match");
             const int blocks = static_cast<int>(std::min(
                 (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE,
                 static_cast<size_t>(MAX_GRID)));
             const size_t rank = shape.size();
+            LFS_ASSERT_MSG(rank >= 2 && rank <= 4,
+                           "immediate strided scatter supports only ranks 2 through 4");
 
-#define LAUNCH_SCATTER2(T) strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
-    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], strides[0], strides[1], n)
-#define LAUNCH_SCATTER3(T) strided_scatter_kernel_rank3<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
-    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], shape[2], strides[0], strides[1], strides[2], n)
-#define LAUNCH_SCATTER4(T) strided_scatter_kernel_rank4<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
-    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], shape[2], shape[3], strides[0], strides[1], strides[2], strides[3], n)
-
-            if (rank == 2) {
-                switch (dtype) {
-                case DataType::Float32: LAUNCH_SCATTER2(float); break;
-                case DataType::Int32: LAUNCH_SCATTER2(int32_t); break;
-                case DataType::Int64: LAUNCH_SCATTER2(int64_t); break;
-                case DataType::UInt8: LAUNCH_SCATTER2(uint8_t); break;
-                case DataType::Bool: LAUNCH_SCATTER2(bool); break;
-                default: break;
+            detail::dispatch_dtype(dtype, [&]<typename T>() {
+                if (rank == 2) {
+                    strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
+                        static_cast<const T*>(input), static_cast<T*>(output),
+                        shape[0], shape[1], strides[0], strides[1], n);
+                } else if (rank == 3) {
+                    strided_scatter_kernel_rank3<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
+                        static_cast<const T*>(input), static_cast<T*>(output),
+                        shape[0], shape[1], shape[2],
+                        strides[0], strides[1], strides[2], n);
+                } else {
+                    strided_scatter_kernel_rank4<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
+                        static_cast<const T*>(input), static_cast<T*>(output),
+                        shape[0], shape[1], shape[2], shape[3],
+                        strides[0], strides[1], strides[2], strides[3], n);
                 }
-            } else if (rank == 3) {
-                switch (dtype) {
-                case DataType::Float32: LAUNCH_SCATTER3(float); break;
-                case DataType::Int32: LAUNCH_SCATTER3(int32_t); break;
-                case DataType::Int64: LAUNCH_SCATTER3(int64_t); break;
-                case DataType::UInt8: LAUNCH_SCATTER3(uint8_t); break;
-                case DataType::Bool: LAUNCH_SCATTER3(bool); break;
-                default: break;
-                }
-            } else if (rank == 4) {
-                switch (dtype) {
-                case DataType::Float32: LAUNCH_SCATTER4(float); break;
-                case DataType::Int32: LAUNCH_SCATTER4(int32_t); break;
-                case DataType::Int64: LAUNCH_SCATTER4(int64_t); break;
-                case DataType::UInt8: LAUNCH_SCATTER4(uint8_t); break;
-                case DataType::Bool: LAUNCH_SCATTER4(bool); break;
-                default: break;
-                }
-            }
-#undef LAUNCH_SCATTER2
-#undef LAUNCH_SCATTER3
-#undef LAUNCH_SCATTER4
+            });
             LFS_CUDA_CHECK(cudaGetLastError());
         }
 
@@ -282,49 +253,36 @@ namespace lfs::core {
             const void* input, void* output,
             const std::vector<size_t>& shape, const std::vector<size_t>& strides,
             const size_t n, const DataType dtype, cudaStream_t stream) {
+            if (n == 0)
+                return;
+            LFS_ASSERT_MSG(input != nullptr && output != nullptr,
+                           "strided copy requires valid input and output pointers");
+            LFS_ASSERT_MSG(shape.size() == strides.size(),
+                           "strided copy shape and stride ranks must match");
             const int num_blocks = static_cast<int>(std::min(
                 (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE,
                 static_cast<size_t>(MAX_GRID)));
             const size_t rank = shape.size();
+            LFS_ASSERT_MSG(rank >= 2 && rank <= 4,
+                           "immediate strided copy supports only ranks 2 through 4");
 
-#define LAUNCH_COPY2(T) strided_copy_kernel_rank2<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
-    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], strides[0], strides[1], n)
-#define LAUNCH_COPY3(T) strided_copy_kernel_rank3<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
-    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], shape[2], strides[0], strides[1], strides[2], n)
-#define LAUNCH_COPY4(T) strided_copy_kernel_rank4<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
-    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], shape[2], shape[3], strides[0], strides[1], strides[2], strides[3], n)
-
-            if (rank == 2) {
-                switch (dtype) {
-                case DataType::Float32: LAUNCH_COPY2(float); break;
-                case DataType::Int32: LAUNCH_COPY2(int32_t); break;
-                case DataType::Int64: LAUNCH_COPY2(int64_t); break;
-                case DataType::UInt8: LAUNCH_COPY2(uint8_t); break;
-                case DataType::Bool: LAUNCH_COPY2(bool); break;
-                default: break;
+            detail::dispatch_dtype(dtype, [&]<typename T>() {
+                if (rank == 2) {
+                    strided_copy_kernel_rank2<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
+                        static_cast<const T*>(input), static_cast<T*>(output),
+                        shape[0], shape[1], strides[0], strides[1], n);
+                } else if (rank == 3) {
+                    strided_copy_kernel_rank3<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
+                        static_cast<const T*>(input), static_cast<T*>(output),
+                        shape[0], shape[1], shape[2],
+                        strides[0], strides[1], strides[2], n);
+                } else {
+                    strided_copy_kernel_rank4<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
+                        static_cast<const T*>(input), static_cast<T*>(output),
+                        shape[0], shape[1], shape[2], shape[3],
+                        strides[0], strides[1], strides[2], strides[3], n);
                 }
-            } else if (rank == 3) {
-                switch (dtype) {
-                case DataType::Float32: LAUNCH_COPY3(float); break;
-                case DataType::Int32: LAUNCH_COPY3(int32_t); break;
-                case DataType::Int64: LAUNCH_COPY3(int64_t); break;
-                case DataType::UInt8: LAUNCH_COPY3(uint8_t); break;
-                case DataType::Bool: LAUNCH_COPY3(bool); break;
-                default: break;
-                }
-            } else if (rank == 4) {
-                switch (dtype) {
-                case DataType::Float32: LAUNCH_COPY4(float); break;
-                case DataType::Int32: LAUNCH_COPY4(int32_t); break;
-                case DataType::Int64: LAUNCH_COPY4(int64_t); break;
-                case DataType::UInt8: LAUNCH_COPY4(uint8_t); break;
-                case DataType::Bool: LAUNCH_COPY4(bool); break;
-                default: break;
-                }
-            }
-#undef LAUNCH_COPY2
-#undef LAUNCH_COPY3
-#undef LAUNCH_COPY4
+            });
             LFS_CUDA_CHECK(cudaGetLastError());
         }
 
@@ -337,45 +295,22 @@ namespace lfs::core {
             size_t total_elements,
             DataType dtype,
             cudaStream_t stream) {
+            if (total_elements == 0)
+                return;
+            LFS_ASSERT_MSG(input != nullptr && output != nullptr,
+                           "strided copy requires valid input and output pointers");
+            LFS_ASSERT_MSG(shape != nullptr && strides != nullptr && rank > 0,
+                           "strided copy requires non-empty shape metadata");
             const int block_size = 256;
             const int num_blocks = static_cast<int>(std::min(
                 (total_elements + block_size - 1) / block_size,
                 static_cast<size_t>(MAX_GRID)));
 
-            switch (dtype) {
-            case DataType::Float32:
+            detail::dispatch_dtype(dtype, [&]<typename T>() {
                 strided_copy_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const float*>(input),
-                    static_cast<float*>(output),
+                    static_cast<const T*>(input), static_cast<T*>(output),
                     shape, strides, rank, total_elements);
-                break;
-            case DataType::Int32:
-                strided_copy_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const int32_t*>(input),
-                    static_cast<int32_t*>(output),
-                    shape, strides, rank, total_elements);
-                break;
-            case DataType::Int64:
-                strided_copy_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const int64_t*>(input),
-                    static_cast<int64_t*>(output),
-                    shape, strides, rank, total_elements);
-                break;
-            case DataType::UInt8:
-                strided_copy_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const uint8_t*>(input),
-                    static_cast<uint8_t*>(output),
-                    shape, strides, rank, total_elements);
-                break;
-            case DataType::Bool:
-                strided_copy_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const bool*>(input),
-                    static_cast<bool*>(output),
-                    shape, strides, rank, total_elements);
-                break;
-            default:
-                break;
-            }
+            });
             LFS_CUDA_CHECK(cudaGetLastError());
         }
 
@@ -508,6 +443,13 @@ namespace lfs::core {
             DataType dtype,
             cudaStream_t stream) {
 
+            if (total_elements == 0)
+                return;
+            LFS_ASSERT_MSG(host_input != nullptr && gpu_output != nullptr,
+                           "strided upload requires valid input and output pointers");
+            LFS_ASSERT_MSG(d_shape != nullptr && d_strides != nullptr && rank > 0,
+                           "strided upload requires non-empty shape metadata");
+
             const int block_size = 256;
             const int num_blocks = static_cast<int>(std::min(
                 (total_elements + block_size - 1) / block_size,
@@ -537,23 +479,12 @@ namespace lfs::core {
                     size_t H = d_shape[1];
                     size_t W = d_shape[2];
 
-                    switch (dtype) {
-                    case DataType::Float32:
+                    detail::dispatch_dtype(dtype, [&]<typename T>() {
                         strided_upload_kernel_hwc_to_chw<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const float*>(host_input),
-                            static_cast<float*>(gpu_output),
+                            static_cast<const T*>(host_input),
+                            static_cast<T*>(gpu_output),
                             H, W, C);
-                        break;
-                    case DataType::UInt8:
-                        strided_upload_kernel_hwc_to_chw<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const uint8_t*>(host_input),
-                            static_cast<uint8_t*>(gpu_output),
-                            H, W, C);
-                        break;
-                    default:
-                        // Fall through to generic path
-                        break;
-                    }
+                    });
                     return;
                 }
 
@@ -601,171 +532,40 @@ namespace lfs::core {
                     order = IterOrder::ORDER_012;
                 }
 
-                // Dispatch to appropriate kernel based on dtype and iteration order
-                switch (dtype) {
-                case DataType::Float32:
+                detail::dispatch_dtype(dtype, [&]<typename T>() {
                     if (order == IterOrder::ORDER_210) {
                         strided_upload_kernel_rank3_gather<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const float*>(host_input),
-                            static_cast<float*>(gpu_output),
+                            static_cast<const T*>(host_input),
+                            static_cast<T*>(gpu_output),
                             d_shape[0], d_shape[1], d_shape[2],
                             d_strides[0], d_strides[1], d_strides[2],
                             total_elements);
                     } else if (order == IterOrder::ORDER_120) {
                         strided_upload_kernel_rank3_gather_order_120<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const float*>(host_input),
-                            static_cast<float*>(gpu_output),
+                            static_cast<const T*>(host_input),
+                            static_cast<T*>(gpu_output),
                             d_shape[0], d_shape[1], d_shape[2],
                             d_strides[0], d_strides[1], d_strides[2],
                             total_elements);
                     } else {
                         strided_upload_kernel_rank3_gather_order_012<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const float*>(host_input),
-                            static_cast<float*>(gpu_output),
+                            static_cast<const T*>(host_input),
+                            static_cast<T*>(gpu_output),
                             d_shape[0], d_shape[1], d_shape[2],
                             d_strides[0], d_strides[1], d_strides[2],
                             total_elements);
                     }
-                    break;
-                case DataType::Int32:
-                    if (order == IterOrder::ORDER_210) {
-                        strided_upload_kernel_rank3_gather<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const int32_t*>(host_input),
-                            static_cast<int32_t*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    } else if (order == IterOrder::ORDER_120) {
-                        strided_upload_kernel_rank3_gather_order_120<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const int32_t*>(host_input),
-                            static_cast<int32_t*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    } else {
-                        strided_upload_kernel_rank3_gather_order_012<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const int32_t*>(host_input),
-                            static_cast<int32_t*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    }
-                    break;
-                case DataType::Int64:
-                    if (order == IterOrder::ORDER_210) {
-                        strided_upload_kernel_rank3_gather<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const int64_t*>(host_input),
-                            static_cast<int64_t*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    } else if (order == IterOrder::ORDER_120) {
-                        strided_upload_kernel_rank3_gather_order_120<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const int64_t*>(host_input),
-                            static_cast<int64_t*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    } else {
-                        strided_upload_kernel_rank3_gather_order_012<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const int64_t*>(host_input),
-                            static_cast<int64_t*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    }
-                    break;
-                case DataType::UInt8:
-                    if (order == IterOrder::ORDER_210) {
-                        strided_upload_kernel_rank3_gather<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const uint8_t*>(host_input),
-                            static_cast<uint8_t*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    } else if (order == IterOrder::ORDER_120) {
-                        strided_upload_kernel_rank3_gather_order_120<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const uint8_t*>(host_input),
-                            static_cast<uint8_t*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    } else {
-                        strided_upload_kernel_rank3_gather_order_012<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const uint8_t*>(host_input),
-                            static_cast<uint8_t*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    }
-                    break;
-                case DataType::Bool:
-                    if (order == IterOrder::ORDER_210) {
-                        strided_upload_kernel_rank3_gather<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const bool*>(host_input),
-                            static_cast<bool*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    } else if (order == IterOrder::ORDER_120) {
-                        strided_upload_kernel_rank3_gather_order_120<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const bool*>(host_input),
-                            static_cast<bool*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    } else {
-                        strided_upload_kernel_rank3_gather_order_012<<<num_blocks, block_size, 0, stream>>>(
-                            static_cast<const bool*>(host_input),
-                            static_cast<bool*>(gpu_output),
-                            d_shape[0], d_shape[1], d_shape[2],
-                            d_strides[0], d_strides[1], d_strides[2],
-                            total_elements);
-                    }
-                    break;
-                default:
-                    // Unsupported dtype - do nothing
-                    break;
-                }
+                });
                 return;
             }
 
             // GENERIC PATH: Uses device memory for shape/strides (requires caller to allocate)
-            switch (dtype) {
-            case DataType::Float32:
+            detail::dispatch_dtype(dtype, [&]<typename T>() {
                 strided_upload_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const float*>(host_input),
-                    static_cast<float*>(gpu_output),
+                    static_cast<const T*>(host_input),
+                    static_cast<T*>(gpu_output),
                     d_shape, d_strides, rank, total_elements);
-                break;
-            case DataType::Int32:
-                strided_upload_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const int32_t*>(host_input),
-                    static_cast<int32_t*>(gpu_output),
-                    d_shape, d_strides, rank, total_elements);
-                break;
-            case DataType::Int64:
-                strided_upload_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const int64_t*>(host_input),
-                    static_cast<int64_t*>(gpu_output),
-                    d_shape, d_strides, rank, total_elements);
-                break;
-            case DataType::UInt8:
-                strided_upload_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const uint8_t*>(host_input),
-                    static_cast<uint8_t*>(gpu_output),
-                    d_shape, d_strides, rank, total_elements);
-                break;
-            case DataType::Bool:
-                strided_upload_kernel<<<num_blocks, block_size, 0, stream>>>(
-                    static_cast<const bool*>(host_input),
-                    static_cast<bool*>(gpu_output),
-                    d_shape, d_strides, rank, total_elements);
-                break;
-            default:
-                // Unsupported dtype - do nothing
-                break;
-            }
+            });
         }
 
     } // namespace tensor_ops

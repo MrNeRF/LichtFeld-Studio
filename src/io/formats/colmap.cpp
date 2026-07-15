@@ -251,10 +251,6 @@ namespace lfs::io {
                                std::format("COLMAP point track has an unmatched image id "
                                            "(image_id={}, bytes_remaining={}, parsed_pairs={})",
                                            image_id, static_cast<size_t>(end - cur), pairs));
-                LFS_ASSERT_MSG(image_id != 0,
-                               std::format("COLMAP point track image id must be non-zero "
-                                           "(image_id={}, point2D_index={}, pair_index={})",
-                                           image_id, point2D_idx, pairs));
                 (void)point2D_idx;
                 ++pairs;
             }
@@ -428,10 +424,6 @@ namespace lfs::io {
                 return false;
             }
 
-            LFS_ASSERT_MSG(point.point3D_id != 0,
-                           std::format("COLMAP point id must be non-zero "
-                                       "(point3D_id={})",
-                                       point.point3D_id));
             LFS_ASSERT_MSG(std::ranges::all_of(point.xyz, [](const double value) { return std::isfinite(value); }),
                            std::format("COLMAP point coordinates must be finite "
                                        "(point3D_id={}, xyz=[{},{},{}])",
@@ -485,11 +477,6 @@ namespace lfs::io {
                                                "(point3D_id={}, image_id={}, bytes_remaining={}, parsed_pairs={})",
                                                point.point3D_id, track.image_id,
                                                static_cast<size_t>(end - cur), point.track.size()));
-                    LFS_ASSERT_MSG(track.image_id != 0,
-                                   std::format("COLMAP point track image id must be non-zero "
-                                               "(point3D_id={}, image_id={}, point2D_index={}, pair_index={})",
-                                               point.point3D_id, track.image_id, track.point2D_idx,
-                                               point.track.size()));
                     point.track.push_back(track);
                 }
                 point.track_count = point.track.size();
@@ -523,10 +510,6 @@ namespace lfs::io {
                 LOG_ERROR("Invalid format in points3D.txt: {}", std::string(line));
                 throw std::runtime_error("Invalid format in points3D.txt");
             }
-            LFS_ASSERT_MSG(point_id != 0,
-                           std::format("COLMAP point id must be non-zero "
-                                       "(point_id={}, parsed_point_index={}, raw_record='{}')",
-                                       point_id, point_count, line));
             LFS_ASSERT_MSG(std::isfinite(x) && std::isfinite(y) && std::isfinite(z),
                            std::format("COLMAP point coordinates must be finite "
                                        "(point_id={}, xyz=[{},{},{}], parsed_point_index={})",
@@ -1086,8 +1069,8 @@ namespace lfs::io {
             }
             ImageData img;
             img.image_id = read_u32(cur, end, "images.bin image id");
-            LFS_ASSERT_MSG(img.image_id != 0 && image_ids.insert(img.image_id).second,
-                           std::format("images.bin image ids must be non-zero and unique "
+            LFS_ASSERT_MSG(image_ids.insert(img.image_id).second,
+                           std::format("images.bin image ids must be unique "
                                        "(record_index={}, image_id={}, previously_seen={})",
                                        i, img.image_id, image_ids.contains(img.image_id)));
 
@@ -1102,10 +1085,6 @@ namespace lfs::io {
             }
 
             img.camera_id = read_u32(cur, end, "images.bin camera id");
-            LFS_ASSERT_MSG(img.camera_id != 0,
-                           std::format("images.bin camera ids must be non-zero "
-                                       "(record_index={}, image_id={}, camera_id={})",
-                                       i, img.image_id, img.camera_id));
 
             const void* terminator = std::memchr(cur, '\0', static_cast<size_t>(end - cur));
             LFS_ASSERT_MSG(terminator != nullptr,
@@ -1210,11 +1189,6 @@ namespace lfs::io {
             cam.model_id = read_i32(cur, end, "cameras.bin model id");
             const uint64_t width = read_u64(cur, end, "cameras.bin width");
             const uint64_t height = read_u64(cur, end, "cameras.bin height");
-            LFS_ASSERT_MSG(cam.camera_id != 0,
-                           std::format("cameras.bin camera ids must be non-zero "
-                                       "(camera_id={}, record_index={}, camera_count={}, path='{}')",
-                                       cam.camera_id, i, n_cams,
-                                       lfs::core::path_to_utf8(file_path)));
             LFS_ASSERT_MSG(width > 0 && height > 0 &&
                                width <= static_cast<uint64_t>(std::numeric_limits<int>::max()) &&
                                height <= static_cast<uint64_t>(std::numeric_limits<int>::max()),
@@ -1303,8 +1277,8 @@ namespace lfs::io {
             }
             Point3DData point;
             point.point3D_id = read_u64(cur, end, "points3D.bin point id");
-            LFS_ASSERT_MSG(point.point3D_id != 0 && point_ids.insert(point.point3D_id).second,
-                           std::format("points3D.bin point ids must be non-zero and unique "
+            LFS_ASSERT_MSG(point_ids.insert(point.point3D_id).second,
+                           std::format("points3D.bin point ids must be unique "
                                        "(point_id={}, record_index={}, point_count={}, "
                                        "unique_count={})",
                                        point.point3D_id, i, N, point_ids.size()));
@@ -1346,12 +1320,6 @@ namespace lfs::io {
                 Point3DTrackElement track;
                 track.image_id = read_u32(cur, end, "points3D.bin track image id");
                 track.point2D_idx = read_u32(cur, end, "points3D.bin track point index");
-                LFS_ASSERT_MSG(track.image_id != 0,
-                               std::format("points3D.bin track image ids must be non-zero "
-                                           "(point_id={}, image_id={}, point2D_index={}, "
-                                           "track_index={}, track_length={})",
-                                           point.point3D_id, track.image_id, track.point2D_idx,
-                                           j, track_len));
                 point.track.push_back(track);
             }
             points.push_back(std::move(point));
@@ -1500,14 +1468,6 @@ namespace lfs::io {
             return false;
         }
 
-        LFS_ASSERT_MSG(img.image_id != 0,
-                       std::format("COLMAP image id must be non-zero "
-                                   "(image_id={}, name='{}')",
-                                   img.image_id, img.name));
-        LFS_ASSERT_MSG(img.camera_id != 0,
-                       std::format("COLMAP image camera id must be non-zero "
-                                   "(image_id={}, camera_id={}, name='{}')",
-                                   img.image_id, img.camera_id, img.name));
         const double qnorm = std::sqrt(
             static_cast<double>(img.qvec[0]) * img.qvec[0] +
             static_cast<double>(img.qvec[1]) * img.qvec[1] +
@@ -1792,8 +1752,8 @@ namespace lfs::io {
                            std::format("cameras.txt record must contain id/model/width/height "
                                        "(source_line={}, text='{}')",
                                        line_idx + 1, line));
-            LFS_ASSERT_MSG(camera_id > 0 && camera_id <= std::numeric_limits<uint32_t>::max(),
-                           std::format("cameras.txt camera id must be non-zero and fit in uint32 "
+            LFS_ASSERT_MSG(camera_id <= std::numeric_limits<uint32_t>::max(),
+                           std::format("cameras.txt camera id must fit in uint32 "
                                        "(camera_id={}, source_line={}, max={})",
                                        camera_id, line_idx + 1, std::numeric_limits<uint32_t>::max()));
             LFS_ASSERT_MSG(width > 0 && height > 0 &&

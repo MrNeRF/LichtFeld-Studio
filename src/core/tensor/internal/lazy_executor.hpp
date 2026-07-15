@@ -75,6 +75,10 @@ namespace lfs::core {
             uint64_t peak_cache_bytes = 0;
         };
 
+        // Retain eager operands when a graph is deferred. The returned cell is detached only
+        // if the source storage is subsequently exposed for mutation.
+        LFS_CORE_API std::shared_ptr<Tensor> lazy_executor_snapshot_operand(const Tensor& source);
+
         // Build topological execution plan metadata for a root tensor.
         LFS_CORE_API LazyExecutionPlanDebug lazy_planner_build_plan_for_tensor(const Tensor& output);
 

@@ -67,7 +67,7 @@ namespace lfs::python {
             if (layout == rendering::ImageLayout::Unknown)
                 return std::nullopt;
             if (layout == rendering::ImageLayout::CHW) {
-                image = image.permute({1, 2, 0});
+                image = rendering::flipImageVertical(image, layout).permute({1, 2, 0}).contiguous();
             } else {
                 image = image.contiguous();
             }

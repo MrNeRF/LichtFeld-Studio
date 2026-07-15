@@ -195,3 +195,40 @@ def test_python_undo_surface_has_single_entry_point(lf):
     assert not hasattr(lf.ops, "can_undo")
     assert not hasattr(lf.ops, "can_redo")
     assert not hasattr(lf.pipeline, "undo")
+
+
+def test_floating_panels_accept_typed_space_enums(lf):
+    if not hasattr(lf, "ui") or not hasattr(lf.ui, "Panel"):
+        pytest.skip("panel API not available")
+
+    assert not hasattr(lf.ui.PanelSpace, "DOCKABLE")
+
+    panel_id = "tests.typed_floating_panel"
+
+    class TypedFloatingPanel(lf.ui.Panel):
+        id = panel_id
+        label = "Typed Floating"
+        space = lf.ui.PanelSpace.FLOATING
+        options = {lf.ui.PanelOption.DEFAULT_CLOSED}
+
+        def draw(self, ui):
+            del ui
+
+    try:
+        lf.register_class(TypedFloatingPanel)
+    except ValueError as exc:
+        if "retained UI manager" in str(exc):
+            pytest.skip(
+                "floating window registration requires an active retained UI manager"
+            )
+        raise
+    try:
+        floating_names = set(lf.ui.get_panel_names(lf.ui.PanelSpace.FLOATING))
+        panel_info = lf.ui.get_panel(panel_id)
+        assert panel_info is not None
+        assert panel_info.id == panel_id
+        assert panel_info.space == lf.ui.PanelSpace.FLOATING
+        assert lf.ui.set_panel_space(panel_id, lf.ui.PanelSpace.FLOATING) is True
+        assert panel_id in floating_names
+    finally:
+        lf.unregister_class(TypedFloatingPanel)

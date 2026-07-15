@@ -169,6 +169,9 @@ namespace lfs::vis {
         void handleLoadConfigFile(const std::filesystem::path& path);
         void handleNewProject();
         void performNewProject();
+        void schedulePendingTrainingAction();
+        void performPendingTrainingAction();
+        void requestApplicationClose();
         void handleSwitchToLatestCheckpoint();
         void performReset();
         void resetProjectState();
@@ -290,8 +293,14 @@ namespace lfs::vis {
         bool tools_initialized_ = false;
         bool view_context_bridge_initialized_ = false;
         bool pending_auto_train_ = false;
-        bool pending_new_project_ = false;
-        bool pending_reset_ = false;
+        enum class PendingTrainingAction : std::uint8_t {
+            None,
+            Reset,
+            NewProject,
+            Close,
+        };
+        PendingTrainingAction pending_training_action_ = PendingTrainingAction::None;
+        bool pending_training_action_posted_ = false;
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
         bool startup_plugin_preload_started_ = false;

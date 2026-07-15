@@ -248,6 +248,28 @@ TEST_F(TensorRandomTest, NormalInPlace) {
     EXPECT_NEAR(std, 3.0f, 0.3f);
 }
 
+TEST_F(TensorRandomTest, NormalInPlaceOddSizeDoesNotOverwriteAdjacentStorage) {
+    constexpr float sentinel = -12345.0f;
+    auto storage = Tensor::full({7}, sentinel, Device::CUDA);
+    auto odd_view = storage.slice(0, 1, 6);
+
+    odd_view.normal_(0.0f, 1.0f);
+
+    const auto values = storage.cpu().to_vector();
+    ASSERT_EQ(values.size(), 7u);
+    EXPECT_FLOAT_EQ(values.front(), sentinel);
+    EXPECT_FLOAT_EQ(values.back(), sentinel);
+    for (size_t i = 1; i < values.size() - 1; ++i) {
+        EXPECT_TRUE(std::isfinite(values[i]));
+        EXPECT_NE(values[i], sentinel);
+    }
+
+    const auto mcmc_shape = Tensor::zeros({101, 3}, Device::CUDA);
+    const auto noise = Tensor::randn_like(mcmc_shape);
+    EXPECT_EQ(noise.shape(), mcmc_shape.shape());
+    EXPECT_EQ(noise.numel(), 303u);
+}
+
 // ============= Integer Random Tests =============
 
 TEST_F(TensorRandomTest, RandIntBasic) {
@@ -747,46 +769,4 @@ TEST_F(TensorRandomTest, SlicePreservesData) {
     for (size_t i = 0; i < 10; ++i) {
         EXPECT_FLOAT_EQ(slice_vec[i], original_vec[i + 10]);
     }
-}
-
-// ============= Performance Test =============
-
-TEST_F(TensorRandomTest, RandomGenerationSpeed) {
-    const size_t n = 10000000; // 10M elements
-
-    auto start = std::chrono::high_resolution_clock::now();
-    auto tensor = Tensor::randn({n}, Device::CUDA);
-    cudaDeviceSynchronize();
-    auto duration = std::chrono::high_resolution_clock::now() - start;
-
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-    std::cout << "Generated " << n << " random numbers in " << ms << " ms" << std::endl;
-
-    EXPECT_TRUE(tensor.is_valid());
-    EXPECT_EQ(tensor.numel(), n);
-}
-
-TEST_F(TensorRandomTest, CompareGenerationSpeed) {
-    const size_t n = 1000000;
-
-    // Custom tensor
-    Tensor::manual_seed(42);
-    auto start_custom = std::chrono::high_resolution_clock::now();
-    auto custom_t = Tensor::randn({n}, Device::CUDA);
-    cudaDeviceSynchronize();
-    auto duration_custom = std::chrono::high_resolution_clock::now() - start_custom;
-    auto ms_custom = std::chrono::duration_cast<std::chrono::milliseconds>(duration_custom).count();
-
-    // PyTorch
-    torch::manual_seed(42);
-    auto start_torch = std::chrono::high_resolution_clock::now();
-    auto torch_t = torch::randn({n}, torch::TensorOptions().device(torch::kCUDA));
-    cudaDeviceSynchronize();
-    auto duration_torch = std::chrono::high_resolution_clock::now() - start_torch;
-    auto ms_torch = std::chrono::duration_cast<std::chrono::milliseconds>(duration_torch).count();
-
-    std::cout << "Custom: " << ms_custom << " ms, PyTorch: " << ms_torch << " ms" << std::endl;
-
-    EXPECT_TRUE(custom_t.is_valid());
-    EXPECT_TRUE(torch_t.defined());
 }

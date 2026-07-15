@@ -181,8 +181,8 @@ namespace {
         const auto load_rotation = loaded.rotation_raw().contiguous().to(Device::CPU);
         const auto orig_opacity = original.opacity_raw().contiguous().to(Device::CPU);
         const auto load_opacity = loaded.opacity_raw().contiguous().to(Device::CPU);
-        const auto orig_shN = original.shN().contiguous().to(Device::CPU);
-        const auto load_shN = loaded.shN().contiguous().to(Device::CPU);
+        const auto orig_shN = original.shN_canonical_cpu().contiguous();
+        const auto load_shN = loaded.shN_canonical_cpu().contiguous();
 
         const auto* const orig_means_ptr = static_cast<const float*>(orig_means.data_ptr());
         const auto* const load_means_ptr = static_cast<const float*>(load_means.data_ptr());
@@ -214,7 +214,7 @@ namespace {
         }
 
         ASSERT_TRUE(loaded.shN().is_valid());
-        for (size_t i = 0; i < original.size() * static_cast<size_t>(original.shN().size(1)) * 3; ++i) {
+        for (size_t i = 0; i < original.size() * original.active_sh_coeffs_rest() * 3; ++i) {
             EXPECT_NEAR(load_shN_ptr[i], orig_shN_ptr[i], EPSILON) << "SHN mismatch at " << i;
         }
     }

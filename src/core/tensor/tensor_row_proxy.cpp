@@ -38,25 +38,25 @@ namespace lfs::core {
     } // namespace
 
     void TensorRowProxy::flush_cuda_staging() const {
-        if (!cuda_staging_pending_write_) {
+        if (cuda_staging_slots_.empty()) {
             return;
         }
         if (!tensor_ || !tensor_->is_valid() || tensor_->device() != Device::CUDA) {
-            cuda_staging_pending_write_ = false;
             return;
         }
         if (tensor_->dtype() != DataType::Float32) {
             throw std::runtime_error("TensorRowProxy CUDA staging writeback only supports Float32 tensors");
         }
 
-        cuda_copy_async_sync(
-            tensor_->ptr<float>() + cuda_staging_linear_idx_,
-            &cuda_staging_,
-            sizeof(float),
-            cudaMemcpyHostToDevice,
-            tensor_->stream(),
-            "TensorRowProxy::flush_cuda_staging");
-        cuda_staging_pending_write_ = false;
+        for (const auto& slot : cuda_staging_slots_) {
+            cuda_copy_async_sync(
+                tensor_->ptr<float>() + slot.linear_index,
+                &slot.value,
+                sizeof(float),
+                cudaMemcpyHostToDevice,
+                tensor_->stream(),
+                "TensorRowProxy::flush_cuda_staging");
+        }
     }
 
     TensorRowProxy::~TensorRowProxy() {
@@ -82,18 +82,25 @@ namespace lfs::core {
         size_t linear_idx = row_index_ * tensor_->stride(0) + col_index * tensor_->stride(1);
 
         if (tensor_->device() != Device::CPU) {
-            // Commit any previously staged element before staging another one.
-            flush_cuda_staging();
+            const auto existing = std::find_if(
+                cuda_staging_slots_.begin(), cuda_staging_slots_.end(),
+                [linear_idx](const CudaStagingSlot& slot) {
+                    return slot.linear_index == linear_idx;
+                });
+            if (existing != cuda_staging_slots_.end()) {
+                return existing->value;
+            }
+
+            cuda_staging_slots_.push_back(CudaStagingSlot{.linear_index = linear_idx});
+            auto& slot = cuda_staging_slots_.back();
             cuda_copy_async_sync(
-                &cuda_staging_,
+                &slot.value,
                 tensor_->ptr<float>() + linear_idx,
                 sizeof(float),
                 cudaMemcpyDeviceToHost,
                 tensor_->stream(),
                 "TensorRowProxy::operator[]");
-            cuda_staging_linear_idx_ = linear_idx;
-            cuda_staging_pending_write_ = true;
-            return cuda_staging_;
+            return slot.value;
         }
 
         return tensor_->ptr<float>()[linear_idx];
@@ -182,34 +189,10 @@ namespace lfs::core {
         assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy tensor conversion");
         flush_cuda_staging();
 
-        if (tensor_->shape().rank() > 1) {
-            // Build a proper row view so storage offsets/strides are respected for non-contiguous tensors.
-            Tensor row_view = tensor_->slice(0, row_index_, row_index_ + 1).squeeze(0);
-            LFS_ASSERT_MSG(row_view.is_valid(),
-                           "TensorRowProxy failed to create a row view");
-            return row_view.clone();
-        }
-
-        // For 1D tensors, return a scalar tensor
-        LFS_ASSERT_MSG(tensor_->dtype() == DataType::Float32,
-                       "TensorRowProxy scalar tensor conversion currently supports only Float32");
-        float val = item();
-
-        auto result = Tensor::empty({1}, tensor_->device(), tensor_->dtype());
-
-        if (tensor_->device() == Device::CUDA) {
-            cuda_copy_async_sync(
-                result.data_ptr(),
-                &val,
-                sizeof(float),
-                cudaMemcpyHostToDevice,
-                tensor_->stream(),
-                "TensorRowProxy scalar tensor conversion");
-        } else {
-            *result.ptr<float>() = val;
-        }
-
-        return result.squeeze();
+        Tensor row_view = tensor_->slice(0, row_index_, row_index_ + 1).squeeze(0);
+        LFS_ASSERT_MSG(row_view.is_valid(),
+                       "TensorRowProxy failed to create a row view");
+        return row_view;
     }
 
     // ============= TensorRowProxy Assignment Operators =============
@@ -333,8 +316,8 @@ namespace lfs::core {
                        "TensorRowProxy float assignment requires a 1D tensor");
         LFS_ASSERT_MSG(tensor_->dtype() == DataType::Float32,
                        "TensorRowProxy float assignment requires Float32");
-        LFS_ASSERT_MSG(std::isfinite(value),
-                       "TensorRowProxy float assignment requires a finite value");
+        detail::require_scalar_representable(
+            tensor_->dtype(), value, "TensorRowProxy float assignment");
 
         // Use stride for proper indexing on non-contiguous 1D tensors
         size_t linear_idx = row_index_ * tensor_->stride(0);

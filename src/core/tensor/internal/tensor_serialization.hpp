@@ -15,7 +15,6 @@ namespace lfs::core {
 
     constexpr uint32_t TENSOR_FILE_MAGIC = 0x4C465354;
     constexpr uint32_t TENSOR_FILE_VERSION = 1;
-    constexpr uint16_t MAX_SERIALIZED_TENSOR_RANK = 8;
     constexpr uint64_t MAX_SERIALIZED_TENSOR_BYTES = 64ULL * 1024ULL * 1024ULL * 1024ULL;
 
     struct TensorFileHeader {

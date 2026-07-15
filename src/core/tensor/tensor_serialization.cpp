@@ -66,10 +66,8 @@ namespace lfs::core {
             os.write(reinterpret_cast<const char*>(&d), sizeof(d));
         }
 
-        Tensor src = tensor.device() == Device::CUDA ? tensor.cpu() : tensor;
-        if (!src.is_contiguous()) {
-            src = src.contiguous();
-        }
+        const Tensor host = tensor.device() == Device::CUDA ? tensor.cpu() : tensor;
+        const Tensor src = host.is_contiguous() ? host : host.contiguous();
         os.write(reinterpret_cast<const char*>(src.data_ptr()), src.bytes());
 
         if (!os) {
@@ -88,7 +86,7 @@ namespace lfs::core {
         if (header.version != TENSOR_FILE_VERSION) {
             throw std::runtime_error("Unsupported tensor file version");
         }
-        if (header.rank > MAX_SERIALIZED_TENSOR_RANK) {
+        if (header.rank > MAX_TENSOR_RANK) {
             throw std::runtime_error("Invalid tensor file: rank exceeds supported maximum");
         }
         if (header.dtype > static_cast<uint8_t>(DataType::Bool)) {

@@ -12,6 +12,8 @@ namespace lfs::core {
 
     class Tensor;
 
+    inline constexpr size_t MAX_TENSOR_RANK = 8;
+
     enum class Device : uint8_t {
         CPU = 0,
         CUDA = 1

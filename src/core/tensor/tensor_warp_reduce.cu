@@ -13,6 +13,7 @@
  */
 
 #include "core/cuda_error.hpp"
+#include "core/logger.hpp"
 #include "internal/gpu_config.hpp"
 #include "internal/packed128.cuh"
 #include "internal/tensor_functors.hpp"
@@ -222,10 +223,10 @@ namespace lfs::core::tensor_ops {
 
             if (use_vectorized && idx + 3 < n) {
                 const float4 vals = reinterpret_cast<const float4*>(input)[vec_idx];
-                val = fmaxf(val, fmaxf(fmaxf(vals.x, vals.y), fmaxf(vals.z, vals.w)));
+                val = ops::max_reduce_op{}(val, ops::max_reduce_op{}(ops::max_reduce_op{}(vals.x, vals.y), ops::max_reduce_op{}(vals.z, vals.w)));
             } else if (idx < n) {
                 for (size_t i = idx; i < n && i < idx + VECTOR_SIZE; ++i) {
-                    val = fmaxf(val, input[i]);
+                    val = ops::max_reduce_op{}(val, input[i]);
                 }
             }
         }
@@ -238,7 +239,7 @@ namespace lfs::core::tensor_ops {
             int assumed;
             do {
                 assumed = old;
-                const float new_val = fmaxf(__int_as_float(assumed), val);
+                const float new_val = ops::max_reduce_op{}(__int_as_float(assumed), val);
                 old = atomicCAS(output_as_int, assumed, __float_as_int(new_val));
             } while (assumed != old);
         }
@@ -261,10 +262,10 @@ namespace lfs::core::tensor_ops {
 
             if (use_vectorized && idx + 3 < n) {
                 const float4 vals = reinterpret_cast<const float4*>(input)[vec_idx];
-                val = fminf(val, fminf(fminf(vals.x, vals.y), fminf(vals.z, vals.w)));
+                val = ops::min_reduce_op{}(val, ops::min_reduce_op{}(ops::min_reduce_op{}(vals.x, vals.y), ops::min_reduce_op{}(vals.z, vals.w)));
             } else if (idx < n) {
                 for (size_t i = idx; i < n && i < idx + VECTOR_SIZE; ++i) {
-                    val = fminf(val, input[i]);
+                    val = ops::min_reduce_op{}(val, input[i]);
                 }
             }
         }
@@ -277,7 +278,7 @@ namespace lfs::core::tensor_ops {
             int assumed;
             do {
                 assumed = old;
-                const float new_val = fminf(__int_as_float(assumed), val);
+                const float new_val = ops::min_reduce_op{}(__int_as_float(assumed), val);
                 old = atomicCAS(output_as_int, assumed, __float_as_int(new_val));
             } while (assumed != old);
         }
@@ -442,12 +443,12 @@ namespace lfs::core::tensor_ops {
                     size_t idx = base + lane;
                     if (idx < num_float4s) {
                         float4 v = reinterpret_cast<const float4*>(segment_start)[idx];
-                        val = fmaxf(val, fmaxf(fmaxf(v.x, v.y), fmaxf(v.z, v.w)));
+                        val = ops::max_reduce_op{}(val, ops::max_reduce_op{}(ops::max_reduce_op{}(v.x, v.y), ops::max_reduce_op{}(v.z, v.w)));
                     }
                 }
             } else {
                 for (size_t i = lane; i < segment_size; i += 32) {
-                    val = fmaxf(val, segment_start[i]);
+                    val = ops::max_reduce_op{}(val, segment_start[i]);
                 }
             }
 
@@ -484,12 +485,12 @@ namespace lfs::core::tensor_ops {
                     size_t idx = base + lane;
                     if (idx < num_float4s) {
                         float4 v = reinterpret_cast<const float4*>(segment_start)[idx];
-                        val = fminf(val, fminf(fminf(v.x, v.y), fminf(v.z, v.w)));
+                        val = ops::min_reduce_op{}(val, ops::min_reduce_op{}(ops::min_reduce_op{}(v.x, v.y), ops::min_reduce_op{}(v.z, v.w)));
                     }
                 }
             } else {
                 for (size_t i = lane; i < segment_size; i += 32) {
-                    val = fminf(val, segment_start[i]);
+                    val = ops::min_reduce_op{}(val, segment_start[i]);
                 }
             }
 
@@ -647,7 +648,7 @@ namespace lfs::core::tensor_ops {
             float max_val = -CUDA_INFINITY;
 #pragma unroll 8
             for (size_t i = 0; i < segment_size; ++i) {
-                max_val = fmaxf(max_val, segment_start[i]);
+                max_val = ops::max_reduce_op{}(max_val, segment_start[i]);
             }
 
             output[seg_idx] = max_val;
@@ -671,7 +672,7 @@ namespace lfs::core::tensor_ops {
             float min_val = CUDA_INFINITY;
 #pragma unroll 8
             for (size_t i = 0; i < segment_size; ++i) {
-                min_val = fminf(min_val, segment_start[i]);
+                min_val = ops::min_reduce_op{}(min_val, segment_start[i]);
             }
 
             output[seg_idx] = min_val;
@@ -858,20 +859,20 @@ namespace lfs::core::tensor_ops {
                     float v7 = input[base_idx + (r + 7) * inner_size];
 
                     // Balanced tree reduction
-                    float m01 = fmaxf(v0, v1);
-                    float m23 = fmaxf(v2, v3);
-                    float m45 = fmaxf(v4, v5);
-                    float m67 = fmaxf(v6, v7);
-                    float m0123 = fmaxf(m01, m23);
-                    float m4567 = fmaxf(m45, m67);
-                    max_val = fmaxf(max_val, fmaxf(m0123, m4567));
+                    float m01 = ops::max_reduce_op{}(v0, v1);
+                    float m23 = ops::max_reduce_op{}(v2, v3);
+                    float m45 = ops::max_reduce_op{}(v4, v5);
+                    float m67 = ops::max_reduce_op{}(v6, v7);
+                    float m0123 = ops::max_reduce_op{}(m01, m23);
+                    float m4567 = ops::max_reduce_op{}(m45, m67);
+                    max_val = ops::max_reduce_op{}(max_val, ops::max_reduce_op{}(m0123, m4567));
                 }
             }
 
 // Handle remainder
 #pragma unroll 4
             for (; r < reduce_size; ++r) {
-                max_val = fmaxf(max_val, input[base_idx + r * inner_size]);
+                max_val = ops::max_reduce_op{}(max_val, input[base_idx + r * inner_size]);
             }
 
             output[out_idx] = max_val;
@@ -969,23 +970,63 @@ namespace lfs::core::tensor_ops {
                     float v7 = input[base_idx + (r + 7) * inner_size];
 
                     // Balanced tree reduction
-                    float m01 = fminf(v0, v1);
-                    float m23 = fminf(v2, v3);
-                    float m45 = fminf(v4, v5);
-                    float m67 = fminf(v6, v7);
-                    float m0123 = fminf(m01, m23);
-                    float m4567 = fminf(m45, m67);
-                    min_val = fminf(min_val, fminf(m0123, m4567));
+                    float m01 = ops::min_reduce_op{}(v0, v1);
+                    float m23 = ops::min_reduce_op{}(v2, v3);
+                    float m45 = ops::min_reduce_op{}(v4, v5);
+                    float m67 = ops::min_reduce_op{}(v6, v7);
+                    float m0123 = ops::min_reduce_op{}(m01, m23);
+                    float m4567 = ops::min_reduce_op{}(m45, m67);
+                    min_val = ops::min_reduce_op{}(min_val, ops::min_reduce_op{}(m0123, m4567));
                 }
             }
 
 // Handle remainder
 #pragma unroll 4
             for (; r < reduce_size; ++r) {
-                min_val = fminf(min_val, input[base_idx + r * inner_size]);
+                min_val = ops::min_reduce_op{}(min_val, input[base_idx + r * inner_size]);
             }
 
             output[out_idx] = min_val;
+        }
+    }
+
+    __global__ void warp_strided_reduce_prod_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t outer_size,
+        size_t reduce_size,
+        size_t inner_size) {
+        const size_t output_elements = outer_size * inner_size;
+        const size_t stride = blockDim.x * gridDim.x;
+
+        for (size_t out_idx = blockIdx.x * blockDim.x + threadIdx.x;
+             out_idx < output_elements;
+             out_idx += stride) {
+            const size_t outer_idx = out_idx / inner_size;
+            const size_t inner_idx = out_idx % inner_size;
+            const size_t base_idx = outer_idx * reduce_size * inner_size + inner_idx;
+
+            float product = 1.0f;
+            size_t r = 0;
+            if (reduce_size >= 8) {
+#pragma unroll 2
+                for (; r + 7 < reduce_size; r += 8) {
+                    product *= input[base_idx + (r + 0) * inner_size] *
+                               input[base_idx + (r + 1) * inner_size] *
+                               input[base_idx + (r + 2) * inner_size] *
+                               input[base_idx + (r + 3) * inner_size] *
+                               input[base_idx + (r + 4) * inner_size] *
+                               input[base_idx + (r + 5) * inner_size] *
+                               input[base_idx + (r + 6) * inner_size] *
+                               input[base_idx + (r + 7) * inner_size];
+                }
+            }
+#pragma unroll 4
+            for (; r < reduce_size; ++r) {
+                product *= input[base_idx + r * inner_size];
+            }
+
+            output[out_idx] = product;
         }
     }
 
@@ -1066,7 +1107,8 @@ namespace lfs::core::tensor_ops {
                 input, output, n, is_aligned);
             break;
         default:
-            break;
+            LFS_ASSERT_MSG(false,
+                           "two-stage warp reduction encountered an unsupported operation");
         }
 
         // Free partial buffer if we allocated it
@@ -1122,7 +1164,8 @@ namespace lfs::core::tensor_ops {
                 input, output, n, is_aligned);
             break;
         default:
-            break;
+            LFS_ASSERT_MSG(false,
+                           "full warp reduction encountered an unsupported operation");
         }
     }
 
@@ -1182,7 +1225,8 @@ namespace lfs::core::tensor_ops {
                     input, output, num_segments, segment_size);
                 break;
             default:
-                break;
+                LFS_ASSERT_MSG(false,
+                               "tiny segmented reduction encountered an unsupported operation");
             }
             return;
         }
@@ -1220,7 +1264,8 @@ namespace lfs::core::tensor_ops {
                     input, output, num_segments, segment_size);
                 break;
             default:
-                break;
+                LFS_ASSERT_MSG(false,
+                               "medium segmented reduction encountered an unsupported operation");
             }
             return;
         }
@@ -1253,7 +1298,8 @@ namespace lfs::core::tensor_ops {
                 input, output, num_segments, segment_size);
             break;
         default:
-            break;
+            LFS_ASSERT_MSG(false,
+                           "segmented reduction encountered an unsupported operation");
         }
     }
 
@@ -1307,128 +1353,35 @@ namespace lfs::core::tensor_ops {
             warp_strided_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, outer_size, reduce_size, inner_size);
             break;
-        default:
+        case ReduceOp::Prod:
+            warp_strided_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                input, output, outer_size, reduce_size, inner_size);
             break;
+        default:
+            LFS_ASSERT_MSG(false,
+                           "warp strided reduction encountered an unsupported operation");
         }
     }
 
-    /**
-     * @brief Multi-axis reduction kernel for contiguous axes
-     *
-     * When reducing multiple contiguous axes, we can treat it as a single-axis
-     * reduction with a larger reduce_size. This is much faster than the generic
-     * multi-axis kernel.
-     *
-     * Example: sum({0, 1}) on [256, 256, 64] reduces 256*256=65536 elements
-     *          to produce each of the 64 output values.
-     *
-     * Each block processes one output element using warp reductions.
-     */
-    __global__ void warp_multi_axis_reduce_sum_kernel(
-        const float* __restrict__ input,
-        float* __restrict__ output,
-        size_t output_size,
-        size_t reduce_count) {
-        size_t out_idx = blockIdx.x;
-        if (out_idx >= output_size)
-            return;
-
-        // Each output element requires summing reduce_count input elements
-        const float* segment_start = input + out_idx * reduce_count;
-
-        // Use vectorized segment reduction
-        float result = warp_ops::vectorized_segment_reduce_sum(segment_start, reduce_count);
-
-        if (threadIdx.x == 0) {
-            output[out_idx] = result;
-        }
-    }
-
-    /**
-     * @brief Multi-axis max reduction kernel for contiguous axes
-     */
-    __global__ void warp_multi_axis_reduce_max_kernel(
-        const float* __restrict__ input,
-        float* __restrict__ output,
-        size_t output_size,
-        size_t reduce_count) {
-        size_t out_idx = blockIdx.x;
-        if (out_idx >= output_size)
-            return;
-
-        const float* segment_start = input + out_idx * reduce_count;
-        float result = warp_ops::vectorized_segment_reduce_max(segment_start, reduce_count);
-
-        if (threadIdx.x == 0) {
-            output[out_idx] = result;
-        }
-    }
-
-    /**
-     * @brief Multi-axis min reduction kernel for contiguous axes
-     */
-    __global__ void warp_multi_axis_reduce_min_kernel(
-        const float* __restrict__ input,
-        float* __restrict__ output,
-        size_t output_size,
-        size_t reduce_count) {
-        size_t out_idx = blockIdx.x;
-        if (out_idx >= output_size)
-            return;
-
-        const float* segment_start = input + out_idx * reduce_count;
-        float result = warp_ops::vectorized_segment_reduce_min(segment_start, reduce_count);
-
-        if (threadIdx.x == 0) {
-            output[out_idx] = result;
-        }
-    }
-
-    /**
-     * @brief Launch optimized multi-axis warp reduction
-     *
-     * This is for reducing multiple contiguous axes. Much faster than the generic
-     * multi-axis kernel which has poor index computation overhead.
-     *
-     * @param input Input tensor data
-     * @param output Output array
-     * @param output_size Number of output elements
-     * @param reduce_count Number of elements to reduce per output
-     * @param op Reduction operation
-     * @param stream CUDA stream
-     */
     void launch_warp_multi_axis_reduce(
         const float* input,
         float* output,
-        size_t output_size,
+        size_t outer_size,
         size_t reduce_count,
+        size_t inner_size,
         ReduceOp op,
         cudaStream_t stream) {
-        if (output_size == 0 || reduce_count == 0)
+        if (outer_size == 0 || reduce_count == 0 || inner_size == 0)
             return;
 
-        // Each block processes one output element
-        // 256 threads per block for good warp utilization
-        constexpr int BLOCK_SIZE = 256;
-        int grid_size = output_size;
-
-        switch (op) {
-        case ReduceOp::Sum:
-        case ReduceOp::Mean: // Mean handled as sum, then divided by caller
-            warp_multi_axis_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
-                input, output, output_size, reduce_count);
-            break;
-        case ReduceOp::Max:
-            warp_multi_axis_reduce_max_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
-                input, output, output_size, reduce_count);
-            break;
-        case ReduceOp::Min:
-            warp_multi_axis_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
-                input, output, output_size, reduce_count);
-            break;
-        default:
-            break;
+        if (inner_size == 1) {
+            launch_warp_segmented_reduce(
+                input, output, outer_size, reduce_count, op, stream);
+            return;
         }
+
+        launch_warp_strided_reduce(
+            input, output, outer_size, reduce_count, inner_size, op, stream);
     }
 
     // Column reduction for 2D matrices [M, N] -> [N]
@@ -1475,7 +1428,7 @@ namespace lfs::core::tensor_ops {
 
         float val = -FLT_MAX;
         for (size_t row = row_start; row < row_end; row++) {
-            val = fmaxf(val, input[row * N + col]);
+            val = ops::max_reduce_op{}(val, input[row * N + col]);
         }
 
         if (gridDim.y == 1) {
@@ -1485,7 +1438,7 @@ namespace lfs::core::tensor_ops {
             int old = *out_int, assumed;
             do {
                 assumed = old;
-                old = atomicCAS(out_int, assumed, __float_as_int(fmaxf(__int_as_float(assumed), val)));
+                old = atomicCAS(out_int, assumed, __float_as_int(ops::max_reduce_op{}(__int_as_float(assumed), val)));
             } while (assumed != old);
         }
     }
@@ -1503,7 +1456,7 @@ namespace lfs::core::tensor_ops {
 
         float val = FLT_MAX;
         for (size_t row = row_start; row < row_end; row++) {
-            val = fminf(val, input[row * N + col]);
+            val = ops::min_reduce_op{}(val, input[row * N + col]);
         }
 
         if (gridDim.y == 1) {
@@ -1513,7 +1466,7 @@ namespace lfs::core::tensor_ops {
             int old = *out_int, assumed;
             do {
                 assumed = old;
-                old = atomicCAS(out_int, assumed, __float_as_int(fminf(__int_as_float(assumed), val)));
+                old = atomicCAS(out_int, assumed, __float_as_int(ops::min_reduce_op{}(__int_as_float(assumed), val)));
             } while (assumed != old);
         }
     }
@@ -1559,7 +1512,8 @@ namespace lfs::core::tensor_ops {
             column_reduce_min_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
             break;
         default:
-            break;
+            LFS_ASSERT_MSG(false,
+                           "column reduction encountered an unsupported operation");
         }
     }
 

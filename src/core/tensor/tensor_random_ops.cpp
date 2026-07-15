@@ -7,6 +7,7 @@
 #include <atomic>
 #include <curand.h>
 #include <curand_kernel.h>
+#include <mutex>
 #include <random>
 
 #define CHECK_CURAND(call)                                                   \
@@ -25,9 +26,11 @@ namespace lfs::core {
     class RandomGeneratorImpl {
     public:
         std::atomic<uint64_t> call_counter_{0};
+        uint64_t cuda_offset_ = 0;
         uint64_t seed_ = 42;
         void* cuda_generator_ = nullptr;
         std::mt19937_64 cpu_generator_;
+        std::mutex cuda_mutex_;
 
         RandomGeneratorImpl() : seed_(42),
                                 cpu_generator_(seed_) {
@@ -69,9 +72,11 @@ namespace lfs::core {
         cpu_generator_.seed(seed);
 
         auto* impl = static_cast<RandomGeneratorImpl*>(impl_);
+        std::lock_guard lock(impl->cuda_mutex_);
         impl->seed_ = seed;
         impl->cpu_generator_.seed(seed);
-        impl->call_counter_.store(0); // Reset call counter when seed is set
+        impl->call_counter_.store(0);
+        impl->cuda_offset_ = 0;
 
         if (impl->cuda_generator_) {
             curandGenerator_t* gen = static_cast<curandGenerator_t*>(impl->cuda_generator_);
@@ -88,10 +93,22 @@ namespace lfs::core {
         return base_seed + counter * 1000000ULL;
     }
 
-    uint64_t RandomGenerator::get_next_cuda_offset() {
+    void RandomGenerator::generate_cuda_normal(float* output, const size_t count,
+                                               const float mean, const float std,
+                                               const cudaStream_t stream) {
+        LFS_ASSERT_MSG(output != nullptr,
+                       "CUDA normal generation requires a valid output pointer");
+        LFS_ASSERT_MSG(count > 0 && count % 2 == 0,
+                       "CUDA normal generation requires a positive even value count");
         auto* impl = static_cast<RandomGeneratorImpl*>(impl_);
-        uint64_t counter = impl->call_counter_.fetch_add(1);
-        return counter * 1000000ULL;
+        std::lock_guard lock(impl->cuda_mutex_);
+        LFS_ASSERT_MSG(count <= std::numeric_limits<uint64_t>::max() - impl->cuda_offset_,
+                       "CUDA random generator offset overflow");
+
+        curandGenerator_t* gen = static_cast<curandGenerator_t*>(impl->cuda_generator_);
+        impl->cuda_offset_ += count;
+        CHECK_CURAND(curandSetStream(*gen, stream));
+        CHECK_CURAND(curandGenerateNormal(*gen, output, count, mean, std));
     }
 
     void* RandomGenerator::get_generator(Device device) {
@@ -116,6 +133,13 @@ namespace lfs::core {
                        "uniform_ bounds must be finite and ordered");
         if (numel() == 0) {
             return *this;
+        }
+
+        if (!is_contiguous()) {
+            return mutate_logical_view(
+                [&](Tensor& materialized) {
+                    materialized.uniform_(low, high);
+                });
         }
 
         size_t n = numel();
@@ -145,37 +169,40 @@ namespace lfs::core {
                        "normal_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
                        "normal_ requires Float32 dtype");
-        LFS_ASSERT_MSG(std::isfinite(mean) && std::isfinite(std) && std > 0.0f,
-                       "normal_ mean and standard deviation must be finite, with std > 0");
+        LFS_ASSERT_MSG(std::isfinite(mean) && std::isfinite(std) && std >= 0.0f,
+                       "normal_ mean and standard deviation must be finite, with std >= 0");
         if (numel() == 0) {
             return *this;
+        }
+
+        if (std == 0.0f) {
+            return fill_(mean);
+        }
+
+        if (!is_contiguous()) {
+            return mutate_logical_view(
+                [&](Tensor& materialized) {
+                    materialized.normal_(mean, std);
+                });
         }
 
         size_t n = numel();
 
         if (device_ == Device::CUDA) {
-            // OPTIMIZATION: Use curandGenerateNormal for bulk generation (much faster!)
-            // This avoids the slow per-element curand_init in the kernel
-            curandGenerator_t* gen = static_cast<curandGenerator_t*>(
-                RandomGenerator::instance().get_generator(Device::CUDA));
-
-            // Advance the generator offset (not the seed!) for reproducibility
-            uint64_t offset = RandomGenerator::instance().get_next_cuda_offset();
-            CHECK_CURAND(curandSetGeneratorOffset(*gen, offset));
-
             // curandGenerateNormal requires even number of elements
             if (n % 2 == 1) {
                 // Generate into an n+1 scratch allocation. Writing n+1 values into
                 // the n-element destination was a one-float buffer overflow.
                 auto scratch = Tensor::empty({n + 1}, Device::CUDA, DataType::Float32);
-                CHECK_CURAND(curandGenerateNormal(*gen, scratch.ptr<float>(), n + 1, mean, std));
+                RandomGenerator::instance().generate_cuda_normal(
+                    scratch.ptr<float>(), n + 1, mean, std, stream());
                 LFS_CUDA_CHECK(cudaMemcpyAsync(ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
                                                cudaMemcpyDeviceToDevice, stream()));
                 LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
             } else {
-                CHECK_CURAND(curandGenerateNormal(*gen, ptr<float>(), n, mean, std));
+                RandomGenerator::instance().generate_cuda_normal(
+                    ptr<float>(), n, mean, std, stream());
             }
-            // Note: No need for cudaDeviceSynchronize() - curandGenerateNormal is blocking
         } else {
             // CPU uses stateful generator
             auto* impl = static_cast<RandomGeneratorImpl*>(

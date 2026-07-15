@@ -38,6 +38,7 @@ def test_builtin_select_activation_uses_toolbar_tool_and_resets_brush_mode(monke
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         ops=SimpleNamespace(cancel_modal=lambda: calls.append(("cancel_modal",))),
+        get_content_type=lambda: "splat_files",
         clear_gizmo=lambda: calls.append(("clear_gizmo",)),
         set_active_tool=lambda tool_id: calls.append(("set_active_tool", tool_id)),
         set_active_operator=lambda tool_id, gizmo="": calls.append(("set_active_operator", tool_id, gizmo)),
@@ -47,6 +48,7 @@ def test_builtin_select_activation_uses_toolbar_tool_and_resets_brush_mode(monke
         ),
         clear_active_operator=lambda: calls.append(("clear_active_operator",)),
     )
+    lf_stub.can_transform_selection = lambda: True
 
     tools = _import_tools_with_runtime_stub(monkeypatch, lf_stub)
 
@@ -62,12 +64,14 @@ def test_crop_activation_uses_active_operator(monkeypatch):
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         ops=SimpleNamespace(cancel_modal=lambda: calls.append(("cancel_modal",))),
+        get_content_type=lambda: "splat_files",
         clear_gizmo=lambda: calls.append(("clear_gizmo",)),
         set_active_tool=lambda tool_id: calls.append(("set_active_tool", tool_id)),
         set_active_operator=lambda tool_id, gizmo="": calls.append(("set_active_operator", tool_id, gizmo)),
         set_gizmo_type=lambda gizmo: calls.append(("set_gizmo_type", gizmo)),
         clear_active_operator=lambda: calls.append(("clear_active_operator",)),
     )
+    lf_stub.can_transform_selection = lambda: True
 
     tools = _import_tools_with_runtime_stub(monkeypatch, lf_stub)
 

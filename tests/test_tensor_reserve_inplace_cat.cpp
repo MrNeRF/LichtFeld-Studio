@@ -2,6 +2,7 @@
  * Test for tensor reserve() + in-place cat() functionality
  */
 #include "core/tensor.hpp"
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <limits>
@@ -209,4 +210,61 @@ TEST(TensorReserveInplaceCat, OverflowFailurePreservesInstalledStorage) {
 
     const auto values = tensor.to(Device::CPU).to_vector();
     EXPECT_EQ(values, (std::vector<float>{1.0f, 1.0f}));
+}
+
+TEST(TensorReserveInplaceCat, MultidimensionalAppendUsesReservedStorage) {
+    auto tensor = Tensor::zeros({2, 2, 3}, Device::CUDA);
+    tensor.reserve(8);
+    void* const reserved_ptr = tensor.data_ptr();
+
+    const auto addition = Tensor::ones({3, 2, 3}, Device::CUDA);
+    tensor = tensor.cat({addition}, 0);
+
+    EXPECT_EQ(tensor.data_ptr(), reserved_ptr);
+    EXPECT_EQ(tensor.capacity(), 8u);
+    EXPECT_EQ(tensor.shape(), TensorShape({5, 2, 3}));
+    const auto values = tensor.cpu().to_vector();
+    EXPECT_EQ(std::count(values.begin(), values.end(), 0.0f), 12);
+    EXPECT_EQ(std::count(values.begin(), values.end(), 1.0f), 18);
+}
+
+TEST(TensorReserveInplaceCat, GrowthBeyondCapacityPreservesValues) {
+    auto tensor = Tensor::full({2, 3}, 5.0f, Device::CUDA);
+    tensor.reserve(4);
+    const auto addition = Tensor::full({5, 3}, 7.0f, Device::CUDA);
+
+    tensor = tensor.cat({addition}, 0);
+
+    EXPECT_EQ(tensor.shape(), TensorShape({7, 3}));
+    EXPECT_EQ(tensor.capacity(), 0u);
+    EXPECT_EQ(tensor.logical_size(), 7u);
+    const auto values = tensor.cpu().to_vector();
+    ASSERT_EQ(values.size(), 21u);
+    for (size_t i = 0; i < 6; ++i) {
+        EXPECT_FLOAT_EQ(values[i], 5.0f);
+    }
+    for (size_t i = 6; i < values.size(); ++i) {
+        EXPECT_FLOAT_EQ(values[i], 7.0f);
+    }
+}
+
+TEST(TensorReserveInplaceCat, AggregateOwnedSliceCopyPreservesOutsideRegion) {
+    struct TensorPair {
+        Tensor first;
+        Tensor second;
+    } tensors{
+        .first = Tensor::full({6, 2}, 5.0f, Device::CUDA),
+        .second = Tensor::zeros({6, 2}, Device::CUDA)};
+
+    const auto replacement = Tensor::full({2, 2}, 7.0f, Device::CUDA);
+    tensors.first.slice(0, 2, 4).copy_(replacement);
+
+    EXPECT_EQ(tensors.first.cpu().to_vector(),
+              (std::vector<float>{5.0f, 5.0f,
+                                  5.0f, 5.0f,
+                                  7.0f, 7.0f,
+                                  7.0f, 7.0f,
+                                  5.0f, 5.0f,
+                                  5.0f, 5.0f}));
+    EXPECT_EQ(tensors.second.cpu().to_vector(), (std::vector<float>(12, 0.0f)));
 }

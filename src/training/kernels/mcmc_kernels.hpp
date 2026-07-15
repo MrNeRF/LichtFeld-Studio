@@ -36,6 +36,7 @@ namespace lfs::training::mcmc {
         const float* opacities,
         const float* scales,
         const int32_t* ratios,
+        float min_opacity,
         float* new_opacities,
         float* new_scales,
         size_t N,

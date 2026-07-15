@@ -510,61 +510,7 @@ TEST_F(SliceMMBugTest, SliceOnCUDA) {
     compare_tensors(custom_T, torch_T, 1e-4f, 1e-5f, "CUDA_Slice_T");
 }
 
-// Test 12: Verify that comment in transforms.cpp says transpose but code doesn't do it
-TEST_F(SliceMMBugTest, TransposeVsNoTranspose_Comment_Code_Mismatch) {
-    // The comment in transforms.cpp says:
-    // "R = np.transpose(w2c[:3,:3])"
-    // But the code does:
-    // lfs::core::Tensor R = w2c.slice(0, 0, 3).slice(1, 0, 3);
-    // This is WITHOUT transpose!
-
-    // The GLM extraction does transpose:
-    // r_ptr[row * 3 + col] = w2c_glm[col][row];
-    // This is equivalent to R = transpose(mat)
-
-    // Let's verify if there's a difference
-
-    std::vector<float> w2c_data = {
-        0.9848f, -0.0312f, 0.1710f, -0.5f,
-        0.0f, 0.9848f, 0.1736f, 1.2f,
-        -0.1736f, -0.1710f, 0.9698f, 3.5f,
-        0.0f, 0.0f, 0.0f, 1.0f};
-
-    auto tensor_w2c = Tensor::from_vector(w2c_data, {4, 4}, Device::CPU);
-
-    // What the current code does (NO transpose)
-    auto R_no_transpose = tensor_w2c.slice(0, 0, 3).slice(1, 0, 3).contiguous();
-
-    // What the comment says should happen (WITH transpose)
-    auto R_with_transpose = tensor_w2c.slice(0, 0, 3).slice(1, 0, 3).t().contiguous();
-
-    LOG_INFO("=== R without transpose (current code) ===");
-    R_no_transpose.print_formatted("R_no_transpose");
-
-    LOG_INFO("=== R with transpose (what comment says) ===");
-    R_with_transpose.print_formatted("R_with_transpose");
-
-    // These are DIFFERENT!
-    auto no_t_vec = R_no_transpose.to_vector();
-    auto with_t_vec = R_with_transpose.to_vector();
-
-    bool are_different = false;
-    for (size_t i = 0; i < no_t_vec.size(); i++) {
-        if (std::abs(no_t_vec[i] - with_t_vec[i]) > 1e-5f) {
-            are_different = true;
-            break;
-        }
-    }
-
-    // For a non-symmetric rotation matrix, they should be different
-    // This highlights a potential code/comment mismatch
-    LOG_INFO("R matrices are different: {}", are_different);
-
-    // The tensor library is working correctly - this is just documentation
-    // that the comment and code may not match
-}
-
-// Test 13: Direct element access on sliced tensor WITHOUT contiguous()
+// Test 12: Direct element access on sliced tensor WITHOUT contiguous()
 TEST_F(SliceMMBugTest, DirectElementAccess_NonContiguousSlice) {
     std::vector<float> data(16);
     for (int i = 0; i < 16; i++) {

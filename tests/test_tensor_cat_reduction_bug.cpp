@@ -754,16 +754,6 @@ TEST_F(TensorCatReductionBugTest, Slice_3D_Dim1) {
 // PART 11: Edge cases
 // ============================================================================
 
-TEST_F(TensorCatReductionBugTest, Cat_EmptyFirst) {
-    auto empty = Tensor::empty({0}, Device::CUDA);
-    std::vector<float> data = {1.0f, 2.0f, 3.0f};
-    auto t = Tensor::from_vector(data, {3}, Device::CUDA);
-
-    // This might not be supported, but let's test it
-    // auto cat = Tensor::cat({empty, t}, 0);
-    // If it works, verify the result
-}
-
 TEST_F(TensorCatReductionBugTest, Cat_SingleElement) {
     std::vector<float> d1 = {100.0f};
     std::vector<float> d2 = {-50.0f};
@@ -848,26 +838,7 @@ TEST_F(TensorCatReductionBugTest, IsContiguous_ColumnSlice) {
     auto t = Tensor::from_vector(data, {2, 3}, Device::CUDA);
 
     auto col0 = t.slice(1, 0, 1); // [2, 1] - elements at positions 0 and 3
-    // Column slice should NOT be contiguous (strided memory)
-    // Note: This test checks our implementation's behavior
-    // The bug may be that we report it as contiguous when it's not
-    bool is_contig = col0.is_contiguous();
-
-    // If it reports contiguous but reduction fails, that's a bug
-    if (is_contig) {
-        // Should still work correctly
-        auto squeezed = col0.squeeze(1);
-        verifyMinMax(squeezed, "IsContiguous_ColumnSlice");
-    }
-}
-
-TEST_F(TensorCatReductionBugTest, IsContiguous_RangeSlice) {
-    std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
-    auto t = Tensor::from_vector(data, {6}, Device::CUDA);
-
-    auto slice = t.slice(0, 2, 5); // [3, 4, 5]
-    // This is a view with storage_offset, but should be contiguous
-    // because stride matches
+    EXPECT_FALSE(col0.is_contiguous());
 }
 
 // ============================================================================
@@ -950,94 +921,16 @@ TEST_F(TensorCatReductionBugTest, Random_2D_Column_Reduction) {
 // PART 14: Specific size thresholds (find where bug appears)
 // ============================================================================
 
-TEST_F(TensorCatReductionBugTest, SizeThreshold_1K) {
-    const size_t N = 1000;
-    auto cpu1 = Tensor::zeros({N}, Device::CPU);
-    auto cpu2 = Tensor::zeros({N}, Device::CPU);
-    float* p1 = cpu1.ptr<float>();
-    float* p2 = cpu2.ptr<float>();
-    for (size_t i = 0; i < N; ++i) {
-        p1[i] = 100.0f;
-        p2[i] = -100.0f;
+TEST_F(TensorCatReductionBugTest, SizeThresholdsPreserveReductionAcrossKernelBoundaries) {
+    for (const size_t size : {1'000u, 10'000u, 100'000u, 500'000u, 1'000'000u}) {
+        SCOPED_TRACE(::testing::Message() << "size=" << size);
+        auto cpu1 = Tensor::full({size}, 100.0f, Device::CPU);
+        auto cpu2 = Tensor::full({size}, -100.0f, Device::CPU);
+
+        const auto cat = Tensor::cat({cpu1.cuda(), cpu2.cuda()}, 0);
+
+        verifyMinMax(cat, "SizeThresholdsPreserveReductionAcrossKernelBoundaries");
     }
-
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
-    auto cat = Tensor::cat({t1, t2}, 0);
-
-    verifyMinMax(cat, "SizeThreshold_1K");
-}
-
-TEST_F(TensorCatReductionBugTest, SizeThreshold_10K) {
-    const size_t N = 10000;
-    auto cpu1 = Tensor::zeros({N}, Device::CPU);
-    auto cpu2 = Tensor::zeros({N}, Device::CPU);
-    float* p1 = cpu1.ptr<float>();
-    float* p2 = cpu2.ptr<float>();
-    for (size_t i = 0; i < N; ++i) {
-        p1[i] = 100.0f;
-        p2[i] = -100.0f;
-    }
-
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
-    auto cat = Tensor::cat({t1, t2}, 0);
-
-    verifyMinMax(cat, "SizeThreshold_10K");
-}
-
-TEST_F(TensorCatReductionBugTest, SizeThreshold_100K) {
-    const size_t N = 100000;
-    auto cpu1 = Tensor::zeros({N}, Device::CPU);
-    auto cpu2 = Tensor::zeros({N}, Device::CPU);
-    float* p1 = cpu1.ptr<float>();
-    float* p2 = cpu2.ptr<float>();
-    for (size_t i = 0; i < N; ++i) {
-        p1[i] = 100.0f;
-        p2[i] = -100.0f;
-    }
-
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
-    auto cat = Tensor::cat({t1, t2}, 0);
-
-    verifyMinMax(cat, "SizeThreshold_100K");
-}
-
-TEST_F(TensorCatReductionBugTest, SizeThreshold_500K) {
-    const size_t N = 500000;
-    auto cpu1 = Tensor::zeros({N}, Device::CPU);
-    auto cpu2 = Tensor::zeros({N}, Device::CPU);
-    float* p1 = cpu1.ptr<float>();
-    float* p2 = cpu2.ptr<float>();
-    for (size_t i = 0; i < N; ++i) {
-        p1[i] = 100.0f;
-        p2[i] = -100.0f;
-    }
-
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
-    auto cat = Tensor::cat({t1, t2}, 0);
-
-    verifyMinMax(cat, "SizeThreshold_500K");
-}
-
-TEST_F(TensorCatReductionBugTest, SizeThreshold_1M) {
-    const size_t N = 1000000;
-    auto cpu1 = Tensor::zeros({N}, Device::CPU);
-    auto cpu2 = Tensor::zeros({N}, Device::CPU);
-    float* p1 = cpu1.ptr<float>();
-    float* p2 = cpu2.ptr<float>();
-    for (size_t i = 0; i < N; ++i) {
-        p1[i] = 100.0f;
-        p2[i] = -100.0f;
-    }
-
-    auto t1 = cpu1.to(Device::CUDA);
-    auto t2 = cpu2.to(Device::CUDA);
-    auto cat = Tensor::cat({t1, t2}, 0);
-
-    verifyMinMax(cat, "SizeThreshold_1M");
 }
 
 // ============================================================================
@@ -1094,4 +987,41 @@ TEST_F(TensorCatReductionBugTest, ToDevice_After_Slice) {
     verifyMinMax(back_to_gpu, "ToDevice_After_Slice");
     EXPECT_FLOAT_EQ(back_to_gpu.min().item(), 100.0f);
     EXPECT_FLOAT_EQ(back_to_gpu.max().item(), 300.0f);
+}
+
+TEST_F(TensorCatReductionBugTest, CatTrimmedRowsWithZeroInitializedGrowth) {
+    const auto storage = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f,
+                           4.0f, 5.0f, 6.0f,
+                           7.0f, 8.0f, 9.0f,
+                           10.0f, 11.0f, 12.0f,
+                           13.0f, 14.0f, 15.0f},
+        {5, 3}, Device::CUDA);
+    const auto trimmed = storage.slice(0, 0, 3).contiguous();
+    const auto result = Tensor::cat({trimmed, Tensor::zeros({2, 3}, Device::CUDA)}, 0);
+
+    EXPECT_EQ(result.shape(), TensorShape({5, 3}));
+    EXPECT_EQ(result.cpu().to_vector(),
+              (std::vector<float>{1.0f, 2.0f, 3.0f,
+                                  4.0f, 5.0f, 6.0f,
+                                  7.0f, 8.0f, 9.0f,
+                                  0.0f, 0.0f, 0.0f,
+                                  0.0f, 0.0f, 0.0f}));
+}
+
+TEST_F(TensorCatReductionBugTest, CatShCoefficientsAlongMiddleDimension) {
+    const auto sh0 = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
+        {2, 1, 3}, Device::CUDA);
+    const auto shn = Tensor::zeros({2, 2, 3}, Device::CUDA);
+    const auto result = Tensor::cat({sh0, shn}, 1);
+
+    EXPECT_EQ(result.shape(), TensorShape({2, 3, 3}));
+    EXPECT_EQ(result.cpu().to_vector(),
+              (std::vector<float>{1.0f, 2.0f, 3.0f,
+                                  0.0f, 0.0f, 0.0f,
+                                  0.0f, 0.0f, 0.0f,
+                                  4.0f, 5.0f, 6.0f,
+                                  0.0f, 0.0f, 0.0f,
+                                  0.0f, 0.0f, 0.0f}));
 }

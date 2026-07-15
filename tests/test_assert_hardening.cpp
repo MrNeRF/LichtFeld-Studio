@@ -119,10 +119,13 @@ namespace {
         EXPECT_THROW((void)lhs.all_close(rhs), std::runtime_error);
     }
 
-    TEST_F(AssertHardeningExpectedFailTest, RejectsUnimplementedArgmaxDispatch) {
+    TEST_F(AssertHardeningExpectedFailTest, ArgmaxDispatchMatchesTorch) {
         const auto values = Tensor::from_vector({1.0f, 3.0f, 2.0f}, {3}, Device::CPU);
 
-        EXPECT_THROW((void)values.argmax(), std::runtime_error);
+        const auto result = values.argmax();
+        EXPECT_EQ(result.dtype(), DataType::Int64);
+        EXPECT_EQ(result.ndim(), 0);
+        EXPECT_EQ(result.item<int64_t>(), 1);
     }
 
     TEST_F(AssertHardeningExpectedFailTest, RejectsDuplicatePlyVertexProperties) {

@@ -282,6 +282,7 @@ namespace lfs::training {
                 sampled_opacities.ptr<float>(),
                 sampled_scales.ptr<float>(),
                 ratios.ptr<int32_t>(),
+                _params->min_opacity,
                 new_opacities.ptr<float>(),
                 new_scales.ptr<float>(),
                 sampled_opacities.numel());
@@ -470,6 +471,7 @@ namespace lfs::training {
                 sampled_opacities.ptr<float>(),
                 sampled_scales.ptr<float>(),
                 ratios.ptr<int32_t>(),
+                _params->min_opacity,
                 new_opacities.ptr<float>(),
                 new_scales.ptr<float>(),
                 sampled_opacities.numel());
@@ -580,6 +582,7 @@ namespace lfs::training {
                 sampled_opacities.ptr<float>(),
                 sampled_scales.ptr<float>(),
                 ratios.ptr<int32_t>(),
+                _params->min_opacity,
                 new_opacities.ptr<float>(),
                 new_scales.ptr<float>(),
                 sampled_opacities.numel());

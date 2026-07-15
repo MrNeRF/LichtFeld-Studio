@@ -109,7 +109,7 @@ TEST(TensorLazyIrTest, OnModeDefersUntilBoundaryAndMaterializes) {
 
     const auto info = c.lazy_expr_info();
     ASSERT_TRUE(info.has_value());
-    EXPECT_EQ(info->op_kind, internal::LazyOpKind::Deferred);
+    EXPECT_EQ(info->op_kind, internal::LazyOpKind::Binary);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
     EXPECT_GE(before_boundary.expr_nodes_created, 1u);
@@ -915,7 +915,7 @@ TEST(TensorLazyIrTest, OnModeIndexPutMultiDimMismatchBoundaryMaterializes) {
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
 
-    deferred.index_put_({row_idx, col_idx}, values);
+    EXPECT_THROW(deferred.index_put_({row_idx, col_idx}, values), std::runtime_error);
     const auto result = deferred.to_vector();
 
     ASSERT_EQ(result.size(), 4u);
@@ -939,15 +939,15 @@ TEST(TensorLazyIrTest, OnModeIndexAddEdgeBoundaryMaterializes) {
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
 
-    deferred.index_add_(0, indices, src);
+    EXPECT_THROW(deferred.index_add_(0, indices, src), std::runtime_error);
     const auto result = deferred.to_vector();
 
     ASSERT_EQ(result.size(), 5u);
     EXPECT_FLOAT_EQ(result[0], 2.0f);
-    EXPECT_FLOAT_EQ(result[1], 8.0f);
+    EXPECT_FLOAT_EQ(result[1], 2.0f);
     EXPECT_FLOAT_EQ(result[2], 2.0f);
     EXPECT_FLOAT_EQ(result[3], 2.0f);
-    EXPECT_FLOAT_EQ(result[4], 6.0f);
+    EXPECT_FLOAT_EQ(result[4], 2.0f);
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
     EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
@@ -964,7 +964,7 @@ TEST(TensorLazyIrTest, OnModeAppendGatherNon1DIndexBoundaryMaterializes) {
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
 
-    deferred.append_gather(indices);
+    EXPECT_THROW(deferred.append_gather(indices), std::runtime_error);
     const auto result = deferred.to_vector();
 
     ASSERT_EQ(result.size(), 4u);
@@ -987,7 +987,7 @@ TEST(TensorLazyIrTest, OnModeAppendGatherEdgeBoundaryMaterializes) {
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
 
-    deferred.append_gather(indices);
+    EXPECT_THROW(deferred.append_gather(indices), std::runtime_error);
     const auto result = deferred.to_vector();
 
     ASSERT_EQ(result.size(), 4u);

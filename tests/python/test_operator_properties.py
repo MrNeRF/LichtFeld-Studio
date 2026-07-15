@@ -138,6 +138,48 @@ class TestOperatorPropertiesTyped:
 class TestOperatorPropertiesIsolation:
     """Tests for property isolation between operator calls."""
 
+    def test_keyword_overrides_do_not_persist(self, lf, lfs_types):
+        """Invocation kwargs should apply only to the call that supplied them."""
+        received = []
+
+        class FreshStartOp(lfs_types.Operator):
+            lf_label = "Fresh Start"
+
+            def execute(self, context):
+                received.append(getattr(self, "value", "default"))
+                return {"FINISHED"}
+
+        lf.register_class(FreshStartOp)
+        try:
+            lf.ops.invoke(FreshStartOp._class_id(), value="override")
+            lf.ops.invoke(FreshStartOp._class_id())
+
+            assert received == ["override", "default"]
+        finally:
+            lf.unregister_class(FreshStartOp)
+
+    def test_keyword_overrides_do_not_persist_after_failure(self, lf, lfs_types):
+        received = []
+
+        class FailingOverrideOp(lfs_types.Operator):
+            lf_label = "Failing Override"
+
+            def execute(self, context):
+                value = getattr(self, "value", "default")
+                received.append(value)
+                if value == "fail":
+                    raise RuntimeError("intentional failure")
+                return {"FINISHED"}
+
+        lf.register_class(FailingOverrideOp)
+        try:
+            lf.ops.invoke(FailingOverrideOp._class_id(), value="fail")
+            lf.ops.invoke(FailingOverrideOp._class_id())
+
+            assert received == ["fail", "default"]
+        finally:
+            lf.unregister_class(FailingOverrideOp)
+
     def test_multiple_operators_independent(self, lf, lfs_types):
         """Different operators should have independent property storage."""
         results = {}

@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <set>
 
 namespace lfs::python {
@@ -454,6 +455,30 @@ namespace lfs::python {
     }
 
     namespace {
+        std::mutex python_property_subscriptions_mutex;
+        std::set<size_t> python_property_subscriptions;
+
+        void track_python_property_subscription(const size_t id) {
+            std::lock_guard lock(python_property_subscriptions_mutex);
+            python_property_subscriptions.insert(id);
+        }
+
+        void forget_python_property_subscription(const size_t id) {
+            std::lock_guard lock(python_property_subscriptions_mutex);
+            python_property_subscriptions.erase(id);
+        }
+
+        void clear_python_property_subscriptions() {
+            std::set<size_t> subscriptions;
+            {
+                std::lock_guard lock(python_property_subscriptions_mutex);
+                subscriptions.swap(python_property_subscriptions);
+            }
+            for (const size_t id : subscriptions) {
+                PropertyRegistry::instance().unsubscribe(id);
+            }
+        }
+
         core::param::OptimizationParameters& get_default_params() {
             static core::param::OptimizationParameters default_params{};
             return default_params;
@@ -1063,7 +1088,7 @@ namespace lfs::python {
             .def_prop_rw(
                 "means_lr",
                 [](PyOptimizationParams& self) { return self.params().means_lr; },
-                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.means_lr = v; }); },
+                [](PyOptimizationParams& self, float v) { self.set("means_lr", nb::cast(v)); },
                 "Learning rate for gaussian positions")
             .def_prop_rw(
                 "means_lr_end",
@@ -1534,7 +1559,8 @@ namespace lfs::python {
                     }
                 };
 
-                size_t sub_id = PropertyRegistry::instance().subscribe(group_id, prop_id, cpp_callback);
+                const size_t sub_id = PropertyRegistry::instance().subscribe(group_id, prop_id, cpp_callback);
+                track_python_property_subscription(sub_id);
                 return sub_id;
             },
             nb::arg("property_path"), nb::arg("callback"),
@@ -1545,6 +1571,7 @@ namespace lfs::python {
             "unsubscribe_property_change",
             [](size_t subscription_id) {
                 PropertyRegistry::instance().unsubscribe(subscription_id);
+                forget_python_property_subscription(subscription_id);
             },
             nb::arg("subscription_id"),
             "Unsubscribe from property change notifications");
@@ -1592,7 +1619,8 @@ namespace lfs::python {
                         }
                     };
 
-                    PropertyRegistry::instance().subscribe(group_id, prop_id, cpp_callback);
+                    const size_t sub_id = PropertyRegistry::instance().subscribe(group_id, prop_id, cpp_callback);
+                    track_python_property_subscription(sub_id);
                     return func;
                 });
             },
@@ -1600,6 +1628,9 @@ namespace lfs::python {
             "Decorator for property change handlers.\n"
             "Usage: @lf.property_callback('optimization.means_lr')\n"
             "       def on_lr_change(old_val, new_val): ...");
+
+        m.def("_clear_property_callbacks", &clear_python_property_subscriptions);
+        nb::module_::import_("atexit").attr("register")(m.attr("_clear_property_callbacks"));
     }
 
 } // namespace lfs::python
