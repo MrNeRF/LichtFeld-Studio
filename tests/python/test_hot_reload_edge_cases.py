@@ -16,7 +16,7 @@ import pytest
 
 
 @pytest.fixture
-def reload_test_dir(monkeypatch):
+def reload_test_dir(monkeypatch, bypass_plugin_installer):
     """Create temporary plugins directory for reload tests."""
     with tempfile.TemporaryDirectory() as tmpdir:
         plugins_dir = Path(tmpdir) / "plugins"

@@ -63,6 +63,7 @@ namespace lfs::training {
         // Serialization
         void serialize(std::ostream& os) const;
         void deserialize(std::istream& is);
+        void adopt_checkpoint_state(BilateralGrid& loaded) noexcept;
 
     private:
         void compute_bias_corrections(float& bc1_rcp, float& bc2_sqrt_rcp) const {

@@ -44,6 +44,7 @@ namespace lfs::vis::gui {
         bool wantsKeyboard() const override { return host_.wantsKeyboard(); }
         bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
         void reloadRmlResources() override;
+        void releaseRendererResources() override { host_.releaseRendererResources(); }
 
     private:
         struct EventListener : Rml::EventListener {

@@ -33,14 +33,16 @@ TEST(LoggerTest, ScopedTimerThresholdSuppressesBelowThresholdPerfLog) {
 
     std::vector<std::string> messages;
     LogHandlerGuard guard([&messages](lfs::core::LogLevel level,
-                                      const std::source_location&,
+                                      const lfs::core::SourceSite&,
                                       std::string_view message) {
         if (level == lfs::core::LogLevel::Performance)
             messages.emplace_back(message);
     });
 
     {
-        lfs::core::ScopedTimer timer("logger.threshold.suppressed", 60'000.0);
+        lfs::core::ScopedTimer timer(
+            "logger.threshold.suppressed", 60'000.0,
+            lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT());
     }
 
     logger.set_level(previous_level);
@@ -55,14 +57,16 @@ TEST(LoggerTest, ScopedTimerThresholdKeepsZeroThresholdCompatible) {
 
     std::vector<std::string> messages;
     LogHandlerGuard guard([&messages](lfs::core::LogLevel level,
-                                      const std::source_location&,
+                                      const lfs::core::SourceSite&,
                                       std::string_view message) {
         if (level == lfs::core::LogLevel::Performance)
             messages.emplace_back(message);
     });
 
     {
-        lfs::core::ScopedTimer timer("logger.threshold.compat", 0.0);
+        lfs::core::ScopedTimer timer(
+            "logger.threshold.compat", 0.0,
+            lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT());
     }
 
     logger.set_level(previous_level);

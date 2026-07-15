@@ -106,6 +106,7 @@ namespace lfs::training {
         void set_phase(TrainingPhase phase);
 
         void update_snapshot(const HookContext& ctx, int max_iterations, bool is_paused, bool is_running, bool stop_requested, TrainingPhase phase);
+        void clear_snapshot(const Trainer* trainer);
 
         [[nodiscard]] TrainingSnapshot snapshot() const;
         [[nodiscard]] std::vector<LossHistoryPoint> loss_history() const;

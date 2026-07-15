@@ -150,7 +150,7 @@ namespace lfs::training {
         // Get current training state
         int get_current_iteration() const { return current_iteration_.load(); }
         int get_total_iterations() const;
-        const std::filesystem::path& get_output_path() const { return params_.dataset.output_path; }
+        std::filesystem::path get_output_path() const { return getParams().dataset.output_path; }
         float get_current_loss() const { return current_loss_.load(); }
         bool fillCameraLossColors(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
                                   std::vector<std::array<float, 3>>& colors) const;
@@ -170,9 +170,8 @@ namespace lfs::training {
         // across a synchronous readback, so it avoids the startup deadlock that
         // gating render_mutex_ every step would hit. The GPU edges still order the
         // actual reads/writes; this lock just makes their setup mutually
-        // exclusive. Disable via LFS_NO_MODEL_ACCESS_LOCK=1 (GPU-handshake only).
+        // exclusive.
         std::shared_mutex& getModelAccessMutex() const { return model_access_mutex_; }
-        [[nodiscard]] static bool modelAccessLockEnabled();
 
         // GPU-side model-read handshake. Call both under a shared lock on
         // getRenderMutex(), bracketing every GPU read of the live model enqueued
@@ -191,7 +190,10 @@ namespace lfs::training {
         void setViewerReleaseFence(cudaExternalSemaphore_t semaphore);
         void publishViewerBorrow(uint64_t value);
 
-        const lfs::core::param::TrainingParameters& getParams() const { return params_; }
+        lfs::core::param::TrainingParameters getParams() const {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            return params_;
+        }
         void setParams(const lfs::core::param::TrainingParameters& params);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
@@ -218,10 +220,16 @@ namespace lfs::training {
                                                 bool use_controller = true) const;
 
         /// Check if PPISP is enabled, initialized, and ready for rendering
-        bool hasPPISP() const { return ppisp_ != nullptr && params_.optimization.use_ppisp && ppisp_->isFinalized(); }
+        bool hasPPISP() const {
+            const auto params = getParams();
+            return ppisp_ != nullptr && params.optimization.use_ppisp && ppisp_->isFinalized();
+        }
 
         /// Check if PPISP controller is enabled and ready for novel views
-        bool hasPPISPController() const { return ppisp_controller_pool_ != nullptr && params_.optimization.ppisp_use_controller; }
+        bool hasPPISPController() const {
+            const auto params = getParams();
+            return ppisp_controller_pool_ != nullptr && params.optimization.ppisp_use_controller;
+        }
 
         PPISPControllerPool* getPPISPControllerPool() const { return ppisp_controller_pool_.get(); }
         PPISP* getPPISP() const { return ppisp_.get(); }
@@ -257,7 +265,7 @@ namespace lfs::training {
         enum class StepResult {
             Continue,
             Stop,
-            Error
+            RetryAfterOom
         };
 
         // Returns the background color to use at a given iteration
@@ -266,6 +274,7 @@ namespace lfs::training {
         // Returns the resized background image for the given camera dimensions
         // Returns empty tensor if no background image is set
         lfs::core::Tensor get_background_image_for_camera(int width, int height);
+        void clearBackgroundImageCache();
 
         lfs::core::Tensor get_random_background_for_camera(int width, int height, int iteration);
 
@@ -359,13 +368,16 @@ namespace lfs::training {
             const PPISPFileMetadata& metadata,
             const std::filesystem::path& sidecar_path) const;
         [[nodiscard]] bool is_ppisp_frozen() const {
-            return params_.optimization.use_ppisp &&
-                   params_.optimization.ppisp_freeze_from_sidecar;
+            const auto params = getParams();
+            return params.optimization.use_ppisp &&
+                   params.optimization.ppisp_freeze_from_sidecar;
         }
         [[nodiscard]] bool should_apply_ppisp_sidecar_on_init() const {
-            return is_ppisp_frozen() &&
-                   !params_.resume_checkpoint.has_value() &&
-                   !params_.optimization.ppisp_sidecar_path.empty();
+            const auto params = getParams();
+            return params.optimization.use_ppisp &&
+                   params.optimization.ppisp_freeze_from_sidecar &&
+                   !params.resume_checkpoint.has_value() &&
+                   !params.optimization.ppisp_sidecar_path.empty();
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
         [[nodiscard]] lfs::core::param::TrainingParameters params_for_checkpoint_save() const;
@@ -375,12 +387,16 @@ namespace lfs::training {
 
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
+        void apply_pending_params_at_safe_point();
+        void apply_param_side_effects(
+            const lfs::core::param::TrainingParameters& params,
+            bool background_image_path_changed);
 
-        void save_ply(const std::filesystem::path& save_path,
-                      const std::string& filename,
-                      int iter_num,
-                      bool join_threads = true,
-                      bool save_checkpoint = true);
+        std::expected<void, std::string> save_ply(const std::filesystem::path& save_path,
+                                                  const std::string& filename,
+                                                  int iter_num,
+                                                  bool join_threads = true,
+                                                  bool save_checkpoint = true);
         void updateGTLoadConfigSnapshot();
         void clearActiveImageLoader();
 
@@ -415,15 +431,28 @@ namespace lfs::training {
         std::shared_ptr<CameraDataset> val_dataset_;
         std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
         std::unique_ptr<IStrategy> strategy_;
+        // Hot-loop reads use params_ without locking. Active updates therefore
+        // coalesce here and are installed only by the worker at safe boundaries.
+        mutable std::mutex params_mutex_;
         lfs::core::param::TrainingParameters params_;
+        std::optional<lfs::core::param::TrainingParameters> pending_params_;
         lfs::core::SplatTensorAllocator splat_tensor_allocator_;
         std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits_;
 
         lfs::core::Tensor background_{};
         lfs::core::Tensor bg_mix_buffer_;
-        lfs::core::Tensor bg_image_base_{};                              // Original background image [C, H, W]
-        std::unordered_map<uint64_t, lfs::core::Tensor> bg_image_cache_; // Cache of resized bg images keyed by (H << 32) | W
-        lfs::core::Tensor random_bg_buffer_{};                           // Reusable buffer for random background
+        lfs::core::Tensor bg_image_base_{}; // Original background image [C, H, W]
+        struct BackgroundImageCacheEntry {
+            lfs::core::Tensor tensor;
+            size_t allocation_bytes = 0;
+            uint64_t last_used = 0;
+        };
+        // Resized backgrounds are bounded by physical bucket size, not entry count.
+        static constexpr size_t BG_IMAGE_CACHE_BUDGET_BYTES = 256ULL * 1024 * 1024;
+        std::unordered_map<uint64_t, BackgroundImageCacheEntry> bg_image_cache_;
+        size_t bg_image_cache_bytes_ = 0;
+        uint64_t bg_image_cache_clock_ = 0;
+        lfs::core::Tensor random_bg_buffer_{}; // Reusable buffer for random background
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
         size_t total_cameras_count_ = 0;
@@ -510,14 +539,6 @@ namespace lfs::training {
         std::atomic<bool> initialized_{false};
         std::atomic<bool> shutdown_complete_{false};
 
-        // Env-gated VRAM tracing used for benchmark/debug runs.
-        bool memory_breakdown_enabled_ = false;
-        bool memory_breakdown_logged_init_ = false;
-        bool memory_breakdown_logged_train_setup_ = false;
-        bool memory_breakdown_logged_first_batch_ = false;
-        bool memory_breakdown_logged_first_raster_ = false;
-        bool memory_breakdown_logged_first_step_ = false;
-
         // Current training state
         std::atomic<int> current_iteration_{0};
         std::atomic<float> current_loss_{0.0f};
@@ -555,6 +576,7 @@ namespace lfs::training {
         uint64_t viewer_borrow_waited_ = 0;
         mutable std::mutex stream_sync_mutex_;
 
+        void createCudaResources();
         void createSyncPrimitives();
         void destroySyncPrimitives();
         void recordParamsReady();

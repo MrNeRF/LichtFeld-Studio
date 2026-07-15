@@ -5,10 +5,12 @@
 #include "vulkan_split_view_pass.hpp"
 
 #include "core/logger.hpp"
+#include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_result.hpp"
 
 #include <algorithm>
 #include <array>
@@ -37,18 +39,6 @@ namespace lfs::vis {
             float grip[4];        // spacing, half_w, half_l, line_count
         };
         static_assert(sizeof(SplitPush) == 7 * 16);
-
-        VkShaderModule createShaderModule(VkDevice device, const std::uint32_t* code, std::size_t bytes) {
-            VkShaderModuleCreateInfo info{};
-            info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            info.codeSize = bytes;
-            info.pCode = code;
-            VkShaderModule m = VK_NULL_HANDLE;
-            if (vkCreateShaderModule(device, &info, nullptr, &m) != VK_SUCCESS) {
-                return VK_NULL_HANDLE;
-            }
-            return m;
-        }
 
         // Convert a CHW float [0,1] tensor (CUDA or CPU) into a tightly packed RGBA8
         // buffer at `dst`. TBB-parallel over rows. Caller owns the destination memory
@@ -126,7 +116,15 @@ namespace lfs::vis {
         VkSampler sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout desc_layout = VK_NULL_HANDLE;
         VkDescriptorPool desc_pool = VK_NULL_HANDLE;
-        VkDescriptorSet desc_set = VK_NULL_HANDLE;
+        struct FrameDescriptor {
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            VkImageView left_view = VK_NULL_HANDLE;
+            VkImageView right_view = VK_NULL_HANDLE;
+            std::uint64_t left_generation = 0;
+            std::uint64_t right_generation = 0;
+            bool ready = false;
+        };
+        std::vector<FrameDescriptor> frame_descriptors;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         VkBuffer screen_quad_buffer = VK_NULL_HANDLE;
@@ -138,11 +136,6 @@ namespace lfs::vis {
             std::uint32_t width = 0;
             std::uint32_t height = 0;
             const lfs::core::Tensor* uploaded_tensor = nullptr;
-            // Last bound view (either our staging-uploaded view or an external interop
-            // view supplied via params). Used to detect descriptor-rebind needs.
-            VkImageView bound_view = VK_NULL_HANDLE;
-            std::uint64_t bound_generation = 0;
-
             // Persistent staging: kept alive between frames so identical-size uploads
             // don't repeatedly allocate / map / unmap an 8 MB buffer at 1080p.
             VkBuffer staging_buffer = VK_NULL_HANDLE;
@@ -160,8 +153,6 @@ namespace lfs::vis {
         };
         PanelImage left{};
         PanelImage right{};
-        bool descriptors_dirty = true;
-        bool frame_ready = false;
 
         ~Impl() { destroy(); }
 
@@ -174,15 +165,27 @@ namespace lfs::vis {
             graphics_queue = ctx.graphicsQueue();
             screen_quad_buffer = screen_quad;
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE) {
-                return false;
+                return logVkFailure(std::format(
+                    "Split-view initialization requires a live device and allocator (device={:#x}, allocator={:#x}, graphics_queue={:#x}, screen_quad_buffer={:#x}) ({}:{})",
+                    vkHandleValue(device),
+                    reinterpret_cast<std::uintptr_t>(allocator),
+                    vkHandleValue(graphics_queue),
+                    vkHandleValue(screen_quad_buffer),
+                    __FILE__,
+                    __LINE__));
             }
             VkCommandPoolCreateInfo pool{};
             pool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
             pool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
             pool.queueFamilyIndex = ctx.graphicsQueueFamily();
-            if (vkCreateCommandPool(device, &pool, nullptr, &transfer_pool) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(vkCreateCommandPool(device, &pool, nullptr, &transfer_pool),
+                             "Split-view transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                             vkHandleValue(device),
+                             pool.queueFamilyIndex,
+                             static_cast<std::uint32_t>(pool.flags));
+            context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
+                                        transfer_pool,
+                                        "split_view.transfer.pool");
             return createSampler() && createDescriptors() &&
                    createPipeline(color_format, depth_format);
         }
@@ -201,8 +204,8 @@ namespace lfs::vis {
             if (desc_pool != VK_NULL_HANDLE) {
                 vkDestroyDescriptorPool(device, desc_pool, nullptr);
                 desc_pool = VK_NULL_HANDLE;
-                desc_set = VK_NULL_HANDLE;
             }
+            frame_descriptors.clear();
             if (desc_layout != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device, desc_layout, nullptr);
                 desc_layout = VK_NULL_HANDLE;
@@ -226,7 +229,16 @@ namespace lfs::vis {
             s.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             s.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            return vkCreateSampler(device, &s, nullptr, &sampler) == VK_SUCCESS;
+            LFS_VK_CHECK_MSG(vkCreateSampler(device, &s, nullptr, &sampler),
+                             "Split-view sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
+                             vkHandleValue(device),
+                             static_cast<int>(s.magFilter),
+                             static_cast<int>(s.minFilter),
+                             static_cast<int>(s.addressModeU));
+            context->setDebugObjectName(VK_OBJECT_TYPE_SAMPLER,
+                                        sampler,
+                                        "split_view.panel.sampler");
+            return true;
         }
 
         bool createDescriptors() {
@@ -241,32 +253,85 @@ namespace lfs::vis {
             li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             li.bindingCount = static_cast<std::uint32_t>(bindings.size());
             li.pBindings = bindings.data();
-            if (vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout),
+                             "Split-view descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                             vkHandleValue(device),
+                             li.bindingCount,
+                             static_cast<int>(bindings[0].descriptorType));
+            context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+                                        desc_layout,
+                                        "split_view.descriptor.layout");
             VkDescriptorPoolSize ps{};
             ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps.descriptorCount = 2;
+            const std::uint32_t frame_count = static_cast<std::uint32_t>(
+                std::max<std::size_t>(1, context->framesInFlight()));
+            ps.descriptorCount = frame_count * 2;
             VkDescriptorPoolCreateInfo pi{};
             pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pi.maxSets = 1;
+            pi.maxSets = frame_count;
             pi.poolSizeCount = 1;
             pi.pPoolSizes = &ps;
-            if (vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool),
+                             "Split-view descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                             vkHandleValue(device),
+                             frame_count,
+                             pi.maxSets,
+                             ps.descriptorCount);
+            context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL,
+                                        desc_pool,
+                                        "split_view.descriptor.pool");
+            std::vector<VkDescriptorSetLayout> layouts(frame_count, desc_layout);
+            std::vector<VkDescriptorSet> sets(frame_count, VK_NULL_HANDLE);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             ai.descriptorPool = desc_pool;
-            ai.descriptorSetCount = 1;
-            ai.pSetLayouts = &desc_layout;
-            return vkAllocateDescriptorSets(device, &ai, &desc_set) == VK_SUCCESS;
+            ai.descriptorSetCount = frame_count;
+            ai.pSetLayouts = layouts.data();
+            LFS_VK_CHECK_MSG(vkAllocateDescriptorSets(device, &ai, sets.data()),
+                             "Split-view descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                             vkHandleValue(device),
+                             vkHandleValue(desc_pool),
+                             vkHandleValue(desc_layout),
+                             ai.descriptorSetCount);
+            frame_descriptors.resize(frame_count);
+            for (std::size_t i = 0; i < sets.size(); ++i) {
+                frame_descriptors[i].set = sets[i];
+                context->setDebugObjectNamef(VK_OBJECT_TYPE_DESCRIPTOR_SET,
+                                             sets[i],
+                                             "split_view.descriptor[{}]",
+                                             i);
+            }
+            return true;
+        }
+
+        [[nodiscard]] FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) {
+            if (frame_slot >= frame_descriptors.size()) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Split-view frame slot is outside the descriptor ring (frame_slot={}, ring_size={}) ({}:{})",
+                    frame_slot,
+                    frame_descriptors.size(),
+                    __FILE__,
+                    __LINE__));
+            }
+            return frame_descriptors[frame_slot];
+        }
+
+        [[nodiscard]] const FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) const {
+            if (frame_slot >= frame_descriptors.size()) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Split-view frame slot is outside the descriptor ring (frame_slot={}, ring_size={}) ({}:{})",
+                    frame_slot,
+                    frame_descriptors.size(),
+                    __FILE__,
+                    __LINE__));
+            }
+            return frame_descriptors[frame_slot];
         }
 
         bool createPipeline(VkFormat color_format, VkFormat depth_format) {
             using namespace viewport_shaders;
-            VkShaderModule vert = createShaderModule(device, kScreenQuadVertSpv, sizeof(kScreenQuadVertSpv));
-            VkShaderModule frag = createShaderModule(device, kSplitViewFragSpv, sizeof(kSplitViewFragSpv));
+            VkShaderModule vert = createShaderModule(device, kScreenQuadVertSpv, "Split-view");
+            VkShaderModule frag = createShaderModule(device, kSplitViewFragSpv, "Split-view");
             if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
                 if (vert)
                     vkDestroyShaderModule(device, vert, nullptr);
@@ -356,11 +421,23 @@ namespace lfs::vis {
             layout_info.pSetLayouts = &desc_layout;
             layout_info.pushConstantRangeCount = 1;
             layout_info.pPushConstantRanges = &push;
-            if (vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout) != VK_SUCCESS) {
+            const VkResult layout_result =
+                vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout);
+            if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return false;
+                return reportVkFailure(
+                    "vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout)",
+                    layout_result,
+                    std::format("Split-view pipeline-layout creation failed (device={:#x}, descriptor_layout={:#x}, set_layout_count={}, push_constant_bytes={})",
+                                vkHandleValue(device),
+                                vkHandleValue(desc_layout),
+                                layout_info.setLayoutCount,
+                                push.size));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
+                                        pipeline_layout,
+                                        "split_view.pipeline.layout");
 
             VkPipelineRenderingCreateInfo rendering_info{};
             rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -387,59 +464,48 @@ namespace lfs::vis {
             const VkResult r = vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pi, nullptr, &pipeline);
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
-            return r == VK_SUCCESS;
-        }
-
-        VkCommandBuffer beginSingleTimeCommands() const {
-            VkCommandBufferAllocateInfo a{};
-            a.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            a.commandPool = transfer_pool;
-            a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            a.commandBufferCount = 1;
-            VkCommandBuffer cb = VK_NULL_HANDLE;
-            if (vkAllocateCommandBuffers(device, &a, &cb) != VK_SUCCESS) {
-                return VK_NULL_HANDLE;
+            if (r != VK_SUCCESS) {
+                return reportVkFailure(
+                    "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pi, nullptr, &pipeline)",
+                    r,
+                    std::format("Split-view graphics-pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, color_format={}, depth_format={})",
+                                vkHandleValue(device),
+                                vkHandleValue(pipeline_cache),
+                                vkHandleValue(pipeline_layout),
+                                static_cast<int>(color_format),
+                                static_cast<int>(depth_format)));
             }
-            VkCommandBufferBeginInfo b{};
-            b.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            b.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            if (vkBeginCommandBuffer(cb, &b) != VK_SUCCESS) {
-                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return VK_NULL_HANDLE;
-            }
-            return cb;
-        }
-
-        bool endSingleTimeCommands(VkCommandBuffer cb) const {
-            if (vkEndCommandBuffer(cb) != VK_SUCCESS) {
-                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return false;
-            }
-            VkSubmitInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            si.commandBufferCount = 1;
-            si.pCommandBuffers = &cb;
-            VkFenceCreateInfo fi{};
-            fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            VkFence fence = VK_NULL_HANDLE;
-            VkResult r = vkCreateFence(device, &fi, nullptr, &fence);
-            if (r == VK_SUCCESS)
-                r = vkQueueSubmit(graphics_queue, 1, &si, fence);
-            if (r == VK_SUCCESS)
-                r = vkWaitForFences(device, 1, &fence, VK_TRUE,
-                                    std::numeric_limits<std::uint64_t>::max());
-            if (fence != VK_NULL_HANDLE)
-                vkDestroyFence(device, fence, nullptr);
-            vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-            return r == VK_SUCCESS;
+            context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
+                                        pipeline,
+                                        "split_view.pipeline");
+            return true;
         }
 
         void destroyPanel(PanelImage& p) {
             // Drain any pending transfer submit so we never destroy device memory
             // that the GPU is still reading from.
             if (p.fence != VK_NULL_HANDLE) {
-                vkWaitForFences(device, 1, &p.fence, VK_TRUE,
-                                std::numeric_limits<std::uint64_t>::max());
+                const VkResult wait_result =
+                    vkWaitForFences(device,
+                                    1,
+                                    &p.fence,
+                                    VK_TRUE,
+                                    std::numeric_limits<std::uint64_t>::max());
+                if (wait_result != VK_SUCCESS) {
+                    LOG_ERROR("Vulkan: {}",
+                              formatVkCheckFailure(
+                                  "vkWaitForFences(device, 1, &p.fence, VK_TRUE, UINT64_MAX)",
+                                  wait_result,
+                                  std::format("Split-view panel image retirement fence did not complete (device={:#x}, fence={:#x}, image={:#x}, image_view={:#x}, panel_size={}x{})",
+                                              vkHandleValue(device),
+                                              vkHandleValue(p.fence),
+                                              vkHandleValue(p.image),
+                                              vkHandleValue(p.view),
+                                              p.width,
+                                              p.height),
+                                  __FILE__,
+                                  __LINE__));
+                }
             }
             if (p.view != VK_NULL_HANDLE) {
                 vkDestroyImageView(device, p.view, nullptr);
@@ -481,9 +547,20 @@ namespace lfs::vis {
             p.height = 0;
             p.image_vram_label.clear();
             p.uploaded_tensor = nullptr;
+            for (auto& descriptor : frame_descriptors) {
+                if (&p == &left) {
+                    descriptor.left_view = VK_NULL_HANDLE;
+                    descriptor.left_generation = 0;
+                } else {
+                    descriptor.right_view = VK_NULL_HANDLE;
+                    descriptor.right_generation = 0;
+                }
+                descriptor.ready = false;
+            }
         }
 
         bool ensureStaging(PanelImage& p, VkDeviceSize bytes) {
+            const char* const side = &p == &left ? "left" : "right";
             if (p.staging_buffer != VK_NULL_HANDLE && p.staging_capacity >= bytes) {
                 return true;
             }
@@ -506,36 +583,131 @@ namespace lfs::vis {
             sa.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
             VmaAllocationInfo ai{};
-            if (vmaCreateBuffer(allocator, &bi, &sa, &p.staging_buffer, &p.staging_alloc, &ai) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(
+                vmaCreateBuffer(allocator, &bi, &sa, &p.staging_buffer, &p.staging_alloc, &ai),
+                "Split-view panel staging-buffer allocation failed (side={}, allocator={:#x}, requested_size={}, usage={:#x})",
+                side,
+                reinterpret_cast<std::uintptr_t>(allocator),
+                bytes,
+                static_cast<std::uint32_t>(bi.usage));
             p.staging_mapped = ai.pMappedData;
             p.staging_capacity = bytes;
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                                         p.staging_buffer,
+                                         "split_view.{}.upload.staging[{}]",
+                                         side,
+                                         p.staging_capacity);
             return true;
         }
 
         bool ensurePanelCmd(PanelImage& p) {
+            const char* const side = &p == &left ? "left" : "right";
             if (p.cmd != VK_NULL_HANDLE && p.fence != VK_NULL_HANDLE) {
                 return true;
+            }
+            if (p.cmd != VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(device, transfer_pool, 1, &p.cmd);
+                p.cmd = VK_NULL_HANDLE;
+            }
+            if (p.fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, p.fence, nullptr);
+                p.fence = VK_NULL_HANDLE;
             }
             VkCommandBufferAllocateInfo a{};
             a.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
             a.commandPool = transfer_pool;
             a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
             a.commandBufferCount = 1;
-            if (vkAllocateCommandBuffers(device, &a, &p.cmd) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(vkAllocateCommandBuffers(device, &a, &p.cmd),
+                             "Split-view panel command-buffer allocation failed (side={}, device={:#x}, command_pool={:#x}, requested_count={})",
+                             side,
+                             vkHandleValue(device),
+                             vkHandleValue(transfer_pool),
+                             a.commandBufferCount);
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_COMMAND_BUFFER,
+                                         p.cmd,
+                                         "split_view.{}.transfer.command",
+                                         side);
             VkFenceCreateInfo fi{};
             fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             // Created signaled so the first vkWaitForFences before recording is a no-op.
             fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-            return vkCreateFence(device, &fi, nullptr, &p.fence) == VK_SUCCESS;
+            const VkResult fence_result = vkCreateFence(device, &fi, nullptr, &p.fence);
+            if (fence_result != VK_SUCCESS) {
+                vkFreeCommandBuffers(device, transfer_pool, 1, &p.cmd);
+                p.cmd = VK_NULL_HANDLE;
+                return reportVkFailure(
+                    "vkCreateFence(device, &fi, nullptr, &p.fence)",
+                    fence_result,
+                    std::format("Split-view panel transfer-fence creation failed (side={}, device={:#x}, command_pool={:#x}, flags={:#x})",
+                                side,
+                                vkHandleValue(device),
+                                vkHandleValue(transfer_pool),
+                                static_cast<std::uint32_t>(fi.flags)));
+            }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_FENCE,
+                                         p.fence,
+                                         "split_view.{}.transfer.fence",
+                                         side);
+            return true;
+        }
+
+        bool replacePanelFenceSignaled(PanelImage& panel,
+                                       const char* const failed_operation,
+                                       const VkResult failed_result) {
+            const char* const side = &panel == &left ? "left" : "right";
+            LOG_ERROR("Vulkan: {}",
+                      formatVkCheckFailure(
+                          failed_operation,
+                          failed_result,
+                          std::format("Split-view panel transfer command lifecycle failed (side={}, device={:#x}, queue={:#x}, command_pool={:#x}, command_buffer={:#x}, fence={:#x})",
+                                      side,
+                                      vkHandleValue(device),
+                                      vkHandleValue(graphics_queue),
+                                      vkHandleValue(transfer_pool),
+                                      vkHandleValue(panel.cmd),
+                                      vkHandleValue(panel.fence)),
+                          __FILE__,
+                          __LINE__));
+            VkFenceCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            VkFence replacement = VK_NULL_HANDLE;
+            const VkResult replacement_result = vkCreateFence(device, &info, nullptr, &replacement);
+            if (replacement_result != VK_SUCCESS) {
+                LOG_ERROR("Vulkan: {}",
+                          formatVkCheckFailure(
+                              "vkCreateFence(device, &info, nullptr, &replacement)",
+                              replacement_result,
+                              std::format("Split-view failed to replace a poisoned panel transfer fence (side={}, device={:#x}, old_fence={:#x}, command_buffer={:#x}, flags={:#x})",
+                                          side,
+                                          vkHandleValue(device),
+                                          vkHandleValue(panel.fence),
+                                          vkHandleValue(panel.cmd),
+                                          static_cast<std::uint32_t>(info.flags)),
+                              __FILE__,
+                              __LINE__));
+                return false;
+            }
+            if (panel.fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, panel.fence, nullptr);
+            }
+            panel.fence = replacement;
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_FENCE,
+                                         panel.fence,
+                                         "split_view.{}.transfer.fence",
+                                         side);
+            return false;
         }
 
         bool ensurePanelImage(PanelImage& p, std::uint32_t w, std::uint32_t h) {
             if (p.image != VK_NULL_HANDLE && p.width == w && p.height == h) {
                 return true;
+            }
+            if (p.image != VK_NULL_HANDLE && context != nullptr && !context->waitForSubmittedFrames()) {
+                LOG_ERROR("VulkanSplitViewPass: could not retire frames before panel resize: {}",
+                          context->lastError());
+                return false;
             }
             destroyPanel(p);
             VkImageCreateInfo img{};
@@ -553,10 +725,22 @@ namespace lfs::vis {
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             VmaAllocationInfo allocation_info{};
-            if (vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, &allocation_info) != VK_SUCCESS) {
-                return false;
-            }
             const char* const side = &p == &left ? "left" : "right";
+            LFS_VK_CHECK_MSG(
+                vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, &allocation_info),
+                "Split-view panel image allocation failed (side={}, allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
+                side,
+                reinterpret_cast<std::uintptr_t>(allocator),
+                w,
+                h,
+                static_cast<int>(img.format),
+                static_cast<std::uint32_t>(img.usage));
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                         p.image,
+                                         "split_view.{}.image[{}x{}]",
+                                         side,
+                                         w,
+                                         h);
             p.image_vram_label = std::format("{}:{}x{}", side, w, h);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.split_view.panel_image",
@@ -570,21 +754,44 @@ namespace lfs::vis {
             vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vi.subresourceRange.levelCount = 1;
             vi.subresourceRange.layerCount = 1;
-            if (vkCreateImageView(device, &vi, nullptr, &p.view) != VK_SUCCESS) {
+            const VkResult view_result = vkCreateImageView(device, &vi, nullptr, &p.view);
+            if (view_result != VK_SUCCESS) {
                 destroyPanel(p);
-                return false;
+                return reportVkFailure(
+                    "vkCreateImageView(device, &vi, nullptr, &p.view)",
+                    view_result,
+                    std::format("Split-view panel image-view creation failed (side={}, device={:#x}, image={:#x}, requested_extent={}x{}, format={}, aspect_mask={:#x})",
+                                side,
+                                vkHandleValue(device),
+                                vkHandleValue(vi.image),
+                                w,
+                                h,
+                                static_cast<int>(vi.format),
+                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)));
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                         p.view,
+                                         "split_view.{}.image[{}x{}].view",
+                                         side,
+                                         w,
+                                         h);
             p.width = w;
             p.height = h;
-            descriptors_dirty = true;
             return true;
         }
 
         bool uploadPanel(PanelImage& panel, const lfs::core::Tensor& tensor) {
+            const char* const side = &panel == &left ? "left" : "right";
             // Probe size from the tensor; resize the persistent pack buffer only when
             // the tensor's resolution exceeds the current capacity.
             if (!tensor.is_valid() || tensor.ndim() != 3) {
-                return false;
+                return logVkFailure(std::format(
+                    "Split-view panel upload requires a valid rank-3 image tensor (side={}, tensor_valid={}, observed_rank={}) ({}:{})",
+                    side,
+                    tensor.is_valid(),
+                    tensor.is_valid() ? tensor.ndim() : 0,
+                    __FILE__,
+                    __LINE__));
             }
             const auto layout = lfs::rendering::detectImageLayout(tensor);
             const int probe_w = static_cast<int>(layout == lfs::rendering::ImageLayout::HWC
@@ -594,7 +801,15 @@ namespace lfs::vis {
                                                      ? tensor.size(0)
                                                      : tensor.size(1));
             if (probe_w <= 0 || probe_h <= 0) {
-                return false;
+                return logVkFailure(std::format(
+                    "Split-view panel upload requires positive image dimensions (side={}, layout={}, observed_width={}, observed_height={}, tensor_rank={}) ({}:{})",
+                    side,
+                    static_cast<int>(layout),
+                    probe_w,
+                    probe_h,
+                    tensor.ndim(),
+                    __FILE__,
+                    __LINE__));
             }
             const std::size_t need_pack = static_cast<std::size_t>(probe_w) * probe_h * 4u;
             if (panel.pack_bytes.size() < need_pack) {
@@ -604,7 +819,16 @@ namespace lfs::vis {
             std::uint32_t pkt_w = 0;
             std::uint32_t pkt_h = 0;
             if (!packPanelToRgba8(tensor, panel.pack_bytes.data(), pkt_w, pkt_h)) {
-                return false;
+                return logVkFailure(std::format(
+                    "Split-view panel packing failed for a valid upload request (side={}, tensor_rank={}, layout={}, probe_size={}x{}, destination_capacity={}) ({}:{})",
+                    side,
+                    tensor.ndim(),
+                    static_cast<int>(layout),
+                    probe_w,
+                    probe_h,
+                    panel.pack_bytes.size(),
+                    __FILE__,
+                    __LINE__));
             }
             if (!ensurePanelImage(panel, pkt_w, pkt_h)) {
                 return false;
@@ -615,22 +839,67 @@ namespace lfs::vis {
             if (!ensureStaging(panel, bytes) || !ensurePanelCmd(panel)) {
                 return false;
             }
+            if (panel.staging_buffer == VK_NULL_HANDLE || panel.staging_alloc == VK_NULL_HANDLE ||
+                panel.staging_mapped == nullptr || panel.staging_capacity < bytes ||
+                panel.image == VK_NULL_HANDLE || panel.cmd == VK_NULL_HANDLE ||
+                panel.fence == VK_NULL_HANDLE || graphics_queue == VK_NULL_HANDLE) {
+                return logVkFailure(std::format(
+                    "Split-view panel upload resources must cover the copy before recording (side={}, staging_buffer={:#x}, staging_allocation={:#x}, staging_mapped={:#x}, staging_capacity={}, copy_size={}, image={:#x}, command_buffer={:#x}, fence={:#x}, queue={:#x}) ({}:{})",
+                    side,
+                    vkHandleValue(panel.staging_buffer),
+                    reinterpret_cast<std::uintptr_t>(panel.staging_alloc),
+                    reinterpret_cast<std::uintptr_t>(panel.staging_mapped),
+                    panel.staging_capacity,
+                    bytes,
+                    vkHandleValue(panel.image),
+                    vkHandleValue(panel.cmd),
+                    vkHandleValue(panel.fence),
+                    vkHandleValue(graphics_queue),
+                    __FILE__,
+                    __LINE__));
+            }
             std::memcpy(panel.staging_mapped, panel.pack_bytes.data(), static_cast<std::size_t>(bytes));
-            vmaFlushAllocation(allocator, panel.staging_alloc, 0, bytes);
+            VkResult result = vmaFlushAllocation(allocator, panel.staging_alloc, 0, bytes);
+            if (result != VK_SUCCESS) {
+                return reportVkFailure(
+                    "vmaFlushAllocation(allocator, panel.staging_alloc, 0, bytes)",
+                    result,
+                    std::format("Split-view panel staging flush failed (side={}, allocator={:#x}, allocation={:#x}, offset=0, flush_size={}, capacity={})",
+                                side,
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                reinterpret_cast<std::uintptr_t>(panel.staging_alloc),
+                                bytes,
+                                panel.staging_capacity));
+            }
 
-            // Wait for any prior submit on this command buffer before re-recording.
-            // First-frame the fence is in unsignaled state and vkWaitForFences with
-            // timeout=0 returns VK_TIMEOUT; the reset below makes the next submit valid.
-            vkWaitForFences(device, 1, &panel.fence, VK_TRUE, std::numeric_limits<std::uint64_t>::max());
-            vkResetFences(device, 1, &panel.fence);
-            if (vkResetCommandBuffer(panel.cmd, 0) != VK_SUCCESS) {
-                return false;
+            // Wait for any prior submit on this command buffer before re-recording. The fence is
+            // created signaled, so the first upload does not block.
+            result = vkWaitForFences(device, 1, &panel.fence, VK_TRUE,
+                                     std::numeric_limits<std::uint64_t>::max());
+            if (result != VK_SUCCESS) {
+                return reportVkFailure(
+                    "vkWaitForFences(device, 1, &panel.fence, VK_TRUE, UINT64_MAX)",
+                    result,
+                    std::format("Split-view prior panel upload did not retire before command-buffer reuse (side={}, device={:#x}, fence={:#x}, command_buffer={:#x}, fence_count=1)",
+                                side,
+                                vkHandleValue(device),
+                                vkHandleValue(panel.fence),
+                                vkHandleValue(panel.cmd)));
+            }
+            result = vkResetFences(device, 1, &panel.fence);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkResetFences", result);
+            }
+            result = vkResetCommandBuffer(panel.cmd, 0);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkResetCommandBuffer", result);
             }
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            if (vkBeginCommandBuffer(panel.cmd, &bi) != VK_SUCCESS) {
-                return false;
+            result = vkBeginCommandBuffer(panel.cmd, &bi);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkBeginCommandBuffer", result);
             }
 
             // After the first upload the panel image already sits in
@@ -658,15 +927,31 @@ namespace lfs::vis {
                              VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-            if (vkEndCommandBuffer(panel.cmd) != VK_SUCCESS) {
-                return false;
+            result = vkEndCommandBuffer(panel.cmd);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkEndCommandBuffer", result);
             }
             VkSubmitInfo si{};
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &panel.cmd;
-            if (vkQueueSubmit(graphics_queue, 1, &si, panel.fence) != VK_SUCCESS) {
-                return false;
+            if (si.commandBufferCount != 1 || si.pCommandBuffers == nullptr ||
+                si.pCommandBuffers[0] == VK_NULL_HANDLE || panel.fence == VK_NULL_HANDLE ||
+                graphics_queue == VK_NULL_HANDLE) {
+                return logVkFailure(std::format(
+                    "Split-view panel submit requires a non-null queue, one command buffer, and a non-null fence (side={}, queue={:#x}, command_buffer_count={}, command_buffer_array={:#x}, command_buffer={:#x}, fence={:#x}) ({}:{})",
+                    side,
+                    vkHandleValue(graphics_queue),
+                    si.commandBufferCount,
+                    reinterpret_cast<std::uintptr_t>(si.pCommandBuffers),
+                    si.pCommandBuffers != nullptr ? vkHandleValue(si.pCommandBuffers[0]) : 0,
+                    vkHandleValue(panel.fence),
+                    __FILE__,
+                    __LINE__));
+            }
+            result = vkQueueSubmit(graphics_queue, 1, &si, panel.fence);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkQueueSubmit", result);
             }
             // The viewport pass that consumes this image runs on the same queue right
             // after, so submission order alone makes the upload visible — no fence wait
@@ -675,12 +960,13 @@ namespace lfs::vis {
             return true;
         }
 
-        bool rebindDescriptorsIfDirty(const VulkanSplitViewPanel& left_spec,
+        bool rebindDescriptorsIfDirty(FrameDescriptor& descriptor,
+                                      const VulkanSplitViewPanel& left_spec,
                                       VkImageView left_view,
                                       const VulkanSplitViewPanel& right_spec,
                                       VkImageView right_view) {
             if (left_view == VK_NULL_HANDLE || right_view == VK_NULL_HANDLE) {
-                descriptors_dirty = true;
+                descriptor.ready = false;
                 return false;
             }
             const std::uint64_t left_generation =
@@ -688,11 +974,12 @@ namespace lfs::vis {
             const std::uint64_t right_generation =
                 right_spec.external_image_view != VK_NULL_HANDLE ? right_spec.external_image_generation : 0;
             const bool changed =
-                left_view != left.bound_view ||
-                right_view != right.bound_view ||
-                left_generation != left.bound_generation ||
-                right_generation != right.bound_generation;
-            if (!descriptors_dirty && !changed) {
+                left_view != descriptor.left_view ||
+                right_view != descriptor.right_view ||
+                left_generation != descriptor.left_generation ||
+                right_generation != descriptor.right_generation;
+            if (!changed) {
+                descriptor.ready = true;
                 return true;
             }
             std::array<VkDescriptorImageInfo, 2> infos{};
@@ -705,7 +992,7 @@ namespace lfs::vis {
             std::array<VkWriteDescriptorSet, 2> writes{};
             for (std::uint32_t i = 0; i < 2; ++i) {
                 writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[i].dstSet = desc_set;
+                writes[i].dstSet = descriptor.set;
                 writes[i].dstBinding = i;
                 writes[i].descriptorCount = 1;
                 writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -713,11 +1000,11 @@ namespace lfs::vis {
             }
             vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
-            descriptors_dirty = false;
-            left.bound_view = left_view;
-            left.bound_generation = left_generation;
-            right.bound_view = right_view;
-            right.bound_generation = right_generation;
+            descriptor.left_view = left_view;
+            descriptor.left_generation = left_generation;
+            descriptor.right_view = right_view;
+            descriptor.right_generation = right_generation;
+            descriptor.ready = true;
             return true;
         }
 
@@ -731,23 +1018,42 @@ namespace lfs::vis {
                 if (!uploadPanel(panel, *spec.image)) {
                     return VK_NULL_HANDLE;
                 }
-                descriptors_dirty = true;
             }
             return panel.view;
         }
 
-        void prepare(const VulkanSplitViewParams& params) {
-            frame_ready = false;
+        void prepare(const VulkanSplitViewParams& params, const std::size_t frame_slot) {
+            auto& descriptor = descriptorForFrame(frame_slot);
+            descriptor.ready = false;
             if (!params.enabled) {
                 return;
             }
             const VkImageView left_view = resolvePanelView(left, params.left);
             const VkImageView right_view = resolvePanelView(right, params.right);
-            frame_ready = rebindDescriptorsIfDirty(params.left, left_view, params.right, right_view);
+            rebindDescriptorsIfDirty(descriptor,
+                                     params.left,
+                                     left_view,
+                                     params.right,
+                                     right_view);
         }
 
-        void record(VkCommandBuffer cb, const VkRect2D& panel_rect, const VulkanSplitViewParams& params) {
-            if (!ready() || !params.enabled || screen_quad_buffer == VK_NULL_HANDLE) {
+        void record(VkCommandBuffer cb, const VkRect2D& panel_rect,
+                    const VulkanSplitViewParams& params, const std::size_t frame_slot) {
+            const auto& descriptor = descriptorForFrame(frame_slot);
+            if (cb == VK_NULL_HANDLE || descriptor.set == VK_NULL_HANDLE) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Split-view recording requires a command buffer and per-frame descriptor set (command_buffer={:#x}, frame_slot={}, ring_size={}, descriptor_set={:#x}, left_view={:#x}, right_view={:#x}, descriptor_ready={}) ({}:{})",
+                    vkHandleValue(cb),
+                    frame_slot,
+                    frame_descriptors.size(),
+                    vkHandleValue(descriptor.set),
+                    vkHandleValue(descriptor.left_view),
+                    vkHandleValue(descriptor.right_view),
+                    descriptor.ready,
+                    __FILE__,
+                    __LINE__));
+            }
+            if (!ready(frame_slot) || !params.enabled || screen_quad_buffer == VK_NULL_HANDLE) {
                 return;
             }
 
@@ -763,7 +1069,7 @@ namespace lfs::vis {
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-                                    0, 1, &desc_set, 0, nullptr);
+                                    0, 1, &descriptor.set, 0, nullptr);
             VkDeviceSize off = 0;
             vkCmdBindVertexBuffers(cb, 0, 1, &screen_quad_buffer, &off);
 
@@ -811,9 +1117,11 @@ namespace lfs::vis {
             vkCmdDraw(cb, 6, 1, 0, 0);
         }
 
-        bool ready() const {
-            return frame_ready && pipeline != VK_NULL_HANDLE && left.bound_view != VK_NULL_HANDLE &&
-                   right.bound_view != VK_NULL_HANDLE;
+        bool ready(const std::size_t frame_slot) const {
+            const auto& descriptor = descriptorForFrame(frame_slot);
+            return descriptor.ready && pipeline != VK_NULL_HANDLE &&
+                   descriptor.left_view != VK_NULL_HANDLE &&
+                   descriptor.right_view != VK_NULL_HANDLE;
         }
     };
 
@@ -829,15 +1137,17 @@ namespace lfs::vis {
         return impl_->init(context, color_format, depth_format, screen_quad_buffer);
     }
 
-    void VulkanSplitViewPass::prepare(const VulkanSplitViewParams& params) {
+    void VulkanSplitViewPass::prepare(const VulkanSplitViewParams& params,
+                                      const std::size_t frame_slot) {
         if (impl_)
-            impl_->prepare(params);
+            impl_->prepare(params, frame_slot);
     }
 
     void VulkanSplitViewPass::record(VkCommandBuffer cb, const VkRect2D& panel_rect,
-                                     const VulkanSplitViewParams& params) {
+                                     const VulkanSplitViewParams& params,
+                                     const std::size_t frame_slot) {
         if (impl_)
-            impl_->record(cb, panel_rect, params);
+            impl_->record(cb, panel_rect, params, frame_slot);
     }
 
     void VulkanSplitViewPass::shutdown() {
@@ -847,8 +1157,8 @@ namespace lfs::vis {
         }
     }
 
-    bool VulkanSplitViewPass::ready() const {
-        return impl_ && impl_->ready();
+    bool VulkanSplitViewPass::ready(const std::size_t frame_slot) const {
+        return impl_ && impl_->ready(frame_slot);
     }
 
 } // namespace lfs::vis

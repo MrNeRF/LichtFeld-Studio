@@ -50,7 +50,7 @@ namespace lfs::vis {
         // Setup and teardown
         void setTrainer(std::unique_ptr<lfs::training::Trainer> trainer);
         void setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration);
-        void clearTrainer();
+        [[nodiscard]] bool clearTrainer();
         bool hasTrainer() const;
 
         // Link to viewer for notifications
@@ -144,7 +144,7 @@ namespace lfs::vis {
         }
 
         // Wait for training to complete (blocking)
-        void waitForCompletion();
+        [[nodiscard]] bool waitForCompletion();
 
         // Get last error message
         const std::string& getLastError() const { return last_error_; }
@@ -174,9 +174,6 @@ namespace lfs::vis {
         void setupEventHandlers();
         void setupStateMachineCallbacks();
 
-        // Resource cleanup (called by state machine)
-        void cleanupTrainingResources(const TrainingResources& resources);
-        void updateResourceTracking();
         [[nodiscard]] lfs::core::SplatTensorAllocator createTrainingSplatTensorAllocator(
             const lfs::core::param::TrainingParameters& params,
             std::size_t min_capacity = 0);

@@ -4,52 +4,150 @@
 
 #pragma once
 
+#include "core/assert.hpp"
+#include "core/logger.hpp"
+#include "rendering/vulkan_result.hpp"
+
+#include <format>
+#include <source_location>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
 
-    inline const char* vkResultToString(const VkResult result) noexcept {
-        switch (result) {
-        case VK_SUCCESS: return "VK_SUCCESS";
-        case VK_NOT_READY: return "VK_NOT_READY";
-        case VK_TIMEOUT: return "VK_TIMEOUT";
-        case VK_EVENT_SET: return "VK_EVENT_SET";
-        case VK_EVENT_RESET: return "VK_EVENT_RESET";
-        case VK_INCOMPLETE: return "VK_INCOMPLETE";
-        case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
-        case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
-        case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
-        case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
-        case VK_ERROR_MEMORY_MAP_FAILED: return "VK_ERROR_MEMORY_MAP_FAILED";
-        case VK_ERROR_LAYER_NOT_PRESENT: return "VK_ERROR_LAYER_NOT_PRESENT";
-        case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
-        case VK_ERROR_FEATURE_NOT_PRESENT: return "VK_ERROR_FEATURE_NOT_PRESENT";
-        case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
-        case VK_ERROR_TOO_MANY_OBJECTS: return "VK_ERROR_TOO_MANY_OBJECTS";
-        case VK_ERROR_FORMAT_NOT_SUPPORTED: return "VK_ERROR_FORMAT_NOT_SUPPORTED";
-        case VK_ERROR_FRAGMENTED_POOL: return "VK_ERROR_FRAGMENTED_POOL";
-        case VK_ERROR_UNKNOWN: return "VK_ERROR_UNKNOWN";
-        case VK_ERROR_OUT_OF_POOL_MEMORY: return "VK_ERROR_OUT_OF_POOL_MEMORY";
-        case VK_ERROR_INVALID_EXTERNAL_HANDLE: return "VK_ERROR_INVALID_EXTERNAL_HANDLE";
-        case VK_ERROR_FRAGMENTATION: return "VK_ERROR_FRAGMENTATION";
-        case VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS: return "VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS";
-        case VK_PIPELINE_COMPILE_REQUIRED: return "VK_PIPELINE_COMPILE_REQUIRED";
-        case VK_ERROR_SURFACE_LOST_KHR: return "VK_ERROR_SURFACE_LOST_KHR";
-        case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
-        case VK_SUBOPTIMAL_KHR: return "VK_SUBOPTIMAL_KHR";
-        case VK_ERROR_OUT_OF_DATE_KHR: return "VK_ERROR_OUT_OF_DATE_KHR";
-        case VK_ERROR_INCOMPATIBLE_DISPLAY_KHR: return "VK_ERROR_INCOMPATIBLE_DISPLAY_KHR";
-        case VK_ERROR_VALIDATION_FAILED_EXT: return "VK_ERROR_VALIDATION_FAILED_EXT";
-        case VK_ERROR_INVALID_SHADER_NV: return "VK_ERROR_INVALID_SHADER_NV";
-        case VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT: return "VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT";
-        case VK_ERROR_NOT_PERMITTED_KHR: return "VK_ERROR_NOT_PERMITTED_KHR";
-        case VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT: return "VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT";
-        case VK_THREAD_IDLE_KHR: return "VK_THREAD_IDLE_KHR";
-        case VK_THREAD_DONE_KHR: return "VK_THREAD_DONE_KHR";
-        case VK_OPERATION_DEFERRED_KHR: return "VK_OPERATION_DEFERRED_KHR";
-        case VK_OPERATION_NOT_DEFERRED_KHR: return "VK_OPERATION_NOT_DEFERRED_KHR";
-        default: return "VK_RESULT_UNKNOWN";
+    using rendering::vkHandleValue;
+    using rendering::vkResultToString;
+
+    [[nodiscard]] inline const char* vkImageLayoutToString(const VkImageLayout layout) noexcept {
+        switch (layout) {
+        case VK_IMAGE_LAYOUT_UNDEFINED: return "VK_IMAGE_LAYOUT_UNDEFINED";
+        case VK_IMAGE_LAYOUT_GENERAL: return "VK_IMAGE_LAYOUT_GENERAL";
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return "VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return "VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL: return "VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return "VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL";
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return "VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL";
+        case VK_IMAGE_LAYOUT_PREINITIALIZED: return "VK_IMAGE_LAYOUT_PREINITIALIZED";
+        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: return "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR";
+        case VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL: return "VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL: return "VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL";
+        default: return "VK_IMAGE_LAYOUT_UNKNOWN";
         }
     }
 
+    [[nodiscard]] inline std::string formatVkCheckFailure(
+        const std::string_view expression,
+        const VkResult result,
+        const std::string_view context,
+        const std::string_view file,
+        const int line) {
+        if (context.empty()) {
+            return std::format("{} failed: {} ({}) ({}:{})",
+                               expression,
+                               vkResultToString(result),
+                               static_cast<int>(result),
+                               file,
+                               line);
+        }
+        return std::format("{} failed: {} ({}) — {} ({}:{})",
+                           expression,
+                           vkResultToString(result),
+                           static_cast<int>(result),
+                           context,
+                           file,
+                           line);
+    }
+
+    [[nodiscard]] inline std::string formatVkCheckFailure(
+        const std::string_view expression,
+        const VkResult result,
+        const std::string_view context,
+        const std::source_location location = std::source_location::current()) {
+        return formatVkCheckFailure(
+            expression, result, context, location.file_name(), static_cast<int>(location.line()));
+    }
+
+    [[nodiscard]] inline bool logVkFailure(std::string message) {
+        LOG_ERROR("Vulkan: {}", message);
+        return false;
+    }
+
+    [[nodiscard]] inline bool reportVkFailure(
+        const std::string_view expression,
+        const VkResult result,
+        const std::string_view context,
+        const std::source_location location = std::source_location::current()) {
+        return logVkFailure(formatVkCheckFailure(expression, result, context, location));
+    }
+
+    [[nodiscard]] inline VkShaderModule createShaderModule(
+        const VkDevice device,
+        const std::span<const std::uint32_t> spirv,
+        const std::string_view label,
+        const std::source_location location = std::source_location::current()) {
+        VkShaderModuleCreateInfo create_info{};
+        create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        create_info.codeSize = spirv.size_bytes();
+        create_info.pCode = spirv.data();
+
+        VkShaderModule module = VK_NULL_HANDLE;
+        const VkResult result = vkCreateShaderModule(device, &create_info, nullptr, &module);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("Vulkan: {}",
+                      formatVkCheckFailure(
+                          "vkCreateShaderModule(device, &create_info, nullptr, &module)",
+                          result,
+                          std::format("{} shader-module creation failed (device={:#x}, code_ptr={:#x}, code_size={})",
+                                      label,
+                                      vkHandleValue(device),
+                                      reinterpret_cast<std::uintptr_t>(spirv.data()),
+                                      spirv.size_bytes()),
+                          location.file_name(),
+                          static_cast<int>(location.line())));
+            return VK_NULL_HANDLE;
+        }
+        return module;
+    }
+
 } // namespace lfs::vis
+
+#define LFS_VK_CHECK_MSG(expr, ...)                                     \
+    do {                                                                \
+        const VkResult lfs_vk_check_result_ = (expr);                   \
+        if (lfs_vk_check_result_ != VK_SUCCESS) {                       \
+            return ::lfs::vis::reportVkFailure(                         \
+                #expr, lfs_vk_check_result_,                            \
+                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__)); \
+        }                                                               \
+    } while (false)
+
+#define LFS_VK_CONTEXT_CHECK_MSG(expr, ...)                              \
+    do {                                                                 \
+        const VkResult lfs_vk_check_result_ = (expr);                    \
+        if (lfs_vk_check_result_ != VK_SUCCESS) {                        \
+            return this->setVkFailure(::lfs::vis::formatVkCheckFailure(  \
+                #expr, lfs_vk_check_result_,                             \
+                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__))); \
+        }                                                                \
+    } while (false)
+
+#ifndef LFS_VK_DEBUG_ASSERT
+#if defined(NDEBUG)
+#define LFS_VK_DEBUG_ASSERT(condition, ...) ((void)0)
+#elif defined(__CUDA_ARCH__)
+#define LFS_VK_DEBUG_ASSERT(condition, ...) assert(condition)
+#else
+#define LFS_VK_DEBUG_ASSERT(condition, ...)                            \
+    do {                                                               \
+        if (!(condition)) [[unlikely]] {                               \
+            ::lfs::core::detail::assertion_failed(                     \
+                "LFS debug invariant", #condition,                     \
+                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__), \
+                LFS_SOURCE_SITE_CURRENT());                            \
+        }                                                              \
+    } while (false)
+#endif
+#endif

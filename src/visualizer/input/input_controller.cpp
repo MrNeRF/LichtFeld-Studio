@@ -39,6 +39,7 @@
 #include <cmath>
 #include <format>
 #include <limits>
+#include <tuple>
 #include <imgui.h>
 
 namespace lfs::vis {
@@ -2401,8 +2402,7 @@ namespace lfs::vis {
         }
 
         // Get camera intrinsics using the proper method
-        const auto [focal_x, focal_y, center_x, center_y] = cam_data->get_intrinsics();
-        (void)focal_x;
+        const float focal_y = std::get<1>(cam_data->get_intrinsics());
         const float height = static_cast<float>(cam_data->image_height());
 
         // Calculate vertical FOV using the actual focal length

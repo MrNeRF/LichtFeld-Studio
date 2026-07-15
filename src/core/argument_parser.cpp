@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/argument_parser.hpp"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -187,7 +188,7 @@ namespace {
                 "lichtfeld-studio plugin create my_plugin\n"
                 "\n"
                 "ENVIRONMENT:\n"
-                "LOG_LEVEL -- Set log level (trace/debug/info/perf/warn/error)\n");
+                "LFS_LOG_LEVEL -- Set log level (trace/debug/info/perf/warn/error)\n");
             parser.helpParams.width = 240;
 
             // =============================================================================
@@ -399,8 +400,8 @@ namespace {
                 std::string filter_pattern;
 
                 // Check environment variable first
-                if (const char* env_level = std::getenv("LOG_LEVEL")) {
-                    level = parse_log_level(env_level);
+                if (const auto env_level = lfs::core::environment::value("LFS_LOG_LEVEL")) {
+                    level = parse_log_level(std::string(*env_level));
                 }
                 // Verbose/quiet flags override environment variable
                 if (verbose) {

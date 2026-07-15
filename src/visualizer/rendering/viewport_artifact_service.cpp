@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_artifact_service.hpp"
-#include "core/cuda_debug.hpp"
+#include "core/cuda_error.hpp"
 #include "rendering/rendering.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
@@ -157,7 +157,6 @@ namespace lfs::vis {
         const int x,
         const int y,
         const glm::ivec2& fallback_viewport_size,
-        const lfs::rendering::RenderingEngine* const engine,
         const std::optional<SplitViewPanelId> panel) const {
         int viewport_width = rendered_size_.x;
         int viewport_height = rendered_size_.y;
@@ -247,7 +246,13 @@ namespace lfs::vis {
                 if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {
                     float d;
                     const float* gpu_ptr = depth_ptr->ptr<float>() + scaled_y * depth_width + scaled_x;
-                    CHECK_CUDA(cudaMemcpy(&d, gpu_ptr, sizeof(float), cudaMemcpyDeviceToHost));
+                    const cudaStream_t stream = depth_ptr->stream();
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(&d,
+                                                   gpu_ptr,
+                                                   sizeof(float),
+                                                   cudaMemcpyDeviceToHost,
+                                                   stream));
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
                     splat_depth = linearizeDepthSample(
                         d, active_near_plane, active_far_plane, active_orthographic, metadata_.depth_is_ndc);
                 }
@@ -257,7 +262,6 @@ namespace lfs::vis {
         if (splat_depth > 0.0f) {
             return splat_depth;
         }
-        (void)engine;
         return -1.0f;
     }
 

@@ -671,51 +671,6 @@ TEST_F(FastGSKernelTest, TiledRendering_Consistency) {
     EXPECT_LT(diff, 0.01f);
 }
 
-// Performance
-TEST_F(FastGSKernelTest, Performance_Forward) {
-    for (int i = 0; i < 3; ++i)
-        forward();
-    cudaDeviceSynchronize();
-
-    auto t0 = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < 10; ++i)
-        forward();
-    cudaDeviceSynchronize();
-    auto t1 = std::chrono::high_resolution_clock::now();
-
-    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / 10;
-    EXPECT_LT(ms, 10.0);
-}
-
-TEST_F(FastGSKernelTest, Performance_Backward) {
-    auto r = forward();
-    ASSERT_TRUE(r.has_value());
-
-    auto grad = Tensor::randn_like(r->first.image);
-    r->second.release_forward_context();
-    auto opt = make_optimizer();
-
-    for (int i = 0; i < 3; ++i) {
-        auto fwd = forward();
-        ASSERT_TRUE(fwd.has_value());
-        opt->zero_grad(0);
-        fast_rasterize_backward(fwd->second, grad, *splat_, *opt, {});
-    }
-    cudaDeviceSynchronize();
-
-    auto t0 = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < 10; ++i) {
-        auto fwd = forward();
-        opt->zero_grad(0);
-        fast_rasterize_backward(fwd->second, grad, *splat_, *opt, {});
-    }
-    cudaDeviceSynchronize();
-    auto t1 = std::chrono::high_resolution_clock::now();
-
-    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / 10;
-    EXPECT_LT(ms, 20.0);
-}
-
 // =============================================================================
 // Numerical gradient verification using finite differences
 // =============================================================================

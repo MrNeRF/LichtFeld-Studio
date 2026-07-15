@@ -5,10 +5,12 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring> // memcpy
+#include <exception>
 #include <functional>
 #include <map>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -18,6 +20,7 @@
 #include <cassert>
 
 #include "buffer.h"
+#include "rendering/vulkan_result.hpp"
 
 class VulkanGSPipeline {
 public:
@@ -25,7 +28,7 @@ public:
     using CpuTimerCallback = std::function<void(std::string_view, double)>;
 
     VulkanGSPipeline();
-    ~VulkanGSPipeline();
+    ~VulkanGSPipeline() noexcept;
 
     void initializeExternal(VkInstance external_instance,
                             VkPhysicalDevice external_physical_device,
@@ -47,15 +50,19 @@ public:
     _VulkanBuffer& clearDeviceBuffer(Buffer<T>& buffer, size_t new_size);
     template <typename T>
     _VulkanBuffer& resizeAndCopyDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool clear);
-    template <typename T>
-    T readElement(const _VulkanBuffer& buffer, size_t index);
-
     void beginCommandBatch();
     void endCommandBatch(bool use_fence = true,
                          VkSemaphore signal_semaphore = VK_NULL_HANDLE,
-                         std::uint64_t signal_value = 0);
+                         std::uint64_t signal_value = 0,
+                         VkSemaphore secondary_signal_semaphore = VK_NULL_HANDLE,
+                         std::uint64_t secondary_signal_value = 0);
+    void cancelCommandBatch() noexcept;
     void waitForPendingBatch();
     [[nodiscard]] bool timelineValueComplete(VkSemaphore semaphore, std::uint64_t value) const;
+    // Pure host-side submission evidence. Updated immediately after
+    // vkQueueSubmit succeeds, before any post-submit bookkeeping can throw.
+    [[nodiscard]] bool wasTimelineSignalSubmitted(VkSemaphore semaphore,
+                                                  std::uint64_t value) const noexcept;
     void addTimelineWait(VkSemaphore semaphore, std::uint64_t value, VkPipelineStageFlags stage_mask);
     bool isCommandBatchInProgress() const {
         return commandBatchInProgress;
@@ -138,6 +145,8 @@ protected:
         VkPipelineStageFlags stage_mask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     };
     std::vector<PendingTimelineWait> pending_timeline_waits_;
+    std::unordered_map<VkSemaphore, std::uint64_t> last_timeline_wait_values_;
+    std::unordered_map<VkSemaphore, std::uint64_t> last_timeline_signal_values_;
 
     static constexpr std::uint32_t kCommandBatchSlotCount = 3;
     struct CommandBatchSlot {
@@ -166,6 +175,7 @@ protected:
     // VK_NULL_HANDLE simply skips the cache. Shared with the rest of the app's pipelines.
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
+    lfs::rendering::VulkanDebugNameWriter debug_name_writer_;
 
     struct DeviceInfo {
         uint32_t subgroupSize;
@@ -187,6 +197,7 @@ protected:
         VkPipelineLayout pipeline_layout;
         VkPipeline pipeline;
         std::vector<int> buffer_layouts;
+        std::string diagnostic_name;
 
         _ComputePipeline(
             std::vector<int> buffer_layouts) : shader(VK_NULL_HANDLE),
@@ -236,6 +247,22 @@ protected:
     void waitForPendingBatchSlot(CommandBatchSlot& slot);
     void collectTimestampResults(CommandBatchSlot& slot, std::uint32_t timestamp_count);
     void createShaderModule(const std::vector<uint32_t>& spirv_code, VkShaderModule* pShaderModule);
+    void validateBufferRange(const _VulkanBuffer& buffer,
+                             VkDeviceSize relative_offset,
+                             VkDeviceSize size,
+                             std::string_view operation) const;
+    void validateFillRange(const _VulkanBuffer& buffer,
+                           VkDeviceSize relative_offset,
+                           VkDeviceSize size,
+                           std::string_view operation) const;
+    void setDebugObjectName(VkObjectType type, std::uint64_t handle, std::string_view name) const;
+
+    template <typename VkHandle>
+    void setDebugObjectName(const VkObjectType type,
+                            const VkHandle handle,
+                            const std::string_view name) const {
+        setDebugObjectName(type, lfs::rendering::vkHandleValue(handle), name);
+    }
 
     void createComputeDescriptorSetLayout(_ComputePipeline& pipeline);
     void createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, uint32_t min_shared_memory = 0, bool compatible_subgroup_size = true);
@@ -264,12 +291,16 @@ class [[nodiscard]] DeviceGuard {
     bool use_fence = true;
     VkSemaphore signal_semaphore = VK_NULL_HANDLE;
     std::uint64_t signal_value = 0;
+    VkSemaphore secondary_signal_semaphore = VK_NULL_HANDLE;
+    std::uint64_t secondary_signal_value = 0;
     const char* debugInfo1 = nullptr;
     int debugInfo2 = -1;
+    int uncaught_exceptions = 0;
 
 public:
     DeviceGuard(VulkanGSPipeline* pipeline, const char* debugInfo1 = nullptr, const int debugInfo2 = -1) {
         this->pipeline = pipeline;
+        uncaught_exceptions = std::uncaught_exceptions();
         cbip = pipeline->isCommandBatchInProgress();
         if (!cbip) {
             pipeline->beginCommandBatch();
@@ -284,22 +315,37 @@ public:
                 const bool use_fence,
                 const VkSemaphore signal_semaphore,
                 const std::uint64_t signal_value,
+                const VkSemaphore secondary_signal_semaphore = VK_NULL_HANDLE,
+                const std::uint64_t secondary_signal_value = 0,
                 const char* debugInfo1 = nullptr,
                 const int debugInfo2 = -1)
         : DeviceGuard(pipeline, debugInfo1, debugInfo2) {
         this->use_fence = use_fence;
         this->signal_semaphore = signal_semaphore;
         this->signal_value = signal_value;
+        this->secondary_signal_semaphore = secondary_signal_semaphore;
+        this->secondary_signal_value = secondary_signal_value;
     }
     ~DeviceGuard() noexcept(false) {
+        if (std::uncaught_exceptions() > uncaught_exceptions) {
+            pipeline->cancelCommandBatch();
+            return;
+        }
         if (!cbip) {
-            pipeline->endCommandBatch(use_fence, signal_semaphore, signal_value);
+            pipeline->endCommandBatch(use_fence,
+                                      signal_semaphore,
+                                      signal_value,
+                                      secondary_signal_semaphore,
+                                      secondary_signal_value);
             if (debugInfo1) {
                 printf("DeviceGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
-            fprintf(stderr, "commandBatchInProgress changed during DeviceGuard (originally %d)\n", (int)cbip);
-            std::terminate();
+            _THROW_ERROR(std::format(
+                "DeviceGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_started_batch={})",
+                cbip,
+                pipeline->isCommandBatchInProgress(),
+                !cbip));
         }
     }
 };
@@ -309,10 +355,12 @@ class [[nodiscard]] HostGuard {
     bool cbip;
     const char* debugInfo1 = nullptr;
     int debugInfo2 = -1;
+    int uncaught_exceptions = 0;
 
 public:
     HostGuard(VulkanGSPipeline* pipeline, const char* debugInfo1 = nullptr, const int debugInfo2 = -1) {
         this->pipeline = pipeline;
+        uncaught_exceptions = std::uncaught_exceptions();
         cbip = pipeline->isCommandBatchInProgress();
         if (cbip) {
             pipeline->endCommandBatch();
@@ -324,14 +372,22 @@ public:
         }
     }
     ~HostGuard() noexcept(false) {
+        if (std::uncaught_exceptions() > uncaught_exceptions) {
+            pipeline->cancelCommandBatch();
+            return;
+        }
         if (cbip) {
             pipeline->beginCommandBatch();
             if (debugInfo1) {
                 printf("HostGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
-            fprintf(stderr, "commandBatchInProgress changed during HostGuard (originally %d)\n", (int)cbip);
-            std::terminate();
+            pipeline->cancelCommandBatch();
+            _THROW_ERROR(std::format(
+                "HostGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_paused_batch={})",
+                cbip,
+                pipeline->isCommandBatchInProgress(),
+                cbip));
         }
     }
 };

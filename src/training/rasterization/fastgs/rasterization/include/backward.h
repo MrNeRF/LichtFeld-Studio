@@ -50,8 +50,8 @@ namespace fast_lfs::rasterization {
         const float cx,
         const float cy,
         bool mip_filter,
-        DensificationType densification_type = DensificationType::None,
-        FusedAdamSettings fused_adam = {},
-        cudaStream_t stream = nullptr);
+        DensificationType densification_type,
+        FusedAdamSettings fused_adam,
+        cudaStream_t stream);
 
 }

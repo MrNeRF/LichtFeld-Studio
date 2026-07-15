@@ -10,7 +10,8 @@
 namespace lfs::core {
 
     Tensor broadcast_to(const Tensor& src, const TensorShape& target) {
-        LFS_ASSERT_MSG(src.is_valid(), "Cannot broadcast an invalid tensor");
+        LFS_ASSERT_MSG(src.is_valid(),
+                       "Cannot broadcast an invalid tensor");
         const bool supported_dtype =
             src.dtype() == DataType::Float32 || src.dtype() == DataType::Bool ||
             (src.device() == Device::CPU && src.dtype() == DataType::Int32);
@@ -23,10 +24,6 @@ namespace lfs::core {
             return src.clone();
         }
 
-        if (src.numel() == 0 || target.elements() == 0) {
-            return Tensor::empty(target, src.device(), src.dtype());
-        }
-
         // Check if shapes are compatible for broadcasting
         auto src_dims = src.shape().dims();
         auto target_dims = target.dims();
@@ -36,11 +33,13 @@ namespace lfs::core {
         LFS_ASSERT_MSG(!broadcast_shape.empty() && broadcast_shape == target_dims,
                        std::format("Cannot broadcast shape {} to {}", src.shape().str(), target.str()));
 
+        if (src.numel() == 0 || target.elements() == 0) {
+            return Tensor::empty(target, src.device(), src.dtype());
+        }
+
         Tensor result;
         if (src.device() == Device::CUDA) {
-            const cudaStream_t execution_stream =
-                getCurrentCUDAStream() ? getCurrentCUDAStream() : src.stream();
-            src.sync_to_stream(execution_stream);
+            const cudaStream_t execution_stream = prepare_inputs_for_stream({&src});
             CUDAStreamGuard guard(execution_stream);
             result = Tensor::empty(target, src.device(), src.dtype());
         } else {
@@ -76,7 +75,8 @@ namespace lfs::core {
                         src_dims.size(), target_dims.size(), result.numel(), result.stream());
                 }
             } else {
-                LFS_ASSERT_MSG(false, "Unsupported dtype reached CUDA broadcast dispatch");
+                LFS_ASSERT_MSG(false,
+                               "Unsupported dtype reached CUDA broadcast dispatch");
             }
         } else {
             if (!src.is_contiguous())
@@ -86,7 +86,13 @@ namespace lfs::core {
                 unsigned char* dst_data = result.ptr<unsigned char>();
                 for (size_t i = 0; i < result.numel(); ++i) {
                     size_t src_idx = broadcast::index(i, target_dims, src_dims);
-                    LFS_DEBUG_ASSERT(src_idx < src.numel());
+                    LFS_DEBUG_ASSERT_MSG(src_idx < src.numel(),
+                                         std::format("broadcast source index must be in range "
+                                                     "(source_index={}, source_numel={}, "
+                                                     "output_index={}, output_numel={}, "
+                                                     "source_shape={}, target_shape={})",
+                                                     src_idx, src.numel(), i, result.numel(),
+                                                     src.shape().str(), target.str()));
                     dst_data[i] = src_data[src_idx];
                 }
             } else if (src.dtype() == DataType::Float32) {
@@ -94,7 +100,13 @@ namespace lfs::core {
                 float* dst_data = result.ptr<float>();
                 for (size_t i = 0; i < result.numel(); ++i) {
                     size_t src_idx = broadcast::index(i, target_dims, src_dims);
-                    LFS_DEBUG_ASSERT(src_idx < src.numel());
+                    LFS_DEBUG_ASSERT_MSG(src_idx < src.numel(),
+                                         std::format("broadcast source index must be in range "
+                                                     "(source_index={}, source_numel={}, "
+                                                     "output_index={}, output_numel={}, "
+                                                     "source_shape={}, target_shape={})",
+                                                     src_idx, src.numel(), i, result.numel(),
+                                                     src.shape().str(), target.str()));
                     dst_data[i] = src_data[src_idx];
                 }
             } else if (src.dtype() == DataType::Int32) {
@@ -102,11 +114,18 @@ namespace lfs::core {
                 int* dst_data = result.ptr<int>();
                 for (size_t i = 0; i < result.numel(); ++i) {
                     size_t src_idx = broadcast::index(i, target_dims, src_dims);
-                    LFS_DEBUG_ASSERT(src_idx < src.numel());
+                    LFS_DEBUG_ASSERT_MSG(src_idx < src.numel(),
+                                         std::format("broadcast source index must be in range "
+                                                     "(source_index={}, source_numel={}, "
+                                                     "output_index={}, output_numel={}, "
+                                                     "source_shape={}, target_shape={})",
+                                                     src_idx, src.numel(), i, result.numel(),
+                                                     src.shape().str(), target.str()));
                     dst_data[i] = src_data[src_idx];
                 }
             } else {
-                LFS_ASSERT_MSG(false, "Unsupported dtype reached CPU broadcast dispatch");
+                LFS_ASSERT_MSG(false,
+                               "Unsupported dtype reached CPU broadcast dispatch");
             }
         }
 

@@ -117,6 +117,22 @@ namespace {
 
 namespace lfs::vis {
 
+    TEST_F(VisualizerImplResetTest, DestructorClearsSharedEventBridgeHandlers) {
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+
+        {
+            VisualizerImpl viewer(options);
+            EXPECT_GT(lfs::event::EventBridge::instance().handler_count(
+                          typeid(lfs::core::events::cmd::ResetTraining)),
+                      0u);
+        }
+
+        EXPECT_EQ(lfs::event::EventBridge::instance().handler_count(
+                      typeid(lfs::core::events::cmd::ResetTraining)),
+                  0u);
+    }
+
     TEST_F(VisualizerImplResetTest, ResetTrainingPreservesExplicitInitPath) {
         ViewerOptions options;
         options.show_startup_overlay = false;

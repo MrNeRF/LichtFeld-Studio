@@ -2,10 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "internal/cuda_stream_context.hpp"
+#include "core/cuda_error.hpp"
 #include "internal/cuda_event_pool.hpp"
+#include "internal/tensor_impl.hpp"
 
-#include <stdexcept>
-#include <string>
+#include <format>
 
 namespace lfs::core {
 
@@ -26,9 +27,27 @@ namespace lfs::core {
 
         cudaError_t status = cudaErrorUnknown;
         if (cudaEvent_t ready = CudaEventPool::instance().acquire()) {
-            status = cudaEventRecord(ready, dependency_stream);
-            if (status == cudaSuccess) {
-                status = cudaStreamWaitEvent(execution_stream, ready, 0);
+            const cudaError_t record_status = cudaEventRecord(ready, dependency_stream);
+            status = record_status;
+            if (record_status == cudaSuccess) {
+                const cudaError_t wait_status =
+                    cudaStreamWaitEvent(execution_stream, ready, 0);
+                status = wait_status;
+                if (wait_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        wait_status, "cudaStreamWaitEvent(tensor dependency)",
+                        std::format("dependency_stream={}, execution_stream={}; fallback=stream sync",
+                                    static_cast<void*>(dependency_stream),
+                                    static_cast<void*>(execution_stream)),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                }
+            } else {
+                ensure_cuda_success(
+                    record_status, "cudaEventRecord(tensor dependency)",
+                    std::format("dependency_stream={}, execution_stream={}; fallback=stream sync",
+                                static_cast<void*>(dependency_stream),
+                                static_cast<void*>(execution_stream)),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
             CudaEventPool::instance().release(ready);
         }
@@ -36,11 +55,40 @@ namespace lfs::core {
         if (status != cudaSuccess) {
             const cudaError_t sync_status = cudaStreamSynchronize(dependency_stream);
             if (sync_status != cudaSuccess) {
-                throw std::runtime_error(
-                    std::string("Failed to synchronize CUDA streams: ") +
-                    cudaGetErrorString(sync_status));
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
+                    sync_status, "cudaStreamSynchronize(tensor dependency fallback)",
+                    std::format("dependency_stream={}, execution_stream={}",
+                                static_cast<void*>(dependency_stream),
+                                static_cast<void*>(execution_stream)));
             }
         }
+    }
+
+    cudaStream_t prepare_inputs_for_stream(
+        const std::initializer_list<const Tensor*> inputs,
+        const std::optional<cudaStream_t> requested_stream) {
+        cudaStream_t execution_stream = requested_stream.has_value()
+                                            ? *requested_stream
+                                            : getCurrentCUDAStream();
+        if (!requested_stream.has_value() && execution_stream == nullptr) {
+            for (const Tensor* input : inputs) {
+                LFS_ASSERT_MSG(input != nullptr && input->is_valid(),
+                               "stream preparation requires valid tensor inputs");
+                if (input->device() == Device::CUDA) {
+                    execution_stream = input->stream();
+                    break;
+                }
+            }
+        }
+
+        for (const Tensor* input : inputs) {
+            LFS_ASSERT_MSG(input != nullptr && input->is_valid(),
+                           "stream preparation requires valid tensor inputs");
+            if (input->device() == Device::CUDA) {
+                input->sync_to_stream(execution_stream);
+            }
+        }
+        return execution_stream;
     }
 
 } // namespace lfs::core

@@ -302,6 +302,7 @@ namespace lfs::vis {
         std::condition_variable_any cv_;
         std::jthread worker_;
         std::optional<WorkItem> pending_work_;
+        bool worker_busy_ = false;
         std::optional<WorkItem> last_requested_work_;
         size_t smoothed_max_splats_ = 0;
         std::chrono::steady_clock::time_point budget_smoothing_time_{};

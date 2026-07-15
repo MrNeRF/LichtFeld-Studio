@@ -20,9 +20,10 @@ from lfs_plugins.tool_defs.builtin import (
 class MockContext:
     """Mock context for poll testing."""
 
-    def __init__(self, has_scene=True, num_gaussians=1000):
+    def __init__(self, has_scene=True, num_gaussians=1000, can_transform=None):
         self.has_scene = has_scene
         self.num_gaussians = num_gaussians
+        self.can_transform = has_scene if can_transform is None else can_transform
 
 
 class TestToolDef:

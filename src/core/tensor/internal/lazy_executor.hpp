@@ -75,6 +75,10 @@ namespace lfs::core {
             uint64_t peak_cache_bytes = 0;
         };
 
+        // Retain eager operands when a graph is deferred. The returned cell is detached only
+        // if the source storage is subsequently exposed for mutation.
+        LFS_CORE_API std::shared_ptr<Tensor> lazy_executor_snapshot_operand(const Tensor& source);
+
         // Build topological execution plan metadata for a root tensor.
         LFS_CORE_API LazyExecutionPlanDebug lazy_planner_build_plan_for_tensor(const Tensor& output);
 
@@ -104,9 +108,8 @@ namespace lfs::core {
         LFS_CORE_API void lazy_executor_reset_diagnostics_for_testing();
         LFS_CORE_API LazyExecutorDiagnosticsSnapshot lazy_executor_diagnostics_snapshot_for_testing();
 
-        // Optional runtime diagnostics dump gate (env + testing override).
+        // Optional diagnostics dump gate used by focused tests.
         LFS_CORE_API void lazy_executor_set_debug_dump_override_for_testing(std::optional<bool> enabled);
-        LFS_CORE_API void lazy_executor_clear_debug_dump_cache_for_testing();
         LFS_CORE_API bool lazy_executor_debug_dump_enabled_for_testing();
 
         // Pointwise fusion scaffold gate (on by default in lazy mode).

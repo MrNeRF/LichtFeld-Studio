@@ -14,15 +14,6 @@ class TestOperatorAPIWithoutBackend:
     These tests verify the API exists and doesn't crash.
     """
 
-    def test_set_active_operator_does_not_crash(self, lf):
-        """set_active_operator doesn't crash without backend."""
-        # Without EditorContext, this is a no-op
-        lf.ui.set_active_operator("test.op", "translate")
-
-    def test_clear_active_operator_does_not_crash(self, lf):
-        """clear_active_operator doesn't crash without backend."""
-        lf.ui.clear_active_operator()
-
     def test_get_active_operator_returns_empty_without_backend(self, lf):
         """get_active_operator returns empty string without backend."""
         assert lf.ui.get_active_operator() == ""
@@ -39,21 +30,14 @@ class TestOperatorAPIWithoutBackend:
 class TestOperatorAPISignatures:
     """Tests that verify API signatures exist correctly."""
 
-    def test_set_active_operator_signature(self, lf):
-        """set_active_operator accepts id and optional gizmo_type."""
-        # Call with just id
+    def test_active_operator_mutators_are_noops_without_backend(self, lf):
         lf.ui.set_active_operator("test.op")
-        # Call with both
-        lf.ui.set_active_operator("test.op", "translate")
-        # Call with empty gizmo type
-        lf.ui.set_active_operator("test.op", "")
-
-    def test_gizmo_type_values(self, lf):
-        """All valid gizmo type strings are accepted."""
-        # These are the valid gizmo types from the plan
-        valid_types = ["translate", "rotate", "scale", ""]
-        for gt in valid_types:
-            lf.ui.set_active_operator("test.op", gt)
+        for gizmo_type in ("translate", "rotate", "scale", ""):
+            lf.ui.set_active_operator("test.op", gizmo_type)
+            assert lf.ui.get_active_operator() == ""
+            assert lf.ui.get_gizmo_type() == ""
+        lf.ui.clear_active_operator()
+        assert not lf.ui.has_active_operator()
 
 
 class TestSceneAPIs:

@@ -12,6 +12,8 @@ class MRNFStrategyTest_SerializeRoundTripPreservesFreeMask_Test;
 class MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;
 class MRNFStrategyTest_DeserializeResizesTransientBuffersToLoadedModel_Test;
 class MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test;
+class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_Test;
+class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
@@ -84,6 +86,37 @@ TEST(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
     EXPECT_NEAR(guidance_ptr[2], 1.0f, 1e-5f);
     EXPECT_GT(guidance_ptr[0], 1.0f);
     EXPECT_GT(guidance_ptr[1], guidance_ptr[0]);
+}
+
+TEST(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate) {
+    auto splat_data = create_mrnf_test_splat_data(1);
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+
+    EXPECT_FALSE(strategy._bounds_valid);
+    const float mean_lr = strategy.get_optimizer().get_param_lr(ParamType::Means);
+    EXPECT_TRUE(std::isfinite(mean_lr));
+    EXPECT_GT(mean_lr, 0.0f);
+}
+
+TEST(MRNFStrategyTest, LineBoundsUseFiniteSceneScaleForMeanLearningRate) {
+    auto splat_data = create_mrnf_test_splat_data(10);
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+
+    EXPECT_TRUE(strategy._bounds_valid);
+    EXPECT_GT(strategy._bounds.median_size, 0.0f);
+    const float mean_lr = strategy.get_optimizer().get_param_lr(ParamType::Means);
+    EXPECT_TRUE(std::isfinite(mean_lr));
+    EXPECT_GT(mean_lr, 0.0f);
 }
 
 TEST(MRNFStrategyTest, RemoveGaussiansKeepsOptimizerStateUsable) {

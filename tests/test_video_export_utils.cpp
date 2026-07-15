@@ -6,12 +6,16 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "gui/video_export_utils.hpp"
+#include "io/video/video_encoder.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
 
+#include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
+#include <string>
 #include <vector>
 
 using lfs::core::Device;
@@ -189,6 +193,10 @@ TEST(VideoExportUtilsTest, ValidateVideoExportOptionsRejectsInvalidValues) {
                                                             .height = 1080,
                                                             .framerate = 30,
                                                             .crf = 99}));
+    EXPECT_FALSE(lfs::vis::gui::validateVideoExportOptions({.width = 1919,
+                                                            .height = 1080,
+                                                            .framerate = 30,
+                                                            .crf = 18}));
 }
 
 TEST(VideoExportUtilsTest, ValidateVideoExportOptionsAcceptsNativeResolution) {
@@ -202,4 +210,26 @@ TEST(VideoExportUtilsTest, ValidateVideoExportOptionsAcceptsNativeResolution) {
     EXPECT_EQ(result->height, 17280);
     EXPECT_EQ(result->framerate, 30);
     EXPECT_EQ(result->crf, 18);
+}
+
+TEST(VideoEncoderValidationTest, RejectsUnsafeOptionsBeforeCodecInitialization) {
+    lfs::io::video::VideoEncoder encoder;
+    const std::filesystem::path unused_path = "/tmp/lfs-invalid-video-options.mp4";
+
+    auto options = lfs::io::video::VideoExportOptions{
+        .preset = lfs::io::video::VideoPreset::CUSTOM,
+        .width = 3,
+        .height = 2,
+        .framerate = 30,
+        .crf = 18,
+    };
+    auto result = encoder.open(unused_path, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("even"), std::string::npos);
+
+    options.width = std::numeric_limits<int>::max() - 1;
+    result = encoder.open(unused_path, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("pixel budget"), std::string::npos);
+    EXPECT_FALSE(encoder.isOpen());
 }

@@ -61,6 +61,8 @@ namespace lfs::core {
         Device device() const { return derived().device_impl(); }
         DataType dtype() const { return derived().dtype_impl(); }
         cudaStream_t stream_hint() const { return derived().stream_hint_impl(); }
+
+        Derived snapshot() const { return derived().snapshot_impl(); }
     };
 
     // ============================================================================
@@ -73,9 +75,11 @@ namespace lfs::core {
         std::shared_ptr<Tensor> tensor_ptr_;
 
     public:
-        explicit TensorLeaf(Tensor tensor); // Implemented in .cpp
+        explicit TensorLeaf(Tensor tensor);                  // Implemented in .cpp
+        explicit TensorLeaf(std::shared_ptr<Tensor> tensor); // Implemented in .cpp
 
-        Tensor eval_impl() const; // Implemented in .cpp
+        Tensor eval_impl() const;         // Implemented in .cpp
+        TensorLeaf snapshot_impl() const; // Implemented in .cpp
 
         const TensorShape& shape_impl() const;
         Device device_impl() const;
@@ -119,6 +123,10 @@ namespace lfs::core {
         // Evaluation: implemented in tensor_expr_impl.hpp (needs full Tensor definition)
         Tensor eval_impl() const;
 
+        UnaryExpr snapshot_impl() const {
+            return UnaryExpr(input_.snapshot(), op_, shape_, device_, dtype_);
+        }
+
         // Compose with another unary operation (fusion opportunity!)
         template <typename NewOp>
         auto map(NewOp new_op) const {
@@ -159,6 +167,10 @@ namespace lfs::core {
 
         // FUSION DETECTED! Implemented in tensor_expr_impl.hpp
         Tensor eval_impl() const;
+
+        UnaryExpr snapshot_impl() const {
+            return UnaryExpr(inner_expr_.snapshot(), outer_op_, shape_, device_, dtype_);
+        }
 
         // Continue fusion chain
         template <typename NewOp>
@@ -201,6 +213,10 @@ namespace lfs::core {
 
         // Implemented in tensor_expr_impl.hpp
         Tensor eval_impl() const;
+
+        BinaryExpr snapshot_impl() const {
+            return BinaryExpr(left_.snapshot(), right_.snapshot(), op_, shape_, device_, dtype_);
+        }
 
         // Apply unary operation to result (fuses with binary op)
         template <typename UnaryOp>
@@ -249,6 +265,10 @@ namespace lfs::core {
         // Implemented in tensor_expr_impl.hpp
         Tensor eval_impl() const;
 
+        ScalarUnaryExpr snapshot_impl() const {
+            return ScalarUnaryExpr(input_.snapshot(), op_, shape_, device_, dtype_);
+        }
+
         template <typename NewOp>
         auto map(NewOp new_op) const {
             auto fused_op = ops::compose(op_, new_op);
@@ -290,6 +310,11 @@ namespace lfs::core {
 
         // Implemented in tensor_expr_impl.hpp
         Tensor eval_impl() const;
+
+        PermutationExpr snapshot_impl() const {
+            return PermutationExpr(
+                input_.snapshot(), indices_.snapshot(), shape_, device_, dtype_);
+        }
 
         // Apply unary operation to gathered result (fuses with gather!)
         template <typename UnaryOp>
@@ -337,6 +362,10 @@ namespace lfs::core {
 
         // FUSED gather + unary! Implemented in tensor_expr_impl.hpp
         Tensor eval_impl() const;
+
+        UnaryExpr snapshot_impl() const {
+            return UnaryExpr(perm_expr_.snapshot(), op_, shape_, device_, dtype_);
+        }
 
         const TensorShape& shape_impl() const { return shape_; }
         Device device_impl() const { return device_; }

@@ -20,52 +20,16 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <stdexcept>
-#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace lfs::training {
 
     namespace {
-        [[nodiscard]] bool mem_breakdown_enabled() {
-            static const bool enabled = [] {
-                const char* raw = std::getenv("LFS_MEM_BREAKDOWN");
-                if (!raw) {
-                    return false;
-                }
-                const std::string_view value(raw);
-                return !value.empty() &&
-                       value != "0" && value != "false" && value != "FALSE" &&
-                       value != "off" && value != "OFF" &&
-                       value != "no" && value != "NO";
-            }();
-            return enabled;
-        }
-
-        [[nodiscard]] double bytes_to_mib(const size_t bytes) {
-            return static_cast<double>(bytes) / (1024.0 * 1024.0);
-        }
-
-        [[nodiscard]] size_t tensor_reserved_bytes(const lfs::core::Tensor& tensor) {
-            if (!tensor.is_valid()) {
-                return 0;
-            }
-            if (tensor.capacity() == 0 || tensor.ndim() == 0) {
-                return tensor.bytes();
-            }
-            size_t row_elems = 1;
-            if (tensor.ndim() > 1) {
-                for (size_t dim = 1; dim < tensor.ndim(); ++dim) {
-                    row_elems *= tensor.shape()[dim];
-                }
-            }
-            return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
-        }
-
         constexpr float MRNF_EDGE_SCORE_WEIGHT = 0.25f;
         constexpr int MRNF_EDGE_MIN_VIEW_SAMPLES = 10;
         constexpr int MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES = 5;
@@ -439,14 +403,6 @@ namespace lfs::training {
 
         compute_bounds();
 
-        if (mem_breakdown_enabled()) {
-            LOG_INFO("[MEM] MRNF persistent refine_weight_max={:.2f} MiB, vis_count={:.2f} MiB, free_mask={:.2f} MiB, densification_info={:.2f} MiB",
-                     bytes_to_mib(tensor_reserved_bytes(_refine_weight_max)),
-                     bytes_to_mib(tensor_reserved_bytes(_vis_count)),
-                     bytes_to_mib(tensor_reserved_bytes(_free_mask)),
-                     bytes_to_mib(tensor_reserved_bytes(_splat_data->_densification_info)));
-        }
-
         LOG_INFO("MRNF strategy initialized with {} Gaussians", n);
     }
 
@@ -642,7 +598,6 @@ namespace lfs::training {
             compute_bounds();
         }
 
-        const float max_allowed = _bounds.max_extent * 100.0f;
         const size_t n = static_cast<size_t>(_splat_data->size());
 
         auto raw_opacities = _splat_data->opacity_raw();
@@ -650,8 +605,6 @@ namespace lfs::training {
             raw_opacities = raw_opacities.squeeze(-1);
         const auto& log_scales = _splat_data->scaling_raw();
         const auto& means = _splat_data->means();
-        const float log_max_allowed = std::log(max_allowed);
-
         assert(raw_opacities.numel() == n);
         assert(log_scales.shape()[0] == n && log_scales.shape()[1] == 3);
         assert(means.shape()[0] == n && means.shape()[1] == 3);
@@ -659,16 +612,27 @@ namespace lfs::training {
         auto scale_min = log_scales.min(1);
         auto scale_max = log_scales.max(1);
 
-        auto center = Tensor::from_vector(
-            {_bounds.center[0], _bounds.center[1], _bounds.center[2]},
-            TensorShape({1, 3}), Device::CUDA);
-        auto dist_from_center = (means - center).abs().max(1);
-
         auto prune_mask = (raw_opacities < MRNF_RAW_OPACITY_PRUNE_THRESHOLD) |
                           compute_near_zero_rotation_mask(_splat_data->rotation_raw()) |
-                          (scale_min < MRNF_LOG_MIN_SCALE_THRESHOLD) |
-                          (scale_max > log_max_allowed) |
-                          (dist_from_center > max_allowed);
+                          (scale_min < MRNF_LOG_MIN_SCALE_THRESHOLD);
+
+        // Bounds-dependent pruning is unsafe for one-point or colocated models:
+        // log(0) would classify every finite scale as oversized. Keep the
+        // bounds-independent safety checks active until a real scene extent exists.
+        if (_bounds_valid) {
+            const float max_allowed =
+                _bounds.max_extent <= std::numeric_limits<float>::max() / 100.0f
+                    ? _bounds.max_extent * 100.0f
+                    : std::numeric_limits<float>::max();
+            const float log_max_allowed = std::log(max_allowed);
+            auto center = Tensor::from_vector(
+                {_bounds.center[0], _bounds.center[1], _bounds.center[2]},
+                TensorShape({1, 3}), Device::CUDA);
+            auto dist_from_center = (means - center).abs().max(1);
+            prune_mask = prune_mask |
+                         (scale_max > log_max_allowed) |
+                         (dist_from_center > max_allowed);
+        }
 
         if (_free_mask.is_valid() && n > 0) {
             auto active_mask = _free_mask.slice(0, 0, n).logical_not();
@@ -1342,11 +1306,42 @@ namespace lfs::training {
             return;
         }
 
+        mrnf_strategy::MRNFBounds candidate{};
         mrnf_strategy::launch_percentile_bounds(
             active_means.ptr<float>(),
             n,
             _params->bounds_percentile,
-            &_bounds);
+            &candidate);
+
+        float coordinate_scale = 1.0f;
+        bool finite_bounds = std::isfinite(candidate.max_extent) && candidate.max_extent >= 0.0f;
+        for (int axis = 0; axis < 3; ++axis) {
+            finite_bounds = finite_bounds &&
+                            std::isfinite(candidate.center[axis]) &&
+                            std::isfinite(candidate.extent[axis]) &&
+                            candidate.extent[axis] >= 0.0f;
+            coordinate_scale = std::max(coordinate_scale, std::abs(candidate.center[axis]));
+        }
+        const float extent_epsilon =
+            32.0f * std::numeric_limits<float>::epsilon() * coordinate_scale;
+        if (!finite_bounds || candidate.max_extent <= extent_epsilon) {
+            if (!_bounds_valid) {
+                LOG_WARN("MRNF: spatial bounds unavailable for a degenerate active model; "
+                         "skipping bounds-dependent noise and pruning");
+            }
+            return;
+        }
+
+        if (!std::isfinite(candidate.median_size) || candidate.median_size <= extent_epsilon) {
+            // A line-like model has a useful spatial extent but a zero median
+            // axis. Use its full largest-axis extent to keep the mean LR finite.
+            candidate.median_size =
+                candidate.max_extent <= std::numeric_limits<float>::max() / 2.0f
+                    ? candidate.max_extent * 2.0f
+                    : candidate.max_extent;
+        }
+
+        _bounds = candidate;
 
         _bounds_valid = true;
         _refine_windows_since_bounds = 0;
@@ -1511,23 +1506,29 @@ namespace lfs::training {
     }
 
     void MRNF::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        uint32_t magic = 0, version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "MRNF magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "MRNF version");
 
         if (magic != LFS_MAGIC)
             throw std::runtime_error("Invalid MRNF checkpoint: wrong magic");
         if (version == 0 || version > LFS_VERSION)
             throw std::runtime_error("Unsupported MRNF checkpoint version: " + std::to_string(version));
 
-        uint8_t has_optimizer;
-        is.read(reinterpret_cast<char*>(&has_optimizer), sizeof(has_optimizer));
-        if (has_optimizer && _optimizer)
+        uint8_t has_optimizer = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &has_optimizer, sizeof(has_optimizer), "MRNF optimizer flag");
+        if (has_optimizer > 1 || (has_optimizer && !_optimizer))
+            throw std::runtime_error("Invalid MRNF checkpoint: optimizer flag/state mismatch");
+        if (has_optimizer)
             _optimizer->deserialize(is);
 
-        uint8_t has_scheduler;
-        is.read(reinterpret_cast<char*>(&has_scheduler), sizeof(has_scheduler));
-        if (has_scheduler && _scheduler)
+        uint8_t has_scheduler = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &has_scheduler, sizeof(has_scheduler), "MRNF scheduler flag");
+        if (has_scheduler > 1 || (has_scheduler && !_scheduler))
+            throw std::runtime_error("Invalid MRNF checkpoint: scheduler flag/state mismatch");
+        if (has_scheduler)
             _scheduler->deserialize(is);
 
         const double optimizer_mean_lr = _optimizer ? _optimizer->get_param_lr(ParamType::Means) : 0.0;
@@ -1535,17 +1536,40 @@ namespace lfs::training {
 
         if (version >= 2) {
             uint8_t has_free_mask = 0;
-            is.read(reinterpret_cast<char*>(&has_free_mask), sizeof(has_free_mask));
+            lfs::core::serialization_detail::read_exact(
+                is, &has_free_mask, sizeof(has_free_mask), "MRNF free-mask flag");
+            if (has_free_mask > 1)
+                throw std::runtime_error("Invalid MRNF checkpoint: free-mask flag must be boolean");
             if (has_free_mask) {
-                is >> _free_mask;
-                if (_free_mask.device() != lfs::core::Device::CUDA) {
-                    _free_mask = _free_mask.cuda();
+                lfs::core::Tensor free_mask;
+                is >> free_mask;
+                const size_t model_size = static_cast<size_t>(_splat_data->size());
+                const size_t max_capacity = _params && _params->max_cap > 0
+                                                ? static_cast<size_t>(_params->max_cap)
+                                                : model_size;
+                if (!free_mask.is_valid() || !lfs::core::is_bool_like(free_mask.dtype()) ||
+                    free_mask.ndim() != 1 || free_mask.numel() < model_size ||
+                    free_mask.numel() > max_capacity) {
+                    throw std::runtime_error("Invalid MRNF checkpoint: free mask has incompatible schema");
                 }
+                if (free_mask.device() != lfs::core::Device::CUDA)
+                    free_mask = free_mask.cuda();
+                _free_mask = std::move(free_mask);
             }
         }
         if (version >= 3) {
-            is.read(reinterpret_cast<char*>(&_mean_lr_unscaled), sizeof(_mean_lr_unscaled));
-            is.read(reinterpret_cast<char*>(&_scale_lr_current), sizeof(_scale_lr_current));
+            double mean_lr_unscaled = 0.0;
+            double scale_lr_current = 0.0;
+            lfs::core::serialization_detail::read_exact(
+                is, &mean_lr_unscaled, sizeof(mean_lr_unscaled), "MRNF mean learning rate");
+            lfs::core::serialization_detail::read_exact(
+                is, &scale_lr_current, sizeof(scale_lr_current), "MRNF scale learning rate");
+            if (!std::isfinite(mean_lr_unscaled) || mean_lr_unscaled < 0.0 ||
+                !std::isfinite(scale_lr_current) || scale_lr_current < 0.0) {
+                throw std::runtime_error("Invalid MRNF checkpoint: learning-rate state is invalid");
+            }
+            _mean_lr_unscaled = mean_lr_unscaled;
+            _scale_lr_current = scale_lr_current;
         } else {
             _mean_lr_unscaled = _params ? _params->means_lr : _mean_lr_unscaled;
             _scale_lr_current = optimizer_scaling_lr > 0.0
@@ -1589,6 +1613,37 @@ namespace lfs::training {
                 _optimizer->set_param_lr(ParamType::Means, _mean_lr_unscaled * _bounds.median_size);
             }
         }
+    }
+
+    bool MRNF::can_adopt_checkpoint_state(const IStrategy& loaded) const noexcept {
+        const auto* source = dynamic_cast<const MRNF*>(&loaded);
+        return source && static_cast<bool>(_optimizer) == static_cast<bool>(source->_optimizer) &&
+               static_cast<bool>(_scheduler) == static_cast<bool>(source->_scheduler);
+    }
+
+    void MRNF::adopt_checkpoint_state(IStrategy& loaded) noexcept {
+        auto& source = checked_checkpoint_source<MRNF>(loaded);
+        if (_optimizer)
+            _optimizer->adopt_checkpoint_state(*source._optimizer);
+        if (_scheduler)
+            _scheduler->adopt_checkpoint_state(*source._scheduler);
+        _params.swap(source._params);
+        std::swap(_refine_weight_max, source._refine_weight_max);
+        std::swap(_vis_count, source._vis_count);
+        std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
+        std::swap(_edge_precompute_valid, source._edge_precompute_valid);
+        std::swap(_edge_score_sum, source._edge_score_sum);
+        std::swap(_edge_canny_nms_output, source._edge_canny_nms_output);
+        std::swap(_edge_sample_count, source._edge_sample_count);
+        std::swap(_edge_last_sample_iter, source._edge_last_sample_iter);
+        std::swap(_free_mask, source._free_mask);
+        std::swap(_bounds, source._bounds);
+        std::swap(_bounds_valid, source._bounds_valid);
+        std::swap(_refine_windows_since_bounds, source._refine_windows_since_bounds);
+        std::swap(_mean_lr_unscaled, source._mean_lr_unscaled);
+        std::swap(_scale_lr_current, source._scale_lr_current);
+        std::swap(_mean_lr_gamma, source._mean_lr_gamma);
+        std::swap(_scale_lr_gamma, source._scale_lr_gamma);
     }
 
     void MRNF::reserve_optimizer_capacity(size_t capacity) {

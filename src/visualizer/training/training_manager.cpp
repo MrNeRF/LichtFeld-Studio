@@ -141,10 +141,6 @@ namespace lfs::vis {
     }
 
     void TrainerManager::setupStateMachineCallbacks() {
-        state_machine_.setCleanupCallback([this](const TrainingResources& resources) {
-            cleanupTrainingResources(resources);
-        });
-
         state_machine_.setStateChangeCallback([this](TrainingState, TrainingState new_state) {
             // Emit events on state changes
             if (new_state == TrainingState::Idle) {
@@ -158,58 +154,31 @@ namespace lfs::vis {
         });
     }
 
-    void TrainerManager::cleanupTrainingResources(const TrainingResources& /*resources*/) {
-        LOG_DEBUG("Cleaning up training resources");
-
-        if (training_thread_ && training_thread_->joinable()) {
-            training_thread_->request_stop();
-            auto timeout = std::chrono::milliseconds(500);
-            {
-                std::unique_lock<std::mutex> lock(completion_mutex_);
-                if (completion_cv_.wait_for(lock, timeout, [this] { return training_complete_; })) {
-                    lock.unlock();
-                    training_thread_->join();
-                } else {
-                    lock.unlock();
-                    LOG_WARN("Thread didn't respond to stop request, detaching");
-                    training_thread_->detach();
-                }
-            }
-            training_thread_.reset();
-        }
-
-        if (trainer_) {
-            std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
-            trainer_->shutdown();
-            trainer_.reset();
-        }
-    }
-
-    void TrainerManager::updateResourceTracking() {
-        TrainingResources resources;
-        resources.has_trainer = trainer_ != nullptr;
-        resources.has_training_thread = training_thread_ != nullptr && training_thread_->joinable();
-        resources.has_scene_data = scene_ != nullptr;
-        resources.has_gpu_tensors = trainer_ && trainer_->isInitialized();
-        if (scene_) {
-            resources.training_node_name = scene_->getTrainingModelNodeName();
-        }
-        state_machine_.setResources(resources);
-    }
-
     TrainerManager::~TrainerManager() {
         // Ensure training is stopped before destruction
         if (training_thread_ && training_thread_->joinable()) {
             LOG_INFO("Stopping training thread during destruction...");
             stopTraining();
-            waitForCompletion();
+            if (!waitForCompletion()) {
+                // Destruction cannot leave a worker that captures this manager or
+                // its scene/trainer pointers. A final join is intentionally
+                // unbounded here; the interactive clear path keeps ownership and
+                // returns instead of reaching this shutdown-only fallback.
+                LOG_WARN("Waiting without a timeout for training worker during shutdown");
+                training_thread_->request_stop();
+                training_thread_->join();
+                training_thread_.reset();
+            }
         }
     }
 
     void TrainerManager::setTrainer(std::unique_ptr<lfs::training::Trainer> trainer) {
         LOG_TIMER_TRACE("TrainerManager::setTrainer");
 
-        clearTrainer();
+        if (!clearTrainer()) {
+            LOG_ERROR("Cannot install trainer while the previous training worker is still stopping");
+            return;
+        }
 
         if (trainer) {
             const auto& params = trainer->getParams();
@@ -218,8 +187,6 @@ namespace lfs::vis {
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
-            updateResourceTracking();
-
             if (!state_machine_.transitionTo(TrainingState::Ready)) {
                 LOG_WARN("Failed to transition to Ready");
             }
@@ -231,7 +198,10 @@ namespace lfs::vis {
     void TrainerManager::setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration) {
         LOG_TIMER_TRACE("TrainerManager::setTrainerFromCheckpoint");
 
-        clearTrainer();
+        if (!clearTrainer()) {
+            LOG_ERROR("Cannot install checkpoint trainer while the previous training worker is still stopping");
+            return;
+        }
 
         if (trainer) {
             const auto& params = trainer->getParams();
@@ -240,7 +210,6 @@ namespace lfs::vis {
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
-            updateResourceTracking();
             internal::TrainerReady{}.emit();
 
             if (!state_machine_.transitionTo(TrainingState::Paused)) {
@@ -256,7 +225,7 @@ namespace lfs::vis {
         return trainer_ != nullptr;
     }
 
-    void TrainerManager::clearTrainer() {
+    bool TrainerManager::clearTrainer() {
         LOG_DEBUG("Clearing trainer");
 
         const auto state = getState();
@@ -271,18 +240,26 @@ namespace lfs::vis {
         if (training_thread_ && training_thread_->joinable()) {
             if (training_thread_->get_id() == std::this_thread::get_id()) {
                 LOG_ERROR("Cannot clear trainer from its own training thread");
-                return;
+                return false;
             }
             LOG_INFO("Waiting for training thread before clearing trainer");
-            waitForCompletion();
+            if (!waitForCompletion()) {
+                LOG_ERROR("Trainer clear deferred: training worker did not reach its terminal state");
+                return false;
+            }
         }
 
         {
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_.reset();
+            // Model tensors retain their own shared ownership while edit/view mode
+            // still uses the exportable block. The manager must not remain the final
+            // owner after scene teardown.
+            splat_storage_.reset();
         }
-
-        updateResourceTracking();
+        // Trainer::shutdown() trims before Tensor-valued members are destroyed.
+        // Trim again after destruction so those returned blocks do not survive clear.
+        lfs::core::Tensor::trim_memory_pool();
 
         if (getState() != TrainingState::Idle && !state_machine_.transitionTo(TrainingState::Idle)) {
             LOG_WARN("Failed to transition to Idle");
@@ -291,6 +268,7 @@ namespace lfs::vis {
         python::update_training_state(false, "idle");
         python::update_trainer_loaded(false, 0);
         LOG_INFO("Trainer cleared");
+        return true;
     }
 
     bool TrainerManager::startTraining() {
@@ -444,8 +422,6 @@ namespace lfs::vis {
             training_complete_ = false;
         }
 
-        updateResourceTracking();
-
         if (!state_machine_.transitionTo(TrainingState::Running)) {
             LOG_WARN("Failed to transition to Running");
         }
@@ -505,8 +481,6 @@ namespace lfs::vis {
         }
 
         training_start_time_ = std::chrono::steady_clock::now();
-        updateResourceTracking();
-
         if (!state_machine_.transitionTo(TrainingState::Running)) {
             LOG_WARN("Failed to transition to Running");
         }
@@ -675,8 +649,6 @@ namespace lfs::vis {
         }
 
         LOG_DEBUG("Requesting training stop");
-        updateResourceTracking();
-
         if (!state_machine_.transitionTo(TrainingState::Stopping)) {
             LOG_WARN("Failed to transition to Stopping");
         }
@@ -707,9 +679,13 @@ namespace lfs::vis {
         }
     }
 
-    void TrainerManager::waitForCompletion() {
+    bool TrainerManager::waitForCompletion() {
         if (!training_thread_ || !training_thread_->joinable()) {
-            return;
+            return true;
+        }
+        if (training_thread_->get_id() == std::this_thread::get_id()) {
+            LOG_ERROR("Cannot wait for the training worker from its own thread");
+            return false;
         }
 
         std::unique_lock<std::mutex> lock(completion_mutex_);
@@ -717,11 +693,12 @@ namespace lfs::vis {
                                      [this] { return training_complete_; })) {
             LOG_ERROR("Training thread join timed out ({}s)", COMPLETION_TIMEOUT_SEC);
             training_thread_->request_stop();
-            return;
+            return false;
         }
 
         training_thread_->join();
         training_thread_.reset();
+        return true;
     }
 
     int TrainerManager::getCurrentIteration() const {
@@ -937,7 +914,6 @@ namespace lfs::vis {
         const float final_loss = getCurrentLoss();
         const bool user_stopped = (getState() == TrainingState::Stopping);
 
-        updateResourceTracking();
         if (!user_stopped) {
             if (!state_machine_.transitionTo(TrainingState::Stopping)) {
                 LOG_WARN("Failed to transition to Stopping");

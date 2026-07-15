@@ -12,6 +12,7 @@
 //   5 batch_prepare wave-chunked raster/compose indirect args
 
 #include "config.slang"
+#include "indirect_layout.inc"
 
 import utils;
 
@@ -151,7 +152,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
     int offset = depth_rank == 0u ? 0 : index_buffer_offset[depth_rank - 1u];
     int offset_max = index_buffer_offset[depth_rank];
     const int sort_capacity = int(uniforms.sort_capacity);
-    if (sort_capacity <= 0 || offset >= sort_capacity || offset >= offset_max)
+    if (sort_capacity <= 0 || offset < 0 || offset_max < 0 ||
+        offset >= sort_capacity || offset >= offset_max)
         return;
     offset_max = min(offset_max, sort_capacity);
 
@@ -208,8 +210,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
 
 layout(binding=0) StructuredBuffer<sortingKey_t> sorted_keys;
 layout(binding=1) RWStructuredBuffer<int32_t> out_macro_ranges;
-layout(binding=2) StructuredBuffer<int32_t> index_buffer_offset_in;
-layout(binding=3) StructuredBuffer<uint32_t> visible_count;
+layout(binding=2) StructuredBuffer<uint32_t> tile_instance_count;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -218,9 +219,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
     const uint32_t num_macro =
         higs_macro_grid_width(uniforms.grid_width) * higs_macro_grid_height(uniforms.grid_height);
 
-    const uint32_t tail = min(visible_count[0], uint32_t(uniforms.num_splats));
-    uint32_t num_isects = tail == 0u ? 0u : (uint32_t)index_buffer_offset_in[tail - 1u];
-    num_isects = min(num_isects, uniforms.sort_capacity);
+    const uint32_t num_isects = min(tile_instance_count[0], uniforms.sort_capacity);
     if (globalIdx > num_isects)
         return;
 
@@ -258,7 +257,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
 #elif MACRO_ENTRY == _MACRO_ENTRY_batch_prepare
 
 layout(binding=0) StructuredBuffer<int32_t> macro_batch_offsets;
-// [0 .. MAX_WAVES*3): per-wave raster args; [MAX_WAVES*3 ..): per-wave compose args.
+// Per-wave raster/compose bases and stride are defined by
+// LFS_VK_MACRO_WAVE_DISPATCH_* in indirect_layout.inc.
 layout(binding=1) RWStructuredBuffer<uint32_t> out_wave_args;
 
 [shader("compute")]
@@ -275,18 +275,21 @@ void main(uniform Uniforms uniforms) {
         const uint wave_batches = total_batches > wave_begin
             ? min(total_batches - wave_begin, HIGS_RASTER_WAVE_BATCHES)
             : 0u;
-        out_wave_args[w * 3u + 0u] = wave_batches;
-        out_wave_args[w * 3u + 1u] = wave_batches > 0u ? 1u : 0u;
-        out_wave_args[w * 3u + 2u] = wave_batches > 0u ? 1u : 0u;
+        const uint raster = LFS_VK_MACRO_WAVE_DISPATCH_RASTER_BASE_WORD_OFFSET +
+                            w * LFS_VK_MACRO_WAVE_DISPATCH_WAVE_STRIDE_WORDS;
+        out_wave_args[raster + LFS_VK_DISPATCH_X_WORD_OFFSET] = wave_batches;
+        out_wave_args[raster + LFS_VK_DISPATCH_Y_WORD_OFFSET] = wave_batches > 0u ? 1u : 0u;
+        out_wave_args[raster + LFS_VK_DISPATCH_Z_WORD_OFFSET] = wave_batches > 0u ? 1u : 0u;
         // Wave 0's compose always runs so an empty frame still initializes
         // the pixel state instead of presenting stale content.
         const bool compose_runs = wave_batches > 0u || w == 0u;
         const uint higs_grid_w = (uniforms.image_width + HIGS_TILE_WIDTH - 1u) / HIGS_TILE_WIDTH;
         const uint higs_grid_h = (uniforms.image_height + HIGS_TILE_HEIGHT - 1u) / HIGS_TILE_HEIGHT;
-        const uint c = (HIGS_RASTER_MAX_WAVES + w) * 3u;
-        out_wave_args[c + 0u] = compose_runs ? higs_grid_w : 0u;
-        out_wave_args[c + 1u] = compose_runs ? higs_grid_h : 0u;
-        out_wave_args[c + 2u] = compose_runs ? 1u : 0u;
+        const uint compose = LFS_VK_MACRO_WAVE_DISPATCH_COMPOSE_BASE_WORD_OFFSET +
+                             w * LFS_VK_MACRO_WAVE_DISPATCH_WAVE_STRIDE_WORDS;
+        out_wave_args[compose + LFS_VK_DISPATCH_X_WORD_OFFSET] = compose_runs ? higs_grid_w : 0u;
+        out_wave_args[compose + LFS_VK_DISPATCH_Y_WORD_OFFSET] = compose_runs ? higs_grid_h : 0u;
+        out_wave_args[compose + LFS_VK_DISPATCH_Z_WORD_OFFSET] = compose_runs ? 1u : 0u;
     }
 }
 

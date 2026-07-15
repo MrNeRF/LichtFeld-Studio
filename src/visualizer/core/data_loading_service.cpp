@@ -10,6 +10,7 @@
 #include "core/services.hpp"
 #include "scene/scene_manager.hpp"
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 
 namespace lfs::vis {
@@ -207,6 +208,80 @@ namespace lfs::vis {
             LOG_ERROR("{} (Path: {})", error_msg, lfs::core::path_to_utf8(path));
             return std::unexpected(error_msg);
         }
+    }
+
+    std::expected<void, std::string>
+    DataLoadingService::loadSplatFiles(const std::vector<std::filesystem::path>& paths) {
+        if (paths.empty()) {
+            return std::unexpected("No splat files were provided");
+        }
+
+        const auto started_at = std::chrono::steady_clock::now();
+
+        size_t loaded = 0;
+        size_t failed = 0;
+        std::vector<std::string> failures;
+        failures.reserve(paths.size());
+
+        // Scene tensor allocation and attachment remain on the graphics thread. The
+        // PLY loader already issues sequential OS read-ahead and uses a fused decode;
+        // concurrent full-file walkers only contend for storage while multiplying its
+        // large host staging footprint.
+        for (size_t index = 0; index < paths.size(); ++index) {
+            std::string load_error;
+            if (loaded == 0) {
+                if (auto result = loadSplatFile(paths[index]); !result) {
+                    load_error = result.error();
+                }
+            } else {
+                try {
+                    addSplatFileToScene(paths[index]);
+                } catch (const std::exception& error) {
+                    load_error = error.what();
+                }
+            }
+
+            if (load_error.empty()) {
+                ++loaded;
+                continue;
+            }
+
+            ++failed;
+            failures.emplace_back(std::format("{}: {}",
+                                              lfs::core::path_to_utf8(paths[index].filename()),
+                                              load_error));
+            LOG_ERROR("Failed to load {}: {}",
+                      lfs::core::path_to_utf8(paths[index]), load_error);
+            lfs::core::events::state::SplatFileLoadFailed{
+                .path = paths[index],
+                .error = load_error}
+                .emit();
+        }
+
+        if (loaded > 1) {
+            scene_manager_->consolidateNodeModels();
+        }
+
+        const double elapsed_seconds = std::chrono::duration<double>(
+                                           std::chrono::steady_clock::now() - started_at)
+                                           .count();
+        LOG_INFO("Splat batch loaded {}/{} files in {:.3f}s ({} failed)",
+                 loaded, paths.size(), elapsed_seconds, failed);
+
+        if (loaded == 0) {
+            std::string error = "No splat files could be loaded";
+            if (!failures.empty()) {
+                error += ": ";
+                for (size_t index = 0; index < failures.size(); ++index) {
+                    if (index > 0) {
+                        error += "; ";
+                    }
+                    error += failures[index];
+                }
+            }
+            return std::unexpected(std::move(error));
+        }
+        return {};
     }
 
     void DataLoadingService::addPLYToScene(const std::filesystem::path& path) {

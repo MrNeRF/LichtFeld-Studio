@@ -32,6 +32,24 @@ def _theme():
     return lf.ui.theme()
 
 
+def _vulkan_capabilities():
+    query = getattr(lf, "get_vulkan_capabilities", None)
+    if query is None:
+        return {}
+    try:
+        return query() or {}
+    except RuntimeError:
+        return {}
+
+
+def _mesh_wireframe_supported():
+    return bool(_vulkan_capabilities().get("mesh_wireframe", False))
+
+
+def _mesh_wide_lines_supported():
+    return bool(_vulkan_capabilities().get("wide_lines", False))
+
+
 def _theme_vignette():
     theme = _theme()
     return theme.vignette if theme else None
@@ -386,6 +404,11 @@ class RenderingPanel(Panel):
                 model.bind(prop_id,
                            lambda: getattr(s(), "lod_debug_colors", False),
                            lambda v: setattr(s(), "lod_debug_colors", v) if s() else None)
+            elif prop_id == "mesh_wireframe":
+                model.bind(prop_id,
+                           lambda: _mesh_wireframe_supported() and getattr(s(), "mesh_wireframe", False),
+                           lambda v: setattr(s(), "mesh_wireframe", bool(v))
+                           if s() and _mesh_wireframe_supported() else None)
             else:
                 model.bind(prop_id,
                            lambda p=prop_id: getattr(s(), p, False),
@@ -427,6 +450,8 @@ class RenderingPanel(Panel):
 
         model.bind_func("environment_enabled",
                         lambda: s() is not None and getattr(s(), "environment_mode", "") == "EQUIRECTANGULAR")
+        model.bind_func("mesh_wireframe_supported", _mesh_wireframe_supported)
+        model.bind_func("mesh_wide_lines_supported", _mesh_wide_lines_supported)
 
         all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + [
             "environment_mode", "environment_map_path", "ppisp_mode"

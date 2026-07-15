@@ -8,43 +8,19 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "strategies/istrategy.hpp"
+#include "strategies/strategy_factory.hpp"
 #include <fstream>
+#include <memory>
 #include <nlohmann/json.hpp>
+#include <type_traits>
 #include <utility>
 
 namespace lfs::training {
 
     namespace {
-        constexpr char kCheckpointTempSuffix[] = ".tmp";
-
-        std::filesystem::path checkpoint_temp_path(const std::filesystem::path& checkpoint_path) {
-            auto temp_path = checkpoint_path;
-            temp_path += kCheckpointTempSuffix;
-            return temp_path;
-        }
-
-        std::expected<void, std::string> replace_checkpoint_file(
-            const std::filesystem::path& checkpoint_path,
-            const std::filesystem::path& temp_checkpoint_path) {
-
-            std::error_code ec;
-            std::filesystem::remove(checkpoint_path, ec);
-            if (ec) {
-                return std::unexpected("Failed to remove existing checkpoint file '" +
-                                       lfs::core::path_to_utf8(checkpoint_path) + "': " + ec.message());
-            }
-
-            std::filesystem::rename(temp_checkpoint_path, checkpoint_path, ec);
-            if (ec) {
-                return std::unexpected("Failed to replace checkpoint file '" +
-                                       lfs::core::path_to_utf8(checkpoint_path) + "': " + ec.message());
-            }
-
-            return {};
-        }
-
         [[nodiscard]] lfs::core::SplatTensorAllocator make_checkpoint_tensor_allocator(
             lfs::core::SplatTensorAllocator allocator,
             const std::size_t target_row_capacity) {
@@ -87,7 +63,11 @@ namespace lfs::training {
 
             const auto checkpoint_dir = checkpoint_directory(path);
             const auto checkpoint_path = checkpoint_output_path(path);
-            const auto temp_checkpoint_path = checkpoint_temp_path(checkpoint_path);
+            lfs::io::ScopedAtomicOutputFile atomic_checkpoint(
+                checkpoint_path,
+                lfs::io::AtomicOutputTempName::AppendSuffix,
+                lfs::io::AtomicOutputDurability::Durable);
+            const auto& temp_checkpoint_path = atomic_checkpoint.temp_path();
 
             // Create checkpoint directory with error checking
             std::error_code ec;
@@ -242,8 +222,9 @@ namespace lfs::training {
                                        lfs::core::path_to_utf8(temp_checkpoint_path));
             }
 
-            if (auto replace_result = replace_checkpoint_file(checkpoint_path, temp_checkpoint_path); !replace_result)
-                return std::unexpected(replace_result.error());
+            if (auto replace_result = atomic_checkpoint.commit(); !replace_result) {
+                return std::unexpected(replace_result.error().format());
+            }
 
             std::string extras;
             if (bilateral_grid)
@@ -274,28 +255,43 @@ namespace lfs::training {
         PPISP* ppisp,
         PPISPControllerPool* ppisp_controller_pool,
         lfs::core::SplatTensorAllocator tensor_allocator) {
-
         try {
             std::ifstream file;
             if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return std::unexpected("Failed to open: " + lfs::core::path_to_utf8(path));
             }
 
+            std::error_code size_error;
+            const auto file_size = std::filesystem::file_size(path, size_error);
+            if (size_error)
+                return std::unexpected("Failed to inspect checkpoint size: " + size_error.message());
+
             CheckpointHeader header{};
             file.read(reinterpret_cast<char*>(&header), sizeof(header));
-
-            if (header.magic != CHECKPOINT_MAGIC) {
-                return std::unexpected("Invalid checkpoint: wrong magic");
-            }
-            if (header.version > CHECKPOINT_VERSION) {
-                return std::unexpected("Unsupported version: " + std::to_string(header.version));
-            }
+            if (!file)
+                return std::unexpected("Invalid checkpoint: truncated header");
+            if (auto validation = lfs::core::validate_checkpoint_header(header, file_size); !validation)
+                return std::unexpected(validation.error());
 
             // Verify strategy compatibility
             uint32_t type_len = 0;
             file.read(reinterpret_cast<char*>(&type_len), sizeof(type_len));
+            if (!file)
+                return std::unexpected("Invalid checkpoint: truncated strategy name length");
+            if (type_len == 0 || type_len > lfs::core::MAX_CHECKPOINT_STRATEGY_NAME_BYTES)
+                return std::unexpected("Invalid checkpoint: strategy name length is out of bounds");
+            const auto type_offset = file.tellg();
+            if (type_offset == std::streampos(-1) ||
+                (header.params_json_size > 0 &&
+                 (static_cast<uint64_t>(static_cast<std::streamoff>(type_offset)) > header.params_json_offset ||
+                  type_len > header.params_json_offset -
+                                 static_cast<uint64_t>(static_cast<std::streamoff>(type_offset))))) {
+                return std::unexpected("Invalid checkpoint: strategy name overlaps parameter JSON");
+            }
             std::string saved_type(type_len, '\0');
             file.read(saved_type.data(), type_len);
+            if (!file)
+                return std::unexpected("Invalid checkpoint: truncated strategy name");
 
             if (!lfs::core::param::strategy_names_match(saved_type, strategy.strategy_type())) {
                 return std::unexpected("Strategy mismatch: '" + saved_type +
@@ -304,81 +300,114 @@ namespace lfs::training {
 
             // Load params from checkpoint up front so strategy internals can be synced before deserialization.
             const auto strategy_state_pos = file.tellg();
+            auto loaded_params = params;
             if (header.params_json_size > 0) {
                 file.seekg(static_cast<std::streamoff>(header.params_json_offset));
                 std::string params_str(header.params_json_size, '\0');
                 file.read(params_str.data(), static_cast<std::streamsize>(header.params_json_size));
+                if (!file)
+                    return std::unexpected("Invalid checkpoint: truncated parameter JSON");
 
-                const auto cli_data_path = params.dataset.data_path;
-                const auto cli_output_path = params.dataset.output_path;
+                const auto cli_data_path = loaded_params.dataset.data_path;
+                const auto cli_output_path = loaded_params.dataset.output_path;
 
                 const auto params_json = nlohmann::json::parse(params_str);
                 if (params_json.contains("optimization")) {
-                    params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json["optimization"]);
+                    loaded_params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json["optimization"]);
                     if (params_json.contains("dataset")) {
-                        params.dataset = lfs::core::param::DatasetConfig::from_json(params_json["dataset"]);
+                        loaded_params.dataset = lfs::core::param::DatasetConfig::from_json(params_json["dataset"]);
                     }
                     if (params_json.contains("init_path")) {
-                        params.init_path = params_json["init_path"].get<std::string>();
+                        loaded_params.init_path = params_json["init_path"].get<std::string>();
                     }
                     if (params_json.contains("exclude_frozen_add_splats_from_export")) {
-                        params.exclude_frozen_add_splats_from_export =
+                        loaded_params.exclude_frozen_add_splats_from_export =
                             params_json["exclude_frozen_add_splats_from_export"].get<bool>();
                     }
                     if (params_json.contains("disabled_camera_uids")) {
-                        params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();
+                        loaded_params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();
                     }
                 } else {
-                    params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json);
+                    loaded_params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json);
                 }
 
                 if (!cli_data_path.empty())
-                    params.dataset.data_path = cli_data_path;
+                    loaded_params.dataset.data_path = cli_data_path;
                 if (!cli_output_path.empty())
-                    params.dataset.output_path = cli_output_path;
+                    loaded_params.dataset.output_path = cli_output_path;
             }
-            strategy.set_optimization_params(params.optimization);
+            if (loaded_params.optimization.max_cap < 0)
+                return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");
+            if (static_cast<uint64_t>(loaded_params.optimization.max_cap) >
+                lfs::core::MAX_CHECKPOINT_GAUSSIANS) {
+                return std::unexpected("Invalid checkpoint parameters: max_cap exceeds checkpoint limit");
+            }
+            if (const auto parameter_error = loaded_params.optimization.validate(); !parameter_error.empty())
+                return std::unexpected("Invalid checkpoint parameters: " + parameter_error);
+            if (const auto parameter_error = loaded_params.dataset.validate(); !parameter_error.empty())
+                return std::unexpected("Invalid checkpoint dataset parameters: " + parameter_error);
+
             file.clear();
             file.seekg(strategy_state_pos);
+            if (!file)
+                throw std::runtime_error("Invalid checkpoint: cannot seek to model state");
 
-            // Model and strategy state. If the caller provides a viewer/training
-            // allocator, deserialize directly into that storage so checkpoint
-            // resume does not reintroduce CUDA-only model tensors.
+            // Parse into an isolated state graph. Nothing reachable from the live
+            // trainer is changed until every model, strategy, and component field
+            // has passed its byte budget and logical schema checks.
             const size_t target_capacity =
-                params.optimization.max_cap > 0
-                    ? std::max<std::size_t>(static_cast<std::size_t>(params.optimization.max_cap),
+                loaded_params.optimization.max_cap > 0
+                    ? std::max<std::size_t>(static_cast<std::size_t>(loaded_params.optimization.max_cap),
                                             static_cast<std::size_t>(header.num_gaussians))
                     : 0;
-            strategy.get_model().deserialize(
+            lfs::core::SplatData loaded_model;
+            loaded_model.deserialize(
                 file,
                 make_checkpoint_tensor_allocator(std::move(tensor_allocator), target_capacity));
-            strategy.deserialize(file);
+            if (static_cast<uint64_t>(loaded_model.size()) != header.num_gaussians)
+                throw std::runtime_error("Invalid checkpoint: model count does not match header");
+            if (loaded_model.get_max_sh_degree() != header.sh_degree)
+                throw std::runtime_error("Invalid checkpoint: model SH degree does not match header");
+
+            auto loaded_strategy_result = StrategyFactory::instance().create(saved_type, loaded_model);
+            if (!loaded_strategy_result)
+                throw std::runtime_error("Cannot construct checkpoint strategy: " + loaded_strategy_result.error());
+            auto loaded_strategy = std::move(*loaded_strategy_result);
+            auto* checkpoint_adopter = dynamic_cast<ICheckpointStateAdopter*>(&strategy);
+            if (checkpoint_adopter && checkpoint_adopter->has_checkpoint_runtime_state())
+                loaded_strategy->initialize(loaded_params.optimization);
+            else
+                loaded_strategy->set_optimization_params(loaded_params.optimization);
+            loaded_strategy->deserialize(file);
+            if (!checkpoint_adopter || !checkpoint_adopter->can_adopt_checkpoint_state(*loaded_strategy)) {
+                throw std::runtime_error(
+                    "Strategy does not support transactional checkpoint state adoption");
+            }
+
+            std::unique_ptr<BilateralGrid> loaded_bilateral_grid;
+            std::unique_ptr<PPISP> loaded_ppisp;
+            std::unique_ptr<PPISPControllerPool> loaded_ppisp_controller_pool;
 
             // Bilateral grid (if present in checkpoint)
             if (has_flag(header.flags, CheckpointFlags::HAS_BILATERAL_GRID)) {
-                if (bilateral_grid) {
-                    bilateral_grid->deserialize(file);
-                    LOG_INFO("Bilateral grid restored (step={}, lr={:.2e})",
-                             bilateral_grid->get_step(), bilateral_grid->get_lr());
-                } else {
+                auto parsed = std::make_unique<BilateralGrid>(1, 1, 1, 1, 1);
+                parsed->deserialize(file);
+                if (bilateral_grid)
+                    loaded_bilateral_grid = std::move(parsed);
+                else
                     LOG_WARN("Checkpoint has bilateral grid but none provided - skipping data");
-                    BilateralGrid temp(1, 1, 1, 1, 1);
-                    temp.deserialize(file);
-                }
             } else if (bilateral_grid) {
                 LOG_WARN("Bilateral grid requested but not in checkpoint - using fresh state");
             }
 
             // PPISP (if present in checkpoint)
             if (has_flag(header.flags, CheckpointFlags::HAS_PPISP)) {
-                if (ppisp) {
-                    ppisp->deserialize(file);
-                    LOG_INFO("PPISP restored (step={}, lr={:.2e})", ppisp->get_step(), ppisp->get_lr());
-                } else {
+                auto parsed = std::make_unique<PPISP>(1);
+                parsed->deserialize(file);
+                if (ppisp)
+                    loaded_ppisp = std::move(parsed);
+                else
                     LOG_WARN("Checkpoint has PPISP but none provided - skipping data");
-                    PPISP temp(1);
-                    temp.deserialize(file);
-                }
             } else if (ppisp) {
                 LOG_WARN("PPISP requested but not in checkpoint - using fresh state");
             }
@@ -386,38 +415,58 @@ namespace lfs::training {
             // PPISP controller pool (if present in checkpoint)
             if (has_flag(header.flags, CheckpointFlags::HAS_PPISP_CONTROLLER)) {
                 if (ppisp_controller_pool) {
-                    ppisp_controller_pool->deserialize(file);
-                    LOG_INFO("PPISP controller pool restored: {} cameras (step={}, lr={:.2e})",
-                             ppisp_controller_pool->num_cameras(),
-                             0, // step not easily accessible from pool
-                             ppisp_controller_pool->get_learning_rate());
+                    loaded_ppisp_controller_pool = std::make_unique<PPISPControllerPool>(
+                        ppisp_controller_pool->num_cameras(), 1);
+                    loaded_ppisp_controller_pool->deserialize(file);
                 } else {
                     LOG_WARN("Checkpoint has PPISP controller pool but none provided - skipping");
-                    // Skip the pool data by reading into a temporary
-                    // Pool format: magic + version + num_cameras + ... (variable size)
-                    // We need to read it to advance the file position
-                    uint32_t magic, version;
-                    int num_cameras, total_iter;
-                    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-                    file.read(reinterpret_cast<char*>(&version), sizeof(version));
-                    file.read(reinterpret_cast<char*>(&num_cameras), sizeof(num_cameras));
-                    // Create a temporary pool to skip the data
-                    PPISPControllerPool temp(num_cameras, 1);
-                    // Rewind and deserialize properly to skip
-                    file.seekg(-static_cast<std::streamoff>(sizeof(magic) + sizeof(version) + sizeof(num_cameras)),
-                               std::ios::cur);
-                    temp.deserialize(file);
+                    PPISPControllerPool::consume_checkpoint(file);
                 }
             } else if (ppisp_controller_pool) {
                 LOG_WARN("PPISP controller pool requested but not in checkpoint - using fresh state");
             }
 
             // Reserve capacity for densification after the checkpoint params are resolved.
-            const size_t max_cap = static_cast<size_t>(params.optimization.max_cap);
-            if (max_cap > strategy.get_model().size()) {
-                LOG_DEBUG("Reserving capacity: {} (current: {})", max_cap, strategy.get_model().size());
-                strategy.get_model().reserve_capacity(max_cap);
-                strategy.reserve_optimizer_capacity(max_cap);
+            if (header.params_json_size > 0) {
+                const auto serialized_state_end = file.tellg();
+                if (serialized_state_end == std::streampos(-1) ||
+                    static_cast<uint64_t>(static_cast<std::streamoff>(serialized_state_end)) !=
+                        header.params_json_offset) {
+                    throw std::runtime_error("Invalid checkpoint: serialized state does not end at parameter JSON");
+                }
+            } else if (!file) {
+                throw std::runtime_error("Invalid checkpoint: truncated serialized state");
+            }
+
+            const size_t max_cap = static_cast<size_t>(loaded_params.optimization.max_cap);
+            if (max_cap > loaded_model.size()) {
+                LOG_DEBUG("Reserving capacity: {} (current: {})", max_cap, loaded_model.size());
+                loaded_model.reserve_capacity(max_cap);
+                loaded_strategy->reserve_optimizer_capacity(max_cap);
+            }
+
+            static_assert(std::is_nothrow_swappable_v<lfs::core::param::TrainingParameters>);
+            static_assert(std::is_nothrow_move_assignable_v<lfs::core::SplatData>);
+
+            // All remaining operations transfer already-owned storage and cannot
+            // allocate. The live state therefore changes as one commit boundary.
+            std::swap(params, loaded_params);
+            strategy.get_model() = std::move(loaded_model);
+            checkpoint_adopter->adopt_checkpoint_state(*loaded_strategy);
+            if (loaded_bilateral_grid) {
+                bilateral_grid->adopt_checkpoint_state(*loaded_bilateral_grid);
+                LOG_INFO("Bilateral grid restored (step={}, lr={:.2e})",
+                         bilateral_grid->get_step(), bilateral_grid->get_lr());
+            }
+            if (loaded_ppisp) {
+                ppisp->adopt_checkpoint_state(*loaded_ppisp);
+                LOG_INFO("PPISP restored (step={}, lr={:.2e})", ppisp->get_step(), ppisp->get_lr());
+            }
+            if (loaded_ppisp_controller_pool) {
+                ppisp_controller_pool->adopt_checkpoint_state(*loaded_ppisp_controller_pool);
+                LOG_INFO("PPISP controller pool restored: {} cameras (lr={:.2e})",
+                         ppisp_controller_pool->num_cameras(),
+                         ppisp_controller_pool->get_learning_rate());
             }
 
             LOG_INFO("Checkpoint loaded: {} ({} Gaussians, iter {})",
@@ -426,6 +475,8 @@ namespace lfs::training {
 
         } catch (const std::exception& e) {
             return std::unexpected(std::string("Load checkpoint failed: ") + e.what());
+        } catch (...) {
+            return std::unexpected("Load checkpoint failed: unknown exception");
         }
     }
 

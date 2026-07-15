@@ -13,10 +13,6 @@ else()
     set(LFS_VIS_LIB_TYPE STATIC)
 endif()
 
-option(LFS_DEV_IMPORT_SOURCE_RESOURCES
-        "Load RmlUI resources and locales from source in non-portable builds"
-        ON)
-
 add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Core
         visualizer.cpp
@@ -239,7 +235,13 @@ target_link_libraries(lfs_visualizer
         CUDA::cudart
         nfd::nfd
         vterm
+        lfs_oiio
 )
+
+set_property(SOURCE
+    gui/gui_manager.cpp
+    rendering/passes/vulkan_environment_pass.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS FMT_HEADER_ONLY=1)
 
 # Linux folder pickers bypass NFD and call GTK directly so they can return
 # the currently-open folder rather than the highlighted child. Set up by
@@ -257,6 +259,7 @@ target_sources(lfs_visualizer
         rendering/vksplat_viewport_renderer.cpp
         rendering/vulkan_external_tensor.cpp
         rendering/point_cloud_vulkan_renderer.cpp)
+
 # The CPU chunk decoders round multiplies and adds separately; FMA contraction
 # in the dequant kernel would break CPU/GPU bit-parity (guarded by gtest).
 set_source_files_properties(rendering/lod_page_dequant_cuda.cu PROPERTIES
@@ -504,13 +507,12 @@ endif()
 # Compile definitions
 target_compile_definitions(lfs_visualizer PRIVATE
         LFS_VIS_EXPORTS
+        LFS_VULKAN_VALIDATION_DEFAULT=$<BOOL:${LFS_ENABLE_VULKAN_VALIDATION}>
         PROJECT_ROOT_PATH="${PROJECT_SOURCE_DIR}"
         VISUALIZER_ASSET_PATH="${VISUALIZER_BUILD_RESOURCE_DIR}/assets"
         VISUALIZER_LOCALE_PATH="${VISUALIZER_BUILD_RESOURCE_DIR}/locales"
         VISUALIZER_SOURCE_ASSET_PATH="${VISUALIZER_SOURCE_RESOURCE_DIR}/assets"
         ${LFS_VISUALIZER_DEV_RESOURCE_DEFINITIONS}
-        $<$<CONFIG:Debug>:DEBUG_BUILD>
-        $<$<CONFIG:Release>:RELEASE_BUILD>
 )
 
 # Platform-specific settings

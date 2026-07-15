@@ -76,59 +76,17 @@ endif()
 find_package(Torch REQUIRED)
 message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tests")
 
-# =============================================================================
-# Separate test sources into regular tests and benchmarks
-# =============================================================================
-
-# Benchmark sources (performance measurement focused)
-set(BENCHMARK_FILES
-    benchmark_background_blend.cpp
-    benchmark_rad_io.cpp
-    benchmark_grad_alpha_layout.cpp
-    benchmark_pipelined_loader.cpp
-    benchmark_slice_assignment.cpp
-    benchmark_strided_tensors.cpp
-    benchmark_scheduler.cpp
-    benchmark_losses.cpp
-    benchmark_ppisp_controller.cpp
-    benchmark_reactive_store.cpp
-    # profile_adam_optimizer.cpp  # Disabled - missing header
-    test_tensor_benchmark.cpp
-    test_memory_pool_benchmark.cpp
-    test_broadcast_benchmark.cpp
-    test_reduction_benchmark.cpp
-    test_fusion_benchmark.cpp
-    test_gather_benchmark.cpp
-    test_zip_gather_benchmark.cpp
-    test_transform_iterator_benchmark.cpp
-    test_cub_reduction_benchmark.cpp
-    test_scalar_reduction_benchmark.cpp
-    test_permute_upload_benchmark.cpp
-    test_isolation.cpp
-    test_allocator_benchmark.cpp
-)
-
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
     test_assert_hardening.cpp
-    test_loss_gradients.cpp
-    test_regularization_comparison.cpp
-    test_gut_rasterizer_gradients.cpp
-    test_gut_manual_vs_autograd.cpp
-    test_gut_autograd_vs_manual.cpp
-    test_gut_gradient_comparison.cpp
-    test_activation_gradients.cpp
+    test_cuda_error.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
     test_allocator_policy.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
-    test_isolation.cpp
     test_tensor_views.cpp
-    test_tensor_math.cpp
-    test_tensor_utils.cpp
-    test_tensor_torch_compat.cpp
     test_tensor_advanced.cpp
     test_tensor_stress.cpp
     test_tensor_matrix.cpp
@@ -136,58 +94,25 @@ set(TEST_FILES
     test_tensor_random.cpp
     test_tensor_broadcast.cpp
     test_tensor_masking.cpp
+    test_tensor_lazy_gather.cpp
+    test_zip_gather.cpp
+    test_tensor_ordering_distance.cpp
+    test_tensor_kmeans_workflow.cpp
     test_tensor_masked_select_rows.cpp
     test_tensor_bitwise.cpp
     test_tensor_accessor.cpp
     test_tensor_random_advanced.cpp
     test_tensor_indexing_advanced.cpp
     test_tensor_clamping.cpp
-    test_tensor_compat.cpp
     test_tensor_cumsum_convenience.cpp
     test_tensor_conversions_shape.cpp
     test_tensor_reserve_inplace_cat.cpp
-    test_kmeans.cpp
-    test_critical_fixes.cpp
-    test_cuda_device_state.cpp
-    test_tensor_ops_comparison.cpp
-    test_sort_minimal.cpp
-    test_tensor_debug.cpp
-    test_bugs_found.cpp
-    test_tensor_vs_torch.cpp
-    test_tensor_move.cpp
     test_mcmc.cpp
-    test_mcmc_add_new_gs_comparison.cpp
-    test_mcmc_relocate_optimizer_state_bug.cpp
     test_expression_templates.cpp
-    test_lfs_adam_optimizer.cpp
     test_lfs_scheduler.cpp
     test_mrnf_strategy.cpp
-    test_lfs_losses.cpp
-    test_mcmc_kernels.cpp
-    test_tensor_bool.cpp
-    test_dataloader_lfs.cpp
-    test_bilateral_grid.cpp
-    test_sparsity_debug.cpp
     test_sparsity_optimizer.cpp
-    test_dtype_operations_comprehensive.cpp
-    test_tensor_bugs.cpp
-    test_densification_performance.cpp
-    test_densification_profile.cpp
-    test_bug_regressions.cpp
-    test_torch_comparisons.cpp
-    test_mcmc_logit_verification.cpp
-    test_tensor_reserve_capacity.cpp
-    test_tensor_cat_inplace.cpp
-    test_tensor_inplace_cat_debug.cpp
-    test_tensor_slice_assignment_reserve.cpp
-    test_tensor_mcmc_memory_profile.cpp
     test_mcmc_tensor_ops.cpp
-    test_mcmc_memory_ops.cpp
-    test_mcmc_critical_bugs.cpp
-    test_mcmc_dead_mask.cpp
-    test_relocate_gs_edge_cases.cpp
-    test_bool_reduction.cpp
-    test_tensor_index_select_bool.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
@@ -195,7 +120,6 @@ set(TEST_FILES
     test_tensor_cat_reduction_bug.cpp
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
-    test_sog_html_export.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
     test_converter_usd.cpp
@@ -207,6 +131,9 @@ set(TEST_FILES
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
+    test_atomic_output.cpp
+    test_training_terminal_state.cpp
+    test_headless_run_coordinator.cpp
     test_argument_parser.cpp
     test_logger.cpp
     test_parameter_manager.cpp
@@ -214,6 +141,7 @@ set(TEST_FILES
     test_mcp_app_utils.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
+    test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
     test_visualizer_post_work.cpp
@@ -224,11 +152,8 @@ set(TEST_FILES
     test_python_integration.cpp
     test_python_lsp_client.cpp
     test_uv_runner.cpp
-    test_uv_runner_proof.cpp
-    test_pytorch_install_proof.cpp
     test_nan_inf_gpu_check.cpp
     test_mcmc_nan_fix.cpp
-    test_vram_resize.cpp
     test_stride_bugs.cpp
     test_strided_fill.cpp
     test_expanded_tensor_ops.cpp
@@ -237,23 +162,16 @@ set(TEST_FILES
     test_image_kernels.cpp
     test_add_new_gs_tensor_ops.cpp
     test_cpu_dtype_conversions.cpp
-    test_cpu_large_tensor_bugs.cpp
-    test_curand_buffer_overflow.cpp
     test_gradient_accumulation.cpp
     test_image_resize_parallel.cpp
-    test_tensor_cat_bug.cpp
     test_tensor_slicing_safety.cpp
-    test_tensor_struct_init.cpp
     test_tensor_lazy_ir.cpp
     test_tensor_lazy_stateful_ops.cpp
-    test_fusion_performance.cpp
-    test_torch_conversion.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp
     test_sh_swizzle_layout.cpp
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
-    # test_property_system.cpp  # Disabled: needs API update after merge
     test_scene_validity.cpp
     test_render_settings_defaults.cpp
     test_selection_rasterization_ops.cpp
@@ -271,6 +189,7 @@ set(TEST_FILES
     test_normal_prior_decode.cpp
     test_background_image.cpp
     test_nvcodec_jpeg2k_16bit.cpp
+    test_pipelined_loader.cpp
     test_pipelined_loader_sidecar_jpeg2k.cpp
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
@@ -279,8 +198,6 @@ set(TEST_FILES
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
-    # test_property_schema_thread_safety.cpp  # Disabled: API mismatch after merge
-    # test_property_system.cpp  # Disabled: API mismatch after merge
     test_tensor_nn_ops.cpp
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
@@ -288,7 +205,6 @@ set(TEST_FILES
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp
     test_export_env_composite.cpp
-    test_controller_memory.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
     test_mesh_data.cpp
@@ -302,28 +218,26 @@ set(TEST_FILES
     test_tensor_stream.cpp
     test_cuda_event_pool.cpp
     test_tensor_multistream.cpp
+    test_tensor_discovery.cpp
+    test_tensor_discovery_fuzz.cpp
     test_mcmc_multinomial.cpp
     test_arena_metrics_contention.cpp
     test_tensor_memory_planner.cpp
     test_vram_profiler_metrics.cpp
+    test_memory_pressure.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)
 list(APPEND TEST_FILES test_lod_page_dequant.cpp)
 list(APPEND TEST_FILES test_lod_upload_engine.cpp)
-list(APPEND TEST_FILES test_lod_builder_bench.cpp)
 list(APPEND TEST_FILES test_octree_lod.cpp)
 list(APPEND TEST_FILES test_ply_to_rad_lod.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
 list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 
-# Build test sources list
-set(TEST_SOURCES test_main.cpp)
-foreach(TEST_FILE ${TEST_FILES})
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${TEST_FILE}")
-        list(APPEND TEST_SOURCES ${TEST_FILE})
-    endif()
-endforeach()
+# Keep the source manifest strict: a stale entry should fail configuration
+# instead of silently dropping coverage from the executable.
+set(TEST_SOURCES test_main.cpp ${TEST_FILES})
 
 # PyModalRegistry data layer (no ImGui) for lock-order regression tests.
 list(APPEND TEST_SOURCES
@@ -332,16 +246,11 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
 )
 
-# Build benchmark sources list
-set(BENCHMARK_SOURCES test_main.cpp)
-foreach(BENCH_FILE ${BENCHMARK_FILES})
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${BENCH_FILE}")
-        list(APPEND BENCHMARK_SOURCES ${BENCH_FILE})
-    endif()
-endforeach()
-
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
+
+# Python integration tests import the in-tree extension at runtime.
+add_dependencies(lichtfeld_tests lfs_py)
 
 # Set CUDA architectures
 set_target_properties(lichtfeld_tests PROPERTIES
@@ -374,11 +283,12 @@ target_compile_definitions(lichtfeld_tests PRIVATE
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_TEST_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_mcp,lfs_visualizer,lfs_sequencer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,lfs_video,fastlfs_backend,spz_lib,lfs_python_utils>"
+        "$<LINK_GROUP:RESCAN,lfs_mcp,lfs_tcp,lfs_visualizer,lfs_sequencer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,lfs_video,fastlfs_backend,spz_lib,lfs_python_utils>"
     )
 else()
     set(LFS_TEST_INTERNAL_LINK_LIBS
         lfs_mcp
+        lfs_tcp
         lfs_visualizer
         lfs_sequencer
         lfs_rendering
@@ -420,72 +330,48 @@ target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulk
 
 # Compiler options for CUDA debugging
 target_compile_options(lichtfeld_tests PRIVATE
-    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:${LFS_CUDA_DEVICE_DEBUG_FLAGS} -lineinfo>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-lineinfo>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
 )
 
-# =============================================================================
-# Benchmark executable
-# =============================================================================
-add_executable(lichtfeld_benchmarks ${BENCHMARK_SOURCES})
+# Tensor-library hardening is intentionally isolated from the default test
+# tiers.  During the hardening phases these oracle tests are expected to expose
+# known failures, and crash-prone reproducers must not terminate the monolithic
+# test process before unrelated tests run.
+add_executable(tensor_hardening_tests
+    test_main.cpp
+    tensor_hardening_cuda_utils.cu
+    test_tensor_hardening_theme_a.cpp
+    test_tensor_hardening_theme_b.cpp
+    test_tensor_hardening_theme_c.cpp
+    test_tensor_hardening_theme_d.cpp
+    test_tensor_hardening_theme_e.cpp
+    test_tensor_hardening_theme_f.cpp
+)
 
-set_target_properties(lichtfeld_benchmarks PROPERTIES
-    CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
-    CUDA_SEPARABLE_COMPILATION ON
-    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+set_target_properties(tensor_hardening_tests PROPERTIES
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
 )
 
-target_include_directories(lichtfeld_benchmarks PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_BINARY_DIR}/include
-    ${CMAKE_SOURCE_DIR}/tests
-    ${CMAKE_SOURCE_DIR}/src/training
+target_include_directories(tensor_hardening_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/visualizer
-    ${CMAKE_SOURCE_DIR}/external/spz
-    ${NB_DIR}/include
+    ${CMAKE_SOURCE_DIR}/tests
     ${CUDAToolkit_INCLUDE_DIRS}
 )
 
-target_compile_definitions(lichtfeld_benchmarks PRIVATE
-    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data"
-    PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
-)
-
-if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
-    set(LFS_BENCH_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,fastlfs_backend,spz_lib>"
-    )
-else()
-    set(LFS_BENCH_INTERNAL_LINK_LIBS
-        lfs_visualizer
-        lfs_rendering
-        lfs_training
-        lfs_core
-        lfs_geometry
-        lfs_io
-        fastlfs_backend
-        spz_lib
-    )
-endif()
-
-target_link_libraries(lichtfeld_benchmarks PRIVATE
-    ${LFS_BENCH_INTERNAL_LINK_LIBS}
-
+target_link_libraries(tensor_hardening_tests PRIVATE
+    lfs_core
     GTest::gtest
     ${TORCH_LIBRARIES}
-    OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand
-    CUDA::cupti
-    spdlog::spdlog
 )
 
-target_compile_options(lichtfeld_benchmarks PRIVATE
-    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:${LFS_CUDA_DEVICE_DEBUG_FLAGS} -lineinfo>
+target_compile_options(tensor_hardening_tests PRIVATE
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
 )
@@ -493,43 +379,266 @@ target_compile_options(lichtfeld_benchmarks PRIVATE
 # =============================================================================
 # CTest registration
 # =============================================================================
-include(GoogleTest)
-
-# Register unit tests with CTest
-gtest_discover_tests(lichtfeld_tests
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    PROPERTIES TIMEOUT 30
-    DISCOVERY_MODE PRE_TEST
+# The monolithic test executable still mixes quick contracts with real-data,
+# training, stress, and optional-codec cases. Register each tier as one filtered
+# invocation: per-case discovery would pay process startup for thousands of
+# sub-second unit tests and make the "fast" CTest label needlessly slow.
+string(CONCAT LFS_NIGHTLY_TEST_FILTER
+    "*CheckpointResumeTest.TrainSaveLoadResume/nightly_*:"
+    "TensorStressTest.*:"
+    "TensorMemoryTest.VeryLargeTensor:"
+    "TensorMemoryTest.StressTest*:"
+    "TensorMatrixTest.VeryLargeMatMul:"
+    "TensorMaskingTest.StressTest*:"
+    "BoolAnyAllTest.LargeBoolSumPreservesDensificationCounts:"
+    "TensorZeroDimensionTest.StressTest*:"
+    "TensorCatReductionBugTest.*VeryLarge*:"
+    "MaskedSelectRowsTest.*LargeScale*:"
+    "CPUDtypeConversionTest.ProductionMuralPointCloudWorkflow:"
+    "FastGSFuzzTest.RandomStress_*:"
+    "FastGSFuzzTest.VeryLargeBatch_100k:"
+    "NaNInfGPUCheckTest.*5M*:"
+    "NaNInfGPUCheckTest.RandomStress_*:"
+    "NaNInfGPUCheckTest.InfDetection_LargeTensors:"
+    "NaNInfGPUCheckTest.MultiDim_LargeTensors:"
+    "StridedFillTest.VeryLargeGrid_3D_Fill:"
+    "TensorLazyRuntimeTest.ErankExpressionMatchesTorchOnInheritedStream:"
+    "TensorLazyRuntimeTest.FusedSegmentedSquareSumMatchesTorchOnInheritedStream:"
+    "PlyToRadLod.OutOfCore*:"
+    "SpzFormatTest.RealPlyRoundtrip:"
+    "PythonIOTest.LoadRealPlyFile:"
+    "ShSwizzleLayout.CanonicalRoundTrip_RealData:"
+    "RotatedShCorrectnessTest.*:"
+    "NvCodecImageLoaderJpeg2k16Bit.*:"
+    "PipelinedImageLoaderSidecarJpeg2k.*"
 )
 
-# Register benchmarks with CTest (longer timeout for benchmarks)
-gtest_discover_tests(lichtfeld_benchmarks
+string(CONCAT LFS_SLOW_TEST_FILTER
+    "*CheckpointResumeTest.TrainSaveLoadResume/tiny_*:"
+    "TrainingSetupRegressionTest.*:"
+    "PipelinedImageLoaderTest.*:"
+    "ImageResizeParallelTest.*:"
+    "PythonIOTest.LoadCOLMAPDataset:"
+    "PythonIOTest.PipelinedLoader*:"
+    "PythonIntegrationTest.SceneCameraExposesVisualizerRenderContract:"
+    "PythonLspClientTest.*:"
+    "UvRunnerTest.*:"
+    "ViewportFrameLifecycleServiceTest.*:"
+    "ArenaMetricsContentionTest.*:"
+    "TensorMultiStreamTest.TrainerViewerHandshake*:"
+    "CheckpointAtomicReplaceFaultTest.*:"
+    "MemoryPressureTest.InjectedFailure*:"
+    "PPISPControllerTest.TrainingLoopConverges:"
+    "UndistortCameraTest.BicyclePinholeNoDist:"
+    "VideoColorConvertTest.*FullHD*:"
+    "PlyToRadLod.*:"
+    "LodPageDequant.*:"
+    "LodUploadEngine.*:"
+    "RadMetaSidecar.*:"
+    "OctreeLod.*:"
+    "NurecUsdzFormatTest.*:"
+    "UsdFormatTest.RoundtripPreservesValues"
+)
+
+set(LFS_NON_FAST_TEST_FILTER
+    "${LFS_SLOW_TEST_FILTER}:${LFS_NIGHTLY_TEST_FILTER}:DiscoveryFuzz.*:DiscoverySweep.*")
+
+add_test(NAME lichtfeld.fast
+    COMMAND $<TARGET_FILE:lichtfeld_tests>
+        "--gtest_filter=*-${LFS_NON_FAST_TEST_FILTER}"
+        --gtest_color=no
+)
+set_tests_properties(lichtfeld.fast PROPERTIES
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    PROPERTIES TIMEOUT 300
-    DISCOVERY_MODE PRE_TEST
-    TEST_PREFIX "benchmark."
+    LABELS "fast;gpu"
+    TIMEOUT 60
+)
+
+add_test(NAME lichtfeld.slow
+    COMMAND $<TARGET_FILE:lichtfeld_tests>
+        "--gtest_filter=${LFS_SLOW_TEST_FILTER}-${LFS_NIGHTLY_TEST_FILTER}"
+        --gtest_color=no
+)
+set_tests_properties(lichtfeld.slow PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "slow;gpu"
+    TIMEOUT 300
+)
+
+add_test(NAME lichtfeld.nightly
+    COMMAND $<TARGET_FILE:lichtfeld_tests>
+        "--gtest_filter=${LFS_NIGHTLY_TEST_FILTER}"
+        --gtest_color=no
+)
+set_tests_properties(lichtfeld.nightly PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "nightly;gpu"
+    TIMEOUT 1800
+)
+
+add_test(NAME tensor.hardening
+    COMMAND $<TARGET_FILE:tensor_hardening_tests>
+        --gtest_color=no
+        --gtest_death_test_style=threadsafe
+)
+set_tests_properties(tensor.hardening PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "hardening;gpu"
+    TIMEOUT 900
+)
+
+add_test(NAME lichtfeld.discovery
+    COMMAND $<TARGET_FILE:lichtfeld_tests>
+        "--gtest_filter=DiscoveryFuzz.*:DiscoverySweep.*"
+        --gtest_color=no
+)
+set_tests_properties(lichtfeld.discovery PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "discovery;gpu"
+    TIMEOUT 1800
+)
+
+# Keep every Python tier explicit so new modules cannot silently drift out of
+# the curated suite.
+set(LFS_PYTHON_FAST_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_event_keypad_mapping.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_histogram_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_http.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_import_dialog_panels.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_input_settings_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_layout_composition.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_manage_stubs.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_mesh2splat_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_properties.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_rich_returns.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_api_surface.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_marketplace_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_templates.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_validator.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_registry.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rendering_panel_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rendering_panel_simplify.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_rmlui_image_sources.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_runtime_state.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_controls_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_groups_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_splat_lod_hierarchy.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tool_registry_activation.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tools_new.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_training_panel_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_transform_controls_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_undo.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_viewport_overlay_hooks.py
+)
+
+set(LFS_PYTHON_SLOW_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_alignment_overlay_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_manager_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_async_plugin_loading.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_capability_thread_safety.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_errors.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_histogram_localization_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_hooks.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_hot_reload_edge_cases.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_hot_reload_fixes.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_menu_schemas.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_menubar_resources.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_hot_reload.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_system.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_pano_coordinate_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_callbacks.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_concurrency.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_docs.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_error_recovery.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_property_schema.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_property_system.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_signals.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_toolbar_hooks.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_orthographic_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_output_lifetime_regressions.py
+)
+
+set(LFS_PYTHON_NIGHTLY_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_io_load.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_io_save.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_packages.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene_validity.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_pytorch_interop.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_unicode_path_bindings.py
+)
+
+add_test(NAME lichtfeld.python.fast
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        -m "not gpu and not slow and not integration"
+        ${LFS_PYTHON_FAST_TESTS}
+)
+set_tests_properties(lichtfeld.python.fast PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "fast"
+    TIMEOUT 60
+)
+
+add_test(NAME lichtfeld.python.slow
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        ${LFS_PYTHON_SLOW_TESTS}
+)
+set_tests_properties(lichtfeld.python.slow PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "slow;gpu"
+    TIMEOUT 300
+)
+
+add_test(NAME lichtfeld.python.nightly
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        ${LFS_PYTHON_NIGHTLY_TESTS}
+)
+set_tests_properties(lichtfeld.python.nightly PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "nightly;gpu"
+    TIMEOUT 1800
+)
+
+add_test(NAME lichtfeld.python.gpu
+    COMMAND ${Python_EXECUTABLE} -m pytest -q
+        -m gpu
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor.py
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_property.py
+)
+set_tests_properties(lichtfeld.python.gpu PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "fast;gpu"
+    TIMEOUT 60
 )
 
 # Custom targets for convenience
 add_custom_target(run_tests
-    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -V -R "^(?!benchmark\\.)"
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L fast
     DEPENDS lichtfeld_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running unit tests (excluding benchmarks)"
+    COMMENT "Running the fast developer test tier"
 )
 
-add_custom_target(run_benchmarks
-    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -V -R "^benchmark\\."
-    DEPENDS lichtfeld_benchmarks
+add_custom_target(run_full_tests
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -LE nightly
+    DEPENDS lichtfeld_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running benchmarks"
+    COMMENT "Running fast and slow tests (excluding nightly)"
 )
 
 # Platform-specific settings
 if(WIN32)
     # Copy Torch DLLs for testing on Windows
     file(GLOB TORCH_DLLS "${Torch_DIR}/../../../lib/*.dll")
-    foreach(TEST_TARGET lichtfeld_tests lichtfeld_benchmarks)
+    foreach(TEST_TARGET lichtfeld_tests)
         foreach(TORCH_DLL ${TORCH_DLLS})
             add_custom_command(
                 TARGET ${TEST_TARGET}
@@ -578,15 +687,10 @@ if(WIN32)
 endif()
 
 # Status messages
-list(LENGTH TEST_SOURCES TEST_COUNT)
-list(LENGTH BENCHMARK_SOURCES BENCH_COUNT)
-math(EXPR TEST_COUNT "${TEST_COUNT} - 1")  # Subtract test_main.cpp
-math(EXPR BENCH_COUNT "${BENCH_COUNT} - 1")  # Subtract test_main.cpp
+list(LENGTH TEST_FILES TEST_COUNT)
 
 message(STATUS "Tests configured with ${CMAKE_BUILD_TYPE} build type")
 message(STATUS "  Unit tests: ${TEST_COUNT} files -> lichtfeld_tests")
-message(STATUS "  Benchmarks: ${BENCH_COUNT} files -> lichtfeld_benchmarks")
 message(STATUS "  Build tests: ninja lichtfeld_tests")
-message(STATUS "  Build benchmarks: ninja lichtfeld_benchmarks")
 message(STATUS "  Run tests: ninja run_tests")
-message(STATUS "  Run benchmarks: ninja run_benchmarks")
+message(STATUS "  Run full tests: ninja run_full_tests")

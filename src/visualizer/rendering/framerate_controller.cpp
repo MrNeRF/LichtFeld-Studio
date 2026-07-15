@@ -39,24 +39,25 @@ namespace lfs::vis {
 
         // Don't skip if scene changed - user interaction requires immediate response
         if (scene_changed) {
+            consecutive_skips_ = 0;
             return false;
         }
 
         // when not training - skip if we're in static mode and scene hasn't changed
         if (settings_.skip_when_static && !is_training) {
+            consecutive_skips_ = 0;
             return true;
         }
 
-        // Skip if performance is critical and we haven't been skipping too many frames
-        if (settings_.adaptive_quality && is_performance_critical_ &&
-            consecutive_skips_ < max_consecutive_skips_) {
-            consecutive_skips_++;
-            // reset consecutive_skips_ counter
-            if (consecutive_skips_ > max_consecutive_skips_) {
-                consecutive_skips_ = 0;
-            } else {
+        // Skip at most max_consecutive_skips_ frames, then force one render.
+        if (settings_.adaptive_quality && is_performance_critical_) {
+            if (consecutive_skips_ < max_consecutive_skips_) {
+                ++consecutive_skips_;
                 return true;
             }
+            consecutive_skips_ = 0;
+        } else {
+            consecutive_skips_ = 0;
         }
         // if training - refresh rate should correspond to training_frame_refresh_time_sec_
         if (is_training) {

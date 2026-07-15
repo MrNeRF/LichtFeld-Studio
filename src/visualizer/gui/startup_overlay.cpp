@@ -207,24 +207,19 @@ namespace lfs::vis::gui {
         last_mouse_valid_ = false;
     }
 
-    void StartupOverlay::setPluginLoadState(bool active, float progress, std::string stage) {
+    void StartupOverlay::setPluginLoadState(const bool started,
+                                            const bool active,
+                                            float progress,
+                                            std::string stage) {
         progress = std::clamp(progress, 0.0f, 1.0f);
         std::lock_guard lock(plugin_load_mutex_);
-        const bool was_started = plugin_load_state_started_;
+        assert(started || !active);
+        assert(!plugin_load_state_started_ || started);
         plugin_load_state_.active = active;
         plugin_load_state_.progress = progress;
         plugin_load_state_.stage = std::move(stage);
-        if (active) {
-            plugin_load_state_started_ = true;
-            plugin_load_complete_ = false;
-        } else if (was_started) {
-            plugin_load_state_started_ = true;
-            if (progress >= 1.0f) {
-                plugin_load_complete_ = true;
-            }
-        } else if (progress >= 1.0f) {
-            plugin_load_complete_ = true;
-        }
+        plugin_load_state_started_ = started;
+        plugin_load_complete_ = !started || !active;
         content_dirty_ = true;
     }
 
@@ -250,6 +245,13 @@ namespace lfs::vis::gui {
     bool StartupOverlay::isPluginLoadComplete() const {
         std::lock_guard lock(plugin_load_mutex_);
         return plugin_load_complete_;
+    }
+
+    bool StartupOverlay::blocksUnderlayInput() const {
+        if (!visible_)
+            return false;
+        std::lock_guard lock(plugin_load_mutex_);
+        return !plugin_load_state_started_;
     }
 
     static std::string escapeRmlText(const std::string& input) {
@@ -639,9 +641,11 @@ namespace lfs::vis::gui {
         if (!rml_context_ || !document_)
             return;
 
-        auto& focus = guiFocusState();
-        focus.want_capture_mouse = true;
-        focus.want_capture_keyboard = true;
+        if (blocksUnderlayInput()) {
+            auto& focus = guiFocusState();
+            focus.want_capture_mouse = true;
+            focus.want_capture_keyboard = true;
+        }
 
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;

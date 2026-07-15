@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -87,8 +88,24 @@ namespace spz {
         float invSigmoid(float x) { return std::log(x / (1.0f - x)); }
 
         template <typename T>
-        size_t countBytes(std::vector<T> vec) {
+        size_t countBytes(const std::vector<T>& vec) {
             return vec.size() * sizeof(vec[0]);
+        }
+
+        bool checkedMultiply(size_t lhs, size_t rhs, size_t* result) {
+            if (lhs != 0 && rhs > std::numeric_limits<size_t>::max() / lhs) {
+                return false;
+            }
+            *result = lhs * rhs;
+            return true;
+        }
+
+        bool checkedAdd(size_t lhs, size_t rhs, size_t* result) {
+            if (rhs > std::numeric_limits<size_t>::max() - lhs) {
+                return false;
+            }
+            *result = lhs + rhs;
+            return true;
         }
 
 #define CHECK(x)                                                                    \
@@ -105,24 +122,31 @@ namespace spz {
 
         bool checkSizes(const GaussianCloud& g) {
             CHECK_GE(g.numPoints, 0);
+            CHECK_LE(static_cast<uint32_t>(g.numPoints), kMaxSpzPoints);
             CHECK_GE(g.shDegree, 0);
             CHECK_LE(g.shDegree, 3);
-            CHECK_EQ(g.positions.size(), g.numPoints * 3);
-            CHECK_EQ(g.scales.size(), g.numPoints * 3);
-            CHECK_EQ(g.rotations.size(), g.numPoints * 4);
-            CHECK_EQ(g.alphas.size(), g.numPoints);
-            CHECK_EQ(g.colors.size(), g.numPoints * 3);
-            CHECK_EQ(g.sh.size(), g.numPoints * dimForDegree(g.shDegree) * 3);
+            const size_t count = static_cast<size_t>(g.numPoints);
+            CHECK_EQ(g.positions.size(), count * 3);
+            CHECK_EQ(g.scales.size(), count * 3);
+            CHECK_EQ(g.rotations.size(), count * 4);
+            CHECK_EQ(g.alphas.size(), count);
+            CHECK_EQ(g.colors.size(), count * 3);
+            CHECK_EQ(g.sh.size(), count * static_cast<size_t>(dimForDegree(g.shDegree)) * 3);
             return true;
         }
 
         bool checkSizes(const PackedGaussians& packed, int32_t numPoints, int32_t shDim, bool usesFloat16) {
-            CHECK_EQ(packed.positions.size(), numPoints * 3 * (usesFloat16 ? 2 : 3));
-            CHECK_EQ(packed.scales.size(), numPoints * 3);
-            CHECK_EQ(packed.rotations.size(), numPoints * (packed.usesQuaternionSmallestThree ? 4 : 3));
-            CHECK_EQ(packed.alphas.size(), numPoints);
-            CHECK_EQ(packed.colors.size(), numPoints * 3);
-            CHECK_EQ(packed.sh.size(), numPoints * shDim * 3);
+            CHECK_GE(numPoints, 0);
+            CHECK_GE(shDim, 0);
+            CHECK_GE(packed.fractionalBits, 0);
+            CHECK_LE(packed.fractionalBits, kMaxSpzFractionalBits);
+            const size_t count = static_cast<size_t>(numPoints);
+            CHECK_EQ(packed.positions.size(), count * 3 * (usesFloat16 ? 2 : 3));
+            CHECK_EQ(packed.scales.size(), count * 3);
+            CHECK_EQ(packed.rotations.size(), count * (packed.usesQuaternionSmallestThree ? 4 : 3));
+            CHECK_EQ(packed.alphas.size(), count);
+            CHECK_EQ(packed.colors.size(), count * 3);
+            CHECK_EQ(packed.sh.size(), count * static_cast<size_t>(shDim) * 3);
             return true;
         }
 
@@ -138,31 +162,63 @@ namespace spz {
             uint8_t reserved = 0;
         };
 
+        void appendInflated(
+            std::vector<uint8_t>* output,
+            const uint8_t* data,
+            const size_t size) {
+            output->insert(output->end(), data, data + size);
+        }
+
+        void appendInflated(
+            std::string* output,
+            const uint8_t* data,
+            const size_t size) {
+            output->append(reinterpret_cast<const char*>(data), size);
+        }
+
+        template <typename Output>
         bool decompressGzippedImpl(
-            const uint8_t* compressed, size_t size, int32_t windowSize, std::vector<uint8_t>* out) {
+            const uint8_t* compressed, size_t size, int32_t windowSize, Output* out) {
+            if (!compressed || !out || size == 0 || size > kMaxSpzCompressedBytes ||
+                size > std::numeric_limits<uInt>::max()) {
+                return false;
+            }
             std::vector<uint8_t> buffer(8192);
             z_stream stream = {};
             stream.next_in = const_cast<Bytef*>(compressed);
-            stream.avail_in = size;
+            stream.avail_in = static_cast<uInt>(size);
             if (inflateInit2(&stream, windowSize) != Z_OK) {
                 return false;
             }
             out->clear();
             bool success = false;
-            while (true) {
-                stream.next_out = buffer.data();
-                stream.avail_out = buffer.size();
-                int32_t res = inflate(&stream, Z_NO_FLUSH);
-                if (res != Z_OK && res != Z_STREAM_END) {
-                    break;
+            try {
+                while (true) {
+                    stream.next_out = buffer.data();
+                    stream.avail_out = static_cast<uInt>(buffer.size());
+                    const int32_t res = inflate(&stream, Z_NO_FLUSH);
+                    if (res != Z_OK && res != Z_STREAM_END) {
+                        break;
+                    }
+                    const size_t produced = buffer.size() - stream.avail_out;
+                    if (out->size() > kMaxSpzDecompressedBytes - produced) {
+                        break;
+                    }
+                    appendInflated(out, buffer.data(), produced);
+                    if (res == Z_STREAM_END) {
+                        success = stream.avail_in == 0;
+                        break;
+                    }
                 }
-                out->insert(out->end(), buffer.data(), buffer.data() + buffer.size() - stream.avail_out);
-                if (res == Z_STREAM_END) {
-                    success = true;
-                    break;
-                }
+            } catch (...) {
+                inflateEnd(&stream);
+                out->clear();
+                throw;
             }
             inflateEnd(&stream);
+            if (!success) {
+                out->clear();
+            }
             return success;
         }
 
@@ -173,42 +229,54 @@ namespace spz {
         }
 
         bool decompressGzipped(const uint8_t* compressed, size_t size, std::string* out) {
-            std::vector<uint8_t> buffer;
-            if (!decompressGzipped(compressed, size, &buffer)) {
-                return false;
-            }
-            out->assign(reinterpret_cast<const char*>(buffer.data()), buffer.size());
-            return true;
+            return decompressGzippedImpl(compressed, size, 16 | MAX_WBITS, out);
         }
 
     } // namespace
 
     bool compressGzipped(const uint8_t* data, size_t size, std::vector<uint8_t>* out) {
+        if (!data || !out || size == 0 || size > kMaxSpzDecompressedBytes ||
+            size > std::numeric_limits<uInt>::max()) {
+            return false;
+        }
         std::vector<uint8_t> buffer(8192);
         z_stream stream = {};
         if (
             deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 9, Z_DEFAULT_STRATEGY) != Z_OK) {
             return false;
         }
-        out->clear();
-        out->reserve(size / 4);
-        stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(data));
-        stream.avail_in = size;
         bool success = false;
-        while (true) {
-            stream.next_out = buffer.data();
-            stream.avail_out = buffer.size();
-            int32_t res = deflate(&stream, Z_FINISH);
-            if (res != Z_OK && res != Z_STREAM_END) {
-                break;
+        try {
+            out->clear();
+            out->reserve(size / 4);
+            stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(data));
+            stream.avail_in = static_cast<uInt>(size);
+            while (true) {
+                stream.next_out = buffer.data();
+                stream.avail_out = static_cast<uInt>(buffer.size());
+                const int32_t res = deflate(&stream, Z_FINISH);
+                if (res != Z_OK && res != Z_STREAM_END) {
+                    break;
+                }
+                const size_t produced = buffer.size() - stream.avail_out;
+                if (out->size() > kMaxSpzCompressedBytes - produced) {
+                    break;
+                }
+                out->insert(out->end(), buffer.data(), buffer.data() + produced);
+                if (res == Z_STREAM_END) {
+                    success = true;
+                    break;
+                }
             }
-            out->insert(out->end(), buffer.data(), buffer.data() + buffer.size() - stream.avail_out);
-            if (res == Z_STREAM_END) {
-                success = true;
-                break;
-            }
+        } catch (...) {
+            deflateEnd(&stream);
+            out->clear();
+            throw;
         }
         deflateEnd(&stream);
+        if (!success) {
+            out->clear();
+        }
         return success;
     }
 
@@ -335,14 +403,23 @@ namespace spz {
         std::copy(xyz.data(), xyz.data() + 3, &rotation[0]);
         // Compute the real component - we know the quaternion is normalized and w is non-negative
         rotation[3] = std::sqrt(std::max(0.0f, 1.0f - squaredNorm(xyz)));
+
+        float norm_squared = 0.0f;
+        for (int i = 0; i < 4; ++i) {
+            norm_squared += rotation[i] * rotation[i];
+        }
+        const float inverse_norm = 1.0f / std::sqrt(norm_squared);
+        for (int i = 0; i < 4; ++i) {
+            rotation[i] *= inverse_norm;
+        }
     }
 
     void unpackQuaternionSmallestThree(float rotation[4], const uint8_t r[4], const CoordinateConverter& c = CoordinateConverter()) {
         uint32_t comp =
-            r[0] +
-            (r[1] << 8) +
-            (r[2] << 16) +
-            (r[3] << 24);
+            static_cast<uint32_t>(r[0]) |
+            (static_cast<uint32_t>(r[1]) << 8u) |
+            (static_cast<uint32_t>(r[2]) << 16u) |
+            (static_cast<uint32_t>(r[3]) << 24u);
 
         constexpr uint32_t c_mask = (1u << 9u) - 1u;
 
@@ -361,7 +438,16 @@ namespace spz {
                 sum_squares += rotation[i] * rotation[i];
             }
         }
-        rotation[i_largest] = sqrt(1.0f - sum_squares);
+        rotation[i_largest] = std::sqrt(std::max(0.0f, 1.0f - sum_squares));
+
+        float norm_squared = 0.0f;
+        for (int i = 0; i < 4; ++i) {
+            norm_squared += rotation[i] * rotation[i];
+        }
+        const float inverse_norm = 1.0f / std::sqrt(norm_squared);
+        for (int i = 0; i < 4; ++i) {
+            rotation[i] *= inverse_norm;
+        }
 
         for (int i = 0; i < 3; i++) {
             rotation[i] *= c.flipQ[i];
@@ -370,7 +456,10 @@ namespace spz {
 
     UnpackedGaussian PackedGaussian::unpack(
         bool usesFloat16, bool usesQuaternionSmallestThree, int32_t fractionalBits, const CoordinateConverter& c) const {
-        UnpackedGaussian result;
+        UnpackedGaussian result{};
+        if (fractionalBits < 0 || fractionalBits > kMaxSpzFractionalBits) {
+            return result;
+        }
         if (usesFloat16) {
             // Decode legacy float16 format. We can remove this at some point as it was never released.
             const auto* halfData = reinterpret_cast<const Half*>(position.data());
@@ -399,7 +488,8 @@ namespace spz {
             unpackQuaternionFirstThree(&result.rotation[0], &rotation[0], c);
         }
 
-        result.alpha = invSigmoid(alpha / 255.0f);
+        const float normalized_alpha = std::clamp(alpha / 255.0f, 1.0f / 255.0f, 254.0f / 255.0f);
+        result.alpha = invSigmoid(normalized_alpha);
 
         for (size_t i = 0; i < 3; i++) {
             result.color[i] = ((color[i] / 255.0f) - 0.5f) / colorScale;
@@ -447,7 +537,10 @@ namespace spz {
         return at(i).unpack(usesFloat16(), usesQuaternionSmallestThree, fractionalBits, c);
     }
 
-    bool PackedGaussians::usesFloat16() const { return positions.size() == numPoints * 3 * 2; }
+    bool PackedGaussians::usesFloat16() const {
+        return numPoints >= 0 &&
+               positions.size() == static_cast<size_t>(numPoints) * 3 * 2;
+    }
 
     GaussianCloud unpackGaussians(const PackedGaussians& packed, const UnpackOptions& o) {
         const int32_t numPoints = packed.numPoints;
@@ -462,23 +555,24 @@ namespace spz {
         result.numPoints = packed.numPoints;
         result.shDegree = packed.shDegree;
         result.antialiased = packed.antialiased;
-        result.positions.resize(numPoints * 3);
-        result.scales.resize(numPoints * 3);
-        result.rotations.resize(numPoints * 4);
-        result.alphas.resize(numPoints);
-        result.colors.resize(numPoints * 3);
-        result.sh.resize(numPoints * shDim * 3);
+        const size_t count = static_cast<size_t>(numPoints);
+        result.positions.resize(count * 3);
+        result.scales.resize(count * 3);
+        result.rotations.resize(count * 4);
+        result.alphas.resize(count);
+        result.colors.resize(count * 3);
+        result.sh.resize(count * static_cast<size_t>(shDim) * 3);
 
         if (usesFloat16) {
             // Decode legacy float16 format. We can remove this at some point as it was never released.
             const auto* halfData = reinterpret_cast<const Half*>(packed.positions.data());
-            for (size_t i = 0; i < numPoints * 3; i++) {
+            for (size_t i = 0; i < count * 3; i++) {
                 result.positions[i] = halfToFloat(halfData[i]);
             }
         } else {
             // Decode 24-bit fixed point coordinates
             float scale = 1.0 / (1 << packed.fractionalBits);
-            for (size_t i = 0; i < numPoints * 3; i++) {
+            for (size_t i = 0; i < count * 3; i++) {
                 int32_t fixed32 = packed.positions[i * 3 + 0];
                 fixed32 |= packed.positions[i * 3 + 1] << 8;
                 fixed32 |= packed.positions[i * 3 + 2] << 16;
@@ -487,11 +581,11 @@ namespace spz {
             }
         }
 
-        for (size_t i = 0; i < numPoints * 3; i++) {
+        for (size_t i = 0; i < count * 3; i++) {
             result.scales[i] = packed.scales[i] / 16.0f - 10.0f;
         }
 
-        for (size_t i = 0; i < numPoints; i++) {
+        for (size_t i = 0; i < count; i++) {
             if (usesQuaternionSmallestThree) {
                 unpackQuaternionSmallestThree(&result.rotations[4 * i], &packed.rotations[4 * i]);
             } else {
@@ -499,11 +593,13 @@ namespace spz {
             }
         }
 
-        for (size_t i = 0; i < numPoints; i++) {
-            result.alphas[i] = invSigmoid(packed.alphas[i] / 255.0f);
+        for (size_t i = 0; i < count; i++) {
+            const float normalized_alpha = std::clamp(
+                packed.alphas[i] / 255.0f, 1.0f / 255.0f, 254.0f / 255.0f);
+            result.alphas[i] = invSigmoid(normalized_alpha);
         }
 
-        for (size_t i = 0; i < numPoints * 3; i++) {
+        for (size_t i = 0; i < count * 3; i++) {
             result.colors[i] = ((packed.colors[i] / 255.0f) - 0.5f) / colorScale;
         }
 
@@ -545,22 +641,62 @@ namespace spz {
             SpzLog("[SPZ ERROR] deserializePackedGaussians: Unsupported SH degree: %d", header.shDegree);
             return {};
         }
-        const int32_t numPoints = header.numPoints;
+        if (header.numPoints > kMaxSpzPoints ||
+            header.numPoints > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {
+            SpzLog("[SPZ ERROR] deserializePackedGaussians: point count exceeds limit: %u", header.numPoints);
+            return {};
+        }
+        if (header.fractionalBits > kMaxSpzFractionalBits) {
+            SpzLog("[SPZ ERROR] deserializePackedGaussians: invalid fractional bits: %u", header.fractionalBits);
+            return {};
+        }
+        const int32_t numPoints = static_cast<int32_t>(header.numPoints);
         const int32_t shDim = dimForDegree(header.shDegree);
         const bool usesFloat16 = header.version == 1;
         const bool usesQuaternionSmallestThree = header.version >= 3;
+
+        const size_t count = static_cast<size_t>(numPoints);
+        size_t bytes_per_point = 0;
+        for (const size_t field_size : {
+                 size_t{usesFloat16 ? 6U : 9U},
+                 size_t{1},
+                 size_t{3},
+                 size_t{3},
+                 size_t{usesQuaternionSmallestThree ? 4U : 3U},
+                 static_cast<size_t>(shDim) * 3}) {
+            if (!checkedAdd(bytes_per_point, field_size, &bytes_per_point)) {
+                return {};
+            }
+        }
+        size_t expected_payload_size = 0;
+        if (!checkedMultiply(count, bytes_per_point, &expected_payload_size) ||
+            expected_payload_size > kMaxSpzDecompressedBytes - sizeof(header)) {
+            SpzLog("[SPZ ERROR] deserializePackedGaussians: payload exceeds limit");
+            return {};
+        }
+
+        const std::streampos payload_start = in.tellg();
+        in.seekg(0, std::ios::end);
+        const std::streampos stream_end = in.tellg();
+        in.seekg(payload_start);
+        if (!in || payload_start < 0 || stream_end < payload_start ||
+            static_cast<uint64_t>(stream_end - payload_start) != expected_payload_size) {
+            SpzLog("[SPZ ERROR] deserializePackedGaussians: payload size mismatch");
+            return {};
+        }
+
         PackedGaussians result;
         result.numPoints = numPoints;
         result.shDegree = header.shDegree;
         result.fractionalBits = header.fractionalBits;
         result.antialiased = (header.flags & FlagAntialiased) != 0;
-        result.positions.resize(numPoints * 3 * (usesFloat16 ? 2 : 3));
-        result.scales.resize(numPoints * 3);
+        result.positions.resize(count * 3 * (usesFloat16 ? 2 : 3));
+        result.scales.resize(count * 3);
         result.usesQuaternionSmallestThree = usesQuaternionSmallestThree;
-        result.rotations.resize(numPoints * (usesQuaternionSmallestThree ? 4 : 3));
-        result.alphas.resize(numPoints);
-        result.colors.resize(numPoints * 3);
-        result.sh.resize(numPoints * shDim * 3);
+        result.rotations.resize(count * (usesQuaternionSmallestThree ? 4 : 3));
+        result.alphas.resize(count);
+        result.colors.resize(count * 3);
+        result.sh.resize(count * static_cast<size_t>(shDim) * 3);
         in.read(reinterpret_cast<char*>(result.positions.data()), countBytes(result.positions));
         in.read(reinterpret_cast<char*>(result.alphas.data()), countBytes(result.alphas));
         in.read(reinterpret_cast<char*>(result.colors.data()), countBytes(result.colors));
@@ -586,6 +722,9 @@ namespace spz {
     }
 
     PackedGaussians loadSpzPacked(const uint8_t* data, int32_t size) {
+        if (!data || size <= 0 || static_cast<size_t>(size) > kMaxSpzCompressedBytes) {
+            return {};
+        }
         std::string decompressed;
         if (!decompressGzipped(data, size, &decompressed))
             return {};
@@ -594,6 +733,10 @@ namespace spz {
     }
 
     PackedGaussians loadSpzPacked(const std::vector<uint8_t>& data) {
+        if (data.empty() || data.size() > kMaxSpzCompressedBytes ||
+            data.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+            return {};
+        }
         return loadSpzPacked(data.data(), static_cast<int>(data.size()));
     }
 
@@ -601,9 +744,14 @@ namespace spz {
         std::ifstream in(filename, std::ios::binary | std::ios::ate);
         if (!in.good())
             return {};
-        std::vector<uint8_t> data(in.tellg());
+        const std::streampos end = in.tellg();
+        if (end <= 0 || static_cast<uint64_t>(end) > kMaxSpzCompressedBytes) {
+            return {};
+        }
+        std::vector<uint8_t> data(static_cast<size_t>(end));
         in.seekg(0, std::ios::beg);
-        in.read(reinterpret_cast<char*>(data.data()), data.size());
+        in.read(reinterpret_cast<char*>(data.data()),
+                static_cast<std::streamsize>(data.size()));
         if (!in.good()) {
             return {};
         }

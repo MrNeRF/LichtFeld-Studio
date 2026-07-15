@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor/internal/tensor_generic_ops.cuh"
-#include "diagnostics/vram_profiler.hpp"
+#include "lfs/cuda_scratch.hpp"
 #include "mrnf_kernels.hpp"
 #include <algorithm>
-#include <cassert>
+#include <cmath>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
+#include <limits>
 #include <thrust/copy.h>
 #include <thrust/count.h>
 #include <thrust/device_ptr.h>
@@ -195,8 +196,12 @@ namespace lfs::training::mrnf_strategy {
         MRNFBounds* bounds,
         void* stream) {
 
-        assert(N > 0);
-        assert(bounds != nullptr);
+        LFS_ASSERT(N > 0);
+        LFS_ASSERT(bounds != nullptr);
+        LFS_ASSERT_MSG(std::isfinite(percentile) && percentile >= 0.0f && percentile <= 1.0f,
+                       "MRNF bounds percentile must be finite and within [0, 1]");
+        LFS_ASSERT_MSG(N <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "MRNF percentile input exceeds CUB's int item-count limit");
 
         cudaStream_t s = resolve_stream(stream);
 
@@ -207,27 +212,19 @@ namespace lfs::training::mrnf_strategy {
 
         const int n_int = static_cast<int>(N);
 
-        float* d_input = nullptr;
-        float* d_sorted = nullptr;
-        cudaMallocAsync(&d_input, N * sizeof(float), s);
-        lfs::diagnostics::VramProfiler::instance().recordAllocation(
-            d_input, N * sizeof(float),
-            lfs::diagnostics::VramAllocationMethod::Async,
-            "mrnf.percentile.input");
-        cudaMallocAsync(&d_sorted, N * sizeof(float), s);
-        lfs::diagnostics::VramProfiler::instance().recordAllocation(
-            d_sorted, N * sizeof(float),
-            lfs::diagnostics::VramAllocationMethod::Async,
-            "mrnf.percentile.sorted");
+        const size_t values_bytes = cuda_scratch::checked_bytes(
+            N, sizeof(float), "MRNF percentile values");
+        cuda_scratch::DeviceBuffer input_buffer(values_bytes, s, "mrnf.percentile.input");
+        cuda_scratch::DeviceBuffer sorted_buffer(values_bytes, s, "mrnf.percentile.sorted");
+        auto* d_input = input_buffer.as<float>();
+        auto* d_sorted = sorted_buffer.as<float>();
 
-        size_t temp_bytes = 0;
-        cub::DeviceRadixSort::SortKeys(nullptr, temp_bytes, d_input, d_sorted, n_int, 0, 32, s);
-        char* d_temp = nullptr;
-        cudaMallocAsync(&d_temp, temp_bytes, s);
-        lfs::diagnostics::VramProfiler::instance().recordAllocation(
-            d_temp, temp_bytes,
-            lfs::diagnostics::VramAllocationMethod::Async,
-            "mrnf.percentile.cub_temp");
+        cuda_scratch::CubWorkspace cub_workspace(
+            "cub::DeviceRadixSort::SortKeys", s,
+            [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceRadixSort::SortKeys(
+                    workspace, workspace_bytes, d_input, d_sorted, n_int, 0, 32, s);
+            });
 
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
@@ -237,21 +234,22 @@ namespace lfs::training::mrnf_strategy {
 
         for (int axis = 0; axis < 3; ++axis) {
             extract_axis_kernel<<<blocks, threads, 0, s>>>(means, d_input, axis, N);
-            cub::DeviceRadixSort::SortKeys(d_temp, temp_bytes, d_input, d_sorted, n_int, 0, 32, s);
-            cudaMemcpyAsync(&h_low, d_sorted + low_idx, sizeof(float), cudaMemcpyDeviceToHost, s);
-            cudaMemcpyAsync(&h_high, d_sorted + high_idx, sizeof(float), cudaMemcpyDeviceToHost, s);
-            cudaStreamSynchronize(s);
+            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MRNF percentile axis extraction");
+            cub_workspace.run([&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceRadixSort::SortKeys(
+                    workspace, workspace_bytes, d_input, d_sorted, n_int, 0, 32, s);
+            });
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpyAsync(&h_low, d_sorted + low_idx, sizeof(float), cudaMemcpyDeviceToHost, s),
+                "MRNF percentile low readback");
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpyAsync(&h_high, d_sorted + high_idx, sizeof(float), cudaMemcpyDeviceToHost, s),
+                "MRNF percentile high readback");
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(s), "MRNF percentile stream sync");
 
             centers[axis] = (h_low + h_high) * 0.5f;
             extents[axis] = (h_high - h_low) * 0.5f;
         }
-
-        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_input);
-        cudaFreeAsync(d_input, s);
-        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_sorted);
-        cudaFreeAsync(d_sorted, s);
-        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_temp);
-        cudaFreeAsync(d_temp, s);
 
         for (int i = 0; i < 3; ++i) {
             bounds->center[i] = centers[i];
@@ -320,9 +318,12 @@ namespace lfs::training::mrnf_strategy {
         int64_t* output_indices,
         void* stream) {
 
-        assert(K <= N);
+        LFS_ASSERT(K <= N);
         if (K == 0)
             return;
+
+        LFS_ASSERT_MSG(N <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "MRNF Gumbel input exceeds CUB's int item-count limit");
 
         cudaStream_t s = resolve_stream(stream);
 
@@ -344,30 +345,19 @@ namespace lfs::training::mrnf_strategy {
         const bool compact_active = active_count >= K && active_count < N;
         const size_t sort_count = compact_active ? active_count : N;
 
-        float* d_keys = nullptr;
-        int64_t* d_indices = nullptr;
-        float* d_keys_sorted = nullptr;
-        int64_t* d_indices_sorted = nullptr;
-        cudaMallocAsync(&d_keys, sort_count * sizeof(float), s);
-        lfs::diagnostics::VramProfiler::instance().recordAllocation(
-            d_keys, sort_count * sizeof(float),
-            lfs::diagnostics::VramAllocationMethod::Async,
-            "mrnf.gumbel.keys");
-        cudaMallocAsync(&d_indices, sort_count * sizeof(int64_t), s);
-        lfs::diagnostics::VramProfiler::instance().recordAllocation(
-            d_indices, sort_count * sizeof(int64_t),
-            lfs::diagnostics::VramAllocationMethod::Async,
-            "mrnf.gumbel.indices");
-        cudaMallocAsync(&d_keys_sorted, sort_count * sizeof(float), s);
-        lfs::diagnostics::VramProfiler::instance().recordAllocation(
-            d_keys_sorted, sort_count * sizeof(float),
-            lfs::diagnostics::VramAllocationMethod::Async,
-            "mrnf.gumbel.keys_sorted");
-        cudaMallocAsync(&d_indices_sorted, sort_count * sizeof(int64_t), s);
-        lfs::diagnostics::VramProfiler::instance().recordAllocation(
-            d_indices_sorted, sort_count * sizeof(int64_t),
-            lfs::diagnostics::VramAllocationMethod::Async,
-            "mrnf.gumbel.indices_sorted");
+        const size_t keys_bytes = cuda_scratch::checked_bytes(
+            sort_count, sizeof(float), "MRNF Gumbel keys");
+        const size_t indices_bytes = cuda_scratch::checked_bytes(
+            sort_count, sizeof(int64_t), "MRNF Gumbel indices");
+        cuda_scratch::DeviceBuffer keys_buffer(keys_bytes, s, "mrnf.gumbel.keys");
+        cuda_scratch::DeviceBuffer indices_buffer(indices_bytes, s, "mrnf.gumbel.indices");
+        cuda_scratch::DeviceBuffer sorted_keys_buffer(keys_bytes, s, "mrnf.gumbel.keys_sorted");
+        cuda_scratch::DeviceBuffer sorted_indices_buffer(
+            indices_bytes, s, "mrnf.gumbel.indices_sorted");
+        auto* d_keys = keys_buffer.as<float>();
+        auto* d_indices = indices_buffer.as<int64_t>();
+        auto* d_keys_sorted = sorted_keys_buffer.as<float>();
+        auto* d_indices_sorted = sorted_indices_buffer.as<int64_t>();
 
         constexpr int threads = 256;
         const int blocks = static_cast<int>((sort_count + threads - 1) / threads);
@@ -393,38 +383,32 @@ namespace lfs::training::mrnf_strategy {
                 thrust::sequence(policy, indices_ptr, indices_ptr + static_cast<std::ptrdiff_t>(sort_count));
             });
         }
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MRNF Gumbel key generation");
 
         const int sort_count_int = static_cast<int>(sort_count);
-        size_t temp_bytes = 0;
-        cub::DeviceRadixSort::SortPairsDescending(
-            nullptr, temp_bytes,
-            d_keys, d_keys_sorted,
-            d_indices, d_indices_sorted,
-            sort_count_int, 0, 32, s);
-        char* d_temp = nullptr;
-        cudaMallocAsync(&d_temp, temp_bytes, s);
-        lfs::diagnostics::VramProfiler::instance().recordAllocation(
-            d_temp, temp_bytes,
-            lfs::diagnostics::VramAllocationMethod::Async,
-            "mrnf.gumbel.cub_temp");
-        cub::DeviceRadixSort::SortPairsDescending(
-            d_temp, temp_bytes,
-            d_keys, d_keys_sorted,
-            d_indices, d_indices_sorted,
-            sort_count_int, 0, 32, s);
+        cuda_scratch::CubWorkspace cub_workspace(
+            "cub::DeviceRadixSort::SortPairsDescending", s,
+            [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceRadixSort::SortPairsDescending(
+                    workspace, workspace_bytes,
+                    d_keys, d_keys_sorted,
+                    d_indices, d_indices_sorted,
+                    sort_count_int, 0, 32, s);
+            });
+        cub_workspace.run([&](void* workspace, size_t& workspace_bytes) {
+            return cub::DeviceRadixSort::SortPairsDescending(
+                workspace, workspace_bytes,
+                d_keys, d_keys_sorted,
+                d_indices, d_indices_sorted,
+                sort_count_int, 0, 32, s);
+        });
 
-        cudaMemcpyAsync(output_indices, d_indices_sorted, K * sizeof(int64_t), cudaMemcpyDeviceToDevice, s);
-
-        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_temp);
-        cudaFreeAsync(d_temp, s);
-        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_keys);
-        cudaFreeAsync(d_keys, s);
-        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_indices);
-        cudaFreeAsync(d_indices, s);
-        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_keys_sorted);
-        cudaFreeAsync(d_keys_sorted, s);
-        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_indices_sorted);
-        cudaFreeAsync(d_indices_sorted, s);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(
+                output_indices, d_indices_sorted,
+                cuda_scratch::checked_bytes(K, sizeof(int64_t), "MRNF Gumbel output"),
+                cudaMemcpyDeviceToDevice, s),
+            "MRNF Gumbel output copy");
     }
 
 } // namespace lfs::training::mrnf_strategy

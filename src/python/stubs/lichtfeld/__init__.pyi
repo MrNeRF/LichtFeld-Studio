@@ -452,6 +452,9 @@ def toggle_fullscreen() -> None:
 def is_fullscreen() -> bool:
     """Check if the window is in fullscreen mode"""
 
+def get_vulkan_capabilities() -> dict:
+    """Return Vulkan device capabilities used to gate rendering controls"""
+
 def toggle_ui() -> None:
     """Toggle UI overlay visibility"""
 

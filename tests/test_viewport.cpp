@@ -145,6 +145,7 @@ TEST(ViewportTest, WasdAdvanceSupportsFlatAdditionalSpeedInVisualizerSpace) {
 
     constexpr float dt = 0.1f;
     constexpr float bonus = 20.0f;
+    const float base_speed = viewport.camera.getWasdSpeed();
     for (int i = 0; i < 100; ++i)
         viewport.camera.advanceWasd(dt, true, false, false, false, false, false, bonus);
 
@@ -156,10 +157,10 @@ TEST(ViewportTest, WasdAdvanceSupportsFlatAdditionalSpeedInVisualizerSpace) {
 
     // Once the inertial velocity saturates, a settled step advances along -Z at
     // (wasdSpeed + bonus), confirming the bonus is additive, not multiplicative.
-    EXPECT_FLOAT_EQ(viewport.camera.getWasdSpeed(), 6.0f);
+    EXPECT_FLOAT_EQ(viewport.camera.getWasdSpeed(), base_speed);
     EXPECT_NEAR(t_step.x, 0.0f, 1e-5f);
     EXPECT_NEAR(t_step.y, 0.0f, 1e-5f);
-    EXPECT_NEAR(t_step.z, -(6.0f + bonus) * dt, 1e-4f);
+    EXPECT_NEAR(t_step.z, -(base_speed + bonus) * dt, 1e-4f);
     EXPECT_NEAR(glm::length(pivot_step - t_step), 0.0f, 1e-5f);
 }
 

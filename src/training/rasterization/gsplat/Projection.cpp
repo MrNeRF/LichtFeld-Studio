@@ -39,15 +39,15 @@ namespace gsplat_lfs {
         float* conics,
         float* compensations,
         cudaStream_t stream) {
-        GSPLAT_CHECK_CUDA_PTR(means, "means");
-        GSPLAT_CHECK_CUDA_PTR(quats, "quats");
-        GSPLAT_CHECK_CUDA_PTR(scales, "scales");
-        GSPLAT_CHECK_CUDA_PTR(viewmats0, "viewmats0");
-        GSPLAT_CHECK_CUDA_PTR(Ks, "Ks");
-        GSPLAT_CHECK_CUDA_PTR(radii, "radii");
-        GSPLAT_CHECK_CUDA_PTR(means2d, "means2d");
-        GSPLAT_CHECK_CUDA_PTR(depths, "depths");
-        GSPLAT_CHECK_CUDA_PTR(conics, "conics");
+        gsplat_lfs::debug_validate_cuda_pointer(means, "means");
+        gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
+        gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
+        gsplat_lfs::debug_validate_cuda_pointer(viewmats0, "viewmats0");
+        gsplat_lfs::debug_validate_cuda_pointer(Ks, "Ks");
+        gsplat_lfs::debug_validate_cuda_pointer(radii, "radii");
+        gsplat_lfs::debug_validate_cuda_pointer(means2d, "means2d");
+        gsplat_lfs::debug_validate_cuda_pointer(depths, "depths");
+        gsplat_lfs::debug_validate_cuda_pointer(conics, "conics");
 
         if (N == 0 || C == 0) {
             return;

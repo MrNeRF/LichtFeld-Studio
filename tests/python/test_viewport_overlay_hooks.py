@@ -113,6 +113,7 @@ def _install_stub_modules(monkeypatch):
         ),
         rml=SimpleNamespace(get_document=lambda _name: document),
         context=lambda: SimpleNamespace(),
+        get_content_type=lambda: "splat_files",
         get_active_tool=lambda: "",
         get_transform_space=lambda: 1,
         get_pivot_mode=lambda: 0,
@@ -141,6 +142,7 @@ def _install_stub_modules(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = ui_stub
+    lf_stub.can_transform_selection = lambda: True
     lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 

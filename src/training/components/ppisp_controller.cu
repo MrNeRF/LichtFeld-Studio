@@ -96,6 +96,9 @@ namespace lfs::training {
     lfs::core::Tensor PPISPController::shared_buf_conv3_;
     lfs::core::Tensor PPISPController::shared_buf_pool2_;
 
+    PPISPController::PPISPController(const int total_iterations)
+        : PPISPController(total_iterations, Config{}) {}
+
     PPISPController::PPISPController(const int total_iterations, Config config)
         : config_(config),
           current_lr_(config.warmup_steps > 0 ? config.lr * config.warmup_start_factor : config.lr),

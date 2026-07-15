@@ -6,6 +6,8 @@
 #include "app/converter.hpp"
 #include "core/abi.hpp"
 #include "core/argument_parser.hpp"
+#include "core/crash_handler.hpp"
+#include "core/cuda_error.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -22,7 +24,6 @@
 #include <curand.h>
 #include <filesystem>
 #include <print>
-#include <string_view>
 
 // pxr/base/tf/hashset.h pulls in the deprecated <ext/hash_set> GNU extension.
 #if defined(__GNUC__) && !defined(__clang__)
@@ -184,15 +185,18 @@ namespace {
 } // namespace
 
 int main(int argc, char* argv[]) {
-    const std::string_view loaded_core_stamp = lfs_core_abi_stamp();
-    if (!lfs_core_abi_matches(LFS_CORE_ABI_STAMP)) {
+    const char* const loaded_core_stamp = lfs_core_abi_stamp();
+    if (loaded_core_stamp == nullptr || !lfs_core_abi_matches(LFS_CORE_ABI_STAMP)) {
         std::println(stderr,
                      "Fatal: lfs_core ABI mismatch. The application expects '{}' but loaded '{}'. "
                      "Remove stale binaries and rebuild LichtFeld Studio.",
                      LFS_CORE_ABI_STAMP,
-                     loaded_core_stamp);
+                     loaded_core_stamp != nullptr ? loaded_core_stamp : "<null>");
         return 2;
     }
+
+    lfs::core::install_crash_handlers();
+    lfs::core::initialize_cuda_diagnostics();
 
     auto result = lfs::core::args::parse_args(argc, argv);
     if (!result) {

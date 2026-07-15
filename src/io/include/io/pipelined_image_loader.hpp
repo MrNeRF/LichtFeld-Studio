@@ -18,6 +18,7 @@
 #include <optional>
 #include <queue>
 #include <set>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -104,6 +105,7 @@ namespace lfs::io {
         // each carries its own event; consumers must wait on both.
         CUevent_st* depth_ready_event = nullptr;
         CUevent_st* normal_ready_event = nullptr;
+        std::string error; // Non-empty for a failed primary image request
     };
 
     class LFS_IO_API PipelinedImageLoader {
@@ -398,7 +400,10 @@ namespace lfs::io {
                                    std::unique_lock<std::mutex>& pending_lock);
         void add_output_ready_bytes(const ReadyImage& ready);
         void release_output_ready_bytes(const ReadyImage& ready);
-        void push_output_ready(ReadyImage ready);
+        bool push_output_ready(ReadyImage ready);
+        void publish_image_failure(size_t sequence_id,
+                                   const std::filesystem::path& path,
+                                   std::string message);
         void erase_pending_pair_locked(PendingPairIterator it);
         void destroy_sidecar_ready_event(CUevent_st*& event);
         void clear_output_queue();

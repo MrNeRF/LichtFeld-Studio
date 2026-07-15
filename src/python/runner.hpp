@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include "python_runtime.hpp"
+
+#include <cstddef>
 #include <expected>
 #include <filesystem>
 #include <functional>
@@ -46,19 +49,13 @@ namespace lfs::python {
      * @brief Load user plugins configured for startup.
      *        This requires a ready Python runtime.
      */
-    void ensure_plugins_loaded();
+    [[nodiscard]] bool ensure_plugins_loaded();
 
     /**
      * @brief Schedule plugin autoload after startup.
-     *        Actual imports are processed on the main thread by process_plugin_preload_step().
+     *        The complete load pipeline runs on one owned background worker.
      */
     void preload_user_plugins_async();
-
-    /**
-     * @brief Process one scheduled startup plugin preload step.
-     * @return true if a step was processed.
-     */
-    bool process_plugin_preload_step();
 
     /**
      * @brief True while startup plugin preload is running.
@@ -69,8 +66,13 @@ namespace lfs::python {
     bool is_plugin_preload_running();
 
     /**
-     * @brief Compatibility hook for startup plugin preload shutdown.
-     *        Preload currently runs on the main thread.
+     * @brief Request cooperative cancellation of startup plugin loading.
+     *        Safe to call from the render thread without acquiring the GIL.
+     */
+    void request_plugin_preload_stop();
+
+    /**
+     * @brief Stop and join startup plugin loading before Python teardown.
      */
     void join_plugin_preload();
 

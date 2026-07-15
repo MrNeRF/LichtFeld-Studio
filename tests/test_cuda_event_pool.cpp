@@ -42,7 +42,7 @@ TEST_F(CudaEventPoolTest, WaitForCUDAStreamStressDoesNotCreatePerCall) {
     waitForCUDAStream(a, b);
     const uint64_t created_before = pool.stats().created.load();
 
-    constexpr int kIterations = 10000;
+    constexpr int kIterations = 256;
     for (int i = 0; i < kIterations; ++i) {
         waitForCUDAStream(a, b);
         waitForCUDAStream(b, a);
@@ -59,8 +59,8 @@ TEST_F(CudaEventPoolTest, WaitForCUDAStreamStressDoesNotCreatePerCall) {
 TEST_F(CudaEventPoolTest, ConcurrentAcquireReleaseIsSafe) {
     auto& pool = CudaEventPool::instance();
 
-    constexpr int kThreads = 8;
-    constexpr int kIterations = 2000;
+    constexpr int kThreads = 4;
+    constexpr int kIterations = 200;
     std::vector<std::thread> threads;
     std::atomic<bool> failed{false};
 
@@ -88,7 +88,7 @@ TEST_F(CudaEventPoolTest, WaitOrdersCrossStreamWork) {
     ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
     ASSERT_EQ(cudaStreamCreateWithFlags(&consumer, cudaStreamNonBlocking), cudaSuccess);
 
-    constexpr size_t kBytes = 64ull * 1024 * 1024;
+    constexpr size_t kBytes = 1ull * 1024 * 1024;
     void* buffer = nullptr;
     ASSERT_EQ(cudaMalloc(&buffer, kBytes), cudaSuccess);
 

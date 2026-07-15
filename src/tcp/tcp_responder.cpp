@@ -7,7 +7,8 @@
 namespace lfs::tcp {
 
     ResponderServer::ResponderServer(int port, std::shared_ptr<lfs::vis::TrainerManager> trainer_manager_)
-        : TCPServer(port, std::move(trainer_manager_), zmq::socket_type::rep), running_(false) {
+        : TCPServer(port, std::move(trainer_manager_), zmq::socket_type::rep),
+          running_(false) {
         // Wake up every 200ms so recv doesn't hold the program
         socket_.set(zmq::sockopt::rcvtimeo, 200);
     }
@@ -53,16 +54,26 @@ namespace lfs::tcp {
                 continue;
             }
 
+            nlohmann::json response;
             try {
-                send(generateResponse(request));
+                response = generateResponse(request);
             } catch (const std::exception& e) {
-                // Send failed, and socket is in an undefined state, stop the server
+                response = {{"success", false}, {"error", e.what()}};
+            }
+            try {
+                send(response);
+            } catch (const std::exception&) {
+                // Send failure leaves a REP socket unable to continue its
+                // receive/send transaction, so stop the server explicitly.
                 running_ = false;
             }
         }
     }
 
     nlohmann::json ResponderServer::generateResponse(const nlohmann::json& request) {
+        if (!request.is_object()) {
+            return {{"success", false}, {"error", "Request must be a JSON object"}};
+        }
         auto command = request.value("command", "");
         nlohmann::json response;
         response["command"] = command;

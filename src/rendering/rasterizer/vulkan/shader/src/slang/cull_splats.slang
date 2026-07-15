@@ -7,6 +7,7 @@
 
 #define NO_MAIN 1
 #include "vertex_shader.slang"
+#include "indirect_layout.inc"
 
 #define CULL_ENTRY_CULL 1
 #define CULL_ENTRY_PREPARE 2
@@ -26,7 +27,7 @@ layout(binding=5) StructuredBuffer<uint32_t> lod_indices;
 layout(binding=6) StructuredBuffer<uint32_t> lod_logical_indices;
 layout(binding=7) StructuredBuffer<uint32_t> lod_counts;
 layout(binding=8) RWStructuredBuffer<int32_t> out_survivors;
-// [0] = survivor count; [1..3] = survivor projection dispatch args (PREPARE).
+// Count and projection-command offsets are defined by LFS_VK_SURVIVOR_STATE_*.
 layout(binding=9) RWStructuredBuffer<uint32_t> out_survivor_state;
 
 [shader("compute")]
@@ -87,7 +88,9 @@ void main(
     const uint lane_offset = WavePrefixCountBits(survives);
     uint wave_base = 0;
     if (WaveIsFirstLane() && survivors_in_wave > 0u) {
-        InterlockedAdd(out_survivor_state[0], survivors_in_wave, wave_base);
+        InterlockedAdd(out_survivor_state[LFS_VK_SURVIVOR_STATE_COUNT_WORD_OFFSET],
+                       survivors_in_wave,
+                       wave_base);
     }
     wave_base = WaveReadLaneFirst(wave_base);
     if (survives) {
@@ -106,10 +109,12 @@ void main() {
     // Survivor projection groups: SUBGROUP_SIZE threads each, matching the
     // projection shader's numthreads. Also zeroes the projection's compact-slot
     // append counter so the host does not need a separate fill.
-    const uint count = survivor_state[0];
-    survivor_state[1] = max((count + SUBGROUP_SIZE - 1u) / SUBGROUP_SIZE, 1u);
-    survivor_state[2] = 1u;
-    survivor_state[3] = 1u;
+    const uint count = survivor_state[LFS_VK_SURVIVOR_STATE_COUNT_WORD_OFFSET];
+    const uint projection = LFS_VK_SURVIVOR_STATE_PROJECTION_WORD_OFFSET;
+    survivor_state[projection + LFS_VK_DISPATCH_X_WORD_OFFSET] =
+        max((count + SUBGROUP_SIZE - 1u) / SUBGROUP_SIZE, 1u);
+    survivor_state[projection + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+    survivor_state[projection + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
     out_emit_count[0] = 0u;
 }
 

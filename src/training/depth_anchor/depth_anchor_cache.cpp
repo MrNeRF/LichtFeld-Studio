@@ -15,7 +15,6 @@
 #include <array>
 #include <cmath>
 #include <condition_variable>
-#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <format>
@@ -29,11 +28,6 @@ namespace lfs::training {
     namespace {
 
         constexpr int kSchemaVersion = 1;
-
-        [[nodiscard]] bool anchor_diag_enabled() {
-            const char* v = std::getenv("LFS_DEPTH_LOSS_DIAG");
-            return v != nullptr && v[0] != '\0' && v[0] != '0';
-        }
 
         void hash_bytes(std::uint64_t& hash, const void* data, const std::size_t size) {
             const auto* bytes = static_cast<const unsigned char*>(data);
@@ -168,8 +162,6 @@ namespace lfs::training {
         bool producing = true;
 
         std::mutex results_mutex;
-        const bool anchor_diag = anchor_diag_enabled();
-
         const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
         const std::size_t worker_count = std::clamp<std::size_t>(
             hw > 1 ? hw - 1 : 1, 1, std::max<std::size_t>(cameras.size(), 1));
@@ -190,13 +182,6 @@ namespace lfs::training {
                 queue_cv.notify_all();
 
                 const auto anchor = lfs::training::kernels::fit_depth_anchor_from_samples(job.samples);
-                if (anchor_diag) {
-                    LOG_INFO("[DEPTH_ANCHOR] camera='{}' valid={} model={} scale={:.6f} shift={:.6f} floor={:.4f} corr={:.4f} samples={} disp_valid={} disp_corr={:.4f} depth_valid={} depth_corr={:.4f}",
-                             job.image_name, anchor.valid ? 1 : 0, anchor.model,
-                             anchor.scale, anchor.shift, anchor.floor, anchor.corr, anchor.samples,
-                             anchor.disparity.valid ? 1 : 0, anchor.disparity.corr,
-                             anchor.depth.valid ? 1 : 0, anchor.depth.corr);
-                }
                 if (anchor.disparity.valid || anchor.depth.valid) {
                     std::lock_guard<std::mutex> lock(results_mutex);
                     anchors[job.image_name] = anchor;

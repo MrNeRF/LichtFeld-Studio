@@ -10,6 +10,10 @@
 
 namespace lfs::mcp {
 
+    namespace {
+        constexpr size_t MAX_MCP_HTTP_BODY_BYTES = 4 * 1024 * 1024;
+    }
+
     McpHttpServer::McpHttpServer(const McpServerOptions& server_options)
         : mcp_server_(std::make_unique<McpServer>(server_options)),
           http_server_(std::make_unique<httplib::Server>()) {}
@@ -19,6 +23,7 @@ namespace lfs::mcp {
     }
 
     bool McpHttpServer::start(int port) {
+        http_server_->set_payload_max_length(MAX_MCP_HTTP_BODY_BYTES);
         http_server_->Post("/mcp", [this](const httplib::Request& req, httplib::Response& res) {
             try {
                 JsonRpcRequest rpc_req = parse_request(req.body);

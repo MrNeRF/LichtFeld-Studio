@@ -4,8 +4,11 @@
 #pragma once
 
 #include <cuda_runtime.h>
+#include <initializer_list>
+#include <optional>
 
 #include "core/export.hpp"
+#include "core/tensor_fwd.hpp"
 
 namespace lfs::core {
 
@@ -17,6 +20,10 @@ namespace lfs::core {
     // Makes execution_stream wait (GPU-side) for work currently enqueued on
     // dependency_stream. Uses pooled events; falls back to a host sync on failure.
     LFS_CORE_API void waitForCUDAStream(cudaStream_t execution_stream, cudaStream_t dependency_stream);
+
+    LFS_CORE_API cudaStream_t prepare_inputs_for_stream(
+        std::initializer_list<const Tensor*> inputs,
+        std::optional<cudaStream_t> execution_stream = std::nullopt);
 
     /**
      * RAII guard for temporarily setting the current CUDA stream

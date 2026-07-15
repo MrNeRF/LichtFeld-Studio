@@ -313,25 +313,44 @@ namespace lfs::training {
         thread_local int last_width = -1;
         thread_local int last_height = -1;
 
-        // Only reallocate if dimensions changed
-        if (last_width != width || last_height != height) {
+        // Thread-local outputs can survive a Trainer. A same-sized render on the
+        // next Trainer must not reuse tensors whose stream handle was destroyed
+        // during the previous Trainer's shutdown.
+        const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream()
+                                               ? lfs::core::getCurrentCUDAStream()
+                                               : means.stream();
+
+        // Reallocate when either the shape or owning stream changes. Calling
+        // Tensor::set_stream on a cache backed by a destroyed stream would try
+        // to bridge from that dead handle before re-homing it.
+        if (!image.is_valid() || !alpha.is_valid() || !depth.is_valid() ||
+            last_width != width || last_height != height ||
+            image.stream() != raster_stream || alpha.stream() != raster_stream ||
+            depth.stream() != raster_stream) {
             image = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
             alpha = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
             depth = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
             normal = core::Tensor();
+            if (image.stream() != raster_stream)
+                image.set_stream(raster_stream);
+            if (alpha.stream() != raster_stream)
+                alpha.set_stream(raster_stream);
+            if (depth.stream() != raster_stream)
+                depth.set_stream(raster_stream);
             last_width = width;
             last_height = height;
         }
-        if (render_normal && (!normal.is_valid() ||
-                              normal.shape() != core::TensorShape({3, static_cast<size_t>(height), static_cast<size_t>(width)}))) {
+        if (render_normal &&
+            (!normal.is_valid() ||
+             normal.shape() != core::TensorShape({3, static_cast<size_t>(height), static_cast<size_t>(width)}) ||
+             normal.stream() != raster_stream)) {
             normal = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
+            if (normal.stream() != raster_stream)
+                normal.set_stream(raster_stream);
         }
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
-        const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream()
-                                               ? lfs::core::getCurrentCUDAStream()
-                                               : image.stream();
         fast_lfs::rasterization::ForwardContext forward_ctx;
         try {
             forward_ctx = fast_lfs::rasterization::forward_raw(
@@ -505,14 +524,16 @@ namespace lfs::training {
 
         thread_local core::Tensor cached_grad_alpha;
         thread_local int cached_ga_h = 0, cached_ga_w = 0;
-        if (!cached_grad_alpha.is_valid() || cached_ga_h != H || cached_ga_w != W) {
+        const cudaStream_t stream = grad_image.stream();
+        if (!cached_grad_alpha.is_valid() || cached_ga_h != H || cached_ga_w != W ||
+            cached_grad_alpha.stream() != stream) {
             cached_grad_alpha = core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, core::Device::CUDA);
+            if (cached_grad_alpha.stream() != stream)
+                cached_grad_alpha.set_stream(stream);
             cached_ga_h = H;
             cached_ga_w = W;
         }
         auto& grad_alpha = cached_grad_alpha;
-        const cudaStream_t stream = grad_image.stream();
-        grad_alpha.set_stream(stream);
 
         // Use background image kernel if available, otherwise use solid color kernel
         if (has_background_image(ctx.bg_image) && is_chw_layout) {

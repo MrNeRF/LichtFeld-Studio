@@ -9,10 +9,6 @@
 // Git version (generated at build time)
 #include "git_version.h"
 
-// Build type
-#cmakedefine DEBUG_BUILD
-#cmakedefine RELEASE_BUILD
-
 // Platform detection
 #if defined(_WIN32) || defined(_WIN64)
 #define PLATFORM_WINDOWS

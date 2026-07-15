@@ -5,12 +5,13 @@
 import hashlib
 import json
 import logging
-import os
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from .environment import value as environment_value
 from urllib.parse import quote
 
 from .compat import (
@@ -78,7 +79,7 @@ class RegistryClient:
         self._cache_dir = cache_dir or Path.home() / ".lichtfeld" / "cache" / "registry"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._index: Optional[Dict] = None
-        override = os.environ.get("LICHTFELD_PLUGIN_REGISTRY_URL", "").strip()
+        override = environment_value("LFS_PLUGIN_REGISTRY_URL")
         self._registry_urls: Tuple[str, ...] = ((override,) if override else DEFAULT_REGISTRY_URLS)
 
     def search(

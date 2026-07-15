@@ -314,7 +314,7 @@ namespace lfs::vis {
             std::vector<std::string> removed_node_names;
         };
 
-        void resetToEmptyState(bool trainer_already_cleared = false);
+        [[nodiscard]] bool resetToEmptyState(bool trainer_already_cleared = false);
         enum class TrainingRemovalImpact {
             None,
             TrainingModel,

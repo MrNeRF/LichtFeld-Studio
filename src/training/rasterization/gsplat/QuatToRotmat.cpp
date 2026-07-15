@@ -15,8 +15,8 @@ namespace gsplat_lfs {
         int64_t N,
         float* rotmats,
         cudaStream_t stream) {
-        GSPLAT_CHECK_CUDA_PTR(quats, "quats");
-        GSPLAT_CHECK_CUDA_PTR(rotmats, "rotmats");
+        gsplat_lfs::debug_validate_cuda_pointer(quats, "quats");
+        gsplat_lfs::debug_validate_cuda_pointer(rotmats, "rotmats");
 
         if (N == 0) {
             return;

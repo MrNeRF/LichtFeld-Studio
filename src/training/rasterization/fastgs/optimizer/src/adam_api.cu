@@ -5,7 +5,6 @@
 #include "adam.h"
 #include "adam_api.h"
 #include "adam_kernels.cuh"
-#include "cuda_utils.h"
 #include "optimizer_config.h"
 #include "utils.h"
 
@@ -26,10 +25,10 @@ namespace fast_lfs::optimizer {
         cudaStream_t stream) {
 
         // Validate pointers
-        CHECK_CUDA_PTR(param, "param");
-        CHECK_CUDA_PTR(exp_avg, "exp_avg");
-        CHECK_CUDA_PTR(exp_avg_sq, "exp_avg_sq");
-        CHECK_CUDA_PTR(param_grad, "param_grad");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg, "exp_avg");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq, "exp_avg_sq");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
 
         // Validate parameters
         if (n_elements <= 0) {
@@ -71,12 +70,12 @@ namespace fast_lfs::optimizer {
         const float bias_correction2_sqrt_rcp,
         cudaStream_t stream) {
 
-        CHECK_CUDA_PTR(param, "param");
-        CHECK_CUDA_PTR(exp_avg_q, "exp_avg_q");
-        CHECK_CUDA_PTR(exp_avg_scale, "exp_avg_scale");
-        CHECK_CUDA_PTR(exp_avg_sq_q, "exp_avg_sq_q");
-        CHECK_CUDA_PTR(exp_avg_sq_scale, "exp_avg_sq_scale");
-        CHECK_CUDA_PTR(param_grad, "param_grad");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
         if (n_rows <= 0 || row_size <= 0) {
             throw std::runtime_error("n_rows and row_size must be positive");
         }
@@ -106,12 +105,12 @@ namespace fast_lfs::optimizer {
         const float bias_correction2_sqrt_rcp,
         cudaStream_t stream) {
 
-        CHECK_CUDA_PTR(param, "param");
-        CHECK_CUDA_PTR(exp_avg_q, "exp_avg_q");
-        CHECK_CUDA_PTR(exp_avg_scale, "exp_avg_scale");
-        CHECK_CUDA_PTR(exp_avg_sq_q, "exp_avg_sq_q");
-        CHECK_CUDA_PTR(exp_avg_sq_scale, "exp_avg_sq_scale");
-        CHECK_CUDA_PTR(param_grad, "param_grad");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
         if (n_primitives <= 0 || slots_per_primitive <= 0) {
             throw std::runtime_error("n_primitives and slots_per_primitive must be positive");
         }
@@ -133,19 +132,19 @@ namespace fast_lfs::optimizer {
         const int row_size,
         cudaStream_t stream) {
 
-        CHECK_CUDA_PTR(exp_avg, "exp_avg");
-        CHECK_CUDA_PTR(exp_avg_sq, "exp_avg_sq");
-        CHECK_CUDA_PTR(exp_avg_q, "exp_avg_q");
-        CHECK_CUDA_PTR(exp_avg_scale, "exp_avg_scale");
-        CHECK_CUDA_PTR(exp_avg_sq_q, "exp_avg_sq_q");
-        CHECK_CUDA_PTR(exp_avg_sq_scale, "exp_avg_sq_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg, "exp_avg");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq, "exp_avg_sq");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
         if (n_rows <= 0 || row_size <= 0)
             return;
 
         kernels::adam::quantize_adam_moments_cu<<<div_round_up(n_rows, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             exp_avg, exp_avg_sq, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, n_rows, row_size);
 
-        CHECK_CUDA(config::debug, "quantize_adam_moments");
+        LFS_FASTGS_PHASE_CHECK(config::debug, "quantize_adam_moments");
     }
 
     void quantize_adam_moments_swizzled_raw(
@@ -159,19 +158,19 @@ namespace fast_lfs::optimizer {
         const int slots_per_primitive,
         cudaStream_t stream) {
 
-        CHECK_CUDA_PTR(exp_avg, "exp_avg");
-        CHECK_CUDA_PTR(exp_avg_sq, "exp_avg_sq");
-        CHECK_CUDA_PTR(exp_avg_q, "exp_avg_q");
-        CHECK_CUDA_PTR(exp_avg_scale, "exp_avg_scale");
-        CHECK_CUDA_PTR(exp_avg_sq_q, "exp_avg_sq_q");
-        CHECK_CUDA_PTR(exp_avg_sq_scale, "exp_avg_sq_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg, "exp_avg");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq, "exp_avg_sq");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
         if (n_primitives <= 0 || slots_per_primitive <= 0)
             return;
 
         kernels::adam::quantize_adam_moments_swizzled_cu<<<div_round_up(n_primitives, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             exp_avg, exp_avg_sq, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, n_primitives, slots_per_primitive);
 
-        CHECK_CUDA(config::debug, "quantize_adam_moments_swizzled");
+        LFS_FASTGS_PHASE_CHECK(config::debug, "quantize_adam_moments_swizzled");
     }
 
     void zero_rows_at_indices(
@@ -182,8 +181,8 @@ namespace fast_lfs::optimizer {
         cudaStream_t stream) {
 
         // Validate pointers
-        CHECK_CUDA_PTR(tensor, "tensor");
-        CHECK_CUDA_PTR(indices_device, "indices_device");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(tensor, "tensor");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(indices_device, "indices_device");
 
         // Validate parameters
         if (n_indices <= 0)
@@ -199,7 +198,7 @@ namespace fast_lfs::optimizer {
             n_indices,
             row_size);
 
-        CHECK_CUDA(config::debug, "zero_rows_at_indices");
+        LFS_FASTGS_PHASE_CHECK(config::debug, "zero_rows_at_indices");
     }
 
     void zero_quantized_rows_at_indices(
@@ -211,9 +210,9 @@ namespace fast_lfs::optimizer {
         const std::uint8_t zero_point,
         cudaStream_t stream) {
 
-        CHECK_CUDA_PTR(tensor_q, "tensor_q");
-        CHECK_CUDA_PTR(scales, "scales");
-        CHECK_CUDA_PTR(indices_device, "indices_device");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(tensor_q, "tensor_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(scales, "scales");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(indices_device, "indices_device");
         if (n_indices <= 0)
             return;
         if (row_size <= 0) {
@@ -223,7 +222,7 @@ namespace fast_lfs::optimizer {
         kernels::adam::zero_quantized_rows_cu<<<div_round_up(n_indices, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             tensor_q, scales, indices_device, n_indices, row_size, zero_point);
 
-        CHECK_CUDA(config::debug, "zero_quantized_rows_at_indices");
+        LFS_FASTGS_PHASE_CHECK(config::debug, "zero_quantized_rows_at_indices");
     }
 
 } // namespace fast_lfs::optimizer

@@ -215,9 +215,9 @@ namespace {
         constexpr size_t width = 2;
         constexpr size_t height = 2;
 
-        // Simulate raw bottom-left-origin readback: the logical bottom row is bright.
+        // Simulate raw bottom-left-origin readback: the logical top row is stored last.
         for (size_t col = 0; col < width; ++col) {
-            ptr[0 * height * width + col * height + 0] = 10.0f;
+            ptr[0 * height * width + (height - 1) * width + col] = 10.0f;
         }
 
         return std::make_shared<lfs::core::Tensor>(std::move(image));
@@ -887,8 +887,9 @@ TEST_F(PythonIntegrationTest, SceneCameraExposesVisualizerRenderContract) {
 
     auto loader = lfs::io::Loader::create();
     lfs::io::LoadOptions options;
-    options.resize_factor = 8;
-    options.images_folder = "images_8";
+    // The committed masks are quarter-resolution and intentionally pair with images_4.
+    options.resize_factor = 4;
+    options.images_folder = "images_4";
 
     auto load_result = loader->load(dataset_dir, options);
     ASSERT_TRUE(load_result.has_value()) << "Failed to load dataset: " << load_result.error().format();

@@ -5,9 +5,11 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "training/rasterization/gsplat/Common.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <stdexcept>
 
 using namespace lfs::training;
 using namespace lfs::core;
@@ -66,11 +68,43 @@ protected:
         bg_color_.fill_(0.5f); // Gray background
     }
 
+    void TearDown() override {
+#if LFS_CUDA_FAILURE_INJECTION_ENABLED
+        gsplat_lfs::set_cuda_allocation_failure_for_testing(false);
+#endif
+    }
+
     std::unique_ptr<SplatData> splat_data_;
     std::unique_ptr<Camera> camera_;
     Tensor means_, sh0_, shN_, scaling_, rotation_, opacity_;
     Tensor bg_color_;
 };
+
+#if LFS_CUDA_FAILURE_INJECTION_ENABLED
+TEST_F(GsplatRasterizerTest, CudaAllocationFailureAbortsAndRecovers) {
+    gsplat_lfs::set_cuda_allocation_failure_for_testing(true);
+    EXPECT_THROW(
+        (void)gsplat_rasterize_forward(
+            *camera_, *splat_data_, bg_color_,
+            0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB),
+        std::runtime_error);
+
+    gsplat_lfs::set_cuda_allocation_failure_for_testing(false);
+    auto result = gsplat_rasterize_forward(
+        *camera_, *splat_data_, bg_color_,
+        0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB);
+    ASSERT_TRUE(result.has_value());
+
+    auto& ctx = result->second;
+    if (ctx.isect_ids_ptr != nullptr) {
+        cudaFree(ctx.isect_ids_ptr);
+    }
+    if (ctx.flatten_ids_ptr != nullptr) {
+        cudaFree(ctx.flatten_ids_ptr);
+    }
+    GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id);
+}
+#endif
 
 TEST_F(GsplatRasterizerTest, ForwardPassBasic) {
     // Just test that forward pass doesn't crash

@@ -15,6 +15,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
+from .environment import value as environment_value
+
 _log = logging.getLogger(__name__)
 _T = TypeVar("_T")
 _ASSET_INDEX_LOCK = threading.RLock()
@@ -58,22 +60,21 @@ def _dedupe_paths(paths: List[Path]) -> List[Path]:
 def _storage_candidates() -> List[Path]:
     candidates: List[Path] = []
 
-    for env_name in ("LICHTFELD_ASSET_MANAGER_DIR", "LFS_ASSET_MANAGER_DIR"):
-        env_value = os.environ.get(env_name, "").strip()
-        if env_value:
-            candidates.append(Path(env_value))
+    env_value = environment_value("LFS_ASSET_MANAGER_DIR")
+    if env_value:
+        candidates.append(Path(env_value))
 
     candidates.append(LEGACY_STORAGE_PATH)
 
-    xdg_data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+    xdg_data_home = environment_value("XDG_DATA_HOME")
     if xdg_data_home:
         candidates.append(Path(xdg_data_home) / "LichtFeldStudio" / "asset_manager")
 
-    appdata = os.environ.get("APPDATA", "").strip()
+    appdata = environment_value("APPDATA")
     if appdata:
         candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
 
-    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+    local_appdata = environment_value("LOCALAPPDATA")
     if local_appdata:
         candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
 

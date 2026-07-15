@@ -22,10 +22,12 @@ set(TENSOR_SOURCES
         tensor/cuda_event_pool.cpp
         tensor/cuda_stream_context.cpp
         tensor/gpu_slab_allocator.cpp
+        tensor/size_bucketed_pool.cpp
         tensor/lazy_config.cpp
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
         tensor/tensor.cpp
+        tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp
         tensor/tensor_utils.cpp
         tensor/tensor_matrix_ops.cpp
@@ -46,6 +48,10 @@ set(TENSOR_SOURCES
 # Core module sources
 set(CORE_SOURCES
         abi.cpp
+        crash_handler.cpp
+        cuda_error.cpp
+        failure_report.cpp
+        memory_pressure.cpp
         operator_callbacks.cpp
         animatable_property.cpp
         argument_parser.cpp
@@ -106,9 +112,11 @@ target_link_libraries(lfs_core
         lfs_core_cuda
         lfs_tensor_kernels
         taywee::args
-        OpenImageIO::OpenImageIO
+        lfs_oiio
         OpenMeshCore
 )
+
+set_property(SOURCE image_io.cpp APPEND PROPERTY COMPILE_DEFINITIONS FMT_HEADER_ONLY=1)
 
 # OpenMP for tensor multi-threaded operations
 find_package(OpenMP)
@@ -120,6 +128,10 @@ endif()
 # Platform-specific settings
 if(UNIX)
     target_link_libraries(lfs_core PUBLIC dl)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
+    target_link_libraries(lfs_core PRIVATE stdc++exp)
 endif()
 
 # Compiler options
@@ -189,33 +201,9 @@ if(WIN32 AND _IS_MULTI_CONFIG)
     )
 endif()
 
-# Configure build type
-function(configure_build_type target)
-    get_target_property(target_type ${target} TYPE)
-
-    if(target_type STREQUAL "INTERFACE_LIBRARY")
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} INTERFACE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-            target_compile_definitions(${target} INTERFACE RELEASE_BUILD)
-        endif()
-    else()
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} PRIVATE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-            target_compile_definitions(${target} PRIVATE RELEASE_BUILD)
-        endif()
-    endif()
-endfunction()
-
-configure_build_type(lfs_core)
-
 # Allocation profiling
-if(ENABLE_ALLOCATION_PROFILING)
-    target_compile_definitions(lfs_core PUBLIC ENABLE_ALLOCATION_PROFILING=1)
-else()
-    target_compile_definitions(lfs_core PUBLIC ENABLE_ALLOCATION_PROFILING=0)
-endif()
+target_compile_definitions(lfs_core PUBLIC
+    LFS_ALLOCATION_PROFILING_ENABLED=$<BOOL:${LFS_ENABLE_ALLOCATION_PROFILING}>)
 
 message(STATUS "+------------------------------------------------------------------+")
 message(STATUS "|  lfs_core - Core + Tensor Library (SHARED)                       |")

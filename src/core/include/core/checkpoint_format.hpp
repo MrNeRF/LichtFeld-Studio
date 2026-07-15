@@ -15,6 +15,10 @@ namespace lfs::core {
 
     constexpr uint32_t CHECKPOINT_MAGIC = 0x4C464B50; // "LFKP"
     constexpr uint32_t CHECKPOINT_VERSION = 1;
+    constexpr uint64_t MAX_CHECKPOINT_FILE_BYTES = 256ULL * 1024ULL * 1024ULL * 1024ULL;
+    constexpr uint64_t MAX_CHECKPOINT_JSON_BYTES = 16ULL * 1024ULL * 1024ULL;
+    constexpr uint32_t MAX_CHECKPOINT_STRATEGY_NAME_BYTES = 64;
+    constexpr uint32_t MAX_CHECKPOINT_GAUSSIANS = 1'000'000'000;
 
     enum class CheckpointFlags : uint32_t {
         NONE = 0,
@@ -41,6 +45,10 @@ namespace lfs::core {
         uint64_t params_json_offset = 0;
         uint64_t params_json_size = 0;
     };
+
+    LFS_CORE_API std::expected<void, std::string> validate_checkpoint_header(
+        const CheckpointHeader& header,
+        uint64_t file_size);
 
     LFS_CORE_API std::expected<CheckpointHeader, std::string> load_checkpoint_header(
         const std::filesystem::path& path);

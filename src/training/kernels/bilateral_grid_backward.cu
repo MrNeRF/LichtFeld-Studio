@@ -36,9 +36,10 @@ namespace lfs::training::kernels {
         const float sg = isfinite(rgb_val.g) ? rgb_val.g : 0.5f;
         const float sb = isfinite(rgb_val.b) ? rgb_val.b : 0.5f;
 
-        const float x = static_cast<float>(wi) / (w - 1) * (W - 1);
-        const float y = static_cast<float>(hi) / (h - 1) * (H - 1);
-        const float z = (kC2G_r * sr + kC2G_g * sg + kC2G_b * sb) * (L - 1);
+        const float x = w > 1 ? static_cast<float>(wi) / (w - 1) * (W - 1) : 0.0f;
+        const float y = h > 1 ? static_cast<float>(hi) / (h - 1) * (H - 1) : 0.0f;
+        const float guidance = fminf(1.0f, fmaxf(0.0f, kC2G_r * sr + kC2G_g * sg + kC2G_b * sb));
+        const float z = guidance * (L - 1);
 
         const int x0 = floorf(x), y0 = floorf(y);
         int z0 = floorf(z);
@@ -141,9 +142,10 @@ namespace lfs::training::kernels {
         sg = isfinite(sg) ? sg : 0.5f;
         sb = isfinite(sb) ? sb : 0.5f;
 
-        const float x = static_cast<float>(wi) / (w - 1) * (W - 1);
-        const float y = static_cast<float>(hi) / (h - 1) * (H - 1);
-        const float z = (kC2G_r * sr + kC2G_g * sg + kC2G_b * sb) * (L - 1);
+        const float x = w > 1 ? static_cast<float>(wi) / (w - 1) * (W - 1) : 0.0f;
+        const float y = h > 1 ? static_cast<float>(hi) / (h - 1) * (H - 1) : 0.0f;
+        const float guidance = fminf(1.0f, fmaxf(0.0f, kC2G_r * sr + kC2G_g * sg + kC2G_b * sb));
+        const float z = guidance * (L - 1);
 
         const int x0 = floorf(x), y0 = floorf(y);
         int z0 = floorf(z);
@@ -296,16 +298,16 @@ namespace lfs::training::kernels {
     // Initialize 3x4 affine identity: channels 0,5,10 = 1.0 (diagonal)
     __global__ void bilateral_grid_init_identity_kernel(
         float* __restrict__ grids,
-        const int num_cells) {
+        const int num_cells,
+        const int num_elements) {
 
         const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= num_cells)
+        if (idx >= num_elements)
             return;
 
-        const int ni = blockIdx.y;
-        const int ci = blockIdx.z;
+        const int ci = (idx / num_cells) % 12;
         const float val = (ci == 0 || ci == 5 || ci == 10) ? 1.0f : 0.0f;
-        grids[(ni * 12 + ci) * num_cells + idx] = val;
+        grids[idx] = val;
     }
 
     void launch_bilateral_grid_init_identity(
@@ -314,12 +316,12 @@ namespace lfs::training::kernels {
         stream = resolve_stream(stream);
 
         const int num_cells = L * H * W;
+        const int num_elements = N * 12 * num_cells;
         const int threads = BLOCK_SIZE;
-        const int blocks_x = (num_cells + threads - 1) / threads;
-        dim3 grid_dim(blocks_x, N, 12);
+        const int blocks = (num_elements + threads - 1) / threads;
 
-        bilateral_grid_init_identity_kernel<<<grid_dim, threads, 0, stream>>>(
-            grids, num_cells);
+        bilateral_grid_init_identity_kernel<<<blocks, threads, 0, stream>>>(
+            grids, num_cells, num_elements);
     }
 
 } // namespace lfs::training::kernels
