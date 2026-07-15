@@ -12,9 +12,11 @@
 #include "app/mcp_ui_registry_tools.hpp"
 #include "app/view_info_json.hpp"
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
+#include "core/json_utils.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
@@ -50,8 +52,11 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <deque>
 #include <future>
+#include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -78,6 +83,19 @@ namespace lfs::app {
     namespace {
 
         using TransformComponents = vis::cap::TransformComponents;
+
+        constexpr size_t MAX_MCP_EVENT_SUBSCRIPTIONS = 64;
+        constexpr size_t MAX_MCP_EVENT_TYPES_PER_SUBSCRIPTION = 32;
+        constexpr size_t MAX_MCP_EVENT_QUEUE = 1024;
+        constexpr size_t MAX_MCP_EVENT_POLL = 256;
+        constexpr size_t MAX_MCP_EVENT_BYTES = 64 * 1024;
+        constexpr size_t MAX_MCP_EVENT_QUEUE_BYTES = 4 * 1024 * 1024;
+        constexpr size_t MAX_MCP_EVENT_TOTAL_QUEUE_BYTES = 16 * 1024 * 1024;
+        constexpr auto MCP_EVENT_SUBSCRIPTION_TTL = std::chrono::minutes(15);
+
+        constexpr size_t MAX_MCP_GAUSSIAN_ROWS = 1024;
+        constexpr size_t MAX_MCP_GAUSSIAN_FIELDS = 6;
+        constexpr size_t MAX_MCP_GAUSSIAN_VALUES = 64 * 1024;
 
         const core::SceneNode* find_first_visible_splat_node(const core::Scene& scene) {
             for (const auto* node : scene.getNodes()) {
@@ -180,7 +198,7 @@ namespace lfs::app {
             if (!vulkan_context)
                 return std::unexpected("Full-window capture requires a Vulkan window");
 
-            auto capture = vulkan_context->captureActiveFrameRgba();
+            auto capture = vulkan_context->captureAndEndActiveFrameRgba();
             if (!capture)
                 return std::unexpected(capture.error());
 
@@ -1604,25 +1622,47 @@ namespace lfs::app {
             };
         }
 
-        std::expected<std::vector<int>, std::string> parse_int_array(const json& value, const char* field_name) {
+        std::expected<std::vector<int>, std::string> parse_int_array(const json& value,
+                                                                     const char* field_name,
+                                                                     const size_t max_items) {
             if (!value.is_array())
                 return std::unexpected(std::string("Field '") + field_name + "' must be an array of integers");
+            if (value.size() > max_items)
+                return std::unexpected(std::string("Field '") + field_name + "' exceeds the limit of " +
+                                       std::to_string(max_items) + " items");
 
             std::vector<int> result;
             result.reserve(value.size());
-            for (const auto& item : value)
-                result.push_back(item.get<int>());
+            for (const auto& item : value) {
+                if (!item.is_number_integer())
+                    return std::unexpected(std::string("Field '") + field_name + "' must contain only integers");
+                const auto parsed = item.get<int64_t>();
+                if (parsed < std::numeric_limits<int>::min() || parsed > std::numeric_limits<int>::max())
+                    return std::unexpected(std::string("Field '") + field_name + "' contains an integer outside the supported range");
+                result.push_back(static_cast<int>(parsed));
+            }
             return result;
         }
 
-        std::expected<std::vector<float>, std::string> parse_float_array(const json& value, const char* field_name) {
+        std::expected<std::vector<float>, std::string> parse_float_array(const json& value,
+                                                                         const char* field_name,
+                                                                         const size_t max_items) {
             if (!value.is_array())
                 return std::unexpected(std::string("Field '") + field_name + "' must be an array of numbers");
+            if (value.size() > max_items)
+                return std::unexpected(std::string("Field '") + field_name + "' exceeds the limit of " +
+                                       std::to_string(max_items) + " items");
 
             std::vector<float> result;
             result.reserve(value.size());
-            for (const auto& item : value)
-                result.push_back(item.get<float>());
+            for (const auto& item : value) {
+                if (!item.is_number())
+                    return std::unexpected(std::string("Field '") + field_name + "' must contain only numbers");
+                const double parsed = item.get<double>();
+                if (!std::isfinite(parsed) || std::abs(parsed) > std::numeric_limits<float>::max())
+                    return std::unexpected(std::string("Field '") + field_name + "' contains a non-finite or out-of-range number");
+                result.push_back(static_cast<float>(parsed));
+            }
             return result;
         }
 
@@ -1641,40 +1681,62 @@ namespace lfs::app {
                 return registry;
             }
 
-            std::expected<int64_t, std::string> subscribe(const std::vector<std::string>& types, const size_t max_queue) {
+            std::expected<int64_t, std::string> subscribe(const std::vector<std::string>& types, const int64_t max_queue) {
+                if (types.size() > MAX_MCP_EVENT_TYPES_PER_SUBSCRIPTION)
+                    return std::unexpected("Field 'types' exceeds the supported item limit");
+                if (max_queue < 1 || max_queue > static_cast<int64_t>(MAX_MCP_EVENT_QUEUE))
+                    return std::unexpected("max_queue must be between 1 and " +
+                                           std::to_string(MAX_MCP_EVENT_QUEUE));
+
                 std::unordered_set<std::string> supported;
                 for (const auto type : kMcpSubscriptionEventTypes)
                     supported.insert(std::string(type));
 
+                std::unordered_set<std::string> unique_types;
                 for (const auto& type : types) {
                     if (type != "*" && !supported.contains(type))
                         return std::unexpected("Unsupported event type: " + type);
+                    if (!unique_types.insert(type).second)
+                        return std::unexpected("Duplicate event type: " + type);
                 }
 
+                const auto now = Clock::now();
                 std::lock_guard lock(mutex_);
+                prune_expired_locked(now);
+                if (subscriptions_.size() >= MAX_MCP_EVENT_SUBSCRIPTIONS)
+                    return std::unexpected("Event subscription limit reached");
+
                 const int64_t id = next_id_++;
                 Subscription sub;
-                sub.max_queue = std::max<size_t>(1, max_queue);
+                sub.max_queue = static_cast<size_t>(max_queue);
+                sub.last_access = now;
                 for (const auto& type : types)
                     sub.types.insert(type);
                 subscriptions_.emplace(id, std::move(sub));
                 return id;
             }
 
-            json poll(const int64_t id, const size_t max_events, const bool clear) {
+            json poll(const int64_t id, const int64_t max_events, const bool clear) {
+                if (max_events < 1 || max_events > static_cast<int64_t>(MAX_MCP_EVENT_POLL))
+                    return json{{"error", "max_events must be between 1 and " +
+                                              std::to_string(MAX_MCP_EVENT_POLL)}};
+
+                const auto now = Clock::now();
                 std::lock_guard lock(mutex_);
+                prune_expired_locked(now);
                 const auto it = subscriptions_.find(id);
                 if (it == subscriptions_.end())
                     return json{{"error", "Unknown subscription id"}};
 
                 auto& sub = it->second;
-                const size_t count = std::min(max_events, sub.queue.size());
+                sub.last_access = now;
+                const size_t count = std::min(static_cast<size_t>(max_events), sub.queue.size());
                 json events = json::array();
                 for (size_t i = 0; i < count; ++i)
-                    events.push_back(sub.queue[i]);
+                    events.push_back(*sub.queue[i].payload);
                 if (clear) {
                     for (size_t i = 0; i < count; ++i)
-                        sub.queue.pop_front();
+                        pop_front_locked(sub);
                 }
 
                 return json{
@@ -1683,17 +1745,25 @@ namespace lfs::app {
                     {"available", static_cast<int64_t>(sub.queue.size())},
                     {"returned", static_cast<int64_t>(events.size())},
                     {"dropped", static_cast<int64_t>(sub.dropped)},
+                    {"queued_bytes", static_cast<int64_t>(sub.queued_bytes)},
                     {"events", events},
                 };
             }
 
             bool unsubscribe(const int64_t id) {
                 std::lock_guard lock(mutex_);
-                return subscriptions_.erase(id) > 0;
+                prune_expired_locked(Clock::now());
+                const auto it = subscriptions_.find(id);
+                if (it == subscriptions_.end())
+                    return false;
+                erase_subscription_locked(it);
+                return true;
             }
 
             json list() {
+                const auto now = Clock::now();
                 std::lock_guard lock(mutex_);
+                prune_expired_locked(now);
                 json subscriptions = json::array();
                 for (const auto& [id, sub] : subscriptions_) {
                     json types = json::array();
@@ -1705,26 +1775,42 @@ namespace lfs::app {
                         {"queued", static_cast<int64_t>(sub.queue.size())},
                         {"dropped", static_cast<int64_t>(sub.dropped)},
                         {"max_queue", static_cast<int64_t>(sub.max_queue)},
+                        {"queued_bytes", static_cast<int64_t>(sub.queued_bytes)},
+                        {"expires_in_ms", std::chrono::duration_cast<std::chrono::milliseconds>(
+                                              MCP_EVENT_SUBSCRIPTION_TTL - (now - sub.last_access))
+                                              .count()},
                     });
                 }
 
                 return json{
                     {"success", true},
                     {"supported_types", mcp_subscription_event_types_json()},
+                    {"queued_bytes", static_cast<int64_t>(total_queued_bytes_)},
+                    {"max_queued_bytes", static_cast<int64_t>(MAX_MCP_EVENT_TOTAL_QUEUE_BYTES)},
                     {"subscriptions", subscriptions},
                 };
             }
 
         private:
+            using Clock = std::chrono::steady_clock;
+
+            struct QueuedEvent {
+                std::shared_ptr<const json> payload;
+                size_t estimated_bytes = 0;
+            };
+
             struct Subscription {
                 std::unordered_set<std::string> types;
-                std::deque<json> queue;
+                std::deque<QueuedEvent> queue;
                 size_t dropped = 0;
                 size_t max_queue = 256;
+                size_t queued_bytes = 0;
+                Clock::time_point last_access = Clock::now();
             };
 
             std::mutex mutex_;
             std::unordered_map<int64_t, Subscription> subscriptions_;
+            size_t total_queued_bytes_ = 0;
             int64_t next_id_ = 1;
             event::ScopedHandler handlers_;
 
@@ -1737,26 +1823,74 @@ namespace lfs::app {
                     });
             }
 
+            void prune_expired_locked(const Clock::time_point now) {
+                for (auto it = subscriptions_.begin(); it != subscriptions_.end();) {
+                    if (now - it->second.last_access >= MCP_EVENT_SUBSCRIPTION_TTL) {
+                        total_queued_bytes_ -= it->second.queued_bytes;
+                        it = subscriptions_.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+
+            void pop_front_locked(Subscription& sub) {
+                const size_t bytes = sub.queue.front().estimated_bytes;
+                sub.queue.pop_front();
+                sub.queued_bytes -= bytes;
+                total_queued_bytes_ -= bytes;
+            }
+
+            void erase_subscription_locked(
+                const std::unordered_map<int64_t, Subscription>::iterator it) {
+                total_queued_bytes_ -= it->second.queued_bytes;
+                subscriptions_.erase(it);
+            }
+
             void publish(const std::string& type, json payload) {
                 const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                               std::chrono::system_clock::now().time_since_epoch())
                                               .count();
 
+                const auto event_payload = std::make_shared<const json>(json{
+                    {"type", type},
+                    {"timestamp_ms", timestamp_ms},
+                    {"data", std::move(payload)},
+                });
+                size_t estimated_bytes = 0;
+                const bool payload_fits =
+                    core::add_bounded_json_cost(*event_payload, estimated_bytes, MAX_MCP_EVENT_BYTES);
+
                 std::lock_guard lock(mutex_);
+                prune_expired_locked(Clock::now());
                 for (auto& [_, sub] : subscriptions_) {
                     if (!sub.types.empty() && !sub.types.contains("*") && !sub.types.contains(type))
                         continue;
 
-                    if (sub.queue.size() >= sub.max_queue) {
-                        sub.queue.pop_front();
+                    if (!payload_fits) {
+                        ++sub.dropped;
+                        continue;
+                    }
+
+                    while (!sub.queue.empty() &&
+                           (sub.queue.size() >= sub.max_queue ||
+                            estimated_bytes > MAX_MCP_EVENT_QUEUE_BYTES - sub.queued_bytes ||
+                            estimated_bytes > MAX_MCP_EVENT_TOTAL_QUEUE_BYTES - total_queued_bytes_)) {
+                        pop_front_locked(sub);
                         ++sub.dropped;
                     }
 
-                    sub.queue.push_back(json{
-                        {"type", type},
-                        {"timestamp_ms", timestamp_ms},
-                        {"data", payload},
+                    if (estimated_bytes > MAX_MCP_EVENT_TOTAL_QUEUE_BYTES - total_queued_bytes_) {
+                        ++sub.dropped;
+                        continue;
+                    }
+
+                    sub.queue.push_back(QueuedEvent{
+                        .payload = event_payload,
+                        .estimated_bytes = estimated_bytes,
                     });
+                    sub.queued_bytes += estimated_bytes;
+                    total_queued_bytes_ += estimated_bytes;
                 }
             }
         };
@@ -3962,7 +4096,7 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"types", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Event types to receive; omit or use ['*'] for all supported types"}}},
-                        {"max_queue", json{{"type", "integer"}, {"description", "Maximum queued events to retain before dropping oldest events (default: 256)"}}}},
+                        {"max_queue", json{{"type", "integer"}, {"minimum", 1}, {"maximum", MAX_MCP_EVENT_QUEUE}, {"description", "Maximum queued events to retain before dropping oldest events (default: 256)"}}}},
                     .required = {}}},
             [](const json& args) -> json {
                 std::vector<std::string> types;
@@ -3971,14 +4105,17 @@ namespace lfs::app {
                     if (!value.is_array())
                         return json{{"error", "Field 'types' must be an array of strings"}};
                     types.reserve(value.size());
-                    for (const auto& item : value)
+                    for (const auto& item : value) {
+                        if (!item.is_string())
+                            return json{{"error", "Field 'types' must contain only strings"}};
                         types.push_back(item.get<std::string>());
+                    }
                 }
                 if (types.empty())
                     types.push_back("*");
 
-                const size_t max_queue = static_cast<size_t>(args.value("max_queue", 256));
-                auto subscription_id = EventSubscriptionRegistry::instance().subscribe(types, max_queue);
+                const int64_t requested_max_queue = args.value("max_queue", int64_t{256});
+                auto subscription_id = EventSubscriptionRegistry::instance().subscribe(types, requested_max_queue);
                 if (!subscription_id)
                     return json{{"error", subscription_id.error()}};
 
@@ -3986,7 +4123,7 @@ namespace lfs::app {
                     {"success", true},
                     {"subscription_id", *subscription_id},
                     {"types", types},
-                    {"max_queue", static_cast<int64_t>(max_queue)},
+                    {"max_queue", requested_max_queue},
                     {"supported_types", mcp_subscription_event_types_json()},
                 };
             });
@@ -3999,14 +4136,14 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"subscription_id", json{{"type", "integer"}, {"description", "Subscription identifier"}}},
-                        {"max_events", json{{"type", "integer"}, {"description", "Maximum queued events to return (default: 100)"}}},
+                        {"max_events", json{{"type", "integer"}, {"minimum", 1}, {"maximum", MAX_MCP_EVENT_POLL}, {"description", "Maximum queued events to return (default: 100)"}}},
                         {"clear", json{{"type", "boolean"}, {"description", "Remove returned events from the queue (default: true)"}}}},
                     .required = {"subscription_id"}}},
             [](const json& args) -> json {
                 const int64_t subscription_id = args["subscription_id"].get<int64_t>();
-                const size_t max_events = static_cast<size_t>(args.value("max_events", 100));
+                const int64_t requested_max_events = args.value("max_events", int64_t{100});
                 const bool clear = args.value("clear", true);
-                return EventSubscriptionRegistry::instance().poll(subscription_id, max_events, clear);
+                return EventSubscriptionRegistry::instance().poll(subscription_id, requested_max_events, clear);
             });
 
         registry.register_tool(
@@ -4043,28 +4180,42 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"node", json{{"type", "string"}, {"description", "Optional gaussian node name; defaults to the selected or training node"}}},
-                        {"fields", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Field names to read (means, scales/scaling_raw, rotations/rotation_raw, opacities/opacity_raw, sh0, shN)"}}},
-                        {"indices", json{{"type", "array"}, {"items", json{{"type", "integer"}}}, {"description", "Optional gaussian indices to read"}}},
-                        {"limit", json{{"type", "integer"}, {"description", "When indices are omitted, read the first N rows (default: 256)"}}}},
+                        {"fields", json{{"type", "array"}, {"minItems", 1}, {"maxItems", MAX_MCP_GAUSSIAN_FIELDS}, {"uniqueItems", true}, {"items", json{{"type", "string"}}}, {"description", "Field names to read (means, scales/scaling_raw, rotations/rotation_raw, opacities/opacity_raw, sh0, shN)"}}},
+                        {"indices", json{{"type", "array"}, {"maxItems", MAX_MCP_GAUSSIAN_ROWS}, {"items", json{{"type", "integer"}}}, {"description", "Optional gaussian indices to read"}}},
+                        {"limit", json{{"type", "integer"}, {"minimum", 1}, {"maximum", MAX_MCP_GAUSSIAN_ROWS}, {"description", "When indices are omitted, read the first N rows (default: 256)"}}}},
                     .required = {"fields"}}},
             [viewer_impl](const json& args) -> json {
                 const auto requested_node = optional_string_arg(args, "node");
                 if (!args.contains("fields") || !args["fields"].is_array())
                     return json{{"error", "Field 'fields' must be an array of field names"}};
+                if (args["fields"].empty() || args["fields"].size() > MAX_MCP_GAUSSIAN_FIELDS)
+                    return json{{"error", "Field 'fields' must contain between 1 and " +
+                                              std::to_string(MAX_MCP_GAUSSIAN_FIELDS) + " items"}};
 
                 std::vector<std::string> fields;
                 fields.reserve(args["fields"].size());
-                for (const auto& item : args["fields"])
-                    fields.push_back(item.get<std::string>());
+                std::unordered_set<std::string> unique_fields;
+                for (const auto& item : args["fields"]) {
+                    if (!item.is_string())
+                        return json{{"error", "Field 'fields' must contain only strings"}};
+                    auto field = item.get<std::string>();
+                    if (!unique_fields.insert(field).second)
+                        return json{{"error", "Field 'fields' must not contain duplicates"}};
+                    fields.push_back(std::move(field));
+                }
 
                 std::optional<std::vector<int>> indices;
                 if (args.contains("indices")) {
-                    auto parsed = parse_int_array(args["indices"], "indices");
+                    auto parsed = parse_int_array(args["indices"], "indices", MAX_MCP_GAUSSIAN_ROWS);
                     if (!parsed)
                         return json{{"error", parsed.error()}};
                     indices = std::move(*parsed);
                 }
-                const int limit = args.value("limit", 256);
+                const int64_t requested_limit = args.value("limit", int64_t{256});
+                if (requested_limit < 1 || requested_limit > static_cast<int64_t>(MAX_MCP_GAUSSIAN_ROWS))
+                    return json{{"error", "limit must be between 1 and " +
+                                              std::to_string(MAX_MCP_GAUSSIAN_ROWS)}};
+                const int limit = static_cast<int>(requested_limit);
 
                 return post_and_wait(viewer_impl, [viewer_impl, requested_node, fields = std::move(fields), indices = std::move(indices), limit]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
@@ -4110,8 +4261,18 @@ namespace lfs::app {
                                                         core::Device::CUDA));
                                 continue;
                             }
-                            const core::Tensor canon = node->model->shN_canonical();
-                            field_payloads[field_name] = tensor_payload_json(canon.index_select(0, index_tensor));
+                            const auto rest_coefficients =
+                                static_cast<uint32_t>(node->model->max_sh_coeffs_rest());
+                            auto selected_sh = core::Tensor::empty(
+                                {resolved_indices.size(), static_cast<size_t>(rest_coefficients), size_t{3}},
+                                node->model->shN_raw().device());
+                            core::shN_swizzled_gather_to_linear(
+                                node->model->shN_raw().ptr<float>(),
+                                index_tensor.ptr<int>(),
+                                selected_sh.ptr<float>(),
+                                resolved_indices.size(),
+                                rest_coefficients);
+                            field_payloads[field_name] = tensor_payload_json(selected_sh);
                             continue;
                         }
                         const auto* const field = resolve_gaussian_field(*node->model, field_name);
@@ -4140,16 +4301,16 @@ namespace lfs::app {
                     .properties = json{
                         {"node", json{{"type", "string"}, {"description", "Optional gaussian node name; defaults to the selected or training node"}}},
                         {"field", json{{"type", "string"}, {"description", "Field name to update (means, scales/scaling_raw, rotations/rotation_raw, opacities/opacity_raw, sh0, shN)"}}},
-                        {"indices", json{{"type", "array"}, {"items", json{{"type", "integer"}}}, {"description", "Gaussian row indices to update"}}},
-                        {"values", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Flat row-major values for the selected tensor slice"}}}},
+                        {"indices", json{{"type", "array"}, {"minItems", 1}, {"maxItems", MAX_MCP_GAUSSIAN_ROWS}, {"uniqueItems", true}, {"items", json{{"type", "integer"}}}, {"description", "Gaussian row indices to update"}}},
+                        {"values", json{{"type", "array"}, {"maxItems", MAX_MCP_GAUSSIAN_VALUES}, {"items", json{{"type", "number"}}}, {"description", "Flat row-major values for the selected tensor slice"}}}},
                     .required = {"field", "indices", "values"}}},
             [viewer_impl](const json& args) -> json {
                 const auto requested_node = optional_string_arg(args, "node");
                 const std::string field_name = args["field"].get<std::string>();
-                auto indices = parse_int_array(args["indices"], "indices");
+                auto indices = parse_int_array(args["indices"], "indices", MAX_MCP_GAUSSIAN_ROWS);
                 if (!indices)
                     return json{{"error", indices.error()}};
-                auto values = parse_float_array(args["values"], "values");
+                auto values = parse_float_array(args["values"], "values", MAX_MCP_GAUSSIAN_VALUES);
                 if (!values)
                     return json{{"error", values.error()}};
 
@@ -4261,6 +4422,8 @@ namespace lfs::app {
 
                 const std::string args_json = args.contains("args") ? args["args"].dump() : "{}";
 
+                if (!python::ensure_plugins_loaded())
+                    return json{{"success", false}, {"error", "Plugins are still loading"}};
                 return post_and_wait(viewer, [viewer, capability, args_json]() -> json {
                     python::SceneContextGuard ctx(&viewer->getScene());
                     auto result = python::invoke_capability(capability, args_json);

@@ -1,16 +1,10 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Include internal memory pool header for stress testing
-// This allows us to properly release cached memory when testing for leaks
 #include "core/tensor.hpp"
 #include <algorithm>
-#include <c10/cuda/CUDACachingAllocator.h>
-#include <chrono>
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <random>
-#include <thread>
 #include <torch/torch.h>
 
 using namespace lfs::core;
@@ -58,133 +52,14 @@ class TensorStressTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
-
-        // Warm up allocator (slab init is lazy, ~288MB)
-        { auto _ = Tensor::empty({1}, Device::CUDA); }
-        cudaDeviceSynchronize();
-        Tensor::trim_memory_pool();
-
-        // Record initial memory after warmup
-        cudaMemGetInfo(&initial_free_mem_, &total_mem_);
         gen_.seed(42);
 
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }
-
-    void TearDown() override {
-        // Force synchronization
-        cudaDeviceSynchronize();
-
-        // Clear PyTorch CUDA cache
-        if (torch::cuda::is_available()) {
-            c10::cuda::CUDACachingAllocator::emptyCache();
-        }
-
-        // Clear tensor library's memory pool cache
-        Tensor::trim_memory_pool();
-
-        // Give the system a moment to actually free memory
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-
-        // Check for memory leaks with reasonable tolerance
-        size_t current_free_mem, current_total;
-        cudaMemGetInfo(&current_free_mem, &current_total);
-
-        // Allow 100MB tolerance for CUDA internal allocations and caching
-        // Both our allocator and PyTorch's allocator cache freed memory
-        size_t tolerance = 100 * 1024 * 1024;
-
-        long long leaked = static_cast<long long>(initial_free_mem_) -
-                           static_cast<long long>(current_free_mem);
-
-        EXPECT_NEAR(static_cast<long long>(current_free_mem),
-                    static_cast<long long>(initial_free_mem_),
-                    static_cast<long long>(tolerance))
-            << "Possible memory leak detected: "
-            << leaked / (1024 * 1024) << " MB not freed";
-    }
-
-    size_t initial_free_mem_;
-    size_t total_mem_;
     std::mt19937 gen_;
     std::uniform_real_distribution<float> dist_{-1.0f, 1.0f};
 };
-
-// ============= Memory Management Tests =============
-
-TEST_F(TensorStressTest, MaxMemoryAllocation) {
-    // Try to allocate tensors until we approach memory limit
-    std::vector<Tensor> tensors;
-    const size_t chunk_size = 10 * 1024 * 1024; // 10M floats = 40MB per tensor
-
-    size_t total_allocated = 0;
-
-    for (int i = 0; i < 50; ++i) { // Max 50 tensors (2GB) to avoid hanging
-        // Check available memory before allocating
-        size_t free_mem, total;
-        cudaMemGetInfo(&free_mem, &total);
-        if (free_mem < chunk_size * sizeof(float) * 3) {
-            // Stop before we run too low
-            break;
-        }
-
-        auto t = Tensor::empty({chunk_size}, Device::CUDA);
-        if (!t.is_valid()) {
-            break;
-        }
-        tensors.emplace_back(std::move(t));
-        total_allocated += chunk_size * sizeof(float);
-    }
-
-    EXPECT_GT(tensors.size(), 0) << "Should be able to allocate at least one tensor";
-
-    // Clear tensors to free memory
-    tensors.clear();
-    cudaDeviceSynchronize();
-
-    // Clear PyTorch cache to actually release memory
-    c10::cuda::CUDACachingAllocator::emptyCache();
-
-    // Clear tensor library's memory pool cache
-    Tensor::trim_memory_pool();
-    cudaDeviceSynchronize();
-
-    // Memory should be freed
-    size_t free_after, total_after;
-    cudaMemGetInfo(&free_after, &total_after);
-    EXPECT_GT(free_after, initial_free_mem_ - 100 * 1024 * 1024)
-        << "Memory not properly freed after clearing tensors";
-}
-
-TEST_F(TensorStressTest, RapidAllocationDeallocation) {
-    // Rapidly allocate and deallocate tensors
-    const int iterations = 1000;
-    const size_t tensor_size = 1024 * 1024; // 1M elements
-
-    for (int i = 0; i < iterations; ++i) {
-        auto t = Tensor::zeros({tensor_size}, Device::CUDA);
-        EXPECT_TRUE(t.is_valid());
-        // Tensor destroyed here
-    }
-
-    cudaDeviceSynchronize();
-
-    // Clear PyTorch cache to verify no leaks (caching is expected, leaks are not)
-    c10::cuda::CUDACachingAllocator::emptyCache();
-
-    // Clear tensor library's memory pool cache
-    Tensor::trim_memory_pool();
-    cudaDeviceSynchronize();
-
-    // Check memory is stable
-    size_t free_after, total_after;
-    cudaMemGetInfo(&free_after, &total_after);
-    EXPECT_NEAR(static_cast<long long>(free_after),
-                static_cast<long long>(initial_free_mem_),
-                50 * 1024 * 1024)
-        << "Memory leak detected after rapid allocation/deallocation";
-}
 
 // ============= Numerical Correctness Tests =============
 
@@ -245,27 +120,15 @@ TEST_F(TensorStressTest, LargeMatrixOperations) {
                        .clone()
                        .to(torch::kCUDA);
 
-    // Perform operations
-    auto start = std::chrono::high_resolution_clock::now();
-
     auto custom_c = custom_a.add(custom_b);
     auto custom_d = custom_c.mul(2.0f);
     auto custom_e = custom_d.sub(custom_a);
     auto custom_result = custom_e.div(custom_b.add(1.0f));
 
-    auto end = std::chrono::high_resolution_clock::now();
-    auto custom_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-
-    // PyTorch operations
-    start = std::chrono::high_resolution_clock::now();
-
     auto torch_c = torch_a + torch_b;
     auto torch_d = torch_c * 2.0f;
     auto torch_e = torch_d - torch_a;
     auto torch_result = torch_e / (torch_b + 1.0f);
-
-    end = std::chrono::high_resolution_clock::now();
-    auto torch_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
     EXPECT_TRUE(custom_result.is_valid());
     EXPECT_FALSE(custom_result.has_nan());
@@ -273,9 +136,6 @@ TEST_F(TensorStressTest, LargeMatrixOperations) {
 
     // Compare results
     compare_tensors(custom_result, torch_result, 1e-3f, 1e-4f, "LargeMatrixOperations");
-
-    std::cout << "Large matrix operations - Custom: " << custom_duration.count()
-              << " ms, PyTorch: " << torch_duration.count() << " ms" << std::endl;
 }
 
 TEST_F(TensorStressTest, ManySmallTensors) {

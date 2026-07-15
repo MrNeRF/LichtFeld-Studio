@@ -1,0 +1,45 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 30,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "dev-release",
+      "displayName": "Full-featured developer Release",
+      "description": "Full application dependency set, one locally detected CUDA architecture, tests off, compiler cache on",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/dev-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTS": "OFF",
+        "BUILD_UNICODE_TEST_ONLY": "OFF",
+        "ENABLE_COMPILER_CACHE": "ON"
+      }
+    },
+    {
+      "name": "measure-release",
+      "displayName": "Full-featured clean-build measurement",
+      "description": "Same production feature set as dev-release, with compiler caching disabled for reproducible timing",
+      "inherits": "dev-release",
+      "binaryDir": "${sourceDir}/build/measure-release",
+      "cacheVariables": {
+        "ENABLE_COMPILER_CACHE": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev-release",
+      "configurePreset": "dev-release",
+      "jobs": 6
+    },
+    {
+      "name": "measure-release",
+      "configurePreset": "measure-release",
+      "jobs": 6
+    }
+  ]
+}

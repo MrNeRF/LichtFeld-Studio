@@ -4,33 +4,26 @@
 
 #pragma once
 
+#include "core/cuda_error.hpp"
+
 #include <cstdint>
 #include <cuda_runtime.h>
-#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
 
-inline void check_cuda_result(cudaError_t ret, const char* name, const char* file, int line) {
-    if (ret != cudaSuccess) {
-        const std::string message = std::string("CUDA error in ") + name + " at " + file + ":" + std::to_string(line) +
-                                    " - " + cudaGetErrorName(ret) + ": " + cudaGetErrorString(ret);
-        std::cerr << "\n[CUDA ERROR] " << message;
-        throw std::runtime_error(message);
-    }
-}
-
-#define CUDA_CHECK(call, name)                               \
-    do {                                                     \
-        check_cuda_result((call), name, __FILE__, __LINE__); \
+#define LFS_FASTGS_CUDA_CALL(call, name)                          \
+    do {                                                          \
+        LFS_CUDA_CHECK_MSG((call), "FastGS operation: {}", name); \
     } while (0)
 
-#define CHECK_CUDA(debug, name)                                                   \
-    do {                                                                          \
-        check_cuda_result(cudaGetLastError(), name, __FILE__, __LINE__);          \
-        if constexpr (debug) {                                                    \
-            check_cuda_result(cudaDeviceSynchronize(), name, __FILE__, __LINE__); \
-        }                                                                         \
+#define LFS_FASTGS_PHASE_CHECK(debug, name)                                      \
+    do {                                                                         \
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "FastGS phase launch: {}", name); \
+        if constexpr (debug) {                                                   \
+            LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),                          \
+                               "FastGS phase synchronization: {}", name);        \
+        }                                                                        \
     } while (0)
 
 template <typename T>

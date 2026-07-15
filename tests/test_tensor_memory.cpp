@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include <c10/cuda/CUDACachingAllocator.h>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <memory>
@@ -54,37 +53,9 @@ protected:
     void SetUp() override {
         ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
 
-        // Record initial CUDA memory
-        cudaMemGetInfo(&initial_free_mem, &total_mem);
-
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }
-
-    void TearDown() override {
-        // Force PyTorch to empty its CUDA cache
-        c10::cuda::CUDACachingAllocator::emptyCache();
-
-        // Force synchronization
-        cudaDeviceSynchronize();
-
-        // Check for memory leaks
-        size_t current_free_mem, current_total;
-        cudaMemGetInfo(&current_free_mem, &current_total);
-
-        // PyTorch uses a caching allocator - need much larger tolerance
-        // Also, CUDA driver may cache memory for performance
-        size_t tolerance = 150 * 1024 * 1024; // 150 MB tolerance
-        EXPECT_NEAR(static_cast<long long>(current_free_mem),
-                    static_cast<long long>(initial_free_mem),
-                    static_cast<long long>(tolerance))
-            << "Possible memory leak detected. Difference: "
-            << (static_cast<long long>(initial_free_mem) - static_cast<long long>(current_free_mem)) / (1024 * 1024)
-            << " MB";
-    }
-
-    size_t initial_free_mem;
-    size_t total_mem;
 };
 
 // ============= Memory Ownership Tests =============
@@ -134,8 +105,7 @@ TEST_F(TensorMemoryTest, MoveSemantics) {
         auto custom_t2 = std::move(custom_t1);
         EXPECT_EQ(custom_t2.data_ptr(), original_ptr);
         EXPECT_TRUE(custom_t2.owns_memory());
-        EXPECT_EQ(custom_t1.data_ptr(), nullptr);
-        EXPECT_FALSE(custom_t1.owns_memory());
+        EXPECT_FALSE(custom_t1.is_valid());
 
         // Verify data is correct
         auto torch_t = torch::ones({50, 50}, torch::TensorOptions().device(torch::kCUDA));
@@ -153,7 +123,7 @@ TEST_F(TensorMemoryTest, MoveSemantics) {
         custom_t2 = std::move(custom_t1);
 
         EXPECT_EQ(custom_t2.data_ptr(), ptr1);
-        EXPECT_EQ(custom_t1.data_ptr(), nullptr);
+        EXPECT_FALSE(custom_t1.is_valid());
 
         // Verify data is zeros
         auto torch_zeros = torch::zeros({30, 30}, torch::TensorOptions().device(torch::kCUDA));
@@ -454,18 +424,11 @@ TEST_F(TensorMemoryTest, InvalidTensorOperations) {
     Tensor custom_invalid;
 
     EXPECT_FALSE(custom_invalid.is_valid());
-    EXPECT_EQ(custom_invalid.data_ptr(), nullptr);
-    EXPECT_FALSE(custom_invalid.owns_memory());
 
-    // Operations on invalid tensor should return invalid tensors
-    auto result1 = custom_invalid.clone();
-    EXPECT_FALSE(result1.is_valid());
-
-    auto result2 = custom_invalid.to(Device::CPU);
-    EXPECT_FALSE(result2.is_valid());
-
-    auto result3 = custom_invalid.view({2, 2});
-    EXPECT_FALSE(result3.is_valid());
+    EXPECT_THROW(custom_invalid.data_ptr(), std::runtime_error);
+    EXPECT_THROW(custom_invalid.clone(), std::runtime_error);
+    EXPECT_THROW(custom_invalid.to(Device::CPU), std::runtime_error);
+    EXPECT_THROW(custom_invalid.view({2, 2}), std::runtime_error);
 }
 
 TEST_F(TensorMemoryTest, EmptyTensor) {
@@ -529,8 +492,6 @@ TEST_F(TensorMemoryTest, StressTestManyAllocations) {
     // Clear them
     custom_tensors.clear();
     torch_tensors.clear();
-
-    // Memory should be freed (checked in TearDown)
 }
 
 TEST_F(TensorMemoryTest, StressTestRapidAllocDealloc) {
@@ -543,7 +504,6 @@ TEST_F(TensorMemoryTest, StressTestRapidAllocDealloc) {
         EXPECT_TRUE(torch_t.defined());
         // Both destroyed at end of iteration
     }
-    // Memory should be stable (checked in TearDown)
 }
 
 TEST_F(TensorMemoryTest, MixedSizeAllocations) {

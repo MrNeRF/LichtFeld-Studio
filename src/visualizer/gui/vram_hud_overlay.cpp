@@ -1042,7 +1042,10 @@ namespace lfs::vis::gui {
               formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_reserved : 0));
         write("cuda_pool_fragmentation",
               formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_fragmentation : 0));
-        write("pinned_host", formatBytes(s.process.pinned_host_used));
+        write("pinned_host", formatBytes(s.process.pinned_host_used),
+              std::format("{} cached / {} peak",
+                          formatBytes(s.process.pinned_host_cached),
+                          formatBytes(s.process.pinned_host_peak)));
         write("vulkan_budget", formatBytes(s.process.vulkan_vma_used),
               formatPercent(s.process.vulkan_vma_used, process_used));
         write("vulkan_blocks", formatBytes(s.process.vulkan_vma_block_bytes));

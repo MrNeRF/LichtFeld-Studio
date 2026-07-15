@@ -154,6 +154,32 @@ struct ColorPPISPParams {
     float2 n;
 };
 
+constexpr float PPISP_MAX_SHAPE_RAW = 32.0f;
+constexpr float PPISP_CENTER_EPSILON = 1.0e-4f;
+constexpr float PPISP_MIN_EXPOSURE_EV = -16.0f;
+constexpr float PPISP_MAX_EXPOSURE_EV = 16.0f;
+
+__device__ __forceinline__ float ppisp_finite_or_zero(const float value) {
+    return isfinite(value) ? value : 0.0f;
+}
+
+__device__ __forceinline__ float2 ppisp_finite_or_zero(const float2 value) {
+    return make_float2(ppisp_finite_or_zero(value.x), ppisp_finite_or_zero(value.y));
+}
+
+__device__ __forceinline__ float ppisp_sigmoid(const float raw) {
+    const float value = ppisp_finite_or_zero(raw);
+    if (value >= 0.0f) {
+        return __fdividef(1.0f, 1.0f + __expf(-value));
+    }
+    const float exp_value = __expf(value);
+    return __fdividef(exp_value, 1.0f + exp_value);
+}
+
+__device__ __forceinline__ float ppisp_exposure_value(const float raw) {
+    return fminf(PPISP_MAX_EXPOSURE_EV, fmaxf(PPISP_MIN_EXPOSURE_EV, ppisp_finite_or_zero(raw)));
+}
+
 // Color correction pinv blocks (constant memory)
 __constant__ float PPISP_COLOR_PINV_BLOCKS[4][4] = {
     {0.0480542f, -0.0043631f, -0.0043631f, 0.0481283f},
@@ -162,18 +188,20 @@ __constant__ float PPISP_COLOR_PINV_BLOCKS[4][4] = {
     {0.0128369f, -0.0034654f, -0.0034654f, 0.0128158f}};
 
 __device__ __forceinline__ float ppisp_bounded_positive_forward(float raw, float min_value = 0.1f) {
-    return min_value + __logf(1.0f + __expf(raw));
+    const float value = fminf(PPISP_MAX_SHAPE_RAW, ppisp_finite_or_zero(raw));
+    return min_value + fmaxf(value, 0.0f) + __logf(1.0f + __expf(-fabsf(value)));
 }
 
 __device__ __forceinline__ float ppisp_clamped_forward(float raw) {
-    return __fdividef(1.0f, 1.0f + __expf(-raw));
+    return fminf(1.0f - PPISP_CENTER_EPSILON,
+                 fmaxf(PPISP_CENTER_EPSILON, ppisp_sigmoid(raw)));
 }
 
 __device__ __forceinline__ float3x3 ppisp_compute_homography(const ColorPPISPParams* params) {
-    const float2& b_lat = params->b;
-    const float2& r_lat = params->r;
-    const float2& g_lat = params->g;
-    const float2& n_lat = params->n;
+    const float2 b_lat = ppisp_finite_or_zero(params->b);
+    const float2 r_lat = ppisp_finite_or_zero(params->r);
+    const float2 g_lat = ppisp_finite_or_zero(params->g);
+    const float2 n_lat = ppisp_finite_or_zero(params->n);
 
     float2x2 zca_b, zca_r, zca_g, zca_n;
     zca_b.m[0] = PPISP_COLOR_PINV_BLOCKS[0][0];
@@ -248,7 +276,7 @@ __device__ __forceinline__ float3x3 ppisp_compute_homography(const ColorPPISPPar
 
 // ISP component functions
 __device__ __forceinline__ void ppisp_apply_exposure(const float3& rgb_in, float exposure_param, float3& rgb_out) {
-    float exposure_factor = exp2f(exposure_param);
+    const float exposure_factor = exp2f(ppisp_exposure_value(exposure_param));
     rgb_out = rgb_in * exposure_factor;
 }
 
@@ -266,14 +294,16 @@ __device__ __forceinline__ void ppisp_apply_vignetting(const float3& rgb_in,
     for (int i = 0; i < 3; i++) {
         const VignettingChannelParams& params = vignetting_params[i];
 
-        float dx = uv.x - params.cx;
-        float dy = uv.y - params.cy;
+        float dx = uv.x - ppisp_finite_or_zero(params.cx);
+        float dy = uv.y - ppisp_finite_or_zero(params.cy);
         float r2 = __fmaf_rn(dx, dx, dy * dy);
         float r4 = r2 * r2;
         float r6 = r4 * r2;
 
-        float falloff =
-            __fmaf_rn(params.alpha2, r6, __fmaf_rn(params.alpha1, r4, __fmaf_rn(params.alpha0, r2, 1.0f)));
+        float falloff = __fmaf_rn(
+            ppisp_finite_or_zero(params.alpha2), r6,
+            __fmaf_rn(ppisp_finite_or_zero(params.alpha1), r4,
+                      __fmaf_rn(ppisp_finite_or_zero(params.alpha0), r2, 1.0f)));
         falloff = fmaxf(0.0f, fminf(1.0f, falloff));
 
         rgb_arr[i] *= falloff;

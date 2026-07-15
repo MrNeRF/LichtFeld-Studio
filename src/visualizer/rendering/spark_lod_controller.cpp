@@ -392,6 +392,19 @@ namespace lfs::vis {
     }
 
     void SparkLodController::detach() {
+        {
+            std::unique_lock lock(mutex_);
+            pending_work_.reset();
+            ready_available_ = false;
+            const uint64_t generation = ++next_work_generation_;
+            latest_requested_generation_.store(generation, std::memory_order_release);
+            min_valid_work_generation_.store(generation, std::memory_order_release);
+            cv_.notify_all();
+            cv_.wait(lock, [this] { return !worker_busy_; });
+        }
+
+        // The worker traverses these vectors without holding mutex_. They are safe to clear only
+        // after the cancellation generation has been observed and the active traversal has left.
         nodes_.clear();
         {
             std::scoped_lock lock(page_maps_mutex_);
@@ -804,19 +817,30 @@ namespace lfs::vis {
                 }
                 work = *pending_work_;
                 pending_work_.reset();
+                worker_busy_ = true;
             }
 
-            const auto result = traverse(work.view_matrix,
-                                         work.params,
-                                         async_scratch_,
-                                         async_indices_,
-                                         async_logical_indices_,
-                                         work.guidance,
-                                         work.generation);
-            if (result.cancelled || stop_token.stop_requested()) {
-                continue;
+            try {
+                const auto result = traverse(work.view_matrix,
+                                             work.params,
+                                             async_scratch_,
+                                             async_indices_,
+                                             async_logical_indices_,
+                                             work.guidance,
+                                             work.generation);
+                if (!result.cancelled && !stop_token.stop_requested()) {
+                    publishAsyncResult(work, result);
+                }
+            } catch (const std::exception& error) {
+                LOG_ERROR("LOD traversal worker failed: {}", error.what());
+            } catch (...) {
+                LOG_ERROR("LOD traversal worker failed with an unknown error");
             }
-            publishAsyncResult(work, result);
+            {
+                std::scoped_lock lock(mutex_);
+                worker_busy_ = false;
+            }
+            cv_.notify_all();
         }
     }
 

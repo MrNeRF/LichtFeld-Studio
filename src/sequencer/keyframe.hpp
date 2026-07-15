@@ -13,6 +13,7 @@ namespace lfs::sequencer {
     using KeyframeId = uint64_t;
     inline constexpr KeyframeId INVALID_KEYFRAME_ID = 0;
     inline constexpr glm::quat IDENTITY_ROTATION{1, 0, 0, 0};
+    inline constexpr float MAX_SEQUENCER_TIME_SECONDS = 7.0f * 24.0f * 60.0f * 60.0f;
 
     enum class EasingType : uint8_t {
         LINEAR,
@@ -20,6 +21,10 @@ namespace lfs::sequencer {
         EASE_OUT,
         EASE_IN_OUT
     };
+
+    [[nodiscard]] inline constexpr bool isValidEasingType(const EasingType easing) noexcept {
+        return easing >= EasingType::LINEAR && easing <= EasingType::EASE_IN_OUT;
+    }
 
     struct Keyframe {
         KeyframeId id = INVALID_KEYFRAME_ID;

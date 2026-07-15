@@ -5,6 +5,7 @@
 #include "photometric_loss.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/kernels/l1_loss.cuh"
+#include "lfs/kernels/loss_tensor_contract.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include <cstdint>
 #include <format>
@@ -43,14 +44,9 @@ namespace lfs::training::losses {
         const lfs::core::Tensor& gt_image,
         const Params& params) {
         try {
-            // Ensure 4D shape [N, C, H, W] by adding batch dimension if needed
-            auto rendered_4d = rendered.ndim() == 3 ? rendered.unsqueeze(0) : rendered;
-            auto gt_4d = gt_image.ndim() == 3 ? gt_image.unsqueeze(0) : gt_image;
-
-            // Validate shapes
-            if (rendered_4d.shape() != gt_4d.shape()) {
-                return std::unexpected("Shape mismatch: rendered and gt_image must have same shape");
-            }
+            lfs::training::kernels::validate_loss_weight(params.lambda_dssim);
+            auto [rendered_4d, gt_4d] =
+                lfs::training::kernels::prepare_loss_images(rendered, gt_image);
 
             lfs::core::Tensor grad_combined;
             lfs::core::Tensor loss_tensor_gpu;

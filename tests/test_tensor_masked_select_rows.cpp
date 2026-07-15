@@ -328,3 +328,19 @@ TEST_F(MaskedSelectRowsTest, OperatorBracket_PointCloudFilter_CUDA) {
     EXPECT_EQ(filtered_colors.size(0), expected);
     EXPECT_EQ(filtered_colors.size(1), 3);
 }
+
+TEST_F(MaskedSelectRowsTest, LogicalNotFiltersDeletedRows) {
+    const auto rows = Tensor::from_vector(
+        std::vector<float>{1.0f, 10.0f,
+                           2.0f, 20.0f,
+                           3.0f, 30.0f,
+                           4.0f, 40.0f},
+        {4, 2}, Device::CUDA);
+    const auto deleted = Tensor::from_vector(
+        std::vector<bool>{false, true, false, true}, {4}, Device::CUDA);
+
+    const Tensor kept = rows[~deleted];
+    EXPECT_EQ(kept.shape(), TensorShape({2, 2}));
+    EXPECT_EQ(kept.cpu().to_vector(),
+              (std::vector<float>{1.0f, 10.0f, 3.0f, 30.0f}));
+}

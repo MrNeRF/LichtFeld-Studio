@@ -1009,7 +1009,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "#depth-view-block .viewport-depth-panel {\n    padding: 5dp 6dp;" in rcss
     assert "#depth-view-block .viewport-depth-mode-select {\n    height: 22dp;" in rcss
     assert "#depth-view-block .viewport-depth-axis {\n    height: 22dp;" in rcss
-    assert "#depth-view-block .viewport-selection-depth-axis > .number-input.viewport-depth-input {\n    height: 22dp;" in rcss
+    assert "#depth-view-block .viewport-depth-axis > .scrub-field {\n    width: 112dp;\n    min-width: 112dp;\n    height: 22dp;" in rcss
     assert ".toolbar-flyout-trigger.hidden" not in rcss
     assert ".viewport-transform-overlay" in rcss
     assert ".viewport-selection-overlay" in rcss

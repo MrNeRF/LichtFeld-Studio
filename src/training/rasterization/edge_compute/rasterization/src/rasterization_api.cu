@@ -5,7 +5,6 @@
 #include "buffer_utils.h"
 #include "core/cuda/memory_arena.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
-#include "cuda_utils.h"
 #include "edge_rasterization_api.h"
 #include "edge_rasterization_config.h"
 #include "forward.h"
@@ -41,11 +40,11 @@ namespace edge_compute::rasterization {
             stream = lfs::core::getCurrentCUDAStream();
         }
         // Validate inputs using pure CUDA validation
-        CHECK_CUDA_PTR(means_ptr, "means_ptr");
-        CHECK_CUDA_PTR(scales_raw_ptr, "scales_raw_ptr");
-        CHECK_CUDA_PTR(rotations_raw_ptr, "rotations_raw_ptr");
-        CHECK_CUDA_PTR(opacities_raw_ptr, "opacities_raw_ptr");
-        CHECK_CUDA_PTR(w2c_ptr, "w2c_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(means_ptr, "means_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(scales_raw_ptr, "scales_raw_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(rotations_raw_ptr, "rotations_raw_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(opacities_raw_ptr, "opacities_raw_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(w2c_ptr, "w2c_ptr");
 
         if (n_primitives <= 0 || width <= 0 || height <= 0) {
             throw std::runtime_error("Invalid dimensions in forward_raw");
@@ -63,44 +62,45 @@ namespace edge_compute::rasterization {
         // Get arena allocator for this frame
         auto arena_allocator = arena.get_allocator(frame_id);
 
-        // Allocate buffers through arena
-        size_t per_primitive_size = required<PerPrimitiveBuffers>(n_primitives);
-        size_t per_tile_size = required<PerTileBuffers>(n_tiles);
-
-        char* per_primitive_buffers_blob = arena_allocator(per_primitive_size);
-        char* per_tile_buffers_blob = arena_allocator(per_tile_size);
-
-        if (!per_primitive_buffers_blob || !per_tile_buffers_blob) {
-            arena.end_frame(frame_id, stream);
-            return {frame_id, false, "OUT_OF_MEMORY: Failed to allocate initial buffers from arena"};
-        }
-
-        // Create allocation wrappers
-        std::function<char*(size_t)> per_primitive_buffers_func =
-            [&per_primitive_buffers_blob](size_t size) -> char* {
-            // Already allocated, just return the pointer
-            return per_primitive_buffers_blob;
-        };
-
-        std::function<char*(size_t)> per_tile_buffers_func =
-            [&per_tile_buffers_blob](size_t size) -> char* {
-            return per_tile_buffers_blob;
-        };
-
-        // These will be allocated later based on n_instances
-        char* per_instance_buffers_blob = nullptr;
-
-        std::function<char*(size_t)> per_instance_buffers_func =
-            [&arena_allocator, &per_instance_buffers_blob](size_t size) -> char* {
-            per_instance_buffers_blob = arena_allocator(size);
-            if (!per_instance_buffers_blob) {
-                // Throw immediately to prevent nullptr from being used
-                throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate instance buffers");
-            }
-            return per_instance_buffers_blob;
-        };
-
         try {
+            // Workspace queries are part of the allocation transaction: if CUB
+            // rejects one, the arena frame must be released through this boundary.
+            size_t per_primitive_size = required<PerPrimitiveBuffers>(n_primitives);
+            size_t per_tile_size = required<PerTileBuffers>(n_tiles);
+
+            char* per_primitive_buffers_blob = arena_allocator(per_primitive_size);
+            char* per_tile_buffers_blob = arena_allocator(per_tile_size);
+
+            if (!per_primitive_buffers_blob || !per_tile_buffers_blob) {
+                arena.end_frame(frame_id, stream);
+                return {frame_id, false, "OUT_OF_MEMORY: Failed to allocate initial buffers from arena"};
+            }
+
+            // Create allocation wrappers
+            std::function<char*(size_t)> per_primitive_buffers_func =
+                [&per_primitive_buffers_blob](size_t size) -> char* {
+                // Already allocated, just return the pointer
+                return per_primitive_buffers_blob;
+            };
+
+            std::function<char*(size_t)> per_tile_buffers_func =
+                [&per_tile_buffers_blob](size_t size) -> char* {
+                return per_tile_buffers_blob;
+            };
+
+            // These will be allocated later based on n_instances
+            char* per_instance_buffers_blob = nullptr;
+
+            std::function<char*(size_t)> per_instance_buffers_func =
+                [&arena_allocator, &per_instance_buffers_blob](size_t size) -> char* {
+                per_instance_buffers_blob = arena_allocator(size);
+                if (!per_instance_buffers_blob) {
+                    // Throw immediately to prevent nullptr from being used
+                    throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate instance buffers");
+                }
+                return per_instance_buffers_blob;
+            };
+
             // Call the actual forward implementation
             const int n_instances = edge_forward(per_primitive_buffers_func,
                                                  per_tile_buffers_func,

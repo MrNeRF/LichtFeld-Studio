@@ -2,8 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "ppisp.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <stdexcept>
@@ -24,17 +27,24 @@ namespace lfs::training {
             }
         }
 
-        void deserialize_int_map(std::istream& is, std::unordered_map<int, int>& m) {
-            uint32_t size;
-            is.read(reinterpret_cast<char*>(&size), sizeof(size));
-            m.clear();
-            m.reserve(size);
+        std::unordered_map<int, int> deserialize_int_map(
+            std::istream& is,
+            const uint32_t max_size,
+            const std::string_view name) {
+            uint32_t size = 0;
+            lfs::core::serialization_detail::read_exact(is, &size, sizeof(size), name);
+            if (size > max_size)
+                throw std::runtime_error("Invalid PPISP checkpoint: map exceeds entry budget");
+            std::unordered_map<int, int> result;
+            result.reserve(size);
             for (uint32_t i = 0; i < size; ++i) {
-                int k, v;
-                is.read(reinterpret_cast<char*>(&k), sizeof(k));
-                is.read(reinterpret_cast<char*>(&v), sizeof(v));
-                m[k] = v;
+                int key = 0, value = 0;
+                lfs::core::serialization_detail::read_exact(is, &key, sizeof(key), name);
+                lfs::core::serialization_detail::read_exact(is, &value, sizeof(value), name);
+                if (!result.emplace(key, value).second)
+                    throw std::runtime_error("Invalid PPISP checkpoint: duplicate map key");
             }
+            return result;
         }
     } // namespace
 
@@ -237,7 +247,8 @@ namespace lfs::training {
         if (ov.exposure_offset != 0.0f) {
             auto exp_cpu = exposure_temp.cpu();
             exp_cpu.ptr<float>()[0] += ov.exposure_offset;
-            cudaMemcpy(exposure_temp.ptr<float>(), exp_cpu.ptr<float>(), sizeof(float), cudaMemcpyHostToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(
+                exposure_temp.ptr<float>(), exp_cpu.ptr<float>(), sizeof(float), cudaMemcpyHostToDevice));
         }
 
         // Color params [b.x, b.y, r.x, r.y, g.x, g.y, n.x, n.y] - latent space, scaled for ZCA transform
@@ -255,7 +266,8 @@ namespace lfs::training {
             p[5] += ov.color_green_y * COLOR_SCALE;
             p[6] += ov.wb_temperature * WB_SCALE;
             p[7] += ov.wb_tint * WB_SCALE;
-            cudaMemcpy(color_temp.ptr<float>(), p, 8 * sizeof(float), cudaMemcpyHostToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(
+                color_temp.ptr<float>(), p, 8 * sizeof(float), cudaMemcpyHostToDevice));
         }
 
         // Vignetting: multiply alpha coefficients by strength (or zero if disabled)
@@ -271,8 +283,9 @@ namespace lfs::training {
                 vig_ptr[base + 4] *= mult;
             }
             const size_t copy_offset = static_cast<size_t>(camera_idx) * 15;
-            cudaMemcpy(vignetting_modified.ptr<float>() + copy_offset, vig_ptr + copy_offset, 15 * sizeof(float),
-                       cudaMemcpyHostToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(
+                vignetting_modified.ptr<float>() + copy_offset, vig_ptr + copy_offset, 15 * sizeof(float),
+                cudaMemcpyHostToDevice));
         }
 
         // CRF params [toe, shoulder, gamma, center] per channel
@@ -289,8 +302,9 @@ namespace lfs::training {
                 crf_ptr[base + 2] += log_gamma_mult + gamma_offsets[ch];
             }
             const size_t copy_offset = static_cast<size_t>(camera_idx) * 12;
-            cudaMemcpy(crf_modified.ptr<float>() + copy_offset, crf_ptr + copy_offset, 12 * sizeof(float),
-                       cudaMemcpyHostToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(
+                crf_modified.ptr<float>() + copy_offset, crf_ptr + copy_offset, 12 * sizeof(float),
+                cudaMemcpyHostToDevice));
         }
 
         kernels::launch_ppisp_forward_chw_region(exposure_temp.ptr<float>(), vignetting_modified.ptr<float>(),
@@ -322,8 +336,9 @@ namespace lfs::training {
         if (ov.exposure_offset != 0.0f) {
             auto exp_cpu = exposure_modified.slice(0, frame_idx, frame_idx + 1).cpu();
             exp_cpu.ptr<float>()[0] += ov.exposure_offset;
-            cudaMemcpy(exposure_modified.ptr<float>() + frame_idx, exp_cpu.ptr<float>(), sizeof(float),
-                       cudaMemcpyHostToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(
+                exposure_modified.ptr<float>() + frame_idx, exp_cpu.ptr<float>(), sizeof(float),
+                cudaMemcpyHostToDevice));
         }
 
         // Vignetting: multiply alpha coefficients by strength (or zero if disabled)
@@ -339,8 +354,9 @@ namespace lfs::training {
                 vig_ptr[base + 4] *= mult;
             }
             const size_t copy_offset = static_cast<size_t>(camera_idx) * 15;
-            cudaMemcpy(vignetting_modified.ptr<float>() + copy_offset, vig_ptr + copy_offset, 15 * sizeof(float),
-                       cudaMemcpyHostToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(
+                vignetting_modified.ptr<float>() + copy_offset, vig_ptr + copy_offset, 15 * sizeof(float),
+                cudaMemcpyHostToDevice));
         }
 
         // Color params [b.x, b.y, r.x, r.y, g.x, g.y, n.x, n.y] - latent space, scaled for ZCA transform
@@ -359,7 +375,8 @@ namespace lfs::training {
             p[base + 5] += ov.color_green_y * COLOR_SCALE;
             p[base + 6] += ov.wb_temperature * WB_SCALE;
             p[base + 7] += ov.wb_tint * WB_SCALE;
-            cudaMemcpy(color_modified.ptr<float>() + base, p + base, 8 * sizeof(float), cudaMemcpyHostToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(
+                color_modified.ptr<float>() + base, p + base, 8 * sizeof(float), cudaMemcpyHostToDevice));
         }
 
         // CRF params [toe, shoulder, gamma, center] per channel
@@ -376,8 +393,9 @@ namespace lfs::training {
                 crf_ptr[base + 2] += log_gamma_mult + gamma_offsets[ch];
             }
             const size_t copy_offset = static_cast<size_t>(camera_idx) * 12;
-            cudaMemcpy(crf_modified.ptr<float>() + copy_offset, crf_ptr + copy_offset, 12 * sizeof(float),
-                       cudaMemcpyHostToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(
+                crf_modified.ptr<float>() + copy_offset, crf_ptr + copy_offset, 12 * sizeof(float),
+                cudaMemcpyHostToDevice));
         }
 
         kernels::launch_ppisp_forward_chw_region(exposure_modified.ptr<float>(), vignetting_modified.ptr<float>(),
@@ -437,10 +455,12 @@ namespace lfs::training {
         auto color_temp = controller_params.slice(1, 1, 9).reshape({8});
 
         // Zero preallocated gradient scratch buffers
-        cudaMemsetAsync(ctrl_bwd_exposure_.ptr<float>(), 0, sizeof(float), nullptr);
-        cudaMemsetAsync(ctrl_bwd_color_.ptr<float>(), 0, 8 * sizeof(float), nullptr);
-        cudaMemsetAsync(ctrl_bwd_vignetting_.ptr<float>(), 0, ctrl_bwd_vignetting_.numel() * sizeof(float), nullptr);
-        cudaMemsetAsync(ctrl_bwd_crf_.ptr<float>(), 0, ctrl_bwd_crf_.numel() * sizeof(float), nullptr);
+        LFS_CUDA_CHECK(cudaMemsetAsync(ctrl_bwd_exposure_.ptr<float>(), 0, sizeof(float), nullptr));
+        LFS_CUDA_CHECK(cudaMemsetAsync(ctrl_bwd_color_.ptr<float>(), 0, 8 * sizeof(float), nullptr));
+        LFS_CUDA_CHECK(cudaMemsetAsync(
+            ctrl_bwd_vignetting_.ptr<float>(), 0, ctrl_bwd_vignetting_.numel() * sizeof(float), nullptr));
+        LFS_CUDA_CHECK(cudaMemsetAsync(
+            ctrl_bwd_crf_.ptr<float>(), 0, ctrl_bwd_crf_.numel() * sizeof(float), nullptr));
 
         kernels::launch_ppisp_backward_chw(exposure_temp.ptr<float>(), vignetting_params_.ptr<float>(),
                                            color_temp.ptr<float>(), crf_params_.ptr<float>(), rgb.ptr<float>(),
@@ -451,10 +471,12 @@ namespace lfs::training {
                                            nullptr);
 
         // Assemble [exposure(1), color(8)] -> [9] via D2D copy into preallocated output
-        cudaMemcpyAsync(ctrl_bwd_output_.ptr<float>(), ctrl_bwd_exposure_.ptr<float>(), sizeof(float),
-                        cudaMemcpyDeviceToDevice, nullptr);
-        cudaMemcpyAsync(ctrl_bwd_output_.ptr<float>() + 1, ctrl_bwd_color_.ptr<float>(), 8 * sizeof(float),
-                        cudaMemcpyDeviceToDevice, nullptr);
+        LFS_CUDA_CHECK(cudaMemcpyAsync(
+            ctrl_bwd_output_.ptr<float>(), ctrl_bwd_exposure_.ptr<float>(), sizeof(float),
+            cudaMemcpyDeviceToDevice, nullptr));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(
+            ctrl_bwd_output_.ptr<float>() + 1, ctrl_bwd_color_.ptr<float>(), 8 * sizeof(float),
+            cudaMemcpyDeviceToDevice, nullptr));
 
         return ctrl_bwd_output_.reshape({1, 9});
     }
@@ -807,10 +829,14 @@ namespace lfs::training {
     }
 
     void PPISP::zero_grad() {
-        cudaMemsetAsync(exposure_grad_.ptr<float>(), 0, exposure_grad_.numel() * sizeof(float), nullptr);
-        cudaMemsetAsync(vignetting_grad_.ptr<float>(), 0, vignetting_grad_.numel() * sizeof(float), nullptr);
-        cudaMemsetAsync(color_grad_.ptr<float>(), 0, color_grad_.numel() * sizeof(float), nullptr);
-        cudaMemsetAsync(crf_grad_.ptr<float>(), 0, crf_grad_.numel() * sizeof(float), nullptr);
+        LFS_CUDA_CHECK(cudaMemsetAsync(
+            exposure_grad_.ptr<float>(), 0, exposure_grad_.numel() * sizeof(float), nullptr));
+        LFS_CUDA_CHECK(cudaMemsetAsync(
+            vignetting_grad_.ptr<float>(), 0, vignetting_grad_.numel() * sizeof(float), nullptr));
+        LFS_CUDA_CHECK(cudaMemsetAsync(
+            color_grad_.ptr<float>(), 0, color_grad_.numel() * sizeof(float), nullptr));
+        LFS_CUDA_CHECK(cudaMemsetAsync(
+            crf_grad_.ptr<float>(), 0, crf_grad_.numel() * sizeof(float), nullptr));
     }
 
     void PPISP::scheduler_step() {
@@ -960,9 +986,9 @@ namespace lfs::training {
     }
 
     void PPISP::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        uint32_t magic = 0, version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "PPISP magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "PPISP version");
 
         if (magic != CHECKPOINT_MAGIC) {
             throw std::runtime_error("Invalid PPISP checkpoint");
@@ -971,55 +997,218 @@ namespace lfs::training {
             throw std::runtime_error("Unsupported PPISP checkpoint version");
         }
 
-        is.read(reinterpret_cast<char*>(&num_cameras_), sizeof(num_cameras_));
-        is.read(reinterpret_cast<char*>(&num_frames_), sizeof(num_frames_));
-        is.read(reinterpret_cast<char*>(&config_), sizeof(config_));
-        is.read(reinterpret_cast<char*>(&step_), sizeof(step_));
-        is.read(reinterpret_cast<char*>(&current_lr_), sizeof(current_lr_));
-        is.read(reinterpret_cast<char*>(&initial_lr_), sizeof(initial_lr_));
-        is.read(reinterpret_cast<char*>(&total_iterations_), sizeof(total_iterations_));
+        int num_cameras = 0;
+        int num_frames = 0;
+        Config config{};
+        int64_t step = 0;
+        double current_lr = 0.0;
+        double initial_lr = 0.0;
+        int total_iterations = 0;
+        lfs::core::serialization_detail::read_exact(is, &num_cameras, sizeof(num_cameras), "PPISP camera count");
+        lfs::core::serialization_detail::read_exact(is, &num_frames, sizeof(num_frames), "PPISP frame count");
+        lfs::core::serialization_detail::read_exact(is, &config, sizeof(config), "PPISP configuration");
+        lfs::core::serialization_detail::read_exact(is, &step, sizeof(step), "PPISP step");
+        lfs::core::serialization_detail::read_exact(is, &current_lr, sizeof(current_lr), "PPISP learning rate");
+        lfs::core::serialization_detail::read_exact(is, &initial_lr, sizeof(initial_lr), "PPISP initial learning rate");
+        lfs::core::serialization_detail::read_exact(is, &total_iterations, sizeof(total_iterations), "PPISP iteration count");
+        const std::array regularization_weights{
+            config.exposure_mean,
+            config.vig_center,
+            config.vig_channel,
+            config.vig_non_pos,
+            config.color_mean,
+            config.crf_channel,
+        };
+        if (num_cameras <= 0 || num_frames <= 0 || num_cameras > 10'000'000 || num_frames > 10'000'000 ||
+            step < 0 || total_iterations <= 0 ||
+            !std::isfinite(current_lr) || current_lr < 0.0 ||
+            !std::isfinite(initial_lr) || initial_lr < 0.0 ||
+            !std::isfinite(config.lr) || config.lr < 0.0 ||
+            !std::isfinite(config.beta1) || config.beta1 < 0.0 || config.beta1 >= 1.0 ||
+            !std::isfinite(config.beta2) || config.beta2 < 0.0 || config.beta2 >= 1.0 ||
+            !std::isfinite(config.eps) || config.eps <= 0.0 || config.warmup_steps < 0 ||
+            !std::isfinite(config.warmup_start_factor) || config.warmup_start_factor < 0.0 ||
+            !std::isfinite(config.final_lr_factor) || config.final_lr_factor <= 0.0 ||
+            std::ranges::any_of(regularization_weights, [](const float weight) {
+                return !std::isfinite(weight) || weight < 0.0f;
+            })) {
+            throw std::runtime_error("Invalid PPISP checkpoint state");
+        }
 
-        is >> exposure_params_ >> exposure_exp_avg_ >> exposure_exp_avg_sq_;
-        is >> vignetting_params_ >> vignetting_exp_avg_ >> vignetting_exp_avg_sq_;
-        is >> color_params_ >> color_exp_avg_ >> color_exp_avg_sq_;
-        is >> crf_params_ >> crf_exp_avg_ >> crf_exp_avg_sq_;
+        const size_t exposure_size = static_cast<size_t>(num_frames);
+        const size_t vig_size = static_cast<size_t>(num_cameras) * 3 * 5;
+        const size_t color_size = static_cast<size_t>(num_frames) * 8;
+        const size_t crf_size = static_cast<size_t>(num_cameras) * 3 * 4;
+        lfs::core::Tensor exposure_params, exposure_exp_avg, exposure_exp_avg_sq;
+        lfs::core::Tensor vignetting_params, vignetting_exp_avg, vignetting_exp_avg_sq;
+        lfs::core::Tensor color_params, color_exp_avg, color_exp_avg_sq;
+        lfs::core::Tensor crf_params, crf_exp_avg, crf_exp_avg_sq;
+        is >> exposure_params >> exposure_exp_avg >> exposure_exp_avg_sq;
+        is >> vignetting_params >> vignetting_exp_avg >> vignetting_exp_avg_sq;
+        is >> color_params >> color_exp_avg >> color_exp_avg_sq;
+        is >> crf_params >> crf_exp_avg >> crf_exp_avg_sq;
 
-        deserialize_int_map(is, camera_id_to_idx_);
-        deserialize_int_map(is, uid_to_frame_idx_);
-        deserialize_int_map(is, uid_to_camera_id_);
+        const auto require_vector = [](const lfs::core::Tensor& tensor,
+                                       const size_t size,
+                                       const std::string_view name) {
+            if (!tensor.is_valid() || tensor.dtype() != lfs::core::DataType::Float32 ||
+                tensor.ndim() != 1 || tensor.numel() != size) {
+                throw std::runtime_error("Invalid PPISP checkpoint tensor: " + std::string(name));
+            }
+        };
+        require_vector(exposure_params, exposure_size, "exposure params");
+        require_vector(exposure_exp_avg, exposure_size, "exposure exp_avg");
+        require_vector(exposure_exp_avg_sq, exposure_size, "exposure exp_avg_sq");
+        require_vector(vignetting_params, vig_size, "vignetting params");
+        require_vector(vignetting_exp_avg, vig_size, "vignetting exp_avg");
+        require_vector(vignetting_exp_avg_sq, vig_size, "vignetting exp_avg_sq");
+        require_vector(color_params, color_size, "color params");
+        require_vector(color_exp_avg, color_size, "color exp_avg");
+        require_vector(color_exp_avg_sq, color_size, "color exp_avg_sq");
+        require_vector(crf_params, crf_size, "crf params");
+        require_vector(crf_exp_avg, crf_size, "crf exp_avg");
+        require_vector(crf_exp_avg_sq, crf_size, "crf exp_avg_sq");
 
-        // Move to CUDA
-        exposure_params_ = exposure_params_.cuda();
-        exposure_exp_avg_ = exposure_exp_avg_.cuda();
-        exposure_exp_avg_sq_ = exposure_exp_avg_sq_.cuda();
-        vignetting_params_ = vignetting_params_.cuda();
-        vignetting_exp_avg_ = vignetting_exp_avg_.cuda();
-        vignetting_exp_avg_sq_ = vignetting_exp_avg_sq_.cuda();
-        color_params_ = color_params_.cuda();
-        color_exp_avg_ = color_exp_avg_.cuda();
-        color_exp_avg_sq_ = color_exp_avg_sq_.cuda();
-        crf_params_ = crf_params_.cuda();
-        crf_exp_avg_ = crf_exp_avg_.cuda();
-        crf_exp_avg_sq_ = crf_exp_avg_sq_.cuda();
+        const auto require_finite = [](lfs::core::Tensor& tensor, const std::string_view name) {
+            try {
+                tensor.assert_finite();
+            } catch (const lfs::core::TensorError&) {
+                throw std::runtime_error("Invalid PPISP checkpoint tensor values: " + std::string(name));
+            }
+        };
+        require_finite(exposure_params, "exposure params");
+        require_finite(exposure_exp_avg, "exposure exp_avg");
+        require_finite(exposure_exp_avg_sq, "exposure exp_avg_sq");
+        require_finite(vignetting_params, "vignetting params");
+        require_finite(vignetting_exp_avg, "vignetting exp_avg");
+        require_finite(vignetting_exp_avg_sq, "vignetting exp_avg_sq");
+        require_finite(color_params, "color params");
+        require_finite(color_exp_avg, "color exp_avg");
+        require_finite(color_exp_avg_sq, "color exp_avg_sq");
+        require_finite(crf_params, "crf params");
+        require_finite(crf_exp_avg, "crf exp_avg");
+        require_finite(crf_exp_avg_sq, "crf exp_avg_sq");
 
-        // Recreate gradient buffers
-        exposure_grad_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::CUDA);
-        size_t vig_size = static_cast<size_t>(num_cameras_) * 3 * 5;
-        vignetting_grad_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
-        color_grad_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_) * 8}, lfs::core::Device::CUDA);
-        size_t crf_size = static_cast<size_t>(num_cameras_) * 3 * 4;
-        crf_grad_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
+        auto camera_id_to_idx = deserialize_int_map(is, static_cast<uint32_t>(num_cameras), "PPISP camera map");
+        auto uid_to_frame_idx = deserialize_int_map(is, static_cast<uint32_t>(num_frames), "PPISP frame map");
+        auto uid_to_camera_id = deserialize_int_map(is, static_cast<uint32_t>(num_frames), "PPISP frame-camera map");
+        if (camera_id_to_idx.size() != static_cast<size_t>(num_cameras) ||
+            uid_to_frame_idx.size() != static_cast<size_t>(num_frames) ||
+            uid_to_camera_id.size() != static_cast<size_t>(num_frames)) {
+            throw std::runtime_error("Invalid PPISP checkpoint map cardinality");
+        }
+        std::vector<bool> seen_cameras(static_cast<size_t>(num_cameras));
+        for (const auto& [_, index] : camera_id_to_idx) {
+            if (index < 0 || index >= num_cameras || seen_cameras[static_cast<size_t>(index)])
+                throw std::runtime_error("Invalid PPISP checkpoint camera map");
+            seen_cameras[static_cast<size_t>(index)] = true;
+        }
+        std::vector<bool> seen_frames(static_cast<size_t>(num_frames));
+        for (const auto& [uid, index] : uid_to_frame_idx) {
+            if (index < 0 || index >= num_frames || seen_frames[static_cast<size_t>(index)] ||
+                !uid_to_camera_id.contains(uid) || !camera_id_to_idx.contains(uid_to_camera_id.at(uid))) {
+                throw std::runtime_error("Invalid PPISP checkpoint frame map");
+            }
+            seen_frames[static_cast<size_t>(index)] = true;
+        }
 
-        // Recreate scratch buffers for backward_with_controller_params
-        ctrl_bwd_exposure_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
-        ctrl_bwd_color_ = lfs::core::Tensor::zeros({8}, lfs::core::Device::CUDA);
-        ctrl_bwd_vignetting_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
-        ctrl_bwd_crf_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
-        ctrl_bwd_output_ = lfs::core::Tensor::empty({9}, lfs::core::Device::CUDA);
+        exposure_params = exposure_params.cuda();
+        exposure_exp_avg = exposure_exp_avg.cuda();
+        exposure_exp_avg_sq = exposure_exp_avg_sq.cuda();
+        vignetting_params = vignetting_params.cuda();
+        vignetting_exp_avg = vignetting_exp_avg.cuda();
+        vignetting_exp_avg_sq = vignetting_exp_avg_sq.cuda();
+        color_params = color_params.cuda();
+        color_exp_avg = color_exp_avg.cuda();
+        color_exp_avg_sq = color_exp_avg_sq.cuda();
+        crf_params = crf_params.cuda();
+        crf_exp_avg = crf_exp_avg.cuda();
+        crf_exp_avg_sq = crf_exp_avg_sq.cuda();
+
+        auto exposure_grad = lfs::core::Tensor::zeros({exposure_size}, lfs::core::Device::CUDA);
+        auto vignetting_grad = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
+        auto color_grad = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::CUDA);
+        auto crf_grad = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
+        auto ctrl_bwd_exposure = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+        auto ctrl_bwd_color = lfs::core::Tensor::zeros({8}, lfs::core::Device::CUDA);
+        auto ctrl_bwd_vignetting = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
+        auto ctrl_bwd_crf = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
+        auto ctrl_bwd_output = lfs::core::Tensor::empty({9}, lfs::core::Device::CUDA);
+
+        num_cameras_ = num_cameras;
+        num_frames_ = num_frames;
+        config_ = config;
+        step_ = step;
+        current_lr_ = current_lr;
+        initial_lr_ = initial_lr;
+        total_iterations_ = total_iterations;
+        exposure_params_ = std::move(exposure_params);
+        exposure_exp_avg_ = std::move(exposure_exp_avg);
+        exposure_exp_avg_sq_ = std::move(exposure_exp_avg_sq);
+        vignetting_params_ = std::move(vignetting_params);
+        vignetting_exp_avg_ = std::move(vignetting_exp_avg);
+        vignetting_exp_avg_sq_ = std::move(vignetting_exp_avg_sq);
+        color_params_ = std::move(color_params);
+        color_exp_avg_ = std::move(color_exp_avg);
+        color_exp_avg_sq_ = std::move(color_exp_avg_sq);
+        crf_params_ = std::move(crf_params);
+        crf_exp_avg_ = std::move(crf_exp_avg);
+        crf_exp_avg_sq_ = std::move(crf_exp_avg_sq);
+        camera_id_to_idx_ = std::move(camera_id_to_idx);
+        uid_to_frame_idx_ = std::move(uid_to_frame_idx);
+        uid_to_camera_id_ = std::move(uid_to_camera_id);
+        exposure_grad_ = std::move(exposure_grad);
+        vignetting_grad_ = std::move(vignetting_grad);
+        color_grad_ = std::move(color_grad);
+        crf_grad_ = std::move(crf_grad);
+        ctrl_bwd_exposure_ = std::move(ctrl_bwd_exposure);
+        ctrl_bwd_color_ = std::move(ctrl_bwd_color);
+        ctrl_bwd_vignetting_ = std::move(ctrl_bwd_vignetting);
+        ctrl_bwd_crf_ = std::move(ctrl_bwd_crf);
+        ctrl_bwd_output_ = std::move(ctrl_bwd_output);
         ctrl_bwd_rgb_h_ = 0;
         ctrl_bwd_rgb_w_ = 0;
 
         finalized_ = true;
+    }
+
+    void PPISP::adopt_checkpoint_state(PPISP& loaded) noexcept {
+        std::swap(exposure_params_, loaded.exposure_params_);
+        std::swap(exposure_exp_avg_, loaded.exposure_exp_avg_);
+        std::swap(exposure_exp_avg_sq_, loaded.exposure_exp_avg_sq_);
+        std::swap(exposure_grad_, loaded.exposure_grad_);
+        std::swap(vignetting_params_, loaded.vignetting_params_);
+        std::swap(vignetting_exp_avg_, loaded.vignetting_exp_avg_);
+        std::swap(vignetting_exp_avg_sq_, loaded.vignetting_exp_avg_sq_);
+        std::swap(vignetting_grad_, loaded.vignetting_grad_);
+        std::swap(color_params_, loaded.color_params_);
+        std::swap(color_exp_avg_, loaded.color_exp_avg_);
+        std::swap(color_exp_avg_sq_, loaded.color_exp_avg_sq_);
+        std::swap(color_grad_, loaded.color_grad_);
+        std::swap(crf_params_, loaded.crf_params_);
+        std::swap(crf_exp_avg_, loaded.crf_exp_avg_);
+        std::swap(crf_exp_avg_sq_, loaded.crf_exp_avg_sq_);
+        std::swap(crf_grad_, loaded.crf_grad_);
+        std::swap(ctrl_bwd_exposure_, loaded.ctrl_bwd_exposure_);
+        std::swap(ctrl_bwd_color_, loaded.ctrl_bwd_color_);
+        std::swap(ctrl_bwd_vignetting_, loaded.ctrl_bwd_vignetting_);
+        std::swap(ctrl_bwd_crf_, loaded.ctrl_bwd_crf_);
+        std::swap(ctrl_bwd_rgb_, loaded.ctrl_bwd_rgb_);
+        std::swap(ctrl_bwd_output_, loaded.ctrl_bwd_output_);
+        std::swap(ctrl_bwd_rgb_h_, loaded.ctrl_bwd_rgb_h_);
+        std::swap(ctrl_bwd_rgb_w_, loaded.ctrl_bwd_rgb_w_);
+        std::swap(config_, loaded.config_);
+        std::swap(step_, loaded.step_);
+        std::swap(current_lr_, loaded.current_lr_);
+        std::swap(initial_lr_, loaded.initial_lr_);
+        std::swap(total_iterations_, loaded.total_iterations_);
+        std::swap(num_cameras_, loaded.num_cameras_);
+        std::swap(num_frames_, loaded.num_frames_);
+        camera_id_to_idx_.swap(loaded.camera_id_to_idx_);
+        uid_to_frame_idx_.swap(loaded.uid_to_frame_idx_);
+        uid_to_camera_id_.swap(loaded.uid_to_camera_id_);
+        std::swap(finalized_, loaded.finalized_);
+        std::swap(color_pinv_block_diag_, loaded.color_pinv_block_diag_);
     }
 
     void PPISP::serialize_inference(std::ostream& os) const {

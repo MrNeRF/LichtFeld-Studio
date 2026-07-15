@@ -29,7 +29,8 @@ namespace lfs::training {
     public:
         using Config = PPISPControllerPoolConfig;
 
-        PPISPControllerPool(int num_cameras, int total_iterations, Config config = {});
+        PPISPControllerPool(int num_cameras, int total_iterations);
+        PPISPControllerPool(int num_cameras, int total_iterations, Config config);
         ~PPISPControllerPool() = default;
 
         PPISPControllerPool(const PPISPControllerPool&) = delete;
@@ -73,6 +74,13 @@ namespace lfs::training {
         /// Deserialize all controller states.
         void deserialize(std::istream& is);
 
+        /// Validate and consume a serialized controller state without retaining it.
+        static void consume_checkpoint(std::istream& is);
+
+        /// Transfer a fully validated persistent checkpoint state. Transient
+        /// inference buffers and the synchronization primitive stay owned here.
+        void adopt_checkpoint_state(PPISPControllerPool& loaded) noexcept;
+
         /// Serialize only weights for inference (no optimizer state).
         void serialize_inference(std::ostream& os) const;
 
@@ -86,6 +94,8 @@ namespace lfs::training {
             const std::vector<int>& source_camera_indices);
 
     private:
+        static void parse_checkpoint(std::istream& is, PPISPControllerPool* destination);
+
         void adam_update(lfs::core::Tensor& param, lfs::core::Tensor& exp_avg,
                          lfs::core::Tensor& exp_avg_sq, const lfs::core::Tensor& grad);
         void compute_bias_corrections(float& bc1_rcp, float& bc2_sqrt_rcp) const;

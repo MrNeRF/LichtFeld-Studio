@@ -61,6 +61,7 @@ namespace lfs::training {
         };
 
         struct PendingCallback {
+            std::size_t registration_id;
             Callback cb;
             HookContext ctx;
         };

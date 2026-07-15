@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/tensor.hpp"
 #include "kernels/image_kernels.hpp"
 
@@ -80,4 +81,25 @@ TEST_F(ImageKernelsTest, FusedCannyUInt8MatchesNormalizedFloatInput) {
     }
 
     EXPECT_LT(max_abs_diff, 1e-5f);
+}
+
+TEST_F(ImageKernelsTest, LanczosRgbAndGrayscaleUseBoundedCoefficientBuffers) {
+    auto rgb = Tensor::full({4, 6, 3}, 255.0f, Device::CUDA, DataType::UInt8);
+    auto grayscale = Tensor::full({4, 6}, 255.0f, Device::CUDA, DataType::UInt8);
+
+    const auto rgb_output = lanczos_resize(rgb, 3, 5, 2, nullptr);
+    const auto grayscale_output = lanczos_resize_grayscale(grayscale, 3, 5, 2, nullptr);
+
+    ASSERT_TRUE(rgb_output.is_valid());
+    ASSERT_EQ(rgb_output.shape(), TensorShape({3, 3, 5}));
+    ASSERT_TRUE(grayscale_output.is_valid());
+    ASSERT_EQ(grayscale_output.shape(), TensorShape({3, 5}));
+    EXPECT_TRUE(rgb_output.isfinite().all().item<bool>());
+    EXPECT_TRUE(grayscale_output.isfinite().all().item<bool>());
+}
+
+TEST_F(ImageKernelsTest, LanczosRejectsNonPositiveOutputExtentBeforeAllocation) {
+    const auto input = Tensor::zeros({2, 2, 3}, Device::CUDA, DataType::UInt8);
+    EXPECT_FALSE(lanczos_resize(input, 0, 2, 2, nullptr).is_valid());
+    EXPECT_FALSE(lanczos_resize(input, 2, -1, 2, nullptr).is_valid());
 }

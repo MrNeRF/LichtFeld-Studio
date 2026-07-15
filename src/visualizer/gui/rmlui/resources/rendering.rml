@@ -406,7 +406,7 @@
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_wireframe">
       <span class="setting-row__label-col">{{label_mesh_wireframe}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
-        <input type="checkbox" data-checked="mesh_wireframe" />
+        <input type="checkbox" data-checked="mesh_wireframe" data-attrif-disabled="!mesh_wireframe_supported" />
       </label>
     </div>
     <div data-if="mesh_wireframe">
@@ -420,7 +420,7 @@
           <input type="text" class="color-hex" data-value="mesh_wireframe_color_hex" />
         </div>
       </div>
-      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_wireframe_width">
+      <div class="setting-row setting-row--aligned" data-if="mesh_wide_lines_supported" data-tooltip="tooltip.mesh_wireframe_width">
         <span class="setting-row__label-col">{{label_mesh_wireframe_width}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
           <input type="range" class="setting-slider" data-value="mesh_wireframe_width" min="0.5" max="5" step="0.01" />

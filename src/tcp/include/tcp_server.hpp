@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <string>
 #include <visualizer/training/training_manager.hpp>
 #include <zmq.hpp>
 
@@ -31,6 +32,7 @@ namespace lfs::tcp {
 
     protected:
         int port_;
+        std::string endpoint_;
         std::shared_ptr<lfs::vis::TrainerManager> trainer_manager_;
         zmq::context_t context_;
         zmq::socket_t socket_;

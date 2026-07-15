@@ -6,6 +6,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
+#include "rendering/export_post_process.hpp"
 #include "rendering/ppisp_overrides_utils.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/selection_ops.hpp"
@@ -120,6 +121,7 @@ namespace lfs::vis {
         }
         camera_metrics_worker_.request_stop();
         camera_metrics_cv_.notify_all();
+        lfs::rendering::releaseEnvironmentMapCaches();
     }
 
     void RenderingManager::setWakeCallback(std::function<void()> callback) {
@@ -338,17 +340,25 @@ namespace lfs::vis {
         frame_lifecycle_service_.resetModelTracking();
     }
 
-    void RenderingManager::releaseSceneRenderResources() {
-        viewport_artifact_service_.clearViewportOutput();
+    void RenderingManager::clearVulkanViewportImageState(const glm::ivec2 size,
+                                                         const bool flip_y) {
         vulkan_viewport_image_.reset();
-        vulkan_viewport_image_generation_ = 0;
         vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         vulkan_external_viewport_image_generation_ = 0;
+        vulkan_viewport_image_size_ = size;
+        vulkan_viewport_image_flip_y_ = flip_y;
+        vulkan_gt_comparison_content_size_ = {0, 0};
+    }
+
+    void RenderingManager::releaseSceneRenderResources() {
+        viewport_artifact_service_.clearViewportOutput();
+        gt_comparison_image_cache_ = {};
+        clearVulkanViewportImageState();
+        last_logged_vksplat_render_error_.clear();
+        vulkan_viewport_image_generation_ = 0;
         split_view_image_generation_ = 0;
-        vulkan_viewport_image_size_ = {0, 0};
-        vulkan_viewport_image_flip_y_ = false;
 
         clearVulkanMeshFrame();
 

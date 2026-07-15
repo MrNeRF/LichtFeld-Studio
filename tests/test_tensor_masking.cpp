@@ -1485,6 +1485,34 @@ TEST_F(TensorMaskingTest, PythonLikeMaskedAssignment) {
     compare_tensors(tensor_custom, tensor_torch, 1e-5f, 1e-7f, "PythonLikeMaskedAssignment");
 }
 
+TEST_F(TensorMaskingTest, MaskedTensorAssignmentSupportsEveryDtype) {
+    const std::array dtypes = {
+        DataType::Float32, DataType::Float16, DataType::Int32,
+        DataType::Int64, DataType::UInt8, DataType::Bool};
+
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        const auto mask = Tensor::from_vector(
+                              std::vector<float>{0.0f, 1.0f, 0.0f, 1.0f},
+                              {4}, device)
+                              .to(DataType::Bool);
+        for (const auto dtype : dtypes) {
+            auto destination = Tensor::zeros({4}, device, dtype);
+            const auto source = Tensor::from_vector(
+                                    std::vector<float>{7.0f, 9.0f}, {2}, device)
+                                    .to(dtype);
+
+            destination[mask] = source;
+
+            const auto actual = destination.to(DataType::Float32).cpu().to_vector();
+            const auto expected = dtype == DataType::Bool
+                                      ? std::vector<float>{0.0f, 1.0f, 0.0f, 1.0f}
+                                      : std::vector<float>{0.0f, 7.0f, 0.0f, 9.0f};
+            EXPECT_EQ(actual, expected) << "dtype=" << dtype_name(dtype)
+                                        << ", device=" << device_name(device);
+        }
+    }
+}
+
 TEST_F(TensorMaskingTest, PythonLikeIndexing) {
     std::vector<float> data = {1, 2, 3, 4, 5};
     auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
@@ -1638,41 +1666,6 @@ TEST_F(TensorMaskingTest, ImageRegionMasking) {
         compare_tensors(channel_custom, channel_torch, 1e-5f, 1e-7f,
                         "ImageRegion_channel" + std::to_string(c));
     }
-}
-
-// ============= Performance Test =============
-
-TEST_F(TensorMaskingTest, MaskingPerformance) {
-    const size_t size = 1000000;
-
-    // Generate random data once and use it for both implementations
-    std::vector<float> data;
-    std::mt19937 gen(42);
-    std::normal_distribution<float> dist(0.0f, 1.0f);
-    for (size_t i = 0; i < size; ++i) {
-        data.push_back(dist(gen));
-    }
-
-    auto tensor_custom = Tensor::from_vector(data, {size}, Device::CUDA);
-    auto tensor_torch = torch::tensor(data, torch::kCUDA);
-
-    // Create mask
-    auto start = std::chrono::high_resolution_clock::now();
-    auto mask_custom = tensor_custom.gt(0.0f);
-    cudaDeviceSynchronize();
-    auto custom_time = std::chrono::high_resolution_clock::now() - start;
-
-    start = std::chrono::high_resolution_clock::now();
-    auto mask_torch = tensor_torch.gt(0.0f);
-    cudaDeviceSynchronize();
-    auto torch_time = std::chrono::high_resolution_clock::now() - start;
-
-    std::cout << "Mask creation for " << size << " elements:\n";
-    std::cout << "  Custom: " << std::chrono::duration_cast<std::chrono::microseconds>(custom_time).count() << " μs\n";
-    std::cout << "  PyTorch: " << std::chrono::duration_cast<std::chrono::microseconds>(torch_time).count() << " μs\n";
-
-    // Verify results match (now they should since we use same input data)
-    compare_tensors(mask_custom, mask_torch, 1e-5f, 1e-7f, "PerformanceMask");
 }
 
 // ============= Extensive Boolean Expansion Tests =============

@@ -121,6 +121,8 @@ namespace lfs::diagnostics {
         std::size_t cuda_phase_malloc_heap = 0;
         std::size_t cuda_phase_curand_load = 0;
         std::size_t pinned_host_used = 0;
+        std::size_t pinned_host_cached = 0;
+        std::size_t pinned_host_peak = 0;
         // VK_EXT_memory_budget heap usage: the driver's estimate of the *whole
         // process* device heap (CUDA allocations, imported external blocks,
         // swap-chain, descriptor pools, driver internals) — NOT just VMA memory.
@@ -261,8 +263,11 @@ namespace lfs::diagnostics {
 
         void recordAllocation(void* ptr,
                               std::size_t bytes,
+                              VramAllocationMethod method);
+        void recordAllocation(void* ptr,
+                              std::size_t bytes,
                               VramAllocationMethod method,
-                              std::string_view label = {});
+                              std::string_view label);
         void recordDeallocation(void* ptr);
         void relabelAllocation(void* ptr, std::string_view label);
         void recordBytes(std::string_view scope,
@@ -290,7 +295,9 @@ namespace lfs::diagnostics {
         void addCounter(std::string_view key, std::uint64_t delta, bool per_iteration);
         void recordHistogram(std::string_view key, double value);
 
-        void setPinnedHostUsed(std::size_t bytes);
+        void setPinnedHostMemory(std::size_t active_bytes,
+                                 std::size_t cached_bytes,
+                                 std::size_t peak_bytes);
         void setVulkanVmaUsed(std::size_t bytes);
         void setVulkanVmaBlockBytes(std::size_t bytes);
         void setCudaPoolBucketCacheBytes(std::size_t bytes);

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/assert.hpp"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/kernels/l1_loss.cuh"
 #include <type_traits>
@@ -94,6 +95,10 @@ namespace lfs::training::kernels {
         float* temp_buffer,
         size_t N,
         cudaStream_t stream) {
+        LFS_ASSERT_MSG(img1 != nullptr && img2 != nullptr && grad_out != nullptr &&
+                           loss_out != nullptr && temp_buffer != nullptr,
+                       "Fused L1 loss pointers must be non-null");
+        LFS_ASSERT_MSG(N > 0, "Fused L1 loss requires at least one element");
         stream = resolve_stream(stream);
 
         const int block_size = 256;

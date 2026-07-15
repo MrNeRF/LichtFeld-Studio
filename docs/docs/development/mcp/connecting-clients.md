@@ -70,18 +70,12 @@ The repository's [`.mcp.json`](https://github.com/MrNeRF/LichtFeld-Studio/blob/m
 This path targets coding agents that operate inside a checkout of this repository. Current limitations to know about:
 
 - The bridge frames stdio messages with `Content-Length` headers. Clients that use spec-standard newline-delimited framing (including Claude Desktop) will hang; use `mcp-remote` or direct HTTP for those instead.
-- Auto-launch passes `--no-splash`, which portable builds (the released binaries) do not recognize, so the launched app exits immediately. Use a regular development build, or set `LICHTFELD_EXECUTABLE` to one.
+- Auto-launch passes `--no-splash`, which portable builds (the released binaries) do not recognize, so the launched app exits immediately. Use a regular development build, or set `LFS_EXECUTABLE` to one.
 
 See [issue #1399](https://github.com/MrNeRF/LichtFeld-Studio/issues/1399) for the status of these limitations.
 
-Bridge environment variables:
-
-| Variable | Default | Use |
-| --- | --- | --- |
-| `LICHTFELD_EXECUTABLE` | repo build directories | Explicit path to the app binary |
-| `LICHTFELD_MCP_ENDPOINT` | `http://127.0.0.1:45677/mcp` | Target endpoint |
-| `LICHTFELD_MCP_START_TIMEOUT_S` | `90` | Seconds to wait for the endpoint after launch |
-| `LICHTFELD_MCP_BRIDGE_LOG` | `~/.codex/log/lichtfeld-mcp-bridge.log` | Bridge and app log output |
+The bridge overrides are listed with the rest of the canonical environment
+surface in [Developer flags and diagnostics](../flags#mcp-bridge-variables).
 
 ## Verify the Connection
 

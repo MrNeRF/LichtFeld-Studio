@@ -6,7 +6,6 @@
     "args",
     "assimp",
     "boost-preprocessor",
-    "boost-regex",
     {
       "name": "ffmpeg",
       "features": [
@@ -19,7 +18,6 @@
     },
     "freetype",
     "glm",
-    "gtest",
     {
       "name": "imgui",
       "features": [
@@ -29,7 +27,15 @@
       ]
     },
     "implot",
-    "libarchive",
+    {
+      "name": "libarchive",
+      "default-features": false,
+      "features": [
+        "bzip2",
+        "lzma",
+        "zstd"
+      ]
+    },
     "libdeflate",
     "libwebp",
     "nanobind",
@@ -84,6 +90,14 @@
     "shader-slang",
     "usd"
   ],
+  "features": {
+    "tests": {
+      "description": "Dependencies used only by the C++ test targets",
+      "dependencies": [
+        "gtest"
+      ]
+    }
+  },
   "overrides": [
     {
       "name": "cppzmq",
@@ -99,10 +113,6 @@
     },
     {
       "name": "boost-preprocessor",
-      "version": "1.90.0#1"
-    },
-    {
-      "name": "boost-regex",
       "version": "1.90.0#1"
     },
     {

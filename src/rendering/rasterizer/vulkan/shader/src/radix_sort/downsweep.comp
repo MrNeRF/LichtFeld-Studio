@@ -35,15 +35,13 @@ layout (std430, binding = 5) writeonly buffer ValuesOut {
   uint32_t data[];  // (N)
 } valuesOut;
 
-#ifdef RADIX_SORT_COUNT_BUFFER
 layout (std430, binding = 6) readonly buffer SortCount {
   uint32_t elementCount;
 } sortCount;
-#endif
 
 layout (push_constant) uniform PushConstant {
   uint32_t pass;
-  uint32_t elementCount;
+  uint32_t pad0;
 } uniforms;
 
 const uint SHMEM_SIZE = PARTITION_SIZE;
@@ -94,12 +92,7 @@ void main() {
   uint partitionIndex = gl_WorkGroupID.x;
   uint partitionStart = partitionIndex * PARTITION_SIZE;
 
-  uint elementCount =
-#ifdef RADIX_SORT_COUNT_BUFFER
-      sortCount.elementCount;
-#else
-      uniforms.elementCount;
-#endif
+  uint elementCount = sortCount.elementCount;
   int pass = int(uniforms.pass);
 
   if (partitionStart >= elementCount) return;
@@ -249,6 +242,9 @@ void main() {
 
   for (uint i = index; i < PARTITION_SIZE; i += WORKGROUP_SIZE) {
     uint32_t value = localHistogram[i];
-    valuesOut.data[localOffsets1[i / WORKGROUP_SIZE]] = value;
+    uint32_t dstOffset = localOffsets1[i / WORKGROUP_SIZE];
+    if (dstOffset < elementCount) {
+      valuesOut.data[dstOffset] = value;
+    }
   }
 }

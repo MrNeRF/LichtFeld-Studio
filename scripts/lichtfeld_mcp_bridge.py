@@ -23,18 +23,18 @@ except ImportError:  # pragma: no cover - Windows fallback.
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_ENDPOINT = os.environ.get("LICHTFELD_MCP_ENDPOINT", "http://127.0.0.1:45677/mcp")
-DEFAULT_START_TIMEOUT_S = float(os.environ.get("LICHTFELD_MCP_START_TIMEOUT_S", "90"))
+DEFAULT_ENDPOINT = os.environ.get("LFS_MCP_ENDPOINT", "http://127.0.0.1:45677/mcp")
+DEFAULT_START_TIMEOUT_S = float(os.environ.get("LFS_MCP_START_TIMEOUT_S", "90"))
 START_POLL_INTERVAL_S = 0.5
 LOG_PATH = Path(
     os.environ.get(
-        "LICHTFELD_MCP_BRIDGE_LOG",
+        "LFS_MCP_BRIDGE_LOG",
         str(Path.home() / ".codex" / "log" / "lichtfeld-mcp-bridge.log"),
     )
 )
 LOCK_PATH = Path(
     os.environ.get(
-        "LICHTFELD_MCP_BRIDGE_LOCK",
+        "LFS_MCP_BRIDGE_LOCK",
         str(Path.home() / ".codex" / "log" / "lichtfeld-mcp-bridge.lock"),
     )
 )
@@ -67,7 +67,7 @@ def endpoint_ready() -> bool:
 
 
 def executable_candidates() -> list[Path]:
-    env_executable = os.environ.get("LICHTFELD_EXECUTABLE")
+    env_executable = os.environ.get("LFS_EXECUTABLE")
     candidates: list[Path] = []
     if env_executable:
         candidates.append(Path(env_executable).expanduser())
@@ -106,7 +106,7 @@ def pick_launch_command() -> list[str]:
             return [str(candidate), "--no-splash"]
     raise RuntimeError(
         "Could not find a LichtFeld Studio executable. "
-        "Set LICHTFELD_EXECUTABLE or build the app first."
+        "Set LFS_EXECUTABLE or build the app first."
     )
 
 

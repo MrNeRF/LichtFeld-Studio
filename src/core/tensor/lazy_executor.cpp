@@ -3,6 +3,7 @@
 
 #include "internal/lazy_executor.hpp"
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "internal/cuda_stream_context.hpp"
 #include "internal/lazy_config.hpp"
@@ -12,14 +13,10 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
-#include <cctype>
 #include <cmath>
-#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -44,7 +41,7 @@ namespace lfs::core::internal {
         struct PointwiseFusionRegistry {
             struct Entry {
                 uint64_t parent_node_id = 0;
-                Tensor source;
+                std::shared_ptr<Tensor> source;
                 std::vector<LazyPointwiseOp> ops;
                 std::weak_ptr<void> owner;
             };
@@ -70,8 +67,6 @@ namespace lfs::core::internal {
 
         struct LazyExecutorDebugDumpState {
             std::atomic<int> override_enabled{-1}; // -1 unset, 0 false, 1 true
-            std::atomic<bool> cached_env_enabled{false};
-            std::atomic<bool> has_cached_env_enabled{false};
         };
 
         struct LazyExecutorPointwiseFusionState {
@@ -110,10 +105,9 @@ namespace lfs::core::internal {
         struct LazyExecutorSizeHeuristicState {
             std::atomic<int> override_enabled{-1};       // -1 unset, 0 false, 1 true
             std::atomic<int64_t> override_threshold{-1}; // -1 unset
-            std::atomic<bool> has_cached_env{false};
-            std::atomic<bool> cached_enabled{true};
-            std::atomic<size_t> cached_threshold{4096};
         };
+
+        constexpr size_t kDefaultLazySizeThreshold = 4096;
 
         LazyExecutorMemoryPlannerState& lazy_executor_memory_planner_state() {
             static LazyExecutorMemoryPlannerState state;
@@ -143,40 +137,6 @@ namespace lfs::core::internal {
             LazyExecutorContext* previous_ = nullptr;
         };
 
-        std::string trim_ascii_lower(std::string_view value) {
-            size_t begin = 0;
-            while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin]))) {
-                ++begin;
-            }
-
-            size_t end = value.size();
-            while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
-                --end;
-            }
-
-            std::string result(value.substr(begin, end - begin));
-            std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            });
-            return result;
-        }
-
-        bool parse_debug_dump_bool(std::string_view value, bool fallback) {
-            const std::string normalized = trim_ascii_lower(value);
-            if (normalized.empty()) {
-                return fallback;
-            }
-            if (normalized == "1" || normalized == "true" || normalized == "yes" ||
-                normalized == "on" || normalized == "enable" || normalized == "enabled") {
-                return true;
-            }
-            if (normalized == "0" || normalized == "false" || normalized == "no" ||
-                normalized == "off" || normalized == "disable" || normalized == "disabled") {
-                return false;
-            }
-            return fallback;
-        }
-
         bool lazy_executor_debug_dump_enabled() {
             auto& state = lazy_executor_debug_dump_state();
             const int override_enabled = state.override_enabled.load(std::memory_order_acquire);
@@ -184,13 +144,7 @@ namespace lfs::core::internal {
                 return override_enabled == 1;
             }
 
-            if (!state.has_cached_env_enabled.load(std::memory_order_acquire)) {
-                const char* env = std::getenv("TENSOR_LAZY_EXEC_DIAGNOSTICS");
-                const bool enabled = env ? parse_debug_dump_bool(env, false) : false;
-                state.cached_env_enabled.store(enabled, std::memory_order_release);
-                state.has_cached_env_enabled.store(true, std::memory_order_release);
-            }
-            return state.cached_env_enabled.load(std::memory_order_acquire);
+            return false;
         }
 
         bool lazy_executor_pointwise_fusion_enabled() {
@@ -350,7 +304,7 @@ namespace lfs::core::internal {
 
         struct PointwiseFusionRecipe {
             uint64_t parent_node_id = 0;
-            Tensor source;
+            std::shared_ptr<Tensor> source;
             std::vector<LazyPointwiseOp> ops;
         };
 
@@ -413,15 +367,6 @@ namespace lfs::core::internal {
             return internal_nodes;
         }
 
-        bool is_pure_scalar_chain(const std::vector<LazyPointwiseOp>& ops) {
-            for (const auto& op : ops) {
-                if (static_cast<uint8_t>(op.kind) >= 10) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
         float apply_pointwise_op_cpu(float x, LazyPointwiseOpKind kind, float scalar) {
             switch (kind) {
             case LazyPointwiseOpKind::AddScalar: return x + scalar;
@@ -431,57 +376,21 @@ namespace lfs::core::internal {
             case LazyPointwiseOpKind::Abs: return std::abs(x);
             case LazyPointwiseOpKind::Neg: return -x;
             case LazyPointwiseOpKind::Exp: return std::exp(x);
-            case LazyPointwiseOpKind::Log: return std::log(std::max(x, 1e-10f));
-            case LazyPointwiseOpKind::Sqrt: return std::sqrt(std::max(x, 0.0f));
+            case LazyPointwiseOpKind::Log: return std::log(x);
+            case LazyPointwiseOpKind::Sqrt: return std::sqrt(x);
             case LazyPointwiseOpKind::Sigmoid: return 1.0f / (1.0f + std::exp(-x));
-            case LazyPointwiseOpKind::Relu: return std::max(x, 0.0f);
+            case LazyPointwiseOpKind::Relu:
+                return std::isnan(x) ? x : std::max(x, 0.0f);
             case LazyPointwiseOpKind::Square: return x * x;
             case LazyPointwiseOpKind::Tanh: return std::tanh(x);
-            case LazyPointwiseOpKind::Rsqrt: return 1.0f / std::sqrt(std::max(x, 1e-10f));
+            case LazyPointwiseOpKind::Rsqrt: return 1.0f / std::sqrt(x);
             case LazyPointwiseOpKind::Sign: return float((x > 0) - (x < 0));
-            case LazyPointwiseOpKind::Reciprocal: return 1.0f / (x + 1e-8f);
+            case LazyPointwiseOpKind::Reciprocal: return 1.0f / x;
             case LazyPointwiseOpKind::Floor: return std::floor(x);
             case LazyPointwiseOpKind::Ceil: return std::ceil(x);
-            case LazyPointwiseOpKind::Round: return std::round(x);
+            case LazyPointwiseOpKind::Round: return ops::round_op{}(x);
             }
             return x;
-        }
-
-        struct AffineCoeffs {
-            float a = 1.0f;
-            float b = 0.0f;
-        };
-
-        AffineCoeffs fold_affine(const std::vector<LazyPointwiseOp>& ops) {
-            float a = 1.0f;
-            float b = 0.0f;
-            for (const auto& op : ops) {
-                switch (op.kind) {
-                case LazyPointwiseOpKind::AddScalar:
-                    b += op.scalar;
-                    break;
-                case LazyPointwiseOpKind::SubScalar:
-                    b -= op.scalar;
-                    break;
-                case LazyPointwiseOpKind::MulScalar:
-                    a *= op.scalar;
-                    b *= op.scalar;
-                    break;
-                case LazyPointwiseOpKind::DivScalar:
-                    a /= op.scalar;
-                    b /= op.scalar;
-                    break;
-                }
-            }
-            return {a, b};
-        }
-
-        cudaStream_t resolve_pointwise_execution_stream(const Tensor& source) {
-            cudaStream_t execution_stream = getCurrentCUDAStream();
-            if (execution_stream == nullptr && source.device() == Device::CUDA) {
-                execution_stream = source.stream();
-            }
-            return execution_stream;
         }
 
         bool execute_pointwise_fusion_recipe(const PointwiseFusionRecipe& recipe, Tensor& materialized) {
@@ -493,7 +402,10 @@ namespace lfs::core::internal {
                 return false;
             }
 
-            Tensor source = recipe.source;
+            if (!recipe.source) {
+                return false;
+            }
+            Tensor source = *recipe.source;
             if (!source.is_valid() ||
                 source.dtype() != DataType::Float32 ||
                 !source.is_contiguous()) {
@@ -501,40 +413,6 @@ namespace lfs::core::internal {
             }
 
             const size_t n = source.numel();
-            const bool pure_scalar = is_pure_scalar_chain(recipe.ops);
-
-            if (pure_scalar) {
-                const auto [a, b] = fold_affine(recipe.ops);
-
-                if (source.device() == Device::CUDA) {
-                    const float* in_ptr = source.ptr<float>();
-                    assert(in_ptr != nullptr);
-                    const cudaStream_t execution_stream = resolve_pointwise_execution_stream(source);
-                    source.sync_to_stream(execution_stream);
-                    CUDAStreamGuard guard(execution_stream);
-                    Tensor out = Tensor::empty(source.shape(), Device::CUDA, DataType::Float32);
-                    float* out_ptr = out.ptr<float>();
-                    assert(out_ptr != nullptr);
-                    tensor_ops::launch_fused_affine_transform(in_ptr, out_ptr, n, a, b, out.stream());
-                    materialized = std::move(out);
-                    return true;
-                }
-
-                const float* in_ptr = source.ptr<float>();
-                if (in_ptr == nullptr)
-                    return false;
-                Tensor out = Tensor::empty(source.shape(), Device::CPU, DataType::Float32);
-                float* out_ptr = out.ptr<float>();
-                if (out_ptr == nullptr)
-                    return false;
-                for (size_t i = 0; i < n; ++i) {
-                    out_ptr[i] = std::fma(a, in_ptr[i], b);
-                }
-                materialized = std::move(out);
-                return materialized.is_valid();
-            }
-
-            // Mixed chain: build op chain and dispatch
             tensor_ops::FusedPointwiseOpChain chain{};
             chain.num_ops = static_cast<int>(recipe.ops.size());
             for (int i = 0; i < chain.num_ops; ++i) {
@@ -545,8 +423,7 @@ namespace lfs::core::internal {
             if (source.device() == Device::CUDA) {
                 const float* in_ptr = source.ptr<float>();
                 assert(in_ptr != nullptr);
-                const cudaStream_t execution_stream = resolve_pointwise_execution_stream(source);
-                source.sync_to_stream(execution_stream);
+                const cudaStream_t execution_stream = prepare_inputs_for_stream({&source});
                 CUDAStreamGuard guard(execution_stream);
                 Tensor out = Tensor::empty(source.shape(), Device::CUDA, DataType::Float32);
                 float* out_ptr = out.ptr<float>();
@@ -675,6 +552,10 @@ namespace lfs::core::internal {
                            static_cast<uint64_t>(registry.by_node_id.size()));
     }
 
+    std::shared_ptr<Tensor> lazy_executor_snapshot_operand(const Tensor& source) {
+        return source.create_lazy_snapshot();
+    }
+
     void lazy_executor_register_pointwise_fusion_op(uint64_t node_id,
                                                     uint64_t parent_node_id,
                                                     const Tensor& source_tensor,
@@ -701,8 +582,8 @@ namespace lfs::core::internal {
                 entry.ops = parent_it->second.ops;
             }
         }
-        if (!entry.source.is_valid()) {
-            entry.source = source_tensor;
+        if (!entry.source || !entry.source->is_valid()) {
+            entry.source = lazy_executor_snapshot_operand(source_tensor);
         }
         entry.ops.push_back(op);
         registry.by_node_id[node_id] = std::move(entry);
@@ -916,12 +797,6 @@ namespace lfs::core::internal {
         state.override_enabled.store(-1, std::memory_order_release);
     }
 
-    void lazy_executor_clear_debug_dump_cache_for_testing() {
-        auto& state = lazy_executor_debug_dump_state();
-        state.cached_env_enabled.store(false, std::memory_order_release);
-        state.has_cached_env_enabled.store(false, std::memory_order_release);
-    }
-
     bool lazy_executor_debug_dump_enabled_for_testing() {
         return lazy_executor_debug_dump_enabled();
     }
@@ -986,29 +861,7 @@ namespace lfs::core::internal {
             return static_cast<size_t>(override_threshold);
         }
 
-        if (!state.has_cached_env.load(std::memory_order_acquire)) {
-            const char* env_threshold = std::getenv("TENSOR_LAZY_SIZE_THRESHOLD");
-            if (env_threshold) {
-                const std::string normalized = trim_ascii_lower(env_threshold);
-                if (!normalized.empty()) {
-                    char* end = nullptr;
-                    const unsigned long parsed = std::strtoul(normalized.c_str(), &end, 10);
-                    if (end != normalized.c_str() && parsed > 0) {
-                        state.cached_threshold.store(static_cast<size_t>(parsed), std::memory_order_release);
-                    }
-                }
-            }
-
-            const char* env_enabled = std::getenv("TENSOR_LAZY_SIZE_HEURISTIC");
-            if (env_enabled) {
-                state.cached_enabled.store(
-                    parse_debug_dump_bool(env_enabled, true), std::memory_order_release);
-            }
-
-            state.has_cached_env.store(true, std::memory_order_release);
-        }
-
-        return state.cached_threshold.load(std::memory_order_acquire);
+        return kDefaultLazySizeThreshold;
     }
 
     bool lazy_size_heuristic_should_defer(size_t byte_count) {
@@ -1016,19 +869,6 @@ namespace lfs::core::internal {
 
         const int override_enabled = state.override_enabled.load(std::memory_order_acquire);
         if (override_enabled == 0) {
-            return true;
-        }
-
-        bool enabled;
-        if (override_enabled == 1) {
-            enabled = true;
-        } else {
-            // Trigger env caching via threshold() call
-            lazy_executor_size_heuristic_threshold();
-            enabled = state.cached_enabled.load(std::memory_order_acquire);
-        }
-
-        if (!enabled) {
             return true;
         }
 
@@ -1053,7 +893,11 @@ namespace lfs::core::internal {
             return false;
         }
 
-        *out_source = std::move(it->second.source);
+        if (!it->second.source) {
+            registry.by_node_id.erase(it);
+            return false;
+        }
+        *out_source = *it->second.source;
         *out_ops = std::move(it->second.ops);
         registry.by_node_id.erase(it);
         return true;

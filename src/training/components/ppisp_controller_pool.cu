@@ -31,6 +31,7 @@ namespace lfs::training {
         constexpr int CNN_FLAT_DIM = 1600;
         constexpr int POOL2_SIZE = 5;
         constexpr int POOL_STRIDE = 3;
+        constexpr int MAX_CHECKPOINT_CAMERAS = 100'000;
 
         lfs::core::Tensor kaiming_uniform(const size_t fan_in, const size_t fan_out) {
             const float bound = std::sqrt(6.0f / static_cast<float>(fan_in));
@@ -83,6 +84,9 @@ namespace lfs::training {
         }
 
     } // namespace
+
+    PPISPControllerPool::PPISPControllerPool(const int num_cameras, const int total_iterations)
+        : PPISPControllerPool(num_cameras, total_iterations, Config{}) {}
 
     PPISPControllerPool::PPISPControllerPool(const int num_cameras, const int total_iterations, Config config)
         : num_cameras_(num_cameras),
@@ -380,74 +384,164 @@ namespace lfs::training {
     }
 
     void PPISPControllerPool::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        parse_checkpoint(is, this);
+    }
+
+    void PPISPControllerPool::consume_checkpoint(std::istream& is) {
+        parse_checkpoint(is, nullptr);
+    }
+
+    void PPISPControllerPool::parse_checkpoint(std::istream& is, PPISPControllerPool* destination) {
+        uint32_t magic = 0;
+        uint32_t version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "PPISP controller magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "PPISP controller version");
 
         if (magic != CHECKPOINT_MAGIC)
             throw std::runtime_error("Invalid PPISPControllerPool checkpoint");
         if (version != CHECKPOINT_VERSION)
             throw std::runtime_error("Unsupported PPISPControllerPool checkpoint version");
 
-        int saved_num_cameras;
-        is.read(reinterpret_cast<char*>(&saved_num_cameras), sizeof(saved_num_cameras));
-        if (saved_num_cameras != num_cameras_)
+        int saved_num_cameras = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &saved_num_cameras, sizeof(saved_num_cameras), "PPISP controller camera count");
+        if (saved_num_cameras <= 0 || saved_num_cameras > MAX_CHECKPOINT_CAMERAS)
+            throw std::runtime_error("Invalid PPISPControllerPool checkpoint camera count");
+        if (destination && saved_num_cameras != destination->num_cameras_)
             throw std::runtime_error("Camera count mismatch in checkpoint");
 
-        is.read(reinterpret_cast<char*>(&total_iterations_), sizeof(total_iterations_));
-        is.read(reinterpret_cast<char*>(&config_), sizeof(config_));
-        is.read(reinterpret_cast<char*>(&step_), sizeof(step_));
-        is.read(reinterpret_cast<char*>(&current_lr_), sizeof(current_lr_));
-        is.read(reinterpret_cast<char*>(&initial_lr_), sizeof(initial_lr_));
-
-        // Shared CNN
-        is >> conv1_w_ >> conv1_b_ >> conv2_w_ >> conv2_b_ >> conv3_w_ >> conv3_b_;
-        conv1_w_ = conv1_w_.cuda();
-        conv1_b_ = conv1_b_.cuda();
-        conv2_w_ = conv2_w_.cuda();
-        conv2_b_ = conv2_b_.cuda();
-        conv3_w_ = conv3_w_.cuda();
-        conv3_b_ = conv3_b_.cuda();
-
-        // Per-camera FC weights
-        for (int i = 0; i < num_cameras_; ++i) {
-            is >> fc1_w_[i] >> fc1_b_[i];
-            is >> fc2_w_[i] >> fc2_b_[i];
-            is >> fc3_w_[i] >> fc3_b_[i];
-            is >> fc4_w_[i] >> fc4_b_[i];
-
-            fc1_w_[i] = fc1_w_[i].cuda();
-            fc1_b_[i] = fc1_b_[i].cuda();
-            fc2_w_[i] = fc2_w_[i].cuda();
-            fc2_b_[i] = fc2_b_[i].cuda();
-            fc3_w_[i] = fc3_w_[i].cuda();
-            fc3_b_[i] = fc3_b_[i].cuda();
-            fc4_w_[i] = fc4_w_[i].cuda();
-            fc4_b_[i] = fc4_b_[i].cuda();
+        int total_iterations = 0;
+        Config config{};
+        int64_t step = 0;
+        double current_lr = 0.0;
+        double initial_lr = 0.0;
+        lfs::core::serialization_detail::read_exact(
+            is, &total_iterations, sizeof(total_iterations), "PPISP controller iteration count");
+        lfs::core::serialization_detail::read_exact(is, &config, sizeof(config), "PPISP controller configuration");
+        lfs::core::serialization_detail::read_exact(is, &step, sizeof(step), "PPISP controller step");
+        lfs::core::serialization_detail::read_exact(
+            is, &current_lr, sizeof(current_lr), "PPISP controller learning rate");
+        lfs::core::serialization_detail::read_exact(
+            is, &initial_lr, sizeof(initial_lr), "PPISP controller initial learning rate");
+        if (total_iterations <= 0 || step < 0 ||
+            !std::isfinite(current_lr) || current_lr < 0.0 ||
+            !std::isfinite(initial_lr) || initial_lr < 0.0 ||
+            !std::isfinite(config.lr) || config.lr < 0.0 ||
+            !std::isfinite(config.beta1) || config.beta1 < 0.0 || config.beta1 >= 1.0 ||
+            !std::isfinite(config.beta2) || config.beta2 < 0.0 || config.beta2 >= 1.0 ||
+            !std::isfinite(config.eps) || config.eps <= 0.0 || config.warmup_steps < 0 ||
+            !std::isfinite(config.warmup_start_factor) || config.warmup_start_factor < 0.0 ||
+            !std::isfinite(config.final_lr_factor) || config.final_lr_factor <= 0.0) {
+            throw std::runtime_error("Invalid PPISPControllerPool checkpoint state");
         }
 
-        // Shared Adam state
-        is >> fc1_w_m_ >> fc1_w_v_ >> fc1_b_m_ >> fc1_b_v_;
-        is >> fc2_w_m_ >> fc2_w_v_ >> fc2_b_m_ >> fc2_b_v_;
-        is >> fc3_w_m_ >> fc3_w_v_ >> fc3_b_m_ >> fc3_b_v_;
-        is >> fc4_w_m_ >> fc4_w_v_ >> fc4_b_m_ >> fc4_b_v_;
+        const auto read_tensor = [&is](lfs::core::Tensor* output,
+                                       const lfs::core::TensorShape& shape,
+                                       const std::string_view name) {
+            lfs::core::Tensor tensor;
+            is >> tensor;
+            if (!tensor.is_valid() || tensor.dtype() != lfs::core::DataType::Float32 || tensor.shape() != shape)
+                throw std::runtime_error("Invalid PPISPControllerPool tensor: " + std::string(name));
+            if (output)
+                *output = tensor.cuda();
+        };
 
-        fc1_w_m_ = fc1_w_m_.cuda();
-        fc1_w_v_ = fc1_w_v_.cuda();
-        fc1_b_m_ = fc1_b_m_.cuda();
-        fc1_b_v_ = fc1_b_v_.cuda();
-        fc2_w_m_ = fc2_w_m_.cuda();
-        fc2_w_v_ = fc2_w_v_.cuda();
-        fc2_b_m_ = fc2_b_m_.cuda();
-        fc2_b_v_ = fc2_b_v_.cuda();
-        fc3_w_m_ = fc3_w_m_.cuda();
-        fc3_w_v_ = fc3_w_v_.cuda();
-        fc3_b_m_ = fc3_b_m_.cuda();
-        fc3_b_v_ = fc3_b_v_.cuda();
-        fc4_w_m_ = fc4_w_m_.cuda();
-        fc4_w_v_ = fc4_w_v_.cuda();
-        fc4_b_m_ = fc4_b_m_.cuda();
-        fc4_b_v_ = fc4_b_v_.cuda();
+        read_tensor(destination ? &destination->conv1_w_ : nullptr, {CNN_CH1, 3}, "conv1 weights");
+        read_tensor(destination ? &destination->conv1_b_ : nullptr, {CNN_CH1}, "conv1 bias");
+        read_tensor(destination ? &destination->conv2_w_ : nullptr, {CNN_CH2, CNN_CH1}, "conv2 weights");
+        read_tensor(destination ? &destination->conv2_b_ : nullptr, {CNN_CH2}, "conv2 bias");
+        read_tensor(destination ? &destination->conv3_w_ : nullptr, {CNN_CH3, CNN_CH2}, "conv3 weights");
+        read_tensor(destination ? &destination->conv3_b_ : nullptr, {CNN_CH3}, "conv3 bias");
+
+        for (int camera = 0; camera < saved_num_cameras; ++camera) {
+            read_tensor(destination ? &destination->fc1_w_[camera] : nullptr,
+                        {FC_HIDDEN_DIM, FC1_INPUT_DIM}, "fc1 weights");
+            read_tensor(destination ? &destination->fc1_b_[camera] : nullptr, {FC_HIDDEN_DIM}, "fc1 bias");
+            read_tensor(destination ? &destination->fc2_w_[camera] : nullptr,
+                        {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc2 weights");
+            read_tensor(destination ? &destination->fc2_b_[camera] : nullptr, {FC_HIDDEN_DIM}, "fc2 bias");
+            read_tensor(destination ? &destination->fc3_w_[camera] : nullptr,
+                        {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc3 weights");
+            read_tensor(destination ? &destination->fc3_b_[camera] : nullptr, {FC_HIDDEN_DIM}, "fc3 bias");
+            read_tensor(destination ? &destination->fc4_w_[camera] : nullptr,
+                        {FC_OUTPUT_DIM, FC_HIDDEN_DIM}, "fc4 weights");
+            read_tensor(destination ? &destination->fc4_b_[camera] : nullptr, {FC_OUTPUT_DIM}, "fc4 bias");
+        }
+
+        read_tensor(destination ? &destination->fc1_w_m_ : nullptr,
+                    {FC_HIDDEN_DIM, FC1_INPUT_DIM}, "fc1 first moment");
+        read_tensor(destination ? &destination->fc1_w_v_ : nullptr,
+                    {FC_HIDDEN_DIM, FC1_INPUT_DIM}, "fc1 second moment");
+        read_tensor(destination ? &destination->fc1_b_m_ : nullptr, {FC_HIDDEN_DIM}, "fc1 bias first moment");
+        read_tensor(destination ? &destination->fc1_b_v_ : nullptr, {FC_HIDDEN_DIM}, "fc1 bias second moment");
+        read_tensor(destination ? &destination->fc2_w_m_ : nullptr,
+                    {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc2 first moment");
+        read_tensor(destination ? &destination->fc2_w_v_ : nullptr,
+                    {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc2 second moment");
+        read_tensor(destination ? &destination->fc2_b_m_ : nullptr, {FC_HIDDEN_DIM}, "fc2 bias first moment");
+        read_tensor(destination ? &destination->fc2_b_v_ : nullptr, {FC_HIDDEN_DIM}, "fc2 bias second moment");
+        read_tensor(destination ? &destination->fc3_w_m_ : nullptr,
+                    {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc3 first moment");
+        read_tensor(destination ? &destination->fc3_w_v_ : nullptr,
+                    {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc3 second moment");
+        read_tensor(destination ? &destination->fc3_b_m_ : nullptr, {FC_HIDDEN_DIM}, "fc3 bias first moment");
+        read_tensor(destination ? &destination->fc3_b_v_ : nullptr, {FC_HIDDEN_DIM}, "fc3 bias second moment");
+        read_tensor(destination ? &destination->fc4_w_m_ : nullptr,
+                    {FC_OUTPUT_DIM, FC_HIDDEN_DIM}, "fc4 first moment");
+        read_tensor(destination ? &destination->fc4_w_v_ : nullptr,
+                    {FC_OUTPUT_DIM, FC_HIDDEN_DIM}, "fc4 second moment");
+        read_tensor(destination ? &destination->fc4_b_m_ : nullptr, {FC_OUTPUT_DIM}, "fc4 bias first moment");
+        read_tensor(destination ? &destination->fc4_b_v_ : nullptr, {FC_OUTPUT_DIM}, "fc4 bias second moment");
+
+        if (destination) {
+            destination->total_iterations_ = total_iterations;
+            destination->config_ = std::move(config);
+            destination->step_ = step;
+            destination->current_lr_ = current_lr;
+            destination->initial_lr_ = initial_lr;
+        }
+    }
+
+    void PPISPControllerPool::adopt_checkpoint_state(PPISPControllerPool& loaded) noexcept {
+        if (num_cameras_ != loaded.num_cameras_)
+            return;
+
+        std::swap(total_iterations_, loaded.total_iterations_);
+        std::swap(config_, loaded.config_);
+        std::swap(step_, loaded.step_);
+        std::swap(current_lr_, loaded.current_lr_);
+        std::swap(initial_lr_, loaded.initial_lr_);
+        std::swap(conv1_w_, loaded.conv1_w_);
+        std::swap(conv1_b_, loaded.conv1_b_);
+        std::swap(conv2_w_, loaded.conv2_w_);
+        std::swap(conv2_b_, loaded.conv2_b_);
+        std::swap(conv3_w_, loaded.conv3_w_);
+        std::swap(conv3_b_, loaded.conv3_b_);
+        fc1_w_.swap(loaded.fc1_w_);
+        fc1_b_.swap(loaded.fc1_b_);
+        fc2_w_.swap(loaded.fc2_w_);
+        fc2_b_.swap(loaded.fc2_b_);
+        fc3_w_.swap(loaded.fc3_w_);
+        fc3_b_.swap(loaded.fc3_b_);
+        fc4_w_.swap(loaded.fc4_w_);
+        fc4_b_.swap(loaded.fc4_b_);
+        std::swap(fc1_w_m_, loaded.fc1_w_m_);
+        std::swap(fc1_w_v_, loaded.fc1_w_v_);
+        std::swap(fc1_b_m_, loaded.fc1_b_m_);
+        std::swap(fc1_b_v_, loaded.fc1_b_v_);
+        std::swap(fc2_w_m_, loaded.fc2_w_m_);
+        std::swap(fc2_w_v_, loaded.fc2_w_v_);
+        std::swap(fc2_b_m_, loaded.fc2_b_m_);
+        std::swap(fc2_b_v_, loaded.fc2_b_v_);
+        std::swap(fc3_w_m_, loaded.fc3_w_m_);
+        std::swap(fc3_w_v_, loaded.fc3_w_v_);
+        std::swap(fc3_b_m_, loaded.fc3_b_m_);
+        std::swap(fc3_b_v_, loaded.fc3_b_v_);
+        std::swap(fc4_w_m_, loaded.fc4_w_m_);
+        std::swap(fc4_w_v_, loaded.fc4_w_v_);
+        std::swap(fc4_b_m_, loaded.fc4_b_m_);
+        std::swap(fc4_b_v_, loaded.fc4_b_v_);
+        last_predict_camera_ = -1;
     }
 
     void PPISPControllerPool::serialize_inference(std::ostream& os) const {

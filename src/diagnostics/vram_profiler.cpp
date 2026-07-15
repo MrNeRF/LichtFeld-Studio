@@ -308,6 +308,8 @@ namespace lfs::diagnostics {
         std::unordered_map<std::string, ScopeNodeStats> scope_nodes;
         VramProcessSnapshot process;
         std::size_t pinned_host_used = 0;
+        std::size_t pinned_host_cached = 0;
+        std::size_t pinned_host_peak = 0;
         std::size_t vulkan_vma_used = 0;
         std::size_t vulkan_vma_block_bytes = 0;
         std::size_t exportable_splat_bytes = 0;
@@ -382,6 +384,8 @@ namespace lfs::diagnostics {
             impl_->iter_window_count = 0;
             impl_->accounted_history.clear();
             impl_->pinned_host_used = 0;
+            impl_->pinned_host_cached = 0;
+            impl_->pinned_host_peak = 0;
             impl_->vulkan_vma_used = 0;
             impl_->vulkan_vma_block_bytes = 0;
             impl_->exportable_splat_bytes = 0;
@@ -616,6 +620,12 @@ namespace lfs::diagnostics {
             node.max_vram_decrease_bytes = std::min(node.max_vram_decrease_bytes, delta);
             impl_->sequence.fetch_add(1, std::memory_order_relaxed);
         }
+    }
+
+    void VramProfiler::recordAllocation(void* ptr,
+                                        const std::size_t bytes,
+                                        const VramAllocationMethod method) {
+        recordAllocation(ptr, bytes, method, {});
     }
 
     void VramProfiler::recordAllocation(void* ptr,
@@ -956,10 +966,16 @@ namespace lfs::diagnostics {
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
-    void VramProfiler::setPinnedHostUsed(const std::size_t bytes) {
+    void VramProfiler::setPinnedHostMemory(const std::size_t active_bytes,
+                                           const std::size_t cached_bytes,
+                                           const std::size_t peak_bytes) {
         std::lock_guard lock(impl_->mutex);
-        impl_->pinned_host_used = bytes;
-        impl_->process.pinned_host_used = bytes;
+        impl_->pinned_host_used = active_bytes;
+        impl_->pinned_host_cached = cached_bytes;
+        impl_->pinned_host_peak = peak_bytes;
+        impl_->process.pinned_host_used = active_bytes;
+        impl_->process.pinned_host_cached = cached_bytes;
+        impl_->process.pinned_host_peak = peak_bytes;
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -1133,6 +1149,8 @@ namespace lfs::diagnostics {
                         : 0;
             }
             process.pinned_host_used = impl_->pinned_host_used;
+            process.pinned_host_cached = impl_->pinned_host_cached;
+            process.pinned_host_peak = impl_->pinned_host_peak;
             process.vulkan_vma_used = impl_->vulkan_vma_used;
             process.vulkan_vma_block_bytes = impl_->vulkan_vma_block_bytes;
             process.cuda_pool_bucket_cache_bytes =

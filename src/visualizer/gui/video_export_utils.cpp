@@ -179,15 +179,8 @@ namespace lfs::vis::gui {
 
     std::expected<lfs::io::video::VideoExportOptions, std::string> validateVideoExportOptions(
         lfs::io::video::VideoExportOptions options) {
-        if (options.width <= 0 || options.height <= 0) {
-            return std::unexpected("Video export width and height must be positive");
-        }
-        if (options.framerate <= 0) {
-            return std::unexpected("Video export framerate must be positive");
-        }
-        if (options.crf < 0 || options.crf > 51) {
-            return std::unexpected("Video export CRF must be between 0 and 51");
-        }
+        if (const auto validation = lfs::io::video::validateVideoEncodingOptions(options); !validation)
+            return std::unexpected(validation.error());
         return options;
     }
 

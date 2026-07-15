@@ -2,6 +2,7 @@
 
 #include "gs_pipeline.h"
 
+#include "indirect_layout.h"
 #include "perf_timer.h"
 
 #include <cstdint>
@@ -141,9 +142,10 @@ public:
         size_t raw_count = 0;     // unclamped emit total; > visible_count means clamping
         size_t num_splats = 0;
     };
-    struct MacroInstanceStats {
+    struct TileInstanceStats {
         size_t instance_count = 0; // clamped to the frame's capacity
         size_t raw_count = 0;      // unclamped; > capacity means the frame clamped
+        bool count_overflow = false;
     };
     struct LodSelectionStats {
         size_t candidate_count = 0;
@@ -159,7 +161,7 @@ public:
     };
 
     VulkanGSRenderer();
-    ~VulkanGSRenderer();
+    ~VulkanGSRenderer() noexcept;
 
     void initializeExternal(const std::map<std::string, std::string>& spirv_paths,
                             VkInstance external_instance,
@@ -176,7 +178,7 @@ public:
     void tagDeferredInstanceCountReadback(VkSemaphore semaphore, std::uint64_t value);
     [[nodiscard]] std::optional<PrimitiveVisibilityStats> pollDeferredPrimitiveVisibilityStats();
     [[nodiscard]] std::optional<LodSelectionStats> pollDeferredLodSelectionStats();
-    [[nodiscard]] std::optional<MacroInstanceStats> pollDeferredMacroInstanceStats();
+    [[nodiscard]] std::optional<TileInstanceStats> pollDeferredTileInstanceStats();
     [[nodiscard]] bool shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buffers,
                                                     size_t target_capacity,
                                                     size_t visible_capacity);
@@ -250,10 +252,8 @@ public:
                                    const _VulkanBuffer& overlay_params,
                                    bool overlays_active);
     [[nodiscard]] bool supportsFloat16Storage() const { return supports_float16_storage_; }
-    // Indirect visible-bounded cumsum of tiles_touched_depth_ordered, then
-    // prepare_tile_sort_visible, then a synchronous tile-instance count read
-    // (same single sync point the N-wide path pays in
-    // executeCalculateIndexBufferOffset).
+    // Indirect visible-bounded cumsum of tiles_touched_depth_ordered followed
+    // by GPU count/dispatch preparation and deferred count readback.
     void executeCalculateIndexBufferOffsetVisible(const VulkanGSRendererUniforms& uniforms,
                                                   VulkanGSPipelineBuffers& buffers,
                                                   size_t visible_capacity,
@@ -272,8 +272,12 @@ public:
                                    const _VulkanBuffer& page_age,
                                    const _VulkanBuffer& page_frames,
                                    const _VulkanBuffer& page_to_chunk);
-    void executeGenerateKeys(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
-    void executeComputeTileRanges(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
+    void executeGenerateKeys(const VulkanGSRendererUniforms& uniforms,
+                             VulkanGSPipelineBuffers& buffers,
+                             size_t instance_capacity);
+    void executeComputeTileRanges(const VulkanGSRendererUniforms& uniforms,
+                                  VulkanGSPipelineBuffers& buffers,
+                                  size_t instance_capacity);
     void executeRasterizeForward(const VulkanGSRendererUniforms& uniforms,
                                  VulkanGSPipelineBuffers& buffers,
                                  const _VulkanBuffer& selection_mask,
@@ -306,10 +310,8 @@ public:
                                           const _VulkanBuffer& polygon_mask);
 
     void executeCalculateIndexBufferOffset(const VulkanGSRendererUniforms& uniforms,
-                                           VulkanGSPipelineBuffers& buffers);
-    // num_elements_override < 0 → use buffers.unsorted_keys().deviceSize().
-    void executeSort(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers,
-                     int num_bits, int64_t num_elements_override = -1);
+                                           VulkanGSPipelineBuffers& buffers,
+                                           size_t instance_capacity);
     void executeSortTileInstances(const VulkanGSRendererUniforms& uniforms,
                                   VulkanGSPipelineBuffers& buffers,
                                   int num_bits,
@@ -338,16 +340,21 @@ protected:
                                   int num_bits,
                                   const _VulkanBuffer& count_buffer,
                                   const _VulkanBuffer& dispatch_args_buffer,
-                                  size_t capacity);
+                                  size_t capacity,
+                                  const lfs::rendering::vulkan::indirect_layout::Layout& dispatch_layout,
+                                  size_t radix_word_offset);
     void executeSortIndirectCountImpl(const VulkanGSRendererUniforms& uniforms,
                                       VulkanGSPipelineBuffers& buffers,
                                       int num_bits,
                                       const _VulkanBuffer& count_buffer,
                                       const _VulkanBuffer& dispatch_args_buffer,
                                       size_t capacity,
+                                      const lfs::rendering::vulkan::indirect_layout::Layout& dispatch_layout,
+                                      size_t radix_word_offset,
                                       const char* cpu_timer_prefix);
     void executePrepareTileSort(const VulkanGSRendererUniforms& uniforms,
-                                VulkanGSPipelineBuffers& buffers);
+                                VulkanGSPipelineBuffers& buffers,
+                                size_t instance_capacity);
     void executeBatchedRasterizeForward(const VulkanGSRendererUniforms& uniforms,
                                         VulkanGSPipelineBuffers& buffers,
                                         const _VulkanBuffer& selection_mask,
@@ -396,8 +403,8 @@ protected:
     _ComputePipeline pipeline_macro_coverage = _ComputePipeline(6);
     _ComputePipeline pipeline_generate_macro_keys = _ComputePipeline(8);
     _ComputePipeline pipeline_compute_macro_ranges[2] = {
-        _ComputePipeline(4),
-        _ComputePipeline(4)};
+        _ComputePipeline(3),
+        _ComputePipeline(3)};
     _ComputePipeline pipeline_macro_batch_counts = _ComputePipeline(2);
     _ComputePipeline pipeline_macro_batch_prepare = _ComputePipeline(2);
     _ComputePipelinePair pipeline_macro_raster = _ComputePipelinePair(8);
@@ -406,7 +413,7 @@ protected:
     _ComputePipelinePair pipeline_macro_compose = _ComputePipelinePair(12);
     _ComputePipelinePair pipeline_macro_compose_overlays = _ComputePipelinePair(18);
     bool supports_float16_storage_ = false;
-    // 3 bindings: sorted_keys, out_tile_ranges, index_buffer_offset (for num_isects).
+    // 3 bindings: sorted_keys, out_tile_ranges, GPU tile-instance count.
     _ComputePipeline pipeline_compute_tile_ranges[2] = {
         _ComputePipeline(3),
         _ComputePipeline(3)};
@@ -429,11 +436,6 @@ protected:
         _ComputePipeline scan_block_sums = _ComputePipeline(3);
         _ComputePipeline add_block_offsets = _ComputePipeline(3);
     } pipeline_cumsum;
-    struct _RadixSortComputePipeline {
-        _ComputePipeline upsweep = _ComputePipeline(3);
-        _ComputePipeline spine = _ComputePipeline(2);
-        _ComputePipeline downsweep = _ComputePipeline(6);
-    } pipeline_sorting_1, pipeline_sorting_2;
     struct _RadixSortIndirectComputePipeline {
         _ComputePipeline upsweep = _ComputePipeline(std::vector<int>{0, 1, 2, 3});
         _ComputePipeline spine = _ComputePipeline(std::vector<int>{0, 1, 2});
@@ -469,7 +471,6 @@ protected:
     std::uint64_t lod_selection_readback_value_ = 0;
     size_t lod_selection_readback_capacity_ = 0;
     size_t lod_selection_readback_chunk_capacity_ = 0;
-    size_t lod_selection_readback_chunk_count_ = 0;
 
     void ensureVisibleCountReadback();
     void destroyVisibleCountReadback();

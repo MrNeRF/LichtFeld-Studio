@@ -14,6 +14,8 @@ target_include_directories(lfs_sequencer
         PUBLIC
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/rendering/include
+        PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/io/include
 )
 
 target_link_libraries(lfs_sequencer

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "config.slang"
+#include "indirect_layout.inc"
 
 import utils;
 
@@ -82,9 +83,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID,
         uint total_batches = num_tiles > 0u
             ? uint(max(tile_batch_offsets[num_tiles - 1u], 0))
             : 0u;
-        out_dispatch_args[0] = total_batches;
-        out_dispatch_args[1] = 1u;
-        out_dispatch_args[2] = 1u;
+        const uint raster = LFS_VK_TILE_BATCH_DISPATCH_RASTER_WORD_OFFSET;
+        out_dispatch_args[raster + LFS_VK_DISPATCH_X_WORD_OFFSET] = total_batches;
+        out_dispatch_args[raster + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+        out_dispatch_args[raster + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
     }
 
     if (tile_idx >= num_tiles)
@@ -112,7 +114,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID,
 #elif TILE_BATCH_ENTRY == TILE_BATCH_ENTRY_RASTERIZE
 
 groupshared Splat_2D_AlphaBlend collected_splats[TILE_SIZE];
-groupshared uint32_t collected_idx[TILE_SIZE];
+groupshared uint32_t active_subgroups[TILE_SIZE / SUBGROUP_SIZE];
 #if LFS_RASTER_OVERLAYS
 groupshared uint32_t collected_gauss_idx[TILE_SIZE];
 #endif
@@ -160,19 +162,20 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         (splats_to_process + TILE_SIZE - 1u) / TILE_SIZE;
 
     for (uint round = 0u; round < shared_memory_rounds; ++round) {
-        uint subgroup_idx = thread_rank / SUBGROUP_SIZE;
-        uint32_t thread_active_u = uint32_t(WaveActiveAnyTrue(thread_active));
+        const uint subgroup_idx = thread_rank / SUBGROUP_SIZE;
+        const uint32_t subgroup_has_active_thread =
+            uint32_t(WaveActiveAnyTrue(thread_active));
         if (WaveIsFirstLane())
-            collected_idx[subgroup_idx] = thread_active_u;
+            active_subgroups[subgroup_idx] = subgroup_has_active_thread;
         GroupMemoryBarrierWithGroupSync();
         if (thread_rank == 0u) {
             uint32_t any_active = 0u;
             for (uint s = 0u; s < TILE_SIZE / SUBGROUP_SIZE; ++s)
-                any_active |= collected_idx[s];
-            collected_idx[0] = any_active;
+                any_active |= active_subgroups[s];
+            active_subgroups[0] = any_active;
         }
         GroupMemoryBarrierWithGroupSync();
-        if (collected_idx[0] == 0u)
+        if (active_subgroups[0] == 0u)
             break;
 
         uint splat_pointer_offset = round * TILE_SIZE + thread_rank;
@@ -250,6 +253,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 curr_pixel_state = new_pixel_state;
             }
         }
+        GroupMemoryBarrierWithGroupSync();
     }
 
     uint partial_idx = batch_idx * TILE_SIZE + thread_rank;

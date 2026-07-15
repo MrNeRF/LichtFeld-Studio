@@ -23,7 +23,8 @@ namespace lfs::training {
     public:
         using Config = PPISPControllerConfig;
 
-        PPISPController(int total_iterations, Config config = {});
+        explicit PPISPController(int total_iterations);
+        PPISPController(int total_iterations, Config config);
 
         // Pre-allocate shared buffers for given max image size (call once, used by all controllers)
         static void preallocate_shared_buffers(size_t max_H, size_t max_W);

@@ -6,6 +6,7 @@
 
 #include "visualizer/gui_capabilities.hpp"
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/events.hpp"
 #include "core/mesh_data.hpp"
 #include "core/point_cloud.hpp"
@@ -22,6 +23,7 @@
 #include <glm/gtx/euler_angles.hpp>
 #include <limits>
 #include <memory>
+#include <unordered_set>
 
 namespace lfs::vis::cap {
 
@@ -264,6 +266,49 @@ namespace lfs::vis::cap {
             for (size_t axis = 1; axis < dims.size(); ++axis)
                 row_width *= dims[axis];
             return row_width;
+        }
+
+        std::expected<void, std::string> validate_gaussian_field_values(
+            const std::string_view canonical_field_name,
+            const std::vector<float>& values,
+            const size_t row_width) {
+            float absolute_limit = 1.0e6f;
+            if (canonical_field_name == "means") {
+                absolute_limit = 1.0e12f;
+            } else if (canonical_field_name == "scaling_raw" ||
+                       canonical_field_name == "opacity_raw") {
+                // exp()/sigmoid() consume these raw parameters. Keep edits in a range
+                // where the downstream transform remains numerically meaningful.
+                absolute_limit = 80.0f;
+            }
+
+            for (const float value : values) {
+                if (!std::isfinite(value))
+                    return std::unexpected("Gaussian field values must be finite");
+                if (std::abs(value) > absolute_limit) {
+                    return std::unexpected(
+                        "Gaussian field value exceeds the safe range for " +
+                        std::string(canonical_field_name));
+                }
+            }
+
+            if (canonical_field_name == "rotation_raw") {
+                if (row_width != 4)
+                    return std::unexpected("Rotation tensor rows must contain four values");
+                for (size_t offset = 0; offset < values.size(); offset += row_width) {
+                    double norm_squared = 0.0;
+                    for (size_t component = 0; component < row_width; ++component) {
+                        const double value = values[offset + component];
+                        norm_squared += value * value;
+                    }
+                    // Raw training quaternions need not be unit length because readers
+                    // normalize them, but a zero row has no defined orientation.
+                    if (norm_squared < 1.0e-24)
+                        return std::unexpected("Rotation quaternion must be non-zero");
+                }
+            }
+
+            return {};
         }
 
         bool normalize_rotation_basis(glm::vec3& col0,
@@ -804,54 +849,66 @@ namespace lfs::vis::cap {
             if (index < 0 || static_cast<size_t>(index) >= node->model->size())
                 return std::unexpected("Gaussian index out of range: " + std::to_string(index));
         }
+        if (indices.empty())
+            return std::unexpected("At least one Gaussian index is required");
+        std::unordered_set<int> unique_indices;
+        unique_indices.reserve(indices.size());
+        for (const int index : indices) {
+            if (!unique_indices.insert(index).second)
+                return std::unexpected("Gaussian indices must not contain duplicates");
+        }
 
         // shN is stored swizzled; the API contract here is canonical [N, K, 3] writes.
-        // Deswizzle into a working buffer, apply the index_copy_, then reswizzle.
         const bool is_shN = (canonical_field_name == "shN");
-        core::Tensor shN_canon;
-        core::Tensor* field = nullptr;
+        core::Tensor* field = resolve_gaussian_field(*node->model, canonical_field_name);
         if (is_shN) {
             if (!node->model->shN_raw().is_valid() || node->model->shN_raw().numel() == 0 ||
                 node->model->max_sh_coeffs_rest() == 0) {
                 return std::unexpected("shN storage is not allocated (max sh-degree 0)");
             }
-            shN_canon = node->model->shN_canonical();
-            field = &shN_canon;
-        } else {
-            field = resolve_gaussian_field(*node->model, field_name);
-            if (!field)
-                return std::unexpected("Unsupported gaussian field: " + std::string(field_name));
         }
+        if (!field)
+            return std::unexpected("Unsupported gaussian field: " + std::string(field_name));
 
-        const auto field_shape = field->shape();
-        if (field_shape.rank() == 0)
+        if (field->shape().rank() == 0)
             return std::unexpected("Gaussian tensor field has invalid rank");
 
-        const size_t row_width = gaussian_field_row_width(*field);
+        const size_t row_width = is_shN
+                                     ? node->model->max_sh_coeffs_rest() * size_t{3}
+                                     : gaussian_field_row_width(*field);
+        if (row_width == 0 || indices.size() > std::numeric_limits<size_t>::max() / row_width)
+            return std::unexpected("Gaussian field slice size exceeds the supported range");
         const size_t expected_values = row_width * indices.size();
         if (values.size() != expected_values) {
             return std::unexpected(
                 "Field slice expects " + std::to_string(expected_values) +
                 " values but received " + std::to_string(values.size()));
         }
+        if (auto validation = validate_gaussian_field_values(
+                canonical_field_name, values, row_width);
+            !validation) {
+            return validation;
+        }
 
-        auto shape_dims = field_shape.dims();
-        shape_dims[0] = indices.size();
-        // Capture undo state: for shN, snapshot the swizzled storage bytes (cheaper than
-        // recomputing canonical); resolve_gaussian_field returns the swizzled raw which
-        // is what we'll reswizzle into after the write.
-        const auto before =
-            is_shN ? node->model->shN_raw().clone() : field->clone();
+        auto shape_dims = field->shape().dims();
+        if (is_shN) {
+            shape_dims = {indices.size(), node->model->max_sh_coeffs_rest(), size_t{3}};
+        } else {
+            shape_dims[0] = indices.size();
+        }
+        const auto before = field->clone();
 
         const auto index_tensor = core::Tensor::from_vector(indices, {indices.size()}, field->device());
         const auto src_tensor = core::Tensor::from_vector(values, core::TensorShape(shape_dims), field->device());
-        field->index_copy_(0, index_tensor, src_tensor);
-
-        // Reswizzle the mutated canonical view back into model.shN_raw().
         if (is_shN) {
-            const size_t cap_rows = std::max<size_t>(node->model->means().capacity(),
-                                                     node->model->size());
-            node->model->shN_set_from_canonical(shN_canon, cap_rows);
+            core::shN_swizzled_scatter_linear(
+                field->ptr<float>(),
+                index_tensor.ptr<int>(),
+                src_tensor.ptr<float>(),
+                indices.size(),
+                static_cast<uint32_t>(node->model->max_sh_coeffs_rest()));
+        } else {
+            field->index_copy_(0, index_tensor, src_tensor);
         }
 
         auto entry = std::make_unique<vis::op::TensorUndoEntry>(

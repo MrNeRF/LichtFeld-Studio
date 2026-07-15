@@ -41,6 +41,16 @@ namespace {
         EXPECT_DOUBLE_EQ(snap.gauges[1].value, 23456.0);
     }
 
+    TEST_F(VramProfilerMetricsTest, PinnedHostMemoryRoundTripsThroughSnapshot) {
+        auto& p = VramProfiler::instance();
+        p.setPinnedHostMemory(11, 22, 44);
+
+        const auto snap = p.snapshot();
+        EXPECT_EQ(snap.process.pinned_host_used, 11u);
+        EXPECT_EQ(snap.process.pinned_host_cached, 22u);
+        EXPECT_EQ(snap.process.pinned_host_peak, 44u);
+    }
+
     TEST_F(VramProfilerMetricsTest, IterCounterResetsOnBeginIteration) {
         auto& p = VramProfiler::instance();
         p.beginIteration(0);

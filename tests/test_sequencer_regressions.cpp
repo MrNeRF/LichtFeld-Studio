@@ -12,6 +12,7 @@
 #include <format>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <limits>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -70,6 +71,12 @@ namespace {
         ASSERT_EQ(json["keyframes"].size(), 2u);
         EXPECT_FLOAT_EQ(json["keyframes"][0]["time"].get<float>(), 0.0f);
         EXPECT_FLOAT_EQ(json["keyframes"][1]["time"].get<float>(), 2.0f);
+
+        const std::string temp_prefix = file.path.filename().string() + ".";
+        for (const auto& entry : std::filesystem::directory_iterator(file.path.parent_path())) {
+            const std::string name = entry.path().filename().string();
+            EXPECT_FALSE(name.starts_with(temp_prefix) && name.ends_with(".tmp"));
+        }
     }
 
     TEST(SequencerTimelineRegressionTest, LoadReplacesStateAndClearsAbsentClip) {
@@ -155,6 +162,125 @@ namespace {
         ASSERT_NE(clip.getTrackByPath("light.color"), nullptr);
         EXPECT_EQ(clip.getTrackByPath("camera.exposure")->id(), 7u);
         EXPECT_EQ(clip.getTrackByPath("light.color")->id(), 42u);
+    }
+
+    TEST(SequencerTimelineRegressionTest, LoadRejectsInvalidStateTransactionally) {
+        Timeline timeline;
+        timeline.addKeyframe(makeKeyframe(9.0f, {9.0f, 0.0f, 0.0f}));
+
+        nlohmann::json json = {
+            {"version", 4},
+            {"clip_duration", 10.0f},
+            {"keyframes", nlohmann::json::array({
+                              {
+                                  {"time", 1.0f},
+                                  {"position", {1.0f, 2.0f, 3.0f}},
+                                  {"rotation", {1.0f, 0.0f, 0.0f, 0.0f}},
+                                  {"focal_length_mm", 40.0f},
+                                  {"easing", 99},
+                              },
+                          })},
+        };
+
+        TempJsonPath file;
+        {
+            std::ofstream output(file.path);
+            ASSERT_TRUE(output.is_open());
+            output << json.dump();
+        }
+        EXPECT_FALSE(timeline.loadFromJson(file.path.string()));
+        ASSERT_EQ(timeline.realKeyframeCount(), 1u);
+        EXPECT_FLOAT_EQ(timeline.getKeyframe(0)->time, 9.0f);
+
+        json["keyframes"][0]["easing"] = static_cast<int>(EasingType::LINEAR);
+        json["keyframes"][0]["rotation"] = {0.0f, 0.0f, 0.0f, 0.0f};
+        {
+            std::ofstream output(file.path, std::ios::trunc);
+            ASSERT_TRUE(output.is_open());
+            output << json.dump();
+        }
+        EXPECT_FALSE(timeline.loadFromJson(file.path.string()));
+        ASSERT_EQ(timeline.realKeyframeCount(), 1u);
+        EXPECT_FLOAT_EQ(timeline.getKeyframe(0)->time, 9.0f);
+    }
+
+    TEST(SequencerTimelineRegressionTest, LoadNormalizesCameraAndAnimationQuaternions) {
+        nlohmann::json json = {
+            {"version", 4},
+            {"keyframes", nlohmann::json::array({
+                              {
+                                  {"time", 1.0f},
+                                  {"position", {1.0f, 2.0f, 3.0f}},
+                                  {"rotation", {2.0f, 0.0f, 0.0f, 0.0f}},
+                                  {"focal_length_mm", 40.0f},
+                                  {"easing", static_cast<int>(EasingType::LINEAR)},
+                              },
+                          })},
+            {"animation_clip",
+             {
+                 {"tracks", nlohmann::json::array({
+                                {
+                                    {"id", 1u},
+                                    {"type", "quat"},
+                                    {"target", "node.rotation"},
+                                    {"keyframes", nlohmann::json::array({
+                                                      {{"time", 0.0f},
+                                                       {"value", {0.0f, 2.0f, 0.0f, 0.0f}},
+                                                       {"easing", "linear"}},
+                                                  })},
+                                },
+                            })},
+             }},
+        };
+
+        TempJsonPath file;
+        {
+            std::ofstream output(file.path);
+            ASSERT_TRUE(output.is_open());
+            output << json.dump();
+        }
+
+        Timeline timeline;
+        ASSERT_TRUE(timeline.loadFromJson(file.path.string()));
+        ASSERT_NE(timeline.getKeyframe(0), nullptr);
+        EXPECT_NEAR(glm::length(timeline.getKeyframe(0)->rotation), 1.0f, 1e-6f);
+        ASSERT_NE(timeline.animationClip(), nullptr);
+        const auto* track = timeline.animationClip()->getTrack(1u);
+        ASSERT_NE(track, nullptr);
+        const auto* rotation = std::get_if<glm::quat>(&track->keyframe(0).value);
+        ASSERT_NE(rotation, nullptr);
+        EXPECT_NEAR(glm::length(*rotation), 1.0f, 1e-6f);
+    }
+
+    TEST(SequencerTimelineRegressionTest, RejectsInvalidAndUnboundedPathRequests) {
+        Timeline timeline;
+        timeline.addKeyframe(makeKeyframe(0.0f));
+        timeline.addKeyframe(makeKeyframe(4.0f));
+
+        EXPECT_THROW(
+            (void)timeline.generatePathAtTimeStep(std::numeric_limits<float>::quiet_NaN()),
+            std::invalid_argument);
+        EXPECT_THROW(
+            (void)timeline.generatePathAtTimeStep(std::numeric_limits<float>::denorm_min()),
+            std::length_error);
+        EXPECT_THROW((void)timeline.generatePath(0), std::invalid_argument);
+    }
+
+    TEST(SequencerTimelineRegressionTest, AnimationClipRejectsUnknownTypesAndDuplicateTargets) {
+        nlohmann::json invalid_type = {
+            {"tracks", nlohmann::json::array({
+                           {{"id", 1u}, {"type", "opaque"}, {"target", "node.value"}},
+                       })},
+        };
+        EXPECT_THROW((void)AnimationClip::fromJson(invalid_type), std::runtime_error);
+
+        nlohmann::json duplicate_target = {
+            {"tracks", nlohmann::json::array({
+                           {{"id", 1u}, {"type", "float"}, {"target", "node.value"}},
+                           {{"id", 2u}, {"type", "float"}, {"target", "node.value"}},
+                       })},
+        };
+        EXPECT_THROW((void)AnimationClip::fromJson(duplicate_target), std::runtime_error);
     }
 
     TEST(SequencerControllerRegressionTest, SelectionTracksKeyframeIdentityAcrossResort) {

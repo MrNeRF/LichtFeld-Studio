@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/assert.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_fwd.hpp"
 #include "internal/memory_pool.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_ops.hpp"
@@ -15,14 +17,27 @@
 
 namespace lfs::core::tensor_ops {
 
-    constexpr int MAX_RANK = 8;
     constexpr int BLOCK_SIZE = 256;
+
+    namespace {
+        struct ieee_broadcast_maximum_float_op {
+            __host__ __device__ float operator()(const float lhs, const float rhs) const {
+                return ops::maximum_op{}(lhs, rhs);
+            }
+        };
+
+        struct ieee_broadcast_minimum_float_op {
+            __host__ __device__ float operator()(const float lhs, const float rhs) const {
+                return ops::minimum_op{}(lhs, rhs);
+            }
+        };
+    } // namespace
 
     // Strided broadcast kernel params (passed by value, no device alloc)
     struct BroadcastStridedParams {
-        size_t src_shape[MAX_RANK];
-        size_t src_strides[MAX_RANK];
-        size_t dst_strides[MAX_RANK];
+        size_t src_shape[MAX_TENSOR_RANK];
+        size_t src_strides[MAX_TENSOR_RANK];
+        size_t dst_strides[MAX_TENSOR_RANK];
         int src_rank;
         int dst_rank;
         size_t dst_elements;
@@ -60,10 +75,8 @@ namespace lfs::core::tensor_ops {
                                        const size_t dst_elements, cudaStream_t stream) {
         if (dst_elements == 0)
             return;
-        if (src_rank > MAX_RANK || dst_rank > MAX_RANK) {
-            LOG_ERROR("Broadcast strided: rank exceeds {}", MAX_RANK);
-            return;
-        }
+        LFS_ASSERT_MSG(src_rank <= MAX_TENSOR_RANK && dst_rank <= MAX_TENSOR_RANK,
+                       "Broadcast strided rank exceeds MAX_TENSOR_RANK");
 
         BroadcastStridedParams params{};
         params.src_rank = static_cast<int>(src_rank);
@@ -106,11 +119,11 @@ namespace lfs::core::tensor_ops {
 
     // Pad kernel params (passed by value, no device alloc)
     struct PadParams {
-        size_t src_shape[MAX_RANK];
-        size_t src_strides[MAX_RANK];
-        size_t dst_strides[MAX_RANK];
-        size_t pad_before[MAX_RANK];
-        size_t contiguous_strides[MAX_RANK];
+        size_t src_shape[MAX_TENSOR_RANK];
+        size_t src_strides[MAX_TENSOR_RANK];
+        size_t dst_strides[MAX_TENSOR_RANK];
+        size_t pad_before[MAX_TENSOR_RANK];
+        size_t contiguous_strides[MAX_TENSOR_RANK];
         int rank;
         size_t src_elements;
     };
@@ -121,7 +134,7 @@ namespace lfs::core::tensor_ops {
         if (idx >= params.src_elements)
             return;
 
-        size_t coords[MAX_RANK];
+        size_t coords[MAX_TENSOR_RANK];
         size_t remaining = idx;
 
         for (int i = 0; i < params.rank; ++i) {
@@ -144,10 +157,8 @@ namespace lfs::core::tensor_ops {
                     const size_t rank, const size_t src_elements, cudaStream_t stream) {
         if (src_elements == 0)
             return;
-        if (rank > MAX_RANK) {
-            LOG_ERROR("Pad: rank exceeds {}", MAX_RANK);
-            return;
-        }
+        LFS_ASSERT_MSG(rank <= MAX_TENSOR_RANK,
+                       "Pad rank exceeds MAX_TENSOR_RANK");
 
         PadParams params{};
         params.rank = static_cast<int>(rank);
@@ -174,7 +185,7 @@ namespace lfs::core::tensor_ops {
 
     // Broadcasting index functor
 
-    template <int MaxRank = 8>
+    template <int MaxRank = static_cast<int>(MAX_TENSOR_RANK)>
     struct broadcast_index_functor {
         int src_rank, dst_rank;
         int src_shape[MaxRank];
@@ -271,6 +282,28 @@ namespace lfs::core::tensor_ops {
                                size_t src_rank, size_t dst_rank,
                                size_t dst_elements, cudaStream_t stream) {
         launch_broadcast_generic(src, dst, src_shape, dst_shape, src_rank, dst_rank, dst_elements, stream);
+    }
+
+    void launch_ieee_maximum_float_broadcast(
+        const float* lhs, const float* rhs, float* output,
+        const size_t* lhs_shape, const size_t* rhs_shape, const size_t* output_shape,
+        const size_t lhs_rank, const size_t rhs_rank, const size_t output_rank,
+        const size_t output_elements, const cudaStream_t stream) {
+        launch_broadcast_binary(
+            lhs, rhs, output, lhs_shape, rhs_shape, output_shape,
+            lhs_rank, rhs_rank, output_rank, output_elements,
+            ieee_broadcast_maximum_float_op{}, stream);
+    }
+
+    void launch_ieee_minimum_float_broadcast(
+        const float* lhs, const float* rhs, float* output,
+        const size_t* lhs_shape, const size_t* rhs_shape, const size_t* output_shape,
+        const size_t lhs_rank, const size_t rhs_rank, const size_t output_rank,
+        const size_t output_elements, const cudaStream_t stream) {
+        launch_broadcast_binary(
+            lhs, rhs, output, lhs_shape, rhs_shape, output_shape,
+            lhs_rank, rhs_rank, output_rank, output_elements,
+            ieee_broadcast_minimum_float_op{}, stream);
     }
 
     // ============================================================================

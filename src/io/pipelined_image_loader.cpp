@@ -384,8 +384,10 @@ namespace lfs::io {
                 t.join();
         }
 
-        clear_output_queue();
-        clear_pending_pairs();
+        // Queue and pairing entries may own tensors homed on decode_stream_.
+        // Retire them while that stream is still valid; member destruction is
+        // too late because shutdown destroys the stream first.
+        clear();
 
         cudaDeviceSynchronize();
         if (decode_stream_) {
@@ -434,6 +436,9 @@ namespace lfs::io {
         auto result = output_queue_.pop();
         release_output_ready_bytes(result);
         in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+        if (!result.error.empty()) {
+            throw std::runtime_error(std::move(result.error));
+        }
         return result;
     }
 
@@ -442,6 +447,9 @@ namespace lfs::io {
         if (result) {
             release_output_ready_bytes(*result);
             in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+            if (!result->error.empty()) {
+                throw std::runtime_error(std::move(result->error));
+            }
         }
         return result;
     }
@@ -451,6 +459,9 @@ namespace lfs::io {
         if (result) {
             release_output_ready_bytes(*result);
             in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+            if (!result->error.empty()) {
+                throw std::runtime_error(std::move(result->error));
+            }
         }
         return result;
     }
@@ -476,6 +487,7 @@ namespace lfs::io {
     PipelinedImageLoader::CacheStats PipelinedImageLoader::get_stats() const {
         CacheStats s;
         {
+            // Snapshot each independently protected domain without nesting locks.
             std::lock_guard<std::mutex> stats_lock(stats_mutex_);
             s = stats_;
         }
@@ -614,7 +626,7 @@ namespace lfs::io {
                     reinterpret_cast<uint8_t*>(decoded.data_ptr()),
                     H, W, C, nullptr);
             } else {
-                decoded = lfs::core::Tensor::zeros(
+                decoded = lfs::core::Tensor::empty(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
                 decoded.set_name("io.image.gpu_float");
@@ -1128,7 +1140,7 @@ namespace lfs::io {
         }
     }
 
-    void PipelinedImageLoader::push_output_ready(ReadyImage ready) {
+    bool PipelinedImageLoader::push_output_ready(ReadyImage ready) {
         const size_t image_bytes = tensor_reserved_bytes(ready.tensor);
         const size_t mask_bytes = ready.mask ? tensor_reserved_bytes(*ready.mask) : 0;
         const size_t depth_bytes = ready.depth ? tensor_reserved_bytes(*ready.depth) : 0;
@@ -1151,6 +1163,36 @@ namespace lfs::io {
             subtract_clamped(output_mask_bytes_, mask_bytes);
             subtract_clamped(output_depth_bytes_, depth_bytes);
             subtract_clamped(output_normal_bytes_, normal_bytes);
+            return false;
+        }
+        return true;
+    }
+
+    void PipelinedImageLoader::publish_image_failure(
+        const size_t sequence_id,
+        const std::filesystem::path& path,
+        std::string message) {
+        {
+            std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+            if (auto it = pending_pairs_.find(sequence_id); it != pending_pairs_.end()) {
+                erase_pending_pair_locked(it);
+            }
+        }
+
+        ReadyImage failed{
+            .sequence_id = sequence_id,
+            .tensor = {},
+            .mask = std::nullopt,
+            .stream = nullptr,
+            .depth = std::nullopt,
+            .normal = std::nullopt,
+            .depth_ready_event = nullptr,
+            .normal_ready_event = nullptr,
+            .error = "Failed to load training image '" + lfs::core::path_to_utf8(path) +
+                     "': " + std::move(message),
+        };
+        if (!push_output_ready(std::move(failed))) {
+            subtract_clamped(in_flight_, 1);
         }
     }
 
@@ -1219,14 +1261,17 @@ namespace lfs::io {
             return;
         }
 
-        ReadyImage ready{sequence_id,
-                         std::move(*pair.image),
-                         mask_has_value ? std::optional(std::move(*pair.mask)) : std::nullopt,
-                         pair.stream,
-                         depth_has_value ? std::optional(std::move(*pair.depth)) : std::nullopt,
-                         normal_has_value ? std::optional(std::move(*pair.normal)) : std::nullopt,
-                         pair.depth_ready_event,
-                         pair.normal_ready_event};
+        ReadyImage ready{
+            .sequence_id = sequence_id,
+            .tensor = std::move(*pair.image),
+            .mask = mask_has_value ? std::optional(std::move(*pair.mask)) : std::nullopt,
+            .stream = pair.stream,
+            .depth = depth_has_value ? std::optional(std::move(*pair.depth)) : std::nullopt,
+            .normal = normal_has_value ? std::optional(std::move(*pair.normal)) : std::nullopt,
+            .depth_ready_event = pair.depth_ready_event,
+            .normal_ready_event = pair.normal_ready_event,
+            .error = {},
+        };
         pair.depth_ready_event = nullptr;
         pair.normal_ready_event = nullptr;
         erase_pending_pair_locked(it);
@@ -1314,14 +1359,8 @@ namespace lfs::io {
                 pending.normal_expected = request.normal_path.has_value();
             }
 
-            auto fail_image_request = [&] {
-                {
-                    std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                    if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
-                        erase_pending_pair_locked(it);
-                    }
-                }
-                in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+            auto fail_image_request = [&](std::string message) {
+                publish_image_failure(request.sequence_id, request.path, std::move(message));
             };
 
             auto mark_mask_unavailable = [&] {
@@ -1422,7 +1461,7 @@ namespace lfs::io {
 
             if (!is_regular_file_no_throw(request.path)) {
                 LOG_DEBUG("[PipelinedImageLoader] Skipping missing image {}", lfs::core::path_to_utf8(request.path));
-                fail_image_request();
+                fail_image_request("file does not exist or is not a regular file");
                 continue;
             }
 
@@ -1518,8 +1557,7 @@ namespace lfs::io {
                 }
             } catch (const std::exception& e) {
                 LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", lfs::core::path_to_utf8(request.path), e.what());
-                // Clean up pending_pairs_ entry to prevent memory leak
-                fail_image_request();
+                fail_image_request(e.what());
                 continue; // Skip auxiliary image processing if image failed
             }
 
@@ -1805,10 +1843,11 @@ namespace lfs::io {
                                         try_push_ready_locked(item.sequence_id, it, lock);
                                     }
                                 } else {
-                                    if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                                        erase_pending_pair_locked(it);
-                                    }
-                                    in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                                    lock.unlock();
+                                    publish_image_failure(
+                                        item.sequence_id,
+                                        item.path,
+                                        describe_current_exception("failed to read image for decoder fallback"));
                                 }
                                 continue;
                             }
@@ -1848,10 +1887,11 @@ namespace lfs::io {
                                     try_push_ready_locked(item.sequence_id, it, lock);
                                 }
                             } else {
-                                if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                                    erase_pending_pair_locked(it);
-                                }
-                                in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                                lock.unlock();
+                                publish_image_failure(
+                                    item.sequence_id,
+                                    item.path,
+                                    describe_current_exception("failed to read image for decoder fallback"));
                             }
                             continue;
                         }
@@ -1896,10 +1936,10 @@ namespace lfs::io {
                                    ? lfs::core::Tensor::empty(
                                          lfs::core::TensorShape({3, H, W}),
                                          lfs::core::Device::CUDA, lfs::core::DataType::UInt8)
-                                   : lfs::core::Tensor::zeros(
+                                   : lfs::core::Tensor::empty(
                                          lfs::core::TensorShape({3, H, W}),
                                          lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-                    auto alpha = lfs::core::Tensor::zeros(
+                    auto alpha = lfs::core::Tensor::empty(
                         lfs::core::TensorShape({H, W}),
                         lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
@@ -2037,7 +2077,7 @@ namespace lfs::io {
                         } else if (gpu_gray.dtype() == lfs::core::DataType::Float32) {
                             aux_tensor = std::move(gpu_gray);
                         } else {
-                            aux_tensor = lfs::core::Tensor::zeros(
+                            aux_tensor = lfs::core::Tensor::empty(
                                 lfs::core::TensorShape({static_cast<size_t>(target_h), static_cast<size_t>(target_w)}),
                                 lfs::core::Device::CUDA, lfs::core::DataType::Float32);
                             cuda::launch_uint8_hw_to_float32_hw(
@@ -2048,6 +2088,11 @@ namespace lfs::io {
                         }
                     }
 
+                    if (!aux_tensor.is_valid() || aux_tensor.ndim() != 2) {
+                        throw std::runtime_error(
+                            item.is_mask ? "Mask preprocessing produced an invalid tensor"
+                                         : "Depth preprocessing produced an invalid tensor");
+                    }
                     const size_t H = aux_tensor.shape()[0];
                     const size_t W = aux_tensor.shape()[1];
 
@@ -2102,7 +2147,6 @@ namespace lfs::io {
                     if (item.is_mask) {
                         try_complete_pair(item.sequence_id, std::nullopt, std::move(aux_tensor), nullptr);
                     } else {
-                        assert(aux_tensor.ndim() == 2);
                         write_sidecar_cache(*nvcodec, aux_tensor, item, SidecarKind::Depth, sidecar_stream);
                         auto ready_event = record_sidecar_ready_event(sidecar_stream);
                         try_complete_pair(
@@ -2187,6 +2231,9 @@ namespace lfs::io {
                         normal_tensor = lfs::core::lanczos_resize_float_chw(normal_tensor, target_h, target_w, 2, sidecar_stream);
                     }
 
+                    if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
+                        throw std::runtime_error("Normal preprocessing produced an invalid tensor");
+                    }
                     if (item.undistort) {
                         const auto scaled = lfs::core::scale_undistort_params(
                             *item.undistort,
@@ -2203,8 +2250,9 @@ namespace lfs::io {
                             normal_tensor, item.aux_target_height, item.aux_target_width, 2, sidecar_stream);
                     }
                     normal_tensor = normal_tensor.contiguous();
-                    assert(normal_tensor.ndim() == 3);
-                    assert(normal_tensor.shape()[0] == 3);
+                    if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
+                        throw std::runtime_error("Normal preprocessing produced an invalid tensor");
+                    }
                     write_sidecar_cache(*nvcodec, normal_tensor, item, SidecarKind::Normal, sidecar_stream);
                     auto ready_event = record_sidecar_ready_event(sidecar_stream);
 
@@ -2288,7 +2336,7 @@ namespace lfs::io {
                                            ? lfs::core::Tensor::empty(
                                                  lfs::core::TensorShape({C, H, W}),
                                                  lfs::core::Device::CUDA, lfs::core::DataType::UInt8)
-                                           : lfs::core::Tensor::zeros(
+                                           : lfs::core::Tensor::empty(
                                                  lfs::core::TensorShape({C, H, W}),
                                                  lfs::core::Device::CUDA, lfs::core::DataType::Float32);
                         if (item.params.output_uint8) {
@@ -2308,14 +2356,12 @@ namespace lfs::io {
                         }
                         try_complete_pair(item.sequence_id, std::move(decoded), std::nullopt, nullptr);
                     } catch (...) {
+                        const auto fallback_message =
+                            describe_current_exception("non-standard RGB fallback exception");
                         LOG_ERROR("[PipelinedImageLoader] RGB fallback also failed {}: {}",
                                   lfs::core::path_to_utf8(item.path),
-                                  describe_current_exception("non-standard RGB fallback exception"));
-                        std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                        if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                            erase_pending_pair_locked(it);
-                        }
-                        in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                                  fallback_message);
+                        publish_image_failure(item.sequence_id, item.path, fallback_message);
                     }
                 } else if (item.is_mask || item.is_depth || item.is_normal) {
                     LOG_WARN("[PipelinedImageLoader] Cold process {} error {}: {} - continuing without it",
@@ -2335,14 +2381,7 @@ namespace lfs::io {
                 } else {
                     LOG_ERROR("[PipelinedImageLoader] Cold process error {}: {}",
                               lfs::core::path_to_utf8(item.path), message);
-                    // Clean up pending_pairs_ to prevent memory leak
-                    {
-                        std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                        if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                            erase_pending_pair_locked(it);
-                        }
-                    }
-                    in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                    publish_image_failure(item.sequence_id, item.path, message);
                 }
             }
         }

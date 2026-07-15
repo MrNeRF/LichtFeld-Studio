@@ -10,6 +10,8 @@
 #include "components/sparsity_optimizer.hpp"
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
+#include "core/assert.hpp"
+#include "core/checked_arithmetic.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -20,7 +22,6 @@
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/gpu_slab_allocator.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
 #include "depth_anchor_cache.hpp"
@@ -55,10 +56,8 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cuda_runtime.h>
 #include <expected>
 #include <format>
@@ -80,25 +79,17 @@
 namespace lfs::training {
 
     namespace {
-        constexpr double BYTES_PER_MIB = 1024.0 * 1024.0;
-        constexpr double BYTES_PER_GIB = 1024.0 * 1024.0 * 1024.0;
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
 
-        [[nodiscard]] bool env_flag_enabled(const char* name) {
-            const char* raw = std::getenv(name);
-            if (!raw) {
-                return false;
+        void require_cuda_success(const cudaError_t status, const std::string_view operation) {
+            if (status == cudaSuccess) {
+                return;
             }
-
-            const std::string_view value(raw);
-            if (value.empty()) {
-                return false;
-            }
-
-            return value != "0" && value != "false" && value != "FALSE" &&
-                   value != "off" && value != "OFF" &&
-                   value != "no" && value != "NO";
+            const std::string message = std::format(
+                "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
+            cudaGetLastError();
+            LFS_ASSERT_MSG(status == cudaSuccess, message);
         }
 
         // Dataset-level normal-prior convention resolution. Prior maps come in
@@ -448,20 +439,6 @@ namespace lfs::training {
             return filtered;
         }
 
-        [[nodiscard]] int env_int_or_default(const char* name, const int fallback) {
-            const char* raw = std::getenv(name);
-            if (!raw || raw[0] == '\0') {
-                return fallback;
-            }
-
-            char* end = nullptr;
-            const long parsed = std::strtol(raw, &end, 10);
-            if (end == raw || parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
-                return fallback;
-            }
-            return static_cast<int>(parsed);
-        }
-
         constexpr float kDepthLossFinalScale = 0.02f;
         constexpr float kDepthLossGradientTermWeight = 1.0f;
         // Normal supervision starts once the geometry has roughly formed
@@ -537,14 +514,6 @@ namespace lfs::training {
                 return count > 0 ? abs_corr_sum / static_cast<double>(count) : 0.0;
             }
         };
-
-        [[nodiscard]] double bytes_to_mib(const size_t bytes) {
-            return static_cast<double>(bytes) / BYTES_PER_MIB;
-        }
-
-        [[nodiscard]] double bytes_to_gib(const size_t bytes) {
-            return static_cast<double>(bytes) / BYTES_PER_GIB;
-        }
 
         [[nodiscard]] std::optional<lfs::core::Tensor> compute_training_cropbox_remove_mask(
             const lfs::core::Scene& scene,
@@ -857,21 +826,6 @@ namespace lfs::training {
             return inputs;
         }
 
-        template <typename Entries>
-        void log_entry_bytes(std::string_view label, Entries entries) {
-            std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
-                return lhs.second > rhs.second;
-            });
-
-            for (const auto& [name, bytes] : entries) {
-                LOG_INFO("[MEM] {} {} = {:.2f} MiB", label, name, bytes_to_mib(bytes));
-            }
-
-            const size_t total = sum_entry_bytes(entries);
-            LOG_INFO("[MEM] {} total = {:.2f} MiB ({:.2f} GiB)",
-                     label, bytes_to_mib(total), bytes_to_gib(total));
-        }
-
         [[nodiscard]] size_t photometric_workspace_bytes(const losses::PhotometricLoss& photometric_loss) {
             std::vector<std::pair<std::string, size_t>> entries;
 
@@ -942,109 +896,6 @@ namespace lfs::training {
 
         [[nodiscard]] size_t ssim_map_workspace_bytes(const kernels::SSIMMapWorkspace& workspace) {
             return tensor_reserved_bytes(workspace.ssim_map);
-        }
-
-        [[nodiscard]] size_t bg_image_cache_bytes(const std::unordered_map<uint64_t, lfs::core::Tensor>& cache) {
-            size_t total = 0;
-            for (const auto& [_, tensor] : cache) {
-                total += tensor_reserved_bytes(tensor);
-            }
-            return total;
-        }
-
-        [[nodiscard]] size_t splat_tensor_bytes(const lfs::core::SplatData& splat) {
-            std::vector<std::pair<std::string, size_t>> entries;
-            add_tensor_entry(entries, "means", splat.means());
-            add_tensor_entry(entries, "sh0", splat.sh0());
-            add_tensor_entry(entries, "shN", splat.shN());
-            add_tensor_entry(entries, "scaling", splat.scaling_raw());
-            add_tensor_entry(entries, "rotation", splat.rotation_raw());
-            add_tensor_entry(entries, "opacity", splat.opacity_raw());
-            add_tensor_entry(entries, "deleted", splat.deleted());
-            add_tensor_entry(entries, "densification_info", splat._densification_info);
-            return sum_entry_bytes(entries);
-        }
-
-        [[nodiscard]] size_t optimizer_state_bytes(const AdamOptimizer& optimizer) {
-            size_t total = 0;
-            for (const auto type : AdamOptimizer::all_param_types()) {
-                const auto* state = optimizer.get_state(type);
-                if (!state) {
-                    continue;
-                }
-                total += tensor_reserved_bytes(state->grad);
-                total += tensor_reserved_bytes(state->exp_avg);
-                total += tensor_reserved_bytes(state->exp_avg_sq);
-            }
-            return total;
-        }
-
-        struct VramSnapshot {
-            size_t gpu_used = 0;
-            size_t gpu_total = 0;
-            size_t mempool_used = 0;
-            size_t mempool_reserved = 0;
-            size_t bucket_cached = 0;
-            size_t slab_reserved = 0;
-            std::optional<lfs::core::RasterizerMemoryArena::MemoryInfo> arena;
-        };
-
-        [[nodiscard]] VramSnapshot capture_vram_snapshot(const bool synchronize) {
-            if (synchronize) {
-                cudaDeviceSynchronize();
-            }
-
-            VramSnapshot snapshot;
-            size_t gpu_free = 0;
-            cudaMemGetInfo(&gpu_free, &snapshot.gpu_total);
-            snapshot.gpu_used = snapshot.gpu_total - gpu_free;
-
-#if CUDART_VERSION >= 12080
-            int device = 0;
-            if (cudaGetDevice(&device) == cudaSuccess) {
-                cudaMemPool_t pool;
-                if (cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess) {
-                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &snapshot.mempool_used);
-                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &snapshot.mempool_reserved);
-                }
-            }
-#endif
-
-            snapshot.bucket_cached =
-                lfs::core::SizeBucketedPool::instance().stats().bytes_cached.load(std::memory_order_relaxed);
-            snapshot.slab_reserved =
-                lfs::core::GPUSlabAllocator::instance().stats().total_slab_memory;
-
-            if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
-                snapshot.arena = arena->get_memory_info();
-            }
-
-            return snapshot;
-        }
-
-        void log_vram_snapshot(std::string_view label, const VramSnapshot& snapshot) {
-            LOG_INFO("[MEM] {} gpu_used={:.2f} MiB ({:.2f} GiB) / total={:.2f} GiB",
-                     label,
-                     bytes_to_mib(snapshot.gpu_used),
-                     bytes_to_gib(snapshot.gpu_used),
-                     bytes_to_gib(snapshot.gpu_total));
-            LOG_INFO("[MEM] {} mempool_used={:.2f} MiB, mempool_reserved={:.2f} MiB, slab_reserved={:.2f} MiB, bucket_cached={:.2f} MiB",
-                     label,
-                     bytes_to_mib(snapshot.mempool_used),
-                     bytes_to_mib(snapshot.mempool_reserved),
-                     bytes_to_mib(snapshot.slab_reserved),
-                     bytes_to_mib(snapshot.bucket_cached));
-
-            if (snapshot.arena) {
-                LOG_INFO("[MEM] {} arena_capacity={:.2f} MiB, arena_current={:.2f} MiB, arena_peak={:.2f} MiB, arena_reallocs={}",
-                         label,
-                         bytes_to_mib(snapshot.arena->arena_capacity),
-                         bytes_to_mib(snapshot.arena->current_usage),
-                         bytes_to_mib(snapshot.arena->peak_usage),
-                         snapshot.arena->num_reallocations);
-            } else {
-                LOG_INFO("[MEM] {} arena=not_created", label);
-            }
         }
 
         [[nodiscard]] bool live_vram_profiler_enabled() {
@@ -1255,12 +1106,13 @@ namespace lfs::training {
         }
 
         struct PipelineMemoryEstimate {
-            size_t max_image_bytes = 0;
-            bool masks_possible = false;
+            size_t max_slot_bytes = 0;
         };
 
         [[nodiscard]] PipelineMemoryEstimate estimatePipelineMemory(
-            const std::shared_ptr<CameraDataset>& dataset) {
+            const std::shared_ptr<CameraDataset>& dataset,
+            const lfs::io::PipelinedLoaderConfig& config,
+            const PipelinedAuxiliaryImageConfig& aux_config) {
             PipelineMemoryEstimate estimate;
             if (!dataset) {
                 return estimate;
@@ -1273,13 +1125,34 @@ namespace lfs::training {
 
                 const size_t width = static_cast<size_t>(std::max(cam->image_width(), 0));
                 const size_t height = static_cast<size_t>(std::max(cam->image_height(), 0));
-                if (width > 0 && height > 0) {
-                    estimate.max_image_bytes = std::max(
-                        estimate.max_image_bytes,
-                        width * height * size_t{3} * sizeof(uint8_t));
+                if (width == 0 || height == 0) {
+                    continue;
                 }
 
-                estimate.masks_possible = estimate.masks_possible || cam->has_mask() || cam->has_alpha();
+                // One in-flight cold request can hold the decoded output beside its
+                // upload staging. Sixteen-bit sources become float32 RGB (12 B/px)
+                // while retaining a uint16 RGB staging image (6 B/px). Eight-bit
+                // requests retain uint8 RGB output and staging (3 B/px each).
+                size_t bytes_per_pixel = config.use_16bit_color ? size_t{18} : size_t{6};
+                const bool loads_mask =
+                    (aux_config.load_masks && cam->has_mask()) ||
+                    (aux_config.use_alpha_as_mask && cam->has_alpha());
+                if (loads_mask) {
+                    bytes_per_pixel = lfs::core::saturating_add(bytes_per_pixel, sizeof(float));
+                }
+                if (aux_config.load_depths && cam->has_depth()) {
+                    bytes_per_pixel = lfs::core::saturating_add(bytes_per_pixel, sizeof(float));
+                }
+                if (aux_config.load_normals && cam->has_normal()) {
+                    // Cached normal decode retains float HWC input beside float CHW output.
+                    bytes_per_pixel = lfs::core::saturating_add(
+                        bytes_per_pixel, size_t{6} * sizeof(float));
+                }
+
+                const size_t pixels = lfs::core::saturating_multiply(width, height);
+                estimate.max_slot_bytes = std::max(
+                    estimate.max_slot_bytes,
+                    lfs::core::saturating_multiply(pixels, bytes_per_pixel));
             }
 
             return estimate;
@@ -1287,9 +1160,10 @@ namespace lfs::training {
 
         [[nodiscard]] lfs::io::PipelinedLoaderConfig tunePipelinedLoaderConfig(
             lfs::io::PipelinedLoaderConfig config,
-            const std::shared_ptr<CameraDataset>& dataset) {
-            const auto estimate = estimatePipelineMemory(dataset);
-            if (estimate.max_image_bytes == 0) {
+            const std::shared_ptr<CameraDataset>& dataset,
+            const PipelinedAuxiliaryImageConfig& aux_config) {
+            const auto estimate = estimatePipelineMemory(dataset, config, aux_config);
+            if (estimate.max_slot_bytes == 0) {
                 config.decoder_pool_size = std::min(config.decoder_pool_size, config.jpeg_batch_size);
                 return config;
             }
@@ -1322,24 +1196,25 @@ namespace lfs::training {
                 }
             }
 
-            const size_t per_ready_image_bytes = estimate.max_image_bytes +
-                                                 (estimate.masks_possible ? estimate.max_image_bytes / 3 : 0);
             constexpr size_t MIN_PIPELINE_BUDGET_BYTES = 256ULL * 1024 * 1024;
             constexpr size_t MAX_PIPELINE_BUDGET_BYTES = 512ULL * 1024 * 1024;
-            const size_t target_pipeline_budget =
-                std::clamp(free_bytes / 32, MIN_PIPELINE_BUDGET_BYTES, MAX_PIPELINE_BUDGET_BYTES);
+            const size_t target_pipeline_budget = std::max<size_t>(
+                1,
+                std::min(
+                    free_bytes / 2,
+                    std::clamp(free_bytes / 32, MIN_PIPELINE_BUDGET_BYTES, MAX_PIPELINE_BUDGET_BYTES)));
 
-            const size_t recommended_prefetch = std::clamp(
-                target_pipeline_budget / std::max<size_t>(per_ready_image_bytes, 1),
-                size_t{2},
-                config.prefetch_count);
+            config.prefetch_count = std::max<size_t>(1, config.prefetch_count);
+            const size_t recommended_prefetch = std::min(
+                config.prefetch_count,
+                std::max<size_t>(1, target_pipeline_budget / estimate.max_slot_bytes));
 
             if (recommended_prefetch < config.prefetch_count) {
                 LOG_INFO(
-                    "Reducing image pipeline depth {} -> {} (largest image {:.1f} MB, free VRAM {:.1f} GB)",
+                    "Reducing image pipeline depth {} -> {} (largest slot {:.1f} MB, free VRAM {:.1f} GB)",
                     config.prefetch_count,
                     recommended_prefetch,
-                    estimate.max_image_bytes / (1024.0 * 1024.0),
+                    estimate.max_slot_bytes / (1024.0 * 1024.0),
                     free_bytes / (1024.0 * 1024.0 * 1024.0));
                 config.prefetch_count = recommended_prefetch;
             }
@@ -1425,7 +1300,10 @@ namespace lfs::training {
         save_requested_ = false;
         stop_requested_ = false;
         is_paused_ = false;
-        is_running_ = false;
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            is_running_ = false;
+        }
         training_complete_ = false;
         ready_to_start_ = false;
         current_iteration_ = 0;
@@ -1438,12 +1316,13 @@ namespace lfs::training {
     }
 
     int Trainer::get_regular_iterations() const {
-        return static_cast<int>(params_.optimization.iterations);
+        return static_cast<int>(getParams().optimization.iterations);
     }
 
     int Trainer::get_active_sparsify_steps() const {
-        return params_.optimization.enable_sparsity
-                   ? std::max(0, params_.optimization.sparsify_steps)
+        const auto params = getParams();
+        return params.optimization.enable_sparsity
+                   ? std::max(0, params.optimization.sparsify_steps)
                    : 0;
     }
 
@@ -1456,8 +1335,13 @@ namespace lfs::training {
     }
 
     lfs::core::param::OptimizationParameters Trainer::get_runtime_optimization_params() const {
-        auto runtime_params = params_.optimization;
-        runtime_params.iterations = static_cast<size_t>(std::max(0, get_total_iterations()));
+        const auto params = getParams();
+        auto runtime_params = params.optimization;
+        const int sparsify_steps = runtime_params.enable_sparsity
+                                       ? std::max(0, runtime_params.sparsify_steps)
+                                       : 0;
+        runtime_params.iterations = static_cast<size_t>(
+            std::max(0, static_cast<int>(runtime_params.iterations) + sparsify_steps));
         return runtime_params;
     }
 
@@ -2128,62 +2012,90 @@ namespace lfs::training {
         : base_dataset_(std::move(dataset)),
           strategy_(std::move(strategy)),
           provided_splits_(std::move(provided_splits)) {
+        LFS_ASSERT_MSG(base_dataset_ != nullptr, "Trainer requires a camera dataset");
+        LFS_ASSERT_MSG(strategy_ != nullptr, "Trainer requires a training strategy");
+
         // Check CUDA availability
         int device_count = 0;
-        cudaError_t error = cudaGetDeviceCount(&device_count);
-        if (error != cudaSuccess || device_count == 0) {
-            throw std::runtime_error("CUDA is not available – aborting.");
-        }
-
-        cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
-        // Use the default stream flags so synchronous readbacks and cold-path
-        // uploads remain ordered with training work. Overlap partners use
-        // non-blocking streams with explicit event edges.
-        cudaStreamCreate(&training_stream_);
-        cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking);
-        nvtxNameCudaStreamA(training_stream_, "lfs.train");
-        nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
-        nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
-        createSyncPrimitives();
+        require_cuda_success(cudaGetDeviceCount(&device_count), "CUDA device discovery");
+        LFS_ASSERT_MSG(device_count > 0, "CUDA is not available - aborting");
+        createCudaResources();
 
         LOG_DEBUG("Trainer constructed with {} cameras", base_dataset_->get_cameras().size());
     }
 
     Trainer::Trainer(lfs::core::Scene& scene)
         : scene_(&scene) {
+        LFS_ASSERT_MSG(scene.hasTrainingData(), "Scene has no cameras");
+
         int device_count = 0;
-        cudaError_t error = cudaGetDeviceCount(&device_count);
-        if (error != cudaSuccess || device_count == 0) {
-            throw std::runtime_error("CUDA is not available – aborting.");
-        }
-
-        cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
-        // Use the default stream flags so synchronous readbacks and cold-path
-        // uploads remain ordered with training work. Overlap partners use
-        // non-blocking streams with explicit event edges.
-        cudaStreamCreate(&training_stream_);
-        cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking);
-        nvtxNameCudaStreamA(training_stream_, "lfs.train");
-        nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
-        nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
-        createSyncPrimitives();
-
-        if (!scene.hasTrainingData()) {
-            throw std::runtime_error("Scene has no cameras");
-        }
+        require_cuda_success(cudaGetDeviceCount(&device_count), "CUDA device discovery");
+        LFS_ASSERT_MSG(device_count > 0, "CUDA is not available - aborting");
+        createCudaResources();
 
         LOG_DEBUG("Trainer constructed from Scene with {} cameras", scene.getAllCameras().size());
     }
 
-    void Trainer::createSyncPrimitives() {
-        cudaEventCreateWithFlags(&params_ready_event_, cudaEventDisableTiming);
-        for (auto& event : reader_done_events_) {
-            cudaEventCreateWithFlags(&event, cudaEventDisableTiming);
+    void Trainer::createCudaResources() {
+        try {
+            require_cuda_success(
+                cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking),
+                "Trainer callback stream creation");
+
+            // Use the default stream flags so synchronous readbacks and cold-path
+            // uploads remain ordered with training work. Overlap partners use
+            // non-blocking streams with explicit event edges.
+            require_cuda_success(
+                cudaStreamCreate(&training_stream_),
+                "Trainer training stream creation");
+            require_cuda_success(
+                cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking),
+                "Trainer metrics stream creation");
+
+            nvtxNameCudaStreamA(training_stream_, "lfs.train");
+            nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
+            nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
+            createSyncPrimitives();
+        } catch (...) {
+            // A C++ destructor is not invoked when its constructor throws.
+            // Roll back every member handle published by this transaction.
+            destroySyncPrimitives();
+            if (metrics_stream_) {
+                cudaStreamDestroy(metrics_stream_);
+                metrics_stream_ = nullptr;
+            }
+            if (training_stream_) {
+                cudaStreamDestroy(training_stream_);
+                training_stream_ = nullptr;
+            }
+            if (callback_stream_) {
+                cudaStreamDestroy(callback_stream_);
+                callback_stream_ = nullptr;
+            }
+            throw;
         }
-        for (auto& slot : loss_slots_) {
-            slot.pinned = static_cast<float*>(
+    }
+
+    void Trainer::createSyncPrimitives() {
+        require_cuda_success(
+            cudaEventCreateWithFlags(&params_ready_event_, cudaEventDisableTiming),
+            "Trainer parameter-ready event creation");
+        for (size_t i = 0; i < reader_done_events_.size(); ++i) {
+            require_cuda_success(
+                cudaEventCreateWithFlags(&reader_done_events_[i], cudaEventDisableTiming),
+                std::format("Trainer reader event {} creation", i));
+        }
+        for (size_t i = 0; i < loss_slots_.size(); ++i) {
+            require_cuda_success(
+                cudaEventCreateWithFlags(&loss_slots_[i].done, cudaEventDisableTiming),
+                std::format("Trainer loss event {} creation", i));
+        }
+        for (size_t i = 0; i < loss_slots_.size(); ++i) {
+            loss_slots_[i].pinned = static_cast<float*>(
                 lfs::core::PinnedMemoryAllocator::instance().allocate(sizeof(float)));
-            cudaEventCreateWithFlags(&slot.done, cudaEventDisableTiming);
+            LFS_ASSERT_MSG(
+                loss_slots_[i].pinned != nullptr,
+                std::format("Trainer loss slot {} pinned allocation failed", i));
         }
     }
 
@@ -2276,14 +2188,6 @@ namespace lfs::training {
                 .emit();
         }
         return {};
-    }
-
-    bool Trainer::modelAccessLockEnabled() {
-        static const bool enabled = [] {
-            const char* v = std::getenv("LFS_NO_MODEL_ACCESS_LOCK");
-            return !(v && v[0] == '1');
-        }();
-        return enabled;
     }
 
     void Trainer::beginModelRead(cudaStream_t reader_stream) {
@@ -2772,6 +2676,10 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> Trainer::initialize(const lfs::core::param::TrainingParameters& params) {
+        if (const auto validation_error = params.validate(); !validation_error.empty()) {
+            return std::unexpected("Invalid training parameters: " + validation_error);
+        }
+
         // Thread-safe initialization using mutex
         std::lock_guard<std::mutex> lock(init_mutex_);
 
@@ -2786,13 +2694,6 @@ namespace lfs::training {
 
         try {
             params_ = params;
-            memory_breakdown_enabled_ = env_flag_enabled("LFS_MEM_BREAKDOWN");
-            memory_breakdown_logged_init_ = false;
-            memory_breakdown_logged_train_setup_ = false;
-            memory_breakdown_logged_first_batch_ = false;
-            memory_breakdown_logged_first_raster_ = false;
-            memory_breakdown_logged_first_step_ = false;
-
             if (params_.optimization.enable_sparsity) {
                 const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
                 if (params_.optimization.stop_refine > stop_refine_limit) {
@@ -3121,71 +3022,6 @@ namespace lfs::training {
 
             initialized_ = true;
 
-            if (memory_breakdown_enabled_ && !memory_breakdown_logged_init_) {
-                const auto snapshot = capture_vram_snapshot(true);
-                log_vram_snapshot("after_trainer_initialize", snapshot);
-
-                std::vector<std::pair<std::string, size_t>> direct_entries;
-                const auto& initialized_splat = strategy_->get_model();
-                add_tensor_entry(direct_entries, "splat.means", initialized_splat.means());
-                add_tensor_entry(direct_entries, "splat.sh0", initialized_splat.sh0());
-                add_tensor_entry(direct_entries, "splat.shN", initialized_splat.shN());
-                add_tensor_entry(direct_entries, "splat.scaling", initialized_splat.scaling_raw());
-                add_tensor_entry(direct_entries, "splat.rotation", initialized_splat.rotation_raw());
-                add_tensor_entry(direct_entries, "splat.opacity", initialized_splat.opacity_raw());
-                add_tensor_entry(direct_entries, "splat.deleted", initialized_splat.deleted());
-                add_tensor_entry(direct_entries, "splat.densification_info", initialized_splat._densification_info);
-                log_entry_bytes("direct_splat", direct_entries);
-
-                std::vector<std::pair<std::string, size_t>> optimizer_entries;
-                for (const auto type : AdamOptimizer::all_param_types()) {
-                    const auto* state = strategy_->get_optimizer().get_state(type);
-                    if (!state) {
-                        continue;
-                    }
-                    const std::string prefix = std::string("optimizer.") +
-                                               (type == ParamType::Means      ? "means"
-                                                : type == ParamType::Sh0      ? "sh0"
-                                                : type == ParamType::ShN      ? "shN"
-                                                : type == ParamType::Scaling  ? "scaling"
-                                                : type == ParamType::Rotation ? "rotation"
-                                                                              : "opacity");
-                    add_tensor_entry(optimizer_entries, prefix + ".grad", state->grad);
-                    add_tensor_entry(optimizer_entries, prefix + ".exp_avg", state->exp_avg);
-                    add_tensor_entry(optimizer_entries, prefix + ".exp_avg_sq", state->exp_avg_sq);
-                }
-                log_entry_bytes("direct_optimizer", optimizer_entries);
-
-                std::vector<std::pair<std::string, size_t>> trainer_entries;
-                add_tensor_entry(trainer_entries, "trainer.background", background_);
-                add_tensor_entry(trainer_entries, "trainer.bg_mix_buffer", bg_mix_buffer_);
-                add_tensor_entry(trainer_entries, "trainer.bg_image_base", bg_image_base_);
-                add_tensor_entry(trainer_entries, "trainer.random_bg_buffer", random_bg_buffer_);
-                add_tensor_entry(trainer_entries, "trainer.loss_accumulator", loss_accumulator_);
-                add_tensor_entry(trainer_entries, "trainer.densification_error_map", densification_error_map_);
-                add_tensor_entry(trainer_entries, "trainer.pipelined_mask", pipelined_mask_);
-                if (const size_t cache_bytes = bg_image_cache_bytes(bg_image_cache_); cache_bytes > 0) {
-                    trainer_entries.emplace_back("trainer.bg_image_cache", cache_bytes);
-                }
-                if (const size_t bytes = photometric_workspace_bytes(photometric_loss_); bytes > 0) {
-                    trainer_entries.emplace_back("trainer.photometric_workspaces", bytes);
-                }
-                if (const size_t bytes = masked_fused_workspace_bytes(masked_fused_workspace_); bytes > 0) {
-                    trainer_entries.emplace_back("trainer.masked_fused_workspace", bytes);
-                }
-                if (const size_t bytes = ssim_map_workspace_bytes(densification_ssim_workspace_); bytes > 0) {
-                    trainer_entries.emplace_back("trainer.densification_ssim_workspace", bytes);
-                }
-                log_entry_bytes("pool_backed_trainer", trainer_entries);
-
-                LOG_INFO("[MEM] model logical_size={} capacity={} direct_model_plus_optimizer={:.2f} MiB",
-                         strategy_->get_model().size(),
-                         strategy_->get_model().means().capacity(),
-                         bytes_to_mib(splat_tensor_bytes(strategy_->get_model()) +
-                                      optimizer_state_bytes(strategy_->get_optimizer())));
-                memory_breakdown_logged_init_ = true;
-            }
-
             LOG_INFO("Trainer initialization complete");
             return {};
         } catch (const std::exception& e) {
@@ -3242,11 +3078,12 @@ namespace lfs::training {
         if (!initialized_.load() || !strategy_) {
             return std::unexpected("trainer is not initialized");
         }
+        const auto params = getParams();
 
         auto inputs = load_camera_metrics_inputs(
             camera,
             getGTLoadConfigSnapshot(),
-            params_.optimization,
+            params.optimization,
             getActiveImageLoader());
         if (!inputs) {
             return std::unexpected(inputs.error());
@@ -3267,10 +3104,7 @@ namespace lfs::training {
             const std::shared_lock lock(render_mutex_);
             // Exclude the non-refining optimizer writes for the metric read window
             // so the live model can't be mutated mid-render (see getModelAccessMutex).
-            std::optional<std::shared_lock<std::shared_mutex>> model_read_lock;
-            if (modelAccessLockEnabled()) {
-                model_read_lock.emplace(model_access_mutex_);
-            }
+            const std::shared_lock model_read_lock(model_access_mutex_);
             // Run the metric render on the dedicated metrics stream (its kernels
             // and tensor ops overlap training; item() readbacks drain it). Cap
             // arena acquisition so a refining iteration holding the arena can't
@@ -3290,13 +3124,13 @@ namespace lfs::training {
 
             try {
                 RenderOutput output;
-                if (params_.optimization.gut) {
+                if (params.optimization.gut) {
                     output = gsplat_rasterize(
                         camera, model, background,
                         1.0f, false, GsplatRenderMode::RGB, true);
                 } else {
                     output = fast_rasterize(
-                        camera, model, background, params_.optimization.mip_filter);
+                        camera, model, background, params.optimization.mip_filter);
                 }
 
                 rendered = output.image;
@@ -3476,19 +3310,60 @@ namespace lfs::training {
         LOG_DEBUG("GPU memory released");
 
         initialized_ = false;
-        is_running_ = false;
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            is_running_ = false;
+        }
         training_complete_ = false;
     }
 
     void Trainer::setParams(const lfs::core::param::TrainingParameters& params) {
-        // Check if background image path changed and needs to be (re)loaded
-        const bool bg_image_path_changed =
-            params.optimization.bg_image_path != params_.optimization.bg_image_path;
+        if (const auto validation_error = params.validate(); !validation_error.empty()) {
+            LOG_ERROR("Rejected invalid training parameter update: {}", validation_error);
+            return;
+        }
+
+        bool bg_image_path_changed = false;
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            if (is_running_.load(std::memory_order_acquire)) {
+                pending_params_ = params;
+                return;
+            }
+            const auto& current = pending_params_ ? *pending_params_ : params_;
+            bg_image_path_changed =
+                params.optimization.bg_image_path != current.optimization.bg_image_path;
+            params_ = params;
+            pending_params_.reset();
+        }
+        apply_param_side_effects(params, bg_image_path_changed);
+    }
+
+    void Trainer::apply_pending_params_at_safe_point() {
+        std::optional<lfs::core::param::TrainingParameters> update;
+        bool bg_image_path_changed = false;
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            if (!pending_params_) {
+                return;
+            }
+            update = std::move(pending_params_);
+            pending_params_.reset();
+            bg_image_path_changed =
+                update->optimization.bg_image_path != params_.optimization.bg_image_path;
+            params_ = *update;
+        }
+        apply_param_side_effects(*update, bg_image_path_changed);
+    }
+
+    void Trainer::apply_param_side_effects(
+        const lfs::core::param::TrainingParameters& params,
+        const bool bg_image_path_changed) {
+        // Metrics render under render_mutex_ shared and read background_ directly.
+        // Publish the parameter-dependent tensors as one exclusive update.
+        const std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
         const bool bg_mode_is_image =
             params.optimization.bg_mode == lfs::core::param::BackgroundMode::Image;
-
-        // Update params first
-        params_ = params;
 
         // Load/reload background image if needed
         if (bg_mode_is_image && bg_image_path_changed &&
@@ -3504,10 +3379,11 @@ namespace lfs::training {
                 if (bg_image_base_.device() != lfs::core::Device::CUDA) {
                     bg_image_base_ = bg_image_base_.to(lfs::core::Device::CUDA);
                 }
-                bg_image_cache_.clear();
+                clearBackgroundImageCache();
                 if (bg_image_base_.shape()[0] != 3) {
                     LOG_WARN("Background image has {} channels, expected 3 (RGB)", bg_image_base_.shape()[0]);
                     bg_image_base_ = {};
+                    std::lock_guard<std::mutex> lock(params_mutex_);
                     params_.optimization.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
                 } else {
                     LOG_INFO("Background image: {} [{}x{}]",
@@ -3516,12 +3392,13 @@ namespace lfs::training {
                 }
             } catch (const std::exception& e) {
                 LOG_WARN("Failed to load background image: {}", e.what());
+                std::lock_guard<std::mutex> lock(params_mutex_);
                 params_.optimization.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
             }
         }
 
         if (!bg_mode_is_image && (bg_image_base_.is_valid() || !bg_image_cache_.empty())) {
-            bg_image_cache_.clear();
+            clearBackgroundImageCache();
             bg_image_base_ = {};
         }
 
@@ -3559,6 +3436,8 @@ namespace lfs::training {
     }
 
     void Trainer::handle_control_requests(int iter, std::stop_token stop_token) {
+        apply_pending_params_at_safe_point();
+
         // Check stop token first
         if (stop_token.stop_requested()) {
             stop_requested_ = true;
@@ -3587,12 +3466,17 @@ namespace lfs::training {
 
         if (save_requested_.exchange(false)) {
             LOG_INFO("Saving checkpoint and PLY at iteration {}...", iter);
-            save_ply(params_.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
+            const auto params = getParams();
+            if (auto ply_result = save_ply(
+                    params.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
+                !ply_result) {
+                LOG_ERROR("Failed to save PLY: {}", ply_result.error());
+            }
             auto result = save_checkpoint(iter);
             if (result) {
-                const auto checkpoint_path = lfs::training::checkpoint_output_path(params_.dataset.output_path);
+                const auto checkpoint_path = lfs::training::checkpoint_output_path(params.dataset.output_path);
                 LOG_INFO("Checkpoint and PLY saved to {} (checkpoint: {})",
-                         lfs::core::path_to_utf8(params_.dataset.output_path),
+                         lfs::core::path_to_utf8(params.dataset.output_path),
                          lfs::core::path_to_utf8(checkpoint_path));
             } else {
                 LOG_ERROR("Failed to save checkpoint: {}", result.error());
@@ -3602,9 +3486,6 @@ namespace lfs::training {
         // Handle stop request - this permanently stops training
         if (stop_requested_.load()) {
             LOG_INFO("Stopping training permanently at iteration {}...", iter);
-            LOG_DEBUG("Saving final model...");
-            save_ply(params_.dataset.output_path, params_.dataset.output_name, iter, /*join=*/true);
-            is_running_ = false;
         }
     }
 
@@ -3669,6 +3550,12 @@ namespace lfs::training {
         return bg_mix_buffer_;
     }
 
+    void Trainer::clearBackgroundImageCache() {
+        bg_image_cache_.clear();
+        bg_image_cache_bytes_ = 0;
+        bg_image_cache_clock_ = 0;
+    }
+
     lfs::core::Tensor Trainer::get_background_image_for_camera(int width, int height) {
         // Return empty tensor if no background image is loaded
         if (!bg_image_base_.is_valid() || bg_image_base_.is_empty()) {
@@ -3679,7 +3566,8 @@ namespace lfs::training {
         const uint64_t cache_key = (static_cast<uint64_t>(height) << 32) | static_cast<uint64_t>(width);
         auto it = bg_image_cache_.find(cache_key);
         if (it != bg_image_cache_.end()) {
-            return it->second;
+            it->second.last_used = ++bg_image_cache_clock_;
+            return it->second.tensor;
         }
 
         // Resize background image to match camera dimensions
@@ -3689,7 +3577,6 @@ namespace lfs::training {
 
         // If dimensions match, use the original
         if (src_w == width && src_h == height) {
-            bg_image_cache_[cache_key] = bg_image_base_;
             return bg_image_base_;
         }
 
@@ -3708,8 +3595,31 @@ namespace lfs::training {
             height, width,
             resized.stream());
 
-        // Cache the resized image
-        bg_image_cache_[cache_key] = resized;
+        // Cache only if this physical bucket can fit under the hard byte ceiling.
+        // Returned Tensor copies retain storage safely if an older entry is evicted.
+        const size_t allocation_bytes = lfs::core::SizeBucketedPool::get_bucket_size(resized.bytes());
+        if (allocation_bytes <= BG_IMAGE_CACHE_BUDGET_BYTES) {
+            while (!bg_image_cache_.empty() &&
+                   bg_image_cache_bytes_ > BG_IMAGE_CACHE_BUDGET_BYTES - allocation_bytes) {
+                const auto lru = std::min_element(
+                    bg_image_cache_.begin(), bg_image_cache_.end(), [](const auto& left, const auto& right) {
+                        return left.second.last_used < right.second.last_used;
+                    });
+                bg_image_cache_bytes_ -= std::min(bg_image_cache_bytes_, lru->second.allocation_bytes);
+                bg_image_cache_.erase(lru);
+            }
+
+            bg_image_cache_.emplace(
+                cache_key,
+                BackgroundImageCacheEntry{
+                    .tensor = resized,
+                    .allocation_bytes = allocation_bytes,
+                    .last_used = ++bg_image_cache_clock_});
+            bg_image_cache_bytes_ += allocation_bytes;
+            LFS_ASSERT_MSG(
+                bg_image_cache_bytes_ <= BG_IMAGE_CACHE_BUDGET_BYTES,
+                "Background image cache exceeded its physical byte budget");
+        }
         LOG_DEBUG("Background image resized: {}x{} -> {}x{}", src_w, src_h, width, height);
 
         return resized;
@@ -3770,6 +3680,9 @@ namespace lfs::training {
 
             if (on_iteration_start_)
                 on_iteration_start_();
+            // Manager/Python callbacks publish parameter updates via setParams().
+            // Install them before forward or optimizer work observes params_.
+            apply_pending_params_at_safe_point();
 
             // Gate this step's in-place parameter writes behind in-flight model
             // reads (viewer packs, metric renders) — GPU-side waits, ~free once
@@ -3850,7 +3763,7 @@ namespace lfs::training {
                 record_vram_tensor("train.persistent", "background", background_);
                 record_vram_tensor("train.persistent", "background_mix_buffer", bg_mix_buffer_);
                 record_vram_tensor("train.persistent", "background_image_base", bg_image_base_);
-                record_vram_current("train.persistent", "background_image_cache", bg_image_cache_bytes(bg_image_cache_));
+                record_vram_current("train.persistent", "background_image_cache", bg_image_cache_bytes_);
                 record_pipeline_vram_breakdown(getActiveImageLoader());
             }
             auto& loss_tensor_gpu = loss_accumulator_;
@@ -4066,7 +3979,7 @@ namespace lfs::training {
 
                                 LOG_ERROR("OUT OF MEMORY in 3DGS/FastGS training.");
                                 LOG_ERROR("Arena error: {}", error);
-                                return std::unexpected(error);
+                                return StepResult::RetryAfterOom;
                             }
                             // Non-OOM error - propagate
                             nvtxRangePop();
@@ -4482,42 +4395,6 @@ namespace lfs::training {
                                         depth_anchor,
                                         depth_stream);
 
-                                    static const bool depth_loss_diag = env_flag_enabled("LFS_DEPTH_LOSS_DIAG");
-                                    static const int depth_loss_diag_interval =
-                                        env_int_or_default("LFS_DEPTH_LOSS_DIAG_INTERVAL", 50);
-                                    if (depth_loss_diag && (iter == 1 || iter % depth_loss_diag_interval == 0)) {
-                                        namespace slots = lfs::training::kernels::depth_loss_slots;
-                                        const auto slot = [&](const int s) {
-                                            return depth_loss_partials_.slice(0, s, s + 1).item<float>();
-                                        };
-                                        const auto depth_grad_abs = depth_loss_grad_.abs();
-                                        const auto alpha_grad_abs = depth_loss_grad_alpha_.abs();
-                                        const float valid_count = slot(slots::kCount);
-                                        const float valid_fraction = num_depth_pixels > 0
-                                                                         ? valid_count / static_cast<float>(num_depth_pixels)
-                                                                         : 0.0f;
-                                        LOG_INFO("[DEPTH_LOSS] iter={} prior={} qstep={:.6f} camera='{}' loss={:.6f} weight={:.4f} valid={:.0f} model={} scale={:.6f} shift={:.6f} sigma_p={:.6f} floor={:.6f} mean_e={:.4f} valid_pixels={:.0f} valid_fraction={:.3f} grad_depth_abs_max={:.6e} grad_depth_abs_mean={:.6e} grad_alpha_abs_max={:.6e} grad_alpha_abs_mean={:.6e}",
-                                                 iter,
-                                                 depth_prior_name(depth_prior),
-                                                 depth_prior_qstep,
-                                                 cam->image_name(),
-                                                 depth_loss_scalar_.item<float>(),
-                                                 depth_weight_now,
-                                                 slot(slots::kValid),
-                                                 static_cast<int>(slot(slots::kModel)) == 0 ? "disparity" : "depth",
-                                                 slot(slots::kScale),
-                                                 slot(slots::kShift),
-                                                 slot(slots::kSigmaP),
-                                                 slot(slots::kFloor),
-                                                 slot(slots::kMeanExpectedDepth),
-                                                 valid_count,
-                                                 valid_fraction,
-                                                 depth_grad_abs.max().item<float>(),
-                                                 depth_grad_abs.mean().item<float>(),
-                                                 alpha_grad_abs.max().item<float>(),
-                                                 alpha_grad_abs.mean().item<float>());
-                                    }
-
                                     tile_loss = tile_loss + depth_loss_scalar_;
                                 }
                             } else {
@@ -4623,7 +4500,6 @@ namespace lfs::training {
                                     params_.optimization.normal_loss_weight,
                                     normal_stream);
 
-                                bool normal_prior_depth_ran = false;
                                 if (output.depth.is_valid() &&
                                     output.depth.numel() > 0 &&
                                     cam->camera_width() > 0 && cam->camera_height() > 0 &&
@@ -4685,40 +4561,8 @@ namespace lfs::training {
                                             cy,
                                             params_.optimization.normal_loss_weight,
                                             normal_stream);
-                                        normal_prior_depth_ran = true;
                                         tile_loss = tile_loss + normal_prior_depth_scalar_;
                                     }
-                                }
-
-                                static const bool normal_loss_diag = env_flag_enabled("LFS_NORMAL_LOSS_DIAG");
-                                static const int normal_loss_diag_interval =
-                                    env_int_or_default("LFS_NORMAL_LOSS_DIAG_INTERVAL", 50);
-                                if (normal_loss_diag && (iter == 1 || iter % normal_loss_diag_interval == 0)) {
-                                    namespace nslots = lfs::training::kernels::normal_loss_slots;
-                                    const auto nslot = [&](const int s) {
-                                        return normal_loss_partials_.slice(0, s, s + 1).item<float>();
-                                    };
-                                    const auto normal_grad_abs = normal_loss_grad_.abs();
-                                    const float prior_depth_loss =
-                                        normal_prior_depth_ran ? normal_prior_depth_scalar_.item<float>() : 0.0f;
-                                    const float prior_depth_grad_max =
-                                        normal_prior_depth_ran ? depth_loss_grad_.abs().max().item<float>() : 0.0f;
-                                    const float prior_alpha_grad_max =
-                                        normal_prior_depth_ran ? depth_loss_grad_alpha_.abs().max().item<float>() : 0.0f;
-                                    LOG_INFO("[NORMAL_LOSS] iter={} camera='{}' loss={:.6f} prior_depth_loss={:.6f} weight={:.4f} valid={:.0f} sum_alpha={:.1f} valid_pixels={:.0f} mean_cos={:.4f} grad_abs_max={:.6e} grad_abs_mean={:.6e} prior_depth_grad_abs_max={:.6e} prior_alpha_grad_abs_max={:.6e}",
-                                             iter,
-                                             cam->image_name(),
-                                             normal_loss_scalar_.item<float>(),
-                                             prior_depth_loss,
-                                             params_.optimization.normal_loss_weight,
-                                             nslot(nslots::kValid),
-                                             nslot(nslots::kSumAlpha),
-                                             nslot(nslots::kCount),
-                                             nslot(nslots::kMeanCos),
-                                             normal_grad_abs.max().item<float>(),
-                                             normal_grad_abs.mean().item<float>(),
-                                             prior_depth_grad_max,
-                                             prior_alpha_grad_max);
                                 }
 
                                 tile_grad_normal = normal_loss_grad_;
@@ -4830,25 +4674,6 @@ namespace lfs::training {
                                 cy,
                                 params_.optimization.normal_consistency_weight,
                                 consistency_stream);
-
-                            static const bool normal_loss_diag = env_flag_enabled("LFS_NORMAL_LOSS_DIAG");
-                            static const int normal_loss_diag_interval =
-                                env_int_or_default("LFS_NORMAL_LOSS_DIAG_INTERVAL", 50);
-                            if (normal_loss_diag && (iter == 1 || iter % normal_loss_diag_interval == 0)) {
-                                namespace cslots = lfs::training::kernels::normal_consistency_slots;
-                                const auto cslot = [&](const int s) {
-                                    return normal_consistency_partials_.slice(0, s, s + 1).item<float>();
-                                };
-                                LOG_INFO("[NORMAL_CONSISTENCY] iter={} camera='{}' loss={:.6f} weight={:.4f} valid={:.0f} sum_alpha={:.1f} valid_pixels={:.0f} mean_cos={:.4f}",
-                                         iter,
-                                         cam->image_name(),
-                                         normal_consistency_scalar_.item<float>(),
-                                         params_.optimization.normal_consistency_weight,
-                                         cslot(cslots::kValid),
-                                         cslot(cslots::kSumAlpha),
-                                         cslot(cslots::kCount),
-                                         cslot(cslots::kMeanCos));
-                            }
 
                             tile_loss = tile_loss + normal_consistency_scalar_;
                         }
@@ -4975,87 +4800,6 @@ namespace lfs::training {
                                             ssim_map_workspace_bytes(densification_ssim_workspace_));
                         record_vram_tensor("train.losses", "densification_error_map.buffer", densification_error_map_);
                         record_vram_tensor("train.losses", "edge_map_buffer", edge_map_buffer_);
-                    }
-
-                    if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_raster_ && fast_ctx) {
-                        const auto snapshot = capture_vram_snapshot(true);
-                        log_vram_snapshot("during_first_fastgs_tile", snapshot);
-
-                        const size_t n_primitives = static_cast<size_t>(strategy_->get_model().size());
-                        const size_t grad_mean2d_helper_bytes = n_primitives * 2 * sizeof(float);
-                        const size_t grad_conic_helper_bytes = n_primitives * 3 * sizeof(float);
-
-                        std::vector<std::pair<std::string, size_t>> fastgs_entries;
-                        if (fast_ctx->forward_ctx.per_primitive_buffers_size > 0) {
-                            fastgs_entries.emplace_back("fastgs.per_primitive_buffers",
-                                                        fast_ctx->forward_ctx.per_primitive_buffers_size);
-                        }
-                        if (fast_ctx->forward_ctx.per_tile_buffers_size > 0) {
-                            fastgs_entries.emplace_back("fastgs.per_tile_buffers",
-                                                        fast_ctx->forward_ctx.per_tile_buffers_size);
-                        }
-                        if (fast_ctx->forward_ctx.sorted_primitive_indices_size > 0) {
-                            fastgs_entries.emplace_back("fastgs.sorted_primitive_indices_live",
-                                                        fast_ctx->forward_ctx.sorted_primitive_indices_size);
-                        }
-                        fastgs_entries.emplace_back("fastgs.grad_mean2d_helper", grad_mean2d_helper_bytes);
-                        fastgs_entries.emplace_back("fastgs.grad_conic_helper", grad_conic_helper_bytes);
-                        if (run_fastgs_gaussian_backward) {
-                            fastgs_entries.emplace_back("fastgs.fused_grad_opacity_helper", n_primitives * sizeof(float));
-                            fastgs_entries.emplace_back("fastgs.fused_grad_color_helper", n_primitives * 3 * sizeof(float));
-                        }
-                        fastgs_entries.emplace_back("render.output_image", tensor_reserved_bytes(output.image));
-                        fastgs_entries.emplace_back("render.output_alpha", tensor_reserved_bytes(output.alpha));
-                        fastgs_entries.emplace_back("render.output_depth", tensor_reserved_bytes(output.depth));
-                        fastgs_entries.emplace_back("train.gt_tile", tensor_reserved_bytes(gt_tile));
-                        if (bg_image.is_valid() && !bg_image.is_empty()) {
-                            fastgs_entries.emplace_back("train.background_image", tensor_reserved_bytes(bg_image));
-                        }
-                        if (tile_error_map.is_valid()) {
-                            fastgs_entries.emplace_back("train.tile_error_map", tensor_reserved_bytes(tile_error_map));
-                        }
-                        log_entry_bytes("first_fastgs_tile_live", fastgs_entries);
-                        if (fast_ctx->forward_ctx.per_instance_sort_total_size > 0) {
-                            LOG_INFO("[MEM] fastgs_sort_transient total_forward={:.2f} MiB, released_after_forward={:.2f} MiB, sorted_indices_live={:.2f} MiB",
-                                     bytes_to_mib(fast_ctx->forward_ctx.per_instance_sort_total_size),
-                                     bytes_to_mib(fast_ctx->forward_ctx.per_instance_sort_scratch_size),
-                                     bytes_to_mib(fast_ctx->forward_ctx.sorted_primitive_indices_size));
-                        }
-
-                        std::vector<std::pair<std::string, size_t>> trainer_entries;
-                        if (const size_t bytes = photometric_workspace_bytes(photometric_loss_); bytes > 0) {
-                            trainer_entries.emplace_back("trainer.photometric_workspaces", bytes);
-                        }
-                        if (const size_t bytes = masked_fused_workspace_bytes(masked_fused_workspace_); bytes > 0) {
-                            trainer_entries.emplace_back("trainer.masked_fused_workspace", bytes);
-                        }
-                        if (const size_t bytes = ssim_map_workspace_bytes(densification_ssim_workspace_); bytes > 0) {
-                            trainer_entries.emplace_back("trainer.densification_ssim_workspace", bytes);
-                        }
-                        add_tensor_entry(trainer_entries, "trainer.densification_error_map", densification_error_map_);
-                        add_tensor_entry(trainer_entries, "trainer.loss_accumulator", loss_accumulator_);
-                        add_tensor_entry(trainer_entries, "trainer.pipelined_mask", pipelined_mask_);
-                        add_tensor_entry(trainer_entries, "trainer.pipelined_depth", pipelined_depth_);
-                        add_tensor_entry(trainer_entries, "trainer.pipelined_normal", pipelined_normal_);
-                        add_tensor_entry(trainer_entries, "trainer.depth_loss_grad", depth_loss_grad_);
-                        add_tensor_entry(trainer_entries, "trainer.depth_loss_partials", depth_loss_partials_);
-                        log_entry_bytes("trainer_pool_backed_live", trainer_entries);
-
-                        if (auto loader = getActiveImageLoader()) {
-                            const auto stats = loader->get_stats();
-                            LOG_INFO("[MEM] first_fastgs_tile loader output_queue={}, pending_pairs={}, hot_queue={}, cold_queue={}, prefetch_queue={}",
-                                     stats.output_queue_size,
-                                     stats.pending_pairs_count,
-                                     stats.hot_queue_size,
-                                     stats.cold_queue_size,
-                                     stats.prefetch_queue_size);
-                        }
-
-                        LOG_INFO("[MEM] fastgs counts instances={}, image={}x{}",
-                                 fast_ctx->forward_ctx.n_instances,
-                                 output.width,
-                                 output.height);
-                        memory_breakdown_logged_first_raster_ = true;
                     }
 
                     loss_tensor_gpu = loss_tensor_gpu + tile_loss;
@@ -5281,7 +5025,7 @@ namespace lfs::training {
                     std::unique_lock<std::shared_mutex> model_write_lock(model_access_mutex_, std::defer_lock);
                     if (strategy_->is_refining(iter)) {
                         lock.lock();
-                    } else if (modelAccessLockEnabled()) {
+                    } else {
                         // Non-refining in-place writes: hold the model-access lock
                         // exclusive across the optimizer step so viewer/metric
                         // readers (which take it shared) cannot enter mid-write and
@@ -5380,7 +5124,11 @@ namespace lfs::training {
                                                        iter == get_sparsity_boundary_iteration();
                 if (save_regular_phase_output) {
                     LOG_INFO("Saving regular-phase checkpoint and PLY at iteration {} before sparsification", iter);
-                    save_ply(params_.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
+                    if (auto ply_result = save_ply(
+                            params_.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
+                        !ply_result) {
+                        LOG_WARN("Failed to save regular-phase PLY at iteration {}: {}", iter, ply_result.error());
+                    }
                     if (auto result = save_checkpoint(iter); !result) {
                         LOG_WARN("Failed to save regular-phase checkpoint at iteration {}: {}", iter, result.error());
                     }
@@ -5458,29 +5206,6 @@ namespace lfs::training {
                 lfs::diagnostics::VramProfiler::instance().sampleCudaMemory();
             }
 
-            if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_step_) {
-                const auto snapshot = capture_vram_snapshot(true);
-                log_vram_snapshot("after_first_train_step", snapshot);
-                LOG_INFO("[MEM] after_first_train_step model logical_size={} capacity={} direct_model_plus_optimizer={:.2f} MiB",
-                         strategy_->get_model().size(),
-                         strategy_->get_model().means().capacity(),
-                         bytes_to_mib(splat_tensor_bytes(strategy_->get_model()) +
-                                      optimizer_state_bytes(strategy_->get_optimizer())));
-                memory_breakdown_logged_first_step_ = true;
-            }
-
-            if (memory_breakdown_enabled_ && iter > 1 && (iter % 1000) == 0) {
-                const auto label = std::format("after_step_{}", iter);
-                const auto snapshot = capture_vram_snapshot(true);
-                log_vram_snapshot(label, snapshot);
-                LOG_INFO("[MEM] {} model logical_size={} capacity={} direct_model_plus_optimizer={:.2f} MiB",
-                         label,
-                         strategy_->get_model().size(),
-                         strategy_->get_model().means().capacity(),
-                         bytes_to_mib(splat_tensor_bytes(strategy_->get_model()) +
-                                      optimizer_state_bytes(strategy_->get_optimizer())));
-            }
-
             // Return Continue if we should continue training
             if (iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()) {
                 return StepResult::Continue;
@@ -5498,41 +5223,46 @@ namespace lfs::training {
             return std::unexpected("Trainer not initialized. Call initialize() before train()");
         }
 
-        is_running_ = false;
         training_complete_ = false;
         ready_to_start_ = false; // Reset the flag
         lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
 
         ready_to_start_ = true; // Skip GUI wait for now
 
-        is_running_ = true; // Now we can start
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            is_running_ = true; // Active setParams() calls queue from this point onward.
+        }
+        apply_pending_params_at_safe_point();
         LOG_INFO("Starting training loop");
         auto& cache_loader = lfs::io::CacheLoader::getInstance();
-        cache_loader.reset_cache();
-        cache_loader.update_cache_params(params_.dataset.loading_params.use_cpu_memory,
-                                         params_.dataset.loading_params.use_fs_cache,
-                                         train_dataset_size_,
-                                         params_.dataset.loading_params.min_cpu_free_GB,
-                                         params_.dataset.loading_params.min_cpu_free_memory_ratio,
-                                         params_.dataset.loading_params.print_cache_status,
-                                         params_.dataset.loading_params.print_status_freq_num);
-
-        // Notify Python control layer that training is starting
-        {
-            lfs::training::HookContext ctx{
-                .iteration = 0,
-                .loss = current_loss_.load(),
-                .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
-                .is_refining = strategy_ ? strategy_->is_refining(0) : false,
-                .trainer = this};
-            lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
-            lfs::training::CommandCenter::instance().update_snapshot(
-                ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
-                lfs::training::TrainingPhase::SafeControl);
-            lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::TrainingStart, ctx);
-        }
+        std::optional<std::string> terminal_error;
 
         try {
+            cache_loader.reset_cache();
+            cache_loader.update_cache_params(params_.dataset.loading_params.use_cpu_memory,
+                                             params_.dataset.loading_params.use_fs_cache,
+                                             train_dataset_size_,
+                                             params_.dataset.loading_params.min_cpu_free_GB,
+                                             params_.dataset.loading_params.min_cpu_free_memory_ratio,
+                                             params_.dataset.loading_params.print_cache_status,
+                                             params_.dataset.loading_params.print_status_freq_num);
+
+            // Notify Python control layer that training is starting
+            {
+                lfs::training::HookContext ctx{
+                    .iteration = 0,
+                    .loss = current_loss_.load(),
+                    .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                    .is_refining = strategy_ ? strategy_->is_refining(0) : false,
+                    .trainer = this};
+                lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
+                lfs::training::CommandCenter::instance().update_snapshot(
+                    ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
+                    lfs::training::TrainingPhase::SafeControl);
+                lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::TrainingStart, ctx);
+            }
+
             std::optional<lfs::core::CUDAStreamGuard> stream_guard;
             if (training_stream_) {
                 stream_guard.emplace(training_stream_);
@@ -5573,8 +5303,6 @@ namespace lfs::training {
                 pipelined_config.prefetch_count = COLD_PREFETCH_COUNT;
                 LOG_INFO("{:.0f}% non-JPEG images, using {} cold threads", non_jpeg_ratio * 100.0f, cold_threads);
             }
-
-            pipelined_config = tunePipelinedLoaderConfig(pipelined_config, train_dataset_);
 
             const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
             PipelinedAuxiliaryImageConfig aux_pipeline_config;
@@ -5723,6 +5451,9 @@ namespace lfs::training {
                 }
             }
 
+            pipelined_config = tunePipelinedLoaderConfig(
+                pipelined_config, train_dataset_, aux_pipeline_config);
+
             auto train_dataloader = create_infinite_pipelined_dataloader(
                 train_dataset_, pipelined_config, aux_pipeline_config);
             auto active_image_loader_guard = makeScopeGuard([this]() {
@@ -5731,20 +5462,6 @@ namespace lfs::training {
             updateGTLoadConfigSnapshot();
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
-
-            if (memory_breakdown_enabled_ && !memory_breakdown_logged_train_setup_) {
-                const auto snapshot = capture_vram_snapshot(true);
-                log_vram_snapshot("after_dataloader_setup", snapshot);
-                const auto stats = train_dataloader->get_stats();
-                LOG_INFO("[MEM] dataloader setup in_flight={}, output_queue={}, pending_pairs={}, hot_queue={}, cold_queue={}, prefetch_queue={}",
-                         train_dataloader->get_loader_shared()->in_flight_count(),
-                         stats.output_queue_size,
-                         stats.pending_pairs_count,
-                         stats.hot_queue_size,
-                         stats.cold_queue_size,
-                         stats.prefetch_queue_size);
-                memory_breakdown_logged_train_setup_ = true;
-            }
 
             LOG_DEBUG("Starting training iterations");
             bool logged_epoch2_loader_cache = false;
@@ -5769,7 +5486,9 @@ namespace lfs::training {
                 lfs::core::Tensor gt_image;
                 auto example_opt = train_dataloader->next();
                 if (!example_opt) {
-                    LOG_ERROR("DataLoader returned nullopt unexpectedly");
+                    terminal_error = std::format(
+                        "DataLoader ended unexpectedly at iteration {}", current_iteration_.load());
+                    LOG_ERROR("{}", *terminal_error);
                     break;
                 }
                 auto& example = *example_opt;
@@ -5810,52 +5529,38 @@ namespace lfs::training {
                     logged_epoch2_loader_cache = true;
                 }
 
-                if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_batch_) {
-                    const auto snapshot = capture_vram_snapshot(true);
-                    log_vram_snapshot("after_first_batch_fetch", snapshot);
-                    const auto stats = train_dataloader->get_stats();
-                    const size_t channels = gt_image.ndim() > 2 ? gt_image.shape()[0] : 1;
-                    const size_t height = gt_image.ndim() > 2 ? gt_image.shape()[1] : gt_image.shape()[0];
-                    const size_t width = gt_image.ndim() > 2 ? gt_image.shape()[2] : gt_image.shape()[1];
-                    LOG_INFO("[MEM] first_batch gt_image={}x{}x{} = {:.2f} MiB, mask = {:.2f} MiB, depth = {:.2f} MiB, output_queue={}, pending_pairs={}, in_flight={}",
-                             channels,
-                             height,
-                             width,
-                             bytes_to_mib(tensor_reserved_bytes(gt_image)),
-                             bytes_to_mib(tensor_reserved_bytes(pipelined_mask_)),
-                             bytes_to_mib(tensor_reserved_bytes(pipelined_depth_)),
-                             stats.output_queue_size,
-                             stats.pending_pairs_count,
-                             train_dataloader->get_loader_shared()->in_flight_count());
-                    memory_breakdown_logged_first_batch_ = true;
-                }
-
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                 if (!step_result) {
-                    // Check if this is an OOM_RETRY signal
-                    if (step_result.error() == "OOM_RETRY") {
-                        cudaDeviceSynchronize();
-                        cudaGetLastError();
+                    terminal_error = step_result.error();
+                    break;
+                }
 
-                        // Device is drained — consume completed loss readbacks
-                        // before the retry resubmits into the ring.
-                        if (auto harvested = harvestLossReadbacks(true, false); !harvested) {
-                            return std::unexpected(harvested.error());
-                        }
+                if (*step_result == StepResult::RetryAfterOom) {
+                    cudaDeviceSynchronize();
+                    cudaGetLastError();
 
-                        lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
-                        lfs::core::Tensor::trim_memory_pool();
+                    // Device is drained — consume completed loss readbacks
+                    // before the retry resubmits into the ring.
+                    if (auto harvested = harvestLossReadbacks(true, false); !harvested) {
+                        terminal_error = harvested.error();
+                        break;
+                    }
 
-                        cudaDeviceSynchronize();
-                        cudaGetLastError();
+                    lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+                    lfs::core::Tensor::trim_memory_pool();
 
-                        LOG_INFO("OOM recovery: retrying iteration {}", iter);
-                        step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
-                        if (!step_result) {
-                            return std::unexpected(step_result.error());
-                        }
-                    } else {
-                        return std::unexpected(step_result.error());
+                    cudaDeviceSynchronize();
+                    cudaGetLastError();
+
+                    LOG_INFO("OOM recovery: retrying iteration {}", iter);
+                    step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
+                    if (!step_result) {
+                        terminal_error = step_result.error();
+                        break;
+                    }
+                    if (*step_result == StepResult::RetryAfterOom) {
+                        terminal_error = "CUDA out of memory after one recovery attempt";
+                        break;
                     }
                 }
 
@@ -5892,73 +5597,116 @@ namespace lfs::training {
             clearActiveImageLoader();
             active_image_loader_guard.release();
 
-            // Ensure callback is finished before final save
-            if (callback_busy_.load()) {
-                cudaStreamSynchronize(callback_stream_);
-            }
-
-            // Final save if not already saved by stop request
-            if (!stop_requested_.load() && !stop_token.stop_requested()) {
-                auto final_path = params_.dataset.output_path;
-                const bool rotate_checkpoint = get_active_sparsify_steps() == 0;
-                save_ply(final_path, params_.dataset.output_name, get_total_iterations(), /*join=*/true,
-                         /*save_checkpoint=*/rotate_checkpoint);
-            }
-
             maybe_publish_camera_loss_heatmap(current_iteration_.load(), true);
 
             if (auto harvested = harvestLossReadbacks(true, false); !harvested) {
-                return std::unexpected(harvested.error());
+                if (terminal_error) {
+                    *terminal_error += "; loss readback finalization failed: " + harvested.error();
+                } else {
+                    terminal_error = harvested.error();
+                }
             }
+        } catch (const std::exception& e) {
+            terminal_error = std::format("Training failed: {}", e.what());
+        }
 
+        const auto append_terminal_error = [&terminal_error](std::string error) {
+            if (terminal_error) {
+                *terminal_error += "; " + error;
+            } else {
+                terminal_error = std::move(error);
+            }
+        };
+
+        if (callback_busy_.load()) {
+            const auto callback_status = cudaStreamSynchronize(callback_stream_);
+            if (callback_status != cudaSuccess) {
+                append_terminal_error(std::format("Failed to finish training callback: {}",
+                                                  cudaGetErrorString(callback_status)));
+            }
+        }
+
+        const int terminal_iteration = current_iteration_.load();
+        const bool user_stopped = stop_requested_.load() || stop_token.stop_requested();
+        const bool rotate_checkpoint = get_active_sparsify_steps() == 0;
+        apply_pending_params_at_safe_point();
+        const auto terminal_params = getParams();
+        try {
+            LOG_INFO("Saving {} model at iteration {}...",
+                     terminal_error ? "recovery" : (user_stopped ? "stopped" : "final"),
+                     terminal_iteration);
+            if (auto save_result = save_ply(
+                    terminal_params.dataset.output_path,
+                    terminal_params.dataset.output_name,
+                    terminal_iteration,
+                    /*join=*/true,
+                    /*save_checkpoint=*/rotate_checkpoint);
+                !save_result) {
+                append_terminal_error(std::format("Terminal save failed at iteration {}: {}",
+                                                  terminal_iteration, save_result.error()));
+            }
+        } catch (const std::exception& e) {
+            append_terminal_error(std::format("Terminal save threw at iteration {}: {}",
+                                              terminal_iteration, e.what()));
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            is_running_ = false;
+        }
+        training_complete_ = true;
+        clearActiveImageLoader();
+        cache_loader.clear_cpu_cache();
+        lfs::core::image_io::wait_for_pending_saves();
+
+        try {
             if (progress_) {
                 progress_->complete();
             }
-            evaluator_->save_report();
-            if (progress_) {
+            if (evaluator_) {
+                evaluator_->save_report();
+            }
+            if (progress_ && strategy_) {
                 progress_->print_final_summary(static_cast<int>(strategy_->get_model().size()));
             }
-
-            is_running_ = false;
-            training_complete_ = true;
-
-            cache_loader.clear_cpu_cache();
-            lfs::core::image_io::wait_for_pending_saves();
-
-            // Notify training end
-            {
-                lfs::training::HookContext ctx{
-                    .iteration = current_iteration_.load(),
-                    .loss = current_loss_.load(),
-                    .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
-                    .is_refining = strategy_ ? strategy_->is_refining(current_iteration_.load()) : false,
-                    .trainer = this};
-                lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
-                lfs::training::CommandCenter::instance().update_snapshot(
-                    ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
-                    lfs::training::TrainingPhase::SafeControl);
-                lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::TrainingEnd, ctx);
-            }
-
-            lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::Idle);
-
-            LOG_INFO("Training completed successfully");
-            return {};
         } catch (const std::exception& e) {
-            is_running_ = false;
-            cache_loader.clear_cpu_cache();
-            lfs::core::image_io::wait_for_pending_saves();
-            lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::Idle);
-
-            return std::unexpected(std::format("Training failed: {}", e.what()));
+            append_terminal_error(std::format("Terminal reporting failed: {}", e.what()));
         }
+
+        auto& command_center = lfs::training::CommandCenter::instance();
+        auto snapshot_guard = makeScopeGuard([&command_center, this]() {
+            command_center.clear_snapshot(this);
+        });
+        try {
+            lfs::training::HookContext ctx{
+                .iteration = terminal_iteration,
+                .loss = current_loss_.load(),
+                .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                .is_refining = strategy_ ? strategy_->is_refining(terminal_iteration) : false,
+                .trainer = this};
+            command_center.set_phase(lfs::training::TrainingPhase::SafeControl);
+            command_center.update_snapshot(
+                ctx, get_total_iterations(), is_paused_.load(), false, user_stopped,
+                lfs::training::TrainingPhase::SafeControl);
+            auto& boundary = lfs::training::ControlBoundary::instance();
+            boundary.notify(lfs::training::ControlHook::TrainingEnd, ctx);
+            boundary.drain_callbacks();
+        } catch (const std::exception& e) {
+            append_terminal_error(std::format("TrainingEnd callback dispatch failed: {}", e.what()));
+        }
+
+        if (terminal_error) {
+            return std::unexpected(*terminal_error);
+        }
+        LOG_INFO("Training completed successfully");
+        return {};
     }
 
-    void Trainer::save_ply(const std::filesystem::path& save_path,
-                           const std::string& filename,
-                           const int iter_num,
-                           const bool join_threads,
-                           const bool save_checkpoint_file) {
+    std::expected<void, std::string> Trainer::save_ply(const std::filesystem::path& save_path,
+                                                       const std::string& filename,
+                                                       const int iter_num,
+                                                       const bool join_threads,
+                                                       const bool save_checkpoint_file) {
 
         std::filesystem::path ply_output_path = filename.empty() ? save_path / ("splat_" + std::to_string(iter_num) + ".ply") : save_path / (filename + ".ply");
 
@@ -5973,6 +5721,7 @@ namespace lfs::training {
             params_.exclude_frozen_add_splats_from_export);
         const auto& model_for_export = export_model ? *export_model : model;
         const auto ply_result = lfs::io::save_ply(model_for_export, ply_options);
+        std::vector<std::string> errors;
         if (!ply_result) {
             if (ply_result.error().code == lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE) {
                 lfs::core::events::state::DiskSpaceSaveFailed{
@@ -5986,7 +5735,7 @@ namespace lfs::training {
                     .emit();
             }
             LOG_WARN("Failed to save PLY: {}", ply_result.error().message);
-            return; // Don't save checkpoint if PLY failed
+            errors.push_back("PLY: " + ply_result.error().message);
         }
 
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iter_num);
@@ -5997,6 +5746,7 @@ namespace lfs::training {
                                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
             if (!ckpt_result) {
                 LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
+                errors.push_back("checkpoint: " + ckpt_result.error());
             }
         }
 
@@ -6013,10 +5763,22 @@ namespace lfs::training {
                                                       metadata ? &*metadata : nullptr);
             if (!ppisp_result) {
                 LOG_WARN("Failed to save PPISP file: {}", ppisp_result.error());
+                errors.push_back("PPISP: " + ppisp_result.error());
             }
         }
 
         LOG_DEBUG("PLY save initiated: {} (sync={})", lfs::core::path_to_utf8(save_path), join_threads);
+        if (!errors.empty()) {
+            std::string message;
+            for (const auto& error : errors) {
+                if (!message.empty()) {
+                    message += "; ";
+                }
+                message += error;
+            }
+            return std::unexpected(std::move(message));
+        }
+        return {};
     }
 
     std::expected<void, std::string> Trainer::save_checkpoint(int iteration) {
@@ -6026,7 +5788,8 @@ namespace lfs::training {
 
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iteration);
 
-        return lfs::training::save_checkpoint(params_.dataset.output_path, iteration, *strategy_,
+        const auto params = getParams();
+        return lfs::training::save_checkpoint(params.dataset.output_path, iteration, *strategy_,
                                               params_for_checkpoint_save(),
                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
     }
@@ -6047,14 +5810,15 @@ namespace lfs::training {
     lfs::core::Tensor Trainer::applyPPISPForViewport(const lfs::core::Tensor& rgb, const int camera_uid,
                                                      const PPISPViewportOverrides& overrides,
                                                      const bool use_controller) const {
-        if (!ppisp_ || !params_.optimization.use_ppisp || rgb.shape().rank() != 3) {
+        const auto params = getParams();
+        if (!ppisp_ || !params.optimization.use_ppisp || rgb.shape().rank() != 3) {
             return rgb;
         }
 
         const bool is_chw = (rgb.shape()[0] == 3);
         const auto rgb_chw = is_chw ? rgb : rgb.permute({2, 0, 1}).contiguous();
         const bool is_training_camera = ppisp_->is_known_frame(camera_uid);
-        const bool has_controller = ppisp_controller_pool_ && params_.optimization.ppisp_use_controller;
+        const bool has_controller = ppisp_controller_pool_ && params.optimization.ppisp_use_controller;
         const int camera_idx = is_training_camera ? ppisp_->camera_index(ppisp_->camera_for_frame(camera_uid)) : 0;
 
         lfs::core::Tensor result;
@@ -6095,13 +5859,14 @@ namespace lfs::training {
         if (is_ppisp_frozen()) {
             return ppisp_controller_pool_.get();
         }
-        return iteration >= params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations())
+        const auto params = getParams();
+        return iteration >= params.optimization.resolved_ppisp_controller_activation_step(get_total_iterations())
                    ? ppisp_controller_pool_.get()
                    : nullptr;
     }
 
     lfs::core::param::TrainingParameters Trainer::params_for_checkpoint_save() const {
-        auto params = params_;
+        auto params = getParams();
         if (scene_) {
             const auto disabled = scene_->getTrainingDisabledCameraUids();
             params.disabled_camera_uids.assign(disabled.begin(), disabled.end());
@@ -6110,8 +5875,12 @@ namespace lfs::training {
     }
 
     void Trainer::save_final_ply_and_checkpoint(const int iteration) {
-        save_ply(params_.dataset.output_path, params_.dataset.output_name, iteration, /*join=*/true,
-                 /*save_checkpoint=*/false);
+        const auto params = getParams();
+        if (auto result = save_ply(params.dataset.output_path, params.dataset.output_name, iteration, /*join=*/true,
+                                   /*save_checkpoint=*/false);
+            !result) {
+            LOG_WARN("Failed to save final PLY: {}", result.error());
+        }
         if (auto result = save_checkpoint(iteration); !result) {
             LOG_WARN("Failed to save checkpoint: {}", result.error());
         }

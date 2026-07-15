@@ -4,9 +4,11 @@
 
 #include "visualizer_impl.hpp"
 #include "core/animatable_property.hpp"
+#include "core/cuda_error.hpp"
 #include "core/data_loading_service.hpp"
-#include "core/event_bus.hpp"
+#include "core/event_bridge/event_bridge.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/panel_registry.hpp"
@@ -38,6 +40,7 @@
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #ifdef WIN32
 #include <windows.h>
@@ -83,6 +86,41 @@ namespace lfs::vis {
                 }
             }
             return transforms;
+        }
+
+        void cancelRemainingWork(std::vector<Visualizer::WorkItem>& work,
+                                 const size_t first,
+                                 const std::string_view queue_name) noexcept {
+            for (size_t i = first; i < work.size(); ++i) {
+                try {
+                    if (work[i].cancel)
+                        work[i].cancel();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exception while cancelling {} work: {}", queue_name, e.what());
+                } catch (...) {
+                    LOG_ERROR("Unknown exception while cancelling {} work", queue_name);
+                }
+            }
+        }
+
+        // Posted work is an external callback boundary. A failing item may report
+        // through its own promise, but must never unwind the GUI frame loop.
+        void runPostedWork(std::vector<Visualizer::WorkItem>& work,
+                           const std::string_view queue_name) noexcept {
+            for (size_t i = 0; i < work.size(); ++i) {
+                try {
+                    if (work[i].run)
+                        work[i].run();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exception in {} work: {}", queue_name, e.what());
+                    cancelRemainingWork(work, i + 1, queue_name);
+                    return;
+                } catch (...) {
+                    LOG_ERROR("Unknown exception in {} work", queue_name);
+                    cancelRemainingWork(work, i + 1, queue_name);
+                    return;
+                }
+            }
         }
 
     } // namespace
@@ -158,7 +196,7 @@ namespace lfs::vis {
 
     VisualizerImpl::~VisualizerImpl() {
         // Clear event handlers before destroying components to prevent use-after-free
-        lfs::core::event::bus().clear_all();
+        lfs::event::EventBridge::instance().clear_all();
         services().clear();
 
         // Clear operator system
@@ -229,12 +267,6 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_operator_callbacks(nullptr); });
         python::set_gui_manager(gui_manager_.get());
         callback_cleanup_.add([] { python::set_gui_manager(nullptr); });
-        python::set_startup_plugin_load_state_callback([](bool active, float progress, const char* stage) {
-            if (auto* const gui = python::get_gui_manager()) {
-                gui->setStartupPluginLoadState(active, progress, stage ? stage : "");
-            }
-        });
-        callback_cleanup_.add([] { python::set_startup_plugin_load_state_callback(nullptr); });
         python::set_main_loop_wake_callback(&wakeEventLoopViaServices);
         callback_cleanup_.add([] { python::set_main_loop_wake_callback(nullptr); });
         core::reactive::Store::set_wake_callback(&wakeEventLoopViaServices);
@@ -768,6 +800,50 @@ namespace lfs::vis {
         main_loop_->setRenderCallback([this]() { render(); });
         main_loop_->setShutdownCallback([this]() { shutdown(); });
         main_loop_->setShouldCloseCallback([this]() { return allowclose(); });
+        main_loop_->setFrameErrorCallback([this](std::exception_ptr eptr) {
+            handleFrameException(std::move(eptr));
+        });
+        main_loop_->setFrameCompletedCallback([this]() { onFrameCompleted(); });
+    }
+
+    void VisualizerImpl::handleFrameException(std::exception_ptr eptr) noexcept {
+        try {
+            std::rethrow_exception(eptr);
+        } catch (const lfs::core::MemoryAllocationError& e) {
+            if (lfs::core::cuda_is_unavailable()) {
+                return;
+            }
+            // GPU memory shortage reached the frame loop. Reclaim render-safe
+            // caches once and keep running; the next frame is the retry.
+            auto& coordinator = lfs::core::MemoryPressureCoordinator::instance();
+            const size_t freed = coordinator.run_episode(
+                e.failure(), lfs::core::PressureContext::RenderThread);
+            ++consecutive_oom_frames_;
+            LOG_ERROR("GPU memory pressure during frame (attempt {}): {}. Freed {:.1f} MiB; "
+                      "reducing preview quality and retrying.",
+                      consecutive_oom_frames_, e.what(),
+                      static_cast<double>(freed) / (1024.0 * 1024.0));
+        } catch (const std::exception& e) {
+            const auto now = std::chrono::steady_clock::now();
+            if (last_frame_error_log_.time_since_epoch().count() == 0 ||
+                now - last_frame_error_log_ >= std::chrono::seconds(5)) {
+                LOG_ERROR("Frame failed: {}{}", e.what(),
+                          suppressed_frame_errors_ > 0
+                              ? std::format(" ({} similar errors suppressed)", suppressed_frame_errors_)
+                              : std::string{});
+                last_frame_error_log_ = now;
+                suppressed_frame_errors_ = 0;
+            } else {
+                ++suppressed_frame_errors_;
+            }
+        } catch (...) {
+            LOG_ERROR("Frame failed with an unknown error");
+        }
+    }
+
+    void VisualizerImpl::onFrameCompleted() noexcept {
+        consecutive_oom_frames_ = 0;
+        lfs::core::MemoryPressureCoordinator::instance().maybe_recover();
     }
 
     void VisualizerImpl::beginShutdown([[maybe_unused]] const std::string_view reason) {
@@ -782,6 +858,8 @@ namespace lfs::vis {
             pending_work.swap(work_queue_);
             pending_render_work.swap(render_work_queue_);
         }
+
+        python::request_plugin_preload_stop();
 
         for (auto& work : pending_work) {
             if (work.cancel)
@@ -1090,6 +1168,8 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::update() {
+        const auto update_started_at = std::chrono::steady_clock::now();
+        const bool preload_running_at_start = python::is_plugin_preload_running();
         update_work_processed_ = false;
         window_manager_->updateWindowSize();
 
@@ -1098,8 +1178,18 @@ namespace lfs::vis {
             LOG_TIMER("startup.python.preload_plugins_async");
             python::preload_user_plugins_async();
         }
-        if (startup_plugin_preload_started_) {
-            python::process_plugin_preload_step();
+
+        const auto plugin_load_status = python::get_startup_plugin_load_status();
+        if (gui_manager_ &&
+            plugin_load_status.revision != startup_plugin_load_status_revision_) {
+            const bool plugin_load_started = plugin_load_status.state != "not_started";
+            gui_manager_->setStartupPluginLoadState(
+                plugin_load_started,
+                plugin_load_status.active,
+                plugin_load_status.progress,
+                plugin_load_status.detail);
+            assert(!plugin_load_started || !gui_manager_->isStartupBlockingInput());
+            startup_plugin_load_status_revision_ = plugin_load_status.revision;
         }
 
         // Process MCP work queue
@@ -1110,18 +1200,7 @@ namespace lfs::vis {
                 work.swap(work_queue_);
             }
             update_work_processed_ = !work.empty();
-            for (size_t i = 0; i < work.size(); ++i) {
-                try {
-                    if (work[i].run)
-                        work[i].run();
-                } catch (...) {
-                    for (size_t j = i + 1; j < work.size(); ++j) {
-                        if (work[j].cancel)
-                            work[j].cancel();
-                    }
-                    throw;
-                }
-            }
+            runPostedWork(work, "viewer");
         }
 
         if (gui_manager_) {
@@ -1150,15 +1229,17 @@ namespace lfs::vis {
 
         if (pending_new_project_ && trainer_manager_ &&
             trainer_manager_->canPerform(TrainingAction::ClearScene)) {
-            pending_new_project_ = false;
-            trainer_manager_->waitForCompletion();
-            performNewProject();
+            if (trainer_manager_->waitForCompletion()) {
+                pending_new_project_ = false;
+                performNewProject();
+            }
         }
 
         if (pending_reset_ && trainer_manager_ && !trainer_manager_->isTrainingActive()) {
-            pending_reset_ = false;
-            trainer_manager_->waitForCompletion();
-            performReset();
+            if (trainer_manager_->waitForCompletion()) {
+                pending_reset_ = false;
+                performReset();
+            }
         }
 
         if (!gui_frame_rendered_) {
@@ -1166,21 +1247,8 @@ namespace lfs::vis {
         } else if (!pending_view_paths_.empty()) {
             auto paths = std::exchange(pending_view_paths_, {});
             LOG_INFO("Loading {} splat file(s)", paths.size());
-            if (const auto result = data_loader_->loadPLY(paths[0]); !result) {
-                LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(paths[0]), result.error());
-                state::SplatFileLoadFailed{.path = paths[0], .error = result.error()}.emit();
-            } else {
-                for (size_t i = 1; i < paths.size(); ++i) {
-                    try {
-                        data_loader_->addSplatFileToScene(paths[i]);
-                    } catch (const std::exception& e) {
-                        LOG_ERROR("Failed to add {}: {}", lfs::core::path_to_utf8(paths[i]), e.what());
-                        state::SplatFileLoadFailed{.path = paths[i], .error = e.what()}.emit();
-                    }
-                }
-                if (paths.size() > 1) {
-                    scene_manager_->consolidateNodeModels();
-                }
+            if (const auto result = data_loader_->loadSplatFiles(paths); !result) {
+                LOG_ERROR("Failed to load startup splat batch: {}", result.error());
             }
         } else if (!pending_dataset_path_.empty()) {
             auto path = std::exchange(pending_dataset_path_, {});
@@ -1202,6 +1270,27 @@ namespace lfs::vis {
             LOG_INFO("Auto-starting training (--train flag)");
             cmd::StartTraining{}.emit();
         }
+
+        const bool preload_running_at_end = python::is_plugin_preload_running();
+        // The transition update can also consume pending startup assets (for example,
+        // a --view PLY) after it starts the worker. Sample only steady-state preload
+        // updates so unrelated startup I/O is not attributed to plugin loading.
+        if (preload_running_at_start) {
+            plugin_preload_timing_active_ = true;
+            plugin_preload_max_update_stall_ = std::max(
+                plugin_preload_max_update_stall_,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - update_started_at));
+        }
+        if (plugin_preload_timing_active_ && !preload_running_at_end) {
+            const double max_stall_ms =
+                std::chrono::duration<double, std::milli>(
+                    plugin_preload_max_update_stall_)
+                    .count();
+            LOG_DEBUG("Plugin preload frame budget: max VisualizerImpl::update stall {:.3f} ms",
+                      max_stall_ms);
+            plugin_preload_timing_active_ = false;
+        }
     }
 
     void VisualizerImpl::processRenderWorkQueue() {
@@ -1214,19 +1303,7 @@ namespace lfs::vis {
             return;
 
         processing_render_work_ = true;
-        for (size_t i = 0; i < render_work.size(); ++i) {
-            try {
-                if (render_work[i].run)
-                    render_work[i].run();
-            } catch (...) {
-                for (size_t j = i + 1; j < render_work.size(); ++j) {
-                    if (render_work[j].cancel)
-                        render_work[j].cancel();
-                }
-                processing_render_work_ = false;
-                throw;
-            }
-        }
+        runPostedWork(render_work, "render");
         processing_render_work_ = false;
     }
 
@@ -1383,8 +1460,9 @@ namespace lfs::vis {
         }
 
         if (input_controller_) {
-            const bool startup_overlay_visible = gui_manager_ && gui_manager_->isStartupVisible();
-            if (!viewport_export_locked && !startup_overlay_visible) {
+            const bool startup_overlay_blocking =
+                gui_manager_ && gui_manager_->isStartupBlockingInput();
+            if (!viewport_export_locked && !startup_overlay_blocking) {
                 input_controller_->update(delta_time);
             }
         }
@@ -1598,7 +1676,7 @@ namespace lfs::vis {
         if (trainer_manager_) {
             if (trainer_manager_->isTrainingActive()) {
                 trainer_manager_->stopTraining();
-                trainer_manager_->waitForCompletion();
+                (void)trainer_manager_->waitForCompletion();
             }
             trainer_manager_.reset();
         }

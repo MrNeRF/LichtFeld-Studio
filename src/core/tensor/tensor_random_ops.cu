@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_ops.hpp"
 #include <cuda_runtime.h>
@@ -8,13 +10,36 @@
 
 // Thrust headers for multinomial without replacement
 #include <thrust/copy.h>
+#include <thrust/count.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 #include <thrust/reduce.h>
 #include <thrust/sequence.h>
 #include <thrust/sort.h>
+#include <thrust/transform_reduce.h>
 
 namespace lfs::core::tensor_ops {
+
+    namespace {
+
+        __device__ float uniform_unit_interval(curandState* state) {
+            constexpr float SCALE = 1.0f / 16777216.0f;
+            return static_cast<float>(curand(state) >> 8) * SCALE;
+        }
+
+        struct invalid_multinomial_weight {
+            __host__ __device__ bool operator()(float weight) const {
+                return !isfinite(weight) || weight < 0.0f;
+            }
+        };
+
+        struct multinomial_weight_to_double {
+            __host__ __device__ double operator()(float weight) const {
+                return static_cast<double>(weight);
+            }
+        };
+
+    } // namespace
 
     // Note: run_with_thrust_policy is now in include/core/tensor_generic_ops.cuh
 
@@ -28,8 +53,13 @@ namespace lfs::core::tensor_ops {
         if (idx < n) {
             curandState state;
             curand_init(seed, idx, 0, &state);
-            float val = curand_uniform(&state);
-            data[idx] = val * (high - low) + low;
+            if (low == high) {
+                data[idx] = low;
+                return;
+            }
+            const float val = uniform_unit_interval(&state);
+            const float result = fmaf(val, high - low, low);
+            data[idx] = result < high ? result : nextafterf(high, low);
         }
     }
 
@@ -53,7 +83,7 @@ namespace lfs::core::tensor_ops {
         if (idx < n) {
             curandState state;
             curand_init(seed, idx, 0, &state);
-            float val = curand_uniform(&state);
+            const float val = uniform_unit_interval(&state);
             data[idx] = (val < p) ? 1.0f : 0.0f;
         }
     }
@@ -67,24 +97,19 @@ namespace lfs::core::tensor_ops {
             curandState state;
             curand_init(seed, idx, 0, &state);
 
-            float val = curand_uniform(&state);
-            int range = high - low;
-
-            int result = low + static_cast<int>(val * range);
-
-            if (result >= high)
-                result = high - 1;
-            if (result < low)
-                result = low;
-
-            data[idx] = result;
+            const uint64_t random = curand(&state);
+            const uint64_t range = static_cast<uint64_t>(
+                static_cast<int64_t>(high) - static_cast<int64_t>(low));
+            const uint64_t offset = (random * range) >> 32;
+            data[idx] = static_cast<int>(static_cast<int64_t>(low) +
+                                         static_cast<int64_t>(offset));
         }
     }
 
     // Kernel for multinomial sampling with replacement
     __global__ void multinomial_with_replacement_kernel(const float* weights, int64_t* samples,
                                                         unsigned long n, unsigned long num_samples,
-                                                        float sum, unsigned long long seed) {
+                                                        double sum, unsigned long long seed) {
         int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
         if (idx >= num_samples)
@@ -93,12 +118,12 @@ namespace lfs::core::tensor_ops {
         curandState state;
         curand_init(seed, idx, 0, &state);
 
-        float u = curand_uniform(&state) * sum;
+        const double u = static_cast<double>(uniform_unit_interval(&state)) * sum;
 
-        float cumsum = 0.0f;
+        double cumsum = 0.0;
         for (unsigned long i = 0; i < n; ++i) {
-            cumsum += weights[i];
-            if (u <= cumsum) {
+            cumsum += static_cast<double>(weights[i]);
+            if (u < cumsum) {
                 samples[idx] = static_cast<int64_t>(i);
                 return;
             }
@@ -180,19 +205,25 @@ namespace lfs::core::tensor_ops {
         // Compute sum of weights using Thrust with centralized sum_op
         auto weights_ptr = thrust::device_pointer_cast(weights);
 
-        float sum;
+        size_t invalid_count = 0;
+        double sum = 0.0;
         run_with_thrust_policy(stream, [&](auto policy) {
-            sum = thrust::reduce(
+            invalid_count = thrust::count_if(
                 policy,
                 weights_ptr, weights_ptr + n,
-                0.0f,
-                ops::sum_op());
+                invalid_multinomial_weight{});
+            sum = thrust::transform_reduce(
+                policy,
+                weights_ptr, weights_ptr + n,
+                multinomial_weight_to_double{},
+                0.0,
+                thrust::plus<double>());
         });
 
-        if (sum <= 0) {
-            cudaMemsetAsync(samples, 0, num_samples * sizeof(int64_t), stream);
-            return;
-        }
+        LFS_ASSERT_MSG(invalid_count == 0,
+                       "multinomial weights must be finite and non-negative");
+        LFS_ASSERT_MSG(std::isfinite(sum) && sum > 0.0,
+                       "multinomial weights must have a positive finite sum");
 
         if (replacement) {
             int block_size = 256;

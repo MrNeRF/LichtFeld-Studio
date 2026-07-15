@@ -2,10 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cub_workspace.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <torch/torch.h>
 
 using namespace lfs::core;
@@ -71,6 +73,10 @@ protected:
         gen.seed(42);
     }
 
+    void TearDown() override {
+        tensor_ops::set_cub_workspace_failure_for_testing(false);
+    }
+
     std::mt19937 gen;
     std::uniform_real_distribution<float> dist{-10.0f, 10.0f};
 };
@@ -88,6 +94,16 @@ TEST_F(TensorReductionTest, Sum) {
 
     compare_scalars(custom_sum, torch_sum, 1e-4f, "Sum");
     EXPECT_FLOAT_EQ(custom_sum, 55.0f);
+}
+
+TEST_F(TensorReductionTest, CubWorkspaceFailureThrowsBeforeExecution) {
+    auto input = Tensor::ones({4096}, Device::CUDA);
+    tensor_ops::set_cub_workspace_failure_for_testing(true);
+
+    EXPECT_THROW((void)input.sum_scalar(), std::runtime_error);
+
+    tensor_ops::set_cub_workspace_failure_for_testing(false);
+    EXPECT_FLOAT_EQ(input.sum_scalar(), 4096.0f);
 }
 
 TEST_F(TensorReductionTest, SumMultiDim) {
@@ -132,6 +148,16 @@ TEST_F(TensorReductionTest, Mean) {
 
     compare_scalars(custom_mean, torch_mean, 1e-5f, "Mean");
     EXPECT_FLOAT_EQ(custom_mean, 6.0f);
+}
+
+TEST_F(TensorReductionTest, Int32MeanRejectsLikeTorch) {
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        const auto values = Tensor::from_vector(
+                                std::vector<int>{1, 2, 3, 4}, {4}, Device::CPU)
+                                .to(device);
+
+        EXPECT_THROW(static_cast<void>(values.mean()), std::exception) << device_name(device);
+    }
 }
 
 TEST_F(TensorReductionTest, MeanMultiDim) {
@@ -381,6 +407,33 @@ TEST_F(TensorReductionTest, KeepDim) {
     EXPECT_EQ(custom_result.shape()[1], 1);
 
     compare_tensors(custom_result, torch_result, 1e-4f, 1e-5f, "SumKeepDim");
+}
+
+TEST_F(TensorReductionTest, KeepDimCoversEveryReductionKindAndMultipleAxes) {
+    std::vector<float> data(48);
+    std::iota(data.begin(), data.end(), 1.0f);
+    const auto custom = Tensor::from_vector(data, {2, 3, 4, 2}, Device::CPU);
+    const auto reference = torch::tensor(data).reshape({2, 3, 4, 2});
+
+    compare_tensors(custom.mean({0, 2}, true),
+                    reference.mean(c10::IntArrayRef{0, 2}, true),
+                    1e-4f, 1e-5f, "MeanMultiAxisKeepDim");
+    compare_tensors(custom.sum(1, true), reference.sum(c10::IntArrayRef{1}, true),
+                    1e-4f, 1e-5f, "SumKeepDim");
+    compare_tensors(custom.max(2, true), std::get<0>(reference.max(2, true)),
+                    1e-4f, 1e-5f, "MaxKeepDim");
+    compare_tensors(custom.min(2, true), std::get<0>(reference.min(2, true)),
+                    1e-4f, 1e-5f, "MinKeepDim");
+    compare_tensors(custom.std(0, true),
+                    reference.std(c10::IntArrayRef{0}, true, true),
+                    1e-4f, 1e-5f, "StdKeepDim");
+    compare_tensors(custom.var(1, true),
+                    reference.var(c10::IntArrayRef{1}, true, true),
+                    1e-4f, 1e-5f, "VarKeepDim");
+
+    const auto cuda_mean = custom.cuda().mean({0, 2}, true);
+    compare_tensors(cuda_mean, reference.cuda().mean(c10::IntArrayRef{0, 2}, true),
+                    1e-4f, 1e-5f, "CudaMeanMultiAxisKeepDim");
 }
 
 TEST_F(TensorReductionTest, MultiAxisReduction) {

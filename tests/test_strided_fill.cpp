@@ -287,6 +287,26 @@ TEST_F(StridedFillTest, Slice2D_GeneralNonContiguous) {
     }
 }
 
+TEST_F(StridedFillTest, TransposedViewFillUpdatesOriginalStorage) {
+    auto tensor = Tensor::zeros({3, 5}, Device::CUDA);
+    auto transposed = tensor.t();
+    ASSERT_FALSE(transposed.is_contiguous());
+
+    transposed.fill_(4.25f);
+
+    EXPECT_EQ(tensor.cpu().to_vector(), (std::vector<float>(15, 4.25f)));
+}
+
+TEST_F(StridedFillTest, CpuColumnSliceFillPreservesOtherColumns) {
+    auto tensor = Tensor::zeros({3, 4}, Device::CPU);
+    tensor.slice(1, 1, 2).fill_(7.0f);
+
+    EXPECT_EQ(tensor.to_vector(),
+              (std::vector<float>{0.0f, 7.0f, 0.0f, 0.0f,
+                                  0.0f, 7.0f, 0.0f, 0.0f,
+                                  0.0f, 7.0f, 0.0f, 0.0f}));
+}
+
 // ===== Contiguous fill (should NOT hit strided path) =====
 
 TEST_F(StridedFillTest, Contiguous3D_Fill) {

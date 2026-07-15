@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <optional>
 #include <semaphore>
 #include <stb_image.h>
@@ -44,6 +45,25 @@ VkValidationFeatureEnableEXT debug_validation_features_ext_requested[] = {
     VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
     VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
 };
+
+static bool SupportsHostImageCopyDestinationLayout(VkPhysicalDevice physical_device,
+                                                   VkImageLayout layout) {
+    VkPhysicalDeviceHostImageCopyPropertiesEXT host_copy_properties{};
+    host_copy_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES_EXT;
+
+    VkPhysicalDeviceProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &host_copy_properties;
+    vkGetPhysicalDeviceProperties2(physical_device, &properties);
+
+    std::vector<VkImageLayout> destination_layouts(host_copy_properties.copyDstLayoutCount);
+    host_copy_properties.pCopyDstLayouts = destination_layouts.data();
+    vkGetPhysicalDeviceProperties2(physical_device, &properties);
+    destination_layouts.resize(host_copy_properties.copyDstLayoutCount);
+
+    return std::find(destination_layouts.begin(), destination_layouts.end(), layout) !=
+           destination_layouts.end();
+}
 
 #ifdef RMLUI_VK_DEBUG
 static Rml::String FormatByteSize(VkDeviceSize size) noexcept {
@@ -81,12 +101,6 @@ static void InsertDebugUtilsLabel(VkDevice device, VkCommandBuffer command_buffe
         fn(command_buffer, &label);
 }
 
-static void SetDebugUtilsObjectName(VkDevice device, const VkDebugUtilsObjectNameInfoEXT& name_info) noexcept {
-    auto* const fn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
-        vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT"));
-    if (fn)
-        (void)fn(device, &name_info);
-}
 #endif
 
 namespace {
@@ -333,6 +347,22 @@ std::string RenderInterface_VK::MakeExternalTextureSource(VkImageView image_view
                   static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(sampler)),
                   width, height);
     return std::string(buf);
+}
+
+void RenderInterface_VK::SetTextureDebugName(const Rml::TextureHandle texture_handle,
+                                             const std::string_view debug_name) const {
+    const auto* texture = reinterpret_cast<const texture_data_t*>(texture_handle);
+    if (!texture || debug_name.empty())
+        return;
+
+    const std::string image_name = std::format("rmlui.cache[{}].image", debug_name);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)texture->m_p_vk_image,
+                                  image_name.c_str());
+    const std::string view_name = std::format("rmlui.cache[{}].view", debug_name);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)texture->m_p_vk_image_view,
+                                  view_name.c_str());
 }
 
 Rml::CompiledGeometryHandle RenderInterface_VK::CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) {
@@ -765,6 +795,9 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
         delete texture;
         return {};
     }
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)texture->m_p_vk_image,
+                                  "rmlui.saved-layer.image");
     texture->m_vram_scope = "vulkan.rmlui.saved_layer_texture";
     texture->m_vram_label = TextureVramLabel("saved_layer",
                                              "clip",
@@ -793,6 +826,9 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
         delete texture;
         return {};
     }
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)texture->m_p_vk_image_view,
+                                  "rmlui.saved-layer.view");
     texture->m_p_vk_sampler = m_p_sampler_linear;
 
     TransitionImageLayout(source_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
@@ -1180,42 +1216,36 @@ void RenderInterface_VK::ProcessAsyncPreviewUploads() {
 }
 
 Rml::TextureHandle RenderInterface_VK::GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) {
-    RMLUI_ASSERT(source_data.data() && source_data.size() == size_t(source_dimensions.x * source_dimensions.y * 4));
     Rml::String source_name = "generated-texture";
     return CreateTexture(source_data, source_dimensions, source_name, m_p_sampler_nearest);
 }
 
-/*
-    How vulkan works with textures efficiently?
-
-    You need to create buffer that has CPU memory accessibility it means it uses your RAM memory for storing data and it has only CPU visibility (RAM)
-    After you create buffer that has GPU memory accessibility it means it uses by your video hardware and it has only VRAM (Video RAM) visibility
-
-    So you copy data to CPU_buffer and after you copy that thing to GPU_buffer, but delete CPU_buffer
-
-    So it means you "uploaded" data to GPU
-
-    Again, you need to "write" data into CPU buffer after you need to copy that data from buffer to GPU buffer and after that buffer go to GPU.
-
-    RAW_POINTER_DATA_BYTES_LITERALLY->COPY_TO->CPU->COPY_TO->GPU->Releasing_CPU <= that's how works uploading textures in Vulkan if you want to have
-    efficient handling otherwise it is cpu_to_gpu visibility and it means you create only ONE buffer that is accessible for CPU and for GPU, but it
-    will cause the worst performance...
-*/
 Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions, const Rml::String& name,
                                                      VkSampler sampler) {
     RMLUI_ZoneScopedN("Vulkan - GenerateTexture");
 
-    RMLUI_VK_ASSERTMSG(!source.empty(), "you pushed not valid data for copying to buffer");
-    RMLUI_VK_ASSERTMSG(m_p_allocator, "you have to initialize Vma Allocator for this method");
+    const int width = dimensions.x;
+    const int height = dimensions.y;
+    const VkSampler texture_sampler = sampler != VK_NULL_HANDLE ? sampler : m_p_sampler_linear;
+    const bool size_overflows =
+        width > 0 && height > 0 &&
+        static_cast<std::size_t>(width) >
+            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(height) / 4u;
+    const std::size_t expected_size =
+        width > 0 && height > 0 && !size_overflows
+            ? static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u
+            : 0u;
+    if (m_p_device == VK_NULL_HANDLE || m_p_allocator == VK_NULL_HANDLE ||
+        texture_sampler == VK_NULL_HANDLE || source.data() == nullptr || source.empty() ||
+        width <= 0 || height <= 0 || size_overflows || source.size() != expected_size) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Refusing invalid RmlUi texture '%s' (%dx%d, %zu bytes).",
+                          name.c_str(), width, height, source.size());
+        return {};
+    }
 
-    int width = dimensions.x;
-    int height = dimensions.y;
-
-    RMLUI_VK_ASSERTMSG(width, "invalid width");
-    RMLUI_VK_ASSERTMSG(height, "invalid height");
-
-    VkDeviceSize image_size = source.size();
-    VkFormat format = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;
+    const VkDeviceSize image_size = source.size();
+    const VkFormat format = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;
 
     const bool use_host_image_copy =
         m_pfn_copy_memory_to_image != nullptr && m_pfn_transition_image_layout != nullptr;
@@ -1225,7 +1255,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     extent_image.height = static_cast<uint32_t>(height);
     extent_image.depth = 1;
 
-    auto* p_texture = new texture_data_t{};
+    auto p_texture = std::make_unique<texture_data_t>();
 
     VkImageCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1244,12 +1274,17 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     VmaAllocationCreateInfo info_allocation = {};
     info_allocation.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
-    VkImage p_image = nullptr;
-    VmaAllocation p_allocation = nullptr;
+    VkImage p_image = VK_NULL_HANDLE;
+    VmaAllocation p_allocation = VK_NULL_HANDLE;
 
     VmaAllocationInfo info_stats = {};
     VkResult status = vmaCreateImage(m_p_allocator, &info, &info_allocation, &p_image, &p_allocation, &info_stats);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateImage");
+    if (status != VK_SUCCESS || p_image == VK_NULL_HANDLE || p_allocation == VK_NULL_HANDLE) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Failed to allocate RmlUi texture '%s' (%d).",
+                          name.c_str(), static_cast<int>(status));
+        return {};
+    }
 
 #ifdef RMLUI_VK_DEBUG
     Rml::Log::Message(Rml::Log::LT_DEBUG, "Created texture '%s' [%dx%d, %s]", name.c_str(), dimensions.x, dimensions.y,
@@ -1258,27 +1293,55 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
     p_texture->m_p_vk_image = p_image;
     p_texture->m_p_vma_allocation = p_allocation;
+    const std::string image_debug_name = std::format("rmlui.texture.image[{}]", name);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)p_texture->m_p_vk_image,
+                                  image_debug_name.c_str());
     p_texture->m_vram_scope = "vulkan.rmlui.texture";
-    p_texture->m_vram_label = TextureVramLabel("texture", name, width, height, p_texture);
+    p_texture->m_vram_label = TextureVramLabel("texture", name, width, height, p_texture.get());
     p_texture->m_vram_allocation_size = info_stats.size;
     RecordRmlUiVram(p_texture->m_vram_scope, p_texture->m_vram_label, p_texture->m_vram_allocation_size);
+
+    const auto fail_texture = [&](const char* operation, const VkResult result) -> Rml::TextureHandle {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Failed to %s for RmlUi texture '%s' (%d).",
+                          operation, name.c_str(), static_cast<int>(result));
+        if (p_texture->m_p_vk_image_view != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_p_device, p_texture->m_p_vk_image_view, nullptr);
+            p_texture->m_p_vk_image_view = VK_NULL_HANDLE;
+        }
+        if (!p_texture->m_vram_scope.empty() && !p_texture->m_vram_label.empty()) {
+            RecordRmlUiVram(p_texture->m_vram_scope, p_texture->m_vram_label, 0);
+        }
+        if (p_texture->m_p_vk_image != VK_NULL_HANDLE &&
+            p_texture->m_p_vma_allocation != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_p_allocator,
+                            p_texture->m_p_vk_image,
+                            p_texture->m_p_vma_allocation);
+            p_texture->m_p_vk_image = VK_NULL_HANDLE;
+            p_texture->m_p_vma_allocation = VK_NULL_HANDLE;
+        }
+        return {};
+    };
 
 #ifdef RMLUI_VK_DEBUG
     vmaSetAllocationName(m_p_allocator, p_allocation, name.c_str());
 #endif
 
     if (use_host_image_copy) {
-        VkHostImageLayoutTransitionInfoEXT to_dst{};
-        to_dst.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
-        to_dst.image = p_image;
-        to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        to_dst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        to_dst.subresourceRange.baseMipLevel = 0;
-        to_dst.subresourceRange.levelCount = 1;
-        to_dst.subresourceRange.baseArrayLayer = 0;
-        to_dst.subresourceRange.layerCount = 1;
-        m_pfn_transition_image_layout(m_p_device, 1, &to_dst);
+        VkHostImageLayoutTransitionInfoEXT to_sampled{};
+        to_sampled.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
+        to_sampled.image = p_image;
+        to_sampled.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        to_sampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_sampled.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        to_sampled.subresourceRange.baseMipLevel = 0;
+        to_sampled.subresourceRange.levelCount = 1;
+        to_sampled.subresourceRange.baseArrayLayer = 0;
+        to_sampled.subresourceRange.layerCount = 1;
+        status = m_pfn_transition_image_layout(m_p_device, 1, &to_sampled);
+        if (status != VK_SUCCESS)
+            return fail_texture("transition host image for shader reads", status);
 
         VkMemoryToImageCopyEXT region{};
         region.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT;
@@ -1292,30 +1355,36 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         VkCopyMemoryToImageInfoEXT copy_info{};
         copy_info.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO_EXT;
         copy_info.dstImage = p_image;
-        copy_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        copy_info.dstImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         copy_info.regionCount = 1;
         copy_info.pRegions = &region;
-        m_pfn_copy_memory_to_image(m_p_device, &copy_info);
-
-        VkHostImageLayoutTransitionInfoEXT to_read{};
-        to_read.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
-        to_read.image = p_image;
-        to_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        to_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        to_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        to_read.subresourceRange.baseMipLevel = 0;
-        to_read.subresourceRange.levelCount = 1;
-        to_read.subresourceRange.baseArrayLayer = 0;
-        to_read.subresourceRange.layerCount = 1;
-        m_pfn_transition_image_layout(m_p_device, 1, &to_read);
+        status = m_pfn_copy_memory_to_image(m_p_device, &copy_info);
+        if (status != VK_SUCCESS)
+            return fail_texture("copy host memory to image", status);
     } else {
         buffer_data_t cpu_buffer = CreateResource_StagingBuffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        void* data;
-        vmaMapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation, &data);
+        if (cpu_buffer.m_p_vk_buffer == VK_NULL_HANDLE ||
+            cpu_buffer.m_p_vma_allocation == VK_NULL_HANDLE) {
+            return fail_texture("allocate texture staging buffer", VK_ERROR_OUT_OF_HOST_MEMORY);
+        }
+        void* data = nullptr;
+        status = vmaMapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation, &data);
+        if (status != VK_SUCCESS || data == nullptr) {
+            DestroyResource_StagingBuffer(cpu_buffer);
+            return fail_texture("map texture staging buffer", status);
+        }
         memcpy(data, source.data(), static_cast<size_t>(image_size));
+        status = vmaFlushAllocation(m_p_allocator,
+                                    cpu_buffer.m_p_vma_allocation,
+                                    0,
+                                    image_size);
         vmaUnmapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation);
+        if (status != VK_SUCCESS) {
+            DestroyResource_StagingBuffer(cpu_buffer);
+            return fail_texture("flush texture staging buffer", status);
+        }
 
-        m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
+        const bool uploaded = m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
             lfs::vis::VulkanImageBarrierTracker upload_barriers;
             upload_barriers.registerImage(p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
             upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -1337,6 +1406,8 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         });
 
         DestroyResource_StagingBuffer(cpu_buffer);
+        if (!uploaded)
+            return fail_texture("submit texture staging upload", VK_ERROR_UNKNOWN);
     }
 
     VkImageViewCreateInfo info_image_view = {};
@@ -1351,14 +1422,19 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     info_image_view.subresourceRange.layerCount = 1;
     info_image_view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 
-    VkImageView p_image_view = nullptr;
+    VkImageView p_image_view = VK_NULL_HANDLE;
     status = vkCreateImageView(m_p_device, &info_image_view, nullptr, &p_image_view);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateImageView");
+    if (status != VK_SUCCESS || p_image_view == VK_NULL_HANDLE)
+        return fail_texture("create image view", status);
 
     p_texture->m_p_vk_image_view = p_image_view;
-    p_texture->m_p_vk_sampler = sampler != VK_NULL_HANDLE ? sampler : m_p_sampler_linear;
+    const std::string view_debug_name = std::format("rmlui.texture.view[{}]", name);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)p_texture->m_p_vk_image_view,
+                                  view_debug_name.c_str());
+    p_texture->m_p_vk_sampler = texture_sampler;
 
-    return reinterpret_cast<Rml::TextureHandle>(p_texture);
+    return reinterpret_cast<Rml::TextureHandle>(p_texture.release());
 }
 
 void RenderInterface_VK::ReleaseTexture(Rml::TextureHandle texture_handle) {
@@ -1638,16 +1714,22 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     m_p_instance = context.instance;
     m_p_physical_device = context.physical_device;
     m_p_device = context.device;
+    m_debug_name_writer.initialize(m_p_device);
     m_p_pipeline_cache = context.pipeline_cache;
 
     // On Vulkan 1.4 drivers these core-promoted entry points resolve even when
     // the hostImageCopy feature was not enabled on the device; calling them then
     // is UB. Only look them up when the owning context enabled the feature.
-    if (context.host_image_copy) {
+    if (context.host_image_copy &&
+        SupportsHostImageCopyDestinationLayout(m_p_physical_device,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)) {
         m_pfn_copy_memory_to_image = reinterpret_cast<PFN_vkCopyMemoryToImageEXT>(
             vkGetDeviceProcAddr(m_p_device, "vkCopyMemoryToImageEXT"));
         m_pfn_transition_image_layout = reinterpret_cast<PFN_vkTransitionImageLayoutEXT>(
             vkGetDeviceProcAddr(m_p_device, "vkTransitionImageLayoutEXT"));
+    } else if (context.host_image_copy) {
+        Rml::Log::Message(Rml::Log::LT_INFO,
+                          "[Vulkan] Host image copies do not support the RmlUi shader-read layout; using staging uploads.");
     }
     m_p_queue_graphics = context.graphics_queue;
     m_p_queue_present = context.graphics_queue;
@@ -1664,6 +1746,11 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     vkGetPhysicalDeviceProperties(m_p_physical_device, &physical_device_properties);
 
     Initialize_Allocator();
+    if (m_p_allocator == VK_NULL_HANDLE) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Failed to initialize the external RmlUi VMA allocator.");
+        return false;
+    }
     Initialize_Resources(physical_device_properties);
     UpdateViewportState(context.extent);
     Create_Pipelines();
@@ -1684,6 +1771,8 @@ void RenderInterface_VK::ShutdownExternal() {
     Destroy_Pipelines();
     Destroy_Resources();
     Destroy_Allocator();
+
+    m_debug_name_writer.reset();
 
     m_p_instance = VK_NULL_HANDLE;
     m_p_physical_device = VK_NULL_HANDLE;
@@ -1870,6 +1959,7 @@ void RenderInterface_VK::Initialize_Device() noexcept {
     VkResult status = vkCreateDevice(m_p_physical_device, &info_device, nullptr, &m_p_device);
 
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkCreateDevice");
+    m_debug_name_writer.initialize(m_p_device);
 }
 
 void RenderInterface_VK::Initialize_PhysicalDevice(VkPhysicalDeviceProperties& out_physical_device_properties) noexcept {
@@ -2091,9 +2181,11 @@ void RenderInterface_VK::Initialize_Resources(const VkPhysicalDeviceProperties& 
 }
 
 void RenderInterface_VK::Initialize_Allocator() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must have a valid VkDevice here");
-    RMLUI_VK_ASSERTMSG(m_p_physical_device, "you must have a valid VkPhysicalDevice here");
-    RMLUI_VK_ASSERTMSG(m_p_instance, "you must have a valid VkInstance here");
+    m_p_allocator = VK_NULL_HANDLE;
+    if (m_p_device == VK_NULL_HANDLE || m_p_physical_device == VK_NULL_HANDLE ||
+        m_p_instance == VK_NULL_HANDLE) {
+        return;
+    }
 
     VmaVulkanFunctions vulkanFunctions = {};
     vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
@@ -2107,9 +2199,8 @@ void RenderInterface_VK::Initialize_Allocator() noexcept {
     info.physicalDevice = m_p_physical_device;
     info.pVulkanFunctions = &vulkanFunctions;
 
-    auto status = vmaCreateAllocator(&info, &m_p_allocator);
-
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateAllocator");
+    if (vmaCreateAllocator(&info, &m_p_allocator) != VK_SUCCESS)
+        m_p_allocator = VK_NULL_HANDLE;
 }
 
 void RenderInterface_VK::Destroy_Instance() noexcept {
@@ -2117,6 +2208,7 @@ void RenderInterface_VK::Destroy_Instance() noexcept {
 }
 
 void RenderInterface_VK::Destroy_Device() noexcept {
+    m_debug_name_writer.reset();
     vkDestroyDevice(m_p_device, nullptr);
 }
 
@@ -2169,11 +2261,9 @@ void RenderInterface_VK::Destroy_Resources() noexcept {
 }
 
 void RenderInterface_VK::Destroy_Allocator() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_allocator, "you must have an initialized allocator for deleting");
-
-    vmaDestroyAllocator(m_p_allocator);
-
-    m_p_allocator = nullptr;
+    if (m_p_allocator != VK_NULL_HANDLE)
+        vmaDestroyAllocator(m_p_allocator);
+    m_p_allocator = VK_NULL_HANDLE;
 }
 
 void RenderInterface_VK::QueryInstanceLayers(LayerPropertiesList& result) noexcept {
@@ -2989,34 +3079,24 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateGraphicsPipelines");
 
 #ifdef RMLUI_VK_DEBUG
-    VkDebugUtilsObjectNameInfoEXT info_debug = {};
-
-    info_debug.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-    info_debug.pObjectName = "pipeline_stencil for region where geometry will be drawn";
-    info_debug.objectType = VkObjectType::VK_OBJECT_TYPE_PIPELINE;
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_stencil_for_region_where_geometry_will_be_drawn;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
-
-    info_debug.pObjectName = "pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures";
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
-
-    info_debug.pObjectName = "pipeline_without_textures";
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_without_textures;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
-
-    info_debug.pObjectName = "pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures";
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
-
-    info_debug.pObjectName = "pipeline_with_textures";
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_with_textures;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
+    (void)m_debug_name_writer.set(
+        VK_OBJECT_TYPE_PIPELINE,
+        (uint64_t)m_p_pipeline_stencil_for_region_where_geometry_will_be_drawn,
+        "pipeline_stencil for region where geometry will be drawn");
+    (void)m_debug_name_writer.set(
+        VK_OBJECT_TYPE_PIPELINE,
+        (uint64_t)m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures,
+        "pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures");
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_PIPELINE,
+                                  (uint64_t)m_p_pipeline_without_textures,
+                                  "pipeline_without_textures");
+    (void)m_debug_name_writer.set(
+        VK_OBJECT_TYPE_PIPELINE,
+        (uint64_t)m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures,
+        "pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures");
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_PIPELINE,
+                                  (uint64_t)m_p_pipeline_with_textures,
+                                  "pipeline_with_textures");
 #endif
 }
 
@@ -3106,6 +3186,9 @@ void RenderInterface_VK::Create_DepthStencilImage() noexcept {
 
     m_texture_depthstencil.m_p_vk_image = p_image;
     m_texture_depthstencil.m_p_vma_allocation = p_allocation;
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)m_texture_depthstencil.m_p_vk_image,
+                                  "rmlui.depth-stencil.image");
     m_texture_depthstencil.m_vram_scope = "vulkan.rmlui.depth_stencil";
     m_texture_depthstencil.m_vram_label = TextureVramLabel("depth_stencil",
                                                            "swapchain",
@@ -3145,6 +3228,9 @@ void RenderInterface_VK::Create_DepthStencilImageViews() noexcept {
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateImageView");
 
     m_texture_depthstencil.m_p_vk_image_view = p_image_view;
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)m_texture_depthstencil.m_p_vk_image_view,
+                                  "rmlui.depth-stencil.view");
 }
 
 void RenderInterface_VK::UpdateViewportState(const VkExtent2D& real_render_image_size) noexcept {
@@ -3279,16 +3365,16 @@ void RenderInterface_VK::Destroy_Texture(const texture_data_t& texture) noexcept
     RMLUI_VK_ASSERTMSG(m_p_allocator, "you must have initialized VmaAllocator");
     RMLUI_VK_ASSERTMSG(m_p_device, "you must have initialized VkDevice");
 
+    if (VkDescriptorSet p_set = texture.m_p_vk_descriptor_set; p_set)
+        m_manager_descriptors.Free_Descriptors(m_p_device, &p_set);
+
     if (texture.m_p_vma_allocation) {
         if (!texture.m_vram_scope.empty() && !texture.m_vram_label.empty())
             RecordRmlUiVram(texture.m_vram_scope, texture.m_vram_label, 0);
         m_image_barriers.forgetImage(texture.m_p_vk_image);
+        if (texture.m_p_vk_image_view)
+            vkDestroyImageView(m_p_device, texture.m_p_vk_image_view, nullptr);
         vmaDestroyImage(m_p_allocator, texture.m_p_vk_image, texture.m_p_vma_allocation);
-        vkDestroyImageView(m_p_device, texture.m_p_vk_image_view, nullptr);
-    }
-
-    if (VkDescriptorSet p_set = texture.m_p_vk_descriptor_set; p_set) {
-        m_manager_descriptors.Free_Descriptors(m_p_device, &p_set);
     }
 }
 
@@ -3395,6 +3481,10 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     VkResult status = vmaCreateImage(m_p_allocator, &color_info, &allocation_info, &layer.m_color.m_p_vk_image,
                                      &layer.m_color.m_p_vma_allocation, &color_allocation_stats);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer color image");
+    const std::string color_image_name = std::format("rmlui.layer[{}].color.image", index);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)layer.m_color.m_p_vk_image,
+                                  color_image_name.c_str());
     layer.m_color.m_vram_scope = "vulkan.rmlui.render_layer";
     layer.m_color.m_vram_label = TextureVramLabel("layer_color", "rmlui", m_width, m_height, &layer.m_color);
     layer.m_color.m_vram_allocation_size = color_allocation_stats.size;
@@ -3414,6 +3504,10 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     color_view_info.subresourceRange.layerCount = 1;
     status = vkCreateImageView(m_p_device, &color_view_info, nullptr, &layer.m_color.m_p_vk_image_view);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer color image view");
+    const std::string color_view_name = std::format("rmlui.layer[{}].color.view", index);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)layer.m_color.m_p_vk_image_view,
+                                  color_view_name.c_str());
     layer.m_color.m_p_vk_sampler = m_p_sampler_linear;
     layer.m_color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -3433,6 +3527,10 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     status = vmaCreateImage(m_p_allocator, &depth_info, &allocation_info, &layer.m_depth_stencil.m_p_vk_image,
                             &layer.m_depth_stencil.m_p_vma_allocation, &depth_allocation_stats);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer depth/stencil image");
+    const std::string depth_image_name = std::format("rmlui.layer[{}].depth-stencil.image", index);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)layer.m_depth_stencil.m_p_vk_image,
+                                  depth_image_name.c_str());
     layer.m_depth_stencil.m_vram_scope = "vulkan.rmlui.render_layer";
     layer.m_depth_stencil.m_vram_label = TextureVramLabel("layer_depth", "rmlui", m_width, m_height, &layer.m_depth_stencil);
     layer.m_depth_stencil.m_vram_allocation_size = depth_allocation_stats.size;
@@ -3452,6 +3550,10 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     depth_view_info.subresourceRange.layerCount = 1;
     status = vkCreateImageView(m_p_device, &depth_view_info, nullptr, &layer.m_depth_stencil.m_p_vk_image_view);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer depth/stencil image view");
+    const std::string depth_view_name = std::format("rmlui.layer[{}].depth-stencil.view", index);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)layer.m_depth_stencil.m_p_vk_image_view,
+                                  depth_view_name.c_str());
     layer.m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     layer.width = m_width;
     layer.height = m_height;

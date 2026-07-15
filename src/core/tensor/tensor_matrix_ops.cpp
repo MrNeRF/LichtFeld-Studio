@@ -3,9 +3,9 @@
 
 #include "core/logger.hpp"
 #include "core/tensor_trace.hpp"
+#include "internal/cuda_stream_context.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
-#include <cassert>
 
 namespace lfs::core {
 
@@ -29,15 +29,21 @@ namespace lfs::core {
     } // namespace
 
     Tensor Tensor::mm(const Tensor& other) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "mm requires valid tensors");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       "mm currently supports only Float32 tensors");
+        tensor_contract::require_valid(
+            *this, "mm", "left", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            other, "mm", "right", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            *this, DataType::Float32, "mm", "left", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            other, DataType::Float32, "mm", "right", LFS_SOURCE_SITE_CURRENT());
         LFS_ASSERT_MSG(shape_.rank() == 2 && other.shape_.rank() == 2,
                        "mm requires rank-2 tensors");
         LFS_ASSERT_MSG(shape_[1] == other.shape_[0],
                        std::format("mm dimension mismatch: {}x{} @ {}x{}",
                                    shape_[0], shape_[1], other.shape_[0], other.shape_[1]));
-        LFS_ASSERT_MSG(device_ == other.device_, "mm requires tensors on the same device");
+        tensor_contract::require_same_device(
+            *this, other, "mm", "left", "right", LFS_SOURCE_SITE_CURRENT());
 
         const size_t m = shape_[0];
         const size_t k = shape_[1];
@@ -49,6 +55,7 @@ namespace lfs::core {
         // GPU: use tiled CUDA sgemm kernel
         if (device_ == Device::CUDA) {
             auto result = empty({m, n}, Device::CUDA, dtype_);
+            prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_sgemm(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
                                      m, n, k, result.stream());
             return result;
@@ -60,16 +67,23 @@ namespace lfs::core {
     }
 
     Tensor Tensor::bmm(const Tensor& other) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "bmm requires valid tensors");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       "bmm currently supports only Float32 tensors");
+        tensor_contract::require_valid(
+            *this, "bmm", "left", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            other, "bmm", "right", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            *this, DataType::Float32, "bmm", "left", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            other, DataType::Float32, "bmm", "right", LFS_SOURCE_SITE_CURRENT());
         LFS_ASSERT_MSG(shape_.rank() == 3 && other.shape_.rank() == 3,
                        "bmm requires rank-3 tensors");
-        LFS_ASSERT_MSG(shape_[0] == other.shape_[0], "bmm batch dimensions must match");
+        LFS_ASSERT_MSG(shape_[0] == other.shape_[0],
+                       "bmm batch dimensions must match");
         LFS_ASSERT_MSG(shape_[2] == other.shape_[1],
                        std::format("bmm dimension mismatch: {}x{} @ {}x{}",
                                    shape_[1], shape_[2], other.shape_[1], other.shape_[2]));
-        LFS_ASSERT_MSG(device_ == other.device_, "bmm requires tensors on the same device");
+        tensor_contract::require_same_device(
+            *this, other, "bmm", "left", "right", LFS_SOURCE_SITE_CURRENT());
 
         const size_t batch_size = shape_[0];
         const size_t m = shape_[1];
@@ -82,6 +96,7 @@ namespace lfs::core {
         // GPU: use tiled CUDA batched sgemm kernel
         if (device_ == Device::CUDA) {
             auto result = empty({batch_size, m, n}, Device::CUDA, dtype_);
+            prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_sgemm_batched(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
                                              batch_size, m, n, k, result.stream());
             return result;
@@ -108,31 +123,37 @@ namespace lfs::core {
     }
 
     Tensor Tensor::matmul(const Tensor& other) const {
-        debug::OpTraceGuard trace("matmul", *this, other);
+        debug::OpTraceGuard trace(
+            "matmul", *this, other, LFS_SOURCE_SITE_CURRENT());
 
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "matmul requires valid tensors");
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       "matmul requires valid tensors");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
                        "matmul currently supports only Float32 tensors");
-        LFS_ASSERT_MSG(device_ == other.device_, "matmul requires tensors on the same device");
+        LFS_ASSERT_MSG(device_ == other.device_,
+                       "matmul requires tensors on the same device");
 
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
 
         // Vector dot product
         if (a.shape_.rank() == 1 && b.shape_.rank() == 1) {
-            LFS_ASSERT_MSG(a.shape_[0] == b.shape_[0], "matmul vector dimensions must match");
+            LFS_ASSERT_MSG(a.shape_[0] == b.shape_[0],
+                           "matmul vector dimensions must match");
             return a.dot(b);
         }
 
         // Vector-matrix: [k] @ [k, n] -> [n]
         if (a.shape_.rank() == 1 && b.shape_.rank() == 2) {
-            LFS_ASSERT_MSG(a.shape_[0] == b.shape_[0], "matmul vector-matrix dimensions must match");
+            LFS_ASSERT_MSG(a.shape_[0] == b.shape_[0],
+                           "matmul vector-matrix dimensions must match");
             return a.unsqueeze(0).mm(b).squeeze(0);
         }
 
         // Matrix-vector: [m, k] @ [k] -> [m]
         if (a.shape_.rank() == 2 && b.shape_.rank() == 1) {
-            LFS_ASSERT_MSG(a.shape_[1] == b.shape_[0], "matmul matrix-vector dimensions must match");
+            LFS_ASSERT_MSG(a.shape_[1] == b.shape_[0],
+                           "matmul matrix-vector dimensions must match");
             return a.mm(b.unsqueeze(1)).squeeze(1);
         }
 
@@ -143,12 +164,37 @@ namespace lfs::core {
 
         // Batch matrix multiply: [B, m, k] @ [B, k, n] -> [B, m, n]
         if (a.shape_.rank() == 3 && b.shape_.rank() == 3) {
-            return a.bmm(b);
+            LFS_ASSERT_MSG(a.shape_[2] == b.shape_[1],
+                           "matmul batched matrix dimensions must match");
+            const size_t a_batch = a.shape_[0];
+            const size_t b_batch = b.shape_[0];
+            LFS_ASSERT_MSG(a_batch == b_batch || a_batch == 1 || b_batch == 1,
+                           std::format("matmul batch dimensions are not broadcastable: {} and {}",
+                                       a_batch, b_batch));
+            if (a_batch == b_batch) {
+                return a.bmm(b);
+            }
+
+            const size_t batch = a_batch == 1 ? b_batch : a_batch;
+            Tensor a_broadcast;
+            Tensor b_broadcast;
+            const Tensor* a_operand = &a;
+            const Tensor* b_operand = &b;
+            if (a_batch == 1) {
+                a_broadcast = a.broadcast_to({batch, a.shape_[1], a.shape_[2]});
+                a_operand = &a_broadcast;
+            }
+            if (b_batch == 1) {
+                b_broadcast = b.broadcast_to({batch, b.shape_[1], b.shape_[2]});
+                b_operand = &b_broadcast;
+            }
+            return a_operand->bmm(*b_operand);
         }
 
         // 2D @ 3D: broadcast [m, k] @ [B, k, n] -> [B, m, n]
         if (a.shape_.rank() == 2 && b.shape_.rank() == 3) {
-            LFS_ASSERT_MSG(a.shape_[1] == b.shape_[1], "matmul 2D @ 3D dimensions must match");
+            LFS_ASSERT_MSG(a.shape_[1] == b.shape_[1],
+                           "matmul 2D @ 3D dimensions must match");
             const size_t batch = b.shape_[0];
             const size_t m = a.shape_[0];
             const size_t k = a.shape_[1];
@@ -160,7 +206,8 @@ namespace lfs::core {
 
         // 3D @ 2D: broadcast [B, m, k] @ [k, n] -> [B, m, n]
         if (a.shape_.rank() == 3 && b.shape_.rank() == 2) {
-            LFS_ASSERT_MSG(a.shape_[2] == b.shape_[0], "matmul 3D @ 2D dimensions must match");
+            LFS_ASSERT_MSG(a.shape_[2] == b.shape_[0],
+                           "matmul 3D @ 2D dimensions must match");
             const size_t batch = a.shape_[0];
             const size_t k = b.shape_[0];
             const size_t n = b.shape_[1];
@@ -176,13 +223,16 @@ namespace lfs::core {
     }
 
     Tensor Tensor::dot(const Tensor& other) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "dot requires valid tensors");
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       "dot requires valid tensors");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
                        "dot currently supports only Float32 tensors");
         LFS_ASSERT_MSG(shape_.rank() == 1 && other.shape_.rank() == 1,
                        "dot requires rank-1 tensors");
-        LFS_ASSERT_MSG(shape_[0] == other.shape_[0], "dot vector dimensions must match");
-        LFS_ASSERT_MSG(device_ == other.device_, "dot requires tensors on the same device");
+        LFS_ASSERT_MSG(shape_[0] == other.shape_[0],
+                       "dot vector dimensions must match");
+        LFS_ASSERT_MSG(device_ == other.device_,
+                       "dot requires tensors on the same device");
 
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
@@ -191,6 +241,7 @@ namespace lfs::core {
         // GPU: Use optimized CUDA kernel
         if (device_ == Device::CUDA) {
             auto result = empty({}, Device::CUDA, dtype_);
+            prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_dot_product(
                 a.ptr<float>(),
                 b.ptr<float>(),
@@ -212,6 +263,7 @@ namespace lfs::core {
         // Return as scalar (rank-0 view)
         Tensor scalar(result.data_ptr(), TensorShape(std::vector<size_t>{}), Device::CPU, dtype_);
         scalar.data_owner_ = result.data_owner_;
+        scalar.storage_meta_ = result.storage_meta_;
         scalar.is_view_ = true;
         return scalar;
     }

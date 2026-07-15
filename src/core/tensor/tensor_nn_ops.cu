@@ -1,10 +1,11 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "internal/tensor_functors.hpp"
 #include "internal/tensor_nn_ops.hpp"
 #include <cassert>
-#include <cfloat>
 #include <cuda_runtime.h>
+#include <limits>
 
 namespace lfs::core::tensor_ops {
 
@@ -29,7 +30,7 @@ namespace lfs::core::tensor_ops {
             const int h_start = h_out * stride - padding;
             const int w_start = w_out * stride - padding;
 
-            float max_val = -FLT_MAX;
+            float max_val = -std::numeric_limits<float>::infinity();
 
             for (int kh = 0; kh < kernel; ++kh) {
                 const int h_in = h_start + kh;
@@ -42,7 +43,7 @@ namespace lfs::core::tensor_ops {
                         continue;
 
                     const int input_idx = ((n * C + c) * H_in + h_in) * W_in + w_in;
-                    max_val = fmaxf(max_val, input[input_idx]);
+                    max_val = ops::max_reduce_op{}(max_val, input[input_idx]);
                 }
             }
 

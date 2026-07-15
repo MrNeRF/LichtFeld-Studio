@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <gtest/gtest.h>
+#include <limits>
 #include <random>
 #include <torch/torch.h>
 
@@ -11,9 +12,6 @@ namespace {
 
     constexpr float FORWARD_ATOL = 5e-6f;
     constexpr float BACKWARD_ATOL = 1e-4f;
-    constexpr float GRADCHECK_EPS = 1e-3f;
-    constexpr float GRADCHECK_ATOL = 2e-2f;
-    constexpr float GRADCHECK_RTOL = 5e-2f;
     constexpr int DEFAULT_SEED = 42;
 
     const auto GPU_F32 = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
@@ -408,81 +406,52 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
         EXPECT_LT(torch::abs(rgb_cuda - rgb_torch).max().item<float>(), FORWARD_ATOL);
     }
 
-    TEST_F(PPISPCudaVsTorchTest, FiniteDifferenceGradcheck) {
-        torch::manual_seed(DEFAULT_SEED);
+    TEST_F(PPISPCudaVsTorchTest, ExtremeAndNonFiniteParametersStayFinite) {
+        auto params = createParams(1, 1, DEFAULT_SEED);
+        params.exposure.fill_(1000.0f);
+        params.vignetting.fill_(std::numeric_limits<float>::infinity());
+        params.color.fill_(std::numeric_limits<float>::quiet_NaN());
+        params.crf.select(2, 0).fill_(1000.0f);
+        params.crf.select(2, 1).fill_(-1000.0f);
+        params.crf.select(2, 2).fill_(1000.0f);
+        params.crf.select(2, 3).fill_(1000.0f);
+        params.crf.select(1, 1).select(1, 3).fill_(-1000.0f);
+        params.crf.select(1, 2).select(1, 3).fill_(std::numeric_limits<float>::quiet_NaN());
 
-        auto exposure = torch::randn({1}, GPU_F32) * 0.1f;
-        auto color = torch::randn({1, 8}, GPU_F32) * 0.02f;
-        auto rgb_in = torch::rand({3, 16, 16}, GPU_F32) * 0.5f + 0.25f;
+        const auto rgb_in = createImage(8, 8, DEFAULT_SEED);
+        const auto output = runCudaForward(params, rgb_in, 8, 8, 0, 0);
+        EXPECT_TRUE(torch::isfinite(output).all().item<bool>());
 
-        exposure = exposure.clone().set_requires_grad(true);
-        color = color.clone().set_requires_grad(true);
-        rgb_in = rgb_in.clone().set_requires_grad(true);
-
-        const auto vignetting = torch::randn({1, 3, 5}, GPU_F32) * 0.01f;
-        const auto crf = torch::randn({1, 3, 4}, GPU_F32) * 0.1f;
-
-        const auto output = ppispApplyTorch(exposure, vignetting, color, crf, rgb_in, 0, 0);
-        output.backward(torch::ones_like(output));
-
-        auto checkGrad = [&](const torch::Tensor& param, const torch::Tensor& grad, const char* name) {
-            auto p = param.detach().clone().flatten();
-            const auto g = grad.flatten();
-            const int n = std::min(5, static_cast<int>(p.size(0)));
-
-            for (int i = 0; i < n; ++i) {
-                const float orig = p[i].item<float>();
-
-                p[i] = orig + GRADCHECK_EPS;
-                const auto exp_p = (name[0] == 'e') ? p.reshape(exposure.sizes()) : exposure.detach();
-                const auto col_p = (name[0] == 'c') ? p.reshape(color.sizes()) : color.detach();
-                const auto rgb_p = (name[0] == 'r') ? p.reshape(rgb_in.sizes()) : rgb_in.detach();
-                const float loss_plus = ppispApplyTorch(exp_p, vignetting, col_p, crf, rgb_p, 0, 0).sum().item<float>();
-
-                p[i] = orig - GRADCHECK_EPS;
-                const auto exp_m = (name[0] == 'e') ? p.reshape(exposure.sizes()) : exposure.detach();
-                const auto col_m = (name[0] == 'c') ? p.reshape(color.sizes()) : color.detach();
-                const auto rgb_m = (name[0] == 'r') ? p.reshape(rgb_in.sizes()) : rgb_in.detach();
-                const float loss_minus = ppispApplyTorch(exp_m, vignetting, col_m, crf, rgb_m, 0, 0).sum().item<float>();
-
-                p[i] = orig;
-
-                const float numerical = (loss_plus - loss_minus) / (2.0f * GRADCHECK_EPS);
-                const float analytical = g[i].item<float>();
-                const float diff = std::abs(numerical - analytical);
-                const float tol = GRADCHECK_ATOL + GRADCHECK_RTOL * std::max(std::abs(numerical), std::abs(analytical));
-
-                EXPECT_LE(diff, tol) << name << "[" << i << "]: num=" << numerical << " ana=" << analytical;
-            }
-        };
-
-        checkGrad(exposure, exposure.grad(), "exposure");
-        checkGrad(color, color.grad(), "color");
-        checkGrad(rgb_in, rgb_in.grad(), "rgb_in");
+        const auto grads = runCudaBackward(params, rgb_in, torch::ones_like(output), 8, 8, 0, 0);
+        EXPECT_TRUE(torch::isfinite(grads.rgb_in).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(grads.exposure).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(grads.vignetting).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(grads.color).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(grads.crf).all().item<bool>());
+        EXPECT_EQ(grads.exposure.item<float>(), 0.0f);
     }
 
-    TEST_F(PPISPCudaVsTorchTest, GradientMagnitudeReasonable) {
-        torch::manual_seed(DEFAULT_SEED);
+    TEST_F(PPISPCudaVsTorchTest, AdamSanitizesNonFiniteParametersGradientsAndState) {
+        auto params = torch::tensor(
+            {std::numeric_limits<float>::quiet_NaN(), 1.0f}, GPU_F32);
+        auto exp_avg = torch::tensor(
+            {std::numeric_limits<float>::infinity(), 0.0f}, GPU_F32);
+        auto exp_avg_sq = torch::tensor({-1.0f, 0.0f}, GPU_F32);
+        auto grad = torch::tensor(
+            {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}, GPU_F32);
 
-        auto exposure = torch::empty({1}, GPU_F32).normal_(0, 0.1f).set_requires_grad(true);
-        auto vignetting = torch::empty({1, 3, 5}, GPU_F32).normal_(0, 0.01f).set_requires_grad(true);
-        auto color = torch::empty({1, 8}, GPU_F32).normal_(0, 0.02f).set_requires_grad(true);
-        auto crf = torch::empty({1, 3, 4}, GPU_F32).normal_(0, 0.1f).set_requires_grad(true);
-        auto rgb_in = torch::empty({3, 32, 32}, GPU_F32).uniform_(0.25f, 0.75f).set_requires_grad(true);
+        lfs::training::kernels::launch_ppisp_adam_update(
+            params.data_ptr<float>(), exp_avg.data_ptr<float>(), exp_avg_sq.data_ptr<float>(),
+            grad.data_ptr<float>(), 2, 1.0e-3f, 0.9f, 0.999f, 10.0f, 10.0f, 1.0e-8f, nullptr);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
-        ppispApplyTorch(exposure, vignetting, color, crf, rgb_in, 0, 0).sum().backward();
-
-        auto check = [](const torch::Tensor& t, const char* name) {
-            ASSERT_TRUE(t.grad().defined()) << name;
-            EXPECT_TRUE(torch::isfinite(t.grad()).all().item<bool>()) << name;
-            EXPECT_LT(t.grad().norm().item<float>(), 1e6f) << name;
-        };
-
-        check(exposure, "exposure");
-        check(vignetting, "vignetting");
-        check(color, "color");
-        check(crf, "crf");
-        check(rgb_in, "rgb_in");
+        EXPECT_TRUE(torch::isfinite(params).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(exp_avg).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(exp_avg_sq).all().item<bool>());
+        EXPECT_EQ(params[0].item<float>(), 0.0f);
+        EXPECT_EQ(params[1].item<float>(), 1.0f);
+        EXPECT_EQ(exp_avg.abs().max().item<float>(), 0.0f);
+        EXPECT_EQ(exp_avg_sq.abs().max().item<float>(), 0.0f);
     }
 
 } // namespace

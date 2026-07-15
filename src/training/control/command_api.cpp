@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace lfs::training {
 
@@ -57,8 +58,38 @@ namespace lfs::training {
             return "Unknown";
         }
 
-        bool is_control_safe_phase(TrainingPhase p) {
-            return p == TrainingPhase::Idle || p == TrainingPhase::IterationStart || p == TrainingPhase::SafeControl;
+        bool argument_matches_type(const ArgValue& value, ArgType type) {
+            switch (type) {
+            case ArgType::Int:
+                return std::holds_alternative<int64_t>(value);
+            case ArgType::Float:
+                return std::holds_alternative<double>(value);
+            case ArgType::Bool:
+                return std::holds_alternative<bool>(value);
+            case ArgType::String:
+                return std::holds_alternative<std::string>(value);
+            case ArgType::IntList:
+                return std::holds_alternative<std::vector<int64_t>>(value);
+            case ArgType::FloatList:
+                return std::holds_alternative<std::vector<double>>(value);
+            }
+            return false;
+        }
+
+        bool argument_is_finite(const ArgValue& value) {
+            if (const auto* scalar = std::get_if<double>(&value)) {
+                return std::isfinite(*scalar);
+            }
+            if (const auto* values = std::get_if<std::vector<double>>(&value)) {
+                return std::ranges::all_of(*values, [](double item) { return std::isfinite(item); });
+            }
+            return true;
+        }
+
+        bool is_known_model_attribute(const std::string& name) {
+            return name == "means" || name == "position" || name == "scaling" || name == "scale" ||
+                   name == "rotation" || name == "rot" || name == "opacity" || name == "alpha" ||
+                   name == "sh0" || name == "shN" || name == "sh";
         }
 
         std::optional<ParamType> param_type_from_attribute(const std::string& name) {
@@ -167,6 +198,16 @@ namespace lfs::training {
             loss_history_.push_back({ctx.iteration, ctx.loss});
             last_recorded_iteration_ = ctx.iteration;
         }
+    }
+
+    void CommandCenter::clear_snapshot(const Trainer* trainer) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (snapshot_.trainer != trainer) {
+            return;
+        }
+        snapshot_ = {};
+        pending_commands_.clear();
+        phase_.store(TrainingPhase::Idle, std::memory_order_relaxed);
     }
 
     TrainingSnapshot CommandCenter::snapshot() const {
@@ -522,16 +563,6 @@ namespace lfs::training {
 
     std::expected<void, std::string> CommandCenter::execute(const Command& cmd) {
         const auto phase = phase_.load(std::memory_order_relaxed);
-        if (!is_control_safe_phase(phase)) {
-            LOG_WARN("CommandCenter: command {} rejected in phase {}", cmd.op, phase_name(phase));
-            return std::unexpected(std::string("Command not allowed during training phase: ") + phase_name(phase));
-        }
-
-        TrainingSnapshot view = snapshot();
-        if (!view.trainer) {
-            return std::unexpected("No active trainer; cannot execute command");
-        }
-
         const auto it_op = std::find_if(ops_.begin(), ops_.end(), [&](const OperationInfo& info) {
             return info.name == cmd.op && info.target == cmd.target;
         });
@@ -543,16 +574,52 @@ namespace lfs::training {
             return std::unexpected("Selector kind not allowed for op " + cmd.op);
         }
 
+        for (const auto& [name, value] : cmd.args) {
+            const auto spec = std::ranges::find_if(it_op->args, [&](const ArgSpec& item) { return item.name == name; });
+            if (spec == it_op->args.end()) {
+                return std::unexpected("Unknown argument '" + name + "' for op " + cmd.op);
+            }
+            if (!argument_matches_type(value, spec->type)) {
+                return std::unexpected("Wrong type for argument '" + name + "' in op " + cmd.op);
+            }
+            if (!argument_is_finite(value)) {
+                return std::unexpected("Non-finite argument '" + name + "' in op " + cmd.op);
+            }
+        }
+        for (const auto& spec : it_op->args) {
+            if (spec.required && !cmd.args.contains(spec.name)) {
+                return std::unexpected("Missing required argument '" + spec.name + "' for op " + cmd.op);
+            }
+        }
+        if (cmd.op == "set_attribute" && cmd.args.contains("value") == cmd.args.contains("values")) {
+            return std::unexpected("set_attribute requires exactly one of 'value' or 'values'");
+        }
+        if (cmd.op == "clamp_attribute" && !cmd.args.contains("min") && !cmd.args.contains("max")) {
+            return std::unexpected("clamp_attribute requires 'min' or 'max'");
+        }
+        if (cmd.target == CommandTarget::Model) {
+            const auto& attribute = std::get<std::string>(cmd.args.at("attribute"));
+            if (!is_known_model_attribute(attribute)) {
+                return std::unexpected("Unknown model attribute: " + attribute);
+            }
+        }
+
+        // Snapshot clearing is the Trainer lifetime boundary. Keep this lock while
+        // touching session atomics, and put GPU/model mutations on the worker queue.
+        // The worker drains that queue only after waiting for outstanding model readers.
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!snapshot_.trainer) {
+            return std::unexpected("No active trainer; cannot execute command");
+        }
         switch (cmd.target) {
         case CommandTarget::Model:
-            LOG_DEBUG("CommandCenter: exec model op {} in phase {}", cmd.op, phase_name(phase));
-            return exec_model(cmd, view);
         case CommandTarget::Optimizer:
-            LOG_DEBUG("CommandCenter: exec optimizer op {} in phase {}", cmd.op, phase_name(phase));
-            return exec_optimizer(cmd, view);
+            LOG_DEBUG("CommandCenter: queue {} op {} in phase {}", target_name(cmd.target), cmd.op, phase_name(phase));
+            pending_commands_.push_back(cmd);
+            return {};
         case CommandTarget::Session:
             LOG_DEBUG("CommandCenter: exec session op {} in phase {}", cmd.op, phase_name(phase));
-            return exec_session(cmd, view);
+            return exec_session(cmd, snapshot_);
         }
         return std::unexpected("Invalid command target");
     }

@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/checked_arithmetic.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
@@ -11,6 +13,7 @@
 #include "internal/lazy_executor.hpp"
 #include "internal/memory_pool.hpp"
 #include "internal/tensor_broadcast.hpp"
+#include "internal/tensor_dtype_dispatch.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include <cstring>
@@ -32,14 +35,6 @@
 #ifdef _OPENMP
 #include <omp.h>
 #endif
-
-#define CHECK_CUDA(call)                                        \
-    do {                                                        \
-        const cudaError_t error = (call);                       \
-        LFS_ASSERT_MSG(error == cudaSuccess,                    \
-                       std::string("CUDA operation failed: ") + \
-                           cudaGetErrorString(error));          \
-    } while (0)
 
 namespace lfs::core {
 
@@ -103,14 +98,138 @@ namespace lfs::core {
             return dtype_size(dtype) != 0;
         }
 
-        [[nodiscard]] size_t checked_size_product(const size_t lhs,
-                                                  const size_t rhs,
-                                                  const std::string_view context) {
-            LFS_ASSERT_MSG(lhs == 0 || rhs <= std::numeric_limits<size_t>::max() / lhs,
-                           std::string(context) + " size overflow");
-            return lhs * rhs;
+        struct NamedTensorContractOperand {
+            std::string_view role;
+            const Tensor* tensor;
+        };
+
+        std::string format_tensor_contract(
+            const std::string_view operation,
+            const std::string_view requirement,
+            const std::initializer_list<NamedTensorContractOperand> tensors,
+            const std::string_view context = {}) {
+            std::string message(operation);
+            message += ": ";
+            message += requirement;
+            if (!context.empty()) {
+                message += " [";
+                message += context;
+                message += ']';
+            }
+            message += " (";
+            bool first = true;
+            for (const auto& [role, tensor] : tensors) {
+                if (!first) {
+                    message += ", ";
+                }
+                first = false;
+                message += role;
+                message += '=';
+                message += tensor->str();
+            }
+            message += ')';
+            return message;
         }
+
+        std::string expected_dtypes(const std::initializer_list<DataType> expected) {
+            std::string result = "expected=";
+            bool first = true;
+            for (const DataType dtype : expected) {
+                if (!first) {
+                    result += '|';
+                }
+                first = false;
+                result += dtype_name(dtype);
+            }
+            return result;
+        }
+
     } // namespace
+
+    namespace tensor_contract {
+
+        void require_valid(const Tensor& tensor,
+                           const std::string_view operation,
+                           const std::string_view role,
+                           const SourceSite location) {
+            if (!tensor.is_valid()) [[unlikely]] {
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor.is_valid()",
+                    format_tensor_contract(operation, "invalid tensor", {{role, &tensor}}),
+                    location);
+            }
+        }
+
+        void require_same_device(const Tensor& reference,
+                                 const Tensor& other,
+                                 const std::string_view operation,
+                                 const std::string_view reference_role,
+                                 const std::string_view other_role,
+                                 const SourceSite location) {
+            if (reference.device() != other.device()) [[unlikely]] {
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor devices match",
+                    format_tensor_contract(
+                        operation, "device mismatch",
+                        {{reference_role, &reference}, {other_role, &other}}),
+                    location);
+            }
+        }
+
+        void require_dtype(const Tensor& tensor,
+                           const DataType expected,
+                           const std::string_view operation,
+                           const std::string_view role,
+                           const SourceSite location) {
+            require_dtype(tensor, {expected}, operation, role, location);
+        }
+
+        void require_dtype(const Tensor& tensor,
+                           const std::initializer_list<DataType> expected,
+                           const std::string_view operation,
+                           const std::string_view role,
+                           const SourceSite location) {
+            if (std::find(expected.begin(), expected.end(), tensor.dtype()) == expected.end()) [[unlikely]] {
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor dtype is allowed",
+                    format_tensor_contract(
+                        operation, "dtype mismatch", {{role, &tensor}}, expected_dtypes(expected)),
+                    location);
+            }
+        }
+
+        void require_shape(const Tensor& reference,
+                           const Tensor& other,
+                           const std::string_view operation,
+                           const std::string_view reference_role,
+                           const std::string_view other_role,
+                           const SourceSite location) {
+            if (reference.shape() != other.shape()) [[unlikely]] {
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor shapes match",
+                    format_tensor_contract(
+                        operation, "shape mismatch",
+                        {{reference_role, &reference}, {other_role, &other}}),
+                    location);
+            }
+        }
+
+        void require_shape(const Tensor& tensor,
+                           const TensorShape& expected,
+                           const std::string_view operation,
+                           const std::string_view role,
+                           const SourceSite location) {
+            if (tensor.shape() != expected) [[unlikely]] {
+                const std::string context = "expected=" + expected.str();
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor shape matches expected shape",
+                    format_tensor_contract(
+                        operation, "shape mismatch", {{role, &tensor}}, context),
+                    location);
+            }
+        }
+
+    } // namespace tensor_contract
 
     size_t Tensor::storage_allocation_bytes(const TensorShape& shape,
                                             const size_t capacity,
@@ -120,23 +239,22 @@ namespace lfs::core {
         if (shape.rank() == 0) {
             LFS_ASSERT_MSG(capacity == 0,
                            "scalar tensor storage cannot have row capacity");
-            return checked_size_product(shape.elements(), dtype_size(dtype),
-                                        "scalar tensor storage");
+            return checked_product(shape.elements(), dtype_size(dtype),
+                                   "scalar tensor storage");
         }
 
         size_t row_elements = 1;
         for (size_t i = 1; i < shape.rank(); ++i) {
-            row_elements = checked_size_product(row_elements, shape[i],
-                                                "tensor row");
+            row_elements = checked_product(row_elements, shape[i], "tensor row");
         }
 
         const size_t rows = capacity == 0 ? shape[0] : capacity;
         LFS_ASSERT_MSG(rows >= shape[0],
                        "tensor capacity cannot be smaller than its logical row count");
-        const size_t elements = checked_size_product(rows, row_elements,
-                                                     "tensor storage element count");
-        return checked_size_product(elements, dtype_size(dtype),
-                                    "tensor storage byte count");
+        const size_t elements = checked_product(rows, row_elements,
+                                                "tensor storage element count");
+        return checked_product(elements, dtype_size(dtype),
+                               "tensor storage byte count");
     }
 
     void Tensor::record_storage_allocation(const StorageAccountingKind kind,
@@ -185,6 +303,10 @@ namespace lfs::core {
         return oss.str();
     }
 
+    void Tensor::log_storage_memory() {
+        log_storage_memory({});
+    }
+
     void Tensor::log_storage_memory(const std::string_view label) {
         if (label.empty()) {
             LOG_INFO("{}", storage_memory_summary());
@@ -197,6 +319,12 @@ namespace lfs::core {
     TensorLeaf::TensorLeaf(Tensor tensor)
         : tensor_ptr_(std::make_shared<Tensor>(std::move(tensor))) {}
 
+    TensorLeaf::TensorLeaf(std::shared_ptr<Tensor> tensor)
+        : tensor_ptr_(std::move(tensor)) {
+        LFS_ASSERT_MSG(tensor_ptr_ != nullptr,
+                       "TensorLeaf requires a valid tensor cell");
+    }
+
     Tensor TensorLeaf::eval_impl() const {
         // Materialize non-contiguous or offset tensors
         if (tensor_ptr_->storage_offset() != 0 || !tensor_ptr_->is_contiguous()) {
@@ -205,10 +333,84 @@ namespace lfs::core {
         return *tensor_ptr_;
     }
 
+    TensorLeaf TensorLeaf::snapshot_impl() const {
+        tensor_ptr_->register_lazy_snapshot_cell(tensor_ptr_);
+        return TensorLeaf(tensor_ptr_);
+    }
+
     const TensorShape& TensorLeaf::shape_impl() const { return tensor_ptr_->shape(); }
     Device TensorLeaf::device_impl() const { return tensor_ptr_->device(); }
     DataType TensorLeaf::dtype_impl() const { return tensor_ptr_->dtype(); }
     cudaStream_t TensorLeaf::stream_hint_impl() const { return tensor_ptr_ ? tensor_ptr_->stream() : nullptr; }
+
+    std::shared_ptr<Tensor> Tensor::create_lazy_snapshot() const {
+        auto snapshot = std::make_shared<Tensor>(*this);
+        register_lazy_snapshot_cell(snapshot);
+        return snapshot;
+    }
+
+    void Tensor::register_lazy_snapshot_cell(
+        const std::shared_ptr<Tensor>& snapshot) const {
+        if (is_deferred() || numel() == 0) {
+            return;
+        }
+
+        auto* mutable_source = const_cast<Tensor*>(this);
+        mutable_source->ensure_storage_meta();
+        const auto storage = mutable_source->storage_meta_;
+        {
+            std::lock_guard lock(storage->lazy_snapshot_mutex);
+            auto& snapshots = storage->lazy_snapshots;
+            snapshots.erase(
+                std::remove_if(snapshots.begin(), snapshots.end(),
+                               [](const std::weak_ptr<Tensor>& candidate) {
+                                   return candidate.expired();
+                               }),
+                snapshots.end());
+            snapshots.emplace_back(snapshot);
+            storage->pending_lazy_snapshots.store(
+                static_cast<uint32_t>(snapshots.size()), std::memory_order_release);
+        }
+    }
+
+    void Tensor::replace_lazy_snapshot_storage(Tensor&& replacement) {
+        is_view_ = false;
+        *this = std::move(replacement);
+    }
+
+    void Tensor::preserve_lazy_snapshots_before_write() {
+        const auto storage = storage_meta_;
+        if (!storage ||
+            storage->pending_lazy_snapshots.load(std::memory_order_acquire) == 0) {
+            return;
+        }
+
+        std::vector<std::shared_ptr<Tensor>> snapshots;
+        {
+            std::lock_guard lock(storage->lazy_snapshot_mutex);
+            snapshots.reserve(storage->lazy_snapshots.size());
+            for (const auto& candidate : storage->lazy_snapshots) {
+                if (auto snapshot = candidate.lock()) {
+                    snapshots.emplace_back(std::move(snapshot));
+                }
+            }
+            storage->lazy_snapshots.clear();
+            storage->pending_lazy_snapshots.store(0, std::memory_order_release);
+        }
+
+        for (const auto& snapshot : snapshots) {
+            Tensor preserved = std::as_const(*snapshot).clone();
+            snapshot->replace_lazy_snapshot_storage(std::move(preserved));
+        }
+    }
+
+    Tensor Tensor::make_deferred_expr_tensor(TensorShape shape,
+                                             const Device device,
+                                             const DataType dtype,
+                                             std::function<Tensor()> materializer) {
+        return make_deferred_expr_tensor(
+            std::move(shape), device, dtype, std::move(materializer), {});
+    }
 
     Tensor Tensor::make_deferred_expr_tensor(TensorShape shape,
                                              Device device,
@@ -383,6 +585,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(data_ != nullptr || shape_.elements() == 0,
                        "Tensor constructor received null storage for a non-empty tensor");
 
+        init_storage_meta();
         compute_alignment();
 
         if (profiling_enabled_) {
@@ -407,7 +610,8 @@ namespace lfs::core {
 #ifndef NDEBUG
           view_generation_snapshot_(other.view_generation_snapshot_),
 #endif
-          id_(next_id_++) {
+          id_(next_id_++),
+          lazy_ir_registered_(false) {
 
         if (profiling_enabled_) {
             LOG_DEBUG("Shallow copy: tensor #{} from #{}: shape={}, device={}, dtype={}, refcount={}",
@@ -428,39 +632,12 @@ namespace lfs::core {
         // If LHS is a view/slice and shapes match, do deep copy
         if (is_view_ && is_valid() && other.is_valid() &&
             shape_ == other.shape_ && dtype_ == other.dtype_) {
+            return copy_from(other);
+        }
 
-            // Deep copy the data, accounting for storage offsets
-            if (numel() > 0) {
-                // Calculate actual data pointers accounting for storage offsets
-                void* dst_ptr = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
-                const void* src_ptr = other.data_ptr();
-
-                if (device_ == Device::CUDA && other.device_ == Device::CUDA) {
-                    CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToDevice, stream()));
-                } else if (device_ == Device::CUDA && other.device_ == Device::CPU) {
-                    CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyHostToDevice, stream()));
-                } else if (device_ == Device::CPU && other.device_ == Device::CUDA) {
-                    // GPU→CPU requires sync before copy to ensure data is ready
-                    if (other.stream()) {
-                        CHECK_CUDA(cudaStreamSynchronize(other.stream()));
-                    } else {
-                        CHECK_CUDA(cudaDeviceSynchronize());
-                    }
-                    CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToHost, stream()));
-                } else {
-                    std::memcpy(dst_ptr, src_ptr, bytes());
-                }
-                // No sync after copy - operations are async like LibTorch
-                // User can sync explicitly if needed via cudaDeviceSynchronize()
-            }
-
-            if (profiling_enabled_) {
-                LOG_DEBUG("Deep copy assign (view): tensor #{} from #{}: shape={}, device={}, dtype={}, offset={}, src_offset={}",
-                          id_, other.id_, shape_.str(), device_name(device_), dtype_name(dtype_),
-                          storage_offset_, other.storage_offset_);
-            }
-
-            return *this;
+        if (lazy_ir_registered_) {
+            internal::lazy_ir_unregister_tensor(id_);
+            lazy_ir_registered_ = false;
         }
 
         const size_t old_capacity = state_ ? state_->capacity : 0;
@@ -513,7 +690,8 @@ namespace lfs::core {
 #ifndef NDEBUG
           view_generation_snapshot_(other.view_generation_snapshot_),
 #endif
-          id_(other.id_) {
+          id_(std::exchange(other.id_, 0)),
+          lazy_ir_registered_(std::exchange(other.lazy_ir_registered_, false)) {
 
         if (!state_) {
             state_ = std::make_shared<TensorState>();
@@ -536,36 +714,11 @@ namespace lfs::core {
 
             if (is_view_ && is_valid() && other.is_valid() &&
                 shape_ == other.shape_ && dtype_ == other.dtype_) {
+                return copy_from(other);
+            }
 
-                // Deep copy the data from the temporary view
-                if (numel() > 0) {
-                    void* dst_ptr = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
-                    const void* src_ptr = other.data_ptr();
-
-                    if (device_ == Device::CUDA && other.device_ == Device::CUDA) {
-                        CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToDevice, stream()));
-                    } else if (device_ == Device::CUDA && other.device_ == Device::CPU) {
-                        CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyHostToDevice, stream()));
-                    } else if (device_ == Device::CPU && other.device_ == Device::CUDA) {
-                        // GPU→CPU requires sync before copy to ensure data is ready
-                        if (other.stream()) {
-                            CHECK_CUDA(cudaStreamSynchronize(other.stream()));
-                        } else {
-                            CHECK_CUDA(cudaDeviceSynchronize());
-                        }
-                        CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToHost, stream()));
-                    } else {
-                        std::memcpy(dst_ptr, src_ptr, bytes());
-                    }
-                    // No sync after copy - operations are async like LibTorch
-                }
-
-                if (profiling_enabled_) {
-                    LOG_DEBUG("Deep copy move assign (view): tensor #{} from #{}: shape={}, device={}, dtype={}",
-                              id_, other.id_, shape_.str(), device_name(device_), dtype_name(dtype_));
-                }
-
-                return *this;
+            if (lazy_ir_registered_) {
+                internal::lazy_ir_unregister_tensor(id_);
             }
 
             data_ = std::exchange(other.data_, nullptr);
@@ -582,7 +735,8 @@ namespace lfs::core {
 #ifndef NDEBUG
             view_generation_snapshot_ = other.view_generation_snapshot_;
 #endif
-            id_ = other.id_;
+            id_ = std::exchange(other.id_, 0);
+            lazy_ir_registered_ = std::exchange(other.lazy_ir_registered_, false);
             if (!state_) {
                 state_ = std::make_shared<TensorState>();
             }
@@ -623,15 +777,20 @@ namespace lfs::core {
     }
 
     void Tensor::set_stream(cudaStream_t stream) {
-        LFS_ASSERT_MSG(is_valid(), "set_stream requires a valid tensor");
-        if (device_ == Device::CUDA && data_owner_) {
+        LFS_ASSERT_MSG(is_valid(),
+                       "set_stream requires a valid tensor");
+        if (device_ == Device::CUDA && data_owner_ && state_->stream != stream) {
+            // Rehoming changes where future writes occur. Preserve prior writes
+            // from the old home before changing allocator ownership metadata.
+            bridgeStreams(state_->stream, stream);
             CudaMemoryPool::instance().rehome_stream(data_owner_.get(), stream);
         }
         state_->stream = stream;
     }
 
     void Tensor::record_stream(cudaStream_t stream) const {
-        LFS_ASSERT_MSG(is_valid(), "record_stream requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "record_stream requires a valid tensor");
         if (!data_owner_) {
             return;
         }
@@ -643,7 +802,8 @@ namespace lfs::core {
     }
 
     void Tensor::sync_to_stream(cudaStream_t execution_stream) const {
-        LFS_ASSERT_MSG(is_valid(), "sync_to_stream requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "sync_to_stream requires a valid tensor");
         if (device_ != Device::CUDA) {
             return;
         }
@@ -668,6 +828,7 @@ namespace lfs::core {
 
     void Tensor::trim_memory_pool() {
         CudaMemoryPool::instance().trim_cached_memory();
+        PinnedMemoryAllocator::instance().empty_cache();
     }
 
     void Tensor::shutdown_memory_pool() {
@@ -688,14 +849,19 @@ namespace lfs::core {
             LOG_DEBUG("Destroying tensor #{}: shape={}, device={}, refcount={}",
                       id_, shape_.str(), device_name(device_), data_owner_.use_count());
         }
+        if (lazy_ir_registered_) {
+            internal::lazy_ir_unregister_tensor(id_);
+        }
         // shared_ptr automatically handles memory cleanup when refcount reaches 0
     }
 
     // ============= Deep Copy (explicit) =============
     Tensor Tensor::clone() const {
-        debug::OpTraceGuard trace("clone", *this);
+        LFS_CUDA_BREADCRUMB_STREAM("tensor.clone", stream());
+        debug::OpTraceGuard trace("clone", *this, LFS_SOURCE_SITE_CURRENT());
 
-        LFS_ASSERT_MSG(is_valid(), "clone requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "clone requires a valid tensor");
 
         if (numel() == 0) {
             // Return empty tensor with same shape and properties
@@ -714,9 +880,14 @@ namespace lfs::core {
         size_t num_bytes = this->bytes();
 
         if (device_ == Device::CUDA) {
-            cudaError_t err = cudaMemcpy(result.data_ptr(), data_ptr(), num_bytes, cudaMemcpyDeviceToDevice);
-            LFS_ASSERT_MSG(err == cudaSuccess,
-                           std::string("clone CUDA copy failed: ") + cudaGetErrorString(err));
+            const cudaStream_t execution_stream =
+                prepare_inputs_for_stream({this}, result.stream());
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpyAsync(result.data_ptr(), data_ptr(), num_bytes,
+                                cudaMemcpyDeviceToDevice, execution_stream),
+                "tensor clone (bytes={}, source_shape={}, source_pointer={}, "
+                "destination_pointer={})",
+                num_bytes, shape_.str(), data_ptr(), result.data_ptr());
         } else {
             std::memcpy(result.data_ptr(), data_ptr(), num_bytes);
         }
@@ -732,7 +903,8 @@ namespace lfs::core {
     // ============= Contiguous (materializes non-contiguous tensors) =============
     Tensor Tensor::contiguous() const {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "contiguous requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "contiguous requires a valid tensor");
 
         // Already contiguous? Just return shallow copy
         if (is_contiguous_) {
@@ -747,22 +919,24 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
+            const cudaStream_t execution_stream =
+                prepare_inputs_for_stream({this}, result.stream());
             const char* src_base = static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
             const size_t rank = shape_.rank();
 
             if (rank >= 2 && rank <= 4) {
                 tensor_ops::launch_strided_copy_immediate(
-                    src_base, result.data_, shape_.dims(), strides_, numel(), dtype_, result.stream());
+                    src_base, result.data_, shape_.dims(), strides_, numel(), dtype_, execution_stream);
             } else {
                 CudaDeviceMemory<size_t> d_shape(rank);
                 CudaDeviceMemory<size_t> d_strides(rank);
                 LFS_ASSERT_MSG(d_shape.valid() && d_strides.valid(),
                                "contiguous failed to allocate CUDA shape metadata");
-                CHECK_CUDA(d_shape.copy_from_host(shape_.dims().data(), rank));
-                CHECK_CUDA(d_strides.copy_from_host(strides_.data(), rank));
+                LFS_CUDA_CHECK(d_shape.copy_from_host(shape_.dims().data(), rank));
+                LFS_CUDA_CHECK(d_strides.copy_from_host(strides_.data(), rank));
                 tensor_ops::launch_strided_copy(
                     src_base, result.data_, d_shape.get(), d_strides.get(), rank,
-                    numel(), dtype_, result.stream());
+                    numel(), dtype_, execution_stream);
             }
         } else {
             // CPU strided copy - optimized for common cases with SIMD + multi-threading
@@ -937,11 +1111,13 @@ namespace lfs::core {
 
     // ============= Device Transfer =============
     Tensor Tensor::to(Device device, cudaStream_t stream) const {
+        LFS_CUDA_BREADCRUMB_STREAM("tensor.device_copy", stream);
         materialize_if_deferred();
         const char* op_name = (device == Device::CUDA) ? "to_cuda" : "to_cpu";
-        debug::OpTraceGuard trace(op_name, *this);
+        debug::OpTraceGuard trace(op_name, *this, LFS_SOURCE_SITE_CURRENT());
 
-        LFS_ASSERT_MSG(is_valid(), "device transfer requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "device transfer requires a valid tensor");
 
         if (device_ == device) {
             return clone();
@@ -961,8 +1137,13 @@ namespace lfs::core {
             if (device_ == Device::CUDA && device == Device::CPU) {
                 // GPU→CPU: Materialize on GPU FIRST (GPU kernel is faster)
                 LOG_DEBUG("GPU→CPU: materializing on GPU before download");
-                return contiguous().to(device);
+                return contiguous().to(device, stream);
             } else if (device_ == Device::CPU && device == Device::CUDA) {
+                if (!PinnedMemoryAllocator::instance().is_cuda_host_allocation(
+                        data_owner_.get())) {
+                    return contiguous().to(device, stream);
+                }
+
                 // CPU→GPU: Use fused strided upload kernel!
                 LOG_DEBUG("CPU→GPU non-contiguous: using fused strided upload kernel (rank={})", shape_.rank());
 
@@ -995,12 +1176,9 @@ namespace lfs::core {
                         dtype_,
                         transfer_stream);
 
-                    // NO SYNC: Let CUDA runtime handle synchronization when data is accessed
-                    // The pinned memory (src) is hopefully safe because:
-                    // 1. It's managed by shared_ptr in data_owner_
-                    // 2. Stream-aware allocator tracks the stream and won't reuse until complete
-                    // Update source tensor's stream for deallocator
-                    const_cast<Tensor*>(this)->set_stream(transfer_stream);
+                    // The host owner can retire immediately after this call. Register
+                    // the actual reader stream with the pinned allocator before return.
+                    record_stream(transfer_stream);
                     LOG_DEBUG("Optimized rank-{} strided upload launched (async): {} elements", shape_.rank(), numel());
                     return t;
                 }
@@ -1010,15 +1188,15 @@ namespace lfs::core {
 
                 size_t* d_shape;
                 size_t* d_strides;
-                CHECK_CUDA(cudaMalloc(&d_shape, shape_.rank() * sizeof(size_t)));
-                CHECK_CUDA(cudaMalloc(&d_strides, shape_.rank() * sizeof(size_t)));
+                LFS_CUDA_CHECK(cudaMalloc(&d_shape, shape_.rank() * sizeof(size_t)));
+                LFS_CUDA_CHECK(cudaMalloc(&d_strides, shape_.rank() * sizeof(size_t)));
 
-                CHECK_CUDA(cudaMemcpy(d_shape, shape_.dims().data(),
-                                      shape_.rank() * sizeof(size_t),
-                                      cudaMemcpyHostToDevice));
-                CHECK_CUDA(cudaMemcpy(d_strides, strides_.data(),
-                                      shape_.rank() * sizeof(size_t),
-                                      cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(d_shape, shape_.dims().data(),
+                                          shape_.rank() * sizeof(size_t),
+                                          cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(d_strides, strides_.data(),
+                                          shape_.rank() * sizeof(size_t),
+                                          cudaMemcpyHostToDevice));
 
                 // Launch generic strided upload kernel
                 tensor_ops::launch_strided_upload(
@@ -1033,11 +1211,10 @@ namespace lfs::core {
 
                 // Free metadata immediately (kernel has already captured the data)
                 // NO SYNC: Kernel launches asynchronously for better PCIe overlap
-                CHECK_CUDA(cudaFree(d_shape));
-                CHECK_CUDA(cudaFree(d_strides));
+                LFS_CUDA_CHECK(cudaFree(d_shape));
+                LFS_CUDA_CHECK(cudaFree(d_strides));
 
-                // CRITICAL: Update source tensor's stream for deallocator
-                const_cast<Tensor*>(this)->set_stream(transfer_stream);
+                record_stream(transfer_stream);
 
                 LOG_DEBUG("Generic strided upload launched (async): {} elements", numel());
                 return t;
@@ -1132,11 +1309,9 @@ namespace lfs::core {
             if (t.stream() != transfer_stream) {
                 t.set_stream(transfer_stream);
             }
-            CHECK_CUDA(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyHostToDevice, transfer_stream));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyHostToDevice, transfer_stream));
 
-            // CRITICAL: Update source tensor's stream so deallocator knows which stream used this memory
-            // This is needed for the stream-aware pinned memory allocator
-            const_cast<Tensor*>(this)->set_stream(transfer_stream);
+            record_stream(transfer_stream);
 
             // If stream is provided, caller is responsible for sync.
             // Otherwise wait only on transfer_stream — the H2D is the only work
@@ -1144,26 +1319,22 @@ namespace lfs::core {
             // unrelated GPU work (Vulkan compute, other CUDA streams), turning
             // sub-KB uploads into multi-ms calls during concurrent rendering.
             if (!stream) {
-                CHECK_CUDA(cudaStreamSynchronize(transfer_stream));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(transfer_stream));
             }
         } else if (device_ == Device::CUDA && device == Device::CPU) {
-            // API BOUNDARY: Sync before GPU→CPU transfer so we see the latest
-            // writes to the source tensor. Sync only the source's stream — a
-            // full device sync was draining unrelated GPU work.
-            if (stream) {
-                CHECK_CUDA(cudaStreamSynchronize(stream));
-            } else {
-                CHECK_CUDA(cudaStreamSynchronize(this->stream()));
-            }
-            // Async transfer for GPU→CPU as well (destination is pinned)
-            cudaStream_t transfer_stream = stream ? stream : 0;
+            // Order the transfer after the source's producing stream without
+            // draining unrelated CUDA work. Explicit-stream calls remain async.
+            const cudaStream_t transfer_stream = stream ? stream : nullptr;
+            prepare_inputs_for_stream({this}, transfer_stream);
             if (stream) {
                 t.set_stream(transfer_stream);
             }
-            CHECK_CUDA(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyDeviceToHost, transfer_stream));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyDeviceToHost, transfer_stream));
+            record_stream(transfer_stream);
+            t.record_stream(transfer_stream);
 
             if (!stream) {
-                CHECK_CUDA(cudaStreamSynchronize(transfer_stream));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(transfer_stream));
             }
         }
 
@@ -1172,8 +1343,10 @@ namespace lfs::core {
 
     // ============= Type Conversion =============
     Tensor Tensor::to(DataType dtype) const {
+        LFS_CUDA_BREADCRUMB_STREAM("tensor.dtype_convert", stream());
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "dtype conversion requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "dtype conversion requires a valid tensor");
 
         if (dtype_ == dtype) {
             return clone();
@@ -1185,32 +1358,28 @@ namespace lfs::core {
         }
 
 // Macro for type conversions using launch_convert_type
-#define CONVERT_DTYPE_CUDA(FROM_TYPE, TO_TYPE, FROM_DTYPE, TO_DTYPE)                                                                         \
-    if (dtype_ == FROM_DTYPE && dtype == TO_DTYPE) {                                                                                         \
-        auto result = empty(shape_, device_, TO_DTYPE);                                                                                      \
-        if (numel() == 0)                                                                                                                    \
-            return result;                                                                                                                   \
-        if (device_ == Device::CUDA) {                                                                                                       \
-            tensor_ops::launch_convert_type<FROM_TYPE, TO_TYPE>(                                                                             \
-                ptr<FROM_TYPE>(), result.ptr<TO_TYPE>(), numel(), result.stream());                                                          \
-            /* No sync - tensor-to-tensor operation */                                                                                       \
-            return result;                                                                                                                   \
-        }                                                                                                                                    \
-        /* CPU fallback */                                                                                                                   \
-        const FROM_TYPE* src = ptr<FROM_TYPE>();                                                                                             \
-        TO_TYPE* dst = result.ptr<TO_TYPE>();                                                                                                \
-        for (size_t i = 0; i < numel(); ++i) {                                                                                               \
-            if constexpr (std::is_same_v<FROM_TYPE, float> && std::is_same_v<TO_TYPE, uint8_t>) {                                            \
-                dst[i] = static_cast<uint8_t>(std::round(std::clamp(static_cast<float>(src[i]), 0.0f, 255.0f)));                             \
-            } else if constexpr (std::is_same_v<FROM_TYPE, int> && std::is_same_v<TO_TYPE, uint8_t>) {                                       \
-                dst[i] = static_cast<uint8_t>(std::clamp(static_cast<int>(src[i]), 0, 255));                                                 \
-            } else if constexpr (std::is_same_v<FROM_TYPE, int64_t> && std::is_same_v<TO_TYPE, uint8_t>) {                                   \
-                dst[i] = static_cast<uint8_t>(std::clamp(static_cast<int64_t>(src[i]), static_cast<int64_t>(0), static_cast<int64_t>(255))); \
-            } else {                                                                                                                         \
-                dst[i] = static_cast<TO_TYPE>(src[i]);                                                                                       \
-            }                                                                                                                                \
-        }                                                                                                                                    \
-        return result;                                                                                                                       \
+#define CONVERT_DTYPE_CUDA(FROM_TYPE, TO_TYPE, FROM_DTYPE, TO_DTYPE)                \
+    if (dtype_ == FROM_DTYPE && dtype == TO_DTYPE) {                                \
+        auto result = empty(shape_, device_, TO_DTYPE);                             \
+        if (numel() == 0)                                                           \
+            return result;                                                          \
+        if (device_ == Device::CUDA) {                                              \
+            tensor_ops::launch_convert_type<FROM_TYPE, TO_TYPE>(                    \
+                ptr<FROM_TYPE>(), result.ptr<TO_TYPE>(), numel(), result.stream()); \
+            /* No sync - tensor-to-tensor operation */                              \
+            return result;                                                          \
+        }                                                                           \
+        /* CPU fallback */                                                          \
+        const FROM_TYPE* src = ptr<FROM_TYPE>();                                    \
+        TO_TYPE* dst = result.ptr<TO_TYPE>();                                       \
+        for (size_t i = 0; i < numel(); ++i) {                                      \
+            if constexpr (std::is_same_v<TO_TYPE, uint8_t>) {                       \
+                dst[i] = detail::torch_uint8_cast(src[i]);                          \
+            } else {                                                                \
+                dst[i] = static_cast<TO_TYPE>(src[i]);                              \
+            }                                                                       \
+        }                                                                           \
+        return result;                                                              \
     }
 
         // Bool <-> Float32 (manual - can't use launch_convert_type due to uint8_t conflict)
@@ -1243,14 +1412,14 @@ namespace lfs::core {
                 // Can't use launch_convert_type - need custom != 0 logic
                 auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
                 std::vector<float> temp(numel());
-                CHECK_CUDA(cudaMemcpy(temp.data(), ptr<float>(), bytes(), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(temp.data(), ptr<float>(), bytes(), cudaMemcpyDeviceToHost));
 
                 unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
                 for (size_t i = 0; i < numel(); ++i) {
                     dst_cpu[i] = (temp[i] != 0.0f) ? 1 : 0;
                 }
 
-                CHECK_CUDA(cudaMemcpy(result.ptr<unsigned char>(), dst_cpu, numel(), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(result.ptr<unsigned char>(), dst_cpu, numel(), cudaMemcpyHostToDevice));
             } else {
                 const float* src = ptr<float>();
                 unsigned char* dst = result.ptr<unsigned char>();
@@ -1288,15 +1457,34 @@ namespace lfs::core {
         CONVERT_DTYPE_CUDA(int, uint8_t, DataType::Int32, DataType::UInt8)
         CONVERT_DTYPE_CUDA(uint8_t, int, DataType::UInt8, DataType::Int32)
 
-        // Bool <-> UInt8: Same underlying storage, just reinterpret dtype
-        if ((dtype_ == DataType::Bool && dtype == DataType::UInt8) ||
-            (dtype_ == DataType::UInt8 && dtype == DataType::Bool)) {
+        // Bool -> UInt8: Bool storage is already normalized to 0 or 1.
+        if (dtype_ == DataType::Bool && dtype == DataType::UInt8) {
             auto result = empty(shape_, device_, dtype);
             if (numel() > 0) {
                 if (device_ == Device::CUDA) {
-                    CHECK_CUDA(cudaMemcpy(const_cast<void*>(result.data_ptr()), data_ptr(), bytes(), cudaMemcpyDeviceToDevice));
+                    LFS_CUDA_CHECK(cudaMemcpy(const_cast<void*>(result.data_ptr()), data_ptr(), bytes(), cudaMemcpyDeviceToDevice));
                 } else {
                     std::memcpy(const_cast<void*>(result.data_ptr()), data_ptr(), bytes());
+                }
+            }
+            return result;
+        }
+
+        // UInt8 -> Bool follows Torch's nonzero semantics rather than merely
+        // reinterpreting the byte storage.
+        if (dtype_ == DataType::UInt8 && dtype == DataType::Bool) {
+            auto result = empty(shape_, device_, DataType::Bool);
+            if (numel() == 0)
+                return result;
+
+            if (device_ == Device::CUDA) {
+                tensor_ops::launch_convert_type<uint8_t, bool>(
+                    ptr<uint8_t>(), result.ptr<bool>(), numel(), result.stream());
+            } else {
+                const uint8_t* src = ptr<uint8_t>();
+                uint8_t* dst = result.ptr<uint8_t>();
+                for (size_t i = 0; i < numel(); ++i) {
+                    dst[i] = src[i] != 0 ? 1 : 0;
                 }
             }
             return result;
@@ -1312,15 +1500,15 @@ namespace lfs::core {
                 // Copy to CPU, convert, copy back
                 auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
                 std::vector<int> temp(numel());
-                CHECK_CUDA(cudaMemcpy(temp.data(), ptr<int>(), bytes(), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(temp.data(), ptr<int>(), bytes(), cudaMemcpyDeviceToHost));
 
                 unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
                 for (size_t i = 0; i < numel(); ++i) {
                     dst_cpu[i] = (temp[i] != 0) ? 1 : 0;
                 }
 
-                CHECK_CUDA(cudaMemcpy(result.ptr<unsigned char>(), result_cpu.ptr<unsigned char>(),
-                                      numel() * sizeof(unsigned char), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(result.ptr<unsigned char>(), result_cpu.ptr<unsigned char>(),
+                                          numel() * sizeof(unsigned char), cudaMemcpyHostToDevice));
             } else {
                 const int* src = ptr<int>();
                 unsigned char* dst = result.ptr<unsigned char>();
@@ -1382,15 +1570,15 @@ namespace lfs::core {
                 // Copy to CPU, convert, copy back
                 auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
                 std::vector<int64_t> temp(numel());
-                CHECK_CUDA(cudaMemcpy(temp.data(), ptr<int64_t>(), bytes(), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(temp.data(), ptr<int64_t>(), bytes(), cudaMemcpyDeviceToHost));
 
                 unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
                 for (size_t i = 0; i < numel(); ++i) {
                     dst_cpu[i] = (temp[i] != 0) ? 1 : 0;
                 }
 
-                CHECK_CUDA(cudaMemcpy(result.ptr<unsigned char>(), result_cpu.ptr<unsigned char>(),
-                                      numel() * sizeof(unsigned char), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(result.ptr<unsigned char>(), result_cpu.ptr<unsigned char>(),
+                                          numel() * sizeof(unsigned char), cudaMemcpyHostToDevice));
             } else {
                 const int64_t* src = ptr<int64_t>();
                 unsigned char* dst = result.ptr<unsigned char>();
@@ -1435,17 +1623,17 @@ namespace lfs::core {
                 // Copy to CPU, convert, copy back
                 auto result_cpu = empty(shape_, Device::CPU, DataType::Bool);
                 std::vector<__half> temp(numel());
-                CHECK_CUDA(cudaMemcpy(temp.data(), ptr<__half>(), bytes(), cudaMemcpyDeviceToHost));
-                CHECK_CUDA(cudaDeviceSynchronize()); // Ensure copy completes
+                LFS_CUDA_CHECK(cudaMemcpy(temp.data(), ptr<__half>(), bytes(), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaDeviceSynchronize()); // Ensure copy completes
 
                 unsigned char* dst_cpu = result_cpu.ptr<unsigned char>();
                 for (size_t i = 0; i < numel(); ++i) {
                     dst_cpu[i] = (__half2float(temp[i]) != 0.0f) ? 1 : 0;
                 }
 
-                CHECK_CUDA(cudaMemcpy(result.ptr<unsigned char>(), result_cpu.ptr<unsigned char>(),
-                                      numel() * sizeof(unsigned char), cudaMemcpyHostToDevice));
-                CHECK_CUDA(cudaDeviceSynchronize()); // Ensure copy completes
+                LFS_CUDA_CHECK(cudaMemcpy(result.ptr<unsigned char>(), result_cpu.ptr<unsigned char>(),
+                                          numel() * sizeof(unsigned char), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaDeviceSynchronize()); // Ensure copy completes
             } else {
                 const __half* src = ptr<__half>();
                 unsigned char* dst = result.ptr<unsigned char>();
@@ -1472,7 +1660,7 @@ namespace lfs::core {
                 tensor_ops::launch_convert_type<int64_t, int>(
                     ptr<int64_t>(), result.ptr<int>(), numel(), result.stream());
                 // CRITICAL: Sync to ensure conversion completes before item() reads
-                CHECK_CUDA(cudaDeviceSynchronize());
+                LFS_CUDA_CHECK(cudaDeviceSynchronize());
             } else {
                 const int64_t* src = ptr<int64_t>();
                 int* dst = result.ptr<int>();
@@ -1504,16 +1692,24 @@ namespace lfs::core {
 
     Tensor& Tensor::zero_() {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "zero_ requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "zero_ requires a valid tensor");
         if (numel() == 0) {
             return *this;
+        }
+        preserve_lazy_snapshots_before_write();
+
+        if (!is_contiguous()) {
+            return mutate_logical_view([](Tensor& materialized) {
+                materialized.zero_();
+            });
         }
 
         // Account for storage offset
         char* dest = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
 
         if (device_ == Device::CUDA) {
-            CHECK_CUDA(cudaMemset(dest, 0, bytes()));
+            LFS_CUDA_CHECK(cudaMemset(dest, 0, bytes()));
         } else {
             std::memset(dest, 0, bytes());
         }
@@ -1523,13 +1719,15 @@ namespace lfs::core {
 
     Tensor& Tensor::fill_(float value) {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "fill_ requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "fill_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 || dtype_ == DataType::Bool,
                        "fill_ currently supports only Float32, Int32, and Bool");
-        LFS_ASSERT_MSG(std::isfinite(value), "fill_ value must be finite");
+        detail::require_scalar_representable(dtype_, value, "fill_");
         if (numel() == 0) {
             return *this;
         }
+        preserve_lazy_snapshots_before_write();
 
         // CRITICAL FIX: For non-contiguous tensors (from slice/view operations),
         // we must respect strides and fill only the elements in the view
@@ -1553,7 +1751,7 @@ namespace lfs::core {
                         static_cast<unsigned char*>(data_), bool_val, shape_.dims(), strides_, storage_offset_, n, stream());
                 }
                 // Sync for the no-stream overload (maintains original behavior)
-                CHECK_CUDA(cudaDeviceSynchronize());
+                LFS_CUDA_CHECK(cudaDeviceSynchronize());
                 return *this;
             }
 
@@ -1593,7 +1791,7 @@ namespace lfs::core {
             unsigned char bool_val = (value != 0.0f) ? 1 : 0;
             if (device_ == Device::CUDA) {
                 std::vector<unsigned char> temp(numel(), bool_val);
-                CHECK_CUDA(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
             } else {
                 unsigned char* data = static_cast<unsigned char*>(dest);
                 std::fill(data, data + numel(), bool_val);
@@ -1606,7 +1804,7 @@ namespace lfs::core {
             int int_val = static_cast<int>(value);
             if (device_ == Device::CUDA) {
                 std::vector<int> temp(numel(), int_val);
-                CHECK_CUDA(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
             } else {
                 int* data = static_cast<int*>(dest);
                 std::fill(data, data + numel(), int_val);
@@ -1617,7 +1815,7 @@ namespace lfs::core {
         // Handle Float32 dtype (original code)
         if (device_ == Device::CUDA) {
             std::vector<float> temp(numel(), value);
-            CHECK_CUDA(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
+            LFS_CUDA_CHECK(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
         } else {
             float* data = static_cast<float*>(dest);
             std::fill(data, data + numel(), value);
@@ -1628,13 +1826,15 @@ namespace lfs::core {
 
     Tensor& Tensor::fill_(float value, cudaStream_t stream) {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "stream-aware fill_ requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "stream-aware fill_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 || dtype_ == DataType::Bool,
                        "stream-aware fill_ currently supports only Float32, Int32, and Bool");
-        LFS_ASSERT_MSG(std::isfinite(value), "stream-aware fill_ value must be finite");
+        detail::require_scalar_representable(dtype_, value, "stream-aware fill_");
         if (numel() == 0) {
             return *this;
         }
+        preserve_lazy_snapshots_before_write();
 
         // Only CUDA tensors benefit from stream-aware fill
         if (device_ != Device::CUDA) {
@@ -1665,7 +1865,7 @@ namespace lfs::core {
 
         if (value == 0.0f) {
             // Fast path: use cudaMemsetAsync for zeros
-            CHECK_CUDA(cudaMemsetAsync(dest, 0, bytes(), stream));
+            LFS_CUDA_CHECK(cudaMemsetAsync(dest, 0, bytes(), stream));
         } else {
             // Non-zero fill: use kernel (treat as 1D strided with stride=1)
             std::vector<size_t> shape_1d = {n};
@@ -1688,24 +1888,41 @@ namespace lfs::core {
 
     Tensor& Tensor::copy_from(const Tensor& other) {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "copy_from requires valid tensors");
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       "copy_from requires valid tensors");
         LFS_ASSERT_MSG(shape_ == other.shape_,
                        std::format("copy_from shape mismatch: {} vs {}", shape_.str(), other.shape_.str()));
 
+        if (this == &other) {
+            return *this;
+        }
+
+        Tensor source_storage;
+        const Tensor* source = &other;
+        if (shares_storage_with(other)) {
+            source_storage = other.clone();
+            source = &source_storage;
+        } else if (!other.is_contiguous()) {
+            source_storage = other.contiguous();
+            source = &source_storage;
+        }
+        const Tensor& src = *source;
+
         // Type conversion path
-        if (dtype_ != other.dtype_) {
+        if (dtype_ != src.dtype_) {
             // Fused int32→float32 strided scatter
-            if (!is_contiguous() && other.is_contiguous() &&
-                device_ == Device::CUDA && other.device_ == Device::CUDA &&
-                dtype_ == DataType::Float32 && other.dtype_ == DataType::Int32 && ndim() == 2) {
+            if (!is_contiguous() && src.is_contiguous() &&
+                device_ == Device::CUDA && src.device_ == Device::CUDA &&
+                dtype_ == DataType::Float32 && src.dtype_ == DataType::Int32 && ndim() == 2) {
+                const cudaStream_t execution_stream =
+                    prepare_inputs_for_stream({this, &src}, stream());
                 const size_t shape_arr[2] = {static_cast<size_t>(size(0)), static_cast<size_t>(size(1))};
                 const size_t strides_arr[2] = {strides_[0], strides_[1]};
                 tensor_ops::launch_strided_scatter_int32_to_float32(
-                    other.data_ptr(), data_ptr(), shape_arr, strides_arr, 2, numel(), stream());
+                    src.data_ptr(), data_ptr(), shape_arr, strides_arr, 2, numel(), execution_stream);
                 return *this;
             }
             // Convert then copy
-            const Tensor src = other.is_contiguous() ? other : other.contiguous();
             return copy_from(src.to(dtype_));
         }
 
@@ -1713,24 +1930,31 @@ namespace lfs::core {
             return *this;
 
         const bool dst_contig = is_contiguous();
-        const bool src_contig = other.is_contiguous();
+        const bool src_contig = src.is_contiguous();
 
         // Both contiguous: direct memcpy
         if (dst_contig && src_contig) {
-            if (device_ == Device::CUDA && other.device_ == Device::CUDA) {
-                CHECK_CUDA(cudaMemcpy(data_ptr(), other.data_ptr(), bytes(), cudaMemcpyDeviceToDevice));
-            } else if (device_ == Device::CUDA && other.device_ == Device::CPU) {
-                CHECK_CUDA(cudaMemcpy(data_ptr(), other.data_ptr(), bytes(), cudaMemcpyHostToDevice));
-            } else if (device_ == Device::CPU && other.device_ == Device::CUDA) {
-                CHECK_CUDA(cudaMemcpy(data_ptr(), other.data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+            if (device_ == Device::CUDA && src.device_ == Device::CUDA) {
+                const cudaStream_t execution_stream =
+                    prepare_inputs_for_stream({this, &src}, stream());
+                LFS_CUDA_CHECK(cudaMemcpyAsync(data_ptr(), src.data_ptr(), bytes(),
+                                               cudaMemcpyDeviceToDevice, execution_stream));
+            } else if (device_ == Device::CUDA && src.device_ == Device::CPU) {
+                prepare_inputs_for_stream({this, &src}, stream());
+                LFS_CUDA_CHECK(cudaMemcpy(data_ptr(), src.data_ptr(), bytes(), cudaMemcpyHostToDevice));
+            } else if (device_ == Device::CPU && src.device_ == Device::CUDA) {
+                prepare_inputs_for_stream({this, &src}, src.stream());
+                LFS_CUDA_CHECK(cudaMemcpy(data_ptr(), src.data_ptr(), bytes(), cudaMemcpyDeviceToHost));
             } else {
-                std::memcpy(data_ptr(), other.data_ptr(), bytes());
+                std::memcpy(data_ptr(), src.data_ptr(), bytes());
             }
             return *this;
         }
 
         // Strided destination, contiguous source (CUDA)
-        if (!dst_contig && src_contig && device_ == Device::CUDA && other.device_ == Device::CUDA) {
+        if (!dst_contig && src_contig && device_ == Device::CUDA && src.device_ == Device::CUDA) {
+            const cudaStream_t execution_stream =
+                prepare_inputs_for_stream({this, &src}, stream());
             const size_t rank = ndim();
             std::vector<size_t> shape_vec(rank);
             for (size_t i = 0; i < rank; ++i)
@@ -1738,33 +1962,48 @@ namespace lfs::core {
 
             if (rank >= 2 && rank <= 4) {
                 tensor_ops::launch_strided_scatter_immediate(
-                    other.data_ptr(), data_ptr(), shape_vec, strides_, numel(), dtype_, stream());
+                    src.data_ptr(), data_ptr(), shape_vec, strides_, numel(), dtype_, execution_stream);
             } else {
                 size_t* d_shape = nullptr;
                 size_t* d_strides = nullptr;
-                CHECK_CUDA(cudaMalloc(&d_shape, rank * sizeof(size_t)));
-                CHECK_CUDA(cudaMalloc(&d_strides, rank * sizeof(size_t)));
-                CHECK_CUDA(cudaMemcpy(d_shape, shape_vec.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
-                CHECK_CUDA(cudaMemcpy(d_strides, strides_.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMalloc(&d_shape, rank * sizeof(size_t)));
+                LFS_CUDA_CHECK(cudaMalloc(&d_strides, rank * sizeof(size_t)));
+                LFS_CUDA_CHECK(cudaMemcpy(d_shape, shape_vec.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(d_strides, strides_.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
                 tensor_ops::launch_strided_scatter(
-                    other.data_ptr(), data_ptr(), d_shape, d_strides, rank, numel(), dtype_, stream());
-                CHECK_CUDA(cudaFree(d_shape));
-                CHECK_CUDA(cudaFree(d_strides));
+                    src.data_ptr(), data_ptr(), d_shape, d_strides, rank, numel(), dtype_, execution_stream);
+                LFS_CUDA_CHECK(cudaFree(d_shape));
+                LFS_CUDA_CHECK(cudaFree(d_strides));
             }
             return *this;
         }
 
         // Strided destination, contiguous source (cross-device: move src to dst device first)
-        if (!dst_contig && src_contig && device_ != other.device_) {
-            return copy_from(other.to(device_));
+        if (!dst_contig && src_contig && device_ != src.device_) {
+            return copy_from(src.to(device_));
         }
 
-        // Fallback: materialize non-contiguous source
-        if (!src_contig) {
-            return copy_from(other.contiguous());
+        if (!dst_contig && src_contig && device_ == Device::CPU && src.device_ == Device::CPU) {
+            const size_t element_size = dtype_size(dtype_);
+            char* destination = static_cast<char*>(data_ptr());
+            const char* source_data = static_cast<const char*>(src.data_ptr());
+            for (size_t linear_index = 0; linear_index < numel(); ++linear_index) {
+                size_t remaining = linear_index;
+                size_t destination_offset = 0;
+                for (int dimension = static_cast<int>(ndim()) - 1; dimension >= 0; --dimension) {
+                    const size_t coordinate = remaining % shape_[dimension];
+                    remaining /= shape_[dimension];
+                    destination_offset += coordinate * strides_[dimension];
+                }
+                std::memcpy(destination + destination_offset * element_size,
+                            source_data + linear_index * element_size,
+                            element_size);
+            }
+            return *this;
         }
 
-        return *this;
+        LFS_ASSERT_MSG(false,
+                       "copy_from reached an unsupported strided copy configuration");
     }
 
     // ============= Shape Operations =============
@@ -1779,7 +2018,8 @@ namespace lfs::core {
     // ============= Broadcasting =============
 
     Tensor Tensor::broadcast_to(const TensorShape& target_shape) const {
-        LFS_ASSERT_MSG(is_valid(), "broadcast_to requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "broadcast_to requires a valid tensor");
         LFS_ASSERT_MSG(can_broadcast_to(target_shape),
                        std::format("cannot broadcast shape {} to {}", shape_.str(), target_shape.str()));
         if (state_ && state_->has_deferred_expr) {
@@ -1806,7 +2046,8 @@ namespace lfs::core {
 
     bool Tensor::can_broadcast_to(const TensorShape& target) const {
         auto result = broadcast::shape(shape_.dims(), target.dims());
-        return !result.empty() && result == target.dims();
+        return broadcast::can_broadcast(shape_.dims(), target.dims()) &&
+               result == target.dims();
     }
 
     TensorShape Tensor::broadcast_shape(const TensorShape& other) const {
@@ -1817,9 +2058,12 @@ namespace lfs::core {
     // ============= Special operations =============
 
     Tensor Tensor::normalize(int dim, float eps) const {
-        LFS_ASSERT_MSG(is_valid(), "normalize requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32, "normalize currently supports only Float32");
-        LFS_ASSERT_MSG(std::isfinite(eps) && eps > 0.0f, "normalize epsilon must be finite and positive");
+        LFS_ASSERT_MSG(is_valid(),
+                       "normalize requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "normalize currently supports only Float32");
+        LFS_ASSERT_MSG(std::isfinite(eps) && eps > 0.0f,
+                       "normalize epsilon must be finite and positive");
         if (dim != -1) {
             const int resolved = resolve_dim(dim);
             LFS_ASSERT_MSG(resolved >= 0 && resolved < static_cast<int>(shape_.rank()),
@@ -1838,8 +2082,10 @@ namespace lfs::core {
     }
 
     Tensor Tensor::logit(float eps) const {
-        LFS_ASSERT_MSG(is_valid(), "logit requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32, "logit currently supports only Float32");
+        LFS_ASSERT_MSG(is_valid(),
+                       "logit requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "logit currently supports only Float32");
         LFS_ASSERT_MSG(std::isfinite(eps) && eps > 0.0f && eps < 0.5f,
                        "logit epsilon must be finite and in (0, 0.5)");
 
@@ -1851,19 +2097,22 @@ namespace lfs::core {
     // ============= Bitwise Operations =============
 
     Tensor Tensor::operator~() const {
-        LFS_ASSERT_MSG(is_valid(), "bitwise NOT requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Bool, "bitwise NOT requires Bool dtype");
+        LFS_ASSERT_MSG(is_valid(),
+                       "bitwise NOT requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Bool,
+                       "bitwise NOT requires Bool dtype");
 
         // Use the new functor-based logical_not() method
         return logical_not();
     }
 
     Tensor Tensor::operator|(const Tensor& other) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "bitwise OR requires valid tensors");
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       "bitwise OR requires valid tensors");
         LFS_ASSERT_MSG(dtype_ == DataType::Bool && other.dtype() == DataType::Bool,
                        "bitwise OR requires Bool tensors");
-        LFS_ASSERT_MSG(device_ == other.device(), "bitwise OR requires tensors on the same device");
-        LFS_ASSERT_MSG(shape_ == other.shape(), "bitwise OR requires matching shapes");
+        LFS_ASSERT_MSG(device_ == other.device(),
+                       "bitwise OR requires tensors on the same device");
 
         return logical_or(other);
     }
@@ -1871,22 +2120,44 @@ namespace lfs::core {
     // ============= Clamp Operations =============
 
     Tensor& Tensor::clamp_(float min_val, float max_val) {
-        LFS_ASSERT_MSG(is_valid(), "clamp_ requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "clamp_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
                        "clamp_ currently supports only Float32 and Int32");
-        LFS_ASSERT_MSG(std::isfinite(min_val) && std::isfinite(max_val) && min_val <= max_val,
-                       "clamp_ bounds must be finite and ordered");
+        LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
+                       "clamp_ bounds must not be NaN and must be ordered");
+        if (dtype_ == DataType::Int32) {
+            const bool integer_bounds =
+                (min_val == -std::numeric_limits<float>::infinity() ||
+                 detail::is_exact_int32_scalar(min_val)) &&
+                (max_val == std::numeric_limits<float>::infinity() ||
+                 detail::is_exact_int32_scalar(max_val));
+            LFS_ASSERT_MSG(integer_bounds,
+                           "in-place Int32 clamp cannot represent fractional float bounds");
+        }
         if (numel() == 0) {
             return *this;
+        }
+
+        if (!is_contiguous()) {
+            return mutate_logical_view(
+                [&](Tensor& materialized) {
+                    materialized.clamp_(min_val, max_val);
+                });
         }
 
         if (device_ == Device::CUDA) {
             if (dtype_ == DataType::Float32) {
                 tensor_ops::launch_clamp_scalar(ptr<float>(), min_val, max_val, numel(), stream());
             } else if (dtype_ == DataType::Int32) {
+                const int min_int = min_val == -std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::lowest()
+                                        : static_cast<int>(min_val);
+                const int max_int = max_val == std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::max()
+                                        : static_cast<int>(max_val);
                 tensor_ops::launch_clamp_scalar_int(ptr<int>(),
-                                                    static_cast<int>(min_val),
-                                                    static_cast<int>(max_val),
+                                                    min_int, max_int,
                                                     numel(), stream());
             }
         } else {
@@ -1899,8 +2170,12 @@ namespace lfs::core {
                 }
             } else if (dtype_ == DataType::Int32) {
                 int* data = ptr<int>();
-                int min_int = static_cast<int>(min_val);
-                int max_int = static_cast<int>(max_val);
+                const int min_int = min_val == -std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::lowest()
+                                        : static_cast<int>(min_val);
+                const int max_int = max_val == std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::max()
+                                        : static_cast<int>(max_val);
                 for (size_t i = 0; i < numel(); ++i) {
                     data[i] = std::clamp(data[i], min_int, max_int);
                 }
@@ -1921,13 +2196,17 @@ namespace lfs::core {
     // ============= Cumulative sum =============
 
     Tensor Tensor::cumsum(int dim) const {
-        LFS_ASSERT_MSG(is_valid(), "cumsum requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "cumsum requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
                        "cumsum currently supports only Float32 and Int32");
 
         dim = resolve_dim(dim);
-        LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(shape_.rank()),
+        LFS_ASSERT_MSG(detail::tensor_dim_is_valid(dim, shape_.rank()),
                        "cumsum dimension is out of range");
+
+        if (shape_.rank() == 0)
+            return clone();
 
         auto result = clone();
 
@@ -2015,6 +2294,10 @@ namespace lfs::core {
 
     // ============= Debug Functions =============
 
+    void Tensor::log_info() const {
+        log_info({});
+    }
+
     void Tensor::log_info(const std::string& name) const {
         const std::string& prefix = name.empty() ? "Tensor" : name;
 
@@ -2039,6 +2322,10 @@ namespace lfs::core {
         oss << "]";
 
         LOG_INFO("{}: {}", prefix, oss.str());
+    }
+
+    void Tensor::print_formatted() const {
+        print_formatted({}, 10);
     }
 
     void Tensor::print_formatted(const std::string& name, size_t max_per_dim) const {
@@ -2125,12 +2412,18 @@ namespace lfs::core {
 
     std::vector<Tensor> Tensor::split_batch(const Tensor& tensor, size_t batch_size) {
         std::vector<Tensor> batches;
-        LFS_ASSERT_MSG(tensor.is_valid(), "split_batch requires a valid tensor");
+        LFS_ASSERT_MSG(tensor.is_valid(),
+                       "split_batch requires a valid tensor");
         LFS_ASSERT_MSG(tensor.shape().rank() > 0,
                        "split_batch requires at least one tensor dimension");
-        LFS_ASSERT_MSG(batch_size > 0, "split_batch batch size must be positive");
+        LFS_ASSERT_MSG(batch_size > 0,
+                       "split_batch batch size must be positive");
 
         size_t total_size = tensor.shape()[0];
+        if (total_size == 0) {
+            batches.push_back(tensor);
+            return batches;
+        }
         size_t num_batches = (total_size + batch_size - 1) / batch_size;
 
         for (size_t i = 0; i < num_batches; ++i) {
@@ -2144,17 +2437,20 @@ namespace lfs::core {
 
     float Tensor::item() const {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "item requires a valid tensor");
-        LFS_ASSERT_MSG(numel() == 1, "item requires exactly one element");
+        LFS_ASSERT_MSG(is_valid(),
+                       "item requires a valid tensor");
+        LFS_ASSERT_MSG(numel() == 1,
+                       "item requires exactly one element");
 
         const void* raw_ptr = data_ptr();
-        LFS_ASSERT_MSG(raw_ptr != nullptr, "item found null tensor storage");
+        LFS_ASSERT_MSG(raw_ptr != nullptr,
+                       "item found null tensor storage");
         float value = 0.0f;
 
         // Sync before reading from GPU
         if (device_ == Device::CUDA) {
             // API BOUNDARY: Sync before reading value from GPU
-            CHECK_CUDA(cudaDeviceSynchronize());
+            LFS_CUDA_CHECK(cudaDeviceSynchronize());
         }
 
         // Handle different dtypes
@@ -2162,7 +2458,7 @@ namespace lfs::core {
         case DataType::Float32: {
             float temp;
             if (device_ == Device::CUDA) {
-                CHECK_CUDA(cudaMemcpy(&temp, raw_ptr, sizeof(float), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(&temp, raw_ptr, sizeof(float), cudaMemcpyDeviceToHost));
             } else {
                 temp = *static_cast<const float*>(raw_ptr);
             }
@@ -2172,7 +2468,7 @@ namespace lfs::core {
         case DataType::Int64: {
             int64_t temp;
             if (device_ == Device::CUDA) {
-                CHECK_CUDA(cudaMemcpy(&temp, raw_ptr, sizeof(int64_t), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(&temp, raw_ptr, sizeof(int64_t), cudaMemcpyDeviceToHost));
             } else {
                 temp = *static_cast<const int64_t*>(raw_ptr);
             }
@@ -2182,7 +2478,7 @@ namespace lfs::core {
         case DataType::Int32: {
             int32_t temp;
             if (device_ == Device::CUDA) {
-                CHECK_CUDA(cudaMemcpy(&temp, raw_ptr, sizeof(int32_t), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(&temp, raw_ptr, sizeof(int32_t), cudaMemcpyDeviceToHost));
             } else {
                 temp = *static_cast<const int32_t*>(raw_ptr);
             }
@@ -2192,7 +2488,7 @@ namespace lfs::core {
         case DataType::Bool: {
             unsigned char temp;
             if (device_ == Device::CUDA) {
-                CHECK_CUDA(cudaMemcpy(&temp, raw_ptr, sizeof(unsigned char), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(&temp, raw_ptr, sizeof(unsigned char), cudaMemcpyDeviceToHost));
             } else {
                 temp = *static_cast<const unsigned char*>(raw_ptr);
             }
@@ -2202,7 +2498,7 @@ namespace lfs::core {
         case DataType::UInt8: {
             uint8_t temp;
             if (device_ == Device::CUDA) {
-                CHECK_CUDA(cudaMemcpy(&temp, raw_ptr, sizeof(uint8_t), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(&temp, raw_ptr, sizeof(uint8_t), cudaMemcpyDeviceToHost));
             } else {
                 temp = *static_cast<const uint8_t*>(raw_ptr);
             }
@@ -2210,7 +2506,8 @@ namespace lfs::core {
             break;
         }
         default:
-            LFS_ASSERT_MSG(false, "item encountered an unsupported dtype");
+            LFS_ASSERT_MSG(false,
+                           "item encountered an unsupported dtype");
         }
 
         return value;
@@ -2220,7 +2517,8 @@ namespace lfs::core {
         materialize_if_deferred();
         std::vector<float> values;
 
-        LFS_ASSERT_MSG(is_valid(), "debug_values requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "debug_values requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
                        "debug_values currently supports only Float32");
         if (numel() == 0 || max_values == 0) {
@@ -2235,9 +2533,9 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             // API BOUNDARY: Sync before reading from GPU
-            CHECK_CUDA(cudaDeviceSynchronize());
-            CHECK_CUDA(cudaMemcpy(values.data(), data_ptr(), n * sizeof(float),
-                                  cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(cudaDeviceSynchronize());
+            LFS_CUDA_CHECK(cudaMemcpy(values.data(), data_ptr(), n * sizeof(float),
+                                      cudaMemcpyDeviceToHost));
         } else {
             const float* data = ptr<float>();
             for (size_t i = 0; i < n; ++i) {
@@ -2250,15 +2548,17 @@ namespace lfs::core {
 
     std::vector<float> Tensor::to_vector() const {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "to_vector requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "to_vector requires a valid tensor");
 
         if (numel() == 0) {
             return {};
         }
 
-        // If tensor is not contiguous, materialize it first
-        if (!is_contiguous_) {
-            return contiguous().to_vector();
+        Tensor materialized;
+        const Tensor& dense = contiguous_read(materialized);
+        if (&dense != this) {
+            return dense.to_vector();
         }
 
         // Handle Bool dtype by converting to float
@@ -2295,8 +2595,8 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             // API BOUNDARY: Sync before reading from GPU
-            CHECK_CUDA(cudaDeviceSynchronize());
-            CHECK_CUDA(cudaMemcpy(result.data(), src, bytes(), cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(cudaDeviceSynchronize());
+            LFS_CUDA_CHECK(cudaMemcpy(result.data(), src, bytes(), cudaMemcpyDeviceToHost));
         } else {
             std::memcpy(result.data(), src, bytes());
         }
@@ -2312,12 +2612,20 @@ namespace lfs::core {
         LOG_DEBUG("  numel: {}", numel());
         LOG_DEBUG("  is_valid: {}", is_valid());
 
-        LFS_ASSERT_MSG(is_valid(), "to_vector_int64 requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Int64, "to_vector_int64 requires Int64 dtype");
+        LFS_ASSERT_MSG(is_valid(),
+                       "to_vector_int64 requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Int64,
+                       "to_vector_int64 requires Int64 dtype");
 
         if (numel() == 0) {
             LOG_DEBUG("Empty tensor, returning empty vector");
             return {};
+        }
+
+        Tensor materialized;
+        const Tensor& dense = contiguous_read(materialized);
+        if (&dense != this) {
+            return dense.to_vector_int64();
         }
 
         LOG_DEBUG("Creating result vector of size {}", numel());
@@ -2325,7 +2633,7 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             LOG_DEBUG("Copying from CUDA to CPU, bytes: {}", bytes());
-            CHECK_CUDA(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
             LOG_DEBUG("CUDA copy complete");
         } else {
             LOG_DEBUG("Copying from CPU memory, bytes: {}", bytes());
@@ -2339,10 +2647,17 @@ namespace lfs::core {
 
     std::vector<int> Tensor::to_vector_int() const {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "to_vector_int requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "to_vector_int requires a valid tensor");
 
         if (numel() == 0) {
             return {};
+        }
+
+        Tensor materialized;
+        const Tensor& dense = contiguous_read(materialized);
+        if (&dense != this) {
+            return dense.to_vector_int();
         }
 
         // Handle Bool dtype by converting to int
@@ -2363,7 +2678,7 @@ namespace lfs::core {
         std::vector<int> result(numel());
 
         if (device_ == Device::CUDA) {
-            CHECK_CUDA(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
         } else {
             std::memcpy(result.data(), data_ptr(), bytes());
         }
@@ -2373,7 +2688,8 @@ namespace lfs::core {
 
     std::vector<bool> Tensor::to_vector_bool() const {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "to_vector_bool requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "to_vector_bool requires a valid tensor");
 
         // Support both Bool and UInt8 dtypes (UInt8 can be used as byte array)
         LFS_ASSERT_MSG(dtype_ == DataType::Bool || dtype_ == DataType::UInt8,
@@ -2383,11 +2699,17 @@ namespace lfs::core {
             return {};
         }
 
+        Tensor materialized;
+        const Tensor& dense = contiguous_read(materialized);
+        if (&dense != this) {
+            return dense.to_vector_bool();
+        }
+
         std::vector<bool> result(numel());
 
         if (device_ == Device::CUDA) {
             std::vector<unsigned char> temp(numel());
-            CHECK_CUDA(cudaMemcpy(temp.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(cudaMemcpy(temp.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
             for (size_t i = 0; i < numel(); ++i) {
                 result[i] = temp[i] != 0;
             }
@@ -2403,12 +2725,19 @@ namespace lfs::core {
 
     std::vector<uint8_t> Tensor::to_vector_uint8() const {
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "to_vector_uint8 requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "to_vector_uint8 requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::UInt8 || dtype_ == DataType::Bool,
                        "to_vector_uint8 requires UInt8 or Bool dtype");
 
         if (numel() == 0) {
             return {};
+        }
+
+        Tensor materialized;
+        const Tensor& dense = contiguous_read(materialized);
+        if (&dense != this) {
+            return dense.to_vector_uint8();
         }
 
         // Handle UInt8 dtype directly
@@ -2417,11 +2746,11 @@ namespace lfs::core {
 
             if (device_ == Device::CUDA) {
                 if (stream()) {
-                    CHECK_CUDA(cudaStreamSynchronize(stream()));
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
                 } else {
-                    CHECK_CUDA(cudaDeviceSynchronize());
+                    LFS_CUDA_CHECK(cudaDeviceSynchronize());
                 }
-                CHECK_CUDA(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
             } else {
                 std::memcpy(result.data(), data_ptr(), bytes());
             }
@@ -2435,11 +2764,11 @@ namespace lfs::core {
 
             if (device_ == Device::CUDA) {
                 if (stream()) {
-                    CHECK_CUDA(cudaStreamSynchronize(stream()));
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
                 } else {
-                    CHECK_CUDA(cudaDeviceSynchronize());
+                    LFS_CUDA_CHECK(cudaDeviceSynchronize());
                 }
-                CHECK_CUDA(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
             } else {
                 const unsigned char* src = ptr<unsigned char>();
                 for (size_t i = 0; i < numel(); ++i) {
@@ -2450,7 +2779,8 @@ namespace lfs::core {
             return result;
         }
 
-        LFS_ASSERT_MSG(false, "to_vector_uint8 reached an unsupported dtype");
+        LFS_ASSERT_MSG(false,
+                       "to_vector_uint8 reached an unsupported dtype");
     }
 
     void Tensor::dump_diagnostic(const std::string& filename) const {
@@ -2483,16 +2813,18 @@ namespace lfs::core {
 
     // ============= Validation & Assertions =============
 
+    Tensor& Tensor::assert_shape(TensorShape expected) {
+        return assert_shape(std::move(expected), {});
+    }
+
     Tensor& Tensor::assert_shape(TensorShape expected, const std::string& msg) {
         if (!is_valid()) {
             std::string error_msg = "Cannot assert shape on invalid tensor";
-            LOG_ERROR("{}", error_msg);
             throw TensorError(error_msg, this);
         }
 
         if (shape_ != expected) {
             std::string error_msg = msg.empty() ? "Shape assertion failed: expected " + expected.str() + " but got " + shape_.str() : msg;
-            LOG_ERROR("{}", error_msg);
             throw TensorError(error_msg, this);
         }
         return *this;
@@ -2501,7 +2833,6 @@ namespace lfs::core {
     Tensor& Tensor::assert_device(Device expected) {
         if (!is_valid()) {
             std::string error_msg = "Cannot assert device on invalid tensor";
-            LOG_ERROR("{}", error_msg);
             throw TensorError(error_msg, this);
         }
 
@@ -2509,7 +2840,6 @@ namespace lfs::core {
             std::string error_msg = "Device assertion failed: expected " +
                                     std::string(device_name(expected)) + " but got " +
                                     std::string(device_name(device_));
-            LOG_ERROR("{}", error_msg);
             throw TensorError(error_msg, this);
         }
         return *this;
@@ -2518,7 +2848,6 @@ namespace lfs::core {
     Tensor& Tensor::assert_dtype(DataType expected) {
         if (!is_valid()) {
             std::string error_msg = "Cannot assert dtype on invalid tensor";
-            LOG_ERROR("{}", error_msg);
             throw TensorError(error_msg, this);
         }
 
@@ -2526,7 +2855,6 @@ namespace lfs::core {
             std::string error_msg = "DataType assertion failed: expected " +
                                     std::string(dtype_name(expected)) + " but got " +
                                     std::string(dtype_name(dtype_));
-            LOG_ERROR("{}", error_msg);
             throw TensorError(error_msg, this);
         }
         return *this;
@@ -2535,13 +2863,11 @@ namespace lfs::core {
     Tensor& Tensor::assert_finite() {
         if (!is_valid()) {
             std::string error_msg = "Cannot assert finite on invalid tensor";
-            LOG_ERROR("{}", error_msg);
             throw TensorError(error_msg, this);
         }
 
         if (has_nan() || has_inf()) {
             std::string error_msg = "Tensor contains NaN or Inf values";
-            LOG_ERROR("{}", error_msg);
             throw TensorError(error_msg, this);
         }
         return *this;
@@ -2550,14 +2876,21 @@ namespace lfs::core {
     // ============= Comparison Utilities =============
 
     bool Tensor::has_nan() const {
-        LFS_ASSERT_MSG(is_valid(), "has_nan requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "has_nan requires a valid tensor");
         if (numel() == 0) {
             return false;
         }
 
+        Tensor materialized;
+        const Tensor& dense = contiguous_read(materialized);
+        if (&dense != this) {
+            return dense.has_nan();
+        }
+
         // Use fast GPU check for CUDA tensors (only transfers 1 int back)
         if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
-            return tensor_ops::has_nan_or_inf_gpu(ptr<float>(), numel(), stream());
+            return tensor_ops::has_nan_gpu(ptr<float>(), numel(), stream());
         }
 
         // CPU fallback
@@ -2567,15 +2900,21 @@ namespace lfs::core {
     }
 
     bool Tensor::has_inf() const {
-        LFS_ASSERT_MSG(is_valid(), "has_inf requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       "has_inf requires a valid tensor");
         if (numel() == 0) {
             return false;
         }
 
+        Tensor materialized;
+        const Tensor& dense = contiguous_read(materialized);
+        if (&dense != this) {
+            return dense.has_inf();
+        }
+
         // Use fast GPU check for CUDA tensors (only transfers 1 int back)
-        // Note: has_nan_or_inf_gpu checks both NaN and Inf
         if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
-            return tensor_ops::has_nan_or_inf_gpu(ptr<float>(), numel(), stream());
+            return tensor_ops::has_inf_gpu(ptr<float>(), numel(), stream());
         }
 
         // CPU fallback
@@ -2585,7 +2924,8 @@ namespace lfs::core {
     }
 
     bool Tensor::all_close(const Tensor& other, float rtol, float atol) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "all_close requires valid tensors");
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       "all_close requires valid tensors");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
                        "all_close currently supports only Float32 tensors");
         LFS_ASSERT_MSG(std::isfinite(rtol) && std::isfinite(atol) &&
@@ -2600,23 +2940,28 @@ namespace lfs::core {
             return true;
         }
 
+        Tensor a_materialized;
+        Tensor b_materialized;
+        const Tensor& a = contiguous_read(a_materialized);
+        const Tensor& b = other.contiguous_read(b_materialized);
+
         const float* a_data = nullptr;
         const float* b_data = nullptr;
 
         Tensor a_temp, b_temp;
 
-        if (device_ == Device::CUDA) {
-            a_temp = to(Device::CPU);
+        if (a.device_ == Device::CUDA) {
+            a_temp = a.to(Device::CPU);
             a_data = a_temp.ptr<float>();
         } else {
-            a_data = ptr<float>();
+            a_data = a.ptr<float>();
         }
 
-        if (other.device() == Device::CUDA) {
-            b_temp = other.to(Device::CPU);
+        if (b.device() == Device::CUDA) {
+            b_temp = b.to(Device::CPU);
             b_data = b_temp.ptr<float>();
         } else {
-            b_data = other.ptr<float>();
+            b_data = b.ptr<float>();
         }
 
         if (!a_data || !b_data) {
@@ -2624,6 +2969,12 @@ namespace lfs::core {
         }
 
         for (size_t i = 0; i < numel(); ++i) {
+            if (a_data[i] == b_data[i]) {
+                continue;
+            }
+            if (!std::isfinite(a_data[i]) || !std::isfinite(b_data[i])) {
+                return false;
+            }
             float diff = std::abs(a_data[i] - b_data[i]);
             float tol = atol + rtol * std::abs(b_data[i]);
             if (diff > tol) {
@@ -2637,15 +2988,24 @@ namespace lfs::core {
     // ============= Capacity Management =============
 
     void Tensor::reserve(size_t new_capacity) {
+        LFS_CUDA_BREADCRUMB_STREAM("tensor.reserve", stream());
         materialize_if_deferred();
-        LFS_ASSERT_MSG(is_valid(), "reserve requires a valid tensor");
-        LFS_ASSERT_MSG(is_supported_device(device_), "reserve encountered an invalid device");
-        LFS_ASSERT_MSG(is_supported_dtype(dtype_), "reserve encountered an invalid dtype");
+        LFS_ASSERT_MSG(is_valid(),
+                       "reserve requires a valid tensor");
+        preserve_lazy_snapshots_before_write();
+        LFS_ASSERT_MSG(is_supported_device(device_),
+                       "reserve encountered an invalid device");
+        LFS_ASSERT_MSG(is_supported_dtype(dtype_),
+                       "reserve encountered an invalid dtype");
         // Validate tensor state
         if (!data_owner_) {
-            LOG_ERROR("reserve({}) failed on tensor '{}' (id={}): null data_owner_, is_view_={}, capacity_={}, shape={}",
-                      new_capacity, name().empty() ? "<unnamed>" : name(), id_, is_view_, state_->capacity, shape_.str());
-            throw TensorError("reserve() requires an owning tensor (not a view)", this);
+            throw TensorError(
+                std::format(
+                    "reserve({}) requires an owning tensor (tensor='{}', id={}, is_view={}, "
+                    "capacity={}, shape={})",
+                    new_capacity, name().empty() ? "<unnamed>" : name(), id_, is_view_,
+                    state_->capacity, shape_.str()),
+                this);
         }
         if (shape_.rank() == 0) {
             throw TensorError("reserve() requires tensor with at least 1 dimension", this);
@@ -2678,7 +3038,7 @@ namespace lfs::core {
         // Calculate sizes
         size_t row_size = 1;
         for (size_t i = 1; i < shape_.rank(); ++i) {
-            row_size = checked_size_product(row_size, shape_[i], "reserve row");
+            row_size = checked_product(row_size, shape_[i], "reserve row");
         }
         if (row_size == 0) {
             state_->capacity = new_capacity;
@@ -2686,44 +3046,78 @@ namespace lfs::core {
             return;
         }
         const size_t new_total_elements =
-            checked_size_product(new_capacity, row_size, "reserve element count");
+            checked_product(new_capacity, row_size, "reserve element count");
         const size_t element_size = dtype_size(dtype_);
         const size_t new_bytes =
-            checked_size_product(new_total_elements, element_size, "reserve byte count");
+            checked_product(new_total_elements, element_size, "reserve byte count");
 
         LOG_DEBUG("  Allocating: {} rows × {} elements/row × {} bytes/elem = {} MB",
                   new_capacity, row_size, element_size, new_bytes / (1024.0 * 1024.0));
 
-        // First, explicitly release the old buffer to avoid double allocation
-        // This ensures the old buffer is freed BEFORE we allocate the new one
-        void* old_data = data_;
-        std::shared_ptr<void> old_owner = data_owner_; // Keep reference temporarily
+        // Keep the installed owner untouched until allocation, copy, and all
+        // replacement metadata have succeeded.
+        Tensor logical_source;
+        const void* old_data = data_ptr();
+        if (!is_contiguous()) {
+            logical_source = contiguous();
+            old_data = logical_source.data_ptr();
+        }
 
         // Allocate new buffer
         void* new_data = nullptr;
         if (device_ == Device::CUDA) {
-            const cudaError_t status = cudaMalloc(&new_data, new_bytes);
-            LFS_ASSERT_MSG(status == cudaSuccess && new_data != nullptr,
-                           std::string("reserve CUDA allocation failed: ") +
-                               cudaGetErrorString(status));
+            new_data = allocate_cuda_storage(
+                new_bytes, stream(), CudaStorageMode::Direct,
+                "Tensor reserve CUDA allocation failed", "tensor.reserve");
+            LFS_ASSERT_MSG(new_data != nullptr,
+                           "reserve CPU allocation failed");
             LOG_DEBUG("  ✓ CUDA allocation succeeded: {} MB at {}", new_bytes / (1024.0 * 1024.0), new_data);
         } else {
             new_data = std::malloc(new_bytes);
-            LFS_ASSERT_MSG(new_data != nullptr, "reserve CPU allocation failed");
+            if (new_data == nullptr) {
+                throw std::runtime_error(std::format(
+                    "reserve CPU allocation failed (data_pointer={}, bytes={}, "
+                    "requested_capacity={}, row_size={}, tensor_shape={})",
+                    new_data, new_bytes, new_capacity, row_size, shape_.str()));
+            }
             LOG_DEBUG("  ✓ CPU allocation succeeded: {} MB at {}", new_bytes / (1024.0 * 1024.0), new_data);
         }
 
+        std::shared_ptr<void> new_owner;
+        if (device_ == Device::CUDA) {
+            record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
+            new_owner = std::shared_ptr<void>(new_data, [bytes = new_bytes](void* ptr) {
+                const cudaError_t status = cudaFree(ptr);
+                if (status != cudaSuccess) {
+                    ensure_cuda_success(
+                        status, "cudaFree(tensor reserve storage)", {},
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                }
+                Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
+            });
+        } else {
+            new_owner = std::shared_ptr<void>(new_data, [](void* ptr) {
+                std::free(ptr);
+            });
+        }
+        auto new_storage_meta = std::make_shared<StorageMeta>();
+
         // Copy existing data
         if (old_data && numel() > 0) {
-            const size_t copy_bytes = numel() * element_size;
+            const size_t copy_bytes =
+                checked_product(numel(), element_size, "reserve copy byte count");
             if (device_ == Device::CUDA) {
                 const cudaError_t status =
                     cudaMemcpy(new_data, old_data, copy_bytes, cudaMemcpyDeviceToDevice);
                 if (status != cudaSuccess) {
-                    cudaFree(new_data);
-                    LFS_ASSERT_MSG(false,
-                                   std::string("reserve CUDA copy failed: ") +
-                                       cudaGetErrorString(status));
+                    ensure_cuda_success(
+                        status, "cudaMemcpy(tensor reserve)",
+                        std::format("bytes={}, source_pointer={}, destination_pointer={}, "
+                                    "tensor_shape={}, requested_capacity={}",
+                                    copy_bytes, old_data, new_data, shape_.str(), new_capacity),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    (void)cudaGetLastError();
+                    throw std::runtime_error("Tensor reserve CUDA copy failed");
                 }
             } else {
                 std::memcpy(new_data, old_data, copy_bytes);
@@ -2733,32 +3127,15 @@ namespace lfs::core {
         bump_storage_generation();
 
         data_ = new_data;
-        if (device_ == Device::CUDA) {
-            record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
-            data_owner_ = std::shared_ptr<void>(new_data, [device = device_, bytes = new_bytes](void* ptr) {
-                if (device == Device::CUDA) {
-                    cudaFree(ptr);
-                    Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
-                } else {
-                    std::free(ptr);
-                }
-            });
-        } else {
-            data_owner_ = std::shared_ptr<void>(new_data, [device = device_](void* ptr) {
-                if (device == Device::CUDA) {
-                    cudaFree(ptr);
-                } else {
-                    std::free(ptr);
-                }
-            });
-        }
-        init_storage_meta();
+        data_owner_ = std::move(new_owner);
+        storage_meta_ = std::move(new_storage_meta);
+        strides_ = shape_.strides();
+        storage_offset_ = 0;
+        is_contiguous_ = true;
+        is_view_ = false;
+        view_generation_snapshot_ = 0;
         state_->capacity = new_capacity;
         state_->logical_size = current_rows;
-
-        // Explicitly release old buffer AFTER copy is complete
-        // This ensures we don't have both buffers alive at the same time
-        old_owner.reset(); // Decrement ref count, potentially freeing old buffer immediately
 
         LOG_DEBUG("✓ Tensor #{}: reserve({}) SUCCEEDED - capacity now {}, size {} ({:.1f}% utilization)",
                   id_, new_capacity, state_->capacity, current_rows, 100.0 * current_rows / state_->capacity);
@@ -2784,15 +3161,14 @@ namespace lfs::core {
                                    capacity, current_size));
         size_t row_size = 1;
         for (size_t i = 1; i < shape.rank(); i++) {
-            row_size = checked_size_product(row_size, shape[i],
-                                            "zeros_direct row");
+            row_size = checked_product(row_size, shape[i], "zeros_direct row");
         }
 
         const size_t total_elements =
-            checked_size_product(capacity, row_size, "zeros_direct element count");
+            checked_product(capacity, row_size, "zeros_direct element count");
         const size_t total_bytes =
-            checked_size_product(total_elements, dtype_size(dtype),
-                                 "zeros_direct byte count");
+            checked_product(total_elements, dtype_size(dtype),
+                            "zeros_direct byte count");
 
         if (total_bytes == 0) {
             Tensor t;
@@ -2807,26 +3183,25 @@ namespace lfs::core {
             t.state_->capacity = capacity;
             t.state_->logical_size = current_size;
             t.id_ = next_id_++;
+            t.init_storage_meta();
             return t;
         }
 
-        // Direct cudaMalloc bypassing pool
-        void* data_ptr = nullptr;
-        cudaError_t err = cudaMalloc(&data_ptr, total_bytes);
-        if (err != cudaSuccess) {
-            std::string error_str = cudaGetErrorString(err);
-            cudaGetLastError(); // Clear sticky error state
-            throw TensorError(std::format(
-                "CUDA allocation failed ({}): {} bytes ({:.2f} GB). "
-                "Try reducing max_cap, sh_degree, or image resolution.",
-                error_str, total_bytes, total_bytes / (1024.0 * 1024.0 * 1024.0)));
-        }
+        void* data_ptr = allocate_cuda_storage(
+            total_bytes, nullptr, CudaStorageMode::Direct,
+            "cudaMalloc(zeros_direct)", "tensor.zeros_direct");
 
         // Zero full capacity
-        err = cudaMemset(data_ptr, 0, total_bytes);
+        cudaError_t err = cudaMemset(data_ptr, 0, total_bytes);
         if (err != cudaSuccess) {
-            cudaFree(data_ptr);
-            throw TensorError("cudaMemset failed in zeros_direct: " + std::string(cudaGetErrorString(err)));
+            const cudaError_t cleanup_status = cudaFree(data_ptr);
+            if (cleanup_status != cudaSuccess) {
+                ensure_cuda_success(
+                    cleanup_status, "cudaFree(failed zeros_direct allocation)", {},
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            }
+            LFS_ENSURE_CUDA_SUCCESS_MSG(
+                err, "cudaMemset(zeros_direct)", std::format("bytes={}", total_bytes));
         }
 
         // Create tensor with custom deleter
@@ -2835,7 +3210,12 @@ namespace lfs::core {
         record_storage_allocation(StorageAccountingKind::CudaDirect, total_bytes);
         t.data_owner_ = std::shared_ptr<void>(data_ptr, [bytes = total_bytes](void* ptr) {
             if (ptr) {
-                cudaFree(ptr);
+                const cudaError_t status = cudaFree(ptr);
+                if (status != cudaSuccess) {
+                    ensure_cuda_success(
+                        status, "cudaFree(zeros_direct storage)", {},
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                }
                 Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
             }
         });
@@ -2847,6 +3227,7 @@ namespace lfs::core {
         t.state_->capacity = capacity;
         t.state_->logical_size = current_size;
         t.id_ = next_id_++;
+        t.init_storage_meta();
 
         return t;
     }

@@ -20,7 +20,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -35,22 +34,6 @@ namespace {
     bool cudaAvailable() {
         int n = 0;
         return cudaGetDeviceCount(&n) == cudaSuccess && n > 0;
-    }
-
-    void setGpuEncodeEnv(const bool enabled) {
-#ifdef _WIN32
-        _putenv_s("LFS_RAD_GPU_ENCODE", enabled ? "1" : "0");
-#else
-        setenv("LFS_RAD_GPU_ENCODE", enabled ? "1" : "0", 1);
-#endif
-    }
-
-    void clearGpuEncodeEnv() {
-#ifdef _WIN32
-        _putenv_s("LFS_RAD_GPU_ENCODE", "");
-#else
-        unsetenv("LFS_RAD_GPU_ENCODE");
-#endif
     }
 
     struct ChunkData {
@@ -148,12 +131,16 @@ namespace {
                       const int sh_degree,
                       const int sh_coeffs,
                       const bool gpu) {
-        setGpuEncodeEnv(gpu);
         std::uint64_t total = 0;
         for (const auto& c : chunks) {
             total += c.count;
         }
-        lfs::io::RadStreamWriter writer(path, total, sh_degree, /*lod_tree=*/true);
+        lfs::io::RadStreamWriter writer(
+            path, total, sh_degree, /*lod_tree=*/true,
+            /*compression_level=*/6, /*emit_meta_sidecar=*/false,
+            lfs::io::kRadNativeChunkSplats,
+            gpu ? lfs::io::RadGpuQuantization::Auto
+                : lfs::io::RadGpuQuantization::Disabled);
         ASSERT_TRUE(writer.open().has_value());
         std::vector<lfs::io::RadStreamChunkSource> sources(chunks.size());
         for (std::size_t i = 0; i < chunks.size(); ++i) {
@@ -172,7 +159,6 @@ namespace {
         }
         ASSERT_TRUE(writer.append_batch(sources).has_value());
         ASSERT_TRUE(writer.finish().has_value());
-        clearGpuEncodeEnv();
     }
 
     std::vector<std::uint8_t> readFile(const std::filesystem::path& path) {

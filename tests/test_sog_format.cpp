@@ -9,9 +9,16 @@
  * and produce comparable results to the original PLY.
  */
 
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <format>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
+#include <webp/decode.h>
+#include <webp/encode.h>
 
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -22,9 +29,93 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fs = std::filesystem;
+
+namespace {
+
+    class ScopedSogDirectory {
+    public:
+        ScopedSogDirectory() {
+            static std::atomic_uint64_t sequence = 0;
+            const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+            path_ = fs::temp_directory_path() /
+                    std::format("lichtfeld_sog_validation_{}_{}", stamp, sequence++);
+            fs::create_directories(path_);
+        }
+
+        ~ScopedSogDirectory() {
+            std::error_code error;
+            fs::remove_all(path_, error);
+        }
+
+        ScopedSogDirectory(const ScopedSogDirectory&) = delete;
+        ScopedSogDirectory& operator=(const ScopedSogDirectory&) = delete;
+
+        [[nodiscard]] const fs::path& path() const { return path_; }
+
+    private:
+        fs::path path_;
+    };
+
+    nlohmann::json minimal_sog_metadata(const int count) {
+        return {
+            {"version", 2},
+            {"count", count},
+            {"means",
+             {{"mins", {0.0f, 0.0f, 0.0f}},
+              {"maxs", {1.0f, 1.0f, 1.0f}},
+              {"files", {"means_l.webp", "means_u.webp"}}}},
+            {"scales", {{"codebook", {0.0f}}, {"files", {"scales.webp"}}}},
+            {"quats", {{"files", {"quats.webp"}}}},
+            {"sh0", {{"codebook", {0.0f}}, {"files", {"sh0.webp"}}}},
+        };
+    }
+
+    bool write_json(const fs::path& path, const nlohmann::json& value) {
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        const std::string encoded = value.dump();
+        stream.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+        return stream.good();
+    }
+
+    bool write_webp(const fs::path& path, const int width, const int height) {
+        std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4, 0);
+        for (size_t pixel = 0; pixel < pixels.size() / 4; ++pixel) {
+            pixels[pixel * 4 + 3] = 0xff;
+        }
+
+        uint8_t* encoded = nullptr;
+        const size_t encoded_size = WebPEncodeLosslessRGBA(
+            pixels.data(), width, height, width * 4, &encoded);
+        if (encoded_size == 0 || !encoded) {
+            return false;
+        }
+
+        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+        stream.write(reinterpret_cast<const char*>(encoded),
+                     static_cast<std::streamsize>(encoded_size));
+        WebPFree(encoded);
+        return stream.good();
+    }
+
+    bool write_base_textures(const fs::path& directory, const int width, const int height) {
+        for (const std::string_view filename : {
+                 "means_l.webp",
+                 "means_u.webp",
+                 "scales.webp",
+                 "quats.webp",
+                 "sh0.webp"}) {
+            if (!write_webp(directory / filename, width, height)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+} // namespace
 
 class SogFormatTest : public ::testing::Test {
 protected:
@@ -261,6 +352,74 @@ TEST_F(SogFormatTest, CompareWithOriginalPly) {
 TEST_F(SogFormatTest, FileNotFound) {
     auto result = lfs::io::load_sog("/nonexistent/path/file.sog");
     EXPECT_FALSE(result.has_value()) << "Should fail for nonexistent file";
+}
+
+TEST_F(SogFormatTest, RejectsTextureSmallerThanDeclaredCountBeforeCudaUpload) {
+    ScopedSogDirectory input;
+    ASSERT_TRUE(write_json(input.path() / "meta.json", minimal_sog_metadata(2)));
+    ASSERT_TRUE(write_base_textures(input.path(), 1, 1));
+
+    const auto result = lfs::io::load_sog(input.path());
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("means_l.webp"), std::string::npos)
+        << result.error();
+}
+
+TEST_F(SogFormatTest, LoadsValidatedMinimalDirectory) {
+    ScopedSogDirectory input;
+    ASSERT_TRUE(write_json(input.path() / "meta.json", minimal_sog_metadata(1)));
+    ASSERT_TRUE(write_base_textures(input.path(), 4, 4));
+
+    const auto result = lfs::io::load_sog(input.path());
+
+    ASSERT_TRUE(result.has_value()) << result.error();
+    EXPECT_EQ(result->size(), 1);
+}
+
+TEST_F(SogFormatTest, RejectsShortMeansBoundsBeforeReadingTextures) {
+    ScopedSogDirectory input;
+    auto metadata = minimal_sog_metadata(1);
+    metadata["means"]["mins"] = {0.0f, 0.0f};
+    ASSERT_TRUE(write_json(input.path() / "meta.json", metadata));
+
+    const auto result = lfs::io::load_sog(input.path());
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("three values"), std::string::npos)
+        << result.error();
+}
+
+TEST_F(SogFormatTest, RejectsUnsupportedShDegreeBeforeReadingTextures) {
+    ScopedSogDirectory input;
+    auto metadata = minimal_sog_metadata(1);
+    metadata["shN"] = {
+        {"count", 1},
+        {"bands", 4},
+        {"codebook", {0.0f}},
+        {"files", {"shN_centroids.webp", "shN_labels.webp"}},
+    };
+    ASSERT_TRUE(write_json(input.path() / "meta.json", metadata));
+
+    const auto result = lfs::io::load_sog(input.path());
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("SH degree"), std::string::npos)
+        << result.error();
+}
+
+TEST_F(SogFormatTest, InvalidArchiveReturnsErrorWithoutEscaping) {
+    ScopedSogDirectory input;
+    const fs::path archive = input.path() / "invalid.sog";
+    {
+        std::ofstream stream(archive, std::ios::binary | std::ios::trunc);
+        stream << "not a zip archive";
+    }
+
+    const auto result = lfs::io::load_sog(archive);
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_FALSE(result.error().empty());
 }
 
 // Test: Load meta.json directly

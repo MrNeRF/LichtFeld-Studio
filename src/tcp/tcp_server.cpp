@@ -10,16 +10,21 @@
 namespace lfs::tcp {
 
     TCPServer::TCPServer(int port, std::shared_ptr<lfs::vis::TrainerManager> trainer_manager, zmq::socket_type type)
-        : port_(port), trainer_manager_(std::move(trainer_manager)), context_(kNumberOfThreads), socket_(context_, type) {
+        : port_(port),
+          trainer_manager_(std::move(trainer_manager)),
+          context_(kNumberOfThreads),
+          socket_(context_, type) {
         port_ = std::max(port_, 0); // Port == 0 sets automatic port
         socket_.bind("tcp://*:" + std::to_string(port_));
-        auto str_endpoint = getEndpoint();
-        auto str_port = str_endpoint.substr(str_endpoint.find_last_of(':') + 1);
+        endpoint_ = socket_.get(zmq::sockopt::last_endpoint);
+        auto str_port = endpoint_.substr(endpoint_.find_last_of(':') + 1);
         port_ = std::stoi(str_port);
     }
 
     std::string TCPServer::getEndpoint() const {
-        return socket_.get(zmq::sockopt::last_endpoint);
+        // The socket belongs to the server's I/O thread after start(). Cache the
+        // endpoint at bind time so callers never query it cross-thread.
+        return endpoint_;
     }
 
     void TCPServer::send(const nlohmann::json& data) {

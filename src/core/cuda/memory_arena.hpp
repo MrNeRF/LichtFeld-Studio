@@ -27,6 +27,7 @@ namespace lfs::core {
             size_t max_physical = 8ULL << 30;  // 8GB max physical memory
             size_t granularity = 2 << 20;      // 2MB allocation granularity
             size_t alignment = 256;
+            bool enable_vmm = true; // Disable to use and validate the cudaMalloc fallback.
             bool enable_profiling = false;
             size_t log_interval = 1000; // Log every N frames
         };
@@ -174,7 +175,7 @@ namespace lfs::core {
         // a device-wide sync, and end_frame records the event on `stream` — which
         // must be the stream all of the frame's arena work was enqueued on. Frames
         // without a stream keep the legacy cudaDeviceSynchronize and invalidate
-        // the chain. LFS_ARENA_LEGACY_SYNC=1 forces the legacy sync everywhere.
+        // the chain.
         //
         // A tenant whose arena work runs on a VULKAN queue (the viewport) must
         // call note_external_release before ending its frame: neither the chain
@@ -254,7 +255,7 @@ namespace lfs::core {
         // wait_timeout: nullopt = non-blocking try; 0 = wait forever; else bounded.
         std::optional<uint64_t> begin_frame_impl(cudaStream_t stream, bool from_rendering,
                                                  std::optional<uint32_t> wait_timeout_ms);
-        bool wait_for_previous_frame(cudaStream_t stream);
+        cudaError_t wait_for_previous_frame(cudaStream_t stream);
         // Host-blocks on a pending Vulkan release fence (note_external_release)
         // and clears it. Must run before any path that frees or replaces arena
         // backing — a device sync cannot observe the in-flight Vulkan batch.

@@ -324,6 +324,17 @@ TEST(ExpressionTemplates, ComplexMixed) {
     EXPECT_TRUE(tensors_equal(result, expected));
 }
 
+TEST(ExpressionTemplates, NestedBinaryBranchesPreserveValues) {
+    const auto a = Tensor::ones({100}, Device::CUDA);
+    const auto b = Tensor::full({100}, 2.0f, Device::CUDA);
+    const auto c = Tensor::full({100}, 3.0f, Device::CUDA);
+
+    const Tensor result = (a + b) * (c - a);
+    const auto expected = Tensor::full({100}, 6.0f, Device::CUDA);
+
+    EXPECT_TRUE(tensors_equal(result, expected));
+}
+
 // ============================================================================
 // TensorExpr::eval() Tests (via CRTP)
 // ============================================================================

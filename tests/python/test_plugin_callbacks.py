@@ -15,7 +15,7 @@ import pytest
 
 
 @pytest.fixture
-def callback_plugins_dir(monkeypatch):
+def callback_plugins_dir(monkeypatch, bypass_plugin_installer):
     """Create temporary plugins directory for callback tests."""
     with tempfile.TemporaryDirectory() as tmpdir:
         plugins_dir = Path(tmpdir) / "plugins"
@@ -126,14 +126,11 @@ class TestPluginCallbacks:
         mgr.load("phoenix")
         mgr.unload("phoenix")
 
-        # May have reloaded, final state depends on implementation
-        # Should not crash or infinite loop
+        assert reload_count == [1]
+        assert mgr.get_state("phoenix") == PluginState.ACTIVE
 
-        # Cleanup
-        if mgr.get_state("phoenix") == PluginState.ACTIVE:
-            # Remove callback first to prevent recursion
-            mgr._on_plugin_unloaded.clear()
-            mgr.unload("phoenix")
+        mgr._on_plugin_unloaded.clear()
+        mgr.unload("phoenix")
 
     def test_load_same_plugin_in_callback(self, callback_plugins_dir):
         """Callback that loads same plugin again."""
@@ -182,6 +179,7 @@ class TestPluginCallbacks:
 
         # First callback should have been called
         assert callback_called[0]
+        assert other_callback_called[0]
 
         # Plugin should still be loaded despite callback failure
         assert mgr.get_state("exc_target") == PluginState.ACTIVE
@@ -262,11 +260,12 @@ def on_unload():
         # Should not infinite loop or deadlock
         mgr.load("dep_a")
 
+        assert mgr.get_state("dep_a") == PluginState.ACTIVE
+        assert mgr.get_state("dep_b") == PluginState.ACTIVE
+
         # Cleanup
-        if mgr.get_state("dep_a") == PluginState.ACTIVE:
-            mgr.unload("dep_a")
-        if mgr.get_state("dep_b") == PluginState.ACTIVE:
-            mgr.unload("dep_b")
+        mgr.unload("dep_a")
+        mgr.unload("dep_b")
 
     def test_callback_order(self, callback_plugins_dir):
         """Callbacks should be called in registration order."""

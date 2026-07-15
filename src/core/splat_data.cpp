@@ -1056,10 +1056,9 @@ namespace lfs::core {
     }
 
     void SplatData::deserialize(std::istream& is, SplatTensorAllocator tensor_allocator) {
-        _tensor_allocator = tensor_allocator;
         uint32_t magic = 0, version = 0;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        serialization_detail::read_exact(is, &magic, sizeof(magic), "SplatData magic");
+        serialization_detail::read_exact(is, &version, sizeof(version), "SplatData version");
 
         if (magic != SPLAT_DATA_MAGIC) {
             throw std::runtime_error("Invalid SplatData: wrong magic");
@@ -1070,12 +1069,85 @@ namespace lfs::core {
 
         int32_t active_sh = 0, max_sh = 0;
         float scene_scale = 0.0f;
-        is.read(reinterpret_cast<char*>(&active_sh), sizeof(active_sh));
-        is.read(reinterpret_cast<char*>(&max_sh), sizeof(max_sh));
-        is.read(reinterpret_cast<char*>(&scene_scale), sizeof(scene_scale));
+        serialization_detail::read_exact(is, &active_sh, sizeof(active_sh), "SplatData active SH degree");
+        serialization_detail::read_exact(is, &max_sh, sizeof(max_sh), "SplatData maximum SH degree");
+        serialization_detail::read_exact(is, &scene_scale, sizeof(scene_scale), "SplatData scene scale");
+
+        if (max_sh < 0 || max_sh > MAX_SUPPORTED_SH_DEGREE || active_sh < 0 || active_sh > max_sh) {
+            throw std::runtime_error("Invalid SplatData: unsupported SH degree range");
+        }
+        if (!std::isfinite(scene_scale) || scene_scale <= 0.0f) {
+            throw std::runtime_error("Invalid SplatData: scene scale must be finite and positive");
+        }
 
         Tensor means, sh0, scaling, rotation, opacity;
         is >> means >> sh0 >> scaling >> rotation >> opacity;
+
+        Tensor shN_canon;
+        if (max_sh > 0)
+            is >> shN_canon;
+
+        uint8_t has_deleted = 0;
+        serialization_detail::read_exact(is, &has_deleted, sizeof(has_deleted), "SplatData deleted flag");
+        if (has_deleted > 1)
+            throw std::runtime_error("Invalid SplatData: deleted flag must be boolean");
+        Tensor deleted;
+        if (has_deleted)
+            is >> deleted;
+
+        uint8_t has_densification = 0;
+        serialization_detail::read_exact(
+            is, &has_densification, sizeof(has_densification), "SplatData densification flag");
+        if (has_densification > 1)
+            throw std::runtime_error("Invalid SplatData: densification flag must be boolean");
+        Tensor densification;
+        if (has_densification)
+            is >> densification;
+
+        const auto require_shape = [](const Tensor& value,
+                                      const DataType dtype,
+                                      const std::vector<size_t>& shape,
+                                      const std::string_view name) {
+            if (!value.is_valid() || value.dtype() != dtype || value.shape().dims() != shape) {
+                throw std::runtime_error(std::format(
+                    "Invalid SplatData: {} must have dtype {} and shape {}",
+                    name,
+                    dtype_name(dtype),
+                    TensorShape(shape).str()));
+            }
+        };
+
+        if (!means.is_valid() || means.dtype() != DataType::Float32 || means.ndim() != 2 || means.size(1) != 3) {
+            throw std::runtime_error("Invalid SplatData: means must be float32 [N,3]");
+        }
+        const size_t n = means.size(0);
+        if (n > static_cast<size_t>(std::numeric_limits<int>::max()))
+            throw std::runtime_error("Invalid SplatData: Gaussian count exceeds supported range");
+        require_shape(sh0, DataType::Float32, {n, 1, 3}, "sh0");
+        require_shape(scaling, DataType::Float32, {n, 3}, "scaling");
+        require_shape(rotation, DataType::Float32, {n, 4}, "rotation");
+        require_shape(opacity, DataType::Float32, {n, 1}, "opacity");
+        if (max_sh > 0) {
+            require_shape(
+                shN_canon,
+                DataType::Float32,
+                {n, static_cast<size_t>(sh_rest_coefficients_for_degree(max_sh)), SH_CHANNELS},
+                "shN");
+        }
+        if (has_deleted &&
+            (!deleted.is_valid() || !is_bool_like(deleted.dtype()) ||
+             deleted.ndim() != 1 || deleted.size(0) != n)) {
+            throw std::runtime_error("Invalid SplatData: deleted mask must be bool/uint8 [N]");
+        }
+        if (has_densification) {
+            const bool valid_shape = densification.is_valid() && densification.dtype() == DataType::Float32 &&
+                                     ((densification.ndim() == 1 && densification.numel() == 0) ||
+                                      (densification.ndim() == 1 && densification.size(0) == n) ||
+                                      (densification.ndim() == 2 && densification.size(0) >= 2 &&
+                                       densification.size(1) == n));
+            if (!valid_shape)
+                throw std::runtime_error("Invalid SplatData: densification state has incompatible schema");
+        }
 
         const auto copy_param = [&](Tensor source, std::string_view name) {
             Tensor source_cuda = std::move(source).cuda();
@@ -1094,66 +1166,61 @@ namespace lfs::core {
             return dst;
         };
 
-        _means = copy_param(std::move(means), "SplatData.means");
-        _sh0 = copy_param(std::move(sh0), "SplatData.sh0");
-        _scaling = copy_param(std::move(scaling), "SplatData.scaling");
-        _rotation = copy_param(std::move(rotation), "SplatData.rotation");
-        _opacity = copy_param(std::move(opacity), "SplatData.opacity");
-        _max_sh_degree = std::clamp(max_sh, 0, MAX_SUPPORTED_SH_DEGREE);
-        _active_sh_degree = std::clamp(active_sh, 0, _max_sh_degree);
-        _scene_scale = scene_scale;
+        Tensor loaded_means = copy_param(std::move(means), "SplatData.means");
+        Tensor loaded_sh0 = copy_param(std::move(sh0), "SplatData.sh0");
+        Tensor loaded_scaling = copy_param(std::move(scaling), "SplatData.scaling");
+        Tensor loaded_rotation = copy_param(std::move(rotation), "SplatData.rotation");
+        Tensor loaded_opacity = copy_param(std::move(opacity), "SplatData.opacity");
 
-        if (_max_sh_degree > 0) {
-            Tensor shN_canon;
-            is >> shN_canon;
+        Tensor loaded_shN;
+        if (max_sh > 0) {
             // shN_canon is canonical [N, K, 3]; reorder into swizzled storage.
-            const size_t n = static_cast<size_t>(size());
-            const size_t cap = std::max<size_t>(_means.capacity(), n);
-            const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
-            _shN = allocate_swizzled_shN(n,
-                                         cap,
-                                         layout_rest,
-                                         tensor_allocator,
-                                         "SplatData.shN");
+            const size_t cap = std::max<size_t>(loaded_means.capacity(), n);
+            const auto layout_rest = sh_rest_coefficients_for_degree(max_sh);
+            loaded_shN = allocate_swizzled_shN(n,
+                                               cap,
+                                               layout_rest,
+                                               tensor_allocator,
+                                               "SplatData.shN");
             const auto src_rest = std::min(canonical_rest_coefficients(shN_canon), layout_rest);
             if (shN_canon.is_valid() && shN_canon.numel() > 0 && n > 0 && src_rest > 0 && layout_rest > 0) {
                 reorder_canonical_into_swizzled(shN_canon.cuda(),
-                                                _shN.ptr<float>(),
+                                                loaded_shN.ptr<float>(),
                                                 n,
                                                 src_rest,
                                                 layout_rest);
             }
         } else {
             // Allocate an empty swizzled tensor so _shN is valid even at SH degree 0.
-            const size_t n = static_cast<size_t>(size());
-            const size_t cap = std::max<size_t>(_means.capacity(), n);
-            _shN = allocate_swizzled_shN(n,
-                                         cap,
-                                         static_cast<uint32_t>(max_sh_coeffs_rest()),
-                                         tensor_allocator,
-                                         "SplatData.shN");
+            const size_t cap = std::max<size_t>(loaded_means.capacity(), n);
+            loaded_shN = allocate_swizzled_shN(n, cap, 0, tensor_allocator, "SplatData.shN");
         }
 
-        uint8_t has_deleted = 0;
-        is.read(reinterpret_cast<char*>(&has_deleted), sizeof(has_deleted));
+        Tensor loaded_deleted;
         if (has_deleted) {
-            Tensor deleted;
-            is >> deleted;
             Tensor deleted_cuda = std::move(deleted).cuda();
-            if (deleted_cuda.sum_scalar() != 0.0f) {
-                _deleted = std::move(deleted_cuda);
-            } else {
-                _deleted = Tensor{};
-            }
+            if (deleted_cuda.sum_scalar() != 0.0f)
+                loaded_deleted = std::move(deleted_cuda);
         }
 
-        uint8_t has_densification = 0;
-        is.read(reinterpret_cast<char*>(&has_densification), sizeof(has_densification));
-        if (has_densification) {
-            Tensor densification;
-            is >> densification;
-            _densification_info = std::move(densification).cuda();
-        }
+        Tensor loaded_densification = has_densification && densification.numel() > 0
+                                          ? std::move(densification).cuda()
+                                          : Tensor{};
+
+        // Commit only after the complete serialized model has been read,
+        // schema-checked, allocated, and uploaded successfully.
+        _tensor_allocator = std::move(tensor_allocator);
+        _means = std::move(loaded_means);
+        _sh0 = std::move(loaded_sh0);
+        _scaling = std::move(loaded_scaling);
+        _rotation = std::move(loaded_rotation);
+        _opacity = std::move(loaded_opacity);
+        _shN = std::move(loaded_shN);
+        _deleted = std::move(loaded_deleted);
+        _densification_info = std::move(loaded_densification);
+        _max_sh_degree = max_sh;
+        _active_sh_degree = active_sh;
+        _scene_scale = scene_scale;
 
         LOG_DEBUG("Deserialized SplatData: {} Gaussians, SH {}/{}", size(), active_sh, max_sh);
     }

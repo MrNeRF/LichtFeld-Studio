@@ -18,6 +18,7 @@
 #include "training/losses/photometric_loss.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
+#include <limits>
 
 using namespace lfs::core;
 using namespace lfs::training::kernels;
@@ -336,6 +337,42 @@ TEST_F(FusedL1SSIMTest, PhotometricLossUsesFusedKernel) {
     EXPECT_FALSE(std::isnan(ctx.grad_image.abs().max().item<float>()));
 }
 
+TEST_F(FusedL1SSIMTest, RejectsInvalidImageContractsBeforeKernelLaunch) {
+    auto valid = Tensor::zeros({1, 3, 16, 16}, Device::CUDA);
+    FusedL1SSIMWorkspace workspace;
+
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            Tensor::zeros({3, 16}, Device::CUDA), valid, 0.2f, workspace, true),
+        std::exception);
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            Tensor::zeros({1, 3, 8, 16}, Device::CUDA), valid, 0.2f, workspace, true),
+        std::exception);
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            valid, valid.to(DataType::Int32), 0.2f, workspace, true),
+        std::exception);
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            valid, valid, std::numeric_limits<float>::quiet_NaN(), workspace, true),
+        std::exception);
+    EXPECT_THROW(
+        (void)fused_l1_ssim_forward(
+            Tensor::empty({0, 3, 16, 16}, Device::CUDA),
+            Tensor::empty({0, 3, 16, 16}, Device::CUDA),
+            0.2f, workspace, true),
+        std::exception);
+
+    lfs::training::losses::PhotometricLoss photometric;
+    auto result = photometric.forward(
+        valid, valid.cpu(), {.lambda_dssim = 0.2f});
+    EXPECT_FALSE(result.has_value());
+    result = photometric.forward(
+        valid, valid, {.lambda_dssim = std::numeric_limits<float>::infinity()});
+    EXPECT_FALSE(result.has_value());
+}
+
 TEST_F(FusedL1SSIMTest, UInt8TargetMatchesFloatReference) {
     const int N = 1, C = 3, H = 64, W = 64;
     auto pred = Tensor::rand({N, C, H, W}, Device::CUDA);
@@ -429,7 +466,7 @@ TEST_F(MaskedFusedL1SSIMTest, ForwardBasic) {
     auto mask = Tensor::ones({H, W}, Device::CUDA).to(DataType::UInt8);
     // Mask out a region
     auto mask_view = mask.slice(0, 0, H / 2).slice(1, 0, W / 2);
-    mask_view.fill_(0.0f, nullptr);
+    mask_view.zero_();
     cudaDeviceSynchronize();
 
     const float ssim_weight = 0.2f;
@@ -673,77 +710,4 @@ TEST_F(FusedL1SSIMTest, DecoupledRoutesContrastStructureGradientToRawBranch) {
     EXPECT_GT(loss.item<float>(), 0.0f);
     EXPECT_LT(grads.grad_corrected.abs().max().item<float>(), 1e-4f);
     EXPECT_GT(grads.grad_raw.abs().max().item<float>(), 1e-4f);
-}
-
-// ============================================================================
-// Performance benchmark (not a correctness test)
-// ============================================================================
-
-TEST_F(FusedL1SSIMTest, DISABLED_PerformanceBenchmark) {
-    const int N = 1, C = 3, H = 1080, W = 1920;
-    const int iterations = 100;
-    const float ssim_weight = 0.2f;
-
-    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
-
-    // Warmup
-    {
-        FusedL1SSIMWorkspace workspace;
-        for (int i = 0; i < 10; ++i) {
-            auto [loss, ctx] = fused_l1_ssim_forward(img1, img2, ssim_weight, workspace, true);
-            auto grad = fused_l1_ssim_backward(ctx, workspace);
-        }
-        cudaDeviceSynchronize();
-    }
-
-    // Benchmark fused kernel
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-
-    FusedL1SSIMWorkspace fused_workspace;
-    cudaEventRecord(start);
-    for (int i = 0; i < iterations; ++i) {
-        auto [loss, ctx] = fused_l1_ssim_forward(img1, img2, ssim_weight, fused_workspace, true);
-        auto grad = fused_l1_ssim_backward(ctx, fused_workspace);
-    }
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-
-    float fused_time;
-    cudaEventElapsedTime(&fused_time, start, stop);
-
-    // Benchmark separate kernels
-    SSIMWorkspace ssim_workspace;
-    cudaEventRecord(start);
-    for (int i = 0; i < iterations; ++i) {
-        // L1
-        auto l1_diff = (img1 - img2).abs();
-        auto l1_loss = l1_diff.mean();
-        auto sign_diff = (img1 - img2).sign();
-        auto l1_grad = sign_diff / static_cast<float>(img1.numel());
-
-        // SSIM
-        auto [ssim_val, ssim_ctx] = ssim_forward(img1, img2, ssim_workspace, true);
-        auto ssim_grad = ssim_backward(ssim_ctx, ssim_workspace, -1.0f);
-
-        // Combine
-        auto grad = l1_grad * (1.0f - ssim_weight) + ssim_grad * ssim_weight;
-    }
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-
-    float separate_time;
-    cudaEventElapsedTime(&separate_time, start, stop);
-
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-
-    float speedup = separate_time / fused_time;
-    std::cout << "Fused kernel time: " << fused_time / iterations << " ms/iter\n";
-    std::cout << "Separate kernels time: " << separate_time / iterations << " ms/iter\n";
-    std::cout << "Speedup: " << speedup << "x\n";
-
-    EXPECT_GT(speedup, 1.2f);
 }

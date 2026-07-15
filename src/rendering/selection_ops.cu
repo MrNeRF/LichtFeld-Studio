@@ -43,6 +43,23 @@ namespace lfs::rendering {
             }
         }
 
+        template <std::size_t N>
+        void copySelectionCountsToHost(const Tensor& counts_scratch,
+                                       std::array<int, N>& host_counts) {
+            const cudaStream_t stream = currentSelectionStream(&counts_scratch);
+            if (const cudaError_t status = cudaMemcpyAsync(host_counts.data(),
+                                                           counts_scratch.ptr<int>(),
+                                                           sizeof(host_counts),
+                                                           cudaMemcpyDeviceToHost,
+                                                           stream);
+                status != cudaSuccess) {
+                throw std::runtime_error(cudaGetErrorString(status));
+            }
+            if (const cudaError_t status = cudaStreamSynchronize(stream); status != cudaSuccess) {
+                throw std::runtime_error(cudaGetErrorString(status));
+            }
+        }
+
         struct PreparedModelTransforms {
             Tensor contig;
             const float* ptr = nullptr;
@@ -738,6 +755,57 @@ namespace lfs::rendering {
         const float pixel_focal_x,
         const float pixel_focal_y,
         const bool orthographic,
+        const float ortho_scale) {
+        return project_screen_positions_tensor(
+            means, width, height, view_rotation_rows, translation,
+            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            nullptr, nullptr, {});
+    }
+
+    Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        const int width,
+        const int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const bool orthographic,
+        const float ortho_scale,
+        const Tensor* const model_transforms) {
+        return project_screen_positions_tensor(
+            means, width, height, view_rotation_rows, translation,
+            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            model_transforms, nullptr, {});
+    }
+
+    Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        const int width,
+        const int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const bool orthographic,
+        const float ortho_scale,
+        const Tensor* const model_transforms,
+        const Tensor* const transform_indices) {
+        return project_screen_positions_tensor(
+            means, width, height, view_rotation_rows, translation,
+            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            model_transforms, transform_indices, {});
+    }
+
+    Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        const int width,
+        const int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const bool orthographic,
         const float ortho_scale,
         const Tensor* const model_transforms,
         const Tensor* const transform_indices,
@@ -1113,13 +1181,7 @@ namespace lfs::rendering {
         }
 
         std::array<int, kSelectionGroupScratchWords> host_counts{};
-        if (const cudaError_t status = cudaMemcpy(host_counts.data(),
-                                                  counts_scratch.ptr<int>(),
-                                                  sizeof(host_counts),
-                                                  cudaMemcpyDeviceToHost);
-            status != cudaSuccess) {
-            throw std::runtime_error(cudaGetErrorString(status));
-        }
+        copySelectionCountsToHost(counts_scratch, host_counts);
         for (size_t i = 0; i < result.group_counts.size(); ++i) {
             result.group_counts[i] = static_cast<size_t>(std::max(host_counts[i], 0));
         }
@@ -1137,13 +1199,7 @@ namespace lfs::rendering {
         }
 
         std::array<int, kSelectionGroupScratchWords> host_counts{};
-        if (const cudaError_t status = cudaMemcpy(host_counts.data(),
-                                                  counts_scratch.ptr<int>(),
-                                                  sizeof(host_counts),
-                                                  cudaMemcpyDeviceToHost);
-            status != cudaSuccess) {
-            throw std::runtime_error(cudaGetErrorString(status));
-        }
+        copySelectionCountsToHost(counts_scratch, host_counts);
         for (size_t i = 0; i < result.group_deltas.size(); ++i) {
             result.group_deltas[i] = host_counts[i];
         }

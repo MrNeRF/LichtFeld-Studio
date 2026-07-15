@@ -408,17 +408,34 @@ namespace lfs::mcp {
             return std::unexpected("No trainer initialized");
         }
 
-        if (training_thread_) {
+        if (training_thread_ && training_active_.load(std::memory_order_acquire)) {
             return std::unexpected("Training already running");
         }
 
+        // A naturally completed jthread remains joinable until its owner reaps
+        // it. Join that finished generation before installing the next one.
+        training_thread_.reset();
+
         auto trainer = trainer_;
-        training_thread_ = std::make_unique<std::jthread>([trainer](std::stop_token stop) {
-            auto result = trainer->train(stop);
-            if (!result) {
-                LOG_ERROR("Training error: {}", result.error());
-            }
-        });
+        training_active_.store(true, std::memory_order_release);
+        try {
+            training_thread_ = std::make_unique<std::jthread>([this, trainer](std::stop_token stop) {
+                try {
+                    auto result = trainer->train(stop);
+                    if (!result) {
+                        LOG_ERROR("Training error: {}", result.error());
+                    }
+                } catch (const std::exception& e) {
+                    LOG_ERROR("MCP training worker failed: {}", e.what());
+                } catch (...) {
+                    LOG_ERROR("MCP training worker failed with an unknown exception");
+                }
+                training_active_.store(false, std::memory_order_release);
+            });
+        } catch (const std::exception& e) {
+            training_active_.store(false, std::memory_order_release);
+            return std::unexpected(std::string("Failed to start training thread: ") + e.what());
+        }
 
         LOG_INFO("MCP: Training started");
         return {};
@@ -434,6 +451,7 @@ namespace lfs::mcp {
             training_thread_->request_stop();
             training_thread_.reset();
         }
+        training_active_.store(false, std::memory_order_release);
     }
 
     void TrainingContext::pause_training() {

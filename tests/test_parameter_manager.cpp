@@ -6,6 +6,8 @@
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 
+#include <limits>
+
 namespace {
 
     TEST(ParameterManagerTest, DefaultStrategyIsMrnf) {
@@ -171,6 +173,49 @@ namespace {
 
         EXPECT_EQ(params.resolved_total_iterations(), 25'000);
         EXPECT_EQ(params.resolved_ppisp_controller_activation_step(params.resolved_total_iterations()), 20'000);
+    }
+
+    TEST(ParameterValidationTest, RejectsCrashProneIterationAndNumericValues) {
+        lfs::core::param::OptimizationParameters params;
+        EXPECT_TRUE(params.validate().empty());
+        EXPECT_TRUE(lfs::core::param::OptimizationParameters::mcmc_defaults().validate().empty());
+        EXPECT_TRUE(lfs::core::param::OptimizationParameters::mrnf_defaults().validate().empty());
+        EXPECT_TRUE(lfs::core::param::OptimizationParameters::igs_plus_defaults().validate().empty());
+
+        params.refine_every = 0;
+        EXPECT_NE(params.validate().find("refine_every"), std::string::npos);
+        params = {};
+        params.reset_every = 0;
+        EXPECT_NE(params.validate().find("reset_every"), std::string::npos);
+        params = {};
+        params.sh_degree_interval = 0;
+        EXPECT_NE(params.validate().find("sh_degree_interval"), std::string::npos);
+        params = {};
+        params.start_refine = 10;
+        params.stop_refine = 9;
+        EXPECT_NE(params.validate().find("start_refine"), std::string::npos);
+        params = {};
+        params.bounds_percentile = std::numeric_limits<float>::quiet_NaN();
+        EXPECT_NE(params.validate().find("bounds_percentile"), std::string::npos);
+        params = {};
+        params.means_lr = std::numeric_limits<float>::infinity();
+        EXPECT_NE(params.validate().find("means_lr"), std::string::npos);
+    }
+
+    TEST(ParameterValidationTest, RejectsDatasetCadenceAndOddVideoDimensions) {
+        lfs::core::param::TrainingParameters params;
+        params.dataset.test_every = 0;
+        EXPECT_NE(params.validate().find("test_every"), std::string::npos);
+
+        params.dataset.test_every = 8;
+        params.dataset.timelapse_every = 0;
+        EXPECT_NE(params.validate().find("timelapse_every"), std::string::npos);
+
+        params.dataset.timelapse_every = 50;
+        params.render_path = lfs::core::param::RenderPathConfig{
+            .width = 1919,
+            .height = 1080};
+        EXPECT_NE(params.validate().find("render dimensions"), std::string::npos);
     }
 
 } // namespace

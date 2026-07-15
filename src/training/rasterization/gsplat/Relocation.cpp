@@ -18,10 +18,10 @@ namespace gsplat_lfs {
         int64_t N,
         int32_t n_max,
         cudaStream_t stream) {
-        GSPLAT_CHECK_CUDA_PTR(opacities, "opacities");
-        GSPLAT_CHECK_CUDA_PTR(scales, "scales");
-        GSPLAT_CHECK_CUDA_PTR(ratios, "ratios");
-        GSPLAT_CHECK_CUDA_PTR(binoms, "binoms");
+        gsplat_lfs::debug_validate_cuda_pointer(opacities, "opacities");
+        gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
+        gsplat_lfs::debug_validate_cuda_pointer(ratios, "ratios");
+        gsplat_lfs::debug_validate_cuda_pointer(binoms, "binoms");
 
         if (N == 0) {
             return;
@@ -41,11 +41,11 @@ namespace gsplat_lfs {
         int64_t N,
         float current_lr,
         cudaStream_t stream) {
-        GSPLAT_CHECK_CUDA_PTR(raw_opacities, "raw_opacities");
-        GSPLAT_CHECK_CUDA_PTR(raw_scales, "raw_scales");
-        GSPLAT_CHECK_CUDA_PTR(raw_quats, "raw_quats");
-        GSPLAT_CHECK_CUDA_PTR(noise, "noise");
-        GSPLAT_CHECK_CUDA_PTR(means, "means");
+        gsplat_lfs::debug_validate_cuda_pointer(raw_opacities, "raw_opacities");
+        gsplat_lfs::debug_validate_cuda_pointer(raw_scales, "raw_scales");
+        gsplat_lfs::debug_validate_cuda_pointer(raw_quats, "raw_quats");
+        gsplat_lfs::debug_validate_cuda_pointer(noise, "noise");
+        gsplat_lfs::debug_validate_cuda_pointer(means, "means");
 
         if (N == 0) {
             return;

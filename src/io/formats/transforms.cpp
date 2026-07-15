@@ -9,13 +9,18 @@
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"
 #include "tinyply.hpp"
+#include <array>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <numbers>
+#include <string>
+#include <string_view>
 
 namespace lfs::io {
 
@@ -29,6 +34,139 @@ namespace lfs::io {
     constexpr int DEFAULT_NUM_INIT_GAUSSIAN = 10000;
     constexpr uint64_t DEFAULT_RANDOM_SEED = 8128;
     constexpr float EQUIRECTANGULAR_DUMMY_FOCAL = 20.0f;
+
+    namespace {
+        constexpr uintmax_t MAX_TRANSFORMS_JSON_BYTES = 64ULL * 1024ULL * 1024ULL;
+        constexpr size_t MAX_TRANSFORMS_FRAMES = 1'000'000;
+        constexpr size_t MAX_TRANSFORMS_PATH_BYTES = 4096;
+        constexpr float MAX_TRANSFORM_COMPONENT = 1.0e12f;
+        constexpr float MAX_DISTORTION_MAGNITUDE = 1.0e4f;
+        constexpr float MAX_INTRINSIC_DIMENSION_MULTIPLIER = 1.0e6f;
+        constexpr double MIN_AFFINE_DETERMINANT = 1.0e-8;
+        constexpr float AFFINE_ROW_TOLERANCE = 1.0e-4f;
+
+        struct ValidatedTransformFrame {
+            std::string file_path;
+            std::array<float, 16> matrix{};
+        };
+
+        [[nodiscard]] float finite_json_float(
+            const nlohmann::json& object,
+            const std::string_view key) {
+            const auto& value = object.at(std::string(key));
+            if (!value.is_number())
+                throw std::runtime_error("Transforms field '" + std::string(key) + "' must be numeric");
+            const double parsed = value.get<double>();
+            if (!std::isfinite(parsed) || std::abs(parsed) > std::numeric_limits<float>::max())
+                throw std::runtime_error("Transforms field '" + std::string(key) + "' must be finite float32");
+            return static_cast<float>(parsed);
+        }
+
+        [[nodiscard]] int positive_image_dimension(
+            const nlohmann::json& object,
+            const std::string_view key) {
+            const auto& value = object.at(std::string(key));
+            if (!value.is_number())
+                throw std::runtime_error("Transforms field '" + std::string(key) + "' must be numeric");
+            const double parsed = value.get<double>();
+            if (!std::isfinite(parsed) || parsed <= 0.0 || std::floor(parsed) != parsed ||
+                parsed > static_cast<double>(std::numeric_limits<int>::max())) {
+                throw std::runtime_error("Transforms field '" + std::string(key) + "' must be a positive int");
+            }
+            return static_cast<int>(parsed);
+        }
+
+        [[nodiscard]] std::array<float, 16> validated_transform_matrix(
+            const nlohmann::json& matrix,
+            const size_t frame_index) {
+            if (!matrix.is_array() || matrix.size() != 4)
+                throw std::runtime_error(std::format("Frame {} transform_matrix must be a 4x4 array", frame_index));
+
+            std::array<float, 16> result{};
+            for (size_t row = 0; row < 4; ++row) {
+                if (!matrix[row].is_array() || matrix[row].size() != 4) {
+                    throw std::runtime_error(
+                        std::format("Frame {} transform_matrix row {} must contain four values", frame_index, row));
+                }
+                for (size_t column = 0; column < 4; ++column) {
+                    const auto& value = matrix[row][column];
+                    if (!value.is_number())
+                        throw std::runtime_error(std::format(
+                            "Frame {} transform_matrix[{}][{}] must be numeric", frame_index, row, column));
+                    const double parsed = value.get<double>();
+                    if (!std::isfinite(parsed) || std::abs(parsed) > MAX_TRANSFORM_COMPONENT) {
+                        throw std::runtime_error(std::format(
+                            "Frame {} transform_matrix[{}][{}] is not a bounded finite value",
+                            frame_index, row, column));
+                    }
+                    result[row * 4 + column] = static_cast<float>(parsed);
+                }
+            }
+
+            for (size_t column = 0; column < 4; ++column) {
+                const float expected = column == 3 ? 1.0f : 0.0f;
+                if (std::abs(result[12 + column] - expected) > AFFINE_ROW_TOLERANCE) {
+                    throw std::runtime_error(
+                        std::format("Frame {} transform_matrix must have affine last row [0,0,0,1]", frame_index));
+                }
+            }
+
+            const double a = result[0], b = result[1], c = result[2];
+            const double d = result[4], e = result[5], f = result[6];
+            const double g = result[8], h = result[9], i = result[10];
+            const double determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+            // Some exporters encode scale in camera matrices, so invertibility is the
+            // compatibility-safe boundary. Do not silently orthogonalize their basis.
+            if (!std::isfinite(determinant) || std::abs(determinant) < MIN_AFFINE_DETERMINANT) {
+                throw std::runtime_error(std::format("Frame {} transform_matrix is singular", frame_index));
+            }
+            return result;
+        }
+
+        [[nodiscard]] std::vector<ValidatedTransformFrame> validated_transform_frames(
+            const nlohmann::json& transforms,
+            const LoadOptions& options) {
+            if (!transforms.contains("frames") || !transforms["frames"].is_array() ||
+                transforms["frames"].empty()) {
+                throw std::runtime_error("Transforms JSON must contain a non-empty frames array");
+            }
+            const auto& frames = transforms["frames"];
+            if (frames.size() > MAX_TRANSFORMS_FRAMES)
+                throw std::runtime_error("Transforms JSON exceeds the frame-count budget");
+
+            std::vector<ValidatedTransformFrame> result;
+            result.reserve(frames.size());
+            for (size_t frame_index = 0; frame_index < frames.size(); ++frame_index) {
+                if ((frame_index % 256) == 0)
+                    throw_if_load_cancel_requested(options, "Transforms schema validation cancelled");
+                const auto& frame = frames[frame_index];
+                if (!frame.is_object() || !frame.contains("file_path") || !frame["file_path"].is_string())
+                    throw std::runtime_error(std::format("Frame {} must contain a string file_path", frame_index));
+                std::string file_path = frame["file_path"].get<std::string>();
+                if (file_path.empty() || file_path.size() > MAX_TRANSFORMS_PATH_BYTES ||
+                    file_path.find('\0') != std::string::npos) {
+                    throw std::runtime_error(std::format("Frame {} file_path is empty or too long", frame_index));
+                }
+                if (!frame.contains("transform_matrix"))
+                    throw std::runtime_error(std::format("Frame {} is missing transform_matrix", frame_index));
+                result.push_back({
+                    .file_path = std::move(file_path),
+                    .matrix = validated_transform_matrix(frame["transform_matrix"], frame_index),
+                });
+            }
+            return result;
+        }
+
+        [[nodiscard]] bool matrix_is_finite(const glm::mat4& matrix) {
+            for (int column = 0; column < 4; ++column) {
+                for (int row = 0; row < 4; ++row) {
+                    if (!std::isfinite(matrix[column][row]))
+                        return false;
+                }
+            }
+            return true;
+        }
+    } // namespace
 
     // Helper: Tensor to glm::mat4
     glm::mat4 tensor_to_mat4(const Tensor& t) {
@@ -86,9 +224,11 @@ namespace lfs::io {
         return rotMat;
     }
 
-    std::filesystem::path GetTransformImagePath(const std::filesystem::path& dir_path, const nlohmann::json& frame) {
+    std::filesystem::path GetTransformImagePath(
+        const std::filesystem::path& dir_path,
+        const std::string& frame_file_path) {
         // Use utf8_to_path for proper Unicode handling since JSON is UTF-8 encoded
-        const auto file_path = lfs::core::utf8_to_path(frame["file_path"].get<std::string>());
+        const auto file_path = lfs::core::utf8_to_path(frame_file_path);
         auto image_path = dir_path / file_path;
         auto images_image_path = dir_path / "images" / file_path;
         // Use path concatenation for proper Unicode handling
@@ -138,15 +278,34 @@ namespace lfs::io {
 
         std::filesystem::path dir_path = transformsFile.parent_path();
 
-        // should throw if parse fails
-        nlohmann::json transforms = nlohmann::json::parse(trans_file, nullptr, true, true);
+        std::error_code file_size_error;
+        const uintmax_t transforms_file_size = std::filesystem::file_size(transformsFile, file_size_error);
+        if (file_size_error || transforms_file_size == 0 || transforms_file_size > MAX_TRANSFORMS_JSON_BYTES)
+            throw std::runtime_error("Transforms JSON is empty or exceeds the 64 MiB input budget");
+
+        std::vector<char> json_bytes(static_cast<size_t>(transforms_file_size) + 1);
+        trans_file.read(json_bytes.data(), static_cast<std::streamsize>(json_bytes.size()));
+        const size_t bytes_read = static_cast<size_t>(trans_file.gcount());
+        if (bytes_read != transforms_file_size)
+            throw std::runtime_error("Transforms JSON changed size while it was being read");
+
+        // Parse only the validated byte range; the extra byte detects a file that grew after stat().
+        nlohmann::json transforms = nlohmann::json::parse(
+            json_bytes.begin(), json_bytes.begin() + static_cast<ptrdiff_t>(bytes_read), nullptr, true, true);
+        if (!transforms.is_object())
+            throw std::runtime_error("Transforms JSON root must be an object");
+        const auto validated_frames = validated_transform_frames(transforms, options);
         throw_if_load_cancel_requested(options, "Transforms dataset parse cancelled");
         int w = -1, h = -1;
-        if (!transforms.contains("w") or !transforms.contains("h")) {
+        const bool has_width = transforms.contains("w");
+        const bool has_height = transforms.contains("h");
+        if (has_width != has_height)
+            throw std::runtime_error("Transforms JSON must specify both w and h or neither");
+        if (!has_width) {
 
             try {
                 LOG_DEBUG("Width/height not in transforms.json, reading from first image");
-                auto first_frame_img_path = GetTransformImagePath(dir_path, transforms["frames"][0]);
+                auto first_frame_img_path = GetTransformImagePath(dir_path, validated_frames.front().file_path);
                 auto result = lfs::core::get_image_info(first_frame_img_path);
 
                 w = std::get<0>(result);
@@ -163,15 +322,19 @@ namespace lfs::io {
                 throw std::runtime_error(error_msg);
             }
         } else {
-            w = int(transforms["w"]);
-            h = int(transforms["h"]);
+            w = positive_image_dimension(transforms, "w");
+            h = positive_image_dimension(transforms, "h");
         }
+        if (w <= 0 || h <= 0 || static_cast<uint64_t>(w) * static_cast<uint64_t>(h) > std::numeric_limits<int>::max())
+            throw std::runtime_error("Transforms image dimensions exceed the signed pixel-index budget");
 
         float fl_x = -1, fl_y = -1;
         auto camera_model = lfs::core::CameraModelType::PINHOLE;
 
         // Parse explicit camera_model field (nerfstudio format)
         if (transforms.contains("camera_model")) {
+            if (!transforms["camera_model"].is_string())
+                throw std::runtime_error("Transforms camera_model must be a string");
             const std::string model_str = transforms["camera_model"];
             if (model_str == "EQUIRECTANGULAR") {
                 camera_model = lfs::core::CameraModelType::EQUIRECTANGULAR;
@@ -184,15 +347,21 @@ namespace lfs::io {
         }
 
         if (transforms.contains("fl_x")) {
-            fl_x = float(transforms["fl_x"]);
+            fl_x = finite_json_float(transforms, "fl_x");
         } else if (transforms.contains("camera_angle_x")) {
-            fl_x = fov_rad_to_focal_length(w, float(transforms["camera_angle_x"]));
+            const float angle = finite_json_float(transforms, "camera_angle_x");
+            if (angle <= 0.0f || angle >= std::numbers::pi_v<float>)
+                throw std::runtime_error("Transforms camera_angle_x must be in (0, pi)");
+            fl_x = fov_rad_to_focal_length(w, angle);
         }
 
         if (transforms.contains("fl_y")) {
-            fl_y = float(transforms["fl_y"]);
+            fl_y = finite_json_float(transforms, "fl_y");
         } else if (transforms.contains("camera_angle_y")) {
-            fl_y = fov_rad_to_focal_length(h, float(transforms["camera_angle_y"]));
+            const float angle = finite_json_float(transforms, "camera_angle_y");
+            if (angle <= 0.0f || angle >= std::numbers::pi_v<float>)
+                throw std::runtime_error("Transforms camera_angle_y must be in (0, pi)");
+            fl_y = fov_rad_to_focal_length(h, angle);
         } else {
             const bool no_intrinsics = !transforms.contains("fl_x") && !transforms.contains("camera_angle_x") &&
                                        !transforms.contains("fl_y") && !transforms.contains("camera_angle_y");
@@ -204,34 +373,38 @@ namespace lfs::io {
                 }
                 fl_x = fl_y = EQUIRECTANGULAR_DUMMY_FOCAL;
             } else {
-                // Blender format: square images use same focal for x/y
-                if (w != h) {
-                    throw std::runtime_error("No camera_angle_y but w!=h");
-                }
+                if (w != h)
+                    throw std::runtime_error("Transforms JSON is missing vertical intrinsics for a non-square image");
                 fl_y = fl_x;
             }
         }
 
-        // Equirectangular needs dummy focal lengths if not set
-        if (camera_model == lfs::core::CameraModelType::EQUIRECTANGULAR) {
-            if (fl_x < 0)
-                fl_x = EQUIRECTANGULAR_DUMMY_FOCAL;
-            if (fl_y < 0)
-                fl_y = EQUIRECTANGULAR_DUMMY_FOCAL;
+        if (fl_x < 0.0f && fl_y > 0.0f) {
+            if (w != h)
+                throw std::runtime_error("Transforms JSON is missing horizontal intrinsics for a non-square image");
+            fl_x = fl_y;
+        }
+        const float max_focal = static_cast<float>(std::max(w, h)) * MAX_INTRINSIC_DIMENSION_MULTIPLIER;
+        if (!std::isfinite(fl_x) || !std::isfinite(fl_y) || fl_x <= 0.0f || fl_y <= 0.0f ||
+            fl_x > max_focal || fl_y > max_focal) {
+            throw std::runtime_error("Transforms focal lengths must be positive bounded finite values");
         }
 
         float cx = -1, cy = -1;
         if (transforms.contains("cx")) {
-            cx = float(transforms["cx"]);
+            cx = finite_json_float(transforms, "cx");
         } else {
             cx = 0.5f * w;
         }
 
         if (transforms.contains("cy")) {
-            cy = float(transforms["cy"]);
+            cy = finite_json_float(transforms, "cy");
         } else {
             cy = 0.5f * h;
         }
+        const float max_center = static_cast<float>(std::max(w, h)) * MAX_INTRINSIC_DIMENSION_MULTIPLIER;
+        if (!std::isfinite(cx) || !std::isfinite(cy) || std::abs(cx) > max_center || std::abs(cy) > max_center)
+            throw std::runtime_error("Transforms principal point must be a bounded finite value");
 
         float k1 = 0;
         float k2 = 0;
@@ -239,19 +412,23 @@ namespace lfs::io {
         float p1 = 0;
         float p2 = 0;
         if (transforms.contains("k1")) {
-            k1 = float(transforms["k1"]);
+            k1 = finite_json_float(transforms, "k1");
         }
         if (transforms.contains("k2")) {
-            k2 = float(transforms["k2"]);
+            k2 = finite_json_float(transforms, "k2");
         }
         if (transforms.contains("k3")) {
-            k3 = float(transforms["k3"]);
+            k3 = finite_json_float(transforms, "k3");
         }
         if (transforms.contains("p1")) {
-            p1 = float(transforms["p1"]);
+            p1 = finite_json_float(transforms, "p1");
         }
         if (transforms.contains("p2")) {
-            p2 = float(transforms["p2"]);
+            p2 = finite_json_float(transforms, "p2");
+        }
+        for (const float coefficient : {k1, k2, k3, p1, p2}) {
+            if (std::abs(coefficient) > MAX_DISTORTION_MAGNITUDE)
+                throw std::runtime_error("Transforms distortion coefficient exceeds the supported range");
         }
         bool is_distorted = (k1 != 0.0f) || (k2 != 0.0f) || (k3 != 0.0f) || (p1 != 0.0f) || (p2 != 0.0f);
 
@@ -259,25 +436,26 @@ namespace lfs::io {
             LOG_DEBUG("Blender Loader: identified distortion in data set");
         }
 
-        std::vector<CameraData> camerasdata;
-        if (transforms.contains("frames") && transforms["frames"].is_array()) {
-            uint64_t counter = 0;
-            LOG_DEBUG("Processing {} frames", transforms["frames"].size());
+        // Validate remaining scalar metadata before allocating any camera tensors.
+        if (transforms.contains("aabb_scale")) {
+            const float aabb_scale = finite_json_float(transforms, "aabb_scale");
+            if (aabb_scale <= 0.0f)
+                throw std::runtime_error("Transforms aabb_scale must be positive");
+            LOG_DEBUG("Found aabb_scale: {}", aabb_scale);
+        }
 
-            for (size_t frameInd = 0; frameInd < transforms["frames"].size(); ++frameInd) {
+        std::vector<CameraData> camerasdata;
+        {
+            uint64_t counter = 0;
+            LOG_DEBUG("Processing {} frames", validated_frames.size());
+            camerasdata.reserve(validated_frames.size());
+
+            for (size_t frameInd = 0; frameInd < validated_frames.size(); ++frameInd) {
                 if ((frameInd % 64) == 0) {
                     throw_if_load_cancel_requested(options, "Transforms camera assembly cancelled");
                 }
                 CameraData camdata;
-                auto& frame = transforms["frames"][frameInd];
-                if (!frame.contains("transform_matrix")) {
-                    LOG_ERROR("Frame {} missing transform_matrix", frameInd);
-                    throw std::runtime_error("expected all frames to contain transform_matrix");
-                }
-                if (!(frame["transform_matrix"].is_array() and frame["transform_matrix"].size() == 4)) {
-                    LOG_ERROR("Frame {} has invalid transform_matrix dimensions", frameInd);
-                    throw std::runtime_error("transform_matrix has the wrong dimensions");
-                }
+                const auto& frame = validated_frames[frameInd];
 
                 // Create camera-to-world transform matrix
                 lfs::core::Tensor c2w = lfs::core::Tensor::empty({4, 4}, Device::CPU, DataType::Float32);
@@ -285,7 +463,7 @@ namespace lfs::io {
                 // Fill the c2w matrix from the JSON data
                 for (int i = 0; i < 4; ++i) {
                     for (int j = 0; j < 4; ++j) {
-                        c2w[i][j] = float(frame["transform_matrix"][i][j]);
+                        c2w[i][j] = frame.matrix[static_cast<size_t>(i) * 4 + static_cast<size_t>(j)];
                     }
                 }
 
@@ -300,6 +478,8 @@ namespace lfs::io {
                 // Get the world-to-camera transform by computing inverse of c2w
                 glm::mat4 c2w_glm = tensor_to_mat4(c2w);
                 glm::mat4 w2c_glm = glm::inverse(c2w_glm);
+                if (!matrix_is_finite(w2c_glm))
+                    throw std::runtime_error(std::format("Frame {} inverse transform is non-finite", frameInd));
                 Tensor w2c = mat4_to_tensor(w2c_glm);
 
                 // fix so that the z direction will be the same (currently it is faceing downward)
@@ -325,7 +505,7 @@ namespace lfs::io {
                 // T = w2c[:3, 3]
                 lfs::core::Tensor T = w2c.slice(0, 0, 3).slice(1, 3, 4).squeeze(1);
 
-                camdata._image_path = GetTransformImagePath(dir_path, frame);
+                camdata._image_path = GetTransformImagePath(dir_path, frame.file_path);
 
                 camdata._image_name = lfs::core::path_to_utf8(camdata._image_path.filename());
 
@@ -358,13 +538,6 @@ namespace lfs::io {
         }
 
         auto center = lfs::core::Tensor::zeros({3}, Device::CPU, DataType::Float32);
-
-        // Check for aabb_scale (used in some NeRF datasets for scene scaling)
-        float aabb_scale = 1.0f;
-        if (transforms.contains("aabb_scale")) {
-            aabb_scale = float(transforms["aabb_scale"]);
-            LOG_DEBUG("Found aabb_scale: {}", aabb_scale);
-        }
 
         LOG_INFO("Loaded {} cameras from transforms file", camerasdata.size());
 

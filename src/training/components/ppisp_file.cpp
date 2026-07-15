@@ -4,6 +4,7 @@
 #include "ppisp_file.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "io/atomic_output.hpp"
 #include "ppisp.hpp"
 #include "ppisp_controller_pool.hpp"
 #include <fstream>
@@ -85,8 +86,16 @@ namespace lfs::training {
         const PPISPFileMetadata* metadata) {
 
         try {
+            if (auto result = lfs::io::ensure_output_parent_directory(path); !result) {
+                return std::unexpected(result.error().format());
+            }
+            lfs::io::ScopedAtomicOutputFile atomic_output(
+                path,
+                lfs::io::AtomicOutputTempName::AppendSuffix,
+                lfs::io::AtomicOutputDurability::Durable);
             std::ofstream file;
-            if (!lfs::core::open_file_for_write(path, std::ios::binary, file)) {
+            if (!lfs::core::open_file_for_write(
+                    atomic_output.temp_path(), std::ios::binary, file)) {
                 return std::unexpected("Failed to open file for writing: " + lfs::core::path_to_utf8(path));
             }
 
@@ -114,6 +123,15 @@ namespace lfs::training {
                 if (auto result = write_metadata_block(file, *metadata); !result) {
                     return result;
                 }
+            }
+
+            file.close();
+            if (!file) {
+                return std::unexpected(
+                    "Failed to write complete PPISP file: " + lfs::core::path_to_utf8(path));
+            }
+            if (auto result = atomic_output.commit(); !result) {
+                return std::unexpected(result.error().format());
             }
 
             LOG_INFO("PPISP file saved: {} ({} cameras, {} frames{}{})",

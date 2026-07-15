@@ -1,4 +1,5 @@
 #include "config.slang"
+#include "indirect_layout.inc"
 
 struct Uniforms {
     uint32_t num_splats;
@@ -26,7 +27,8 @@ void main(uniform Uniforms uniforms) {
 
     uint32_t partition_size = max(uniforms.sort_partition_size, 1u);
     uint32_t groups_x = (visible_count + partition_size - 1u) / partition_size;
-    out_sort_dispatch_args[0] = max(groups_x, 1u);
-    out_sort_dispatch_args[1] = 1u;
-    out_sort_dispatch_args[2] = 1u;
+    const uint32_t radix = LFS_VK_VISIBLE_SORT_DISPATCH_RADIX_WORD_OFFSET;
+    out_sort_dispatch_args[radix + LFS_VK_DISPATCH_X_WORD_OFFSET] = max(groups_x, 1u);
+    out_sort_dispatch_args[radix + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+    out_sort_dispatch_args[radix + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
 }

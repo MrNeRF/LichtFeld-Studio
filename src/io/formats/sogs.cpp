@@ -26,10 +26,13 @@
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <nlohmann/json.hpp>
-#include <sstream>
+#include <optional>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <webp/decode.h>
 #include <webp/encode.h>
@@ -54,6 +57,35 @@ namespace lfs::io {
 
         // SH coefficient counts per degree
         constexpr int SH_COEFFS[] = {0, 3, 8, 15};
+
+        // Bound allocations derived from untrusted SOG metadata.
+        constexpr size_t MAX_SOG_SPLATS = 100'000'000;
+        constexpr size_t MAX_METADATA_BYTES = 16ULL * 1024 * 1024;
+        constexpr size_t MAX_ENCODED_IMAGE_BYTES = 512ULL * 1024 * 1024;
+        constexpr size_t MAX_ARCHIVE_BYTES = 4ULL * 1024 * 1024 * 1024;
+        constexpr size_t MAX_DECODED_IMAGE_BYTES = 2ULL * 1024 * 1024 * 1024;
+        constexpr size_t MAX_TOTAL_DECODED_BYTES = 8ULL * 1024 * 1024 * 1024;
+        constexpr size_t MAX_RECONSTRUCTION_BYTES = 8ULL * 1024 * 1024 * 1024;
+        constexpr size_t MAX_ARCHIVE_ENTRIES = 128;
+        constexpr size_t MAX_CODEBOOK_SIZE = 256;
+
+        struct DecodedImage {
+            std::vector<uint8_t> rgba;
+            int width = 0;
+            int height = 0;
+        };
+
+        using DecodedImages = std::unordered_map<std::string, DecodedImage>;
+
+        std::expected<size_t, std::string> checked_product(
+            const size_t lhs,
+            const size_t rhs,
+            const std::string_view description) {
+            if (lhs != 0 && rhs > std::numeric_limits<size_t>::max() / lhs) {
+                return std::unexpected(std::format("SOG {} size overflows", description));
+            }
+            return lhs * rhs;
+        }
 
         float inverse_log_transform(float value) {
             float sign = value >= 0 ? 1.0f : -1.0f;
@@ -119,31 +151,54 @@ namespace lfs::io {
             return quat; // Returns [x, y, z, w]
         }
 
-        std::expected<std::vector<uint8_t>, std::string> decode_webp(
-            const uint8_t* data, size_t size, int& width, int& height) {
+        std::expected<DecodedImage, std::string> decode_webp(
+            const uint8_t* data, const size_t size) {
 
             if (!data || size == 0) {
                 return std::unexpected("Invalid WebP data");
             }
+            if (size > MAX_ENCODED_IMAGE_BYTES) {
+                return std::unexpected(std::format(
+                    "Encoded WebP exceeds the {} byte SOG limit", MAX_ENCODED_IMAGE_BYTES));
+            }
 
             // Get image info
+            int width = 0;
+            int height = 0;
             if (!WebPGetInfo(data, size, &width, &height)) {
                 return std::unexpected("Failed to get WebP info");
             }
+            if (width <= 0 || height <= 0) {
+                return std::unexpected("WebP has invalid dimensions");
+            }
 
-            // Decode RGBA
-            std::vector<uint8_t> rgba(width * height * 4);
-            uint8_t* result = WebPDecodeRGBA(data, size, &width, &height);
+            const auto pixel_count = checked_product(
+                static_cast<size_t>(width), static_cast<size_t>(height), "image pixel");
+            if (!pixel_count) {
+                return std::unexpected(pixel_count.error());
+            }
+            const auto decoded_bytes = checked_product(*pixel_count, 4, "decoded image");
+            if (!decoded_bytes) {
+                return std::unexpected(decoded_bytes.error());
+            }
+            if (*decoded_bytes > MAX_DECODED_IMAGE_BYTES) {
+                return std::unexpected(std::format(
+                    "Decoded WebP exceeds the {} byte SOG limit", MAX_DECODED_IMAGE_BYTES));
+            }
 
-            if (!result) {
+            DecodedImage image{
+                .rgba = std::vector<uint8_t>(*decoded_bytes),
+                .width = width,
+                .height = height};
+            if (!WebPDecodeRGBAInto(data,
+                                    size,
+                                    image.rgba.data(),
+                                    image.rgba.size(),
+                                    width * 4)) {
                 return std::unexpected("Failed to decode WebP image");
             }
 
-            // Copy to vector
-            std::memcpy(rgba.data(), result, width * height * 4);
-            WebPFree(result);
-
-            return rgba;
+            return image;
         }
 
         struct SogMetadata {
@@ -248,27 +303,316 @@ namespace lfs::io {
             }
         }
 
+        std::expected<int, std::string> resolve_sh_degree(
+            const SogMetadata::SHData& sh_data) {
+            int degree = sh_data.bands;
+            if (degree == 0) {
+                degree = sh_data.coeffs == 3 ? 1 : sh_data.coeffs == 8 ? 2
+                                               : sh_data.coeffs == 15  ? 3
+                                                                       : 0;
+            }
+            if (degree < 1 || degree > 3) {
+                return std::unexpected(std::format(
+                    "Unsupported SOG SH degree {} (supported range is 1..3)", degree));
+            }
+            if (sh_data.coeffs != 0 && sh_data.coeffs != SH_COEFFS[degree]) {
+                return std::unexpected(std::format(
+                    "SOG SH coeff count {} does not match degree {}",
+                    sh_data.coeffs,
+                    degree));
+            }
+            return degree;
+        }
+
+        std::expected<void, std::string> validate_files(
+            const std::vector<std::string>& actual,
+            const std::initializer_list<std::string_view> expected,
+            const std::string_view field) {
+            if (actual.size() != expected.size()) {
+                return std::unexpected(std::format(
+                    "SOG {} must list exactly {} texture(s)", field, expected.size()));
+            }
+            size_t index = 0;
+            for (const auto name : expected) {
+                if (actual[index] != name) {
+                    return std::unexpected(std::format(
+                        "SOG {} texture {} must be '{}'", field, index, name));
+                }
+                ++index;
+            }
+            return {};
+        }
+
+        std::expected<void, std::string> validate_codebook(
+            const std::vector<float>& codebook,
+            const std::string_view field) {
+            if (codebook.empty() || codebook.size() > MAX_CODEBOOK_SIZE) {
+                return std::unexpected(std::format(
+                    "SOG {} codebook must contain 1..{} entries",
+                    field,
+                    MAX_CODEBOOK_SIZE));
+            }
+            if (!std::ranges::all_of(codebook, [](const float value) {
+                    return std::isfinite(value);
+                })) {
+                return std::unexpected(std::format(
+                    "SOG {} codebook contains a non-finite value", field));
+            }
+            return {};
+        }
+
+        std::expected<void, std::string> validate_metadata(SogMetadata& meta) {
+            if (meta.count <= 0 || static_cast<size_t>(meta.count) > MAX_SOG_SPLATS) {
+                return std::unexpected(std::format(
+                    "SOG splat count must be in the range 1..{}", MAX_SOG_SPLATS));
+            }
+
+            if ((meta.width == 0) != (meta.height == 0) ||
+                meta.width < 0 || meta.height < 0) {
+                return std::unexpected(
+                    "SOG width and height must both be omitted or both be positive");
+            }
+            if (meta.width == 0) {
+                const double count = static_cast<double>(meta.count);
+                meta.width = static_cast<int>(std::ceil(std::sqrt(count) / 4.0)) * 4;
+                meta.height = static_cast<int>(
+                                  std::ceil(count / static_cast<double>(meta.width) / 4.0)) *
+                              4;
+            }
+
+            const auto pixel_count = checked_product(
+                static_cast<size_t>(meta.width),
+                static_cast<size_t>(meta.height),
+                "texture pixel");
+            if (!pixel_count || *pixel_count < static_cast<size_t>(meta.count)) {
+                return std::unexpected(pixel_count
+                                           ? "SOG texture dimensions cannot hold the declared splat count"
+                                           : pixel_count.error());
+            }
+            const auto texture_bytes = checked_product(*pixel_count, 4, "texture");
+            if (!texture_bytes) {
+                return std::unexpected(texture_bytes.error());
+            }
+            if (*texture_bytes > MAX_DECODED_IMAGE_BYTES) {
+                return std::unexpected("SOG texture dimensions exceed the decoded image limit");
+            }
+
+            if (meta.means_mins.size() != 3 || meta.means_maxs.size() != 3) {
+                return std::unexpected("SOG means mins and maxs must each contain three values");
+            }
+            const float max_finite_log_coordinate =
+                std::log(std::numeric_limits<float>::max());
+            for (size_t axis = 0; axis < 3; ++axis) {
+                const float min_value = meta.means_mins[axis];
+                const float max_value = meta.means_maxs[axis];
+                if (!std::isfinite(min_value) || !std::isfinite(max_value) ||
+                    min_value > max_value ||
+                    std::abs(min_value) > max_finite_log_coordinate ||
+                    std::abs(max_value) > max_finite_log_coordinate) {
+                    return std::unexpected(std::format(
+                        "SOG means bounds for axis {} are invalid", axis));
+                }
+            }
+
+            if (auto result = validate_files(
+                    meta.means_files, {"means_l.webp", "means_u.webp"}, "means");
+                !result) {
+                return result;
+            }
+            if (auto result = validate_files(
+                    meta.scales_files, {"scales.webp"}, "scales");
+                !result) {
+                return result;
+            }
+            if (auto result = validate_files(
+                    meta.quats_files, {"quats.webp"}, "quats");
+                !result) {
+                return result;
+            }
+            if (auto result = validate_files(meta.sh0_files, {"sh0.webp"}, "sh0");
+                !result) {
+                return result;
+            }
+            if (auto result = validate_codebook(meta.scales_codebook, "scales"); !result) {
+                return result;
+            }
+            if (auto result = validate_codebook(meta.sh0_codebook, "sh0"); !result) {
+                return result;
+            }
+
+            if (meta.shN) {
+                auto& sh_data = *meta.shN;
+                const auto degree = resolve_sh_degree(sh_data);
+                if (!degree) {
+                    return std::unexpected(degree.error());
+                }
+                sh_data.bands = *degree;
+                sh_data.coeffs = SH_COEFFS[*degree];
+
+                if (auto result = validate_files(
+                        sh_data.files,
+                        {"shN_centroids.webp", "shN_labels.webp"},
+                        "shN");
+                    !result) {
+                    return result;
+                }
+                if (auto result = validate_codebook(sh_data.codebook, "shN"); !result) {
+                    return result;
+                }
+                if (sh_data.palette_size <= 0 || sh_data.palette_size > 65'536 ||
+                    sh_data.palette_size > meta.count) {
+                    return std::unexpected(
+                        "SOG SH palette size must be positive, fit the 16-bit label, and not exceed the splat count");
+                }
+            }
+
+            const size_t floats_per_splat =
+                14 + (meta.shN ? static_cast<size_t>(meta.shN->coeffs) * 3 : 0);
+            const auto reconstruction_floats = checked_product(
+                static_cast<size_t>(meta.count),
+                floats_per_splat,
+                "reconstruction buffer");
+            if (!reconstruction_floats) {
+                return std::unexpected(reconstruction_floats.error());
+            }
+            const auto reconstruction_bytes = checked_product(
+                *reconstruction_floats,
+                sizeof(float),
+                "reconstruction buffer");
+            if (!reconstruction_bytes ||
+                *reconstruction_bytes > MAX_RECONSTRUCTION_BYTES) {
+                return std::unexpected(std::format(
+                    "SOG reconstruction exceeds the {} byte host-buffer limit",
+                    MAX_RECONSTRUCTION_BYTES));
+            }
+
+            return {};
+        }
+
+        std::expected<const DecodedImage*, std::string> require_image(
+            const DecodedImages& images,
+            const std::string_view name,
+            const int expected_width,
+            const int expected_height) {
+            const auto it = images.find(std::string(name));
+            if (it == images.end()) {
+                return std::unexpected(std::format("Missing SOG texture '{}'", name));
+            }
+            const auto& image = it->second;
+            if (image.width != expected_width || image.height != expected_height) {
+                return std::unexpected(std::format(
+                    "SOG texture '{}' is {}x{}, expected {}x{}",
+                    name,
+                    image.width,
+                    image.height,
+                    expected_width,
+                    expected_height));
+            }
+            const auto pixel_count = checked_product(
+                static_cast<size_t>(expected_width),
+                static_cast<size_t>(expected_height),
+                "decoded texture pixel");
+            if (!pixel_count) {
+                return std::unexpected(pixel_count.error());
+            }
+            const auto byte_count = checked_product(*pixel_count, 4, "decoded texture");
+            if (!byte_count || image.rgba.size() != *byte_count) {
+                return std::unexpected(std::format(
+                    "SOG texture '{}' has an invalid decoded byte count", name));
+            }
+            return &image;
+        }
+
+        std::expected<void, std::string> validate_decoded_payload(
+            const SogMetadata& meta,
+            const DecodedImages& images) {
+            for (const std::string_view name : {
+                     "means_l.webp",
+                     "means_u.webp",
+                     "quats.webp",
+                     "scales.webp",
+                     "sh0.webp"}) {
+                if (auto result = require_image(images, name, meta.width, meta.height); !result) {
+                    return std::unexpected(result.error());
+                }
+            }
+
+            const auto& scales = images.at("scales.webp").rgba;
+            const auto& sh0 = images.at("sh0.webp").rgba;
+            for (size_t i = 0; i < static_cast<size_t>(meta.count); ++i) {
+                const size_t offset = i * 4;
+                for (size_t channel = 0; channel < 3; ++channel) {
+                    if (scales[offset + channel] >= meta.scales_codebook.size()) {
+                        return std::unexpected("SOG scale texture contains an invalid codebook index");
+                    }
+                    if (sh0[offset + channel] >= meta.sh0_codebook.size()) {
+                        return std::unexpected("SOG sh0 texture contains an invalid codebook index");
+                    }
+                }
+            }
+
+            if (meta.shN) {
+                const auto& sh_data = *meta.shN;
+                const int coefficients = SH_COEFFS[sh_data.bands];
+                const int centroid_width = 64 * coefficients;
+                const int centroid_height = (sh_data.palette_size + 63) / 64;
+                const auto centroids = require_image(
+                    images, "shN_centroids.webp", centroid_width, centroid_height);
+                if (!centroids) {
+                    return std::unexpected(centroids.error());
+                }
+                const auto labels = require_image(
+                    images, "shN_labels.webp", meta.width, meta.height);
+                if (!labels) {
+                    return std::unexpected(labels.error());
+                }
+
+                const auto& centroid_bytes = (*centroids)->rgba;
+                for (size_t pixel = 0;
+                     pixel < static_cast<size_t>(sh_data.palette_size) * coefficients;
+                     ++pixel) {
+                    for (size_t channel = 0; channel < 3; ++channel) {
+                        if (centroid_bytes[pixel * 4 + channel] >= sh_data.codebook.size()) {
+                            return std::unexpected(
+                                "SOG SH centroid texture contains an invalid codebook index");
+                        }
+                    }
+                }
+
+                const auto& label_bytes = (*labels)->rgba;
+                for (size_t i = 0; i < static_cast<size_t>(meta.count); ++i) {
+                    const size_t offset = i * 4;
+                    const uint16_t label = static_cast<uint16_t>(label_bytes[offset]) |
+                                           (static_cast<uint16_t>(label_bytes[offset + 1]) << 8);
+                    if (label >= sh_data.palette_size) {
+                        return std::unexpected("SOG SH label is outside the declared palette");
+                    }
+                }
+            }
+
+            return {};
+        }
+
         std::expected<SplatData, std::string> reconstruct_splat_data(
             const SogMetadata& meta,
-            const std::unordered_map<std::string, std::vector<uint8_t>>& images) {
+            const DecodedImages& images) {
+
+            if (auto result = validate_decoded_payload(meta, images); !result) {
+                return std::unexpected(result.error());
+            }
 
             const int num_splats = meta.count;
-
-            // If width/height not in metadata, calculate from count
-            int width = meta.width;
-            int height = meta.height;
-            if (width == 0 || height == 0) {
-                width = ((int)std::ceil(std::sqrt(num_splats) / 4.0)) * 4;
-                height = ((int)std::ceil(num_splats / (float)width / 4.0)) * 4;
-            }
+            const int width = meta.width;
+            const int height = meta.height;
 
             LOG_DEBUG("Reconstructing {} splats from {}x{} textures", num_splats, width, height);
 
             // Create host buffers
-            std::vector<float> host_means(num_splats * 3);
-            std::vector<float> host_scales(num_splats * 3);
-            std::vector<float> host_rotations(num_splats * 4);
-            std::vector<float> host_opacity(num_splats);
+            const size_t splat_count = static_cast<size_t>(num_splats);
+            std::vector<float> host_means(splat_count * 3);
+            std::vector<float> host_scales(splat_count * 3);
+            std::vector<float> host_rotations(splat_count * 4);
+            std::vector<float> host_opacity(splat_count);
 
             // Determine SH dimensions
             int sh0_dim1 = 1, sh0_dim2 = 3;
@@ -276,14 +620,11 @@ namespace lfs::io {
 
             if (meta.shN.has_value()) {
                 const auto& sh_meta = meta.shN.value();
-                int sh_degree = sh_meta.bands > 0 ? sh_meta.bands : (sh_meta.coeffs == 3 ? 1 : sh_meta.coeffs == 8 ? 2
-                                                                                           : sh_meta.coeffs == 15  ? 3
-                                                                                                                   : 0);
-                shN_dim1 = SH_COEFFS[sh_degree];
+                shN_dim1 = SH_COEFFS[sh_meta.bands];
             }
 
-            std::vector<float> host_sh0(num_splats * sh0_dim1 * sh0_dim2);
-            std::vector<float> host_shN(num_splats * shN_dim1 * shN_dim2);
+            std::vector<float> host_sh0(splat_count * sh0_dim1 * sh0_dim2);
+            std::vector<float> host_shN(splat_count * shN_dim1 * shN_dim2);
 
             // 1. Decode positions from means_l and means_u
             {
@@ -294,8 +635,8 @@ namespace lfs::io {
                     return std::unexpected("Missing position textures");
                 }
 
-                const auto& means_l = it_l->second;
-                const auto& means_u = it_u->second;
+                const auto& means_l = it_l->second.rgba;
+                const auto& means_u = it_u->second.rgba;
 
                 for (int i = 0; i < num_splats; ++i) {
                     int ti = identity_layout(i, width) * 4;
@@ -327,7 +668,7 @@ namespace lfs::io {
                     return std::unexpected("Missing quaternion texture");
                 }
 
-                const auto& quats = it->second;
+                const auto& quats = it->second.rgba;
 
                 for (int i = 0; i < num_splats; ++i) {
                     int ti = identity_layout(i, width) * 4;
@@ -354,7 +695,7 @@ namespace lfs::io {
                     return std::unexpected("Missing scales texture");
                 }
 
-                const auto& scales_img = it->second;
+                const auto& scales_img = it->second.rgba;
 
                 for (int i = 0; i < num_splats; ++i) {
                     int ti = identity_layout(i, width) * 4;
@@ -387,7 +728,7 @@ namespace lfs::io {
                     return std::unexpected("Missing color texture");
                 }
 
-                const auto& sh0_img = it->second;
+                const auto& sh0_img = it->second.rgba;
 
                 for (int i = 0; i < num_splats; ++i) {
                     int ti = identity_layout(i, width) * 4;
@@ -428,25 +769,20 @@ namespace lfs::io {
                 auto it_labels = images.find("shN_labels.webp");
 
                 if (it_centroids != images.end() && it_labels != images.end()) {
-                    const auto& centroids_img = it_centroids->second;
-                    const auto& labels_img = it_labels->second;
+                    const auto& centroids_img = it_centroids->second.rgba;
+                    const auto& labels_img = it_labels->second.rgba;
 
                     // Determine SH configuration
-                    int sh_degree = sh_meta.bands > 0 ? sh_meta.bands : (sh_meta.coeffs == 3 ? 1 : sh_meta.coeffs == 8 ? 2
-                                                                                               : sh_meta.coeffs == 15  ? 3
-                                                                                                                       : 0);
-
-                    int num_coeffs = SH_COEFFS[sh_degree];
-                    int palette_size = static_cast<int>(sh_meta.palette_size > 0 ? sh_meta.palette_size : centroids_img.size() / (64 * num_coeffs * 4));
+                    const int num_coeffs = SH_COEFFS[sh_meta.bands];
+                    const int palette_size = sh_meta.palette_size;
 
                     LOG_DEBUG("Decoding SH: degree={}, coeffs={}, palette_size={}",
-                              sh_degree, num_coeffs, palette_size);
+                              sh_meta.bands, num_coeffs, palette_size);
 
                     // Decode centroids from texture
-                    std::vector<std::vector<float>> centroids(palette_size);
+                    std::vector<float> centroids(
+                        static_cast<size_t>(palette_size) * num_coeffs * 3);
                     for (int i = 0; i < palette_size; ++i) {
-                        centroids[i].resize(num_coeffs * 3);
-
                         for (int j = 0; j < num_coeffs; ++j) {
                             int pixel_idx = i * num_coeffs + j;
 
@@ -463,7 +799,8 @@ namespace lfs::io {
 
                                 // Band-major ordering
                                 int coeff_idx = j + c * num_coeffs;
-                                centroids[i][coeff_idx] = sh_meta.codebook[idx];
+                                centroids[(static_cast<size_t>(i) * num_coeffs * 3) + coeff_idx] =
+                                    sh_meta.codebook[idx];
                             }
                         }
                     }
@@ -476,13 +813,12 @@ namespace lfs::io {
                         int label = labels_img[ti + 0] | (labels_img[ti + 1] << 8);
 
                         if (label < palette_size) {
-                            const auto& centroid = centroids[label];
-
                             // Unpack in band-major order
                             for (int c = 0; c < 3; ++c) {
                                 for (int j = 0; j < num_coeffs; ++j) {
                                     host_shN[i * shN_dim1 * shN_dim2 + j * shN_dim2 + c] =
-                                        centroid[j + c * num_coeffs];
+                                        centroids[(static_cast<size_t>(label) * num_coeffs * 3) +
+                                                  j + c * num_coeffs];
                                 }
                             }
                         }
@@ -530,9 +866,37 @@ namespace lfs::io {
 
             LOG_INFO("Reading SOG bundle: {}", lfs::core::path_to_utf8(path));
 
-            struct archive* a = archive_read_new();
-            archive_read_support_format_zip(a);
-            archive_read_support_filter_all(a);
+            std::error_code file_error;
+            const uintmax_t archive_size = std::filesystem::file_size(path, file_error);
+            if (file_error) {
+                return std::unexpected(std::format(
+                    "Failed to inspect SOG archive: {}", file_error.message()));
+            }
+            if (archive_size > MAX_ARCHIVE_BYTES) {
+                return std::unexpected(std::format(
+                    "SOG archive exceeds the {} byte limit", MAX_ARCHIVE_BYTES));
+            }
+
+            struct ArchiveReadDeleter {
+                void operator()(struct archive* value) const {
+                    if (value) {
+                        archive_read_free(value);
+                    }
+                }
+            };
+            std::unique_ptr<struct archive, ArchiveReadDeleter> archive_reader(
+                archive_read_new());
+            if (!archive_reader) {
+                return std::unexpected("Failed to allocate SOG archive reader");
+            }
+            struct archive* const a = archive_reader.get();
+            if (archive_read_support_format_zip(a) != ARCHIVE_OK ||
+                archive_read_support_filter_all(a) != ARCHIVE_OK) {
+                const char* detail = archive_error_string(a);
+                return std::unexpected(std::format(
+                    "Failed to configure SOG archive reader: {}",
+                    detail ? detail : "unknown error"));
+            }
 
             // Use wide-character API on Windows for proper Unicode path handling
             int result;
@@ -542,45 +906,122 @@ namespace lfs::io {
             result = archive_read_open_filename(a, path.c_str(), 10240);
 #endif
             if (result != ARCHIVE_OK) {
-                archive_read_free(a);
+                const char* detail = archive_error_string(a);
                 return std::unexpected(std::format("Failed to open archive: {}",
-                                                   archive_error_string(a)));
+                                                   detail ? detail : "unknown error"));
             }
 
             struct archive_entry* entry;
             std::string metadata_json;
-            std::unordered_map<std::string, std::vector<uint8_t>> images;
+            DecodedImages images;
+            std::unordered_set<std::string> seen_entries;
+            size_t entry_count = 0;
+            size_t total_entry_bytes = 0;
+            size_t total_decoded_bytes = 0;
+
+            const auto is_sog_entry = [](const std::string_view filename) {
+                return filename == "meta.json" || filename == "means_l.webp" ||
+                       filename == "means_u.webp" || filename == "scales.webp" ||
+                       filename == "quats.webp" || filename == "sh0.webp" ||
+                       filename == "shN_centroids.webp" || filename == "shN_labels.webp";
+            };
 
             // Read all files from archive
-            while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
-                std::string filename = archive_entry_pathname(entry);
-                size_t size = archive_entry_size(entry);
+            int header_result = ARCHIVE_OK;
+            while ((header_result = archive_read_next_header(a, &entry)) == ARCHIVE_OK) {
+                if (++entry_count > MAX_ARCHIVE_ENTRIES) {
+                    return std::unexpected(std::format(
+                        "SOG archive contains more than {} entries", MAX_ARCHIVE_ENTRIES));
+                }
+                const char* const pathname = archive_entry_pathname(entry);
+                if (!pathname) {
+                    return std::unexpected("SOG archive entry has no valid pathname");
+                }
+                const std::string filename(pathname);
+
+                if (!archive_entry_size_is_set(entry)) {
+                    return std::unexpected(std::format(
+                        "SOG archive entry '{}' has no declared size", filename));
+                }
+                const la_int64_t signed_size = archive_entry_size(entry);
+                if (signed_size < 0) {
+                    return std::unexpected(std::format(
+                        "SOG archive entry '{}' has a negative size", filename));
+                }
+                const size_t size = static_cast<size_t>(signed_size);
+                if (size > MAX_ENCODED_IMAGE_BYTES) {
+                    return std::unexpected(std::format(
+                        "SOG archive entry '{}' exceeds the {} byte limit",
+                        filename,
+                        MAX_ENCODED_IMAGE_BYTES));
+                }
+                if (total_entry_bytes > MAX_ARCHIVE_BYTES - size) {
+                    return std::unexpected(std::format(
+                        "SOG archive entries exceed the {} byte total limit",
+                        MAX_ARCHIVE_BYTES));
+                }
+                total_entry_bytes += size;
+
+                if (!is_sog_entry(filename)) {
+                    if (archive_read_data_skip(a) != ARCHIVE_OK) {
+                        const char* detail = archive_error_string(a);
+                        return std::unexpected(std::format(
+                            "Failed to skip SOG archive entry '{}': {}",
+                            filename,
+                            detail ? detail : "unknown error"));
+                    }
+                    continue;
+                }
+                if (!seen_entries.emplace(filename).second) {
+                    return std::unexpected(std::format(
+                        "SOG archive contains duplicate entry '{}'", filename));
+                }
+                if (filename == "meta.json" && size > MAX_METADATA_BYTES) {
+                    return std::unexpected(std::format(
+                        "SOG metadata exceeds the {} byte limit", MAX_METADATA_BYTES));
+                }
 
                 LOG_DEBUG("Reading {} ({} bytes)", filename, size);
 
                 std::vector<uint8_t> data(size);
-                ssize_t r = archive_read_data(a, data.data(), size);
-
-                if (r != static_cast<ssize_t>(size)) {
-                    archive_read_free(a);
-                    return std::unexpected(std::format("Failed to read {} from archive", filename));
+                size_t offset = 0;
+                while (offset < size) {
+                    const ssize_t bytes_read = archive_read_data(
+                        a, data.data() + offset, size - offset);
+                    if (bytes_read <= 0) {
+                        const char* detail = archive_error_string(a);
+                        return std::unexpected(std::format(
+                            "Failed to read '{}' from SOG archive: {}",
+                            filename,
+                            detail ? detail : "truncated entry"));
+                    }
+                    offset += static_cast<size_t>(bytes_read);
                 }
 
                 if (filename == "meta.json") {
                     metadata_json = std::string(data.begin(), data.end());
-                } else if (filename.ends_with(".webp")) {
-                    // Decode WebP
-                    int width, height;
-                    auto decoded = decode_webp(data.data(), data.size(), width, height);
+                } else {
+                    auto decoded = decode_webp(data.data(), data.size());
                     if (!decoded) {
-                        archive_read_free(a);
-                        return std::unexpected(decoded.error());
+                        return std::unexpected(std::format(
+                            "Failed to decode '{}': {}", filename, decoded.error()));
                     }
-                    images[filename] = std::move(decoded.value());
+                    if (total_decoded_bytes >
+                        MAX_TOTAL_DECODED_BYTES - decoded->rgba.size()) {
+                        return std::unexpected(std::format(
+                            "Decoded SOG textures exceed the {} byte total limit",
+                            MAX_TOTAL_DECODED_BYTES));
+                    }
+                    total_decoded_bytes += decoded->rgba.size();
+                    images.emplace(filename, std::move(*decoded));
                 }
             }
-
-            archive_read_free(a);
+            if (header_result != ARCHIVE_EOF) {
+                const char* detail = archive_error_string(a);
+                return std::unexpected(std::format(
+                    "Failed while reading SOG archive headers: {}",
+                    detail ? detail : "unknown error"));
+            }
 
             if (metadata_json.empty()) {
                 return std::unexpected("Missing meta.json in archive");
@@ -590,6 +1031,9 @@ namespace lfs::io {
             auto meta_result = parse_metadata(metadata_json);
             if (!meta_result) {
                 return std::unexpected(meta_result.error());
+            }
+            if (auto validation = validate_metadata(*meta_result); !validation) {
+                return std::unexpected(validation.error());
             }
 
             // Reconstruct SplatData
@@ -607,88 +1051,119 @@ namespace lfs::io {
                 return std::unexpected("Missing meta.json");
             }
 
-            std::ifstream meta_file;
-            if (!lfs::core::open_file_for_read(meta_path, meta_file)) {
-                return std::unexpected("Failed to open meta.json");
+            std::error_code file_error;
+            const uintmax_t metadata_size = std::filesystem::file_size(meta_path, file_error);
+            if (file_error) {
+                return std::unexpected(std::format(
+                    "Failed to inspect meta.json: {}", file_error.message()));
+            }
+            if (metadata_size == 0 || metadata_size > MAX_METADATA_BYTES) {
+                return std::unexpected(std::format(
+                    "SOG metadata must contain 1..{} bytes", MAX_METADATA_BYTES));
             }
 
-            std::stringstream buffer;
-            buffer << meta_file.rdbuf();
+            std::ifstream meta_file;
+            if (!lfs::core::open_file_for_read(meta_path, std::ios::binary, meta_file)) {
+                return std::unexpected("Failed to open meta.json");
+            }
+            std::string metadata_json(static_cast<size_t>(metadata_size), '\0');
+            if (!meta_file.read(metadata_json.data(),
+                                static_cast<std::streamsize>(metadata_json.size()))) {
+                return std::unexpected("Failed to read complete meta.json");
+            }
 
-            auto meta_result = parse_metadata(buffer.str());
+            auto meta_result = parse_metadata(metadata_json);
             if (!meta_result) {
                 return std::unexpected(meta_result.error());
             }
+            if (auto validation = validate_metadata(*meta_result); !validation) {
+                return std::unexpected(validation.error());
+            }
 
             auto& meta = meta_result.value();
-            std::unordered_map<std::string, std::vector<uint8_t>> images;
+            DecodedImages images;
+            size_t total_decoded_bytes = 0;
 
             // Helper to read and decode WebP files
-            auto read_webp = [&](const std::string& filename) -> bool {
+            auto read_webp = [&](const std::string& filename)
+                -> std::expected<void, std::string> {
+                if (images.contains(filename)) {
+                    return std::unexpected(std::format(
+                        "SOG metadata references duplicate texture '{}'", filename));
+                }
                 auto file_path = path / filename;
 
-                // Also check with .webp extension if not present
-                if (!std::filesystem::exists(file_path) && !filename.ends_with(".webp")) {
-                    file_path = path / (filename + ".webp");
-                }
-
                 if (!std::filesystem::exists(file_path)) {
-                    LOG_ERROR("Missing file: {}", lfs::core::path_to_utf8(file_path));
-                    return false;
+                    return std::unexpected(std::format(
+                        "Missing SOG texture '{}'", lfs::core::path_to_utf8(file_path)));
                 }
 
-                // Read file
+                std::error_code image_error;
+                const uintmax_t image_size = std::filesystem::file_size(file_path, image_error);
+                if (image_error) {
+                    return std::unexpected(std::format(
+                        "Failed to inspect '{}': {}", filename, image_error.message()));
+                }
+                if (image_size == 0 || image_size > MAX_ENCODED_IMAGE_BYTES) {
+                    return std::unexpected(std::format(
+                        "Encoded SOG texture '{}' must contain 1..{} bytes",
+                        filename,
+                        MAX_ENCODED_IMAGE_BYTES));
+                }
+
                 std::ifstream file;
                 if (!lfs::core::open_file_for_read(file_path, std::ios::binary, file)) {
-                    LOG_ERROR("Failed to open: {}", lfs::core::path_to_utf8(file_path));
-                    return false;
+                    return std::unexpected(std::format(
+                        "Failed to open SOG texture '{}'", filename));
                 }
 
-                file.seekg(0, std::ios::end);
-                size_t size = file.tellg();
-                file.seekg(0, std::ios::beg);
-
-                std::vector<uint8_t> data(size);
-                file.read(reinterpret_cast<char*>(data.data()), size);
+                std::vector<uint8_t> data(static_cast<size_t>(image_size));
+                if (!file.read(reinterpret_cast<char*>(data.data()),
+                               static_cast<std::streamsize>(data.size()))) {
+                    return std::unexpected(std::format(
+                        "Failed to read complete SOG texture '{}'", filename));
+                }
 
                 // Decode WebP
-                int width, height;
-                auto decoded = decode_webp(data.data(), data.size(), width, height);
+                auto decoded = decode_webp(data.data(), data.size());
                 if (!decoded) {
-                    LOG_ERROR("Failed to decode {}: {}", filename, decoded.error());
-                    return false;
+                    return std::unexpected(std::format(
+                        "Failed to decode '{}': {}", filename, decoded.error()));
                 }
-
-                images[filename] = std::move(decoded.value());
-                return true;
+                if (total_decoded_bytes >
+                    MAX_TOTAL_DECODED_BYTES - decoded->rgba.size()) {
+                    return std::unexpected(std::format(
+                        "Decoded SOG textures exceed the {} byte total limit",
+                        MAX_TOTAL_DECODED_BYTES));
+                }
+                total_decoded_bytes += decoded->rgba.size();
+                images.emplace(filename, std::move(*decoded));
+                return {};
             };
 
             // Read all required files
             for (const auto& file : meta.means_files) {
-                if (!read_webp(file))
-                    return std::unexpected("Failed to read " + file);
+                if (auto result = read_webp(file); !result)
+                    return std::unexpected(result.error());
             }
             for (const auto& file : meta.scales_files) {
-                if (!read_webp(file))
-                    return std::unexpected("Failed to read " + file);
+                if (auto result = read_webp(file); !result)
+                    return std::unexpected(result.error());
             }
             for (const auto& file : meta.quats_files) {
-                if (!read_webp(file))
-                    return std::unexpected("Failed to read " + file);
+                if (auto result = read_webp(file); !result)
+                    return std::unexpected(result.error());
             }
             for (const auto& file : meta.sh0_files) {
-                if (!read_webp(file))
-                    return std::unexpected("Failed to read " + file);
+                if (auto result = read_webp(file); !result)
+                    return std::unexpected(result.error());
             }
 
             // Read optional SH files
             if (meta.shN.has_value()) {
                 for (const auto& file : meta.shN->files) {
-                    if (!read_webp(file)) {
-                        LOG_WARN("Failed to read SH file {}, continuing without SH", file);
-                        meta.shN.reset();
-                        break;
-                    }
+                    if (auto result = read_webp(file); !result)
+                        return std::unexpected(result.error());
                 }
             }
 
@@ -701,30 +1176,31 @@ namespace lfs::io {
     std::expected<SplatData, std::string> load_sog(const std::filesystem::path& path) {
         LOG_TIMER("SOG File Loading");
 
-        if (!std::filesystem::exists(path)) {
-            std::string error_msg = std::format("SOG file/directory does not exist: {}", lfs::core::path_to_utf8(path));
-            LOG_ERROR("{}", error_msg);
-            return std::unexpected(error_msg);
-        }
+        try {
+            if (!std::filesystem::exists(path)) {
+                std::string error_msg = std::format("SOG file/directory does not exist: {}", lfs::core::path_to_utf8(path));
+                LOG_ERROR("{}", error_msg);
+                return std::unexpected(error_msg);
+            }
 
-        std::expected<SplatData, std::string> result;
-
-        // Check if it's a .sog bundle
-        if (path.extension() == ".sog") {
-            result = read_sog_bundle(path);
-        }
-        // Check if it's a meta.json file
-        else if (path.filename() == "meta.json") {
-            result = read_sog_directory(path.parent_path());
-        }
-        // Check if it's a directory
-        else if (std::filesystem::is_directory(path)) {
-            result = read_sog_directory(path);
-        } else {
+            // Check if it's a .sog bundle
+            if (path.extension() == ".sog") {
+                return read_sog_bundle(path);
+            }
+            // Check if it's a meta.json file
+            if (path.filename() == "meta.json") {
+                return read_sog_directory(path.parent_path());
+            }
+            // Check if it's a directory
+            if (std::filesystem::is_directory(path)) {
+                return read_sog_directory(path);
+            }
             return std::unexpected(std::format("Unknown SOG format: {}", lfs::core::path_to_utf8(path)));
+        } catch (const std::bad_alloc&) {
+            return std::unexpected("SOG input exceeds available memory");
+        } catch (const std::exception& error) {
+            return std::unexpected(std::format("Failed to load SOG: {}", error.what()));
         }
-
-        return result;
     }
 
     // ============================================================================

@@ -30,12 +30,15 @@ namespace lfs::training::kernels {
         const int rgb_idx = idx * 3;
 
         const RGB color = load_rgb_cs(&rgb[rgb_idx]);
-        const float sr = color.r, sg = color.g, sb = color.b;
+        const float sr = isfinite(color.r) ? color.r : 0.5f;
+        const float sg = isfinite(color.g) ? color.g : 0.5f;
+        const float sb = isfinite(color.b) ? color.b : 0.5f;
         float dr = 0.0f, dg = 0.0f, db = 0.0f;
 
-        const float x = static_cast<float>(wi) / (w - 1) * (W - 1);
-        const float y = static_cast<float>(hi) / (h - 1) * (H - 1);
-        const float z = (kC2G_r * sr + kC2G_g * sg + kC2G_b * sb) * (L - 1);
+        const float x = w > 1 ? static_cast<float>(wi) / (w - 1) * (W - 1) : 0.0f;
+        const float y = h > 1 ? static_cast<float>(hi) / (h - 1) * (H - 1) : 0.0f;
+        const float guidance = fminf(1.0f, fmaxf(0.0f, kC2G_r * sr + kC2G_g * sg + kC2G_b * sb));
+        const float z = guidance * (L - 1);
 
         const int x0 = floorf(x), y0 = floorf(y);
         int z0 = floorf(z);
@@ -107,14 +110,15 @@ namespace lfs::training::kernels {
         const int hi = idx / w;
         const int wi = idx % w;
 
-        const float sr = rgb[0 * hw + idx];
-        const float sg = rgb[1 * hw + idx];
-        const float sb = rgb[2 * hw + idx];
+        const float sr = isfinite(rgb[0 * hw + idx]) ? rgb[0 * hw + idx] : 0.5f;
+        const float sg = isfinite(rgb[1 * hw + idx]) ? rgb[1 * hw + idx] : 0.5f;
+        const float sb = isfinite(rgb[2 * hw + idx]) ? rgb[2 * hw + idx] : 0.5f;
         float dr = 0.0f, dg = 0.0f, db = 0.0f;
 
-        const float x = static_cast<float>(wi) / (w - 1) * (W - 1);
-        const float y = static_cast<float>(hi) / (h - 1) * (H - 1);
-        const float z = (kC2G_r * sr + kC2G_g * sg + kC2G_b * sb) * (L - 1);
+        const float x = w > 1 ? static_cast<float>(wi) / (w - 1) * (W - 1) : 0.0f;
+        const float y = h > 1 ? static_cast<float>(hi) / (h - 1) * (H - 1) : 0.0f;
+        const float guidance = fminf(1.0f, fmaxf(0.0f, kC2G_r * sr + kC2G_g * sg + kC2G_b * sb));
+        const float z = guidance * (L - 1);
 
         const int x0 = floorf(x), y0 = floorf(y);
         int z0 = floorf(z);

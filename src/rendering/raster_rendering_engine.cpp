@@ -47,8 +47,7 @@ namespace lfs::rendering {
 
         struct EnvironmentImageCache {
             std::mutex mutex;
-            EnvironmentImage image;
-            std::string last_error;
+            std::shared_ptr<const EnvironmentImage> image;
         };
 
         [[nodiscard]] EnvironmentImageCache& environmentImageCache() {
@@ -79,79 +78,85 @@ namespace lfs::rendering {
 
     } // namespace
 
-    std::expected<EnvironmentImage, std::string> loadEnvironmentImage(const std::filesystem::path& environment_path) {
+    std::expected<std::shared_ptr<const EnvironmentImage>, std::string>
+    loadEnvironmentImageShared(const std::filesystem::path& environment_path) {
         const auto resolved_path = resolveEnvironmentPath(environment_path);
         auto& cache = environmentImageCache();
         std::lock_guard lock(cache.mutex);
-        if (cache.image.valid() && cache.image.path == resolved_path) {
+        if (cache.image && cache.image->valid() && cache.image->path == resolved_path) {
             return cache.image;
         }
 
-        cache.image = {};
-        cache.last_error.clear();
+        cache.image.reset();
         if (resolved_path.empty()) {
-            cache.last_error = "Environment map path is empty";
-            return std::unexpected(cache.last_error);
+            return std::unexpected("Environment map path is empty");
         }
         if (!std::filesystem::exists(resolved_path)) {
-            cache.last_error = std::format("Environment map not found: {}", resolved_path.string());
-            return std::unexpected(cache.last_error);
+            return std::unexpected(std::format("Environment map not found: {}", resolved_path.string()));
         }
 
         const std::string path_utf8 = lfs::core::path_to_utf8(resolved_path);
         std::unique_ptr<OIIO::ImageInput> input(OIIO::ImageInput::open(path_utf8));
         if (!input) {
-            cache.last_error = std::format("Failed to open environment map {}: {}", path_utf8, OIIO::geterror());
-            return std::unexpected(cache.last_error);
+            return std::unexpected(std::format("Failed to open environment map {}: {}",
+                                               path_utf8,
+                                               OIIO::geterror()));
         }
 
         const auto& spec = input->spec();
         if (spec.width <= 0 || spec.height <= 0 || spec.nchannels <= 0) {
             input->close();
-            cache.last_error = std::format("Invalid environment map dimensions for {}", path_utf8);
-            return std::unexpected(cache.last_error);
+            return std::unexpected(std::format("Invalid environment map dimensions for {}", path_utf8));
         }
 
+        const int read_channels = spec.nchannels >= 3 ? 3 : 1;
         std::vector<float> source_pixels(
             static_cast<size_t>(spec.width) * static_cast<size_t>(spec.height) *
-            static_cast<size_t>(spec.nchannels));
-        if (!input->read_image(0, 0, 0, spec.nchannels, OIIO::TypeDesc::FLOAT, source_pixels.data())) {
-            cache.last_error = std::format("Failed to read environment map {}: {}", path_utf8, input->geterror());
+            static_cast<size_t>(read_channels));
+        if (!input->read_image(0, 0, 0, read_channels, OIIO::TypeDesc::FLOAT, source_pixels.data())) {
+            const std::string error =
+                std::format("Failed to read environment map {}: {}", path_utf8, input->geterror());
             input->close();
-            return std::unexpected(cache.last_error);
+            return std::unexpected(error);
         }
         input->close();
 
-        EnvironmentImage image{
-            .path = resolved_path,
-            .width = spec.width,
-            .height = spec.height,
-            .pixels = std::vector<float>(
-                static_cast<size_t>(spec.width) * static_cast<size_t>(spec.height) * 3u),
-        };
-        for (int y = 0; y < spec.height; ++y) {
-            for (int x = 0; x < spec.width; ++x) {
-                const size_t src_index =
-                    (static_cast<size_t>(y) * static_cast<size_t>(spec.width) + static_cast<size_t>(x)) *
-                    static_cast<size_t>(spec.nchannels);
-                const size_t dst_index =
-                    (static_cast<size_t>(y) * static_cast<size_t>(spec.width) + static_cast<size_t>(x)) * 3u;
-                if (spec.nchannels >= 3) {
-                    image.pixels[dst_index + 0] = source_pixels[src_index + 0];
-                    image.pixels[dst_index + 1] = source_pixels[src_index + 1];
-                    image.pixels[dst_index + 2] = source_pixels[src_index + 2];
-                } else {
-                    const float value = source_pixels[src_index];
-                    image.pixels[dst_index + 0] = value;
-                    image.pixels[dst_index + 1] = value;
-                    image.pixels[dst_index + 2] = value;
-                }
+        auto image = std::make_shared<EnvironmentImage>();
+        image->path = resolved_path;
+        image->width = spec.width;
+        image->height = spec.height;
+        if (read_channels == 3) {
+            image->pixels = std::move(source_pixels);
+        } else {
+            const size_t pixel_count =
+                static_cast<size_t>(spec.width) * static_cast<size_t>(spec.height);
+            image->pixels.resize(pixel_count * 3u);
+            for (size_t pixel = 0; pixel < pixel_count; ++pixel) {
+                const float value = source_pixels[pixel];
+                image->pixels[pixel * 3u + 0u] = value;
+                image->pixels[pixel * 3u + 1u] = value;
+                image->pixels[pixel * 3u + 2u] = value;
             }
         }
 
         cache.image = image;
         LOG_INFO("Loaded tensor environment map {}", resolved_path.string());
         return image;
+    }
+
+    std::expected<EnvironmentImage, std::string> loadEnvironmentImage(
+        const std::filesystem::path& environment_path) {
+        auto image = loadEnvironmentImageShared(environment_path);
+        if (!image) {
+            return std::unexpected(image.error());
+        }
+        return **image;
+    }
+
+    void releaseEnvironmentImageCache() {
+        auto& cache = environmentImageCache();
+        std::lock_guard lock(cache.mutex);
+        cache.image.reset();
     }
 
     namespace {
@@ -225,7 +230,7 @@ namespace lfs::rendering {
                 return image;
             }
 
-            auto environment = loadEnvironmentImage(request.environment.map_path);
+            auto environment = loadEnvironmentImageShared(request.environment.map_path);
             if (!environment) {
                 return std::unexpected(environment.error());
             }
@@ -239,7 +244,7 @@ namespace lfs::rendering {
                     const auto rotated = envmath::rotateAroundY({world_dir.x, world_dir.y, world_dir.z}, rotation);
                     const auto uv = envmath::equirectUvForDirection(envmath::normalized(rotated));
 
-                    const glm::vec3 hdr = sampleEnvironmentBilinear(*environment, uv.u, uv.v);
+                    const glm::vec3 hdr = sampleEnvironmentBilinear(**environment, uv.u, uv.v);
                     const auto color = envmath::shadeEnvironmentRadiance({hdr.x, hdr.y, hdr.z}, exposure);
 
                     const size_t pixel = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);

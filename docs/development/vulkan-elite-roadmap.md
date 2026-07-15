@@ -112,7 +112,7 @@ Three orthogonal wins, all enabled by the timeline-semaphore plumbing that's alr
 - Replace `int num_indices = readElement<int32_t>(...)` + scalar dispatch with `vkCmdDispatchIndirect(cmd, count_buffer, offset)`. The cumsum tail already lives in `index_buffer_offset.deviceBuffer` — point the indirect dispatch at the last 12 bytes (groupCountX/Y/Z).
 - Where the count drives multiple subsequent dispatches with different group counts, add a tiny "indirect setup" compute shader that writes a small `VkDispatchIndirectCommand` array from the cumsum tail.
 - Rewire `executeGenerateKeys`, `executeComputeTileRanges`, `executeRasterizeForward` to consume it.
-- Drop `buffers.num_indices` CPU mirror entirely (or keep as a debug-only readback gated on `LOG_LEVEL=debug`).
+- Drop `buffers.num_indices` CPU mirror entirely (or keep as a debug-only readback gated on `LFS_LOG_LEVEL=debug`).
 - **Accept**: Frame time drop measurable (~0.5–2 ms on RTX 3070). NSight capture shows no `vkQueueWaitIdle`-style stall between dispatches.
 
 ### 2.2 Async compute queue for vksplat

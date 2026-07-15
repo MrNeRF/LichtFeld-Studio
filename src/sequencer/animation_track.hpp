@@ -45,6 +45,9 @@ namespace lfs::sequencer {
         [[nodiscard]] float endTime() const;
 
     private:
+        friend class AnimationClip;
+
+        void replaceKeyframes(std::vector<GenericKeyframe> keyframes);
         void sortKeyframes();
 
         TrackId id_;

@@ -6,6 +6,7 @@
 
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "window/vulkan_result.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,7 @@
 #include <format>
 #include <glm/gtc/type_ptr.hpp>
 #include <mutex>
+#include <source_location>
 #include <utility>
 #include <vk_mem_alloc.h>
 
@@ -101,6 +103,18 @@ namespace lfs::vis {
             const VkResult r = vmaCreateBuffer(allocator, &bi, &ai,
                                                &out.buffer, &out.allocation, &allocation_info);
             if (r != VK_SUCCESS) {
+                LOG_ERROR("Vulkan: {}",
+                          formatVkCheckFailure(
+                              "vmaCreateBuffer(allocator, &bi, &ai, &out.buffer, &out.allocation, &allocation_info)",
+                              r,
+                              std::format("Point-cloud device-buffer allocation failed (allocator={:#x}, requested_size={}, allocated_size={}, usage={:#x}, label='{}')",
+                                          reinterpret_cast<std::uintptr_t>(allocator),
+                                          size,
+                                          bi.size,
+                                          static_cast<std::uint32_t>(bi.usage),
+                                          vram_label),
+                              __FILE__,
+                              __LINE__));
                 out = {};
                 return false;
             }
@@ -144,6 +158,19 @@ namespace lfs::vis {
                                VkDeviceSize bytes,
                                ManagedBuffer& dst,
                                ManagedBuffer& staging_scratch) {
+            if (allocator == VK_NULL_HANDLE || cb == VK_NULL_HANDLE || src == nullptr ||
+                bytes == 0 || dst.buffer == VK_NULL_HANDLE || bytes > dst.size) {
+                return logVkFailure(std::format(
+                    "Point-cloud staging upload requires live handles and a copy range within the destination allocation (allocator={:#x}, command_buffer={:#x}, source={:#x}, copy_size={}, destination_buffer={:#x}, destination_size={}) ({}:{})",
+                    reinterpret_cast<std::uintptr_t>(allocator),
+                    vkHandleValue(cb),
+                    reinterpret_cast<std::uintptr_t>(src),
+                    bytes,
+                    vkHandleValue(dst.buffer),
+                    dst.size,
+                    __FILE__,
+                    __LINE__));
+            }
             destroyBuffer(allocator, staging_scratch);
             VkBufferCreateInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -155,33 +182,66 @@ namespace lfs::vis {
             ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
             VmaAllocationInfo info{};
-            if (vmaCreateBuffer(allocator, &bi, &ai, &staging_scratch.buffer,
-                                &staging_scratch.allocation, &info) != VK_SUCCESS) {
+            const VkResult create_result =
+                vmaCreateBuffer(allocator,
+                                &bi,
+                                &ai,
+                                &staging_scratch.buffer,
+                                &staging_scratch.allocation,
+                                &info);
+            if (create_result != VK_SUCCESS) {
+                LOG_ERROR("Vulkan: {}",
+                          formatVkCheckFailure(
+                              "vmaCreateBuffer(allocator, &bi, &ai, &staging_scratch.buffer, &staging_scratch.allocation, &info)",
+                              create_result,
+                              std::format("Point-cloud staging-buffer allocation failed (allocator={:#x}, requested_size={}, destination_buffer={:#x}, destination_size={})",
+                                          reinterpret_cast<std::uintptr_t>(allocator),
+                                          bytes,
+                                          vkHandleValue(dst.buffer),
+                                          dst.size),
+                              __FILE__,
+                              __LINE__));
                 staging_scratch = {};
                 return false;
             }
             staging_scratch.size = bytes;
             staging_scratch.usage = bi.usage;
+            if (info.pMappedData == nullptr) {
+                LOG_ERROR("Point-cloud staging allocation is not mapped after requesting mapped memory (allocator={:#x}, allocation={:#x}, buffer={:#x}, requested_size={}, mapped={:#x}) ({}:{})",
+                          reinterpret_cast<std::uintptr_t>(allocator),
+                          reinterpret_cast<std::uintptr_t>(staging_scratch.allocation),
+                          vkHandleValue(staging_scratch.buffer),
+                          bytes,
+                          reinterpret_cast<std::uintptr_t>(info.pMappedData),
+                          __FILE__,
+                          __LINE__);
+                destroyBuffer(allocator, staging_scratch);
+                return false;
+            }
             std::memcpy(info.pMappedData, src, bytes);
-            vmaFlushAllocation(allocator, staging_scratch.allocation, 0, bytes);
+            const VkResult flush_result =
+                vmaFlushAllocation(allocator, staging_scratch.allocation, 0, bytes);
+            if (flush_result != VK_SUCCESS) {
+                LOG_ERROR("Vulkan: {}",
+                          formatVkCheckFailure(
+                              "vmaFlushAllocation(allocator, staging_scratch.allocation, 0, bytes)",
+                              flush_result,
+                              std::format("Point-cloud staging flush failed (allocator={:#x}, allocation={:#x}, buffer={:#x}, offset=0, flush_size={}, capacity={})",
+                                          reinterpret_cast<std::uintptr_t>(allocator),
+                                          reinterpret_cast<std::uintptr_t>(staging_scratch.allocation),
+                                          vkHandleValue(staging_scratch.buffer),
+                                          bytes,
+                                          staging_scratch.size),
+                              __FILE__,
+                              __LINE__));
+                destroyBuffer(allocator, staging_scratch);
+                return false;
+            }
 
             VkBufferCopy region{};
             region.size = bytes;
             vkCmdCopyBuffer(cb, staging_scratch.buffer, dst.buffer, 1, &region);
             return true;
-        }
-
-        VkShaderModule createShaderModule(VkDevice device, const std::uint32_t* code,
-                                          std::size_t bytes) {
-            VkShaderModuleCreateInfo info{};
-            info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            info.codeSize = bytes;
-            info.pCode = code;
-            VkShaderModule m = VK_NULL_HANDLE;
-            if (vkCreateShaderModule(device, &info, nullptr, &m) != VK_SUCCESS) {
-                return VK_NULL_HANDLE;
-            }
-            return m;
         }
 
         void writePushConstants(PushConstants& pc, const PointCloudVulkanRenderer::RenderRequest& req,
@@ -375,8 +435,59 @@ namespace lfs::vis {
 
         ~Impl() { destroy(); }
 
-        std::string vkError(const char* what, VkResult r) {
-            return std::format("{} failed (VkResult={})", what, static_cast<int>(r));
+        [[nodiscard]] std::string vkError(
+            const std::string_view what,
+            const VkResult r,
+            const std::string_view details = {},
+            const std::source_location location = std::source_location::current()) const {
+            const std::string observed = details.empty()
+                                             ? std::format(
+                                                   "Point-cloud Vulkan operation failed (device={:#x}, queue={:#x}, command_pool={:#x}, command_buffer={:#x}, fence={:#x})",
+                                                   vkHandleValue(device),
+                                                   context != nullptr ? vkHandleValue(context->graphicsQueue()) : 0,
+                                                   vkHandleValue(command_pool),
+                                                   vkHandleValue(command_buffer),
+                                                   vkHandleValue(fence))
+                                             : std::string(details);
+            return formatVkCheckFailure(
+                what, r, observed, location.file_name(), static_cast<int>(location.line()));
+        }
+
+        bool replaceFenceSignaled(const char* const failed_operation,
+                                  const VkResult failed_result) {
+            LOG_ERROR("Vulkan: {}",
+                      vkError(failed_operation,
+                              failed_result,
+                              std::format("Point-cloud command lifecycle failed (device={:#x}, queue={:#x}, command_pool={:#x}, command_buffer={:#x}, fence={:#x})",
+                                          vkHandleValue(device),
+                                          context != nullptr ? vkHandleValue(context->graphicsQueue()) : 0,
+                                          vkHandleValue(command_pool),
+                                          vkHandleValue(command_buffer),
+                                          vkHandleValue(fence))));
+            VkFenceCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            VkFence replacement = VK_NULL_HANDLE;
+            const VkResult replacement_result = vkCreateFence(device, &info, nullptr, &replacement);
+            if (replacement_result != VK_SUCCESS) {
+                LOG_ERROR("Vulkan: {}",
+                          vkError("vkCreateFence(device, &info, nullptr, &replacement)",
+                                  replacement_result,
+                                  std::format("Point-cloud renderer failed to replace a poisoned fence (device={:#x}, old_fence={:#x}, command_buffer={:#x}, flags={:#x})",
+                                              vkHandleValue(device),
+                                              vkHandleValue(fence),
+                                              vkHandleValue(command_buffer),
+                                              static_cast<std::uint32_t>(info.flags))));
+                return false;
+            }
+            if (fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, fence, nullptr);
+            }
+            fence = replacement;
+            context->setDebugObjectName(VK_OBJECT_TYPE_FENCE,
+                                        fence,
+                                        "point_cloud.render.fence");
+            return true;
         }
 
         // Allocate a fresh device-local buffer and stage `bytes` from `src` into
@@ -394,13 +505,39 @@ namespace lfs::vis {
                                     dst,
                                     "vulkan.point_cloud.buffer",
                                     what)) {
-                return std::unexpected<std::string>(std::format("Failed to allocate {} buffer", what));
+                return std::unexpected<std::string>(std::format(
+                    "Point-cloud input buffer allocation failed (label='{}', requested_size={}, usage={:#x}, allocator={:#x}) ({}:{})",
+                    what,
+                    bytes,
+                    static_cast<std::uint32_t>(usage),
+                    reinterpret_cast<std::uintptr_t>(allocator),
+                    __FILE__,
+                    __LINE__));
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                                         dst.buffer,
+                                         "point_cloud.input.{}[{}]",
+                                         what,
+                                         dst.size);
             ManagedBuffer staging{};
             if (!stageBufferUpload(allocator, cb, src, bytes, dst, staging)) {
                 destroyBuffer(allocator, staging);
-                return std::unexpected<std::string>(std::format("Failed to upload {}", what));
+                return std::unexpected<std::string>(std::format(
+                    "Point-cloud input staging upload failed (label='{}', command_buffer={:#x}, source={:#x}, copy_size={}, destination_buffer={:#x}, destination_size={}) ({}:{})",
+                    what,
+                    vkHandleValue(cb),
+                    reinterpret_cast<std::uintptr_t>(src),
+                    bytes,
+                    vkHandleValue(dst.buffer),
+                    dst.size,
+                    __FILE__,
+                    __LINE__));
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                                         staging.buffer,
+                                         "point_cloud.input.{}.upload.staging[{}]",
+                                         what,
+                                         staging.size);
             pending_stagings.push_back(std::move(staging));
             return {};
         }
@@ -413,7 +550,12 @@ namespace lfs::vis {
             device = ctx.device();
             allocator = ctx.allocator();
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE) {
-                return std::unexpected<std::string>("Vulkan context not initialized");
+                return std::unexpected<std::string>(std::format(
+                    "Point-cloud renderer requires a live Vulkan device and allocator (device={:#x}, allocator={:#x}) ({}:{})",
+                    vkHandleValue(device),
+                    reinterpret_cast<std::uintptr_t>(allocator),
+                    __FILE__,
+                    __LINE__));
             }
 
             if (auto r = createPipeline(); !r) {
@@ -431,18 +573,25 @@ namespace lfs::vis {
                                     placeholder,
                                     "vulkan.point_cloud.buffer",
                                     "placeholder")) {
-                return std::unexpected<std::string>("Failed to create placeholder buffer");
+                return std::unexpected<std::string>(std::format(
+                    "Point-cloud placeholder buffer allocation failed (allocator={:#x}, requested_size={}, usage={:#x}) ({}:{})",
+                    reinterpret_cast<std::uintptr_t>(allocator),
+                    kPlaceholderSize,
+                    static_cast<std::uint32_t>(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT),
+                    __FILE__,
+                    __LINE__));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
+                                        placeholder.buffer,
+                                        "point_cloud.input.placeholder");
             initialized = true;
             return {};
         }
 
         std::expected<void, std::string> createPipeline() {
             using namespace viewport_shaders;
-            VkShaderModule vert = createShaderModule(device, kPointCloudVertSpv,
-                                                     sizeof(kPointCloudVertSpv));
-            VkShaderModule frag = createShaderModule(device, kPointCloudFragSpv,
-                                                     sizeof(kPointCloudFragSpv));
+            VkShaderModule vert = createShaderModule(device, kPointCloudVertSpv, "Point-cloud");
+            VkShaderModule frag = createShaderModule(device, kPointCloudFragSpv, "Point-cloud");
             if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
                 if (vert)
                     vkDestroyShaderModule(device, vert, nullptr);
@@ -466,8 +615,17 @@ namespace lfs::vis {
             if (r != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return std::unexpected<std::string>(vkError("vkCreateDescriptorSetLayout", r));
+                return std::unexpected<std::string>(vkError(
+                    "vkCreateDescriptorSetLayout(device, &dl, nullptr, &descriptor_set_layout)",
+                    r,
+                    std::format("Point-cloud descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                                vkHandleValue(device),
+                                dl.bindingCount,
+                                static_cast<int>(bindings[0].descriptorType))));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+                                        descriptor_set_layout,
+                                        "point_cloud.descriptor.layout");
 
             VkPushConstantRange push{};
             push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -483,8 +641,18 @@ namespace lfs::vis {
             if (r != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return std::unexpected<std::string>(vkError("vkCreatePipelineLayout", r));
+                return std::unexpected<std::string>(vkError(
+                    "vkCreatePipelineLayout(device, &pli, nullptr, &pipeline_layout)",
+                    r,
+                    std::format("Point-cloud pipeline-layout creation failed (device={:#x}, descriptor_layout={:#x}, set_layout_count={}, push_constant_bytes={})",
+                                vkHandleValue(device),
+                                vkHandleValue(descriptor_set_layout),
+                                pli.setLayoutCount,
+                                push.size)));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
+                                        pipeline_layout,
+                                        "point_cloud.pipeline.layout");
 
             std::array<VkPipelineShaderStageCreateInfo, 2> stages{};
             stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -587,8 +755,19 @@ namespace lfs::vis {
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkCreateGraphicsPipelines", r));
+                return std::unexpected<std::string>(vkError(
+                    "vkCreateGraphicsPipelines(device, context->pipelineCache(), 1, &pi, nullptr, &pipeline)",
+                    r,
+                    std::format("Point-cloud graphics-pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, color_format={}, depth_format={})",
+                                vkHandleValue(device),
+                                vkHandleValue(context->pipelineCache()),
+                                vkHandleValue(pipeline_layout),
+                                static_cast<int>(color_format),
+                                static_cast<int>(kDepthFormat))));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
+                                        pipeline,
+                                        "point_cloud.pipeline");
             return {};
         }
 
@@ -603,8 +782,18 @@ namespace lfs::vis {
             pi.pPoolSizes = &ps;
             VkResult r = vkCreateDescriptorPool(device, &pi, nullptr, &descriptor_pool);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkCreateDescriptorPool", r));
+                return std::unexpected<std::string>(vkError(
+                    "vkCreateDescriptorPool(device, &pi, nullptr, &descriptor_pool)",
+                    r,
+                    std::format("Point-cloud descriptor-pool creation failed (device={:#x}, max_sets={}, pool_size_count={}, descriptor_count={})",
+                                vkHandleValue(device),
+                                pi.maxSets,
+                                pi.poolSizeCount,
+                                ps.descriptorCount)));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL,
+                                        descriptor_pool,
+                                        "point_cloud.descriptor.pool");
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             ai.descriptorPool = descriptor_pool;
@@ -612,8 +801,18 @@ namespace lfs::vis {
             ai.pSetLayouts = &descriptor_set_layout;
             r = vkAllocateDescriptorSets(device, &ai, &descriptor_set);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkAllocateDescriptorSets", r));
+                return std::unexpected<std::string>(vkError(
+                    "vkAllocateDescriptorSets(device, &ai, &descriptor_set)",
+                    r,
+                    std::format("Point-cloud descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                                vkHandleValue(device),
+                                vkHandleValue(descriptor_pool),
+                                vkHandleValue(descriptor_set_layout),
+                                ai.descriptorSetCount)));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET,
+                                        descriptor_set,
+                                        "point_cloud.descriptor");
             return {};
         }
 
@@ -624,8 +823,17 @@ namespace lfs::vis {
             pi.queueFamilyIndex = context->graphicsQueueFamily();
             VkResult r = vkCreateCommandPool(device, &pi, nullptr, &command_pool);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkCreateCommandPool", r));
+                return std::unexpected<std::string>(vkError(
+                    "vkCreateCommandPool(device, &pi, nullptr, &command_pool)",
+                    r,
+                    std::format("Point-cloud command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                                vkHandleValue(device),
+                                pi.queueFamilyIndex,
+                                static_cast<std::uint32_t>(pi.flags))));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
+                                        command_pool,
+                                        "point_cloud.render.pool");
             VkCommandBufferAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
             ai.commandPool = command_pool;
@@ -633,20 +841,49 @@ namespace lfs::vis {
             ai.commandBufferCount = 1;
             r = vkAllocateCommandBuffers(device, &ai, &command_buffer);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkAllocateCommandBuffers", r));
+                return std::unexpected<std::string>(vkError(
+                    "vkAllocateCommandBuffers(device, &ai, &command_buffer)",
+                    r,
+                    std::format("Point-cloud command-buffer allocation failed (device={:#x}, command_pool={:#x}, requested_count={})",
+                                vkHandleValue(device),
+                                vkHandleValue(command_pool),
+                                ai.commandBufferCount)));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
+                                        command_buffer,
+                                        "point_cloud.render.command");
             VkFenceCreateInfo fi{};
             fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
             r = vkCreateFence(device, &fi, nullptr, &fence);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkCreateFence", r));
+                return std::unexpected<std::string>(vkError(
+                    "vkCreateFence(device, &fi, nullptr, &fence)",
+                    r,
+                    std::format("Point-cloud render fence creation failed (device={:#x}, command_buffer={:#x}, flags={:#x})",
+                                vkHandleValue(device),
+                                vkHandleValue(command_buffer),
+                                static_cast<std::uint32_t>(fi.flags))));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_FENCE,
+                                        fence,
+                                        "point_cloud.render.fence");
             return {};
         }
 
         std::expected<void, std::string> ensureOutputImages(OutputSlotResources& slot,
                                                             glm::ivec2 size) {
+            const std::size_t slot_index = static_cast<std::size_t>(&slot - slots.data());
+            if (slot_index >= slots.size() || size.x <= 0 || size.y <= 0) {
+                return std::unexpected<std::string>(std::format(
+                    "Point-cloud output image request requires an in-range slot and positive dimensions (slot_index={}, slot_count={}, observed_width={}, observed_height={}) ({}:{})",
+                    slot_index,
+                    slots.size(),
+                    size.x,
+                    size.y,
+                    __FILE__,
+                    __LINE__));
+            }
             if (slot.color_image != VK_NULL_HANDLE && slot.depth_image != VK_NULL_HANDLE &&
                 slot.size == size) {
                 return {};
@@ -673,13 +910,25 @@ namespace lfs::vis {
 
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            const std::size_t slot_index = static_cast<std::size_t>(&slot - slots.data());
             VmaAllocationInfo color_allocation_info{};
             VkResult r = vmaCreateImage(allocator, &color_info, &ai, &slot.color_image,
                                         &slot.color_alloc, &color_allocation_info);
             if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vmaCreateImage(color)", r));
+                return std::unexpected<std::string>(vkError(
+                    "vmaCreateImage(allocator, &color_info, &ai, &slot.color_image, &slot.color_alloc, &color_allocation_info)",
+                    r,
+                    std::format("Point-cloud output color-image allocation failed (allocator={:#x}, slot_index={}, requested_extent={}x{}, format={}, usage={:#x})",
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                slot_index,
+                                size.x,
+                                size.y,
+                                static_cast<int>(color_info.format),
+                                static_cast<std::uint32_t>(color_info.usage))));
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                         slot.color_image,
+                                         "point_cloud.output[{}].color",
+                                         slot_index);
             slot.color_vram_label = std::format("color.slot{}:{}x{}", slot_index, size.x, size.y);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.point_cloud.output_image",
@@ -693,9 +942,24 @@ namespace lfs::vis {
             cv.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             r = vkCreateImageView(device, &cv, nullptr, &slot.color_view);
             if (r != VK_SUCCESS) {
+                const std::string error = vkError(
+                    "vkCreateImageView(device, &cv, nullptr, &slot.color_view)",
+                    r,
+                    std::format("Point-cloud output color image-view creation failed (device={:#x}, slot_index={}, image={:#x}, extent={}x{}, format={}, aspect_mask={:#x})",
+                                vkHandleValue(device),
+                                slot_index,
+                                vkHandleValue(cv.image),
+                                size.x,
+                                size.y,
+                                static_cast<int>(cv.format),
+                                static_cast<std::uint32_t>(cv.subresourceRange.aspectMask)));
                 destroySlot(slot);
-                return std::unexpected<std::string>(vkError("vkCreateImageView(color)", r));
+                return std::unexpected<std::string>(error);
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                         slot.color_view,
+                                         "point_cloud.output[{}].color.view",
+                                         slot_index);
 
             // Depth: D32_SFLOAT, used as depth attachment + sampled by depth-blit.
             VkImageCreateInfo depth_info = color_info;
@@ -706,9 +970,23 @@ namespace lfs::vis {
             r = vmaCreateImage(allocator, &depth_info, &ai, &slot.depth_image,
                                &slot.depth_alloc, &depth_allocation_info);
             if (r != VK_SUCCESS) {
+                const std::string error = vkError(
+                    "vmaCreateImage(allocator, &depth_info, &ai, &slot.depth_image, &slot.depth_alloc, &depth_allocation_info)",
+                    r,
+                    std::format("Point-cloud output depth-image allocation failed (allocator={:#x}, slot_index={}, requested_extent={}x{}, format={}, usage={:#x})",
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                slot_index,
+                                size.x,
+                                size.y,
+                                static_cast<int>(depth_info.format),
+                                static_cast<std::uint32_t>(depth_info.usage)));
                 destroySlot(slot);
-                return std::unexpected<std::string>(vkError("vmaCreateImage(depth)", r));
+                return std::unexpected<std::string>(error);
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                         slot.depth_image,
+                                         "point_cloud.output[{}].depth",
+                                         slot_index);
             slot.depth_vram_label = std::format("depth.slot{}:{}x{}", slot_index, size.x, size.y);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.point_cloud.output_image",
@@ -722,9 +1000,24 @@ namespace lfs::vis {
             dv.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
             r = vkCreateImageView(device, &dv, nullptr, &slot.depth_view);
             if (r != VK_SUCCESS) {
+                const std::string error = vkError(
+                    "vkCreateImageView(device, &dv, nullptr, &slot.depth_view)",
+                    r,
+                    std::format("Point-cloud output depth image-view creation failed (device={:#x}, slot_index={}, image={:#x}, extent={}x{}, format={}, aspect_mask={:#x})",
+                                vkHandleValue(device),
+                                slot_index,
+                                vkHandleValue(dv.image),
+                                size.x,
+                                size.y,
+                                static_cast<int>(dv.format),
+                                static_cast<std::uint32_t>(dv.subresourceRange.aspectMask)));
                 destroySlot(slot);
-                return std::unexpected<std::string>(vkError("vkCreateImageView(depth)", r));
+                return std::unexpected<std::string>(error);
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                         slot.depth_view,
+                                         "point_cloud.output[{}].depth.view",
+                                         slot_index);
 
             context->imageBarriers().registerImage(slot.color_image,
                                                    VK_IMAGE_ASPECT_COLOR_BIT,
@@ -775,7 +1068,20 @@ namespace lfs::vis {
                 return;
             }
             if (fence != VK_NULL_HANDLE) {
-                vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+                const VkResult wait_result = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+                if (wait_result != VK_SUCCESS) {
+                    LOG_ERROR("Vulkan: {}",
+                              formatVkCheckFailure(
+                                  "vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX)",
+                                  wait_result,
+                                  std::format("Point-cloud renderer destruction fence did not retire (device={:#x}, fence={:#x}, command_pool={:#x}, command_buffer={:#x})",
+                                              vkHandleValue(device),
+                                              vkHandleValue(fence),
+                                              vkHandleValue(command_pool),
+                                              vkHandleValue(command_buffer)),
+                                  __FILE__,
+                                  __LINE__));
+                }
                 vkDestroyFence(device, fence, nullptr);
                 fence = VK_NULL_HANDLE;
             }
@@ -1165,17 +1471,31 @@ namespace lfs::vis {
             std::lock_guard<std::mutex> command_lock(command_mutex);
             const std::size_t slot_idx = static_cast<std::size_t>(output_slot);
             if (slot_idx >= kSlotCount) {
-                return std::unexpected<std::string>("invalid output_slot");
+                return std::unexpected<std::string>(std::format(
+                    "Point-cloud render output slot is out of range (output_slot={}, slot_count={}) ({}:{})",
+                    slot_idx,
+                    kSlotCount,
+                    __FILE__,
+                    __LINE__));
             }
             if (req.size.x <= 0 || req.size.y <= 0) {
-                return std::unexpected<std::string>("invalid render size");
+                return std::unexpected<std::string>(std::format(
+                    "Point-cloud render size must be positive (observed_width={}, observed_height={}, output_slot={}) ({}:{})",
+                    req.size.x,
+                    req.size.y,
+                    slot_idx,
+                    __FILE__,
+                    __LINE__));
             }
 
             // Wait for the previous frame on this renderer to finish before
             // touching slot resources — the cb is shared across slots and a
             // size change would otherwise destroy images the in-flight submit
             // is still sampling.
-            vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+            VkResult r = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+            if (r != VK_SUCCESS) {
+                return std::unexpected<std::string>(vkError("vkWaitForFences(render prewait)", r));
+            }
 
             auto& slot = slots[slot_idx];
             const bool will_recreate = slot.color_image == VK_NULL_HANDLE ||
@@ -1197,18 +1517,32 @@ namespace lfs::vis {
                 destroyBuffer(allocator, s);
             }
             pending_stagings.clear();
-            vkResetCommandBuffer(command_buffer, 0);
+            r = vkResetCommandBuffer(command_buffer, 0);
+            if (r != VK_SUCCESS) {
+                return std::unexpected<std::string>(vkError("vkResetCommandBuffer", r));
+            }
 
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            VkResult r = vkBeginCommandBuffer(command_buffer, &bi);
+            r = vkBeginCommandBuffer(command_buffer, &bi);
             if (r != VK_SUCCESS) {
                 return std::unexpected<std::string>(vkError("vkBeginCommandBuffer", r));
             }
 
             if (auto u = uploadIfChanged(command_buffer, req); !u) {
-                vkEndCommandBuffer(command_buffer);
+                const VkResult end_result = vkEndCommandBuffer(command_buffer);
+                if (end_result != VK_SUCCESS) {
+                    LOG_ERROR("Vulkan: {}",
+                              formatVkCheckFailure(
+                                  "vkEndCommandBuffer(command_buffer)",
+                                  end_result,
+                                  std::format("Point-cloud upload error cleanup could not end command-buffer recording (command_buffer={:#x}, upload_error={})",
+                                              vkHandleValue(command_buffer),
+                                              u.error()),
+                                  __FILE__,
+                                  __LINE__));
+                }
                 return std::unexpected<std::string>(u.error());
             }
 
@@ -1228,6 +1562,35 @@ namespace lfs::vis {
             vkCmdPipelineBarrier2(command_buffer, &xfer_dependency);
 
             updateDescriptorSet();
+
+            VkDeviceSize zero_offsets[2] = {0, 0};
+            VkBuffer vbufs[2] = {cache.positions.buffer, cache.colors.buffer};
+            if (vbufs[0] == VK_NULL_HANDLE || vbufs[1] == VK_NULL_HANDLE ||
+                cache.cached_positions_count > std::numeric_limits<std::uint32_t>::max() ||
+                cache.positions.size < cache.cached_positions_count * sizeof(float) * 3u ||
+                cache.colors.size < cache.cached_positions_count * sizeof(float) * 3u) {
+                const std::string error = std::format(
+                    "Point-cloud draw requires non-null vertex buffers, a 32-bit vertex count, and allocations large enough for all vertices (positions_buffer={:#x}, positions_size={}, colors_buffer={:#x}, colors_size={}, vertex_count={}, maximum_vertex_count={}, required_positions_bytes={}, required_colors_bytes={}) ({}:{})",
+                    vkHandleValue(vbufs[0]),
+                    cache.positions.size,
+                    vkHandleValue(vbufs[1]),
+                    cache.colors.size,
+                    cache.cached_positions_count,
+                    std::numeric_limits<std::uint32_t>::max(),
+                    cache.cached_positions_count * sizeof(float) * 3u,
+                    cache.cached_positions_count * sizeof(float) * 3u,
+                    __FILE__,
+                    __LINE__);
+                const VkResult cleanup_result = vkEndCommandBuffer(command_buffer);
+                if (cleanup_result != VK_SUCCESS) {
+                    LOG_ERROR("Vulkan: {}",
+                              vkError("vkEndCommandBuffer(command_buffer)",
+                                      cleanup_result,
+                                      std::format("Point-cloud invalid-draw cleanup could not end command-buffer recording (command_buffer={:#x})",
+                                                  vkHandleValue(command_buffer))));
+                }
+                return std::unexpected<std::string>(error);
+            }
 
             // Transition output images for rendering.
             context->imageBarriers().transitionImage(command_buffer, slot.color_image,
@@ -1288,8 +1651,6 @@ namespace lfs::vis {
             vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
 
-            VkDeviceSize zero_offsets[2] = {0, 0};
-            VkBuffer vbufs[2] = {cache.positions.buffer, cache.colors.buffer};
             vkCmdBindVertexBuffers(command_buffer, 0, 2, vbufs, zero_offsets);
 
             // 64 is the lower bound of Vulkan's guaranteed pointSizeRange; the
@@ -1323,8 +1684,20 @@ namespace lfs::vis {
                                                      VK_IMAGE_ASPECT_DEPTH_BIT,
                                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
+            const VkImageLayout previous_color_layout = slot.color_layout;
+            const VkImageLayout previous_depth_layout = slot.depth_layout;
+            const auto restore_tracked_layouts = [&]() {
+                context->imageBarriers().registerImage(slot.color_image,
+                                                       VK_IMAGE_ASPECT_COLOR_BIT,
+                                                       previous_color_layout);
+                context->imageBarriers().registerImage(slot.depth_image,
+                                                       VK_IMAGE_ASPECT_DEPTH_BIT,
+                                                       previous_depth_layout);
+            };
+
             r = vkEndCommandBuffer(command_buffer);
             if (r != VK_SUCCESS) {
+                restore_tracked_layouts();
                 return std::unexpected<std::string>(vkError("vkEndCommandBuffer", r));
             }
 
@@ -1334,10 +1707,35 @@ namespace lfs::vis {
             si.pCommandBuffers = &command_buffer;
             r = vkResetFences(device, 1, &fence);
             if (r != VK_SUCCESS) {
+                restore_tracked_layouts();
+                (void)replaceFenceSignaled("vkResetFences", r);
                 return std::unexpected<std::string>(vkError("vkResetFences", r));
             }
-            r = vkQueueSubmit(context->graphicsQueue(), 1, &si, fence);
+            const VkQueue submit_queue = context->graphicsQueue();
+            if (submit_queue == VK_NULL_HANDLE || command_buffer == VK_NULL_HANDLE ||
+                fence == VK_NULL_HANDLE || si.commandBufferCount != 1 ||
+                si.pCommandBuffers == nullptr || si.pCommandBuffers[0] != command_buffer) {
+                const std::string error = std::format(
+                    "Point-cloud render submit requires a non-null queue, one expected command buffer, and a non-null fence (queue={:#x}, command_buffer={:#x}, fence={:#x}, command_buffer_count={}, command_buffer_array={:#x}, submitted_command_buffer={:#x}, wait_semaphore_count={}, signal_semaphore_count={}) ({}:{})",
+                    vkHandleValue(submit_queue),
+                    vkHandleValue(command_buffer),
+                    vkHandleValue(fence),
+                    si.commandBufferCount,
+                    reinterpret_cast<std::uintptr_t>(si.pCommandBuffers),
+                    si.pCommandBuffers != nullptr ? vkHandleValue(si.pCommandBuffers[0]) : 0,
+                    si.waitSemaphoreCount,
+                    si.signalSemaphoreCount,
+                    __FILE__,
+                    __LINE__);
+                restore_tracked_layouts();
+                (void)replaceFenceSignaled("point-cloud render submit integrity check",
+                                           VK_ERROR_INITIALIZATION_FAILED);
+                return std::unexpected<std::string>(error);
+            }
+            r = vkQueueSubmit(submit_queue, 1, &si, fence);
             if (r != VK_SUCCESS) {
+                restore_tracked_layouts();
+                (void)replaceFenceSignaled("vkQueueSubmit", r);
                 return std::unexpected<std::string>(vkError("vkQueueSubmit", r));
             }
 
@@ -1372,7 +1770,12 @@ namespace lfs::vis {
 
             const std::size_t slot_idx = static_cast<std::size_t>(output_slot);
             if (slot_idx >= kSlotCount) {
-                return std::unexpected<std::string>("invalid output_slot");
+                return std::unexpected<std::string>(std::format(
+                    "Point-cloud readback output slot is out of range (output_slot={}, slot_count={}) ({}:{})",
+                    slot_idx,
+                    kSlotCount,
+                    __FILE__,
+                    __LINE__));
             }
             auto& slot = slots[slot_idx];
             if (slot.color_image == VK_NULL_HANDLE || slot.size.x <= 0 || slot.size.y <= 0) {
@@ -1421,14 +1824,29 @@ namespace lfs::vis {
             if (r != VK_SUCCESS || staging.buffer == VK_NULL_HANDLE) {
                 return std::unexpected<std::string>(vkError("vmaCreateBuffer(point-cloud readback)", r));
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                                         staging.buffer,
+                                         "point_cloud.output[{}].readback[{}]",
+                                         slot_idx,
+                                         byte_count);
             staging.vram_scope = "vulkan.point_cloud.readback_buffer";
             staging.vram_label = std::format("rgba:{}x{}", slot.size.x, slot.size.y);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 staging.vram_scope,
                 staging.vram_label,
                 static_cast<std::size_t>(staging.allocation_info.size));
-            if (staging.allocation_info.pMappedData == nullptr) {
-                return std::unexpected<std::string>("Point-cloud readback staging buffer is not host-mapped");
+            if (staging.allocation_info.pMappedData == nullptr ||
+                staging.allocation_info.size < byte_count) {
+                return std::unexpected<std::string>(std::format(
+                    "Point-cloud readback staging allocation must be mapped and cover the copy (slot_index={}, buffer={:#x}, allocation={:#x}, mapped={:#x}, allocation_size={}, copy_size={}) ({}:{})",
+                    slot_idx,
+                    vkHandleValue(staging.buffer),
+                    reinterpret_cast<std::uintptr_t>(staging.allocation),
+                    reinterpret_cast<std::uintptr_t>(staging.allocation_info.pMappedData),
+                    staging.allocation_info.size,
+                    byte_count,
+                    __FILE__,
+                    __LINE__));
             }
 
             r = vkResetCommandBuffer(command_buffer, 0);
@@ -1480,14 +1898,40 @@ namespace lfs::vis {
 
             r = vkResetFences(device, 1, &fence);
             if (r != VK_SUCCESS) {
+                (void)replaceFenceSignaled("vkResetFences(point-cloud readback)", r);
                 return std::unexpected<std::string>(vkError("vkResetFences(point-cloud readback)", r));
             }
             VkSubmitInfo submit_info{};
             submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             submit_info.commandBufferCount = 1;
             submit_info.pCommandBuffers = &command_buffer;
-            r = vkQueueSubmit(ctx.graphicsQueue(), 1, &submit_info, fence);
+            const VkQueue submit_queue = ctx.graphicsQueue();
+            if (submit_queue == VK_NULL_HANDLE || command_buffer == VK_NULL_HANDLE ||
+                fence == VK_NULL_HANDLE || submit_info.commandBufferCount != 1 ||
+                submit_info.pCommandBuffers == nullptr ||
+                submit_info.pCommandBuffers[0] != command_buffer) {
+                const std::string error = std::format(
+                    "Point-cloud readback submit requires a non-null queue, one expected command buffer, and a non-null fence (slot_index={}, queue={:#x}, command_buffer={:#x}, fence={:#x}, command_buffer_count={}, command_buffer_array={:#x}, submitted_command_buffer={:#x}, wait_semaphore_count={}, signal_semaphore_count={}) ({}:{})",
+                    slot_idx,
+                    vkHandleValue(submit_queue),
+                    vkHandleValue(command_buffer),
+                    vkHandleValue(fence),
+                    submit_info.commandBufferCount,
+                    reinterpret_cast<std::uintptr_t>(submit_info.pCommandBuffers),
+                    submit_info.pCommandBuffers != nullptr
+                        ? vkHandleValue(submit_info.pCommandBuffers[0])
+                        : 0,
+                    submit_info.waitSemaphoreCount,
+                    submit_info.signalSemaphoreCount,
+                    __FILE__,
+                    __LINE__);
+                (void)replaceFenceSignaled("point-cloud readback submit integrity check",
+                                           VK_ERROR_INITIALIZATION_FAILED);
+                return std::unexpected<std::string>(error);
+            }
+            r = vkQueueSubmit(submit_queue, 1, &submit_info, fence);
             if (r != VK_SUCCESS) {
+                (void)replaceFenceSignaled("vkQueueSubmit(point-cloud readback)", r);
                 return std::unexpected<std::string>(vkError("vkQueueSubmit(point-cloud readback)", r));
             }
             r = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);

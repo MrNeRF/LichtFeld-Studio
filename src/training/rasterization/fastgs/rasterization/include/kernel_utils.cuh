@@ -114,7 +114,10 @@ namespace fast_lfs::rasterization::kernels {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         float3 result = 0.5f + 0.28209479177387814f * sh_coefficients_0[primitive_idx];
         if (active_sh_bases > 1) {
-            auto [x, y, z] = safe_normalize(position - cam_position);
+            const float3 direction = safe_normalize(position - cam_position);
+            const float x = direction.x;
+            const float y = direction.y;
+            const float z = direction.z;
             float3 c[15];
             load_shN_coeffs(sh_coefficients_rest, primitive_idx, active_sh_bases, sh_layout_slots, c);
             result = result + (-0.48860251190291987f * y) * c[0] + (0.48860251190291987f * z) * c[1] + (-0.48860251190291987f * x) * c[2];
@@ -408,8 +411,14 @@ namespace fast_lfs::rasterization::kernels {
         adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         float3 dcolor_dposition = make_float3(0.0f);
         if constexpr (ACTIVE_SH_BASES > 1) {
-            auto [x_raw, y_raw, z_raw] = position - cam_position;
-            auto [x, y, z] = safe_normalize(make_float3(x_raw, y_raw, z_raw));
+            const float3 raw_direction = position - cam_position;
+            const float x_raw = raw_direction.x;
+            const float y_raw = raw_direction.y;
+            const float z_raw = raw_direction.z;
+            const float3 direction = safe_normalize(raw_direction);
+            const float x = direction.x;
+            const float y = direction.y;
+            const float z = direction.z;
 
             // Load all coeffs we need via the float4-packed shuffle.
             float3 c[15];

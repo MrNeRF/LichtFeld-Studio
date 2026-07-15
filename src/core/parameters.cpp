@@ -13,6 +13,7 @@
 #include <format>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <sstream>
@@ -197,6 +198,119 @@ namespace lfs::core {
         }
 
         std::string OptimizationParameters::validate() const {
+            const auto invalid_nonnegative = [](const float value, const std::string_view name) -> std::string {
+                if (!std::isfinite(value) || value < 0.0f)
+                    return std::format("{} must be finite and nonnegative (got {})", name, value);
+                return {};
+            };
+            const auto invalid_probability = [](const float value, const std::string_view name) -> std::string {
+                if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
+                    return std::format("{} must be finite and within [0, 1] (got {})", name, value);
+                return {};
+            };
+            constexpr size_t MAX_ITERATION_VALUE = static_cast<size_t>(std::numeric_limits<int>::max());
+
+            if (!is_valid_strategy_name(strategy))
+                return std::format("strategy must be one of mcmc, mrnf, or igs+ (got '{}')", strategy);
+            if (iterations == 0 || iterations > MAX_ITERATION_VALUE)
+                return std::format("iterations must be within [1, {}] (got {})", MAX_ITERATION_VALUE, iterations);
+            if (refine_every == 0 || refine_every > MAX_ITERATION_VALUE)
+                return std::format("refine_every must be within [1, {}] (got {})", MAX_ITERATION_VALUE, refine_every);
+            if (reset_every == 0 || reset_every > MAX_ITERATION_VALUE)
+                return std::format("reset_every must be within [1, {}] (got {})", MAX_ITERATION_VALUE, reset_every);
+            if (sh_degree_interval == 0 || sh_degree_interval > MAX_ITERATION_VALUE)
+                return std::format("sh_degree_interval must be within [1, {}] (got {})", MAX_ITERATION_VALUE, sh_degree_interval);
+            if (start_refine > stop_refine)
+                return std::format("start_refine must not exceed stop_refine ({} > {})", start_refine, stop_refine);
+            if (start_refine > MAX_ITERATION_VALUE || stop_refine > MAX_ITERATION_VALUE ||
+                grow_until_iter > MAX_ITERATION_VALUE || pause_refine_after_reset > MAX_ITERATION_VALUE)
+                return "refinement iteration fields must fit in a signed int";
+            if (max_cap < 0)
+                return std::format("max_cap must be nonnegative (got {})", max_cap);
+            if (sh_degree < 0 || sh_degree > 3)
+                return std::format("sh_degree must be within [0, 3] (got {})", sh_degree);
+            if (sparsify_steps < 0)
+                return std::format("sparsify_steps must be nonnegative (got {})", sparsify_steps);
+            if (enable_sparsity &&
+                static_cast<uint64_t>(iterations) + static_cast<uint64_t>(sparsify_steps) >
+                    static_cast<uint64_t>(std::numeric_limits<int>::max()))
+                return "iterations plus sparsify_steps must fit in a signed int";
+            if (init_num_pts <= 0)
+                return std::format("init_num_pts must be positive (got {})", init_num_pts);
+            if (!std::isfinite(init_extent) || init_extent <= 0.0f)
+                return std::format("init_extent must be finite and positive (got {})", init_extent);
+            if (!std::isfinite(init_scaling) || init_scaling <= 0.0f)
+                return std::format("init_scaling must be finite and positive (got {})", init_scaling);
+            if (!std::isfinite(init_opacity) || init_opacity <= 0.0f || init_opacity >= 1.0f)
+                return std::format("init_opacity must be finite and within (0, 1) (got {})", init_opacity);
+            if (!std::isfinite(mask_opacity_penalty_power) || mask_opacity_penalty_power <= 0.0f)
+                return std::format("mask_opacity_penalty_power must be finite and positive (got {})", mask_opacity_penalty_power);
+            if (!std::isfinite(steps_scaler))
+                return std::format("steps_scaler must be finite (got {})", steps_scaler);
+            if (ppisp_warmup_steps < 0)
+                return std::format("ppisp_warmup_steps must be nonnegative (got {})", ppisp_warmup_steps);
+            if (debug_python && (debug_python_port <= 0 || debug_python_port > 65535))
+                return std::format("debug_python_port must be within [1, 65535] (got {})", debug_python_port);
+
+            const std::array nonnegative_fields{
+                std::pair{"means_lr", means_lr},
+                std::pair{"means_lr_end", means_lr_end},
+                std::pair{"shs_lr", shs_lr},
+                std::pair{"opacity_lr", opacity_lr},
+                std::pair{"scaling_lr", scaling_lr},
+                std::pair{"scaling_lr_end", scaling_lr_end},
+                std::pair{"rotation_lr", rotation_lr},
+                std::pair{"grad_threshold", grad_threshold},
+                std::pair{"opacity_reg", opacity_reg},
+                std::pair{"scale_reg", scale_reg},
+                std::pair{"mask_opacity_penalty_weight", mask_opacity_penalty_weight},
+                std::pair{"depth_loss_weight", depth_loss_weight},
+                std::pair{"bilateral_grid_lr", bilateral_grid_lr},
+                std::pair{"tv_loss_weight", tv_loss_weight},
+                std::pair{"ppisp_lr", ppisp_lr},
+                std::pair{"ppisp_reg_weight", ppisp_reg_weight},
+                std::pair{"ppisp_controller_lr", ppisp_controller_lr},
+                std::pair{"grow_scale3d", grow_scale3d},
+                std::pair{"grow_scale2d", grow_scale2d},
+                std::pair{"prune_scale3d", prune_scale3d},
+                std::pair{"prune_scale2d", prune_scale2d},
+                std::pair{"growth_grad_threshold", growth_grad_threshold},
+                std::pair{"means_noise_weight", means_noise_weight},
+                std::pair{"init_rho", init_rho},
+            };
+            for (const auto& [name, value] : nonnegative_fields) {
+                if (auto error = invalid_nonnegative(value, name); !error.empty())
+                    return error;
+            }
+
+            const std::array probability_fields{
+                std::pair{"lambda_dssim", lambda_dssim},
+                std::pair{"min_opacity", min_opacity},
+                std::pair{"mask_threshold", mask_threshold},
+                std::pair{"prune_opacity", prune_opacity},
+                std::pair{"grow_fraction", grow_fraction},
+                std::pair{"opacity_decay", opacity_decay},
+                std::pair{"scale_decay", scale_decay},
+                std::pair{"bounds_percentile", bounds_percentile},
+                std::pair{"prune_ratio", prune_ratio},
+            };
+            for (const auto& [name, value] : probability_fields) {
+                if (auto error = invalid_probability(value, name); !error.empty())
+                    return error;
+            }
+            for (size_t i = 0; i < bg_color.size(); ++i) {
+                if (auto error = invalid_probability(bg_color[i], std::format("bg_color[{}]", i)); !error.empty())
+                    return error;
+            }
+
+            if (bilateral_grid_X <= 0 || bilateral_grid_Y <= 0 || bilateral_grid_W <= 0)
+                return std::format("bilateral grid dimensions must be positive (got {}x{}x{})",
+                                   bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
+            const uint64_t bilateral_xy = static_cast<uint64_t>(bilateral_grid_X) * bilateral_grid_Y;
+            if (bilateral_xy > static_cast<uint64_t>(std::numeric_limits<int>::max()) /
+                                   static_cast<uint64_t>(bilateral_grid_W))
+                return std::format("bilateral grid dimensions are too large ({}x{}x{})",
+                                   bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
             if (gut && canonical_strategy_name(strategy) == kStrategyIGSPlus)
                 return "GUT and igs+ strategy cannot be used together";
             if (ppisp_freeze_from_sidecar && !use_ppisp)
@@ -214,6 +328,29 @@ namespace lfs::core {
         std::string TrainingParameters::validate() const {
             if (auto error = optimization.validate(); !error.empty()) {
                 return error;
+            }
+            if (auto error = dataset.validate(); !error.empty()) {
+                return error;
+            }
+            const auto valid_port = [](const int port) { return port == -1 || (port > 0 && port <= 65535); };
+            if (!valid_port(server.tcp_server_connection_port))
+                return std::format("tcp_server_connection_port must be -1 or within [1, 65535] (got {})",
+                                   server.tcp_server_connection_port);
+            if (!valid_port(server.tcp_broadcast_connection_port))
+                return std::format("tcp_broadcast_connection_port must be -1 or within [1, 65535] (got {})",
+                                   server.tcp_broadcast_connection_port);
+            if (render_path) {
+                if (render_path->width <= 0 || render_path->height <= 0 ||
+                    (render_path->width % 2) != 0 || (render_path->height % 2) != 0)
+                    return std::format("render dimensions must be positive and even (got {}x{})",
+                                       render_path->width, render_path->height);
+                if (render_path->width > std::numeric_limits<int>::max() / render_path->height)
+                    return std::format("render pixel count exceeds signed-int limits (got {}x{})",
+                                       render_path->width, render_path->height);
+                if (render_path->fps <= 0)
+                    return std::format("render fps must be positive (got {})", render_path->fps);
+                if (render_path->crf < 0 || render_path->crf > 51)
+                    return std::format("render crf must be within [0, 51] (got {})", render_path->crf);
             }
             if (!add_splat_paths.empty()) {
                 if (resume_checkpoint.has_value()) {
@@ -241,6 +378,33 @@ namespace lfs::core {
                                        lfs::core::path_to_utf8(optimization.ppisp_sidecar_path));
                 }
             }
+            return {};
+        }
+
+        std::string DatasetConfig::validate() const {
+            if (resize_factor != -1 && resize_factor < 1)
+                return std::format("resize_factor must be -1 or positive (got {})", resize_factor);
+            if (test_every <= 0)
+                return std::format("test_every must be positive (got {})", test_every);
+            if (timelapse_every <= 0)
+                return std::format("timelapse_every must be positive (got {})", timelapse_every);
+            if (max_width < 0)
+                return std::format("max_width must be nonnegative (got {})", max_width);
+            if (min_track_length < 0)
+                return std::format("min_track_length must be nonnegative (got {})", min_track_length);
+            if (!std::isfinite(mask_threshold) || mask_threshold < 0.0f || mask_threshold > 1.0f)
+                return std::format("dataset mask_threshold must be finite and within [0, 1] (got {})", mask_threshold);
+            if (!std::isfinite(loading_params.min_cpu_free_memory_ratio) ||
+                loading_params.min_cpu_free_memory_ratio < 0.0f ||
+                loading_params.min_cpu_free_memory_ratio > 1.0f)
+                return std::format("min_cpu_free_memory_ratio must be finite and within [0, 1] (got {})",
+                                   loading_params.min_cpu_free_memory_ratio);
+            if (!std::isfinite(loading_params.min_cpu_free_GB) || loading_params.min_cpu_free_GB < 0.0f)
+                return std::format("min_cpu_free_GB must be finite and nonnegative (got {})",
+                                   loading_params.min_cpu_free_GB);
+            if (loading_params.print_status_freq_num <= 0)
+                return std::format("print_status_freq_num must be positive (got {})",
+                                   loading_params.print_status_freq_num);
             return {};
         }
 
@@ -534,6 +698,14 @@ namespace lfs::core {
             }
             if (json.contains("depth_loss_mode")) {
                 params.depth_loss_mode = json["depth_loss_mode"];
+                if (params.depth_loss_mode == "pearson" ||
+                    params.depth_loss_mode == "adaptive-warped-l1") {
+                    LOG_WARN(
+                        "Migrating legacy depth loss mode '{}' to 'ssi'; the current depth "
+                        "pipeline auto-detects whether the prior stores depth or disparity",
+                        params.depth_loss_mode);
+                    params.depth_loss_mode = "ssi";
+                }
             }
             if (json.contains("use_normal_loss")) {
                 params.use_normal_loss = json["use_normal_loss"];
@@ -594,7 +766,10 @@ namespace lfs::core {
             const auto& opt_json = json.contains("optimization") ? json["optimization"] : json;
 
             try {
-                return OptimizationParameters::from_json(opt_json);
+                auto params = OptimizationParameters::from_json(opt_json);
+                if (auto error = params.validate(); !error.empty())
+                    return std::unexpected("Invalid optimization parameters: " + error);
+                return params;
             } catch (const std::exception& e) {
                 return std::unexpected(std::format("Error parsing optimization parameters: {}", e.what()));
             }

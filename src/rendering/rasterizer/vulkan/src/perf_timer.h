@@ -55,6 +55,7 @@ namespace PerfTimer {
     using Marker = std::pair<int, int>;
 
     std::vector<Marker> takeMarkers();
+    void discardMarkers() noexcept;
     std::vector<std::pair<size_t, double>> update(std::vector<double> times,
                                                   const std::vector<Marker>& batch_marks);
 

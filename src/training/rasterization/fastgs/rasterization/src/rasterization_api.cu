@@ -6,10 +6,10 @@
 #include "buffer_utils.h"
 #include "core/cuda/memory_arena.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
-#include "cuda_utils.h"
 #include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
 #include "helper_math.h"
+#include "lfs/cuda_scratch.hpp"
 #include "rasterization_api.h"
 #include "rasterization_config.h"
 #include "utils.h"
@@ -33,15 +33,19 @@ namespace fast_lfs::rasterization {
             }
             lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr);
 #if CUDART_VERSION >= 11020
-            cudaFreeAsync(ptr, stream);
+            const cudaError_t status = cudaFreeAsync(ptr, stream);
 #else
             (void)stream;
-            cudaFree(ptr);
+            const cudaError_t status = cudaFree(ptr);
 #endif
-        }
-
-        std::string cuda_error_detail(cudaError_t err) {
-            return std::string(cudaGetErrorName(err)) + ": " + cudaGetErrorString(err);
+            if (status != cudaSuccess) {
+                lfs::core::ensure_cuda_success(
+                    status, "FastGS sorted-index buffer free",
+                    lfs::core::detail::format_cuda_safe(
+                        "ptr={}, stream={}", ptr, static_cast<void*>(stream)),
+                    LFS_SOURCE_SITE_CURRENT(),
+                    lfs::core::CudaFailureDisposition::LogOnly);
+            }
         }
 
         const char* cuda_memory_type_name(cudaMemoryType type) {
@@ -57,39 +61,37 @@ namespace fast_lfs::rasterization {
             int device_count = 0;
             const cudaError_t count_err = cudaGetDeviceCount(&device_count);
             if (count_err != cudaSuccess) {
-                throw std::runtime_error(std::string(phase) +
-                                         ": cudaGetDeviceCount failed - " +
-                                         cuda_error_detail(count_err));
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
+                    count_err, "cudaGetDeviceCount(FastGS preflight)", phase);
             }
-            if (device_count <= 0) {
-                throw std::runtime_error(std::string(phase) +
-                                         ": no CUDA devices are visible");
-            }
+            LFS_ASSERT_MSG(device_count > 0,
+                           lfs::core::detail::format_cuda_safe(
+                               "{}: no CUDA devices are visible", phase));
 
             int current_device = -1;
             const cudaError_t device_err = cudaGetDevice(&current_device);
             if (device_err != cudaSuccess) {
-                throw std::runtime_error(std::string(phase) +
-                                         ": cudaGetDevice failed - " +
-                                         cuda_error_detail(device_err) +
-                                         " (device_count=" + std::to_string(device_count) + ")");
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
+                    device_err, "cudaGetDevice(FastGS preflight)",
+                    lfs::core::detail::format_cuda_safe(
+                        "phase={}, device_count={}", phase, device_count));
             }
-            if (current_device < 0 || current_device >= device_count) {
-                throw std::runtime_error(std::string(phase) +
-                                         ": current CUDA device ordinal is out of range"
-                                         " (current_device=" +
-                                         std::to_string(current_device) +
-                                         ", device_count=" + std::to_string(device_count) + ")");
-            }
+            LFS_ASSERT_MSG(
+                current_device >= 0 && current_device < device_count,
+                lfs::core::detail::format_cuda_safe(
+                    "{}: current CUDA device ordinal is out of range "
+                    "(current_device={}, device_count={})",
+                    phase, current_device, device_count));
             return current_device;
         }
 
         void checked_no_pending_cuda_error(const char* phase) {
             const cudaError_t pending_err = cudaPeekAtLastError();
             if (pending_err != cudaSuccess) {
-                throw std::runtime_error(std::string(phase) +
-                                         ": pending CUDA error before FastGS buffer sizing - " +
-                                         cuda_error_detail(pending_err));
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
+                    pending_err, "cudaPeekAtLastError(FastGS preflight)",
+                    lfs::core::detail::format_cuda_safe(
+                        "{}: pending CUDA error before buffer sizing", phase));
             }
         }
 
@@ -97,29 +99,27 @@ namespace fast_lfs::rasterization {
             const void* ptr,
             const char* name,
             int current_device) {
-            if (!ptr) {
-                throw std::runtime_error(std::string("FastGS forward preflight: ") +
-                                         name + " is null");
-            }
+            LFS_ASSERT_MSG(ptr != nullptr,
+                           lfs::core::detail::format_cuda_safe(
+                               "FastGS forward preflight: {} is null", name));
 
             cudaPointerAttributes attrs{};
             const cudaError_t attr_err = cudaPointerGetAttributes(&attrs, ptr);
             if (attr_err != cudaSuccess) {
-                throw std::runtime_error(std::string("FastGS forward preflight: cudaPointerGetAttributes failed for ") +
-                                         name + " - " + cuda_error_detail(attr_err));
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
+                    attr_err, "cudaPointerGetAttributes(FastGS preflight)", name);
             }
-            if (attrs.type != cudaMemoryTypeDevice) {
-                throw std::runtime_error(std::string("FastGS forward preflight: ") +
-                                         name + " is not device memory (type=" +
-                                         cuda_memory_type_name(attrs.type) + ")");
-            }
-            if (attrs.device != current_device) {
-                throw std::runtime_error(std::string("FastGS forward preflight: ") +
-                                         name + " is allocated on CUDA device " +
-                                         std::to_string(attrs.device) +
-                                         " but the current CUDA device is " +
-                                         std::to_string(current_device));
-            }
+            LFS_ASSERT_MSG(
+                attrs.type == cudaMemoryTypeDevice,
+                lfs::core::detail::format_cuda_safe(
+                    "FastGS forward preflight: {} is not device memory (type={})",
+                    name, cuda_memory_type_name(attrs.type)));
+            LFS_ASSERT_MSG(
+                attrs.device == current_device,
+                lfs::core::detail::format_cuda_safe(
+                    "FastGS forward preflight: {} is allocated on CUDA device {} "
+                    "but the current CUDA device is {}",
+                    name, attrs.device, current_device));
         }
 
         void validate_fastgs_forward_cuda_preflight(
@@ -464,26 +464,26 @@ namespace fast_lfs::rasterization {
 
         try {
             // Validate required inputs using pure CUDA validation
-            CHECK_CUDA_PTR(grad_image_ptr, "grad_image_ptr");
-            CHECK_CUDA_PTR(grad_alpha_ptr, "grad_alpha_ptr");
-            CHECK_CUDA_PTR_OPTIONAL(grad_depth_ptr, "grad_depth_ptr");
-            CHECK_CUDA_PTR_OPTIONAL(grad_normal_ptr, "grad_normal_ptr");
-            CHECK_CUDA_PTR(image_ptr, "image_ptr");
-            CHECK_CUDA_PTR(alpha_ptr, "alpha_ptr");
-            CHECK_CUDA_PTR(means_ptr, "means_ptr");
-            CHECK_CUDA_PTR(scales_raw_ptr, "scales_raw_ptr");
-            CHECK_CUDA_PTR(rotations_raw_ptr, "rotations_raw_ptr");
-            CHECK_CUDA_PTR(raw_opacities_ptr, "raw_opacities_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(grad_image_ptr, "grad_image_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(grad_alpha_ptr, "grad_alpha_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_depth_ptr, "grad_depth_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_normal_ptr, "grad_normal_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(image_ptr, "image_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(alpha_ptr, "alpha_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(means_ptr, "means_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(scales_raw_ptr, "scales_raw_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(rotations_raw_ptr, "rotations_raw_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(raw_opacities_ptr, "raw_opacities_ptr");
             if (active_sh_bases > 1) {
-                CHECK_CUDA_PTR(sh_coefficients_rest_ptr, "sh_coefficients_rest_ptr");
+                LFS_VALIDATE_CUDA_DEVICE_POINTER(sh_coefficients_rest_ptr, "sh_coefficients_rest_ptr");
             }
-            CHECK_CUDA_PTR(w2c_ptr, "w2c_ptr");
-            CHECK_CUDA_PTR(cam_position_ptr, "cam_position_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(w2c_ptr, "w2c_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(cam_position_ptr, "cam_position_ptr");
 
             // Optional pointer
-            CHECK_CUDA_PTR_OPTIONAL(densification_info_ptr, "densification_info_ptr");
-            CHECK_CUDA_PTR_OPTIONAL(densification_error_map_ptr, "densification_error_map_ptr");
-            CHECK_CUDA_PTR_OPTIONAL(grad_w2c_ptr, "grad_w2c_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_info_ptr, "densification_info_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_error_map_ptr, "densification_error_map_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_w2c_ptr, "grad_w2c_ptr");
         } catch (const std::exception& e) {
             release_forward_context(forward_ctx);
             last_backward_error = e.what();
@@ -542,28 +542,29 @@ namespace fast_lfs::rasterization {
                 if (!grad_normal_helper) {
                     throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate normal gradient helper buffer from arena");
                 }
-                CUDA_CHECK(cudaMemsetAsync(grad_normal_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float3), stream),
-                           "cudaMemsetAsync(grad_normal_helper)");
+                LFS_CUDA_CHECK_MSG(
+                    cudaMemsetAsync(grad_normal_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float3), stream),
+                    "cudaMemsetAsync(grad_normal_helper)");
             }
 
             // Zero out helper buffers
             const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * 2 * sizeof(float);
             const size_t grad_conic_size = static_cast<size_t>(n_primitives) * 3 * sizeof(float);
             const size_t grad_depth_size = static_cast<size_t>(n_primitives) * sizeof(float);
-            CUDA_CHECK(cudaMemsetAsync(grad_mean2d_helper, 0, grad_mean2d_size, stream),
-                       "cudaMemsetAsync(grad_mean2d_helper)");
-            CUDA_CHECK(cudaMemsetAsync(grad_conic_helper, 0, grad_conic_size, stream),
-                       "cudaMemsetAsync(grad_conic_helper)");
-            CUDA_CHECK(cudaMemsetAsync(grad_depth_helper, 0, grad_depth_size, stream),
-                       "cudaMemsetAsync(grad_depth_helper)");
-            CUDA_CHECK(cudaMemsetAsync(grad_opacity_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float), stream),
-                       "cudaMemsetAsync(grad_opacity_helper)");
-            CUDA_CHECK(cudaMemsetAsync(grad_color_helper, 0, static_cast<size_t>(n_primitives) * 3 * sizeof(float), stream),
-                       "cudaMemsetAsync(grad_color_helper)");
+            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_mean2d_helper, 0, grad_mean2d_size, stream),
+                                 "cudaMemsetAsync(grad_mean2d_helper)");
+            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_conic_helper, 0, grad_conic_size, stream),
+                                 "cudaMemsetAsync(grad_conic_helper)");
+            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_depth_helper, 0, grad_depth_size, stream),
+                                 "cudaMemsetAsync(grad_depth_helper)");
+            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_opacity_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float), stream),
+                                 "cudaMemsetAsync(grad_opacity_helper)");
+            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_color_helper, 0, static_cast<size_t>(n_primitives) * 3 * sizeof(float), stream),
+                                 "cudaMemsetAsync(grad_color_helper)");
 
             if (grad_w2c_ptr) {
-                CUDA_CHECK(cudaMemsetAsync(grad_w2c_ptr, 0, 4 * 4 * sizeof(float), stream),
-                           "cudaMemsetAsync(grad_w2c)");
+                LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(grad_w2c_ptr, 0, 4 * 4 * sizeof(float), stream),
+                                     "cudaMemsetAsync(grad_w2c)");
             }
 
             // Call the actual backward implementation
@@ -642,9 +643,13 @@ namespace fast_lfs::rasterization {
                                       + 3 * sizeof(float)                                 // cam_pos
                                       + IMG_WIDTH * IMG_HEIGHT * 5 * sizeof(float);       // image + alpha + depth
 
-        char* buffer;
-        cudaMalloc(&buffer, INPUT_SIZE);
-        cudaMemset(buffer, 0, INPUT_SIZE);
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        lfs::training::cuda_scratch::DeviceBuffer input_buffer(
+            INPUT_SIZE, stream, "fastgs.warmup.input");
+        char* const buffer = input_buffer.as<char>();
+        LFS_CUDA_CHECK_MSG(
+            cudaMemsetAsync(buffer, 0, INPUT_SIZE, stream),
+            "FastGS warmup input initialization");
 
         float* const means = reinterpret_cast<float*>(buffer);
         float* const scales = means + NUM_GAUSSIANS * 3;
@@ -662,13 +667,23 @@ namespace fast_lfs::rasterization {
         for (int i = 0; i < NUM_GAUSSIANS; ++i) {
             rot_data[i * 4] = 1.0f; // w=1, x=y=z=0
         }
-        cudaMemcpy(rotations, rot_data.data(), rot_data.size() * sizeof(float), cudaMemcpyHostToDevice);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(rotations, rot_data.data(), rot_data.size() * sizeof(float),
+                            cudaMemcpyHostToDevice, stream),
+            "FastGS warmup rotation upload");
 
         // Initialize w2c to identity and camera position
         const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         const float cam[3] = {0.0f, 0.0f, 5.0f};
-        cudaMemcpy(w2c, identity, sizeof(identity), cudaMemcpyHostToDevice);
-        cudaMemcpy(cam_pos, cam, sizeof(cam), cudaMemcpyHostToDevice);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(w2c, identity, sizeof(identity), cudaMemcpyHostToDevice, stream),
+            "FastGS warmup transform upload");
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(cam_pos, cam, sizeof(cam), cudaMemcpyHostToDevice, stream),
+            "FastGS warmup camera upload");
+        LFS_CUDA_CHECK_MSG(
+            cudaStreamSynchronize(stream),
+            "FastGS warmup input upload sync");
 
         // Forward pass compiles forward kernels
         const auto ctx = forward_raw(
@@ -687,9 +702,13 @@ namespace fast_lfs::rasterization {
             constexpr size_t GRAD_SIZE = IMG_WIDTH * IMG_HEIGHT * 4 * sizeof(float);
             constexpr size_t MOMENT_Q_SIZE = PARAM_ELEMENTS * 2 * sizeof(std::uint8_t);
             constexpr size_t SCALE_SIZE = PARAM_ROWS * 2 * sizeof(float);
-            char* grad_buffer;
-            cudaMalloc(&grad_buffer, GRAD_SIZE + MOMENT_Q_SIZE + SCALE_SIZE);
-            cudaMemset(grad_buffer, 0, GRAD_SIZE + MOMENT_Q_SIZE + SCALE_SIZE);
+            constexpr size_t GRAD_BUFFER_SIZE = GRAD_SIZE + MOMENT_Q_SIZE + SCALE_SIZE;
+            lfs::training::cuda_scratch::DeviceBuffer gradient_buffer(
+                GRAD_BUFFER_SIZE, stream, "fastgs.warmup.gradients");
+            char* const grad_buffer = gradient_buffer.as<char>();
+            LFS_CUDA_CHECK_MSG(
+                cudaMemsetAsync(grad_buffer, 0, GRAD_BUFFER_SIZE, stream),
+                "FastGS warmup gradient initialization");
 
             float* const grad_image = reinterpret_cast<float*>(grad_buffer);
             float* const grad_alpha = grad_image + IMG_WIDTH * IMG_HEIGHT * 3;
@@ -734,13 +753,9 @@ namespace fast_lfs::rasterization {
                 IMG_WIDTH, IMG_HEIGHT, FOCAL, FOCAL, CENTER_X, CENTER_Y, true,
                 DensificationType::None, &warmup_adam);
 
-            cudaFree(grad_buffer);
         } else {
             lfs::core::GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id);
         }
-
-        cudaFree(buffer);
-        // Note: cudaFree is synchronous, no need for cudaDeviceSynchronize
     }
 
 } // namespace fast_lfs::rasterization

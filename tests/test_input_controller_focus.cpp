@@ -1201,10 +1201,10 @@ namespace lfs::vis {
                         .getTriggerForAction(input::Action::TOOL_MIRROR,
                                              input::ToolMode::SELECTION)
                         .has_value());
-        EXPECT_FALSE(controller.getBindings()
-                         .getTriggerForAction(input::Action::TOOL_MIRROR,
-                                              input::ToolMode::GLOBAL)
-                         .has_value());
+        EXPECT_TRUE(controller.getBindings()
+                        .getTriggerForAction(input::Action::TOOL_MIRROR,
+                                             input::ToolMode::GLOBAL)
+                        .has_value());
     }
 
     TEST_F(InputControllerFocusTest, ToolLocalOperationalShortcutsDoNotResolveAcrossModes) {

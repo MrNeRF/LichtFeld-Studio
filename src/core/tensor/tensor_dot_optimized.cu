@@ -7,6 +7,7 @@
  * - GPU-aware grid sizing for full SM utilization
  */
 
+#include "core/cuda_error.hpp"
 #include "internal/gpu_config.hpp"
 #include "internal/tensor_ops.hpp"
 #include "internal/warp_reduce.cuh"
@@ -113,7 +114,7 @@ namespace lfs::core::tensor_ops {
 
     void launch_dot_product(const float* a, const float* b, float* result, size_t n, cudaStream_t stream) {
         if (n == 0) {
-            cudaMemsetAsync(result, 0, sizeof(float), stream);
+            LFS_CUDA_CHECK(cudaMemsetAsync(result, 0, sizeof(float), stream));
             return;
         }
 
@@ -125,10 +126,10 @@ namespace lfs::core::tensor_ops {
 
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
         float* partials = nullptr;
-        cudaMallocAsync(&partials, grid * sizeof(float), stream);
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, grid * sizeof(float), stream));
         dot_stage1<<<grid, BLOCK, 0, stream>>>(a, b, partials, n);
         reduce_partials_sum<<<1, BLOCK, 0, stream>>>(partials, result, grid);
-        cudaFreeAsync(partials, stream);
+        LFS_CUDA_CHECK(cudaFreeAsync(partials, stream));
     }
 
     // ============================================================================
@@ -175,7 +176,7 @@ namespace lfs::core::tensor_ops {
 
     void launch_sum_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
         if (n == 0) {
-            cudaMemsetAsync(result, 0, sizeof(float), stream);
+            LFS_CUDA_CHECK(cudaMemsetAsync(result, 0, sizeof(float), stream));
             return;
         }
 
@@ -187,15 +188,15 @@ namespace lfs::core::tensor_ops {
 
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
         float* partials = nullptr;
-        cudaMallocAsync(&partials, grid * sizeof(float), stream);
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, grid * sizeof(float), stream));
         unary_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, identity_op{});
         reduce_partials_sum<<<1, BLOCK, 0, stream>>>(partials, result, grid);
-        cudaFreeAsync(partials, stream);
+        LFS_CUDA_CHECK(cudaFreeAsync(partials, stream));
     }
 
     void launch_mean_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
         if (n == 0) {
-            cudaMemsetAsync(result, 0, sizeof(float), stream);
+            LFS_CUDA_CHECK(cudaMemsetAsync(result, 0, sizeof(float), stream));
             return;
         }
         launch_sum_scalar(data, result, n, stream);
@@ -204,7 +205,7 @@ namespace lfs::core::tensor_ops {
 
     void launch_l1_norm(const float* data, float* result, size_t n, cudaStream_t stream) {
         if (n == 0) {
-            cudaMemsetAsync(result, 0, sizeof(float), stream);
+            LFS_CUDA_CHECK(cudaMemsetAsync(result, 0, sizeof(float), stream));
             return;
         }
 
@@ -216,15 +217,15 @@ namespace lfs::core::tensor_ops {
 
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
         float* partials = nullptr;
-        cudaMallocAsync(&partials, grid * sizeof(float), stream);
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, grid * sizeof(float), stream));
         unary_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, abs_op{});
         reduce_partials_sum<<<1, BLOCK, 0, stream>>>(partials, result, grid);
-        cudaFreeAsync(partials, stream);
+        LFS_CUDA_CHECK(cudaFreeAsync(partials, stream));
     }
 
     void launch_l2_norm(const float* data, float* result, size_t n, cudaStream_t stream) {
         if (n == 0) {
-            cudaMemsetAsync(result, 0, sizeof(float), stream);
+            LFS_CUDA_CHECK(cudaMemsetAsync(result, 0, sizeof(float), stream));
             return;
         }
 
@@ -237,11 +238,11 @@ namespace lfs::core::tensor_ops {
 
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
         float* partials = nullptr;
-        cudaMallocAsync(&partials, grid * sizeof(float), stream);
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, grid * sizeof(float), stream));
         unary_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, square_op{});
         reduce_partials_sum<<<1, BLOCK, 0, stream>>>(partials, result, grid);
         sqrt_inplace<<<1, 1, 0, stream>>>(result);
-        cudaFreeAsync(partials, stream);
+        LFS_CUDA_CHECK(cudaFreeAsync(partials, stream));
     }
 
     // ============================================================================
@@ -300,7 +301,7 @@ namespace lfs::core::tensor_ops {
     void launch_max_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
         if (n == 0) {
             float v = -FLT_MAX;
-            cudaMemcpyAsync(result, &v, sizeof(float), cudaMemcpyHostToDevice, stream);
+            LFS_CUDA_CHECK(cudaMemcpyAsync(result, &v, sizeof(float), cudaMemcpyHostToDevice, stream));
             return;
         }
 
@@ -312,16 +313,16 @@ namespace lfs::core::tensor_ops {
 
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
         float* partials = nullptr;
-        cudaMallocAsync(&partials, grid * sizeof(float), stream);
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, grid * sizeof(float), stream));
         minmax_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, -FLT_MAX, max_op{});
         reduce_partials_max<<<1, BLOCK, 0, stream>>>(partials, result, grid);
-        cudaFreeAsync(partials, stream);
+        LFS_CUDA_CHECK(cudaFreeAsync(partials, stream));
     }
 
     void launch_min_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
         if (n == 0) {
             float v = FLT_MAX;
-            cudaMemcpyAsync(result, &v, sizeof(float), cudaMemcpyHostToDevice, stream);
+            LFS_CUDA_CHECK(cudaMemcpyAsync(result, &v, sizeof(float), cudaMemcpyHostToDevice, stream));
             return;
         }
 
@@ -333,10 +334,10 @@ namespace lfs::core::tensor_ops {
 
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
         float* partials = nullptr;
-        cudaMallocAsync(&partials, grid * sizeof(float), stream);
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, grid * sizeof(float), stream));
         minmax_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, FLT_MAX, min_op{});
         reduce_partials_min<<<1, BLOCK, 0, stream>>>(partials, result, grid);
-        cudaFreeAsync(partials, stream);
+        LFS_CUDA_CHECK(cudaFreeAsync(partials, stream));
     }
 
     // ============================================================================

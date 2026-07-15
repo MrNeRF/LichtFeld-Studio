@@ -4,6 +4,7 @@
 
 #include "io/nvcodec_image_loader.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/environment.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -15,7 +16,6 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <cuda.h> // For CUcontext, cuCtxGetCurrent, cuCtxSetCurrent
 #include <cuda_runtime.h>
@@ -245,11 +245,7 @@ namespace lfs::io {
         }
 
         bool should_run_nvimgcodec_diagnostics() {
-            const char* flag = std::getenv("LFS_NVCODEC_DIAGNOSTICS");
-            if (!flag || !*flag) {
-                return false;
-            }
-            return std::strcmp(flag, "0") != 0;
+            return lfs::core::environment::flag("LFS_NVCODEC_DIAGNOSTICS");
         }
 
         bool check_nvimgcodec_availability_fast() {
