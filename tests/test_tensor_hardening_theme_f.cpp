@@ -38,13 +38,19 @@ namespace {
     public:
         PinnedFallbackGuard() {
             auto& allocator = PinnedMemoryAllocator::instance();
+            previous_enabled_ = allocator.is_enabled();
             allocator.set_enabled(true);
             allocator.set_force_fallback_for_testing(true);
         }
 
         ~PinnedFallbackGuard() {
-            PinnedMemoryAllocator::instance().set_force_fallback_for_testing(false);
+            auto& allocator = PinnedMemoryAllocator::instance();
+            allocator.set_force_fallback_for_testing(false);
+            allocator.set_enabled(previous_enabled_);
         }
+
+    private:
+        bool previous_enabled_ = false;
     };
 
 } // namespace
