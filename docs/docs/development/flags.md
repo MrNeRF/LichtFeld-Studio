@@ -34,6 +34,7 @@ environment variables:
 | Option | Default | Effect |
 | --- | --- | --- |
 | `ENABLE_COMPILER_CACHE` | `ON` | Auto-detects `sccache`, then `ccache`; disable for cold compiler measurements. |
+| `COMPILER_CACHE_PATH_INDEPENDENT` | `ON` when supported | Makes C/C++ compiler paths worktree-independent for single-config GNU/Clang Release and MinSizeRel builds. |
 | `LFS_VCPKG_MAX_CONCURRENCY` | empty | Uses an explicit vcpkg environment setting or caps automatic package-build concurrency at six. |
 | `LFS_DOWNLOAD_CACHE_DIR` | platform cache directory | Stores checksum-verified ONNX Runtime and uv archives outside disposable build trees. |
 
