@@ -138,11 +138,11 @@ namespace lfs::mcp {
 
         const auto& params = *req.params;
 
-        if (!params.contains("name")) {
+        if (!params.contains("name") || !params["name"].is_string()) {
             return make_error_response(
                 req.id,
                 JsonRpcError::INVALID_PARAMS,
-                "Missing 'name' parameter");
+                "Missing or invalid 'name' parameter");
         }
 
         std::string tool_name = params["name"].get<std::string>();

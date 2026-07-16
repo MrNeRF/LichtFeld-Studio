@@ -5,9 +5,14 @@
 #include <gtest/gtest.h>
 
 #include "config.h"
+#include "mcp/mcp_http_server.hpp"
 #include "mcp/mcp_protocol.hpp"
 #include "mcp/mcp_server.hpp"
 #include "mcp/mcp_tools.hpp"
+
+#include <httplib/httplib.h>
+
+#include <stdexcept>
 
 namespace lfs::mcp {
 
@@ -208,6 +213,159 @@ namespace lfs::mcp {
         const auto parsed = json::parse(result["contents"][0]["text"].get<std::string>());
         EXPECT_EQ(parsed["handler"], "narrow");
         EXPECT_EQ(parsed["id"], "example");
+    }
+
+    TEST(McpProtocolTest, ParseRequestExtractsIdForEachIdKind) {
+        const auto int_req = parse_request(R"({"jsonrpc":"2.0","id":42,"method":"ping"})");
+        EXPECT_EQ(int_req.id, RequestId(int64_t{42}));
+
+        const auto string_req = parse_request(R"({"jsonrpc":"2.0","id":"abc-123","method":"ping"})");
+        EXPECT_EQ(string_req.id, RequestId(std::string("abc-123")));
+
+        const auto null_req = parse_request(R"({"jsonrpc":"2.0","id":null,"method":"ping"})");
+        EXPECT_EQ(null_req.id, RequestId(nullptr));
+
+        const auto notification_req = parse_request(R"({"jsonrpc":"2.0","method":"notifications/initialized"})");
+        EXPECT_EQ(notification_req.id, RequestId());
+
+        EXPECT_THROW(parse_request("{not json"), json::parse_error);
+    }
+
+    TEST(McpProtocolTest, RequestIdIntegerEchoedOnSuccessAndErrorPaths) {
+        McpServer server;
+        const auto success = server.handle_request(JsonRpcRequest{.id = int64_t{7}, .method = "ping"});
+        EXPECT_EQ(success.id, RequestId(int64_t{7}));
+        EXPECT_EQ(json::parse(serialize_response(success))["id"], 7);
+
+        const auto failure = server.handle_request(JsonRpcRequest{.id = int64_t{7}, .method = "unknown/method"});
+        EXPECT_EQ(failure.id, RequestId(int64_t{7}));
+        EXPECT_EQ(json::parse(serialize_response(failure))["id"], 7);
+    }
+
+    TEST(McpProtocolTest, RequestIdStringEchoedOnSuccessAndErrorPaths) {
+        McpServer server;
+        const auto success = server.handle_request(JsonRpcRequest{.id = std::string("req-a"), .method = "ping"});
+        EXPECT_EQ(success.id, RequestId(std::string("req-a")));
+        EXPECT_EQ(json::parse(serialize_response(success))["id"], "req-a");
+
+        const auto failure = server.handle_request(JsonRpcRequest{.id = std::string("req-a"), .method = "unknown/method"});
+        EXPECT_EQ(failure.id, RequestId(std::string("req-a")));
+        EXPECT_EQ(json::parse(serialize_response(failure))["id"], "req-a");
+    }
+
+    TEST(McpProtocolTest, RequestIdNullSerializesAsJsonNull) {
+        McpServer server;
+        const auto response = server.handle_request(JsonRpcRequest{.id = nullptr, .method = "unknown/method"});
+        EXPECT_EQ(response.id, RequestId(nullptr));
+
+        const auto body = json::parse(serialize_response(response));
+        ASSERT_TRUE(body.contains("id"));
+        EXPECT_TRUE(body["id"].is_null());
+    }
+
+    TEST(McpProtocolTest, RequestIdAbsentOmitsIdFieldOnSerialization) {
+        McpServer server;
+        JsonRpcRequest req;
+        req.method = "ping";
+        EXPECT_EQ(req.id, RequestId());
+
+        const auto response = server.handle_request(req);
+        EXPECT_EQ(response.id, RequestId());
+
+        const auto body = json::parse(serialize_response(response));
+        EXPECT_FALSE(body.contains("id"));
+    }
+
+    TEST(McpProtocolTest, ToolsCallMissingNameReturnsInvalidParams) {
+        McpServer server;
+        ASSERT_TRUE(server.handle_request(JsonRpcRequest{.id = int64_t{1}, .method = "initialize"}).result.has_value());
+
+        const auto response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{2},
+            .method = "tools/call",
+            .params = json{{"arguments", json::object()}}});
+
+        ASSERT_TRUE(response.error.has_value());
+        EXPECT_EQ(response.error->code, JsonRpcError::INVALID_PARAMS);
+        EXPECT_EQ(response.id, RequestId(int64_t{2}));
+    }
+
+    TEST(McpProtocolTest, ToolsCallNonStringNameReturnsInvalidParamsNotInternalError) {
+        McpServer server;
+        ASSERT_TRUE(server.handle_request(JsonRpcRequest{.id = int64_t{1}, .method = "initialize"}).result.has_value());
+
+        const auto response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{2},
+            .method = "tools/call",
+            .params = json{{"name", 123}, {"arguments", json::object()}}});
+
+        ASSERT_TRUE(response.error.has_value());
+        EXPECT_EQ(response.error->code, JsonRpcError::INVALID_PARAMS);
+        EXPECT_EQ(response.id, RequestId(int64_t{2}));
+    }
+
+    TEST(McpHttpServerTest, MalformedJsonBodyRespondsWithNullIdAndParseError) {
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(47691));
+
+        httplib::Client client("127.0.0.1", 47691);
+        const auto res = client.Post("/mcp", "{not json", "application/json");
+        ASSERT_TRUE(res);
+
+        const auto body = json::parse(res->body);
+        ASSERT_TRUE(body.contains("id"));
+        EXPECT_TRUE(body["id"].is_null());
+        ASSERT_TRUE(body.contains("error"));
+        EXPECT_EQ(body["error"]["code"], JsonRpcError::PARSE_ERROR);
+
+        server.stop();
+    }
+
+    TEST(McpHttpServerTest, ToolHandlerThrowRespondsWithInternalErrorAndEchoedIdNoLeak) {
+        static constexpr const char* tool_name = "test.throwing_tool";
+        static constexpr const char* leaked_detail = "sensitive internal detail";
+        ScopedToolRegistration cleanup(tool_name);
+
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Throws for firewall testing",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "command"}},
+            [](const json&) -> json {
+                throw std::runtime_error(leaked_detail);
+            });
+
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(47692));
+
+        httplib::Client client("127.0.0.1", 47692);
+
+        const json init_req{
+            {"jsonrpc", "2.0"},
+            {"id", 1},
+            {"method", "initialize"},
+            {"params", json::object()}};
+        ASSERT_TRUE(client.Post("/mcp", init_req.dump(), "application/json"));
+
+        const json call_req{
+            {"jsonrpc", "2.0"},
+            {"id", "req-42"},
+            {"method", "tools/call"},
+            {"params", json{{"name", tool_name}, {"arguments", json::object()}}}};
+        const auto res = client.Post("/mcp", call_req.dump(), "application/json");
+        ASSERT_TRUE(res);
+
+        EXPECT_EQ(res->body.find(leaked_detail), std::string::npos);
+
+        const auto body = json::parse(res->body);
+        ASSERT_TRUE(body.contains("id"));
+        EXPECT_EQ(body["id"], "req-42");
+        ASSERT_TRUE(body.contains("error"));
+        EXPECT_EQ(body["error"]["code"], JsonRpcError::INTERNAL_ERROR);
+        EXPECT_EQ(body["error"]["message"].get<std::string>().find(leaked_detail), std::string::npos);
+
+        server.stop();
     }
 
 } // namespace lfs::mcp

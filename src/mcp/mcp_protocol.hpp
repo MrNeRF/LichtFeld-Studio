@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <variant>
@@ -28,16 +29,43 @@ namespace lfs::mcp {
         static constexpr int INTERNAL_ERROR = -32603;
     };
 
+    // A JSON-RPC 2.0 request/response id. Three states, not two: a request can
+    // omit "id" entirely (notification - no response id field on the wire), or
+    // carry an explicit JSON null (used when a parse error left the real id
+    // unknowable), or a real integer/string id to be echoed back verbatim.
+    class LFS_MCP_API RequestId {
+    public:
+        RequestId() = default; // absent -> notification semantics
+        RequestId(std::nullptr_t) : value_(nullptr) {}
+        RequestId(std::int64_t value) : value_(value) {}
+        RequestId(std::string value) : value_(std::move(value)) {}
+
+        // Reads the "id" member of a raw JSON-RPC request object. A missing
+        // "id" key yields the absent/notification state; a present-but-non
+        // conforming id (not string/number/null) degrades to explicit null,
+        // matching JSON-RPC's "id unknowable" handling.
+        static RequestId from_json(const json& request_object);
+
+        // nullopt means the id field must be omitted from the response
+        // (notification); otherwise this is the id's wire representation.
+        std::optional<json> to_json() const;
+
+        bool operator==(const RequestId&) const = default;
+
+    private:
+        std::variant<std::monostate, std::nullptr_t, std::int64_t, std::string> value_;
+    };
+
     struct JsonRpcRequest {
         std::string jsonrpc = "2.0";
-        std::variant<int64_t, std::string> id;
+        RequestId id;
         std::string method;
         std::optional<json> params;
     };
 
     struct JsonRpcResponse {
         std::string jsonrpc = "2.0";
-        std::variant<int64_t, std::string> id;
+        RequestId id;
         std::optional<json> result;
         std::optional<JsonRpcError> error;
     };
@@ -106,13 +134,13 @@ namespace lfs::mcp {
     LFS_MCP_API json initialize_result_to_json(const McpInitializeResult& result);
 
     LFS_MCP_API JsonRpcResponse make_error_response(
-        const std::variant<int64_t, std::string>& id,
+        const RequestId& id,
         int code,
         const std::string& message,
         const std::optional<json>& data = std::nullopt);
 
     LFS_MCP_API JsonRpcResponse make_success_response(
-        const std::variant<int64_t, std::string>& id,
+        const RequestId& id,
         const json& result);
 
 } // namespace lfs::mcp
