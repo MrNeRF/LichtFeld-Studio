@@ -42,6 +42,7 @@ namespace lfs::io {
         // upload it directly to a Vulkan texture, avoiding RGB/RGBA CPU copies.
         [[nodiscard]] bool tonemapToSdrRgba(const AVFrame* frame, const AVStream* stream,
                                             int output_width, int output_height,
+                                            int rotation_degrees,
                                             std::vector<unsigned char>& output_rgba,
                                             std::string& error);
         void reset();

@@ -433,6 +433,7 @@ namespace lfs::gui {
         custom_width_ = std::max(16, player_->sourceWidth());
         custom_height_ = std::max(16, player_->sourceHeight());
         rotation_deg_ = player_->rotation();
+        player_->setPreviewRotation(rotation_deg_);
         hdr_to_sdr_ = player_->isHdr() && player_->isHdrConversionSupported();
         player_->setHdrToSdr(hdr_to_sdr_);
         if (hdr_to_sdr_)
@@ -510,7 +511,7 @@ namespace lfs::gui {
         const uint8_t* upload_data = data;
         std::vector<uint8_t> rotated_buf;
 
-        if (rotation_deg_ != 0) {
+        if (rotation_deg_ != 0 && !player_->currentFrameHasGpuRotation()) {
             rotated_buf.resize(static_cast<size_t>(width) * height * channels);
             if (rotation_deg_ == 180) {
                 for (int y = 0; y < height; ++y)
@@ -1338,14 +1339,24 @@ namespace lfs::gui {
             clearErrorMessage();
         } else if (id == "btn-rotation-cw") {
             rotation_deg_ = (rotation_deg_ + 90) % 360;
+            player_->setPreviewRotation(rotation_deg_);
             if (rotation_value_el_)
                 rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
+            if (player_->isOpen() && player_->currentFrameHasGpuRotation()) {
+                LOG_INFO("HDR preview: re-rendering current frame with libplacebo GPU rotation {} deg", rotation_deg_);
+                player_->seekFrame(player_->currentFrameNumber());
+            }
             texture_needs_update_ = true;
             markContentDirty();
         } else if (id == "btn-rotation-ccw") {
             rotation_deg_ = (rotation_deg_ + 270) % 360;
+            player_->setPreviewRotation(rotation_deg_);
             if (rotation_value_el_)
                 rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
+            if (player_->isOpen() && player_->currentFrameHasGpuRotation()) {
+                LOG_INFO("HDR preview: re-rendering current frame with libplacebo GPU rotation {} deg", rotation_deg_);
+                player_->seekFrame(player_->currentFrameNumber());
+            }
             texture_needs_update_ = true;
             markContentDirty();
         }

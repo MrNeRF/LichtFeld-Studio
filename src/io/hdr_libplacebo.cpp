@@ -57,6 +57,7 @@ namespace lfs::io {
 
         bool tonemap(const AVFrame* const frame, const AVStream* const stream,
                      const int output_width, const int output_height,
+                     const int rotation_degrees,
                      std::vector<unsigned char>& output, std::string& error,
                      HdrTonemapTiming* const timing, const bool keep_rgba) {
             std::lock_guard lock(mutex_);
@@ -91,12 +92,11 @@ namespace lfs::io {
             if (stream)
                 pl_frame_copy_stream_props(&source, stream);
 
-            // The dialog applies the stream display rotation after receiving
-            // RGB data, for both SDR and HDR preview paths. libplacebo also
-            // imports FFmpeg display-matrix rotation, which would otherwise
-            // rotate here and make the dialog apply it a second time. Render
-            // the coded pixel geometry and keep that single UI rotation.
-            source.rotation = PL_ROTATION_0;
+            // Keep display-matrix handling explicit. The HDR preview passes
+            // the dialog's current rotation here so that libplacebo applies it
+            // during rendering rather than the UI rotating an RGBA8 buffer on
+            // the CPU before every upload.
+            source.rotation = pl_rotation_normalize(rotation_degrees / 90);
 
             const bool texture_ready = recreateOutput(output_width, output_height, error);
             if (!texture_ready) {
@@ -237,14 +237,17 @@ namespace lfs::io {
                                               const int output_width, const int output_height,
                                               std::vector<unsigned char>& output_rgb,
                                               std::string& error, HdrTonemapTiming* const timing) {
-        return impl_->tonemap(frame, stream, output_width, output_height, output_rgb, error, timing, false);
+        return impl_->tonemap(frame, stream, output_width, output_height, 0,
+                              output_rgb, error, timing, false);
     }
 
     bool HdrLibplaceboRenderer::tonemapToSdrRgba(const AVFrame* const frame, const AVStream* const stream,
                                                   const int output_width, const int output_height,
+                                                  const int rotation_degrees,
                                                   std::vector<unsigned char>& output_rgba,
                                                   std::string& error) {
-        return impl_->tonemap(frame, stream, output_width, output_height, output_rgba, error, nullptr, true);
+        return impl_->tonemap(frame, stream, output_width, output_height, rotation_degrees,
+                              output_rgba, error, nullptr, true);
     }
 
     void HdrLibplaceboRenderer::reset() { impl_->reset(); }

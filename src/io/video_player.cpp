@@ -156,6 +156,9 @@ namespace lfs::io {
     struct DecodedFrame {
         std::vector<uint8_t> data;
         int channels = 3;
+        int width = 0;
+        int height = 0;
+        bool gpu_rotation = false;
         double pts = 0;
         int64_t frame_number = 0;
     };
@@ -174,10 +177,9 @@ namespace lfs::io {
                 return false;
             }
 
-            // This component is deliberately video-only. MOV/MP4 headers
-            // already contain all decoder and Dolby Vision configuration we
-            // need, so do not invoke FFmpeg's global stream-info probe: it
-            // would inspect unsupported audio tracks that are never used.
+            // Find the video stream from container headers first. This lets us
+            // discard every non-video stream before asking FFmpeg to inspect
+            // packets for codec-level colour metadata.
             video_stream_idx_ = findUsableHeaderVideoStream(fmt_ctx_);
             if (video_stream_idx_ < 0) {
                 // Keep a conservative fallback for containers whose video
@@ -195,6 +197,15 @@ namespace lfs::io {
             }
 
             discardNonVideoStreams(fmt_ctx_, video_stream_idx_);
+
+            // Some MP4 files carry HDR mastering/transfer data only in the
+            // HEVC bitstream rather than in the sample entry. Probe only the
+            // selected video stream so PQ/HLG detection is complete without
+            // involving unsupported audio tracks, then rewind before decode.
+            if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
+                LOG_WARN("VideoPlayer: could not complete video-only stream metadata probe");
+            }
+            av_seek_frame(fmt_ctx_, video_stream_idx_, 0, AVSEEK_FLAG_BACKWARD);
 
             AVStream* const stream = fmt_ctx_->streams[video_stream_idx_];
             const AVCodecID codec_id = stream->codecpar->codec_id;
@@ -258,6 +269,13 @@ namespace lfs::io {
                     is_hdr_ = true;
                     hdr_info_ = hdrFormatLabel(hdr_format_);
                 }
+            }
+            if (is_hdr_) {
+                LOG_INFO("VideoPlayer: detected HDR format {} (transfer={}, primaries={}, matrix={}, pixel_format={})",
+                         hdr_info_, static_cast<int>(stream->codecpar->color_trc),
+                         static_cast<int>(stream->codecpar->color_primaries),
+                         static_cast<int>(stream->codecpar->color_space),
+                         av_get_pix_fmt_name(static_cast<AVPixelFormat>(stream->codecpar->format)));
             }
 
             // NVDEC frames can omit the colour fields carried by MOV/MP4.
@@ -371,6 +389,9 @@ namespace lfs::io {
             if (decodeNextFrame()) {
                 display_buffer_ = std::move(decoded_frame_.data);
                 display_channels_ = decoded_frame_.channels;
+                display_width_ = decoded_frame_.width;
+                display_height_ = decoded_frame_.height;
+                display_gpu_rotation_ = decoded_frame_.gpu_rotation;
                 current_time_ = decoded_frame_.pts;
                 current_frame_ = decoded_frame_.frame_number;
 
@@ -454,12 +475,16 @@ namespace lfs::io {
             using_hw_decode_ = false;
             is_hdr_ = false;
             hdr_to_sdr_ = false;
+            preview_rotation_ = 0;
             logged_hdr_rgba_preview_path_ = false;
             hdr_format_ = HdrFormat::SDR;
             source_colorspace_ = AVCOL_SPC_UNSPECIFIED;
             source_range_ = AVCOL_RANGE_UNSPECIFIED;
             current_time_ = 0;
             current_frame_ = 0;
+            display_width_ = 0;
+            display_height_ = 0;
+            display_gpu_rotation_ = false;
             playback_start_time_ = -1.0;
             eof_reached_ = false;
         }
@@ -522,6 +547,9 @@ namespace lfs::io {
                     frame_queue_.pop();
                     display_buffer_ = std::move(frame.data);
                     display_channels_ = frame.channels;
+                    display_width_ = frame.width;
+                    display_height_ = frame.height;
+                    display_gpu_rotation_ = frame.gpu_rotation;
                     current_time_ = frame.pts;
                     current_frame_ = frame.frame_number;
                 }
@@ -545,6 +573,9 @@ namespace lfs::io {
 
                 display_buffer_ = std::move(frame.data);
                 display_channels_ = frame.channels;
+                display_width_ = frame.width;
+                display_height_ = frame.height;
+                display_gpu_rotation_ = frame.gpu_rotation;
                 current_time_ = frame.pts;
                 current_frame_ = frame.frame_number;
             }
@@ -593,6 +624,9 @@ namespace lfs::io {
                 frame_queue_.pop();
                 display_buffer_ = std::move(frame.data);
                 display_channels_ = frame.channels;
+                display_width_ = frame.width;
+                display_height_ = frame.height;
+                display_gpu_rotation_ = frame.gpu_rotation;
                 current_time_ = frame.pts;
                 current_frame_ = frame.frame_number;
                 presented = true;
@@ -608,9 +642,10 @@ namespace lfs::io {
             return display_buffer_.empty() ? nullptr : display_buffer_.data();
         }
         [[nodiscard]] int currentFrameChannels() const { return display_channels_; }
+        [[nodiscard]] bool currentFrameHasGpuRotation() const { return display_gpu_rotation_; }
 
-        [[nodiscard]] int width() const { return width_; }
-        [[nodiscard]] int height() const { return height_; }
+        [[nodiscard]] int width() const { return display_width_; }
+        [[nodiscard]] int height() const { return display_height_; }
         [[nodiscard]] int sourceWidth() const { return src_width_; }
         [[nodiscard]] int sourceHeight() const { return src_height_; }
         [[nodiscard]] int rotation() const { return rotation_; }
@@ -622,6 +657,10 @@ namespace lfs::io {
         void setHdrToSdr(const bool enabled) {
             const bool value = enabled && isHdrConversionSupported();
             hdr_to_sdr_.store(value);
+        }
+        void setPreviewRotation(const int degrees) {
+            const int normalized = ((degrees % 360) + 360) % 360;
+            preview_rotation_.store(normalized - normalized % 90);
         }
         [[nodiscard]] double currentTime() const { return current_time_; }
         [[nodiscard]] double duration() const { return duration_; }
@@ -640,23 +679,23 @@ namespace lfs::io {
                 return {};
             }
 
-            if (max_width > 0 && width_ > max_width) {
-                const int thumb_height = height_ * max_width / width_;
+            if (max_width > 0 && display_width_ > max_width) {
+                const int thumb_height = display_height_ * max_width / display_width_;
                 std::vector<uint8_t> thumb(static_cast<size_t>(max_width) * thumb_height * 3);
 
                 const AVPixelFormat preview_format =
                     display_channels_ == 4 ? AV_PIX_FMT_RGBA : AV_PIX_FMT_RGB24;
                 SwsContext* const thumb_sws =
-                    sws_getContext(width_, height_, preview_format, max_width, thumb_height,
+                    sws_getContext(display_width_, display_height_, preview_format, max_width, thumb_height,
                                    AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
 
                 if (thumb_sws) {
                     uint8_t* src_data[1] = {display_buffer_.data()};
-                    int src_linesize[1] = {width_ * display_channels_};
+                    int src_linesize[1] = {display_width_ * display_channels_};
                     uint8_t* dst_data[1] = {thumb.data()};
                     int dst_linesize[1] = {max_width * 3};
 
-                    sws_scale(thumb_sws, src_data, src_linesize, 0, height_, dst_data, dst_linesize);
+                    sws_scale(thumb_sws, src_data, src_linesize, 0, display_height_, dst_data, dst_linesize);
                     sws_freeContext(thumb_sws);
                 }
                 return thumb;
@@ -672,7 +711,7 @@ namespace lfs::io {
 
                 queue_cv_.wait(lock, [this] {
                     return stop_decode_thread_ || seek_requested_ ||
-                           frame_queue_.size() < FRAME_QUEUE_SIZE;
+                           (!eof_reached_ && frame_queue_.size() < FRAME_QUEUE_SIZE);
                 });
 
                 if (stop_decode_thread_) {
@@ -713,6 +752,10 @@ namespace lfs::io {
             // The demuxer must seek first; flushing afterwards discards only
             // decoder state from the old position before feeding new packets.
             avcodec_flush_buffers(codec_ctx_);
+            av_packet_unref(packet_);
+            packet_pending_ = false;
+            demux_eof_ = false;
+            decoder_drain_sent_ = false;
             eof_reached_ = false;
 
             skip_video_conversion_ = true;
@@ -731,26 +774,66 @@ namespace lfs::io {
         }
 
         bool decodeNextFrame() {
-            while (av_read_frame(fmt_ctx_, packet_) >= 0) {
-                if (packet_->stream_index == video_stream_idx_) {
-                    if (avcodec_send_packet(codec_ctx_, packet_) == 0) {
-                        if (avcodec_receive_frame(codec_ctx_, frame_) == 0) {
-                            convertFrameToBuffer();
-                            av_packet_unref(packet_);
-                            return true;
-                        }
-                    }
+            // FFmpeg's send/receive API is a two-way state machine: drain every
+            // available decoded frame before feeding another packet. In particular,
+            // AVERROR(EAGAIN) from avcodec_send_packet() means that packet was not
+            // consumed and must be retained until receive_frame() makes room.
+            while (true) {
+                const int receive_result = avcodec_receive_frame(codec_ctx_, frame_);
+                if (receive_result == 0) {
+                    convertFrameToBuffer();
+                    return true;
                 }
-                av_packet_unref(packet_);
-            }
+                if (receive_result == AVERROR_EOF)
+                    return false;
+                if (receive_result != AVERROR(EAGAIN)) {
+                    LOG_WARN("VideoPlayer: decoder receive failed ({})", receive_result);
+                    return false;
+                }
 
-            avcodec_send_packet(codec_ctx_, nullptr);
-            if (avcodec_receive_frame(codec_ctx_, frame_) == 0) {
-                convertFrameToBuffer();
-                return true;
-            }
+                if (packet_pending_) {
+                    const int send_result = avcodec_send_packet(codec_ctx_, packet_);
+                    if (send_result == 0) {
+                        av_packet_unref(packet_);
+                        packet_pending_ = false;
+                        continue;
+                    }
+                    if (send_result == AVERROR(EAGAIN))
+                        continue;
 
-            return false;
+                    LOG_WARN("VideoPlayer: decoder packet submission failed ({})", send_result);
+                    av_packet_unref(packet_);
+                    packet_pending_ = false;
+                    continue;
+                }
+
+                if (demux_eof_) {
+                    if (decoder_drain_sent_)
+                        return false;
+
+                    const int flush_result = avcodec_send_packet(codec_ctx_, nullptr);
+                    if (flush_result == 0 || flush_result == AVERROR_EOF) {
+                        decoder_drain_sent_ = true;
+                        continue;
+                    }
+                    if (flush_result == AVERROR(EAGAIN))
+                        continue;
+
+                    LOG_WARN("VideoPlayer: decoder drain submission failed ({})", flush_result);
+                    return false;
+                }
+
+                while (av_read_frame(fmt_ctx_, packet_) >= 0) {
+                    if (packet_->stream_index == video_stream_idx_) {
+                        packet_pending_ = true;
+                        break;
+                    }
+                    av_packet_unref(packet_);
+                }
+
+                if (!packet_pending_)
+                    demux_eof_ = true;
+            }
         }
 
         void convertFrameToBuffer() {
@@ -759,6 +842,9 @@ namespace lfs::io {
             if (skip_video_conversion_) {
                 decoded_frame_.data.clear();
                 decoded_frame_.channels = 3;
+                decoded_frame_.width = width_;
+                decoded_frame_.height = height_;
+                decoded_frame_.gpu_rotation = false;
                 decoded_frame_.pts = static_cast<double>(frame_->pts) * time_base_;
                 decoded_frame_.frame_number = static_cast<int64_t>(decoded_frame_.pts * fps_);
                 return;
@@ -783,15 +869,24 @@ namespace lfs::io {
                 if (!hdr_renderer_)
                     hdr_renderer_ = std::make_unique<HdrLibplaceboRenderer>();
                 std::string renderer_error;
+                const int rotation = preview_rotation_.load();
+                const bool swapped_dimensions = rotation == 90 || rotation == 270;
+                const int output_width = swapped_dimensions ? height_ : width_;
+                const int output_height = swapped_dimensions ? width_ : height_;
                 if (!hdr_renderer_->tonemapToSdrRgba(src_frame, fmt_ctx_->streams[video_stream_idx_],
-                                                      width_, height_, decoded_frame_.data, renderer_error)) {
+                                                       output_width, output_height, rotation,
+                                                       decoded_frame_.data, renderer_error)) {
                     LOG_ERROR("HDR preview renderer failed: {}", renderer_error);
                     decoded_frame_.data.clear();
                     return;
                 }
                 decoded_frame_.channels = 4;
+                decoded_frame_.width = output_width;
+                decoded_frame_.height = output_height;
+                decoded_frame_.gpu_rotation = true;
                 if (!logged_hdr_rgba_preview_path_) {
-                    LOG_INFO("HDR preview: libplacebo RGBA8 readback -> Vulkan UI upload (CPU RGB/RGBA conversion bypassed)");
+                    LOG_INFO("HDR preview: libplacebo RGBA8 readback -> Vulkan UI upload "
+                             "(CPU RGB/RGBA conversion bypassed, GPU rotation={} deg)", rotation);
                     logged_hdr_rgba_preview_path_ = true;
                 }
             } else {
@@ -801,6 +896,9 @@ namespace lfs::io {
                 sws_scale(sws_ctx_, src_frame->data, src_frame->linesize, 0, src_height_, dst_data,
                           dst_linesize);
                 decoded_frame_.channels = 3;
+                decoded_frame_.width = width_;
+                decoded_frame_.height = height_;
+                decoded_frame_.gpu_rotation = false;
             }
 
             decoded_frame_.pts = static_cast<double>(frame_->pts) * time_base_;
@@ -814,6 +912,9 @@ namespace lfs::io {
         AVFrame* frame_ = nullptr;
         AVFrame* sw_frame_ = nullptr;
         AVPacket* packet_ = nullptr;
+        bool packet_pending_ = false;
+        bool demux_eof_ = false;
+        bool decoder_drain_sent_ = false;
         bool using_hw_decode_ = false;
 
         int video_stream_idx_ = -1;
@@ -833,12 +934,16 @@ namespace lfs::io {
         AVColorSpace source_colorspace_ = AVCOL_SPC_UNSPECIFIED;
         AVColorRange source_range_ = AVCOL_RANGE_UNSPECIFIED;
         std::atomic<bool> hdr_to_sdr_{false};
+        std::atomic<int> preview_rotation_{0};
         bool skip_video_conversion_ = false;
         bool logged_hdr_rgba_preview_path_ = false;
         std::unique_ptr<HdrLibplaceboRenderer> hdr_renderer_;
 
         std::vector<uint8_t> display_buffer_;
         int display_channels_ = 3;
+        int display_width_ = 0;
+        int display_height_ = 0;
+        bool display_gpu_rotation_ = false;
         double current_time_ = 0;
         int64_t current_frame_ = 0;
 
@@ -879,6 +984,7 @@ namespace lfs::io {
 
     const uint8_t* VideoPlayer::currentFrameData() const { return impl_->currentFrameData(); }
     int VideoPlayer::currentFrameChannels() const { return impl_->currentFrameChannels(); }
+    bool VideoPlayer::currentFrameHasGpuRotation() const { return impl_->currentFrameHasGpuRotation(); }
     int VideoPlayer::width() const { return impl_->width(); }
     int VideoPlayer::height() const { return impl_->height(); }
     int VideoPlayer::sourceWidth() const { return impl_->sourceWidth(); }
@@ -888,6 +994,7 @@ namespace lfs::io {
     bool VideoPlayer::isHdrConversionSupported() const { return impl_->isHdrConversionSupported(); }
     std::string VideoPlayer::hdrInfo() const { return impl_->hdrInfo(); }
     void VideoPlayer::setHdrToSdr(const bool enabled) { impl_->setHdrToSdr(enabled); }
+    void VideoPlayer::setPreviewRotation(const int degrees) { impl_->setPreviewRotation(degrees); }
 
     double VideoPlayer::currentTime() const { return impl_->currentTime(); }
     double VideoPlayer::duration() const { return impl_->duration(); }

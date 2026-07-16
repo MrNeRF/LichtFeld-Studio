@@ -40,6 +40,7 @@ namespace lfs::io {
         // Get current frame as RGB or RGBA data (call after update returns true).
         const uint8_t* currentFrameData() const;
         int currentFrameChannels() const;
+        bool currentFrameHasGpuRotation() const;
         int width() const;
         int height() const;
         int sourceWidth() const;
@@ -62,6 +63,7 @@ namespace lfs::io {
         bool isHdrConversionSupported() const;
         std::string hdrInfo() const;
         void setHdrToSdr(bool enabled);
+        void setPreviewRotation(int degrees);
 
     private:
         class Impl;

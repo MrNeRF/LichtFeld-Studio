@@ -427,17 +427,14 @@ namespace lfs::io {
                 discardNonVideoStreams(fmt_ctx, video_stream_idx);
 
                 AVStream* video_stream = fmt_ctx->streams[video_stream_idx];
-                // Header-only opening is intentionally used to avoid probing unsupported
-                // audio tracks. Some MOV files, however, expose their video duration only
-                // after packet probing. Probe after discarding every non-video stream, then
-                // reset to the beginning so extraction remains deterministic.
-                if (fmt_ctx->duration == AV_NOPTS_VALUE ||
-                    video_stream->duration == AV_NOPTS_VALUE) {
-                    if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
-                        LOG_WARN("Could not complete video-only stream timing probe; sparse seeking may be unavailable");
-                    }
-                    av_seek_frame(fmt_ctx, video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
+                // Metadata may live in HEVC packets instead of the container
+                // header (notably PQ/HLG signalling). Probe only after every
+                // non-video stream is discarded, then rewind so decoding and
+                // frame selection remain deterministic.
+                if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+                    LOG_WARN("Could not complete video-only stream metadata probe; some source metadata may be unavailable");
                 }
+                av_seek_frame(fmt_ctx, video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
                 const AVCodecID codec_id = video_stream->codecpar->codec_id;
                 int dv_profile = 0;
                 int dv_compatibility = 0;
