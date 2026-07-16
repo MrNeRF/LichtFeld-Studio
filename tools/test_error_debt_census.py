@@ -392,6 +392,32 @@ class ErrorDebtCensusTests(unittest.TestCase):
             stdout.getvalue(),
         )
 
+    def test_empty_catch_reviewed_annotation_is_exempt(self) -> None:
+        self.write(
+            "core/reviewed.cpp",
+            "void f() {\n  try {\n    g();\n  } catch (...) {\n"
+            "    // LFS-CENSUS-OK(empty-catch): best-effort diagnostics only.\n"
+            "  }\n}\n",
+        )
+        self.write(
+            "core/unreviewed.cpp",
+            "void f() {\n  try {\n    g();\n  } catch (...) {\n  }\n}\n",
+        )
+        hits = census.scan(self.root)
+        locations = [hit.location for hit in hits if hit.rule == "empty-catch"]
+        self.assertEqual(["src/core/unreviewed.cpp:4"], locations)
+
+    def test_allowlist_exempts_sanctioned_legacy_bridge_declaration(self) -> None:
+        self.write(
+            "core/include/core/error.hpp",
+            "template <class T>\n"
+            "Result<T> from_legacy_expected(std::expected<T, std::string>&& value);\n"
+            "std::expected<int, std::string> not_sanctioned();\n",
+        )
+        hits = census.scan(self.root)
+        locations = [hit.location for hit in hits if hit.rule == "expected-string"]
+        self.assertEqual(["src/core/include/core/error.hpp:3"], locations)
+
     def test_cli_rejects_unknown_rule_and_missing_baseline(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()

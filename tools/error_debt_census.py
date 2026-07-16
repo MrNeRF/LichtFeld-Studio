@@ -74,6 +74,7 @@ class ScannedFile:
     file: str
     module: str
     masked: str
+    raw: str
     line_starts: tuple[int, ...]
 
     def line_number(self, offset: int) -> int:
@@ -355,6 +356,8 @@ def check_empty_catch(source: ScannedFile) -> list[Hit]:
             continue
 
         body = source.masked[opening_brace + 1 : closing_brace]
+        if "LFS-CENSUS-OK(empty-catch)" in source.raw[opening_brace + 1 : closing_brace]:
+            continue
         reviewed = (
             "LOG_" in body
             or THROW_KEYWORD_RE.search(body) is not None
@@ -508,6 +511,43 @@ RULES = (
 RULE_BY_ID = {rule.rule_id: rule for rule in RULES}
 
 
+@dataclass(frozen=True)
+class AllowlistEntry:
+    """A named, owned exemption. Every entry must carry a reason and an
+    expiry milestone at which it is re-justified or deleted."""
+
+    rule: str
+    file: str
+    line_pattern: str
+    owner: str
+    reason: str
+    expiry: str
+
+
+ALLOWLIST: tuple[AllowlistEntry, ...] = (
+    AllowlistEntry(
+        rule="expected-string",
+        file="src/core/include/core/error.hpp",
+        line_pattern=r"from_legacy_expected",
+        owner="error-architecture",
+        reason="the sanctioned legacy string bridge's own declaration",
+        expiry="Phase 11 (legacy adapters removed)",
+    ),
+)
+
+
+def _is_allowlisted(hit: Hit, source: "ScannedFile") -> bool:
+    for entry in ALLOWLIST:
+        if entry.rule != hit.rule or entry.file != hit.file:
+            continue
+        line_start = source.line_starts[hit.line - 1]
+        line_end = source.raw.find("\n", line_start)
+        raw_line = source.raw[line_start : None if line_end < 0 else line_end]
+        if re.search(entry.line_pattern, raw_line):
+            return True
+    return False
+
+
 def _iter_source_files(root: Path) -> Iterator[Path]:
     """Walk with explicitly sorted directory and file iteration."""
 
@@ -575,10 +615,13 @@ def scan(root: Path = DEFAULT_ROOT) -> list[Hit]:
             file=path.relative_to(display_root).as_posix(),
             module=relative_path.parts[0],
             masked=masked,
+            raw=text,
             line_starts=_line_starts(masked),
         )
         for rule in applicable_rules:
-            hits.extend(rule.checker(source))
+            hits.extend(
+                hit for hit in rule.checker(source) if not _is_allowlisted(hit, source)
+            )
 
     return hits
 
@@ -694,6 +737,10 @@ def _rules_help() -> str:
 
 This is a lexical/regex heuristic, NOT an AST-based checker. Comments and
 literals are masked, but inactive preprocessor branches remain visible.
+
+A reviewed catch-all may be exempted with a raw comment inside the catch body:
+`// LFS-CENSUS-OK(empty-catch): <reason>`. Sanctioned permanent exceptions live
+in ALLOWLIST (each with owner, reason, and expiry).
 
 Known over-counts: mutually exclusive macro definitions are counted separately;
 inactive #if branches count; and a non-launch <<< token can resemble a kernel
