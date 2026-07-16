@@ -378,6 +378,22 @@ namespace lfs::core {
             finish_cuda_check(result, state, expression_copy.c_str(), message, location);
             return;
         }
+        if (result == cudaErrorCudartUnloading) {
+            // Process exit: the CUDA runtime has already shut itself down, so
+            // failed frees are expected and the OS reclaims the memory anyway.
+            // Log once instead of flooding the shutdown log.
+            static std::once_flag logged_once;
+            try {
+                std::call_once(logged_once, [] {
+                    Logger::get().log_internal(
+                        LogLevel::Debug, LFS_SOURCE_SITE_CURRENT(),
+                        "CUDA runtime is unloading (process exit); suppressing CUDA teardown failure reports.");
+                });
+            } catch (...) {
+            }
+            cudaGetLastError(); // clear the sticky error
+            return;
+        }
         try {
             const std::string expression_copy(expression);
             emit_cuda_failure_report(
