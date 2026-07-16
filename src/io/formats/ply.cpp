@@ -544,21 +544,31 @@ namespace lfs::io {
             // Line parsing
             const std::string_view line(line_start, line_len);
             if (line.starts_with("format ")) {
-                LFS_ASSERT_MSG(!has_format,
-                               std::format("PLY header must contain exactly one format line "
-                                           "(duplicate_line={}, text='{}')",
-                                           lines_parsed, line));
-                LFS_ASSERT_MSG(line == "format binary_little_endian 1.0",
-                               std::format("only PLY format binary_little_endian 1.0 is supported "
-                                           "(observed='{}', line={})",
-                                           line, lines_parsed));
+                if (has_format) {
+                    throw_ply_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        std::format("PLY header must contain exactly one format line "
+                                    "(duplicate_line={}, text='{}')",
+                                    lines_parsed, line));
+                }
+                if (line != "format binary_little_endian 1.0") {
+                    throw_ply_error(
+                        lfs::ErrorCode::Unsupported,
+                        std::format("only PLY format binary_little_endian 1.0 is supported "
+                                    "(observed='{}', line={})",
+                                    line, lines_parsed),
+                        lfs::SmallFields{}.add("observed_format", std::string(line)));
+                }
                 is_binary = true;
                 has_format = true;
             } else if (line.starts_with("element ")) {
-                LFS_ASSERT_MSG(has_format,
-                               std::format("PLY format line must precede element declarations "
-                                           "(format_seen=false, element_line={}, text='{}')",
-                                           lines_parsed, line));
+                if (!has_format) {
+                    throw_ply_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        std::format("PLY format line must precede element declarations "
+                                    "(format_seen=false, element_line={}, text='{}')",
+                                    lines_parsed, line));
+                }
                 const std::string_view declaration = trim_ascii_whitespace(line.substr(8));
                 const size_t name_end = declaration.find_first_of(" \t\r");
                 if (name_end == std::string_view::npos)
@@ -573,10 +583,13 @@ namespace lfs::io {
                 }
 
                 if (element_name == ply_constants::VERTEX_ELEMENT) {
-                    LFS_ASSERT_MSG(!has_vertex_element,
-                                   std::format("PLY header must not declare the vertex element more than once "
-                                               "(duplicate_line={}, text='{}')",
-                                               lines_parsed, line));
+                    if (has_vertex_element) {
+                        throw_ply_error(
+                            lfs::ErrorCode::InvalidArgument,
+                            std::format("PLY header must not declare the vertex element more than once "
+                                        "(duplicate_line={}, text='{}')",
+                                        lines_parsed, line));
+                    }
                     layout.vertex_count = element_count;
                     layout.vertex_stride = 0;
                     has_vertex_element = true;
@@ -611,25 +624,36 @@ namespace lfs::io {
                 std::string_view prop_name = trim_ascii_whitespace(property_line.substr(type_end));
                 const size_t name_end = prop_name.find_first_of(" \t\r");
                 if (name_end != std::string_view::npos) {
-                    LFS_ASSERT_MSG(trim_ascii_whitespace(prop_name.substr(name_end)).empty(),
-                                   std::format("PLY property declarations must contain exactly a type "
-                                               "and name (header_line={}, property_type='{}', "
-                                               "property_text='{}', trailing_text='{}')",
-                                               lines_parsed, type, prop_name,
-                                               trim_ascii_whitespace(prop_name.substr(name_end))));
+                    if (!trim_ascii_whitespace(prop_name.substr(name_end)).empty()) {
+                        throw_ply_error(
+                            lfs::ErrorCode::InvalidArgument,
+                            std::format("PLY property declarations must contain exactly a type "
+                                        "and name (header_line={}, property_type='{}', "
+                                        "property_text='{}', trailing_text='{}')",
+                                        lines_parsed, type, prop_name,
+                                        trim_ascii_whitespace(prop_name.substr(name_end))));
+                    }
                     prop_name = prop_name.substr(0, name_end);
                 }
                 if (prop_name.empty()) {
                     throw_ply_error(lfs::ErrorCode::InvalidArgument,
                                     "Malformed PLY property line");
                 }
-                LFS_ASSERT_MSG(is_valid_ply_property_name_token(prop_name),
-                               std::format("PLY vertex property names must be non-empty tokens "
-                                           "(header_line={}, property_type='{}', property_name='{}', "
-                                           "property_name_length={})",
-                                           lines_parsed, type, prop_name, prop_name.size()));
-                LFS_ASSERT_MSG(vertex_property_names.emplace(prop_name).second,
-                               std::format("Duplicate PLY vertex property '{}'", prop_name));
+                if (!is_valid_ply_property_name_token(prop_name)) {
+                    throw_ply_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        std::format("PLY vertex property names must be non-empty tokens "
+                                    "(header_line={}, property_type='{}', property_name='{}', "
+                                    "property_name_length={})",
+                                    lines_parsed, type, prop_name, prop_name.size()),
+                        lfs::SmallFields{}.add("property_name", std::string(prop_name)));
+                }
+                if (!vertex_property_names.emplace(prop_name).second) {
+                    throw_ply_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        std::format("Duplicate PLY vertex property '{}'", prop_name),
+                        lfs::SmallFields{}.add("property_name", std::string(prop_name)));
+                }
                 ++layout.vertex_property_count;
 
                 size_t property_size = 0;
@@ -649,8 +673,14 @@ namespace lfs::io {
                     prop_name.starts_with(ply_constants::REST_PREFIX) ||
                     prop_name.starts_with(ply_constants::SCALE_PREFIX) ||
                     prop_name.starts_with(ply_constants::ROT_PREFIX);
-                LFS_ASSERT_MSG(!gaussian_float_property || is_float32_ply_type(type),
-                               std::format("PLY Gaussian property '{}' must be float32", prop_name));
+                if (gaussian_float_property && !is_float32_ply_type(type)) {
+                    throw_ply_error(
+                        lfs::ErrorCode::InvalidArgument,
+                        std::format("PLY Gaussian property '{}' must be float32", prop_name),
+                        lfs::SmallFields{}
+                            .add("property_name", std::string(prop_name))
+                            .add("property_type", std::string(type)));
+                }
 
                 if (is_float32_ply_type(type)) {
                     // Property recognition using first character + length
@@ -665,33 +695,51 @@ namespace lfs::io {
                         layout.opacity_offset = layout.vertex_stride;
                     } else if (prop_name.starts_with(ply_constants::DC_PREFIX)) {
                         int idx = 0;
-                        LFS_ASSERT_MSG(parse_property_index(prop_name,
-                                                            ply_constants::DC_PREFIX,
-                                                            ply_constants::MAX_DC_COMPONENTS,
-                                                            idx),
-                                       std::format("Invalid PLY DC coefficient property '{}'", prop_name));
+                        if (!parse_property_index(prop_name, ply_constants::DC_PREFIX,
+                                                  ply_constants::MAX_DC_COMPONENTS, idx)) {
+                            throw_ply_error(
+                                lfs::ErrorCode::InvalidArgument,
+                                std::format("Invalid PLY DC coefficient property '{}'", prop_name),
+                                lfs::SmallFields{}
+                                    .add("property_name", std::string(prop_name))
+                                    .add("max_exclusive", static_cast<std::int64_t>(
+                                                              ply_constants::MAX_DC_COMPONENTS)));
+                        }
                         layout.dc_offsets[idx] = layout.vertex_stride;
                         if (idx >= layout.dc_count)
                             layout.dc_count = idx + 1;
                     } else if (prop_name.starts_with(ply_constants::REST_PREFIX)) {
                         int idx = 0;
-                        LFS_ASSERT_MSG(parse_property_index(prop_name,
-                                                            ply_constants::REST_PREFIX,
-                                                            ply_constants::MAX_REST_COMPONENTS,
-                                                            idx),
-                                       std::format("Invalid PLY higher-order coefficient property '{}'", prop_name));
+                        if (!parse_property_index(prop_name, ply_constants::REST_PREFIX,
+                                                  ply_constants::MAX_REST_COMPONENTS, idx)) {
+                            throw_ply_error(
+                                lfs::ErrorCode::InvalidArgument,
+                                std::format("Invalid PLY higher-order coefficient property '{}'", prop_name),
+                                lfs::SmallFields{}
+                                    .add("property_name", std::string(prop_name))
+                                    .add("max_exclusive", static_cast<std::int64_t>(
+                                                              ply_constants::MAX_REST_COMPONENTS)));
+                        }
                         layout.rest_offsets[idx] = layout.vertex_stride;
                         if (idx >= layout.rest_count)
                             layout.rest_count = idx + 1;
                     } else if (prop_name.starts_with(ply_constants::SCALE_PREFIX)) {
                         int idx = 0;
-                        LFS_ASSERT_MSG(parse_property_index(prop_name, ply_constants::SCALE_PREFIX, 3, idx),
-                                       std::format("Invalid PLY scale property '{}'", prop_name));
+                        if (!parse_property_index(prop_name, ply_constants::SCALE_PREFIX, 3, idx)) {
+                            throw_ply_error(
+                                lfs::ErrorCode::InvalidArgument,
+                                std::format("Invalid PLY scale property '{}'", prop_name),
+                                lfs::SmallFields{}.add("property_name", std::string(prop_name)));
+                        }
                         layout.scale_offsets[idx] = layout.vertex_stride;
                     } else if (prop_name.starts_with(ply_constants::ROT_PREFIX)) {
                         int idx = 0;
-                        LFS_ASSERT_MSG(parse_property_index(prop_name, ply_constants::ROT_PREFIX, 4, idx),
-                                       std::format("Invalid PLY rotation property '{}'", prop_name));
+                        if (!parse_property_index(prop_name, ply_constants::ROT_PREFIX, 4, idx)) {
+                            throw_ply_error(
+                                lfs::ErrorCode::InvalidArgument,
+                                std::format("Invalid PLY rotation property '{}'", prop_name),
+                                lfs::SmallFields{}.add("property_name", std::string(prop_name)));
+                        }
                         layout.rot_offsets[idx] = layout.vertex_stride;
                     }
                 }
@@ -783,42 +831,83 @@ namespace lfs::io {
         }
 
         if (layout.has_any_scaling() && !layout.has_scaling()) {
-            throw std::runtime_error("PLY scaling properties must include scale_0, scale_1, and scale_2");
+            throw_ply_error(
+                lfs::ErrorCode::InvalidArgument,
+                "PLY scaling properties must include scale_0, scale_1, and scale_2",
+                lfs::SmallFields{}.add(
+                    "scale_properties_present",
+                    static_cast<std::int64_t>((layout.scale_offsets[0] != SIZE_MAX) +
+                                              (layout.scale_offsets[1] != SIZE_MAX) +
+                                              (layout.scale_offsets[2] != SIZE_MAX))));
         }
 
         if (layout.has_any_rotation() && !layout.has_rotation()) {
-            throw std::runtime_error("PLY rotation properties must include rot_0, rot_1, rot_2, and rot_3");
+            throw_ply_error(
+                lfs::ErrorCode::InvalidArgument,
+                "PLY rotation properties must include rot_0, rot_1, rot_2, and rot_3",
+                lfs::SmallFields{}.add(
+                    "rotation_properties_present",
+                    static_cast<std::int64_t>((layout.rot_offsets[0] != SIZE_MAX) +
+                                              (layout.rot_offsets[1] != SIZE_MAX) +
+                                              (layout.rot_offsets[2] != SIZE_MAX) +
+                                              (layout.rot_offsets[3] != SIZE_MAX))));
         }
         for (int i = 0; i < layout.dc_count; ++i) {
-            LFS_ASSERT_MSG(layout.dc_offsets[i] != SIZE_MAX,
-                           std::format("PLY f_dc coefficient indices must be contiguous from zero "
-                                       "(missing_index={}, dc_count={})",
-                                       i, layout.dc_count));
+            if (layout.dc_offsets[i] == SIZE_MAX) {
+                throw_ply_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    std::format("PLY f_dc coefficient indices must be contiguous from zero "
+                                "(missing_index={}, dc_count={})",
+                                i, layout.dc_count),
+                    lfs::SmallFields{}
+                        .add("missing_index", static_cast<std::int64_t>(i))
+                        .add("dc_count", static_cast<std::int64_t>(layout.dc_count)));
+            }
         }
         for (int i = 0; i < layout.rest_count; ++i) {
-            LFS_ASSERT_MSG(layout.rest_offsets[i] != SIZE_MAX,
-                           std::format("PLY f_rest coefficient indices must be contiguous from zero "
-                                       "(missing_index={}, rest_count={})",
-                                       i, layout.rest_count));
+            if (layout.rest_offsets[i] == SIZE_MAX) {
+                throw_ply_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    std::format("PLY f_rest coefficient indices must be contiguous from zero "
+                                "(missing_index={}, rest_count={})",
+                                i, layout.rest_count),
+                    lfs::SmallFields{}
+                        .add("missing_index", static_cast<std::int64_t>(i))
+                        .add("rest_count", static_cast<std::int64_t>(layout.rest_count)));
+            }
         }
-        LFS_ASSERT_MSG(layout.dc_count == 0 ||
-                           layout.dc_count % ply_constants::COLOR_CHANNELS == 0,
-                       std::format("PLY f_dc coefficient count must be divisible by three color channels "
-                                   "(dc_count={}, color_channels={})",
-                                   layout.dc_count, ply_constants::COLOR_CHANNELS));
-        LFS_ASSERT_MSG(layout.rest_count == 0 ||
-                           layout.rest_count % ply_constants::COLOR_CHANNELS == 0,
-                       std::format("PLY f_rest coefficient count must be divisible by three color channels "
-                                   "(rest_count={}, color_channels={})",
-                                   layout.rest_count, ply_constants::COLOR_CHANNELS));
+        if (layout.dc_count != 0 && layout.dc_count % ply_constants::COLOR_CHANNELS != 0) {
+            throw_ply_error(
+                lfs::ErrorCode::InvalidArgument,
+                std::format("PLY f_dc coefficient count must be divisible by three color channels "
+                            "(dc_count={}, color_channels={})",
+                            layout.dc_count, ply_constants::COLOR_CHANNELS),
+                lfs::SmallFields{}.add("dc_count", static_cast<std::int64_t>(layout.dc_count)));
+        }
+        if (layout.rest_count != 0 && layout.rest_count % ply_constants::COLOR_CHANNELS != 0) {
+            throw_ply_error(
+                lfs::ErrorCode::InvalidArgument,
+                std::format("PLY f_rest coefficient count must be divisible by three color channels "
+                            "(rest_count={}, color_channels={})",
+                            layout.rest_count, ply_constants::COLOR_CHANNELS),
+                lfs::SmallFields{}.add("rest_count", static_cast<std::int64_t>(layout.rest_count)));
+        }
         if (layout.rest_count > 0) {
             const int coefficients_per_channel =
                 layout.rest_count / ply_constants::COLOR_CHANNELS;
             const int root = static_cast<int>(std::sqrt(coefficients_per_channel + 1));
-            LFS_ASSERT_MSG(root * root == coefficients_per_channel + 1,
-                           std::format("PLY f_rest coefficient count does not describe a complete SH degree "
-                                       "(rest_count={}, coefficients_per_channel={}, candidate_root={})",
-                                       layout.rest_count, coefficients_per_channel, root));
+            if (root * root != coefficients_per_channel + 1) {
+                throw_ply_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    std::format("PLY f_rest coefficient count does not describe a complete SH degree "
+                                "(rest_count={}, coefficients_per_channel={}, candidate_root={})",
+                                layout.rest_count, coefficients_per_channel, root),
+                    lfs::SmallFields{}
+                        .add("rest_count", static_cast<std::int64_t>(layout.rest_count))
+                        .add("coefficients_per_channel",
+                             static_cast<std::int64_t>(coefficients_per_channel))
+                        .add("candidate_root", static_cast<std::int64_t>(root)));
+            }
         }
 
         const auto assert_offset = [&](const size_t offset, const std::string_view property) {
@@ -1305,14 +1394,17 @@ namespace lfs::io {
     struct HostBuffer {
         float* ptr = nullptr;
         size_t count = 0;
+        size_t requested_count = 0;
+        bool alloc_failed = false;
 
         HostBuffer() = default;
         explicit HostBuffer(const size_t element_count, const bool zero_initialize = false)
-            : count(element_count) {
+            : count(element_count),
+              requested_count(element_count) {
             if (count == 0)
                 return;
             if (count > std::numeric_limits<size_t>::max() / sizeof(float)) {
-                LOG_ERROR("Host buffer allocation size overflow for {} floats", count);
+                alloc_failed = true;
                 count = 0;
                 return;
             }
@@ -1320,8 +1412,7 @@ namespace lfs::io {
                                           ? std::calloc(count, sizeof(float))
                                           : std::malloc(count * sizeof(float)));
             if (!ptr) {
-                LOG_ERROR("Host allocation failed for {} MB buffer",
-                          (count * sizeof(float)) / (1024 * 1024));
+                alloc_failed = true;
                 count = 0;
             }
         }
@@ -1341,6 +1432,8 @@ namespace lfs::io {
                     std::free(ptr);
                 ptr = nullptr;
                 count = 0;
+                requested_count = 0;
+                alloc_failed = false;
                 swap(other);
             }
             return *this;
@@ -1350,6 +1443,8 @@ namespace lfs::io {
         void swap(HostBuffer& other) noexcept {
             std::swap(ptr, other.ptr);
             std::swap(count, other.count);
+            std::swap(requested_count, other.requested_count);
+            std::swap(alloc_failed, other.alloc_failed);
         }
     };
 
@@ -1362,8 +1457,8 @@ namespace lfs::io {
         HostBuffer rotation;
 
         [[nodiscard]] bool valid() const {
-            return means.ptr && sh0.ptr && opacity.ptr && scaling.ptr && rotation.ptr &&
-                   (shN_swizzled.count == 0 || shN_swizzled.ptr);
+            return !means.alloc_failed && !sh0.alloc_failed && !shN_swizzled.alloc_failed &&
+                   !opacity.alloc_failed && !scaling.alloc_failed && !rotation.alloc_failed;
         }
     };
 
@@ -1635,6 +1730,23 @@ namespace lfs::io {
                 };
             };
 
+            const auto describe_staging_failure = [](const PlyHostStaging& staging) {
+                lfs::SmallFields fields{};
+                const auto note = [&](const HostBuffer& buffer, const std::string_view name) {
+                    if (buffer.alloc_failed) {
+                        fields.add(std::format("{}_requested_floats", name),
+                                   static_cast<std::int64_t>(buffer.requested_count));
+                    }
+                };
+                note(staging.means, "means");
+                note(staging.sh0, "sh0");
+                note(staging.shN_swizzled, "shN");
+                note(staging.opacity, "opacity");
+                note(staging.scaling, "scaling");
+                note(staging.rotation, "rotation");
+                return fields;
+            };
+
             const auto header_ready_at = std::chrono::steady_clock::now();
             size_t N = layout.vertex_count;
             PlyHostStaging host = make_staging(N);
@@ -1642,7 +1754,8 @@ namespace lfs::io {
                 throw_ply_error(
                     lfs::ErrorCode::ResourceExhausted,
                     "Failed to allocate host staging buffers for PLY load",
-                    lfs::SmallFields{}.add("gaussian_count", static_cast<std::int64_t>(N)));
+                    describe_staging_failure(host).add(
+                        "gaussian_count", static_cast<std::int64_t>(N)));
             }
 
             PlyImportValidation validation = extract_and_validate_ply_payload(
@@ -1677,7 +1790,8 @@ namespace lfs::io {
                     throw_ply_error(
                         lfs::ErrorCode::ResourceExhausted,
                         "Failed to allocate compacted PLY staging buffers",
-                        lfs::SmallFields{}.add("gaussian_count", static_cast<std::int64_t>(N)));
+                        describe_staging_failure(host).add(
+                            "gaussian_count", static_cast<std::int64_t>(N)));
                 }
                 const std::span<const size_t> rows_to_load(validation.valid_rows);
                 extract_positions_to_host(vertex_data, layout, rows_to_load, host.means.ptr);
@@ -3099,10 +3213,11 @@ namespace lfs::io {
             throw_if_load_cancel_requested(options, "PLY read cancelled");
 
             const size_t N = vertices->count;
-            LFS_ASSERT_MSG(N > 0,
-                           std::format("PLY point cloud must contain at least one vertex "
-                                       "(vertex_count={})",
-                                       N));
+            if (N == 0) {
+                return std::unexpected(std::format("PLY point cloud must contain at least one vertex "
+                                                   "(vertex_count={})",
+                                                   N));
+            }
             LOG_DEBUG("Point cloud: {} points", N);
 
             using namespace lfs::core;
@@ -3131,10 +3246,10 @@ namespace lfs::io {
                 return std::unexpected("Unsupported vertex type");
             }
             if (const auto invalid = find_non_finite_float_value(positions)) {
-                LFS_ASSERT_MSG(false,
-                               std::format("PLY point positions must be finite "
-                                           "(flat_index={}, value={}, shape={})",
-                                           invalid->index, invalid->value, positions.shape().str()));
+                return std::unexpected(std::format("PLY point positions must be finite "
+                                                   "(flat_index={}, value={}, shape={})",
+                                                   invalid->index, invalid->value,
+                                                   positions.shape().str()));
             }
 
             Tensor color_tensor;
@@ -3158,11 +3273,10 @@ namespace lfs::io {
                     Tensor float_colors = Tensor::zeros({N, 3}, Device::CPU, DataType::Float32);
                     std::memcpy(float_colors.ptr<float>(), colors->buffer.get(), N * 3 * sizeof(float));
                     if (const auto invalid = find_non_finite_float_value(float_colors)) {
-                        LFS_ASSERT_MSG(false,
-                                       std::format("PLY Float32 colors must be finite "
-                                                   "(flat_index={}, value={}, shape={})",
-                                                   invalid->index, invalid->value,
-                                                   float_colors.shape().str()));
+                        return std::unexpected(std::format("PLY Float32 colors must be finite "
+                                                           "(flat_index={}, value={}, shape={})",
+                                                           invalid->index, invalid->value,
+                                                           float_colors.shape().str()));
                     }
                     color_tensor = (float_colors * 255.0f).clamp(0, 255).to(DataType::UInt8);
                 } else {
@@ -3197,11 +3311,10 @@ namespace lfs::io {
                 }
                 if (normal_tensor.is_valid()) {
                     if (const auto invalid = find_non_finite_float_value(normal_tensor)) {
-                        LFS_ASSERT_MSG(false,
-                                       std::format("PLY normals must be finite "
-                                                   "(flat_index={}, value={}, shape={})",
-                                                   invalid->index, invalid->value,
-                                                   normal_tensor.shape().str()));
+                        return std::unexpected(std::format("PLY normals must be finite "
+                                                           "(flat_index={}, value={}, shape={})",
+                                                           invalid->index, invalid->value,
+                                                           normal_tensor.shape().str()));
                     }
                 }
             }
