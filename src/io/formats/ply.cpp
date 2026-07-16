@@ -223,6 +223,28 @@ namespace lfs::io {
             return true;
         }
 
+        // Builds and throws a typed lfs::Exception for one PLY load detection
+        // site. `site` defaults to the call site via source_location semantics —
+        // do not pass it explicitly at ordinary call sites. No `path` field here
+        // by design: load_ply/load_ply_point_cloud attach `path` exactly once,
+        // at their own single outer catch, via Error::with_context — inner
+        // helpers below this point never see the filesystem path.
+        [[noreturn]] void throw_ply_error(
+            const lfs::ErrorCode code,
+            std::string detail,
+            lfs::SmallFields fields = {},
+            std::optional<lfs::NativeError> native = std::nullopt,
+            const lfs::core::SourceSite site = LFS_SOURCE_SITE_CURRENT()) {
+            throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::IO,
+                .detail = std::move(detail),
+                .detection = site,
+                .fields = std::move(fields),
+                .native = std::move(native),
+            }));
+        }
+
         [[nodiscard]] bool ply_scalar_property_size(const std::string_view type, size_t& size) {
             if (type == "char" || type == "uchar" ||
                 type == "int8" || type == "uint8") {
@@ -366,26 +388,22 @@ namespace lfs::io {
             file_handle = CreateFileW(wide_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
                                       nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
             if (file_handle == INVALID_HANDLE_VALUE) {
-                LOG_ERROR("Failed to open file for mapping: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
 
             LARGE_INTEGER file_size_li;
             if (!GetFileSizeEx(file_handle, &file_size_li)) {
-                LOG_ERROR("Failed to get file size: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
             size = static_cast<size_t>(file_size_li.QuadPart);
 
             mapping_handle = CreateFileMappingW(file_handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
             if (!mapping_handle) {
-                LOG_ERROR("Failed to create file mapping: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
 
             data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, 0);
             if (!data) {
-                LOG_ERROR("Failed to map view of file: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
 
@@ -424,20 +442,17 @@ namespace lfs::io {
         [[nodiscard]] bool map(const std::filesystem::path& filepath) {
             fd = open(filepath.c_str(), O_RDONLY);
             if (fd < 0) {
-                LOG_ERROR("Failed to open file for mapping: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
 
             struct stat st {};
             if (fstat(fd, &st) < 0) {
-                LOG_ERROR("Failed to stat file: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
             size = st.st_size;
 
             data = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
             if (data == MAP_FAILED) {
-                LOG_ERROR("Failed to mmap file: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
 
@@ -468,16 +483,18 @@ namespace lfs::io {
 
         // Check for PLY magic with both Unix and Windows line endings
         if (file_size < ply_constants::PLY_MIN_SIZE) {
-            LOG_ERROR("File too small to be valid PLY: {} bytes", file_size);
-            throw std::runtime_error("File too small to be valid PLY");
+            throw_ply_error(
+                lfs::ErrorCode::DataLoss,
+                "File too small to be valid PLY",
+                lfs::SmallFields{}.add("available_bytes", static_cast<std::int64_t>(file_size)));
         }
 
         bool has_crlf = false;
         if (std::strncmp(data, "ply\r\n", 5) == 0) {
             has_crlf = true;
         } else if (std::strncmp(data, "ply\n", 4) != 0) {
-            LOG_ERROR("Invalid PLY file - missing PLY header");
-            throw std::runtime_error("Invalid PLY file - missing PLY header");
+            throw_ply_error(lfs::ErrorCode::InvalidArgument,
+                            "Invalid PLY file - missing PLY header");
         }
 
         const char* ptr = data + (has_crlf ? 5 : 4);
@@ -545,12 +562,14 @@ namespace lfs::io {
                 const std::string_view declaration = trim_ascii_whitespace(line.substr(8));
                 const size_t name_end = declaration.find_first_of(" \t\r");
                 if (name_end == std::string_view::npos)
-                    throw std::runtime_error("Malformed PLY element declaration");
+                    throw_ply_error(lfs::ErrorCode::InvalidArgument,
+                                    "Malformed PLY element declaration");
                 const std::string_view element_name = declaration.substr(0, name_end);
                 size_t element_count = 0;
                 if (!is_valid_ply_property_name_token(element_name) ||
                     !parse_size_token(declaration.substr(name_end), element_count)) {
-                    throw std::runtime_error("Malformed PLY element declaration");
+                    throw_ply_error(lfs::ErrorCode::InvalidArgument,
+                                    "Malformed PLY element declaration");
                 }
 
                 if (element_name == ply_constants::VERTEX_ELEMENT) {
@@ -564,9 +583,13 @@ namespace lfs::io {
                     parsing_vertex = true;
                 } else {
                     if (!has_vertex_element && element_count != 0) {
-                        throw std::runtime_error(std::format(
-                            "PLY element '{}' with {} rows appears before vertex data",
-                            element_name, element_count));
+                        throw_ply_error(
+                            lfs::ErrorCode::InvalidArgument,
+                            std::format("PLY element '{}' with {} rows appears before vertex data",
+                                        element_name, element_count),
+                            lfs::SmallFields{}
+                                .add("element", std::string(element_name))
+                                .add("element_count", static_cast<std::int64_t>(element_count)));
                     }
                     parsing_vertex = false;
                 }
@@ -574,12 +597,14 @@ namespace lfs::io {
                 std::string_view property_line(line_start + 9, line_len - 9);
                 property_line = trim_ascii_whitespace(property_line);
                 if (property_line.starts_with("list ")) {
-                    throw std::runtime_error("PLY vertex list properties are not supported");
+                    throw_ply_error(lfs::ErrorCode::Unsupported,
+                                    "PLY vertex list properties are not supported");
                 }
 
                 const size_t type_end = property_line.find_first_of(" \t\r");
                 if (type_end == std::string_view::npos) {
-                    throw std::runtime_error("Malformed PLY property line");
+                    throw_ply_error(lfs::ErrorCode::InvalidArgument,
+                                    "Malformed PLY property line");
                 }
 
                 const std::string_view type = property_line.substr(0, type_end);
@@ -595,7 +620,8 @@ namespace lfs::io {
                     prop_name = prop_name.substr(0, name_end);
                 }
                 if (prop_name.empty()) {
-                    throw std::runtime_error("Malformed PLY property line");
+                    throw_ply_error(lfs::ErrorCode::InvalidArgument,
+                                    "Malformed PLY property line");
                 }
                 LFS_ASSERT_MSG(is_valid_ply_property_name_token(prop_name),
                                std::format("PLY vertex property names must be non-empty tokens "
@@ -608,7 +634,10 @@ namespace lfs::io {
 
                 size_t property_size = 0;
                 if (!ply_scalar_property_size(type, property_size)) {
-                    throw std::runtime_error(std::format("Unsupported PLY vertex property type '{}'", type));
+                    throw_ply_error(
+                        lfs::ErrorCode::Unsupported,
+                        std::format("Unsupported PLY vertex property type '{}'", type),
+                        lfs::SmallFields{}.add("property_type", std::string(type)));
                 }
 
                 const bool gaussian_float_property =
@@ -668,13 +697,14 @@ namespace lfs::io {
                 }
 
                 if (property_size > std::numeric_limits<size_t>::max() - layout.vertex_stride) {
-                    throw std::runtime_error("PLY vertex stride is too large");
+                    throw_ply_error(lfs::ErrorCode::ResourceExhausted,
+                                    "PLY vertex stride is too large");
                 }
                 layout.vertex_stride += property_size;
             } else if (line == "end_header") {
                 if (!has_format || !is_binary || !has_vertex_element) {
-                    LOG_ERROR("Only binary PLY with vertex element supported");
-                    throw std::runtime_error("Only binary PLY with vertex element supported");
+                    throw_ply_error(lfs::ErrorCode::Unsupported,
+                                    "Only binary PLY with vertex element supported");
                 }
                 LOG_DEBUG("Header parsed: {} vertices, stride {} bytes, dc {}, rest {}",
                           layout.vertex_count, layout.vertex_stride, layout.dc_count, layout.rest_count);
@@ -684,16 +714,21 @@ namespace lfs::io {
 
         if (lines_parsed >= MAX_HEADER_LINES) {
             std::string error_msg = std::format("Header too large - exceeded {} lines", MAX_HEADER_LINES);
-            LOG_ERROR("{}", error_msg);
-            throw std::runtime_error(error_msg);
+            throw_ply_error(
+                lfs::ErrorCode::InvalidArgument,
+                std::move(error_msg),
+                lfs::SmallFields{}.add("max_lines", static_cast<std::int64_t>(MAX_HEADER_LINES)));
         }
 
         if (file_size > ply_constants::MAX_HEADER_BYTES) {
-            LOG_ERROR("PLY header exceeds the {} byte budget", ply_constants::MAX_HEADER_BYTES);
-            throw std::runtime_error("PLY header exceeds the 1 MiB byte budget");
+            throw_ply_error(
+                lfs::ErrorCode::InvalidArgument,
+                "PLY header exceeds the 1 MiB byte budget",
+                lfs::SmallFields{}.add(
+                    "max_bytes", static_cast<std::int64_t>(ply_constants::MAX_HEADER_BYTES)));
         }
-        LOG_ERROR("No end_header found in PLY file");
-        throw std::runtime_error("No end_header found in PLY file");
+        throw_ply_error(lfs::ErrorCode::InvalidArgument,
+                        "No end_header found in PLY file");
     }
 
     [[nodiscard]] float read_unaligned_float32(const char* ptr) {
@@ -738,11 +773,13 @@ namespace lfs::io {
 
     void validate_ply_layout_for_import(const FastPropertyLayout& layout) {
         if (layout.vertex_count == 0) {
-            throw std::runtime_error("PLY contains no vertices");
+            throw_ply_error(lfs::ErrorCode::InvalidArgument,
+                            "PLY contains no vertices");
         }
 
         if (!layout.has_positions()) {
-            throw std::runtime_error("PLY vertex properties must include x, y, and z");
+            throw_ply_error(lfs::ErrorCode::InvalidArgument,
+                            "PLY vertex properties must include x, y, and z");
         }
 
         if (layout.has_any_scaling() && !layout.has_scaling()) {
@@ -888,17 +925,20 @@ namespace lfs::io {
         }
 
         if (validation.invalid_count == layout.vertex_count) {
-            throw std::runtime_error(std::format(
-                "PLY contains no valid Gaussian splats after validation ({} invalid rows, {} non-finite values, {} zero-length rotations)",
-                validation.invalid_count,
-                validation.non_finite_value_count,
-                validation.zero_rotation_count));
+            throw_ply_error(
+                lfs::ErrorCode::DataLoss,
+                std::format(
+                    "PLY contains no valid Gaussian splats after validation ({} invalid rows, {} non-finite values, {} zero-length rotations)",
+                    validation.invalid_count,
+                    validation.non_finite_value_count,
+                    validation.zero_rotation_count),
+                lfs::SmallFields{}
+                    .add("invalid_rows", static_cast<std::int64_t>(validation.invalid_count))
+                    .add("non_finite_values", static_cast<std::int64_t>(validation.non_finite_value_count))
+                    .add("zero_rotations", static_cast<std::int64_t>(validation.zero_rotation_count))
+                    .add("vertex_count", static_cast<std::int64_t>(layout.vertex_count)));
         }
 
-        LOG_WARN("PLY validation will discard {} invalid splats before import ({} non-finite values, {} zero-length rotations)",
-                 validation.invalid_count,
-                 validation.non_finite_value_count,
-                 validation.zero_rotation_count);
         return validation;
     }
 
@@ -932,10 +972,10 @@ namespace lfs::io {
             __cpuid(cpuInfo, 7);
             has_avx2 = (cpuInfo[1] & (1 << 5)) != 0;
 #elif defined(__GNUC__) || defined(__clang__)
-            __builtin_cpu_init();
-            has_avx2 = __builtin_cpu_supports("avx2");
+                __builtin_cpu_init();
+                has_avx2 = __builtin_cpu_supports("avx2");
 #else
-            has_avx2 = false;
+                has_avx2 = false;
 #endif
         });
 
@@ -1164,11 +1204,15 @@ namespace lfs::io {
                     cudaMemcpyHostToDevice,
                     stream_);
                 if (status != cudaSuccess) {
-                    throw std::runtime_error(std::format(
-                        "CUDA upload failed for '{}': {} ({})",
-                        name,
-                        cudaGetErrorName(status),
-                        cudaGetErrorString(status)));
+                    throw_ply_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        std::format("CUDA upload failed for '{}': {} ({})", name,
+                                    cudaGetErrorName(status), cudaGetErrorString(status)),
+                        lfs::SmallFields{}.add("tensor_name", std::string(name)),
+                        lfs::NativeError{
+                            .domain = lfs::ErrorDomain::CUDA,
+                            .code = static_cast<std::int64_t>(status),
+                            .name = cudaGetErrorName(status)});
                 }
                 has_pending_cuda_work_ = true;
                 tensor.record_stream(stream_);
@@ -1184,10 +1228,15 @@ namespace lfs::io {
             const cudaError_t status = cudaStreamSynchronize(stream_);
             has_pending_cuda_work_ = false;
             if (status != cudaSuccess) {
-                throw std::runtime_error(std::format(
-                    "CUDA upload batch failed: {} ({})",
-                    cudaGetErrorName(status),
-                    cudaGetErrorString(status)));
+                throw_ply_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    std::format("CUDA upload batch failed: {} ({})",
+                                cudaGetErrorName(status), cudaGetErrorString(status)),
+                    {},
+                    lfs::NativeError{
+                        .domain = lfs::ErrorDomain::CUDA,
+                        .code = static_cast<std::int64_t>(status),
+                        .name = cudaGetErrorName(status)});
             }
         }
 
@@ -1466,24 +1515,24 @@ namespace lfs::io {
     }
 
     // Main function - returns SplatData
-    [[nodiscard]] std::expected<SplatData, std::string>
+    [[nodiscard]] lfs::Result<LoadOutcome<SplatData>>
     load_ply(const std::filesystem::path& filepath, const LoadOptions& options) {
         try {
             LOG_TIMER("PLY File Loading");
             const auto start_time = std::chrono::steady_clock::now();
 
             if (!std::filesystem::exists(filepath)) {
-                std::string error_msg = std::format("PLY file does not exist: {}", lfs::core::path_to_utf8(filepath));
-                LOG_ERROR("{}", error_msg);
-                throw std::runtime_error(error_msg);
+                throw_ply_error(
+                    lfs::ErrorCode::NotFound,
+                    std::format("PLY file does not exist: {}", lfs::core::path_to_utf8(filepath)));
             }
             throw_if_load_cancel_requested(options, "PLY load cancelled");
 
             // Memory map
             MMappedFile mapped_file;
             if (!mapped_file.map(filepath)) {
-                LOG_ERROR("Failed to memory map PLY file: {}", lfs::core::path_to_utf8(filepath));
-                throw std::runtime_error("Failed to memory map PLY file");
+                throw_ply_error(lfs::ErrorCode::Internal,
+                                "Failed to memory map PLY file");
             }
 
             const char* data = static_cast<const char*>(mapped_file.data);
@@ -1491,24 +1540,19 @@ namespace lfs::io {
 
             // Ultra-fast header parsing
             auto parse_result = parse_header(data, file_size);
-            if (!parse_result) {
-                LOG_ERROR("Failed to parse PLY header: {}", parse_result.error());
-                throw std::runtime_error(parse_result.error());
-            }
-
             auto [data_offset, layout] = parse_result.value();
             const char* vertex_data = data + data_offset;
 
             if (layout.vertex_stride == 0) {
-                std::string error_msg = "PLY header declares no vertex properties";
-                LOG_ERROR("{}", error_msg);
-                throw std::runtime_error(error_msg);
+                throw_ply_error(lfs::ErrorCode::InvalidArgument,
+                                "PLY header declares no vertex properties");
             }
 
             const size_t body_bytes_available = file_size - data_offset;
             size_t body_bytes_required = 0;
             if (!checked_mul_size(layout.vertex_count, layout.vertex_stride, body_bytes_required)) {
-                throw std::runtime_error("PLY header declares an impossibly large vertex body");
+                throw_ply_error(lfs::ErrorCode::ResourceExhausted,
+                                "PLY header declares an impossibly large vertex body");
             }
             if (body_bytes_required > body_bytes_available) {
                 const size_t missing = body_bytes_required - body_bytes_available;
@@ -1519,8 +1563,16 @@ namespace lfs::io {
                     "Re-export or re-download the source file.",
                     layout.vertex_count, layout.vertex_stride, body_bytes_required,
                     body_bytes_available, complete_vertices, missing, missing / (1024 * 1024));
-                LOG_ERROR("{}", error_msg);
-                throw std::runtime_error(error_msg);
+                throw_ply_error(
+                    lfs::ErrorCode::DataLoss,
+                    std::move(error_msg),
+                    lfs::SmallFields{}
+                        .add("declared_vertices", static_cast<std::int64_t>(layout.vertex_count))
+                        .add("vertex_stride", static_cast<std::int64_t>(layout.vertex_stride))
+                        .add("required_bytes", static_cast<std::int64_t>(body_bytes_required))
+                        .add("available_bytes", static_cast<std::int64_t>(body_bytes_available))
+                        .add("complete_vertices", static_cast<std::int64_t>(complete_vertices))
+                        .add("missing_bytes", static_cast<std::int64_t>(missing)));
             }
 
             validate_ply_layout_for_import(layout);
@@ -1545,8 +1597,10 @@ namespace lfs::io {
                                           const std::string_view label) {
                 size_t result = 0;
                 if (!checked_mul_size(a, b, result)) {
-                    throw std::runtime_error(std::format(
-                        "PLY load size overflow while allocating {}", label));
+                    throw_ply_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        std::format("PLY load size overflow while allocating {}", label),
+                        lfs::SmallFields{}.add("component", std::string(label)));
                 }
                 return result;
             };
@@ -1585,7 +1639,10 @@ namespace lfs::io {
             size_t N = layout.vertex_count;
             PlyHostStaging host = make_staging(N);
             if (!host.valid()) {
-                throw std::runtime_error("Failed to allocate host staging buffers for PLY load");
+                throw_ply_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "Failed to allocate host staging buffers for PLY load",
+                    lfs::SmallFields{}.add("gaussian_count", static_cast<std::int64_t>(N)));
             }
 
             PlyImportValidation validation = extract_and_validate_ply_payload(
@@ -1617,7 +1674,10 @@ namespace lfs::io {
                 host = {};
                 host = make_staging(N);
                 if (!host.valid()) {
-                    throw std::runtime_error("Failed to allocate compacted PLY staging buffers");
+                    throw_ply_error(
+                        lfs::ErrorCode::ResourceExhausted,
+                        "Failed to allocate compacted PLY staging buffers",
+                        lfs::SmallFields{}.add("gaussian_count", static_cast<std::int64_t>(N)));
                 }
                 const std::span<const size_t> rows_to_load(validation.valid_rows);
                 extract_positions_to_host(vertex_data, layout, rows_to_load, host.means.ptr);
@@ -1680,6 +1740,22 @@ namespace lfs::io {
                             });
                     });
                 }
+            }
+
+            std::vector<Diagnostic> warnings;
+            if (validation.invalid_count > 0) {
+                warnings.push_back(Diagnostic{
+                    .code = lfs::ErrorCode::DataLoss,
+                    .message = std::format(
+                        "PLY validation discarded {} invalid splat(s) before import "
+                        "({} non-finite values, {} zero-length rotations)",
+                        validation.invalid_count, validation.non_finite_value_count,
+                        validation.zero_rotation_count),
+                    .fields = lfs::SmallFields{}
+                                  .add("invalid_rows", static_cast<std::int64_t>(validation.invalid_count))
+                                  .add("non_finite_values", static_cast<std::int64_t>(validation.non_finite_value_count))
+                                  .add("zero_rotations", static_cast<std::int64_t>(validation.zero_rotation_count)),
+                });
             }
             throw_if_load_cancel_requested(options, "PLY load cancelled");
             const auto decode_complete_at = std::chrono::steady_clock::now();
@@ -1752,12 +1828,31 @@ namespace lfs::io {
                      file_size / (1024 * 1024), splat_data.size(), sh_degree, duration.count(),
                      validation.invalid_count);
 
-            return splat_data;
+            return LoadOutcome<SplatData>{std::move(splat_data), std::move(warnings)};
 
+        } catch (const LoadCancelledError& e) {
+            return lfs::make_error(lfs::ErrorInit{
+                                       .code = lfs::ErrorCode::Cancelled,
+                                       .domain = lfs::ErrorDomain::IO,
+                                       .severity = lfs::Severity::Warning,
+                                       .detail = e.what(),
+                                       .detection = LFS_SOURCE_SITE_CURRENT(),
+                                   })
+                .with_context("load PLY", LFS_SOURCE_SITE_CURRENT(),
+                              lfs::SmallFields{}.add("path", lfs::core::path_to_utf8(filepath)));
+        } catch (const lfs::Exception& e) {
+            return lfs::Error(e.error())
+                .with_context("load PLY", LFS_SOURCE_SITE_CURRENT(),
+                              lfs::SmallFields{}.add("path", lfs::core::path_to_utf8(filepath)));
         } catch (const std::exception& e) {
-            std::string error_msg = std::format("Failed to load PLY file: {}", e.what());
-            LOG_ERROR("{}", error_msg);
-            return std::unexpected(error_msg);
+            return lfs::make_error(lfs::ErrorInit{
+                                       .code = lfs::ErrorCode::Internal,
+                                       .domain = lfs::ErrorDomain::IO,
+                                       .detail = e.what(),
+                                       .detection = LFS_SOURCE_SITE_CURRENT(),
+                                   })
+                .with_context("load PLY", LFS_SOURCE_SITE_CURRENT(),
+                              lfs::SmallFields{}.add("path", lfs::core::path_to_utf8(filepath)));
         }
     }
 

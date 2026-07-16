@@ -10,8 +10,10 @@
 #include <expected>
 #include <filesystem>
 #include <format>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lfs::io {
 
@@ -51,6 +53,9 @@ namespace lfs::io {
         // Operation (500-599)
         CANCELLED = 500,
         INTERNAL_ERROR = 502,
+
+        // Resource (600-699)
+        RESOURCE_EXHAUSTED = 600,
     };
 
     constexpr std::string_view error_code_to_string(ErrorCode code) {
@@ -79,6 +84,7 @@ namespace lfs::io {
         case ErrorCode::DECODING_FAILED: return "Decoding failed";
         case ErrorCode::CANCELLED: return "Cancelled";
         case ErrorCode::INTERNAL_ERROR: return "Internal error";
+        case ErrorCode::RESOURCE_EXHAUSTED: return "Resource exhausted";
         default: return "Unknown error";
         }
     }
@@ -275,6 +281,7 @@ namespace lfs::io {
         case ErrorCode::DECODING_FAILED: return lfs::ErrorCode::DataLoss;
         case ErrorCode::CANCELLED: return lfs::ErrorCode::Cancelled;
         case ErrorCode::INTERNAL_ERROR: return lfs::ErrorCode::Internal;
+        case ErrorCode::RESOURCE_EXHAUSTED: return lfs::ErrorCode::ResourceExhausted;
         }
         return lfs::ErrorCode::Internal;
     }
@@ -305,6 +312,85 @@ namespace lfs::io {
             .fields = std::move(fields),
             .native = std::nullopt,
         });
+    }
+
+    // A non-fatal condition attached to an otherwise-successful load: rows
+    // discarded, a feature degraded, etc. Carries the same stable ErrorCode
+    // taxonomy as a failure so a diagnostic and a failure of the same class
+    // render identically. Never itself a failure — see Section 5.4
+    // ("Warnings are separate Diagnostic values, not failures hidden in a
+    // successful result").
+    struct Diagnostic {
+        lfs::ErrorCode code;
+        std::string message;
+        lfs::SmallFields fields;
+    };
+
+    // A successful load's value plus zero or more non-fatal Diagnostics
+    // collected while producing it (Section 7.1 row 3A: `Result<LoadOutcome<SplatData>>`).
+    template <class T>
+    struct LoadOutcome {
+        T value;
+        std::vector<Diagnostic> warnings;
+    };
+
+    namespace detail {
+
+        // Linear scan is fine here: at most kMaxErrorContextFrames (16) frames,
+        // each with at most kMaxFieldsPerFrame (16) fields — cold path only.
+        [[nodiscard]] inline std::optional<std::string> find_error_field_string(
+            const lfs::Error& error, const std::string_view key) {
+            for (const auto& frame : error.frames()) {
+                for (const auto& entry : frame.fields.entries()) {
+                    if (entry.key == key) {
+                        if (const auto* value = std::get_if<std::string>(&entry.value)) {
+                            return *value;
+                        }
+                    }
+                }
+            }
+            return std::nullopt;
+        }
+
+    } // namespace detail
+
+    // Inverse of to_lfs_error_code: maps the stable lfs taxonomy back onto this
+    // module's narrower legacy codes for callers that have not migrated. Not a
+    // bijection — several lfs::ErrorCode values collapse onto INTERNAL_ERROR
+    // because this legacy enum has no matching bucket; that is an accepted,
+    // documented narrowing, not a bug to fix here.
+    constexpr ErrorCode from_lfs_error_code(const lfs::ErrorCode code) noexcept {
+        switch (code) {
+        case lfs::ErrorCode::Cancelled: return ErrorCode::CANCELLED;
+        case lfs::ErrorCode::InvalidArgument: return ErrorCode::INVALID_HEADER;
+        case lfs::ErrorCode::BoundsViolation: return ErrorCode::CORRUPTED_DATA;
+        case lfs::ErrorCode::FailedPrecondition: return ErrorCode::INVALID_DATASET;
+        case lfs::ErrorCode::NotFound: return ErrorCode::PATH_NOT_FOUND;
+        case lfs::ErrorCode::PermissionDenied: return ErrorCode::PERMISSION_DENIED;
+        case lfs::ErrorCode::AlreadyExists: return ErrorCode::INTERNAL_ERROR;
+        case lfs::ErrorCode::ResourceExhausted: return ErrorCode::RESOURCE_EXHAUSTED;
+        case lfs::ErrorCode::DeadlineExceeded: return ErrorCode::INTERNAL_ERROR;
+        case lfs::ErrorCode::Unavailable: return ErrorCode::INTERNAL_ERROR;
+        case lfs::ErrorCode::DataLoss: return ErrorCode::CORRUPTED_DATA;
+        case lfs::ErrorCode::Unsupported: return ErrorCode::UNSUPPORTED_FORMAT;
+        case lfs::ErrorCode::DeviceLost: return ErrorCode::INTERNAL_ERROR;
+        case lfs::ErrorCode::Internal: return ErrorCode::INTERNAL_ERROR;
+        case lfs::ErrorCode::ContractViolation: return ErrorCode::INTERNAL_ERROR;
+        }
+        return ErrorCode::INTERNAL_ERROR;
+    }
+
+    // `error` must represent an actual failure. Extracts `path` from the
+    // outermost-to-innermost context frame that carries one (every call site in
+    // this phase attaches it via with_context at its single outer catch), and
+    // prefers user_message() over detail() for the legacy Error::message field.
+    [[nodiscard]] inline Error from_lfs_error(const lfs::Error& error) {
+        const ErrorCode code = from_lfs_error_code(error.code());
+        std::string message(error.user_message().empty() ? error.detail() : error.user_message());
+        if (const auto path_str = detail::find_error_field_string(error, "path")) {
+            return Error{code, std::move(message), lfs::core::utf8_to_path(*path_str)};
+        }
+        return Error{code, std::move(message)};
     }
 
 } // namespace lfs::io

@@ -124,8 +124,8 @@ protected:
             create_synthetic_data();
             return;
         }
-        n_ = std::min(result->means().shape()[0], size_t(10000));
-        means_ = result->means().slice(0, 0, n_).contiguous().to(Device::CUDA);
+        n_ = std::min(result->value.means().shape()[0], size_t(10000));
+        means_ = result->value.means().slice(0, 0, n_).contiguous().to(Device::CUDA);
         init_params();
     }
 

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "ply_loader.hpp"
+#include "core/error_reporter.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
@@ -87,9 +88,7 @@ namespace lfs::io {
         const bool is_gaussian = is_gaussian_splat_ply(path);
         LOG_INFO("Loading PLY: {} ({})", lfs::core::path_to_utf8(path), is_gaussian ? "gaussian" : "point cloud");
 
-        auto splat_result = is_gaussian
-                                ? load_ply(path, options)
-                                : [&]() -> std::expected<SplatData, std::string> {
+        auto point_cloud_to_splat = [&]() -> std::expected<SplatData, std::string> {
             const auto pc_result = load_ply_point_cloud(path, options);
             if (!pc_result)
                 return std::unexpected(pc_result.error());
@@ -131,30 +130,55 @@ namespace lfs::io {
                 std::move(rotation),
                 std::move(opacity),
                 ply_constants::SCENE_SCALE_FACTOR);
-        }();
+        };
+
+        lfs::Result<LoadOutcome<SplatData>> splat_result = is_gaussian
+                                                               ? load_ply(path, options)
+                                                               : lfs::from_legacy_expected<SplatData>(
+                                                                     point_cloud_to_splat(),
+                                                                     lfs::LegacyErrorContext{
+                                                                         .code = lfs::ErrorCode::DataLoss,
+                                                                         .domain = lfs::ErrorDomain::IO,
+                                                                         .operation = "load PLY point cloud",
+                                                                         .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                     })
+                                                                     .or_else([&](lfs::Error error) -> lfs::Result<SplatData> {
+                                                                         return std::move(error).with_context(
+                                                                             "load PLY", LFS_SOURCE_SITE_CURRENT(),
+                                                                             lfs::SmallFields{}.add("path", lfs::core::path_to_utf8(path)));
+                                                                     })
+                                                                     .transform([](SplatData data) {
+                                                                         return LoadOutcome<SplatData>{std::move(data), {}};
+                                                                     });
 
         if (!splat_result) {
-            if (is_load_cancel_requested(options)) {
-                return make_error(ErrorCode::CANCELLED, splat_result.error(), path);
-            }
-            return make_error(ErrorCode::CORRUPTED_DATA,
-                              std::format("Failed to load PLY: {}", splat_result.error()), path);
+            const lfs::Error& error = splat_result.error();
+            lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
+            return std::unexpected(from_lfs_error(error));
         }
 
         if (options.progress) {
             options.progress(100.0f, "PLY loading complete");
         }
 
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+        const auto end_time = std::chrono::high_resolution_clock::now();
+        const auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
             end_time - start_time);
 
+        LoadOutcome<SplatData> outcome = std::move(splat_result).value();
+
+        std::vector<std::string> warnings;
+        warnings.reserve(outcome.warnings.size());
+        for (const auto& diagnostic : outcome.warnings) {
+            warnings.push_back(diagnostic.message);
+        }
+
         LoadResult result{
-            .data = std::make_shared<SplatData>(std::move(*splat_result)),
+            .data = std::make_shared<SplatData>(std::move(outcome.value)),
             .scene_center = Tensor::zeros({3}, Device::CPU),
             .loader_used = name(),
             .load_time = load_time,
-            .warnings = {}};
+            .warnings = std::move(warnings)};
 
         LOG_INFO("PLY loaded successfully in {}ms", load_time.count());
 
