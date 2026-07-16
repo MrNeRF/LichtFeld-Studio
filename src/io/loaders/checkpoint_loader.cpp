@@ -123,8 +123,11 @@ namespace lfs::io {
             return false;
         }
 
-        uint32_t magic;
+        uint32_t magic = 0;
         file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+        if (!file) {
+            return false;
+        }
         return magic == lfs::core::CHECKPOINT_MAGIC;
     }
 

@@ -18,6 +18,7 @@
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "io/loader.hpp"
+#include "io/loaders/checkpoint_loader.hpp"
 #include "training/checkpoint.hpp"
 #include "training/strategies/mcmc.hpp"
 #include "training/strategies/strategy_factory.hpp"
@@ -71,6 +72,16 @@ namespace {
             return false;
         file.seekp(offset);
         file.write(reinterpret_cast<const char*>(&value), sizeof(value));
+        file.flush();
+        return file.good();
+    }
+
+    bool write_probe_fixture(const std::filesystem::path& path, const void* data, const size_t size) {
+        std::ofstream file(path, std::ios::binary);
+        if (!file)
+            return false;
+        if (size > 0)
+            file.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
         file.flush();
         return file.good();
     }
@@ -315,6 +326,61 @@ namespace {
         const auto header = lfs::core::load_checkpoint_header(checkpoint);
         ASSERT_FALSE(header.has_value());
         EXPECT_NE(header.error().find("JSON exceeds byte budget"), std::string::npos);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    class CheckpointLoaderShortProbeTest : public ::testing::TestWithParam<size_t> {};
+
+    TEST_P(CheckpointLoaderShortProbeTest, RejectsTruncatedMagicDeterministically) {
+        const auto short_bytes = GetParam();
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_loader_short_probe";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+
+        const auto probe_path = temp_dir / std::format("truncated_{}.resume", short_bytes);
+        ASSERT_TRUE(write_probe_fixture(probe_path, &lfs::core::CHECKPOINT_MAGIC, short_bytes));
+
+        lfs::io::CheckpointLoader loader;
+        EXPECT_FALSE(loader.canLoad(probe_path));
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(
+        ByteLength,
+        CheckpointLoaderShortProbeTest,
+        ::testing::Values(size_t{0}, size_t{1}, size_t{2}, size_t{3}));
+
+    TEST(CheckpointLoaderProbeTest, AcceptsValidFourByteMagicPrefix) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_loader_valid_probe";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+
+        const auto probe_path = temp_dir / "valid_magic.resume";
+        ASSERT_TRUE(write_probe_fixture(
+            probe_path, &lfs::core::CHECKPOINT_MAGIC, sizeof(lfs::core::CHECKPOINT_MAGIC)));
+
+        lfs::io::CheckpointLoader loader;
+        EXPECT_TRUE(loader.canLoad(probe_path));
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointLoaderProbeTest, RejectsWrongFourByteMagic) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_loader_wrong_probe";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+
+        const auto probe_path = temp_dir / "wrong_magic.resume";
+        constexpr uint32_t wrong_magic = ~lfs::core::CHECKPOINT_MAGIC;
+        ASSERT_TRUE(write_probe_fixture(probe_path, &wrong_magic, sizeof(wrong_magic)));
+
+        lfs::io::CheckpointLoader loader;
+        EXPECT_FALSE(loader.canLoad(probe_path));
 
         std::filesystem::remove_all(temp_dir, ec);
     }

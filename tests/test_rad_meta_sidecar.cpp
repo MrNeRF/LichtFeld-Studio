@@ -4,6 +4,7 @@
 
 #include "core/splat_data.hpp"
 #include "io/formats/rad.hpp"
+#include "io/loaders/rad_loader.hpp"
 #include "io/ply_to_rad_lod.hpp"
 
 #include <gtest/gtest.h>
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iterator>
 #include <random>
@@ -276,5 +278,85 @@ namespace {
         std::filesystem::remove_all(temp_dir);
     }
 #endif
+
+    bool writeRadProbeFixture(const std::filesystem::path& path, const void* data, const size_t size) {
+        std::ofstream file(path, std::ios::binary);
+        if (!file)
+            return false;
+        if (size > 0)
+            file.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
+        file.flush();
+        return file.good();
+    }
+
+    class RadLoaderShortProbeTest : public ::testing::TestWithParam<size_t> {};
+
+    TEST_P(RadLoaderShortProbeTest, ValidateOnlyRejectsTruncatedMagicDeterministically) {
+        const auto short_bytes = GetParam();
+        const auto temp_dir = std::filesystem::temp_directory_path() / "rad_loader_short_probe";
+        std::filesystem::remove_all(temp_dir);
+        std::filesystem::create_directories(temp_dir);
+
+        constexpr uint8_t rad_magic[4] = {0x52, 0x41, 0x44, 0x30};
+        const auto probe_path = temp_dir / std::format("truncated_{}.rad", short_bytes);
+        ASSERT_TRUE(writeRadProbeFixture(probe_path, rad_magic, short_bytes));
+
+        lfs::io::RadLoader loader;
+        lfs::io::LoadOptions options;
+        options.validate_only = true;
+        const auto result = loader.load(probe_path, options);
+
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_HEADER);
+        EXPECT_NE(result.error().message.find(std::format("expected 4 bytes, got {}", short_bytes)),
+                  std::string::npos);
+
+        std::filesystem::remove_all(temp_dir);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(
+        ByteLength,
+        RadLoaderShortProbeTest,
+        ::testing::Values(size_t{0}, size_t{1}, size_t{2}, size_t{3}));
+
+    TEST(RadLoaderProbeTest, ValidateOnlyAcceptsValidFourByteMagicPrefix) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "rad_loader_valid_probe";
+        std::filesystem::remove_all(temp_dir);
+        std::filesystem::create_directories(temp_dir);
+
+        constexpr uint8_t rad_magic[4] = {0x52, 0x41, 0x44, 0x30};
+        const auto probe_path = temp_dir / "valid_magic.rad";
+        ASSERT_TRUE(writeRadProbeFixture(probe_path, rad_magic, sizeof(rad_magic)));
+
+        lfs::io::RadLoader loader;
+        lfs::io::LoadOptions options;
+        options.validate_only = true;
+        const auto result = loader.load(probe_path, options);
+
+        ASSERT_TRUE(result.has_value()) << result.error().format();
+
+        std::filesystem::remove_all(temp_dir);
+    }
+
+    TEST(RadLoaderProbeTest, ValidateOnlyRejectsWrongFourByteMagic) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "rad_loader_wrong_probe";
+        std::filesystem::remove_all(temp_dir);
+        std::filesystem::create_directories(temp_dir);
+
+        constexpr uint8_t wrong_magic[4] = {0x00, 0x00, 0x00, 0x00};
+        const auto probe_path = temp_dir / "wrong_magic.rad";
+        ASSERT_TRUE(writeRadProbeFixture(probe_path, wrong_magic, sizeof(wrong_magic)));
+
+        lfs::io::RadLoader loader;
+        lfs::io::LoadOptions options;
+        options.validate_only = true;
+        const auto result = loader.load(probe_path, options);
+
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_HEADER);
+        EXPECT_NE(result.error().message.find("RAD0"), std::string::npos);
+
+        std::filesystem::remove_all(temp_dir);
+    }
 
 } // namespace
