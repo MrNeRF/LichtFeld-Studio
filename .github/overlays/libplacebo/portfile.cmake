@@ -71,9 +71,10 @@ set(LIBPLACEBO_MESON_OPTIONS
     -Dfuzz=false
 )
 
-if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW)
+set(_lfs_vulkan_registry "${CURRENT_INSTALLED_DIR}/share/vulkan/registry/vk.xml")
+if(EXISTS "${_lfs_vulkan_registry}")
     list(APPEND LIBPLACEBO_MESON_OPTIONS
-        "-Dvulkan-registry=${CURRENT_INSTALLED_DIR}/share/vulkan/registry/vk.xml")
+        "-Dvulkan-registry=${_lfs_vulkan_registry}")
 endif()
 
 vcpkg_configure_meson(
