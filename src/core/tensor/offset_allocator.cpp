@@ -3,13 +3,9 @@
 
 #include "internal/offset_allocator.hpp"
 
-#ifdef DEBUG
-#include <assert.h>
-#define ASSERT(x) assert(x)
+#include "core/assert.hpp"
+
 // #define DEBUG_VERBOSE
-#else
-#define ASSERT(x)
-#endif
 
 #ifdef DEBUG_VERBOSE
 #include <stdio.h>
@@ -123,7 +119,7 @@ namespace OffsetAllocator {
                                                           m_nodes(nullptr),
                                                           m_freeNodes(nullptr) {
         if (sizeof(NodeIndex) == 2) {
-            ASSERT(maxAllocs <= 65536);
+            LFS_DEBUG_ASSERT(maxAllocs <= 65536);
         }
         reset();
     }
@@ -260,7 +256,7 @@ namespace OffsetAllocator {
     }
 
     void Allocator::free(Allocation allocation) {
-        ASSERT(allocation.metadata != Allocation::NO_SPACE);
+        LFS_DEBUG_ASSERT(allocation.metadata != Allocation::NO_SPACE);
         if (!m_nodes)
             return;
 
@@ -268,7 +264,7 @@ namespace OffsetAllocator {
         Node& node = m_nodes[nodeIndex];
 
         // Double delete check
-        ASSERT(node.used == true);
+        LFS_DEBUG_ASSERT(node.used == true);
 
         // Merge with neighbors...
         uint32 offset = node.dataOffset;
@@ -283,7 +279,7 @@ namespace OffsetAllocator {
             // Remove node from the bin linked list and put it in the freelist
             removeNodeFromBin(node.neighborPrev);
 
-            ASSERT(prevNode.neighborNext == nodeIndex);
+            LFS_DEBUG_ASSERT(prevNode.neighborNext == nodeIndex);
             node.neighborPrev = prevNode.neighborPrev;
         }
 
@@ -295,7 +291,7 @@ namespace OffsetAllocator {
             // Remove node from the bin linked list and put it in the freelist
             removeNodeFromBin(node.neighborNext);
 
-            ASSERT(nextNode.neighborPrev == nodeIndex);
+            LFS_DEBUG_ASSERT(nextNode.neighborPrev == nodeIndex);
             node.neighborNext = nextNode.neighborNext;
         }
 
@@ -421,7 +417,7 @@ namespace OffsetAllocator {
                 uint32 topBinIndex = 31 - lzcnt_nonzero(m_usedBinsTop);
                 uint32 leafBinIndex = 31 - lzcnt_nonzero(m_usedBins[topBinIndex]);
                 largestFreeRegion = SmallFloat::floatToUint((topBinIndex << TOP_BINS_INDEX_SHIFT) | leafBinIndex);
-                ASSERT(freeStorage >= largestFreeRegion);
+                LFS_DEBUG_ASSERT(freeStorage >= largestFreeRegion);
             }
         }
 

@@ -9,9 +9,9 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
-#define LFS_EDGE_PHASE_CHECK(debug, name)                                       \
+#define LFS_EDGE_PHASE_CHECK(name)                                              \
     do {                                                                        \
-        if constexpr (debug) {                                                  \
+        if (::lfs::core::cuda_sync_debug_enabled()) {                           \
             LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),                         \
                                "edge-compute phase synchronization: {}", name); \
         }                                                                       \

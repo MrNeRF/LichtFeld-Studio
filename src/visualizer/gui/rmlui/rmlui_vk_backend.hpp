@@ -6,6 +6,7 @@
 
 #include <RmlUi/Core/RenderInterface.h>
 
+#include "core/assert.hpp"
 #include "rendering/vulkan_result.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
 
@@ -40,8 +41,8 @@
 #include <unordered_map>
 #include <vector>
 
-#ifdef RMLUI_DEBUG
-#define RMLUI_VK_ASSERTMSG(statement, msg) RMLUI_ASSERTMSG(statement, msg)
+#ifdef DEBUG_BUILD
+#define RMLUI_VK_ASSERTMSG(statement, msg) LFS_DEBUG_ASSERT_MSG(statement, msg)
 
 // Uncomment the following line to enable additional Vulkan debugging.
 // #define RMLUI_VK_DEBUG

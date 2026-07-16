@@ -91,7 +91,7 @@ int edge_compute::rasterization::edge_forward(
         far_,
         depth_bits,
         mip_filter);
-    LFS_EDGE_PHASE_CHECK(config::debug, "preprocess");
+    LFS_EDGE_PHASE_CHECK("preprocess");
 
     LFS_CUDA_CHECK_MSG(
         cub::DeviceScan::InclusiveSum(
@@ -102,7 +102,7 @@ int edge_compute::rasterization::edge_forward(
             n_primitives,
             stream),
         "cub::DeviceScan::InclusiveSum (Primitive Offsets)");
-    LFS_EDGE_PHASE_CHECK(config::debug, "cub::DeviceScan::InclusiveSum (Primitive Offsets)");
+    LFS_EDGE_PHASE_CHECK("cub::DeviceScan::InclusiveSum (Primitive Offsets)");
 
     uint32_t n_instances_u32;
     LFS_CUDA_CHECK_MSG(
@@ -111,7 +111,7 @@ int edge_compute::rasterization::edge_forward(
             sizeof(n_instances_u32), cudaMemcpyDeviceToHost, stream),
         "edge instance-count readback");
     LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "edge instance-count stream sync");
-    LFS_EDGE_PHASE_CHECK(config::debug, "cudaMemcpy(n_instances)");
+    LFS_EDGE_PHASE_CHECK("cudaMemcpy(n_instances)");
     const int n_instances = checked_to_int(n_instances_u32, "n_instances exceeds int range");
 
     const int alloc_instances = std::max(n_instances, 1);
@@ -131,7 +131,7 @@ int edge_compute::rasterization::edge_forward(
             grid.x,
             depth_bits,
             n_primitives);
-        LFS_EDGE_PHASE_CHECK(config::debug, "create_instances");
+        LFS_EDGE_PHASE_CHECK("create_instances");
 
         LFS_CUDA_CHECK_MSG(
             cub::DeviceRadixSort::SortPairs(
@@ -142,7 +142,7 @@ int edge_compute::rasterization::edge_forward(
                 n_instances, 0, key_end_bit,
                 stream),
             "cub::DeviceRadixSort::SortPairs (Tile/Depth)");
-        LFS_EDGE_PHASE_CHECK(config::debug, "cub::DeviceRadixSort::SortPairs (Tile/Depth)");
+        LFS_EDGE_PHASE_CHECK("cub::DeviceRadixSort::SortPairs (Tile/Depth)");
     }
 
     // Extract instance ranges
@@ -152,7 +152,7 @@ int edge_compute::rasterization::edge_forward(
             per_tile_buffers.instance_ranges,
             depth_bits,
             n_instances);
-        LFS_EDGE_PHASE_CHECK(config::debug, "extract_instance_ranges");
+        LFS_EDGE_PHASE_CHECK("extract_instance_ranges");
     }
 
     // Perform blending
@@ -166,7 +166,7 @@ int edge_compute::rasterization::edge_forward(
         grid.x,
         pixel_weights,
         accum_weights);
-    LFS_EDGE_PHASE_CHECK(config::debug, "blend");
+    LFS_EDGE_PHASE_CHECK("blend");
 
     return n_instances;
 }

@@ -4,6 +4,7 @@
 
 #include "vulkan_context.hpp"
 
+#include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -283,7 +284,8 @@ namespace lfs::vis {
                 LOG_ERROR("Vulkan validation: {}", message);
                 const bool fatal = user_data != nullptr && *static_cast<const bool*>(user_data);
                 if (fatal) {
-                    LOG_CRITICAL("Vulkan validation error is fatal because LFS_VK_VALIDATION_FATAL=1: {}",
+                    LOG_CRITICAL("Vulkan validation error is fatal because LFS_CUDA_SYNC_DEBUG includes "
+                                 "vk-fatal: {}",
                                  message);
                     std::abort();
                 }
@@ -1791,7 +1793,7 @@ namespace lfs::vis {
 
         std::vector<const char*> layers;
         const bool validation_requested = validationRequestedByBuild();
-        validation_errors_fatal_ = lfs::core::environment::flag("LFS_VK_VALIDATION_FATAL");
+        validation_errors_fatal_ = lfs::core::diagnostic_mode_enabled(lfs::core::DiagnosticMode::VkFatal);
         const bool validation_layer_available = layerAvailable(available_layers, "VK_LAYER_KHRONOS_validation");
         validation_enabled_ = validation_requested && validation_layer_available && debug_utils_enabled_;
         if (validation_enabled_) {
