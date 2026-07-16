@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/path_utils.hpp"
 #include <expected>
@@ -238,6 +239,72 @@ namespace lfs::io {
         }
 
         return {};
+    }
+
+    // Phase 1 error-architecture adapter: maps this legacy io::Error into the
+    // stable lfs::ErrorCode/ErrorDomain taxonomy for callers migrating to
+    // lfs::Result<T>. This mapping is a reasonable best-effort starting
+    // point, not the frozen per-format taxonomy Phase 3A defines for PLY
+    // (NotFound/InvalidHeader/TruncatedData/...); it exists so any call site
+    // can bridge today without waiting for that phase. Header-only: this
+    // header must not be included from a CUDA translation unit as a result
+    // (core/error.hpp already enforces that with a hard #error if it is).
+    constexpr lfs::ErrorCode to_lfs_error_code(const ErrorCode code) noexcept {
+        switch (code) {
+        case ErrorCode::SUCCESS: return lfs::ErrorCode::Internal; // precondition: caller has a failure
+        case ErrorCode::PATH_NOT_FOUND: return lfs::ErrorCode::NotFound;
+        case ErrorCode::NOT_A_DIRECTORY: return lfs::ErrorCode::InvalidArgument;
+        case ErrorCode::NOT_A_FILE: return lfs::ErrorCode::InvalidArgument;
+        case ErrorCode::PERMISSION_DENIED: return lfs::ErrorCode::PermissionDenied;
+        case ErrorCode::INSUFFICIENT_DISK_SPACE: return lfs::ErrorCode::ResourceExhausted;
+        case ErrorCode::PATH_NOT_WRITABLE: return lfs::ErrorCode::PermissionDenied;
+        case ErrorCode::INVALID_DATASET: return lfs::ErrorCode::InvalidArgument;
+        case ErrorCode::MISSING_REQUIRED_FILES: return lfs::ErrorCode::NotFound;
+        case ErrorCode::CORRUPTED_DATA: return lfs::ErrorCode::DataLoss;
+        case ErrorCode::UNSUPPORTED_FORMAT: return lfs::ErrorCode::Unsupported;
+        case ErrorCode::EMPTY_DATASET: return lfs::ErrorCode::InvalidArgument;
+        case ErrorCode::INVALID_HEADER: return lfs::ErrorCode::DataLoss;
+        case ErrorCode::MALFORMED_JSON: return lfs::ErrorCode::DataLoss;
+        case ErrorCode::MASK_SIZE_MISMATCH: return lfs::ErrorCode::InvalidArgument;
+        case ErrorCode::DEPTH_SIZE_MISMATCH: return lfs::ErrorCode::InvalidArgument;
+        case ErrorCode::NORMAL_SIZE_MISMATCH: return lfs::ErrorCode::InvalidArgument;
+        case ErrorCode::WRITE_FAILURE: return lfs::ErrorCode::Internal;
+        case ErrorCode::ENCODING_FAILED: return lfs::ErrorCode::Internal;
+        case ErrorCode::ARCHIVE_CREATION_FAILED: return lfs::ErrorCode::Internal;
+        case ErrorCode::READ_FAILURE: return lfs::ErrorCode::Internal;
+        case ErrorCode::DECODING_FAILED: return lfs::ErrorCode::DataLoss;
+        case ErrorCode::CANCELLED: return lfs::ErrorCode::Cancelled;
+        case ErrorCode::INTERNAL_ERROR: return lfs::ErrorCode::Internal;
+        }
+        return lfs::ErrorCode::Internal;
+    }
+
+    // `legacy` must represent an actual failure (never call with
+    // ErrorCode::SUCCESS). Carries path/required_bytes/available_bytes
+    // through as SmallFields and records one detection frame at `site`.
+    [[nodiscard]] inline lfs::Error to_lfs_error(const Error& legacy, const lfs::core::SourceSite site) {
+        lfs::SmallFields fields;
+        if (!legacy.path.empty()) {
+            fields.add("path", lfs::core::path_to_utf8(legacy.path));
+        }
+        if (legacy.required_bytes != 0) {
+            fields.add("required_bytes", static_cast<std::uint64_t>(legacy.required_bytes));
+        }
+        if (legacy.available_bytes != 0) {
+            fields.add("available_bytes", static_cast<std::uint64_t>(legacy.available_bytes));
+        }
+        return lfs::make_error(lfs::ErrorInit{
+            .code = to_lfs_error_code(legacy.code),
+            .domain = lfs::ErrorDomain::IO,
+            .severity = lfs::Severity::Error,
+            .retryability = lfs::Retryability::NotRetryable,
+            .operation_id = lfs::OperationId{},
+            .user_message = legacy.message,
+            .detail = legacy.format(),
+            .detection = site,
+            .fields = std::move(fields),
+            .native = std::nullopt,
+        });
     }
 
 } // namespace lfs::io
