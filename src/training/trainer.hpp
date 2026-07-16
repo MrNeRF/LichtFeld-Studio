@@ -576,6 +576,14 @@ namespace lfs::training {
         uint64_t viewer_borrow_waited_ = 0;
         mutable std::mutex stream_sync_mutex_;
 
+        // Sidecar (depth/normal) ready-events whose training-stream wait was
+        // rejected: ownership moves here instead of destroying at the failure
+        // site, since the stream may not be quiescent at that point. Reaped in
+        // destroySyncPrimitives(), after shutdown() has synchronized
+        // training_stream_. Only ever touched from the training thread (push)
+        // and after it has joined (drain) — no lock needed.
+        std::vector<cudaEvent_t> orphaned_sidecar_events_;
+
         void createCudaResources();
         void createSyncPrimitives();
         void destroySyncPrimitives();

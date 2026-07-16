@@ -15,6 +15,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/cuda_error.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -2125,6 +2126,10 @@ namespace lfs::training {
             }
             slot.in_flight = false;
         }
+        for (const cudaEvent_t event : orphaned_sidecar_events_) {
+            cudaEventDestroy(event);
+        }
+        orphaned_sidecar_events_.clear();
     }
 
     void Trainer::submitLossReadback(const lfs::core::Tensor& total_loss, int iter) {
@@ -2255,21 +2260,24 @@ namespace lfs::training {
         std::lock_guard<std::mutex> lock(stream_sync_mutex_);
         if (reader_done_pending_ != 0) {
             for (size_t i = 0; i < READER_DONE_RING; ++i) {
-                if (reader_done_pending_ & (1u << i)) {
-                    cudaStreamWaitEvent(training_stream_, reader_done_events_[i], 0);
+                const uint32_t bit = 1u << i;
+                if (!(reader_done_pending_ & bit)) {
+                    continue;
                 }
+                LFS_CUDA_CHECK_MSG(cudaStreamWaitEvent(training_stream_, reader_done_events_[i], 0),
+                                   "model reader-done wait, slot {}", i);
+                reader_done_pending_ &= ~bit;
             }
-            reader_done_pending_ = 0;
         }
 
         const uint64_t borrow = viewer_borrow_value_.load(std::memory_order_acquire);
         if (viewer_release_semaphore_ && borrow > viewer_borrow_waited_) {
             cudaExternalSemaphoreWaitParams wait_params{};
             wait_params.params.fence.value = borrow;
-            if (cudaWaitExternalSemaphoresAsync(&viewer_release_semaphore_, &wait_params, 1,
-                                                training_stream_) == cudaSuccess) {
-                viewer_borrow_waited_ = borrow;
-            }
+            LFS_CUDA_CHECK_MSG(
+                cudaWaitExternalSemaphoresAsync(&viewer_release_semaphore_, &wait_params, 1, training_stream_),
+                "viewer-release semaphore wait, borrow value {}", borrow);
+            viewer_borrow_waited_ = borrow;
         }
     }
 
@@ -5499,9 +5507,13 @@ namespace lfs::training {
                     if (!*event) {
                         continue;
                     }
-                    if (const cudaError_t wait_err = cudaStreamWaitEvent(training_stream_, *event, 0);
-                        wait_err != cudaSuccess) {
-                        LOG_WARN("Failed to wait for sidecar loader event: {}", cudaGetErrorString(wait_err));
+                    const cudaError_t wait_err = cudaStreamWaitEvent(training_stream_, *event, 0);
+                    if (wait_err != cudaSuccess) {
+                        orphaned_sidecar_events_.push_back(*event);
+                        *event = nullptr;
+                        LFS_ENSURE_CUDA_SUCCESS_MSG(
+                            wait_err, "cudaStreamWaitEvent(sidecar loader ready)",
+                            std::format("iteration {}", iter));
                     }
                     cudaEventDestroy(*event);
                     *event = nullptr;
