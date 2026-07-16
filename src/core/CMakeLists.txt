@@ -51,6 +51,7 @@ set(CORE_SOURCES
         crash_handler.cpp
         cuda_error.cpp
         error.cpp
+        error_reporter.cpp
         failure_report.cpp
         memory_pressure.cpp
         operator_callbacks.cpp

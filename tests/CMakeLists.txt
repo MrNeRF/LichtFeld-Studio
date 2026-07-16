@@ -227,6 +227,7 @@ set(TEST_FILES
     test_vram_profiler_metrics.cpp
     test_memory_pressure.cpp
     test_error_core.cpp
+    test_error_reporter.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)

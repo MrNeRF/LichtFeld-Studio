@@ -583,6 +583,18 @@ namespace lfs::core {
         return resolve_default_log_path(user_dir_override).string();
     }
 
+    bool Logger::is_ready() const noexcept {
+        std::lock_guard lock(impl_->mutex);
+        return static_cast<bool>(impl_->logger);
+    }
+
+    void Logger::reset_for_testing() noexcept {
+        std::lock_guard lock(impl_->mutex);
+        impl_->logger.reset();
+        impl_->console_sink.reset();
+        impl_->memory_sink.reset();
+    }
+
     LogHandlerToken Logger::add_log_handler(LogHandler handler) {
         std::lock_guard lock(impl_->handler_mutex);
         const auto token = impl_->next_handler_token_++;
@@ -631,8 +643,29 @@ namespace lfs::core {
             std::lock_guard lock(impl_->handler_mutex);
             handlers_snapshot = impl_->log_handlers_;
         }
+        // Contain each handler: a throwing handler must not interrupt the
+        // caller of log()/log_internal() or stop later handlers from
+        // running. The faulty handler is disabled so it cannot repeat the
+        // failure on every subsequent log call.
+        std::vector<LogHandlerToken> faulty_tokens;
         for (const auto& [token, handler] : handlers_snapshot) {
-            handler(level, loc, final_msg);
+            try {
+                handler(level, loc, final_msg);
+            } catch (const std::exception& e) {
+                // LFS-CENSUS-OK(empty-catch): handler containment reports directly to
+                // stderr, not LOG_*, because the failure is Logger's own handler misbehaving.
+                std::fprintf(stderr, "lichtfeld: log handler %u threw '%s'; disabling it\n",
+                             static_cast<unsigned>(token), e.what());
+                faulty_tokens.push_back(token);
+            } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): same rationale as the std::exception branch above.
+                std::fprintf(stderr, "lichtfeld: log handler %u threw a non-std exception; disabling it\n",
+                             static_cast<unsigned>(token));
+                faulty_tokens.push_back(token);
+            }
+        }
+        for (const LogHandlerToken token : faulty_tokens) {
+            remove_log_handler(token);
         }
     }
 

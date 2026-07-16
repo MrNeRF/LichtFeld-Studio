@@ -88,6 +88,17 @@ namespace lfs::core {
         // user_dir_override replaces the per-user LichtFeld directory when non-empty.
         [[nodiscard]] static std::string default_log_file_path(const std::string& user_dir_override = {});
 
+        // True once init() has installed a backing spdlog logger. ErrorReporter
+        // uses this to detect a not-yet-initialized Logger and fall back to a
+        // direct stderr report instead of silently dropping the message.
+        [[nodiscard]] bool is_ready() const noexcept;
+
+        // Test-only: returns the Logger singleton to its pre-init() state
+        // (is_ready() == false) without touching registered log handlers or
+        // the global level. Mirrors force_next_error_allocation_to_fail_for_testing
+        // and reset_failure_report_dedup_for_testing elsewhere in core.
+        void reset_for_testing() noexcept;
+
         LogHandlerToken add_log_handler(LogHandler handler);
         void remove_log_handler(LogHandlerToken handler_token);
 
