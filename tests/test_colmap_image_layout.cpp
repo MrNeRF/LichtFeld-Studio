@@ -192,6 +192,42 @@ TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
     EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), nested_mask));
 }
 
+TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedColmapIds) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "0 PINHOLE 1 1 1 1 0.5 0.5\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "0 1 0 0 0 0 0 0 0 frame_0.png\n");
+    write_png(dataset_dir / "images" / "frame_0.png");
+
+    auto result =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<0>(*result);
+
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_EQ(cameras[0]->image_name(), "frame_0.png");
+}
+
+TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedPoint3DIds) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    write_text_file(dataset_dir / "points3D.txt",
+                    "0 0 0 0 255 0 0 0.1 0 0\n");
+
+    const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(
+        dataset_dir,
+        lfs::io::LoadOptions{});
+
+    EXPECT_EQ(result.point_cloud.size(), 1u);
+    EXPECT_EQ(result.total_points, 1u);
+}
+
 TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";

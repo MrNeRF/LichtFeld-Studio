@@ -220,9 +220,59 @@ namespace lfs::vis {
                 "LFS_VK_VALIDATION", LFS_VULKAN_VALIDATION_DEFAULT != 0);
         }
 
+        [[nodiscard]] bool isExpectedPinnedValidationLayerDedup(
+            [[maybe_unused]] const VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
+            [[maybe_unused]] const VkDebugUtilsMessageTypeFlagsEXT message_type,
+            [[maybe_unused]] const VkDebugUtilsMessengerCallbackDataEXT* const callback_data) {
+#ifdef LFS_VULKAN_VALIDATION_LAYER_DIR
+            constexpr std::string_view loader_message_id = "Loader Message";
+            constexpr std::string_view duplicate_prefix =
+                "Removing layer VK_LAYER_KHRONOS_validation (";
+            constexpr std::string_view duplicate_separator =
+                ") because it is a duplicate of VK_LAYER_KHRONOS_validation (";
+
+            if (message_severity != VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT ||
+                message_type != VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT ||
+                callback_data == nullptr || callback_data->pMessageIdName == nullptr ||
+                callback_data->pMessage == nullptr || callback_data->messageIdNumber != 0 ||
+                std::string_view(callback_data->pMessageIdName) != loader_message_id) {
+                return false;
+            }
+
+            const std::string_view message = callback_data->pMessage;
+            if (!message.starts_with(duplicate_prefix) || !message.ends_with(')')) {
+                return false;
+            }
+
+            const auto separator = message.find(duplicate_separator, duplicate_prefix.size());
+            if (separator == std::string_view::npos || separator == duplicate_prefix.size()) {
+                return false;
+            }
+
+            const auto retained_manifest_begin = separator + duplicate_separator.size();
+            if (retained_manifest_begin >= message.size() - 1) {
+                return false;
+            }
+
+            const std::filesystem::path retained_manifest(
+                std::string(message.substr(retained_manifest_begin, message.size() - retained_manifest_begin - 1)));
+            const std::filesystem::path pinned_manifest =
+                std::filesystem::path(LFS_VULKAN_VALIDATION_LAYER_DIR) / "VkLayer_khronos_validation.json";
+            std::error_code error;
+            const auto retained_absolute = std::filesystem::absolute(retained_manifest, error).lexically_normal();
+            if (error) {
+                return false;
+            }
+            const auto pinned_absolute = std::filesystem::absolute(pinned_manifest, error).lexically_normal();
+            return !error && retained_absolute == pinned_absolute;
+#else
+            return false;
+#endif
+        }
+
         VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(
             VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
-            VkDebugUtilsMessageTypeFlagsEXT,
+            VkDebugUtilsMessageTypeFlagsEXT message_type,
             const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
             void* user_data) {
             const char* const message = callback_data != nullptr && callback_data->pMessage != nullptr
@@ -237,6 +287,8 @@ namespace lfs::vis {
                                  message);
                     std::abort();
                 }
+            } else if (isExpectedPinnedValidationLayerDedup(message_severity, message_type, callback_data)) {
+                LOG_INFO("Vulkan validation: {}", message);
             } else if ((message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0) {
                 LOG_WARN("Vulkan validation: {}", message);
             }

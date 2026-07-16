@@ -504,6 +504,23 @@ if(LFS_DEV_IMPORT_SOURCE_RESOURCES AND NOT BUILD_PORTABLE)
     message(STATUS "Resource dev mode: locales import from ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales")
 endif()
 
+if(LFS_ENABLE_VULKAN_VALIDATION)
+    if(WIN32)
+        set(_lfs_vulkan_validation_layer_dir
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+    else()
+        set(_lfs_vulkan_validation_layer_dir
+                "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/vulkan/explicit_layer.d")
+    endif()
+    if(NOT EXISTS "${_lfs_vulkan_validation_layer_dir}/VkLayer_khronos_validation.json")
+        message(FATAL_ERROR
+                "Vulkan validation is enabled, but the pinned validation layer is missing from ${_lfs_vulkan_validation_layer_dir}")
+    endif()
+    set_property(SOURCE window/window_manager.cpp window/vulkan_context.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+            LFS_VULKAN_VALIDATION_LAYER_DIR="${_lfs_vulkan_validation_layer_dir}")
+    unset(_lfs_vulkan_validation_layer_dir)
+endif()
+
 # Compile definitions
 target_compile_definitions(lfs_visualizer PRIVATE
         LFS_VIS_EXPORTS

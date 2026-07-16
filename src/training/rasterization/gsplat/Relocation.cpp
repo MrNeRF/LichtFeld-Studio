@@ -17,6 +17,7 @@ namespace gsplat_lfs {
         const float* binoms,
         int64_t N,
         int32_t n_max,
+        float min_opacity,
         cudaStream_t stream) {
         gsplat_lfs::debug_validate_cuda_pointer(opacities, "opacities");
         gsplat_lfs::debug_validate_cuda_pointer(scales, "scales");
@@ -29,7 +30,7 @@ namespace gsplat_lfs {
 
         launch_relocation_kernel(
             opacities, scales, ratios, binoms,
-            N, n_max, stream);
+            N, n_max, min_opacity, stream);
     }
 
     void add_noise(

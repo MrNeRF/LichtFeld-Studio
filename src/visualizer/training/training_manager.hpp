@@ -96,6 +96,9 @@ namespace lfs::vis {
         [[nodiscard]] bool canResume() const { return canPerform(TrainingAction::Resume); }
         [[nodiscard]] bool canStop() const { return canPerform(TrainingAction::Stop); }
         [[nodiscard]] bool canReset() const { return canPerform(TrainingAction::Reset); }
+        [[nodiscard]] bool isCompletionPending() const {
+            return completion_pending_.load(std::memory_order_acquire);
+        }
 
         // Progress information - directly query trainer
         int getCurrentIteration() const;
@@ -166,8 +169,22 @@ namespace lfs::vis {
         void applyPendingParams();
 
     private:
+        struct TrainingCompletionData {
+            int iteration = 0;
+            float final_loss = 0.0f;
+            float elapsed_seconds = 0.0f;
+            bool success = false;
+            bool user_stopped = false;
+            FinishReason reason = FinishReason::None;
+            std::optional<std::string> error;
+        };
+
         // Training thread function
         void trainingThreadFunc(std::stop_token stop_token);
+        void launchTrainingThread();
+        void completionReaperLoop(std::stop_token stop_token);
+        void finishTrainingThreadJoin();
+        void dispatchTrainingCompleted(TrainingCompletionData completion);
 
         // State management
         void handleTrainingComplete(bool success, const std::string& error = "");
@@ -181,6 +198,10 @@ namespace lfs::vis {
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
         std::unique_ptr<std::jthread> training_thread_;
+        std::optional<std::stop_source> training_stop_source_;
+        std::mutex training_thread_mutex_;
+        std::condition_variable training_thread_cv_;
+        std::jthread completion_reaper_;
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;
         std::optional<lfs::core::SplatExportableStorage> splat_storage_;
@@ -194,7 +215,9 @@ namespace lfs::vis {
         // Synchronization
         std::condition_variable completion_cv_;
         std::mutex completion_mutex_;
-        bool training_complete_ = false;
+        bool training_joined_ = true;
+        std::optional<TrainingCompletionData> pending_completion_;
+        std::atomic<bool> completion_pending_{false};
 
         static constexpr int COMPLETION_TIMEOUT_SEC = 30;
         static constexpr int MAX_LOSS_POINTS = 200;

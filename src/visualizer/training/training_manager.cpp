@@ -79,6 +79,9 @@ namespace lfs::vis {
     TrainerManager::TrainerManager() {
         setupEventHandlers();
         setupStateMachineCallbacks();
+        completion_reaper_ = std::jthread([this](const std::stop_token stop_token) {
+            completionReaperLoop(stop_token);
+        });
         LOG_DEBUG("TrainerManager created");
     }
 
@@ -155,20 +158,21 @@ namespace lfs::vis {
     }
 
     TrainerManager::~TrainerManager() {
-        // Ensure training is stopped before destruction
-        if (training_thread_ && training_thread_->joinable()) {
+        if (isCompletionPending()) {
             LOG_INFO("Stopping training thread during destruction...");
-            stopTraining();
-            if (!waitForCompletion()) {
-                // Destruction cannot leave a worker that captures this manager or
-                // its scene/trainer pointers. A final join is intentionally
-                // unbounded here; the interactive clear path keeps ownership and
-                // returns instead of reaching this shutdown-only fallback.
-                LOG_WARN("Waiting without a timeout for training worker during shutdown");
-                training_thread_->request_stop();
-                training_thread_->join();
-                training_thread_.reset();
+            if (canStop()) {
+                stopTraining();
+            } else if (trainer_) {
+                trainer_->request_stop();
             }
+            if (!waitForCompletion()) {
+                LOG_WARN("Training worker exceeded the shutdown completion timeout");
+            }
+        }
+        completion_reaper_.request_stop();
+        training_thread_cv_.notify_all();
+        if (completion_reaper_.joinable()) {
+            completion_reaper_.join();
         }
     }
 
@@ -237,9 +241,9 @@ namespace lfs::vis {
             stopTraining();
         }
 
-        if (training_thread_ && training_thread_->joinable()) {
-            if (training_thread_->get_id() == std::this_thread::get_id()) {
-                LOG_ERROR("Cannot clear trainer from its own training thread");
+        if (isCompletionPending()) {
+            if (viewer_ && viewer_->isOnViewerThread()) {
+                LOG_ERROR("Trainer clear deferred until the training completion event");
                 return false;
             }
             LOG_INFO("Waiting for training thread before clearing trainer");
@@ -417,11 +421,6 @@ namespace lfs::vis {
             }
         }
 
-        {
-            std::lock_guard<std::mutex> lock(completion_mutex_);
-            training_complete_ = false;
-        }
-
         if (!state_machine_.transitionTo(TrainingState::Running)) {
             LOG_WARN("Failed to transition to Running");
         }
@@ -431,10 +430,7 @@ namespace lfs::vis {
 
         state::TrainingStarted{.total_iterations = getTotalIterations()}.emit();
 
-        training_thread_ = std::make_unique<std::jthread>(
-            [this](std::stop_token stop_token) {
-                trainingThreadFunc(stop_token);
-            });
+        launchTrainingThread();
 
         LOG_INFO("Training started - {} iterations planned", getTotalIterations());
         return true;
@@ -468,14 +464,12 @@ namespace lfs::vis {
             return;
 
         const int iter = getCurrentIteration();
-        const bool need_thread = !training_thread_ || !training_thread_->joinable();
+        const bool need_thread = !isCompletionPending();
 
         if (need_thread) {
             // Checkpoint resume: no thread exists yet
-            training_complete_ = false;
             accumulated_training_time_ = std::chrono::steady_clock::duration{0};
-            training_thread_ = std::make_unique<std::jthread>(
-                [this](std::stop_token st) { trainingThreadFunc(st); });
+            launchTrainingThread();
         } else {
             trainer_->request_resume();
         }
@@ -657,9 +651,14 @@ namespace lfs::vis {
             trainer_->request_stop();
         }
 
-        const bool has_thread = training_thread_ && training_thread_->joinable();
+        const bool has_thread = isCompletionPending();
+        std::optional<std::stop_source> stop_source;
         if (has_thread) {
-            training_thread_->request_stop();
+            std::lock_guard lock(training_thread_mutex_);
+            stop_source = training_stop_source_;
+        }
+        if (stop_source) {
+            stop_source->request_stop();
         }
 
         state::TrainingStopped{.iteration = getCurrentIteration(), .user_requested = true}.emit();
@@ -667,6 +666,7 @@ namespace lfs::vis {
 
         if (!has_thread) {
             handleTrainingComplete(true);
+            finishTrainingThreadJoin();
         }
     }
 
@@ -680,25 +680,112 @@ namespace lfs::vis {
     }
 
     bool TrainerManager::waitForCompletion() {
-        if (!training_thread_ || !training_thread_->joinable()) {
-            return true;
-        }
-        if (training_thread_->get_id() == std::this_thread::get_id()) {
-            LOG_ERROR("Cannot wait for the training worker from its own thread");
-            return false;
-        }
-
         std::unique_lock<std::mutex> lock(completion_mutex_);
-        if (!completion_cv_.wait_for(lock, std::chrono::seconds(COMPLETION_TIMEOUT_SEC),
-                                     [this] { return training_complete_; })) {
-            LOG_ERROR("Training thread join timed out ({}s)", COMPLETION_TIMEOUT_SEC);
-            training_thread_->request_stop();
+        if (viewer_ && viewer_->isOnViewerThread() && !training_joined_) {
+            LOG_ERROR("Refusing to block the viewer thread on training completion");
             return false;
         }
-
-        training_thread_->join();
-        training_thread_.reset();
+        if (!completion_cv_.wait_for(lock, std::chrono::seconds(COMPLETION_TIMEOUT_SEC),
+                                     [this] { return training_joined_; })) {
+            LOG_ERROR("Training thread join timed out ({}s)", COMPLETION_TIMEOUT_SEC);
+            return false;
+        }
         return true;
+    }
+
+    void TrainerManager::launchTrainingThread() {
+        {
+            std::lock_guard lock(completion_mutex_);
+            training_joined_ = false;
+            pending_completion_.reset();
+        }
+        completion_pending_.store(true, std::memory_order_release);
+
+        auto worker = std::make_unique<std::jthread>(
+            [this](const std::stop_token stop_token) {
+                trainingThreadFunc(stop_token);
+            });
+        {
+            std::lock_guard lock(training_thread_mutex_);
+            training_stop_source_ = worker->get_stop_source();
+            training_thread_ = std::move(worker);
+        }
+        training_thread_cv_.notify_one();
+    }
+
+    void TrainerManager::completionReaperLoop(const std::stop_token stop_token) {
+        while (true) {
+            std::unique_ptr<std::jthread> worker;
+            {
+                std::unique_lock lock(training_thread_mutex_);
+                training_thread_cv_.wait(lock, [this, stop_token] {
+                    return stop_token.stop_requested() || training_thread_ != nullptr;
+                });
+                if (!training_thread_) {
+                    if (stop_token.stop_requested()) {
+                        return;
+                    }
+                    continue;
+                }
+                worker = std::move(training_thread_);
+            }
+
+            if (worker->joinable()) {
+                worker->join();
+            }
+            finishTrainingThreadJoin();
+        }
+    }
+
+    void TrainerManager::finishTrainingThreadJoin() {
+        std::optional<TrainingCompletionData> completion;
+        {
+            std::lock_guard lock(completion_mutex_);
+            training_joined_ = true;
+            completion = std::move(pending_completion_);
+            pending_completion_.reset();
+        }
+        completion_cv_.notify_all();
+
+        if (!completion) {
+            completion_pending_.store(false, std::memory_order_release);
+            LOG_ERROR("Training worker exited without terminal completion data");
+            return;
+        }
+        dispatchTrainingCompleted(std::move(*completion));
+    }
+
+    void TrainerManager::dispatchTrainingCompleted(TrainingCompletionData completion) {
+        auto emit_completion = [this, completion = std::move(completion)]() mutable {
+            if (!state_machine_.transitionToFinished(completion.reason)) {
+                LOG_WARN("Failed to transition to Finished");
+            }
+            LOG_INFO("Training finished: iter={}, loss={:.6f}, time={:.1f}s",
+                     completion.iteration, completion.final_loss, completion.elapsed_seconds);
+            completion_pending_.store(false, std::memory_order_release);
+            state::TrainingCompleted{
+                .iteration = completion.iteration,
+                .final_loss = completion.final_loss,
+                .elapsed_seconds = completion.elapsed_seconds,
+                .success = completion.success,
+                .user_stopped = completion.user_stopped,
+                .error = std::move(completion.error)}
+                .emit();
+        };
+
+        if (viewer_) {
+            if (!viewer_->postWork({
+                    .run = std::move(emit_completion),
+                    .cancel = [this] {
+                        completion_pending_.store(false, std::memory_order_release);
+                    },
+                })) {
+                completion_pending_.store(false, std::memory_order_release);
+                LOG_WARN("Training completion event dropped during viewer shutdown");
+            }
+            return;
+        }
+        emit_completion();
     }
 
     int TrainerManager::getCurrentIteration() const {
@@ -924,28 +1011,17 @@ namespace lfs::vis {
                                     : user_stopped ? FinishReason::UserStopped
                                                    : FinishReason::Completed;
 
-        if (!state_machine_.transitionToFinished(reason)) {
-            LOG_WARN("Failed to transition to Finished");
-        }
-
-        LOG_INFO("Training finished: iter={}, loss={:.6f}, time={:.1f}s",
-                 final_iter, final_loss, elapsed);
-
-        // Signal completion before emitting events to avoid GIL deadlock
         {
             std::lock_guard lock(completion_mutex_);
-            training_complete_ = true;
+            pending_completion_ = TrainingCompletionData{
+                .iteration = final_iter,
+                .final_loss = final_loss,
+                .elapsed_seconds = elapsed,
+                .success = success,
+                .user_stopped = user_stopped,
+                .reason = reason,
+                .error = error.empty() ? std::nullopt : std::optional(error)};
         }
-        completion_cv_.notify_all();
-
-        state::TrainingCompleted{
-            .iteration = final_iter,
-            .final_loss = final_loss,
-            .elapsed_seconds = elapsed,
-            .success = success,
-            .user_stopped = user_stopped,
-            .error = error.empty() ? std::nullopt : std::optional(error)}
-            .emit();
     }
 
     void TrainerManager::setupEventHandlers() {

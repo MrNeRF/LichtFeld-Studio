@@ -36,9 +36,12 @@ namespace lfs::vis {
         LOG_DEBUG("Entering main render loop");
 
         while (true) {
-            if (g_interrupt_requested.load(std::memory_order_acquire)) {
+            if (g_interrupt_requested.exchange(false, std::memory_order_acq_rel)) {
                 LOG_INFO("Interrupt signal received, shutting down");
-                break;
+                if (!interrupt_callback_) {
+                    break;
+                }
+                interrupt_callback_();
             }
 
             if (should_close_callback_ && should_close_callback_()) {

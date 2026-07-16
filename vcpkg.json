@@ -98,6 +98,19 @@
       "dependencies": [
         "gtest"
       ]
+    },
+    "vulkan-validation": {
+      "description": "Pinned Vulkan validation layer and SPIR-V validator for developer builds",
+      "dependencies": [
+        {
+          "name": "spirv-tools",
+          "features": [
+            "tools"
+          ],
+          "host": true
+        },
+        "vulkan-validationlayers"
+      ]
     }
   },
   "overrides": [

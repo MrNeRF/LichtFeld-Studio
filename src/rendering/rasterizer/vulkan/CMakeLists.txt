@@ -67,6 +67,24 @@ find_program(GLSLANG
 message(STATUS "vulkan: slangc=${SLANGC}")
 message(STATUS "vulkan: glslang=${GLSLANG}")
 
+if(LFS_ENABLE_VULKAN_VALIDATION)
+        set(_VULKAN_SPIRV_TOOLS_TRIPLET "${VCPKG_HOST_TRIPLET}")
+        if(NOT _VULKAN_SPIRV_TOOLS_TRIPLET)
+                set(_VULKAN_SPIRV_TOOLS_TRIPLET "${VCPKG_TARGET_TRIPLET}")
+        endif()
+        find_program(_VULKAN_SPIRV_VAL
+                NAMES spirv-val
+                HINTS
+                        ${CMAKE_PREFIX_PATH}
+                        ${CMAKE_PREFIX_PATH}/tools/spirv-tools
+                        ${VCPKG_INSTALLED_DIR}/${_VULKAN_SPIRV_TOOLS_TRIPLET}/tools/spirv-tools
+                PATH_SUFFIXES tools/spirv-tools
+                NO_CACHE
+                REQUIRED
+        )
+        message(STATUS "vulkan: spirv-val=${_VULKAN_SPIRV_VAL}")
+endif()
+
 set(_VULKAN_SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shader/src)
 set(_VULKAN_GENERATED_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/generated)
 set(_VULKAN_RADIX_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/radix_sort)
@@ -106,6 +124,12 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                 list(APPEND _defs "-D${D}")
         endforeach()
         set(_out ${_VULKAN_GENERATED_OUT}/${OUT_NAME}.spv)
+        set(_spirv_validation)
+        set(_spirv_validation_dependency)
+        if(_VULKAN_SPIRV_VAL)
+                set(_spirv_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_out})
+                set(_spirv_validation_dependency ${_VULKAN_SPIRV_VAL})
+        endif()
         add_custom_command(
                 OUTPUT ${_out}
                 COMMAND ${SLANGC}
@@ -114,7 +138,8 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
                         ${_defs}
                         -I${_VULKAN_SHADER_SRC}/slang
                         -o ${_out}
-                DEPENDS ${_VULKAN_SLANG_ALL}
+                ${_spirv_validation}
+                DEPENDS ${_VULKAN_SLANG_ALL} ${_spirv_validation_dependency}
                 COMMENT "slangc ${OUT_NAME}.spv"
                 VERBATIM
         )
@@ -127,6 +152,12 @@ function(_vulkan_add_glsl_shader OUT_NAME SRC_FILE)
                 list(APPEND _defs "-D${D}")
         endforeach()
         set(_out ${_VULKAN_RADIX_OUT}/${OUT_NAME}.spv)
+        set(_spirv_validation)
+        set(_spirv_validation_dependency)
+        if(_VULKAN_SPIRV_VAL)
+                set(_spirv_validation COMMAND ${_VULKAN_SPIRV_VAL} ${_out})
+                set(_spirv_validation_dependency ${_VULKAN_SPIRV_VAL})
+        endif()
         add_custom_command(
                 OUTPUT ${_out}
                 COMMAND ${GLSLANG}
@@ -134,7 +165,8 @@ function(_vulkan_add_glsl_shader OUT_NAME SRC_FILE)
                         ${_defs}
                         ${_VULKAN_SHADER_SRC}/radix_sort/${SRC_FILE}
                         -o ${_out}
-                DEPENDS ${_VULKAN_SHADER_SRC}/radix_sort/${SRC_FILE} ${_VULKAN_RADIX_DEPS}
+                ${_spirv_validation}
+                DEPENDS ${_VULKAN_SHADER_SRC}/radix_sort/${SRC_FILE} ${_VULKAN_RADIX_DEPS} ${_spirv_validation_dependency}
                 COMMENT "glslang ${OUT_NAME}.spv"
                 VERBATIM
         )

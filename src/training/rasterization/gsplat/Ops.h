@@ -97,6 +97,7 @@ namespace gsplat_lfs {
         const float* binoms, // [n_max, n_max]
         int64_t N,
         int32_t n_max,
+        float min_opacity,
         cudaStream_t stream = nullptr);
 
     void add_noise(

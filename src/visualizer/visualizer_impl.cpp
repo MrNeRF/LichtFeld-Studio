@@ -42,6 +42,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #ifdef WIN32
 #include <windows.h>
 #endif
@@ -800,6 +801,7 @@ namespace lfs::vis {
         main_loop_->setRenderCallback([this]() { render(); });
         main_loop_->setShutdownCallback([this]() { shutdown(); });
         main_loop_->setShouldCloseCallback([this]() { return allowclose(); });
+        main_loop_->setInterruptCallback([this]() { requestApplicationClose(); });
         main_loop_->setFrameErrorCallback([this](std::exception_ptr eptr) {
             handleFrameException(std::move(eptr));
         });
@@ -890,9 +892,14 @@ namespace lfs::vis {
                 LOG_WARN("Cannot reset: no dataset");
                 return;
             }
-            if (trainer_manager_ && trainer_manager_->isTrainingActive()) {
-                pending_reset_ = true;
-                trainer_manager_->stopTraining();
+            if (trainer_manager_ &&
+                (trainer_manager_->isTrainingActive() || trainer_manager_->isCompletionPending())) {
+                if (pending_training_action_ == PendingTrainingAction::None) {
+                    pending_training_action_ = PendingTrainingAction::Reset;
+                }
+                if (trainer_manager_->canStop()) {
+                    trainer_manager_->stopTraining();
+                }
                 return;
             }
             performReset();
@@ -1225,21 +1232,6 @@ namespace lfs::vis {
 
         if (selection_tool_ && selection_tool_->isEnabled() && tool_context_) {
             selection_tool_->update(*tool_context_);
-        }
-
-        if (pending_new_project_ && trainer_manager_ &&
-            trainer_manager_->canPerform(TrainingAction::ClearScene)) {
-            if (trainer_manager_->waitForCompletion()) {
-                pending_new_project_ = false;
-                performNewProject();
-            }
-        }
-
-        if (pending_reset_ && trainer_manager_ && !trainer_manager_->isTrainingActive()) {
-            if (trainer_manager_->waitForCompletion()) {
-                pending_reset_ = false;
-                performReset();
-            }
         }
 
         if (!gui_frame_rendered_) {
@@ -1642,12 +1634,31 @@ namespace lfs::vis {
             return false;
         }
 
+        const auto defer_close_for_training = [this] {
+            if (!trainer_manager_ ||
+                (!trainer_manager_->isTrainingActive() && !trainer_manager_->isCompletionPending())) {
+                return false;
+            }
+            pending_training_action_ = PendingTrainingAction::Close;
+            if (trainer_manager_->canStop()) {
+                trainer_manager_->stopTraining();
+            }
+            window_manager_->cancelClose();
+            return true;
+        };
+
         if (!gui_manager_) {
+            if (defer_close_for_training()) {
+                return false;
+            }
             beginShutdown();
             return true;
         }
 
         if (gui_manager_->isForceExit()) {
+            if (defer_close_for_training()) {
+                return false;
+            }
             beginShutdown();
 #ifdef WIN32
             const HWND hwnd = GetConsoleWindow();
@@ -1670,14 +1681,15 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::shutdown() {
+        if (trainer_manager_ &&
+            (trainer_manager_->isTrainingActive() || trainer_manager_->isCompletionPending())) {
+            LOG_CRITICAL("Shutdown reached before the training worker was reaped");
+            return;
+        }
+
         beginShutdown();
 
-        // Stop training before GPU resources are freed
         if (trainer_manager_) {
-            if (trainer_manager_->isTrainingActive()) {
-                trainer_manager_->stopTraining();
-                (void)trainer_manager_->waitForCompletion();
-            }
             trainer_manager_.reset();
         }
 
@@ -1801,6 +1813,9 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::handleNewProject() {
+        if (pending_training_action_ == PendingTrainingAction::Close) {
+            return;
+        }
         if (gui_manager_) {
             gui_manager_->asyncTasks().cancelImport();
         }
@@ -1808,17 +1823,21 @@ namespace lfs::vis {
         pending_view_paths_.clear();
         pending_dataset_path_.clear();
         pending_auto_train_ = false;
-        pending_reset_ = false;
+        if (pending_training_action_ == PendingTrainingAction::Reset) {
+            pending_training_action_ = PendingTrainingAction::None;
+        }
 
-        if (trainer_manager_ && !trainer_manager_->canPerform(TrainingAction::ClearScene)) {
-            pending_new_project_ = true;
+        if (trainer_manager_ &&
+            (!trainer_manager_->canPerform(TrainingAction::ClearScene) ||
+             trainer_manager_->isCompletionPending())) {
+            pending_training_action_ = PendingTrainingAction::NewProject;
             if (trainer_manager_->canStop()) {
                 trainer_manager_->stopTraining();
             }
             return;
         }
 
-        pending_new_project_ = false;
+        pending_training_action_ = PendingTrainingAction::None;
         performNewProject();
     }
 
@@ -1841,8 +1860,8 @@ namespace lfs::vis {
         pending_view_paths_.clear();
         pending_dataset_path_.clear();
         pending_auto_train_ = false;
-        pending_new_project_ = false;
-        pending_reset_ = false;
+        pending_training_action_ = PendingTrainingAction::None;
+        pending_training_action_posted_ = false;
     }
 
     void VisualizerImpl::wakeMainLoop() const {
@@ -2012,6 +2031,45 @@ namespace lfs::vis {
         pending_training_completion_refresh_frames_ = 3;
         if (rendering_manager_) {
             rendering_manager_->markDirty(DirtyFlag::ALL);
+        }
+        wakeMainLoop();
+        schedulePendingTrainingAction();
+    }
+
+    void VisualizerImpl::schedulePendingTrainingAction() {
+        if (pending_training_action_ == PendingTrainingAction::None || pending_training_action_posted_) {
+            return;
+        }
+        pending_training_action_posted_ = postWork({
+            .run = [this] { performPendingTrainingAction(); },
+            .cancel = [this] { pending_training_action_posted_ = false; },
+        });
+    }
+
+    void VisualizerImpl::performPendingTrainingAction() {
+        pending_training_action_posted_ = false;
+        const auto action = std::exchange(pending_training_action_, PendingTrainingAction::None);
+        switch (action) {
+        case PendingTrainingAction::Reset:
+            performReset();
+            break;
+        case PendingTrainingAction::NewProject:
+            performNewProject();
+            break;
+        case PendingTrainingAction::Close:
+            requestApplicationClose();
+            break;
+        case PendingTrainingAction::None:
+            break;
+        }
+    }
+
+    void VisualizerImpl::requestApplicationClose() {
+        if (gui_manager_) {
+            gui_manager_->setForceExit(true);
+        }
+        if (window_manager_) {
+            window_manager_->requestClose();
         }
         wakeMainLoop();
     }

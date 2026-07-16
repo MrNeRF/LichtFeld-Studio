@@ -6,7 +6,15 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 binary="$repo_root/build/LichtFeld-Studio"
-layer_path="$repo_root/../Vulkan-ValidationLayers/build/layers"
+layer_path=""
+for candidate in \
+    "$repo_root"/build/vcpkg_installed/*/share/vulkan/explicit_layer.d \
+    "$repo_root"/build/vcpkg_installed/*/bin; do
+    if [[ -f "$candidate/VkLayer_khronos_validation.json" ]]; then
+        layer_path="$candidate"
+        break
+    fi
+done
 fatal=0
 
 usage() {
@@ -15,7 +23,7 @@ Usage: scripts/run_vulkan_validation.sh [options] [-- app-arguments]
 
 Options:
   --binary PATH      LichtFeld Studio executable
-  --layer-path PATH  Source-built Vulkan-ValidationLayers layer directory
+  --layer-path PATH  Vulkan validation layer manifest directory
   --fatal            Abort on the first validation error
   -h, --help         Show this help
 EOF
@@ -55,8 +63,8 @@ if [[ ! -x "$binary" ]]; then
     echo "LichtFeld Studio executable is not available: $binary" >&2
     exit 1
 fi
-if [[ ! -f "$layer_path/VkLayer_khronos_validation.json" ]]; then
-    echo "Source-built Vulkan validation layer is not available: $layer_path" >&2
+if [[ -z "$layer_path" || ! -f "$layer_path/VkLayer_khronos_validation.json" ]]; then
+    echo "Vulkan validation layer is not available: $layer_path" >&2
     exit 1
 fi
 

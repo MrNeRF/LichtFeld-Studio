@@ -57,6 +57,7 @@ namespace lfs::training::mcmc {
         const float* __restrict__ opacities,
         const float* __restrict__ scales,
         const int32_t* __restrict__ ratios,
+        const float min_opacity,
         float* __restrict__ new_opacities,
         float* __restrict__ new_scales,
         const size_t N) {
@@ -77,7 +78,7 @@ namespace lfs::training::mcmc {
         // new_opacity = 1 - (1 - opacity)^(1/n_idx)
         const float new_opacity = fminf(fmaxf(
                                             1.0f - powf(1.0f - opacity, 1.0f / static_cast<float>(n_idx)),
-                                            OPACITY_MIN),
+                                            fmaxf(OPACITY_MIN, min_opacity)),
                                         OPACITY_MAX);
         new_opacities[idx] = new_opacity;
 
@@ -106,6 +107,7 @@ namespace lfs::training::mcmc {
         const float* opacities,
         const float* scales,
         const int32_t* ratios,
+        float min_opacity,
         float* new_opacities,
         float* new_scales,
         size_t N,
@@ -124,6 +126,7 @@ namespace lfs::training::mcmc {
             opacities,
             scales,
             ratios,
+            min_opacity,
             new_opacities,
             new_scales,
             N);
