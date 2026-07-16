@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_frame_extractor.hpp"
+#include "hdr_libplacebo.hpp"
+#include "hdr_tonemap.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "nvcodec_image_loader.hpp"
@@ -14,6 +16,7 @@ extern "C" {
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_cuda.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/dovi_meta.h>
 #include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
@@ -26,6 +29,8 @@ extern "C" {
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <vector>
@@ -34,6 +39,54 @@ namespace lfs::io {
 
     namespace {
         constexpr int JPEG_BATCH_SIZE = 32;
+
+        void configureVideoToRgbColorimetry(SwsContext* context, const AVFrame* source,
+                                            const AVColorSpace fallback_colorspace,
+                                            const AVColorRange fallback_range) {
+            if (!context || !source)
+                return;
+            const AVColorSpace colorspace = source->colorspace != AVCOL_SPC_UNSPECIFIED
+                ? source->colorspace
+                : fallback_colorspace;
+            const AVColorRange color_range = source->color_range != AVCOL_RANGE_UNSPECIFIED
+                ? source->color_range
+                : fallback_range;
+            const int source_matrix = colorspace == AVCOL_SPC_BT2020_NCL ||
+                                      colorspace == AVCOL_SPC_BT2020_CL
+                ? SWS_CS_BT2020
+                : colorspace == AVCOL_SPC_BT709 ? SWS_CS_ITU709 : SWS_CS_DEFAULT;
+            const int source_range = color_range == AVCOL_RANGE_JPEG ? 1 : 0;
+            sws_setColorspaceDetails(context, sws_getCoefficients(source_matrix), source_range,
+                                     sws_getCoefficients(SWS_CS_ITU709), 1, 0, 1 << 16, 1 << 16);
+        }
+
+        void inheritStreamColorimetry(AVFrame* const frame, const AVCodecParameters* const parameters,
+                                      const HdrFormat hdr_format) {
+            if (!frame || !parameters)
+                return;
+            if (frame->colorspace == AVCOL_SPC_UNSPECIFIED)
+                frame->colorspace = parameters->color_space != AVCOL_SPC_UNSPECIFIED
+                                        ? parameters->color_space
+                                        : AVCOL_SPC_BT2020_NCL;
+            if (frame->color_range == AVCOL_RANGE_UNSPECIFIED)
+                frame->color_range = parameters->color_range != AVCOL_RANGE_UNSPECIFIED
+                                         ? parameters->color_range
+                                         : AVCOL_RANGE_MPEG;
+            if (frame->color_primaries == AVCOL_PRI_UNSPECIFIED)
+                frame->color_primaries = parameters->color_primaries != AVCOL_PRI_UNSPECIFIED
+                                             ? parameters->color_primaries
+                                             : AVCOL_PRI_BT2020;
+            if (frame->color_trc == AVCOL_TRC_UNSPECIFIED) {
+                frame->color_trc = parameters->color_trc != AVCOL_TRC_UNSPECIFIED
+                                       ? parameters->color_trc
+                                       : (hdr_format == HdrFormat::HLG ||
+                                          hdr_format == HdrFormat::DOLBY_VISION_HLG
+                                              ? AVCOL_TRC_ARIB_STD_B67
+                                              : AVCOL_TRC_SMPTE2084);
+            }
+            if (frame->chroma_location == AVCHROMA_LOC_UNSPECIFIED)
+                frame->chroma_location = parameters->chroma_location;
+        }
 
         struct ExtractionCancelled final : std::exception {
             [[nodiscard]] const char* what() const noexcept override { return "Extraction stopped"; }
@@ -328,9 +381,34 @@ namespace lfs::io {
 
                 AVStream* video_stream = fmt_ctx->streams[video_stream_idx];
                 const AVCodecID codec_id = video_stream->codecpar->codec_id;
+                int dv_profile = 0;
+                int dv_compatibility = 0;
+                for (int i = 0; i < video_stream->codecpar->nb_coded_side_data; ++i) {
+                    const AVPacketSideData* side_data = &video_stream->codecpar->coded_side_data[i];
+                    if (side_data->type == AV_PKT_DATA_DOVI_CONF &&
+                        side_data->size >= static_cast<int>(sizeof(AVDOVIDecoderConfigurationRecord))) {
+                        const auto* dovi = reinterpret_cast<const AVDOVIDecoderConfigurationRecord*>(side_data->data);
+                        dv_profile = dovi->dv_profile;
+                        dv_compatibility = dovi->dv_bl_signal_compatibility_id;
+                        break;
+                    }
+                }
+                const HdrFormat hdr_format = dv_profile > 0
+                    ? detectDolbyVisionFormat(video_stream->codecpar->color_trc, dv_profile, dv_compatibility)
+                    : detectHdrFormat(video_stream->codecpar->color_trc, video_stream->codecpar->format);
+                const bool convert_hdr_to_sdr = params.convert_hdr_to_sdr && isHdrTonemapSupported(hdr_format);
+                AVColorSpace source_colorspace = video_stream->codecpar->color_space;
+                AVColorRange source_range = video_stream->codecpar->color_range;
+                if (convert_hdr_to_sdr && source_colorspace == AVCOL_SPC_UNSPECIFIED)
+                    source_colorspace = AVCOL_SPC_BT2020_NCL;
+                if (convert_hdr_to_sdr && source_range == AVCOL_RANGE_UNSPECIFIED)
+                    source_range = AVCOL_RANGE_MPEG;
 
                 // Try hardware decoder first
-                const char* hw_decoder_name = get_hw_decoder_name(codec_id);
+                // cuvid does not reliably preserve Dolby Vision RPU side data.
+                // Decode DV through FFmpeg's native codec so the shared
+                // libplacebo renderer receives the per-frame metadata.
+                const char* hw_decoder_name = dv_profile > 0 ? nullptr : get_hw_decoder_name(codec_id);
                 const AVCodec* codec = nullptr;
 
                 if (hw_decoder_name) {
@@ -355,7 +433,9 @@ namespace lfs::io {
                         avformat_close_input(&fmt_ctx);
                         return false;
                     }
-                    LOG_INFO("Using CPU software decoder");
+                    LOG_INFO("Using {} decoder", dv_profile > 0
+                                                     ? "FFmpeg Dolby Vision metadata-preserving"
+                                                     : "CPU software");
                 }
 
                 codec_ctx = avcodec_alloc_context3(codec);
@@ -380,6 +460,9 @@ namespace lfs::io {
                     codec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
                     codec_ctx->get_format = get_hw_format;
                 }
+#ifdef AV_CODEC_EXPORT_DATA_DOVI_RPU
+                codec_ctx->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
+#endif
 
                 if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
                     error = "Failed to open codec";
@@ -470,8 +553,11 @@ namespace lfs::io {
                 // Only create sws_ctx for software decode path
                 if (!using_hw_decode) {
                     sws_ctx = sws_getContext(src_width, src_height, codec_ctx->pix_fmt,
-                                             out_width, out_height, AV_PIX_FMT_RGB24,
+                                             out_width, out_height,
+                                             AV_PIX_FMT_RGB24,
                                              SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    if (!convert_hdr_to_sdr)
+                        configureVideoToRgbColorimetry(sws_ctx, frame, source_colorspace, source_range);
                     if (!sws_ctx) {
                         error = "Failed to create scaling context";
                         throw std::runtime_error(error);
@@ -505,10 +591,37 @@ namespace lfs::io {
 
                 const bool gpu_encoding_enabled = use_gpu_jpeg && gpu_batch_buffer != nullptr;
                 const bool full_gpu_pipeline_available =
-                    using_hw_decode && gpu_encoding_enabled && gpu_rgb_buffer && !needs_scale;
+                    using_hw_decode && gpu_encoding_enabled && gpu_rgb_buffer && !needs_scale &&
+                    !convert_hdr_to_sdr;
                 const auto throw_if_cancelled = [&]() {
                     if (params.cancel_requested && params.cancel_requested())
                         throw ExtractionCancelled{};
+                };
+                std::unique_ptr<HdrLibplaceboRenderer> hdr_renderer;
+                std::vector<unsigned char> hdr_sdr_buffer;
+                const auto convert_frame_to_rgb8 = [&](SwsContext* context, AVFrame* source,
+                                                       const int source_height) {
+                    if (convert_hdr_to_sdr) {
+                        inheritStreamColorimetry(source, video_stream->codecpar, hdr_format);
+                        if (!hdr_renderer)
+                            hdr_renderer = std::make_unique<HdrLibplaceboRenderer>();
+                        std::string renderer_error;
+                        if (!hdr_renderer->tonemapToSdr(source, video_stream, out_width, out_height,
+                                                        hdr_sdr_buffer, renderer_error)) {
+                            LOG_ERROR("HDR extraction renderer failed: {}", renderer_error);
+                            return false;
+                        }
+                        std::memcpy(cpu_contiguous_buffer, hdr_sdr_buffer.data(), frame_size);
+                        return true;
+                    }
+                    if (!convert_hdr_to_sdr)
+                        configureVideoToRgbColorimetry(context, source, source_colorspace, source_range);
+                    uint8_t* dst_data[4] = {cpu_contiguous_buffer, nullptr, nullptr, nullptr};
+                    int dst_linesize[4] = {out_width * 3, 0, 0, 0};
+                    if (sws_scale(context, source->data, source->linesize, 0, source_height,
+                                  dst_data, dst_linesize) <= 0)
+                        return false;
+                    return true;
                 };
 
                 if (full_gpu_pipeline_available) {
@@ -811,18 +924,22 @@ namespace lfs::io {
                         // Hardware frame transfer output -> RGB with optional scaling.
                         SwsContext* hw_sws = sws_getContext(
                             src_width, src_height, static_cast<AVPixelFormat>(sw_frame->format),
-                            out_width, out_height, AV_PIX_FMT_RGB24, SWS_BILINEAR,
+                            out_width, out_height,
+                            AV_PIX_FMT_RGB24,
+                            SWS_BILINEAR,
                             nullptr, nullptr, nullptr);
+                        if (!convert_hdr_to_sdr)
+                            configureVideoToRgbColorimetry(hw_sws, sw_frame, source_colorspace, source_range);
 
                         if (!hw_sws) {
                             LOG_WARN("Failed to create hardware frame scaling context");
                             return;
                         }
 
-                        uint8_t* dst_data[1] = {cpu_contiguous_buffer};
-                        int dst_linesize[1] = {out_width * 3};
-                        sws_scale(hw_sws, sw_frame->data, sw_frame->linesize, 0, src_height,
-                                  dst_data, dst_linesize);
+                        if (!convert_frame_to_rgb8(hw_sws, sw_frame, src_height)) {
+                            sws_freeContext(hw_sws);
+                            return;
+                        }
                         sws_freeContext(hw_sws);
 
                         // --- Sharpness evaluation (hybrid path) ---
@@ -926,10 +1043,8 @@ namespace lfs::io {
 
                 auto process_frame_sw = [&](AVFrame* decoded_frame) {
                     throw_if_cancelled();
-                    uint8_t* dst_data[1] = {cpu_contiguous_buffer};
-                    int dst_linesize[1] = {out_width * 3};
-                    sws_scale(sws_ctx, decoded_frame->data, decoded_frame->linesize, 0, src_height,
-                              dst_data, dst_linesize);
+                    if (!convert_frame_to_rgb8(sws_ctx, decoded_frame, src_height))
+                        return;
 
                     // --- Sharpness evaluation (SW path) ---
                     double frame_score = 0.0;

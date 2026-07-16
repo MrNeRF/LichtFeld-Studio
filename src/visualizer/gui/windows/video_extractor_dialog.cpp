@@ -323,6 +323,7 @@ namespace lfs::gui {
             extract_params.sharpness.window_candidates_target = params.window_candidates_target;
             extract_params.sharpness.window_mode = params.sharpness_window_mode;
             extract_params.generate_metadata = params.generate_metadata;
+            extract_params.convert_hdr_to_sdr = params.convert_hdr_to_sdr;
             extract_params.rotation = params.rotation;
             extract_params.cancel_requested = [this]() {
                 return stop_extraction_requested_.load();
@@ -432,6 +433,16 @@ namespace lfs::gui {
         custom_width_ = std::max(16, player_->sourceWidth());
         custom_height_ = std::max(16, player_->sourceHeight());
         rotation_deg_ = player_->rotation();
+        hdr_to_sdr_ = player_->isHdr() && player_->isHdrConversionSupported();
+        player_->setHdrToSdr(hdr_to_sdr_);
+        if (hdr_to_sdr_)
+            player_->seek(0.0);
+        if (hdr_to_sdr_el_) {
+            if (hdr_to_sdr_)
+                hdr_to_sdr_el_->SetAttribute("checked", "checked");
+            else
+                hdr_to_sdr_el_->RemoveAttribute("checked");
+        }
         if (rotation_value_el_)
             rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
 
@@ -748,6 +759,8 @@ namespace lfs::gui {
         hdr_badge_el_ = document_->GetElementById("hdr-badge");
         hdr_badge_type_el_ = document_->GetElementById("hdr-badge-type");
         hdr_badge_label_el_ = document_->GetElementById("hdr-badge-label");
+        hdr_to_sdr_el_ = document_->GetElementById("hdr-to-sdr");
+        hdr_to_sdr_row_el_ = document_->GetElementById("hdr-to-sdr-row");
 
         bindEventListeners();
         controls_dirty_ = true;
@@ -816,6 +829,7 @@ namespace lfs::gui {
         listen_input(sharpness_threshold_slider_el_);
         listen_change(window_candidates_select_el_);
         listen_change(generate_metadata_el_);
+        listen_change(hdr_to_sdr_el_);
         listen_click(rotation_cw_btn_el_);
         listen_click(rotation_ccw_btn_el_);
 
@@ -1031,6 +1045,12 @@ namespace lfs::gui {
         changed |= setCachedProperty(fps_row_el_, "display", mode_selection_ == 0 ? "flex" : "none");
         changed |= setCachedProperty(interval_row_el_, "display", mode_selection_ == 1 ? "flex" : "none");
         changed |= setCachedProperty(quality_row_el_, "display", format_selection_ == 1 ? "flex" : "none");
+        if (hdr_to_sdr_row_el_) {
+            changed |= setCachedProperty(hdr_to_sdr_row_el_, "display", player_->isHdr() ? "inline-flex" : "none");
+        }
+        if (hdr_to_sdr_el_) {
+            changed |= setCachedDisabled(hdr_to_sdr_el_, !player_->isHdrConversionSupported());
+        }
         changed |= setCachedProperty(scale_row_el_, "display", resolution_mode_ == 1 ? "flex" : "none");
         changed |= setCachedProperty(custom_resolution_row_el_, "display", resolution_mode_ == 2 ? "flex" : "none");
         changed |= setCachedProperty(stop_btn_el_, "display", extracting ? "block" : "none");
@@ -1370,6 +1390,15 @@ namespace lfs::gui {
             changed_control = sharpness_threshold_slider_el_;
         } else if (id == "generate-metadata") {
             changed_control = generate_metadata_el_;
+        } else if (id == "hdr-to-sdr") {
+            hdr_to_sdr_ = hdr_to_sdr_el_ && hdr_to_sdr_el_->HasAttribute("checked");
+            player_->setHdrToSdr(hdr_to_sdr_);
+            if (player_->isOpen()) {
+                player_->seekFrame(player_->currentFrameNumber());
+                texture_needs_update_ = true;
+                preview_src_.clear();
+            }
+            changed_control = hdr_to_sdr_el_;
         } else {
             applyTextInput(id);
             if (id == "trim-start-input")
@@ -1524,6 +1553,7 @@ namespace lfs::gui {
         params.window_candidates_target = window_candidates_target_;
         params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 10));
         params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
+        params.convert_hdr_to_sdr = hdr_to_sdr_;
         params.rotation = rotation_deg_;
 
         // Check if output folder already contains generated extraction files

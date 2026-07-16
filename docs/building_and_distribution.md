@@ -8,6 +8,17 @@
 - vcpkg (`VCPKG_ROOT` environment variable set)
 - GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
 
+Windows builds that include the libplacebo HDR preview require these Visual
+Studio Installer individual components in addition to the regular C++ desktop
+workload:
+
+- **C++ Clang Compiler for Windows**
+- **MSBuild support for LLVM (clang-cl) toolset**
+
+They provide `clang-cl`, which is used only to build libplacebo with a
+Microsoft-compatible ABI. The rest of LichtFeld Studio continues to use the
+configured Visual Studio/MSVC toolchain.
+
 On Windows, set `CUDNN_ROOT_DIR` to the cuDNN version root so the build can copy
 the CUDA-versioned cuDNN runtime DLLs next to the executable and into portable
 installs:

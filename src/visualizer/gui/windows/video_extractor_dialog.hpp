@@ -61,6 +61,7 @@ namespace lfs::gui {
         bool sharpness_window_mode = false;
         bool sharpness_enabled = false;
         bool generate_metadata = false;
+        bool convert_hdr_to_sdr = false;
         int rotation = 0; // 0, 90, 180, 270
     };
 
@@ -277,8 +278,11 @@ namespace lfs::gui {
         Rml::Element* window_candidates_select_el_ = nullptr;
         Rml::Element* window_candidates_readout_el_ = nullptr;
         Rml::Element* generate_metadata_el_ = nullptr;
+        Rml::Element* hdr_to_sdr_el_ = nullptr;
+        Rml::Element* hdr_to_sdr_row_el_ = nullptr;
         Rml::Element* overwrite_overlay_el_ = nullptr;
         int rotation_deg_ = 0;
+        bool hdr_to_sdr_ = false;
         std::vector<uint8_t> rotated_buf_;
         Rml::Element* rotation_cw_btn_el_ = nullptr;
         Rml::Element* rotation_ccw_btn_el_ = nullptr;

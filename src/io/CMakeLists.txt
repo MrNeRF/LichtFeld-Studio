@@ -104,6 +104,7 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
         libswscale
         libavutil
 )
+pkg_check_modules(LIBPLACEBO REQUIRED IMPORTED_TARGET libplacebo)
 
 add_library(lfs_video STATIC
         include/io/video/video_encoder_interface.hpp
@@ -115,6 +116,11 @@ add_library(lfs_video STATIC
         video/color_convert.cu
         video_frame_extractor.hpp
         video_frame_extractor.cpp
+        hdr_tonemap.hpp
+        hdr_tonemap.cpp
+        hdr_libplacebo.hpp
+        hdr_libplacebo.cpp
+        hdr_libplacebo_av.c
         video_player.hpp
         video_player.cpp
 )
@@ -135,6 +141,7 @@ target_include_directories(lfs_video SYSTEM PRIVATE
 target_link_libraries(lfs_video
         PRIVATE
         PkgConfig::FFMPEG
+        PkgConfig::LIBPLACEBO
         spdlog::spdlog
         CUDA::cudart
 )

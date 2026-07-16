@@ -9,6 +9,8 @@
 #include <string>
 #include <string_view>
 
+#include "io/hdr_tonemap.hpp"
+
 namespace lfs::io {
 
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
@@ -75,6 +77,7 @@ namespace lfs::io {
             std::string filename_pattern = "frame_%d"; // %d = frame number
             bool generate_metadata = false;
             int rotation = 0; // 0, 90, 180, 270
+            bool convert_hdr_to_sdr = false;
         };
 
         bool extract(const Params& params, std::string& error);

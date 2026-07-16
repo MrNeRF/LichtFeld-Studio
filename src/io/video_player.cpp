@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_player.hpp"
+#include "hdr_libplacebo.hpp"
+#include "hdr_tonemap.hpp"
 #include "core/include/core/logger.hpp"
 #include "core/path_utils.hpp"
 
@@ -10,9 +12,11 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/display.h>
+#include <libavutil/dovi_meta.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/hwcontext_cuda.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
@@ -34,6 +38,54 @@ namespace lfs::io {
         constexpr int MAX_PREVIEW_HEIGHT = 720;
         constexpr size_t MIN_BUFFERED_FRAMES = 4;
         constexpr int MAX_SW_DECODE_THREADS = 4;
+
+        void configureVideoToRgbColorimetry(SwsContext* context, const AVFrame* source,
+                                            const AVColorSpace fallback_colorspace,
+                                            const AVColorRange fallback_range) {
+            if (!context || !source)
+                return;
+            const AVColorSpace colorspace = source->colorspace != AVCOL_SPC_UNSPECIFIED
+                ? source->colorspace
+                : fallback_colorspace;
+            const AVColorRange color_range = source->color_range != AVCOL_RANGE_UNSPECIFIED
+                ? source->color_range
+                : fallback_range;
+            const int source_matrix = colorspace == AVCOL_SPC_BT2020_NCL ||
+                                      colorspace == AVCOL_SPC_BT2020_CL
+                ? SWS_CS_BT2020
+                : colorspace == AVCOL_SPC_BT709 ? SWS_CS_ITU709 : SWS_CS_DEFAULT;
+            const int source_range = color_range == AVCOL_RANGE_JPEG ? 1 : 0;
+            sws_setColorspaceDetails(context, sws_getCoefficients(source_matrix), source_range,
+                                     sws_getCoefficients(SWS_CS_ITU709), 1, 0, 1 << 16, 1 << 16);
+        }
+
+        void inheritStreamColorimetry(AVFrame* const frame, const AVCodecParameters* const parameters,
+                                      const HdrFormat hdr_format) {
+            if (!frame || !parameters)
+                return;
+            if (frame->colorspace == AVCOL_SPC_UNSPECIFIED)
+                frame->colorspace = parameters->color_space != AVCOL_SPC_UNSPECIFIED
+                                        ? parameters->color_space
+                                        : AVCOL_SPC_BT2020_NCL;
+            if (frame->color_range == AVCOL_RANGE_UNSPECIFIED)
+                frame->color_range = parameters->color_range != AVCOL_RANGE_UNSPECIFIED
+                                         ? parameters->color_range
+                                         : AVCOL_RANGE_MPEG;
+            if (frame->color_primaries == AVCOL_PRI_UNSPECIFIED)
+                frame->color_primaries = parameters->color_primaries != AVCOL_PRI_UNSPECIFIED
+                                             ? parameters->color_primaries
+                                             : AVCOL_PRI_BT2020;
+            if (frame->color_trc == AVCOL_TRC_UNSPECIFIED) {
+                frame->color_trc = parameters->color_trc != AVCOL_TRC_UNSPECIFIED
+                                       ? parameters->color_trc
+                                       : (hdr_format == HdrFormat::HLG ||
+                                          hdr_format == HdrFormat::DOLBY_VISION_HLG
+                                              ? AVCOL_TRC_ARIB_STD_B67
+                                              : AVCOL_TRC_SMPTE2084);
+            }
+            if (frame->chroma_location == AVCHROMA_LOC_UNSPECIFIED)
+                frame->chroma_location = parameters->chroma_location;
+        }
 
         const char* getHwDecoderName(const AVCodecID codec_id) {
             switch (codec_id) {
@@ -139,44 +191,55 @@ namespace lfs::io {
             if (rotation_ != 0 && rotation_ != 90 && rotation_ != 180 && rotation_ != 270)
                 rotation_ = 0;
 
-            // Detect HDR from codec parameters
+            // Detect HDR from stream transfer metadata. PQ also covers HDR10+ and
+            // the base layer of Dolby Vision; dynamic metadata is not needed for
+            // the deterministic SDR preview path.
             is_hdr_ = false;
             hdr_info_ = "SDR";
+            hdr_format_ = detectHdrFormat(stream->codecpar->color_trc, stream->codecpar->format);
+            bool has_dolby_vision = false;
             {
-                const auto fmt = stream->codecpar->format;
-                const auto trc = stream->codecpar->color_trc;
-
-                // Check for 10+ bit depth
-                const bool bit10_or_higher =
-                    fmt == AV_PIX_FMT_YUV420P10LE || fmt == AV_PIX_FMT_YUV422P10LE ||
-                    fmt == AV_PIX_FMT_YUV444P10LE || fmt == AV_PIX_FMT_P010LE ||
-                    fmt == AV_PIX_FMT_P016LE || fmt == AV_PIX_FMT_YUV420P12LE;
-
-                // Check for Dolby Vision in codecpar side data
-                bool has_dovi = false;
+                int dv_profile = 0;
+                int dv_compatibility = 0;
                 for (int i = 0; i < stream->codecpar->nb_coded_side_data; i++) {
-                    if (stream->codecpar->coded_side_data[i].type == AV_PKT_DATA_DOVI_CONF) {
-                        has_dovi = true;
+                    const AVPacketSideData* side_data = &stream->codecpar->coded_side_data[i];
+                    if (side_data->type == AV_PKT_DATA_DOVI_CONF &&
+                        side_data->size >= static_cast<int>(sizeof(AVDOVIDecoderConfigurationRecord))) {
+                        const auto* dovi = reinterpret_cast<const AVDOVIDecoderConfigurationRecord*>(side_data->data);
+                        dv_profile = dovi->dv_profile;
+                        dv_compatibility = dovi->dv_bl_signal_compatibility_id;
                         break;
                     }
                 }
 
-                if (has_dovi) {
+                if (dv_profile > 0) {
                     is_hdr_ = true;
-                    hdr_info_ = "Dolby Vision";
-                } else if (bit10_or_higher && trc == AVCOL_TRC_ARIB_STD_B67) {
+                    has_dolby_vision = true;
+                    hdr_format_ = detectDolbyVisionFormat(stream->codecpar->color_trc, dv_profile,
+                                                           dv_compatibility);
+                    hdr_info_ = hdrFormatLabel(hdr_format_);
+                } else if (isHdrFormat(hdr_format_)) {
                     is_hdr_ = true;
-                    hdr_info_ = "HLG";
-                } else if (bit10_or_higher && trc == AVCOL_TRC_SMPTE2084) {
-                    is_hdr_ = true;
-                    hdr_info_ = "HDR10";
+                    hdr_info_ = hdrFormatLabel(hdr_format_);
                 }
             }
+
+            // NVDEC frames can omit the colour fields carried by MOV/MP4.
+            // HDR base layers without explicit tags are BT.2020 NCL, limited range.
+            source_colorspace_ = stream->codecpar->color_space;
+            source_range_ = stream->codecpar->color_range;
+            if (is_hdr_ && source_colorspace_ == AVCOL_SPC_UNSPECIFIED)
+                source_colorspace_ = AVCOL_SPC_BT2020_NCL;
+            if (is_hdr_ && source_range_ == AVCOL_RANGE_UNSPECIFIED)
+                source_range_ = AVCOL_RANGE_MPEG;
 
             const char* hw_decoder_name = getHwDecoderName(codec_id);
             const AVCodec* codec = nullptr;
 
-            if (hw_decoder_name) {
+            // The dedicated NVDEC cuvid codecs do not reliably propagate
+            // Dolby Vision RPU side-data. Use FFmpeg's native decoder for DV
+            // so libplacebo can apply the frame metadata correctly.
+            if (hw_decoder_name && !has_dolby_vision) {
                 codec = avcodec_find_decoder_by_name(hw_decoder_name);
                 if (codec &&
                     av_hwdevice_ctx_create(&hw_device_ctx_, AV_HWDEVICE_TYPE_CUDA, nullptr, nullptr, 0) ==
@@ -195,11 +258,18 @@ namespace lfs::io {
                     return false;
                 }
                 using_hw_decode_ = false;
-                LOG_INFO("VideoPlayer: CPU decoder");
+                LOG_INFO("VideoPlayer: {} decoder", has_dolby_vision
+                                                            ? "FFmpeg Dolby Vision metadata-preserving"
+                                                            : "CPU");
             }
 
             codec_ctx_ = avcodec_alloc_context3(codec);
             avcodec_parameters_to_context(codec_ctx_, stream->codecpar);
+#ifdef AV_CODEC_EXPORT_DATA_DOVI_RPU
+            // Required for libplacebo to consume frame-level Dolby Vision RPU
+            // metadata when FFmpeg exposes it.
+            codec_ctx_->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
+#endif
 
             if (using_hw_decode_) {
                 codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
@@ -245,7 +315,8 @@ namespace lfs::io {
 
             if (!using_hw_decode_) {
                 sws_ctx_ = sws_getContext(src_width_, src_height_, codec_ctx_->pix_fmt, width_, height_,
-                                          AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                                           AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                configureVideoToRgbColorimetry(sws_ctx_, frame_, source_colorspace_, source_range_);
             }
 
             if (decodeNextFrame()) {
@@ -299,6 +370,7 @@ namespace lfs::io {
                 sws_freeContext(sws_ctx_);
                 sws_ctx_ = nullptr;
             }
+            hdr_renderer_.reset();
             if (frame_) {
                 av_frame_free(&frame_);
                 frame_ = nullptr;
@@ -328,6 +400,11 @@ namespace lfs::io {
             is_open_ = false;
             is_playing_ = false;
             using_hw_decode_ = false;
+            is_hdr_ = false;
+            hdr_to_sdr_ = false;
+            hdr_format_ = HdrFormat::SDR;
+            source_colorspace_ = AVCOL_SPC_UNSPECIFIED;
+            source_range_ = AVCOL_RANGE_UNSPECIFIED;
             current_time_ = 0;
             current_frame_ = 0;
         }
@@ -426,11 +503,14 @@ namespace lfs::io {
         }
 
         bool update(double /*current_wall_time*/) {
-            if (!is_open_ || !is_playing_) {
+            if (!is_open_) {
                 return false;
             }
 
             std::unique_lock<std::mutex> lock(queue_mutex_);
+            if (!is_playing_) {
+                return false;
+            }
 
             if (frame_queue_.empty()) {
                 lock.unlock();
@@ -462,7 +542,14 @@ namespace lfs::io {
         [[nodiscard]] int sourceHeight() const { return src_height_; }
         [[nodiscard]] int rotation() const { return rotation_; }
         [[nodiscard]] bool isHdr() const { return is_hdr_; }
+        [[nodiscard]] bool isHdrConversionSupported() const {
+            return is_hdr_ && isHdrTonemapSupported(hdr_format_);
+        }
         [[nodiscard]] std::string hdrInfo() const { return hdr_info_; }
+        void setHdrToSdr(const bool enabled) {
+            const bool value = enabled && isHdrConversionSupported();
+            hdr_to_sdr_.store(value);
+        }
         [[nodiscard]] double currentTime() const { return current_time_; }
         [[nodiscard]] double duration() const { return duration_; }
         [[nodiscard]] int64_t currentFrameNumber() const { return current_frame_; }
@@ -531,7 +618,11 @@ namespace lfs::io {
 
                 if (decodeNextFrame()) {
                     std::lock_guard<std::mutex> qlock(queue_mutex_);
-                    frame_queue_.push(std::move(decoded_frame_));
+                    // A seek may have been requested while decoding outside the
+                    // queue lock. Never insert that stale frame after seek()
+                    // has cleared the queue.
+                    if (!seek_requested_)
+                        frame_queue_.push(std::move(decoded_frame_));
                 } else {
                     eof_reached_ = true;
                 }
@@ -544,13 +635,19 @@ namespace lfs::io {
             av_seek_frame(fmt_ctx_, video_stream_idx_, timestamp, AVSEEK_FLAG_BACKWARD);
             eof_reached_ = false;
 
+            skip_video_conversion_ = true;
             while (decodeNextFrame()) {
                 if (decoded_frame_.pts >= seconds - 0.5 / fps_) {
+                    skip_video_conversion_ = false;
+                    // decodeNextFrame intentionally skipped conversion while advancing
+                    // from the keyframe; convert only the frame that will be displayed.
+                    convertFrameToBuffer();
                     std::lock_guard<std::mutex> lock(queue_mutex_);
                     frame_queue_.push(std::move(decoded_frame_));
                     break;
                 }
             }
+            skip_video_conversion_ = false;
         }
 
         bool decodeNextFrame() {
@@ -579,6 +676,13 @@ namespace lfs::io {
         void convertFrameToBuffer() {
             AVFrame* src_frame = frame_;
 
+            if (skip_video_conversion_) {
+                decoded_frame_.data.clear();
+                decoded_frame_.pts = static_cast<double>(frame_->pts) * time_base_;
+                decoded_frame_.frame_number = static_cast<int64_t>(decoded_frame_.pts * fps_);
+                return;
+            }
+
             if (using_hw_decode_ && frame_->format == AV_PIX_FMT_CUDA) {
                 if (av_hwframe_transfer_data(sw_frame_, frame_, 0) < 0) {
                     return;
@@ -588,15 +692,29 @@ namespace lfs::io {
 
             if (!sws_ctx_) {
                 sws_ctx_ = sws_getContext(src_width_, src_height_,
-                                          static_cast<AVPixelFormat>(src_frame->format), width_, height_,
-                                          AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
+                                           static_cast<AVPixelFormat>(src_frame->format), width_, height_,
+                                           AV_PIX_FMT_RGB24, SWS_FAST_BILINEAR, nullptr, nullptr, nullptr);
             }
+            configureVideoToRgbColorimetry(sws_ctx_, src_frame, source_colorspace_, source_range_);
 
             decoded_frame_.data.resize(frame_size_);
-            uint8_t* dst_data[1] = {decoded_frame_.data.data()};
-            int dst_linesize[1] = {width_ * 3};
-            sws_scale(sws_ctx_, src_frame->data, src_frame->linesize, 0, src_height_, dst_data,
-                      dst_linesize);
+            if (is_hdr_ && hdr_to_sdr_) {
+                inheritStreamColorimetry(src_frame, fmt_ctx_->streams[video_stream_idx_]->codecpar, hdr_format_);
+                if (!hdr_renderer_)
+                    hdr_renderer_ = std::make_unique<HdrLibplaceboRenderer>();
+                std::string renderer_error;
+                if (!hdr_renderer_->tonemapToSdr(src_frame, fmt_ctx_->streams[video_stream_idx_], width_, height_,
+                                                  decoded_frame_.data, renderer_error)) {
+                    LOG_ERROR("HDR preview renderer failed: {}", renderer_error);
+                    decoded_frame_.data.clear();
+                    return;
+                }
+            } else {
+                uint8_t* dst_data[1] = {decoded_frame_.data.data()};
+                int dst_linesize[1] = {width_ * 3};
+                sws_scale(sws_ctx_, src_frame->data, src_frame->linesize, 0, src_height_, dst_data,
+                          dst_linesize);
+            }
 
             decoded_frame_.pts = static_cast<double>(frame_->pts) * time_base_;
             decoded_frame_.frame_number = static_cast<int64_t>(decoded_frame_.pts * fps_);
@@ -624,6 +742,12 @@ namespace lfs::io {
         int rotation_ = 0;
         bool is_hdr_ = false;
         std::string hdr_info_;
+        HdrFormat hdr_format_ = HdrFormat::SDR;
+        AVColorSpace source_colorspace_ = AVCOL_SPC_UNSPECIFIED;
+        AVColorRange source_range_ = AVCOL_RANGE_UNSPECIFIED;
+        std::atomic<bool> hdr_to_sdr_{false};
+        bool skip_video_conversion_ = false;
+        std::unique_ptr<HdrLibplaceboRenderer> hdr_renderer_;
 
         std::vector<uint8_t> display_buffer_;
         double current_time_ = 0;
@@ -671,7 +795,9 @@ namespace lfs::io {
     int VideoPlayer::sourceHeight() const { return impl_->sourceHeight(); }
     int VideoPlayer::rotation() const { return impl_->rotation(); }
     bool VideoPlayer::isHdr() const { return impl_->isHdr(); }
+    bool VideoPlayer::isHdrConversionSupported() const { return impl_->isHdrConversionSupported(); }
     std::string VideoPlayer::hdrInfo() const { return impl_->hdrInfo(); }
+    void VideoPlayer::setHdrToSdr(const bool enabled) { impl_->setHdrToSdr(enabled); }
 
     double VideoPlayer::currentTime() const { return impl_->currentTime(); }
     double VideoPlayer::duration() const { return impl_->duration(); }

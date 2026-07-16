@@ -58,7 +58,9 @@ namespace lfs::io {
 
         // HDR detection
         bool isHdr() const;
+        bool isHdrConversionSupported() const;
         std::string hdrInfo() const;
+        void setHdrToSdr(bool enabled);
 
     private:
         class Impl;

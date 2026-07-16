@@ -176,6 +176,10 @@
               <input id="generate-metadata" type="checkbox" />
               <span>@tr:video_extractor.generate_metadata</span>
             </label>
+            <label id="hdr-to-sdr-row" class="toggle-label metadata-check" style="display:none">
+              <input id="hdr-to-sdr" type="checkbox" />
+              <span>Convert HDR to SDR (8-bit)</span>
+            </label>
           </div>
         </div>
 
