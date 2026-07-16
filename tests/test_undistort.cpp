@@ -478,7 +478,7 @@ protected:
 
         auto result = lfs::io::read_colmap_cameras_and_images(base_path_, "images_4");
         ASSERT_TRUE(result.has_value()) << "Failed to load COLMAP data";
-        auto& [cams, center] = *result;
+        auto& [cams, center] = result->value;
         cameras_ = std::move(cams);
         ASSERT_GT(cameras_.size(), 0u);
     }

@@ -184,7 +184,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
-    const auto& cameras = std::get<0>(*result);
+    const auto& cameras = std::get<0>(result->value);
 
     ASSERT_EQ(cameras.size(), 1u);
     EXPECT_EQ(cameras[0]->image_name(), "frame_0001.png");
@@ -205,7 +205,7 @@ TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedColmapIds) {
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
-    const auto& cameras = std::get<0>(*result);
+    const auto& cameras = std::get<0>(result->value);
 
     ASSERT_EQ(cameras.size(), 1u);
     EXPECT_EQ(cameras[0]->image_name(), "frame_0.png");
@@ -224,8 +224,9 @@ TEST_F(ColmapImageLayoutTest, AcceptsZeroBasedPoint3DIds) {
         dataset_dir,
         lfs::io::LoadOptions{});
 
-    EXPECT_EQ(result.point_cloud.size(), 1u);
-    EXPECT_EQ(result.total_points, 1u);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->value.point_cloud.size(), 1u);
+    EXPECT_EQ(result->value.total_points, 1u);
 }
 
 TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
@@ -243,10 +244,11 @@ TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
         dataset_dir,
         lfs::io::LoadOptions{.min_track_length = 3});
 
-    EXPECT_TRUE(result.track_filter_applied);
-    EXPECT_EQ(result.total_points, 3u);
-    EXPECT_EQ(result.points_after_filtering, 1u);
-    EXPECT_EQ(result.point_cloud.size(), 1u);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->value.track_filter_applied);
+    EXPECT_EQ(result->value.total_points, 3u);
+    EXPECT_EQ(result->value.points_after_filtering, 1u);
+    EXPECT_EQ(result->value.point_cloud.size(), 1u);
 }
 
 TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
@@ -262,7 +264,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
-    const auto& cameras = std::get<0>(*result);
+    const auto& cameras = std::get<0>(result->value);
 
     ASSERT_EQ(cameras.size(), 1u);
     EXPECT_TRUE(cameras[0]->has_depth());
@@ -326,7 +328,7 @@ TEST_F(ColmapImageLayoutTest, ResolvesDuplicateNestedImagesAndMasksByRelativePat
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
-    auto& [cameras, scene_center] = *result;
+    auto& [cameras, scene_center] = result->value;
     (void)scene_center;
 
     ASSERT_EQ(cameras.size(), 2u);
@@ -349,9 +351,9 @@ TEST_F(ColmapImageLayoutTest, FailsWhenDuplicateNestedImagesAreReferencedByBasen
     write_png(image_a);
     write_png(image_b);
 
-    EXPECT_THROW(
-        (void)lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images"),
-        std::runtime_error);
+    const auto result = lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::CORRUPTED_DATA);
 }
 
 TEST_F(ColmapImageLayoutTest, ValidationFailsWhenDuplicateBasenameWasCollapsedInMetadata) {

@@ -214,6 +214,7 @@ set(TEST_FILES
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
     test_colmap_points3d_text.cpp
+    test_colmap_binary_error_taxonomy.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rotated_sh_correctness.cpp
