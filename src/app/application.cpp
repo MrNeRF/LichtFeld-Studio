@@ -6,6 +6,7 @@
 #include "app/headless_run_coordinator.hpp"
 #include "control/command_api.hpp"
 #include "core/checkpoint_format.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda_version.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
@@ -239,7 +240,7 @@ namespace lfs::app {
                         core::Tensor::shutdown_memory_pool();
                         core::PinnedMemoryAllocator::instance().shutdown();
                         python::finalize();
-                        std::_Exit(1);
+                        core::flush_and_exit(1);
                     }
                     return 1;
                 }
@@ -253,7 +254,7 @@ namespace lfs::app {
             const int exit_code = coordinator.interrupted() ? coordinator.interrupted_exit_code() : 0;
             if (!params->python_scripts.empty()) {
                 python::finalize();
-                std::_Exit(exit_code);
+                core::flush_and_exit(exit_code);
             }
             return exit_code;
         }
@@ -305,7 +306,7 @@ namespace lfs::app {
                             core::Tensor::shutdown_memory_pool();
                             core::PinnedMemoryAllocator::instance().shutdown();
                             python::finalize();
-                            std::_Exit(1);
+                            core::flush_and_exit(1);
                         }
                         return 1;
                     }
@@ -344,7 +345,7 @@ namespace lfs::app {
                             core::Tensor::shutdown_memory_pool();
                             core::PinnedMemoryAllocator::instance().shutdown();
                             python::finalize();
-                            std::_Exit(1);
+                            core::flush_and_exit(1);
                         }
                         return 1;
                     }
@@ -353,8 +354,7 @@ namespace lfs::app {
                 }
 
                 LOG_INFO("Headless training completed");
-                core::Logger::get().flush();
-                std::_Exit(0);
+                core::flush_and_exit(0);
             }
 
             core::Tensor::shutdown_memory_pool();
@@ -363,7 +363,7 @@ namespace lfs::app {
             const int exit_code = coordinator.interrupted() ? coordinator.interrupted_exit_code() : 0;
             if (!params->python_scripts.empty()) {
                 python::finalize();
-                std::_Exit(exit_code);
+                core::flush_and_exit(exit_code);
             }
             return exit_code;
         }
@@ -638,7 +638,7 @@ namespace lfs::app {
             core::Tensor::shutdown_memory_pool();
             core::PinnedMemoryAllocator::instance().shutdown();
 
-            std::_Exit(0);
+            core::flush_and_exit(0);
         }
 
 #ifdef WIN32

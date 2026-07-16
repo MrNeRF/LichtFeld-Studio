@@ -18,6 +18,7 @@
 #include <string_view>
 #include <thread>
 
+#include <core/crash_handler.hpp>
 #include <core/environment.hpp>
 #include <core/executable_path.hpp>
 #include <core/logger.hpp>
@@ -1272,13 +1273,13 @@ _add_dll_dirs()
                 LOG_CRITICAL(
                     "Plugin preload did not stop within {} seconds; exiting without Python teardown",
                     SHUTDOWN_TIMEOUT.count());
-                std::_Exit(EXIT_FAILURE);
+                lfs::core::flush_and_exit(EXIT_FAILURE);
             }
 
             if (g_plugin_preload.worker.joinable()) {
                 if (g_plugin_preload.worker.get_id() == std::this_thread::get_id()) {
                     LOG_CRITICAL("Plugin preload worker attempted to join itself");
-                    std::_Exit(EXIT_FAILURE);
+                    lfs::core::flush_and_exit(EXIT_FAILURE);
                 }
                 worker = std::move(g_plugin_preload.worker);
             }

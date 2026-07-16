@@ -135,6 +135,7 @@ set(TEST_FILES
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
+    test_crash_handler.cpp
     test_logger.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp

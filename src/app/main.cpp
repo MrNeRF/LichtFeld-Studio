@@ -182,6 +182,55 @@ namespace {
         // regardless of compiled-in search paths or env var timing.
         pxr::PlugRegistry::GetInstance().RegisterPlugins(path_utf8);
     }
+
+    int run_mode(lfs::core::args::ParsedArgs args) {
+        return std::visit([](auto&& mode) -> int {
+            using T = std::decay_t<decltype(mode)>;
+
+            if constexpr (std::is_same_v<T, lfs::core::args::HelpMode>) {
+                return 0;
+            } else if constexpr (std::is_same_v<T, lfs::core::args::VersionMode>) {
+                std::println("LichtFeld Studio {} ({})", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
+                return 0;
+            } else if constexpr (std::is_same_v<T, lfs::core::args::WarmupMode>) {
+                applyCudaContextTuning();
+                analyzeCudaContextDistribution();
+                return 0;
+            } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
+                configure_usd_plugins();
+                return lfs::app::run_converter(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
+                return lfs::app::run_mesh2splat(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
+                return lfs::preprocessing::run_preprocess(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
+                return lfs::python::run_plugin_command(mode);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
+                LOG_INFO("LichtFeld Studio");
+                LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
+
+                // Driver-level tuning must precede *any* CUDA call, including the
+                // cudaFree(nullptr) inside analyzeCudaContextDistribution.
+                applyCudaContextTuning();
+
+                // Probe and decompose the CUDA driver's context-creation cost only for the
+                // GPU app path. CLI-only modes such as --help, convert, preprocess,
+                // plugin, and mesh2splat must not create a CUDA primary context just
+                // for HUD metrics.
+                analyzeCudaContextDistribution();
+                configure_usd_plugins();
+
+                if (mode.params->optimization.debug_python) {
+                    lfs::python::start_debugpy(mode.params->optimization.debug_python_port);
+                }
+
+                lfs::app::Application app;
+                return app.run(std::move(mode.params));
+            }
+        },
+                          std::move(args));
+    }
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -204,49 +253,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    return std::visit([](auto&& mode) -> int {
-        using T = std::decay_t<decltype(mode)>;
-
-        if constexpr (std::is_same_v<T, lfs::core::args::HelpMode>) {
-            return 0;
-        } else if constexpr (std::is_same_v<T, lfs::core::args::VersionMode>) {
-            std::println("LichtFeld Studio {} ({})", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
-            return 0;
-        } else if constexpr (std::is_same_v<T, lfs::core::args::WarmupMode>) {
-            applyCudaContextTuning();
-            analyzeCudaContextDistribution();
-            return 0;
-        } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
-            configure_usd_plugins();
-            return lfs::app::run_converter(mode.params);
-        } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
-            return lfs::app::run_mesh2splat(mode.params);
-        } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
-            return lfs::preprocessing::run_preprocess(mode.params);
-        } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
-            return lfs::python::run_plugin_command(mode);
-        } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
-            LOG_INFO("LichtFeld Studio");
-            LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
-
-            // Driver-level tuning must precede *any* CUDA call, including the
-            // cudaFree(nullptr) inside analyzeCudaContextDistribution.
-            applyCudaContextTuning();
-
-            // Probe and decompose the CUDA driver's context-creation cost only for the
-            // GPU app path. CLI-only modes such as --help, convert, preprocess,
-            // plugin, and mesh2splat must not create a CUDA primary context just
-            // for HUD metrics.
-            analyzeCudaContextDistribution();
-            configure_usd_plugins();
-
-            if (mode.params->optimization.debug_python) {
-                lfs::python::start_debugpy(mode.params->optimization.debug_python_port);
-            }
-
-            lfs::app::Application app;
-            return app.run(std::move(mode.params));
-        }
-    },
-                      std::move(*result));
+    return lfs::core::run_with_exception_firewall(
+        [&result] { return run_mode(std::move(*result)); });
 }
