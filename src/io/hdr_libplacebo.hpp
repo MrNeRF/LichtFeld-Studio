@@ -38,6 +38,12 @@ namespace lfs::io {
                                         std::vector<unsigned char>& output_rgb,
                                         std::string& error,
                                         HdrTonemapTiming* timing = nullptr);
+        // Preview consumers can keep libplacebo's native RGBA8 readback and
+        // upload it directly to a Vulkan texture, avoiding RGB/RGBA CPU copies.
+        [[nodiscard]] bool tonemapToSdrRgba(const AVFrame* frame, const AVStream* stream,
+                                            int output_width, int output_height,
+                                            std::vector<unsigned char>& output_rgba,
+                                            std::string& error);
         void reset();
 
     private:

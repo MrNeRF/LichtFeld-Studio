@@ -504,32 +504,33 @@ namespace lfs::gui {
 
         int width = player_->width();
         int height = player_->height();
+        const int channels = player_->currentFrameChannels();
+        if (channels != 3 && channels != 4)
+            return;
         const uint8_t* upload_data = data;
         std::vector<uint8_t> rotated_buf;
 
         if (rotation_deg_ != 0) {
-            rotated_buf.resize(static_cast<size_t>(width) * height * 3);
+            rotated_buf.resize(static_cast<size_t>(width) * height * channels);
             if (rotation_deg_ == 180) {
                 for (int y = 0; y < height; ++y)
                     for (int x = 0; x < width; ++x) {
-                        const int si = (y * width + x) * 3;
-                        const int di = ((height - 1 - y) * width + (width - 1 - x)) * 3;
-                        rotated_buf[di + 0] = data[si + 0];
-                        rotated_buf[di + 1] = data[si + 1];
-                        rotated_buf[di + 2] = data[si + 2];
+                        const int si = (y * width + x) * channels;
+                        const int di = ((height - 1 - y) * width + (width - 1 - x)) * channels;
+                        for (int channel = 0; channel < channels; ++channel)
+                            rotated_buf[di + channel] = data[si + channel];
                     }
             } else {
                 const int dst_w = height;
                 const int dst_h = width;
                 for (int y = 0; y < height; ++y)
                     for (int x = 0; x < width; ++x) {
-                        const int si = (y * width + x) * 3;
+                        const int si = (y * width + x) * channels;
                         const int di = (rotation_deg_ == 90)
-                                           ? (x * height + (height - 1 - y)) * 3 // CW
-                                           : ((width - 1 - x) * height + y) * 3; // CCW
-                        rotated_buf[di + 0] = data[si + 0];
-                        rotated_buf[di + 1] = data[si + 1];
-                        rotated_buf[di + 2] = data[si + 2];
+                                           ? (x * height + (height - 1 - y)) * channels // CW
+                                           : ((width - 1 - x) * height + y) * channels; // CCW
+                        for (int channel = 0; channel < channels; ++channel)
+                            rotated_buf[di + channel] = data[si + channel];
                     }
                 width = dst_w;
                 height = dst_h;
@@ -539,7 +540,7 @@ namespace lfs::gui {
 
         if (!preview_texture_)
             preview_texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
-        if (preview_texture_->upload(upload_data, width, height, 3)) {
+        if (preview_texture_->upload(upload_data, width, height, channels)) {
             preview_texture_width_ = width;
             preview_texture_height_ = height;
         } else {

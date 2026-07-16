@@ -57,8 +57,8 @@ namespace lfs::io {
 
         bool tonemap(const AVFrame* const frame, const AVStream* const stream,
                      const int output_width, const int output_height,
-                     std::vector<unsigned char>& output_rgb, std::string& error,
-                     HdrTonemapTiming* const timing) {
+                     std::vector<unsigned char>& output, std::string& error,
+                     HdrTonemapTiming* const timing, const bool keep_rgba) {
             std::lock_guard lock(mutex_);
             if (timing)
                 *timing = {};
@@ -131,11 +131,12 @@ namespace lfs::io {
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - render_started).count();
             }
 
-            rgba_buffer_.resize(static_cast<size_t>(output_width) * output_height * 4);
+            std::vector<unsigned char>& readback_buffer = keep_rgba ? output : rgba_buffer_;
+            readback_buffer.resize(static_cast<size_t>(output_width) * output_height * 4);
             pl_tex_transfer_params download_params{};
             download_params.tex = output_texture_;
             download_params.row_pitch = static_cast<size_t>(output_width) * 4;
-            download_params.ptr = rgba_buffer_.data();
+            download_params.ptr = readback_buffer.data();
             const auto readback_started = std::chrono::steady_clock::now();
             if (!pl_tex_download(gpu_, &download_params)) {
                 error = "libplacebo failed to read back the SDR frame";
@@ -146,13 +147,16 @@ namespace lfs::io {
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - readback_started).count();
             }
 
-            output_rgb.resize(static_cast<size_t>(output_width) * output_height * 3);
+            if (keep_rgba)
+                return true;
+
+            output.resize(static_cast<size_t>(output_width) * output_height * 3);
             const auto rgb_conversion_started = std::chrono::steady_clock::now();
             for (size_t source_index = 0, target_index = 0; source_index < rgba_buffer_.size();
                  source_index += 4, target_index += 3) {
-                output_rgb[target_index] = rgba_buffer_[source_index];
-                output_rgb[target_index + 1] = rgba_buffer_[source_index + 1];
-                output_rgb[target_index + 2] = rgba_buffer_[source_index + 2];
+                output[target_index] = rgba_buffer_[source_index];
+                output[target_index + 1] = rgba_buffer_[source_index + 1];
+                output[target_index + 2] = rgba_buffer_[source_index + 2];
             }
             if (timing) {
                 timing->rgba_to_rgb_seconds =
@@ -233,7 +237,14 @@ namespace lfs::io {
                                               const int output_width, const int output_height,
                                               std::vector<unsigned char>& output_rgb,
                                               std::string& error, HdrTonemapTiming* const timing) {
-        return impl_->tonemap(frame, stream, output_width, output_height, output_rgb, error, timing);
+        return impl_->tonemap(frame, stream, output_width, output_height, output_rgb, error, timing, false);
+    }
+
+    bool HdrLibplaceboRenderer::tonemapToSdrRgba(const AVFrame* const frame, const AVStream* const stream,
+                                                  const int output_width, const int output_height,
+                                                  std::vector<unsigned char>& output_rgba,
+                                                  std::string& error) {
+        return impl_->tonemap(frame, stream, output_width, output_height, output_rgba, error, nullptr, true);
     }
 
     void HdrLibplaceboRenderer::reset() { impl_->reset(); }

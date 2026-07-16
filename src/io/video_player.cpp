@@ -37,7 +37,7 @@ namespace lfs::io {
         constexpr size_t FRAME_QUEUE_SIZE = 16;
         constexpr int MAX_PREVIEW_HEIGHT = 720;
         constexpr size_t MIN_BUFFERED_FRAMES = 4;
-        constexpr int MAX_SW_DECODE_THREADS = 4;
+        constexpr int MAX_SW_DECODE_THREADS = 8;
 
         [[nodiscard]] double monotonicSeconds() {
             return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -155,6 +155,7 @@ namespace lfs::io {
 
     struct DecodedFrame {
         std::vector<uint8_t> data;
+        int channels = 3;
         double pts = 0;
         int64_t frame_number = 0;
     };
@@ -310,9 +311,11 @@ namespace lfs::io {
                 codec_ctx_->hw_device_ctx = av_buffer_ref(hw_device_ctx_);
                 codec_ctx_->get_format = getHwFormat;
             } else {
-                codec_ctx_->thread_count =
-                    std::min(MAX_SW_DECODE_THREADS, static_cast<int>(std::thread::hardware_concurrency()));
+                const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
+                codec_ctx_->thread_count = std::min(MAX_SW_DECODE_THREADS,
+                                                     static_cast<int>(hardware_threads));
                 codec_ctx_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+                LOG_INFO("VideoPlayer: FFmpeg software decoder threads: {}", codec_ctx_->thread_count);
             }
 
             if (avcodec_open2(codec_ctx_, codec, nullptr) < 0) {
@@ -367,6 +370,7 @@ namespace lfs::io {
 
             if (decodeNextFrame()) {
                 display_buffer_ = std::move(decoded_frame_.data);
+                display_channels_ = decoded_frame_.channels;
                 current_time_ = decoded_frame_.pts;
                 current_frame_ = decoded_frame_.frame_number;
 
@@ -450,6 +454,7 @@ namespace lfs::io {
             using_hw_decode_ = false;
             is_hdr_ = false;
             hdr_to_sdr_ = false;
+            logged_hdr_rgba_preview_path_ = false;
             hdr_format_ = HdrFormat::SDR;
             source_colorspace_ = AVCOL_SPC_UNSPECIFIED;
             source_range_ = AVCOL_RANGE_UNSPECIFIED;
@@ -516,6 +521,7 @@ namespace lfs::io {
                     auto frame = std::move(frame_queue_.front());
                     frame_queue_.pop();
                     display_buffer_ = std::move(frame.data);
+                    display_channels_ = frame.channels;
                     current_time_ = frame.pts;
                     current_frame_ = frame.frame_number;
                 }
@@ -538,6 +544,7 @@ namespace lfs::io {
                 queue_cv_.notify_all();
 
                 display_buffer_ = std::move(frame.data);
+                display_channels_ = frame.channels;
                 current_time_ = frame.pts;
                 current_frame_ = frame.frame_number;
             }
@@ -585,6 +592,7 @@ namespace lfs::io {
                 auto frame = std::move(frame_queue_.front());
                 frame_queue_.pop();
                 display_buffer_ = std::move(frame.data);
+                display_channels_ = frame.channels;
                 current_time_ = frame.pts;
                 current_frame_ = frame.frame_number;
                 presented = true;
@@ -599,6 +607,7 @@ namespace lfs::io {
         [[nodiscard]] const uint8_t* currentFrameData() const {
             return display_buffer_.empty() ? nullptr : display_buffer_.data();
         }
+        [[nodiscard]] int currentFrameChannels() const { return display_channels_; }
 
         [[nodiscard]] int width() const { return width_; }
         [[nodiscard]] int height() const { return height_; }
@@ -635,13 +644,15 @@ namespace lfs::io {
                 const int thumb_height = height_ * max_width / width_;
                 std::vector<uint8_t> thumb(static_cast<size_t>(max_width) * thumb_height * 3);
 
+                const AVPixelFormat preview_format =
+                    display_channels_ == 4 ? AV_PIX_FMT_RGBA : AV_PIX_FMT_RGB24;
                 SwsContext* const thumb_sws =
-                    sws_getContext(width_, height_, AV_PIX_FMT_RGB24, max_width, thumb_height,
+                    sws_getContext(width_, height_, preview_format, max_width, thumb_height,
                                    AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
 
                 if (thumb_sws) {
                     uint8_t* src_data[1] = {display_buffer_.data()};
-                    int src_linesize[1] = {width_ * 3};
+                    int src_linesize[1] = {width_ * display_channels_};
                     uint8_t* dst_data[1] = {thumb.data()};
                     int dst_linesize[1] = {max_width * 3};
 
@@ -695,8 +706,13 @@ namespace lfs::io {
 
         void performSeek(const double seconds) {
             const int64_t timestamp = static_cast<int64_t>(seconds / time_base_);
+            if (av_seek_frame(fmt_ctx_, video_stream_idx_, timestamp, AVSEEK_FLAG_BACKWARD) < 0) {
+                LOG_WARN("VideoPlayer: failed to seek to {:.3f}s", seconds);
+                return;
+            }
+            // The demuxer must seek first; flushing afterwards discards only
+            // decoder state from the old position before feeding new packets.
             avcodec_flush_buffers(codec_ctx_);
-            av_seek_frame(fmt_ctx_, video_stream_idx_, timestamp, AVSEEK_FLAG_BACKWARD);
             eof_reached_ = false;
 
             skip_video_conversion_ = true;
@@ -742,6 +758,7 @@ namespace lfs::io {
 
             if (skip_video_conversion_) {
                 decoded_frame_.data.clear();
+                decoded_frame_.channels = 3;
                 decoded_frame_.pts = static_cast<double>(frame_->pts) * time_base_;
                 decoded_frame_.frame_number = static_cast<int64_t>(decoded_frame_.pts * fps_);
                 return;
@@ -761,23 +778,29 @@ namespace lfs::io {
             }
             configureVideoToRgbColorimetry(sws_ctx_, src_frame, source_colorspace_, source_range_);
 
-            decoded_frame_.data.resize(frame_size_);
             if (is_hdr_ && hdr_to_sdr_) {
                 inheritStreamColorimetry(src_frame, fmt_ctx_->streams[video_stream_idx_]->codecpar, hdr_format_);
                 if (!hdr_renderer_)
                     hdr_renderer_ = std::make_unique<HdrLibplaceboRenderer>();
                 std::string renderer_error;
-                if (!hdr_renderer_->tonemapToSdr(src_frame, fmt_ctx_->streams[video_stream_idx_], width_, height_,
-                                                  decoded_frame_.data, renderer_error)) {
+                if (!hdr_renderer_->tonemapToSdrRgba(src_frame, fmt_ctx_->streams[video_stream_idx_],
+                                                      width_, height_, decoded_frame_.data, renderer_error)) {
                     LOG_ERROR("HDR preview renderer failed: {}", renderer_error);
                     decoded_frame_.data.clear();
                     return;
                 }
+                decoded_frame_.channels = 4;
+                if (!logged_hdr_rgba_preview_path_) {
+                    LOG_INFO("HDR preview: libplacebo RGBA8 readback -> Vulkan UI upload (CPU RGB/RGBA conversion bypassed)");
+                    logged_hdr_rgba_preview_path_ = true;
+                }
             } else {
+                decoded_frame_.data.resize(frame_size_);
                 uint8_t* dst_data[1] = {decoded_frame_.data.data()};
                 int dst_linesize[1] = {width_ * 3};
                 sws_scale(sws_ctx_, src_frame->data, src_frame->linesize, 0, src_height_, dst_data,
                           dst_linesize);
+                decoded_frame_.channels = 3;
             }
 
             decoded_frame_.pts = static_cast<double>(frame_->pts) * time_base_;
@@ -811,9 +834,11 @@ namespace lfs::io {
         AVColorRange source_range_ = AVCOL_RANGE_UNSPECIFIED;
         std::atomic<bool> hdr_to_sdr_{false};
         bool skip_video_conversion_ = false;
+        bool logged_hdr_rgba_preview_path_ = false;
         std::unique_ptr<HdrLibplaceboRenderer> hdr_renderer_;
 
         std::vector<uint8_t> display_buffer_;
+        int display_channels_ = 3;
         double current_time_ = 0;
         int64_t current_frame_ = 0;
 
@@ -853,6 +878,7 @@ namespace lfs::io {
     bool VideoPlayer::update(const double current_wall_time) { return impl_->update(current_wall_time); }
 
     const uint8_t* VideoPlayer::currentFrameData() const { return impl_->currentFrameData(); }
+    int VideoPlayer::currentFrameChannels() const { return impl_->currentFrameChannels(); }
     int VideoPlayer::width() const { return impl_->width(); }
     int VideoPlayer::height() const { return impl_->height(); }
     int VideoPlayer::sourceWidth() const { return impl_->sourceWidth(); }

@@ -37,8 +37,9 @@ namespace lfs::io {
         // Update playback, returns true if frame changed
         bool update(double delta_seconds);
 
-        // Get current frame as RGB data (call after update returns true)
+        // Get current frame as RGB or RGBA data (call after update returns true).
         const uint8_t* currentFrameData() const;
+        int currentFrameChannels() const;
         int width() const;
         int height() const;
         int sourceWidth() const;
