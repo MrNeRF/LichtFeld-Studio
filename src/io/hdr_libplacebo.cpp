@@ -16,6 +16,7 @@ extern "C" {
 #include <libplacebo/vulkan.h>
 
 #include <array>
+#include <chrono>
 #include <mutex>
 #include <utility>
 
@@ -56,15 +57,25 @@ namespace lfs::io {
 
         bool tonemap(const AVFrame* const frame, const AVStream* const stream,
                      const int output_width, const int output_height,
-                     std::vector<unsigned char>& output_rgb, std::string& error) {
+                     std::vector<unsigned char>& output_rgb, std::string& error,
+                     HdrTonemapTiming* const timing) {
             std::lock_guard lock(mutex_);
+            if (timing)
+                *timing = {};
+
+            const auto initialization_started = std::chrono::steady_clock::now();
             if (!initialize(error))
                 return false;
+            if (timing) {
+                timing->initialization_seconds =
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - initialization_started).count();
+            }
             if (!frame || output_width <= 0 || output_height <= 0) {
                 error = "Invalid HDR frame or output dimensions";
                 return false;
             }
 
+            const auto render_started = std::chrono::steady_clock::now();
             pl_frame source{};
             pl_avframe_params map_params{};
             map_params.frame = frame;
@@ -115,23 +126,37 @@ namespace lfs::io {
                 error = "libplacebo failed to render the HDR frame";
                 return false;
             }
+            if (timing) {
+                timing->render_seconds =
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - render_started).count();
+            }
 
             rgba_buffer_.resize(static_cast<size_t>(output_width) * output_height * 4);
             pl_tex_transfer_params download_params{};
             download_params.tex = output_texture_;
             download_params.row_pitch = static_cast<size_t>(output_width) * 4;
             download_params.ptr = rgba_buffer_.data();
+            const auto readback_started = std::chrono::steady_clock::now();
             if (!pl_tex_download(gpu_, &download_params)) {
                 error = "libplacebo failed to read back the SDR frame";
                 return false;
             }
+            if (timing) {
+                timing->readback_seconds =
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - readback_started).count();
+            }
 
             output_rgb.resize(static_cast<size_t>(output_width) * output_height * 3);
+            const auto rgb_conversion_started = std::chrono::steady_clock::now();
             for (size_t source_index = 0, target_index = 0; source_index < rgba_buffer_.size();
                  source_index += 4, target_index += 3) {
                 output_rgb[target_index] = rgba_buffer_[source_index];
                 output_rgb[target_index + 1] = rgba_buffer_[source_index + 1];
                 output_rgb[target_index + 2] = rgba_buffer_[source_index + 2];
+            }
+            if (timing) {
+                timing->rgba_to_rgb_seconds =
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - rgb_conversion_started).count();
             }
             return true;
         }
@@ -149,7 +174,9 @@ namespace lfs::io {
 
             pl_log_params log_params{};
             log_params.log_cb = libplaceboLogCallback;
-            log_params.log_level = PL_LOG_INFO;
+            // Startup details are useful while debugging libplacebo itself but
+            // overwhelm normal application logs without helping an end user.
+            log_params.log_level = PL_LOG_WARN;
             log_ = pl_log_create(PL_API_VER, &log_params);
             vulkan_ = pl_vulkan_create(log_, nullptr);
             if (!vulkan_) {
@@ -205,8 +232,8 @@ namespace lfs::io {
     bool HdrLibplaceboRenderer::tonemapToSdr(const AVFrame* const frame, const AVStream* const stream,
                                               const int output_width, const int output_height,
                                               std::vector<unsigned char>& output_rgb,
-                                              std::string& error) {
-        return impl_->tonemap(frame, stream, output_width, output_height, output_rgb, error);
+                                              std::string& error, HdrTonemapTiming* const timing) {
+        return impl_->tonemap(frame, stream, output_width, output_height, output_rgb, error, timing);
     }
 
     void HdrLibplaceboRenderer::reset() { impl_->reset(); }

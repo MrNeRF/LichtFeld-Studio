@@ -13,6 +13,13 @@ struct AVStream;
 
 namespace lfs::io {
 
+    struct HdrTonemapTiming {
+        double initialization_seconds = 0.0;
+        double render_seconds = 0.0;
+        double readback_seconds = 0.0;
+        double rgba_to_rgb_seconds = 0.0;
+    };
+
     /// Vulkan/libplacebo SDR renderer for all HDR sources supported by FFmpeg.
     ///
     /// The input is deliberately the decoded AVFrame, before swscale changes
@@ -29,7 +36,8 @@ namespace lfs::io {
         [[nodiscard]] bool tonemapToSdr(const AVFrame* frame, const AVStream* stream,
                                         int output_width, int output_height,
                                         std::vector<unsigned char>& output_rgb,
-                                        std::string& error);
+                                        std::string& error,
+                                        HdrTonemapTiming* timing = nullptr);
         void reset();
 
     private:

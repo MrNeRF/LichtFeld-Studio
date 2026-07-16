@@ -39,6 +39,36 @@ namespace lfs::io {
         constexpr size_t MIN_BUFFERED_FRAMES = 4;
         constexpr int MAX_SW_DECODE_THREADS = 4;
 
+        [[nodiscard]] double monotonicSeconds() {
+            return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+
+        [[nodiscard]] int findUsableHeaderVideoStream(const AVFormatContext* const context) {
+            if (!context)
+                return -1;
+
+            for (unsigned int i = 0; i < context->nb_streams; ++i) {
+                const AVStream* const stream = context->streams[i];
+                const AVCodecParameters* const parameters = stream ? stream->codecpar : nullptr;
+                if (parameters && parameters->codec_type == AVMEDIA_TYPE_VIDEO &&
+                    parameters->codec_id != AV_CODEC_ID_NONE && parameters->width > 0 &&
+                    parameters->height > 0) {
+                    return static_cast<int>(i);
+                }
+            }
+            return -1;
+        }
+
+        void discardNonVideoStreams(AVFormatContext* const context, const int video_stream_idx) {
+            if (!context)
+                return;
+
+            for (unsigned int i = 0; i < context->nb_streams; ++i)
+                context->streams[i]->discard = static_cast<int>(i) == video_stream_idx
+                    ? AVDISCARD_DEFAULT
+                    : AVDISCARD_ALL;
+        }
+
         void configureVideoToRgbColorimetry(SwsContext* context, const AVFrame* source,
                                             const AVColorSpace fallback_colorspace,
                                             const AVColorRange fallback_range) {
@@ -143,22 +173,27 @@ namespace lfs::io {
                 return false;
             }
 
-            if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
-                close();
-                return false;
-            }
-
-            for (unsigned int i = 0; i < fmt_ctx_->nb_streams; i++) {
-                if (fmt_ctx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-                    video_stream_idx_ = static_cast<int>(i);
-                    break;
+            // This component is deliberately video-only. MOV/MP4 headers
+            // already contain all decoder and Dolby Vision configuration we
+            // need, so do not invoke FFmpeg's global stream-info probe: it
+            // would inspect unsupported audio tracks that are never used.
+            video_stream_idx_ = findUsableHeaderVideoStream(fmt_ctx_);
+            if (video_stream_idx_ < 0) {
+                // Keep a conservative fallback for containers whose video
+                // dimensions/codec are only discoverable from packets.
+                if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
+                    close();
+                    return false;
                 }
+                video_stream_idx_ = findUsableHeaderVideoStream(fmt_ctx_);
             }
 
             if (video_stream_idx_ < 0) {
                 close();
                 return false;
             }
+
+            discardNonVideoStreams(fmt_ctx_, video_stream_idx_);
 
             AVStream* const stream = fmt_ctx_->streams[video_stream_idx_];
             const AVCodecID codec_id = stream->codecpar->codec_id;
@@ -287,8 +322,14 @@ namespace lfs::io {
 
             src_width_ = codec_ctx_->width;
             src_height_ = codec_ctx_->height;
-            fps_ = av_q2d(stream->r_frame_rate);
+            fps_ = av_q2d(stream->avg_frame_rate);
+            if (!std::isfinite(fps_) || fps_ <= 0.0)
+                fps_ = av_q2d(stream->r_frame_rate);
+            if (!std::isfinite(fps_) || fps_ <= 0.0)
+                fps_ = 30.0;
             time_base_ = av_q2d(stream->time_base);
+            if (!std::isfinite(time_base_) || time_base_ <= 0.0)
+                time_base_ = 1.0 / fps_;
 
             if (src_height_ > MAX_PREVIEW_HEIGHT) {
                 const float scale = static_cast<float>(MAX_PREVIEW_HEIGHT) / src_height_;
@@ -301,12 +342,17 @@ namespace lfs::io {
             frame_size_ = static_cast<size_t>(width_) * height_ * 3;
 
             total_frames_ = stream->nb_frames;
-            if (total_frames_ == 0) {
-                duration_ = static_cast<double>(fmt_ctx_->duration) / AV_TIME_BASE;
-                total_frames_ = static_cast<int64_t>(duration_ * fps_);
-            } else {
+            if (total_frames_ > 0) {
                 duration_ = static_cast<double>(total_frames_) / fps_;
+            } else if (fmt_ctx_->duration != AV_NOPTS_VALUE && fmt_ctx_->duration > 0) {
+                duration_ = static_cast<double>(fmt_ctx_->duration) / AV_TIME_BASE;
+            } else if (stream->duration != AV_NOPTS_VALUE && stream->duration > 0) {
+                duration_ = static_cast<double>(stream->duration) * time_base_;
+            } else {
+                duration_ = 0.0;
             }
+            if (total_frames_ <= 0 && duration_ > 0.0)
+                total_frames_ = static_cast<int64_t>(std::llround(duration_ * fps_));
 
             frame_ = av_frame_alloc();
             sw_frame_ = av_frame_alloc();
@@ -342,6 +388,8 @@ namespace lfs::io {
             }
 
             is_open_ = true;
+            eof_reached_ = false;
+            playback_start_time_ = -1.0;
             stop_decode_thread_ = false;
             decode_thread_ = std::thread(&Impl::decodeThreadFunc, this);
 
@@ -407,6 +455,8 @@ namespace lfs::io {
             source_range_ = AVCOL_RANGE_UNSPECIFIED;
             current_time_ = 0;
             current_frame_ = 0;
+            playback_start_time_ = -1.0;
+            eof_reached_ = false;
         }
 
         [[nodiscard]] bool isOpen() const { return is_open_; }
@@ -512,24 +562,38 @@ namespace lfs::io {
                 return false;
             }
 
+            const double now = monotonicSeconds();
+            if (playback_start_time_ < 0.0)
+                playback_start_time_ = now - current_time_;
+            const double target_pts = now - playback_start_time_;
+            const double frame_period = 1.0 / std::max(fps_, 1.0);
+            const double presentation_slack = frame_period * 0.5;
+
             if (frame_queue_.empty()) {
                 lock.unlock();
-                if (eof_reached_) {
+                if (eof_reached_ && target_pts >= duration_ - presentation_slack) {
                     is_playing_ = false;
                 }
                 return false;
             }
 
-            auto& front = frame_queue_.front();
-            display_buffer_ = std::move(front.data);
-            current_time_ = front.pts;
-            current_frame_ = front.frame_number;
-            frame_queue_.pop();
+            // Present the newest frame whose PTS is due. When decode/render
+            // falls behind, discard older queued frames rather than slowing
+            // playback below the source time base.
+            bool presented = false;
+            while (!frame_queue_.empty() && frame_queue_.front().pts <= target_pts + presentation_slack) {
+                auto frame = std::move(frame_queue_.front());
+                frame_queue_.pop();
+                display_buffer_ = std::move(frame.data);
+                current_time_ = frame.pts;
+                current_frame_ = frame.frame_number;
+                presented = true;
+            }
 
             lock.unlock();
             queue_cv_.notify_all();
 
-            return true;
+            return presented;
         }
 
         [[nodiscard]] const uint8_t* currentFrameData() const {

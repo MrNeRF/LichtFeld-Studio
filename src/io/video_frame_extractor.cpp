@@ -28,17 +28,52 @@ extern "C" {
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 namespace lfs::io {
 
     namespace {
         constexpr int JPEG_BATCH_SIZE = 32;
+        // Extraction runs off the UI thread and benefits from more parallel
+        // HEVC decoding than the latency-sensitive preview path.
+        constexpr int MAX_SW_DECODE_THREADS = 8;
+
+        [[nodiscard]] double elapsedSeconds(const std::chrono::steady_clock::time_point started) {
+            return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        }
+
+        [[nodiscard]] int findUsableHeaderVideoStream(const AVFormatContext* const context) {
+            if (!context)
+                return -1;
+
+            for (unsigned int i = 0; i < context->nb_streams; ++i) {
+                const AVStream* const stream = context->streams[i];
+                const AVCodecParameters* const parameters = stream ? stream->codecpar : nullptr;
+                if (parameters && parameters->codec_type == AVMEDIA_TYPE_VIDEO &&
+                    parameters->codec_id != AV_CODEC_ID_NONE && parameters->width > 0 &&
+                    parameters->height > 0) {
+                    return static_cast<int>(i);
+                }
+            }
+            return -1;
+        }
+
+        void discardNonVideoStreams(AVFormatContext* const context, const int video_stream_idx) {
+            if (!context)
+                return;
+
+            for (unsigned int i = 0; i < context->nb_streams; ++i)
+                context->streams[i]->discard = static_cast<int>(i) == video_stream_idx
+                    ? AVDISCARD_DEFAULT
+                    : AVDISCARD_ALL;
+        }
 
         void configureVideoToRgbColorimetry(SwsContext* context, const AVFrame* source,
                                             const AVColorSpace fallback_colorspace,
@@ -334,6 +369,7 @@ namespace lfs::io {
     class VideoFrameExtractor::Impl {
     public:
         bool extract(const Params& params, std::string& error) {
+            const auto extraction_started = std::chrono::steady_clock::now();
             AVFormatContext* fmt_ctx = nullptr;
             AVCodecContext* codec_ctx = nullptr;
             SwsContext* sws_ctx = nullptr;
@@ -359,18 +395,19 @@ namespace lfs::io {
                     return false;
                 }
 
-                if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
-                    error = "Failed to find stream info";
-                    avformat_close_input(&fmt_ctx);
-                    return false;
-                }
-
-                int video_stream_idx = -1;
-                for (unsigned int i = 0; i < fmt_ctx->nb_streams; i++) {
-                    if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-                        video_stream_idx = i;
-                        break;
+                // Frame extraction is video-only. Prefer the complete stream
+                // description already stored in container headers, avoiding a
+                // global probe of audio tracks which this workflow never uses.
+                int video_stream_idx = findUsableHeaderVideoStream(fmt_ctx);
+                if (video_stream_idx < 0) {
+                    // Preserve compatibility with containers that need packet
+                    // probing to expose their video dimensions or codec.
+                    if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+                        error = "Failed to find stream info";
+                        avformat_close_input(&fmt_ctx);
+                        return false;
                     }
+                    video_stream_idx = findUsableHeaderVideoStream(fmt_ctx);
                 }
 
                 if (video_stream_idx == -1) {
@@ -378,6 +415,8 @@ namespace lfs::io {
                     avformat_close_input(&fmt_ctx);
                     return false;
                 }
+
+                discardNonVideoStreams(fmt_ctx, video_stream_idx);
 
                 AVStream* video_stream = fmt_ctx->streams[video_stream_idx];
                 const AVCodecID codec_id = video_stream->codecpar->codec_id;
@@ -459,6 +498,12 @@ namespace lfs::io {
                 if (using_hw_decode) {
                     codec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
                     codec_ctx->get_format = get_hw_format;
+                } else {
+                    const unsigned int hardware_threads = std::max(1U, std::thread::hardware_concurrency());
+                    codec_ctx->thread_count = std::min(MAX_SW_DECODE_THREADS,
+                                                       static_cast<int>(hardware_threads));
+                    codec_ctx->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
+                    LOG_INFO("FFmpeg software decoder threads: {}", codec_ctx->thread_count);
                 }
 #ifdef AV_CODEC_EXPORT_DATA_DOVI_RPU
                 codec_ctx->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
@@ -599,6 +644,10 @@ namespace lfs::io {
                 };
                 std::unique_ptr<HdrLibplaceboRenderer> hdr_renderer;
                 std::vector<unsigned char> hdr_sdr_buffer;
+                HdrTonemapTiming hdr_timing_total{};
+                double cuda_upload_seconds = 0.0;
+                double jpeg_encode_seconds = 0.0;
+                double jpeg_write_seconds = 0.0;
                 const auto convert_frame_to_rgb8 = [&](SwsContext* context, AVFrame* source,
                                                        const int source_height) {
                     if (convert_hdr_to_sdr) {
@@ -606,11 +655,16 @@ namespace lfs::io {
                         if (!hdr_renderer)
                             hdr_renderer = std::make_unique<HdrLibplaceboRenderer>();
                         std::string renderer_error;
+                        HdrTonemapTiming frame_timing{};
                         if (!hdr_renderer->tonemapToSdr(source, video_stream, out_width, out_height,
-                                                        hdr_sdr_buffer, renderer_error)) {
+                                                        hdr_sdr_buffer, renderer_error, &frame_timing)) {
                             LOG_ERROR("HDR extraction renderer failed: {}", renderer_error);
                             return false;
                         }
+                        hdr_timing_total.initialization_seconds += frame_timing.initialization_seconds;
+                        hdr_timing_total.render_seconds += frame_timing.render_seconds;
+                        hdr_timing_total.readback_seconds += frame_timing.readback_seconds;
+                        hdr_timing_total.rgba_to_rgb_seconds += frame_timing.rgba_to_rgb_seconds;
                         std::memcpy(cpu_contiguous_buffer, hdr_sdr_buffer.data(), frame_size);
                         return true;
                     }
@@ -626,6 +680,9 @@ namespace lfs::io {
 
                 if (full_gpu_pipeline_available) {
                     LOG_INFO("Full GPU pipeline available for NV12 frames: NVDEC decode → GPU color convert → GPU JPEG encode");
+                } else if (convert_hdr_to_sdr && gpu_encoding_enabled) {
+                    LOG_INFO("HDR hybrid pipeline: {} decode -> libplacebo Vulkan tone map -> host readback -> CUDA JPEG batch",
+                             dv_profile > 0 ? "FFmpeg Dolby Vision" : "CPU");
                 } else if (using_hw_decode) {
                     LOG_INFO("Hybrid pipeline: NVDEC decode → CPU transfer → {}",
                              gpu_encoding_enabled ? "GPU encode" : "CPU encode");
@@ -689,12 +746,16 @@ namespace lfs::io {
                     }
                     throw_if_cancelled();
 
+                    const auto jpeg_encode_started = std::chrono::steady_clock::now();
                     auto encoded = nvcodec->encode_batch_rgb_to_jpeg(batch_gpu_ptrs, batch_encode_w, batch_encode_h,
                                                                      params.jpg_quality);
+                    jpeg_encode_seconds += elapsedSeconds(jpeg_encode_started);
 
                     for (size_t i = 0; i < encoded.size(); i++) {
                         if (!encoded[i].empty()) {
+                            const auto jpeg_write_started = std::chrono::steady_clock::now();
                             write_jpeg_to_file(batch_filenames[i], encoded[i]);
+                            jpeg_write_seconds += elapsedSeconds(jpeg_write_started);
                             ++written_count;
                             if (params.generate_metadata && i < batch_meta.size()) {
                                 saved_frames.push_back({lfs::core::path_to_utf8(batch_filenames[i].filename()),
@@ -1007,8 +1068,10 @@ namespace lfs::io {
                                 batch_encode_h = (hw_rot_h > 0) ? hw_rot_h : out_height;
                             }
                             void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
+                            const auto cuda_upload_started = std::chrono::steady_clock::now();
                             cudaMemcpy(dst_ptr, cpu_contiguous_buffer, frame_size,
                                        cudaMemcpyHostToDevice);
+                            cuda_upload_seconds += elapsedSeconds(cuda_upload_started);
 
                             batch_gpu_ptrs.push_back(dst_ptr);
                             batch_filenames.push_back(filename);
@@ -1116,8 +1179,10 @@ namespace lfs::io {
                             batch_encode_h = (sw_rot_h > 0) ? sw_rot_h : out_height;
                         }
                         void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
+                        const auto cuda_upload_started = std::chrono::steady_clock::now();
                         cudaMemcpy(dst_ptr, cpu_contiguous_buffer, frame_size,
                                    cudaMemcpyHostToDevice);
+                        cuda_upload_seconds += elapsedSeconds(cuda_upload_started);
 
                         batch_gpu_ptrs.push_back(dst_ptr);
                         batch_filenames.push_back(filename);
@@ -1365,6 +1430,15 @@ namespace lfs::io {
                              written_count, skipped_count);
                 } else {
                     LOG_INFO("Extracted {} frames from video", written_count);
+                }
+                if (convert_hdr_to_sdr) {
+                    LOG_INFO("HDR extraction timing: total={:.3f}s decoded={} selected={} written={} init={:.3f}s "
+                             "render={:.3f}s readback={:.3f}s rgba_to_rgb={:.3f}s cuda_upload={:.3f}s "
+                             "jpeg_encode={:.3f}s file_write={:.3f}s",
+                             elapsedSeconds(extraction_started), decoded_frame_count, saved_count, written_count,
+                             hdr_timing_total.initialization_seconds, hdr_timing_total.render_seconds,
+                             hdr_timing_total.readback_seconds, hdr_timing_total.rgba_to_rgb_seconds,
+                             cuda_upload_seconds, jpeg_encode_seconds, jpeg_write_seconds);
                 }
 
                 // Cleanup
