@@ -751,8 +751,20 @@ namespace lfs::core {
         return *this;
     }
 
+    namespace {
+        std::atomic<CudaMemoryPool*> g_cuda_memory_pool_instance{nullptr};
+    }
+
     CudaMemoryPool& CudaMemoryPool::instance() {
+        // The pool shuts down each subordinate allocator from its destructor.
+        // Construct every dependency first so reverse static destruction keeps
+        // them alive until after CudaMemoryPool has completed that shutdown.
+        static_cast<void>(lfs::diagnostics::VramProfiler::instance());
+        static_cast<void>(CudaEventPool::instance());
+        static_cast<void>(GPUSlabAllocator::instance());
+        static_cast<void>(SizeBucketedPool::instance());
         static CudaMemoryPool pool;
+        g_cuda_memory_pool_instance.store(&pool, std::memory_order_release);
         return pool;
     }
 
@@ -832,7 +844,12 @@ namespace lfs::core {
     }
 
     void Tensor::shutdown_memory_pool() {
-        CudaMemoryPool::instance().shutdown();
+        // CPU-only commands must not initialize CUDA merely to tear it down.
+        // A non-null pointer proves that an earlier CUDA allocation path
+        // constructed the pool and all of its subordinate allocators.
+        if (CudaMemoryPool* pool = g_cuda_memory_pool_instance.load(std::memory_order_acquire)) {
+            pool->shutdown();
+        }
     }
 
     void Tensor::set_memory_pool_iteration(int iteration) {
