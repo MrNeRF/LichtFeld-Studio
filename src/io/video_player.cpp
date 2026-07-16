@@ -177,13 +177,10 @@ namespace lfs::io {
                 return false;
             }
 
-            // Find the video stream from container headers first. This lets us
-            // discard every non-video stream before asking FFmpeg to inspect
-            // packets for codec-level colour metadata.
+            // Select the video stream before probing codec-level metadata.
             video_stream_idx_ = findUsableHeaderVideoStream(fmt_ctx_);
             if (video_stream_idx_ < 0) {
-                // Keep a conservative fallback for containers whose video
-                // dimensions/codec are only discoverable from packets.
+                // Fallback for containers requiring packet probing.
                 if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
                     close();
                     return false;
@@ -198,10 +195,7 @@ namespace lfs::io {
 
             discardNonVideoStreams(fmt_ctx_, video_stream_idx_);
 
-            // Some MP4 files carry HDR mastering/transfer data only in the
-            // HEVC bitstream rather than in the sample entry. Probe only the
-            // selected video stream so PQ/HLG detection is complete without
-            // involving unsupported audio tracks, then rewind before decode.
+            // Probe the selected stream for HDR metadata stored in the bitstream.
             if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
                 LOG_WARN("VideoPlayer: could not complete video-only stream metadata probe");
             }
@@ -238,9 +232,7 @@ namespace lfs::io {
             if (rotation_ != 0 && rotation_ != 90 && rotation_ != 180 && rotation_ != 270)
                 rotation_ = 0;
 
-            // Detect HDR from stream transfer metadata. PQ also covers HDR10+ and
-            // the base layer of Dolby Vision; dynamic metadata is not needed for
-            // the deterministic SDR preview path.
+            // PQ covers HDR10+ and Dolby Vision base layers.
             is_hdr_ = false;
             hdr_info_ = "SDR";
             hdr_format_ = detectHdrFormat(stream->codecpar->color_trc, stream->codecpar->format);
@@ -278,8 +270,7 @@ namespace lfs::io {
                          av_get_pix_fmt_name(static_cast<AVPixelFormat>(stream->codecpar->format)));
             }
 
-            // NVDEC frames can omit the colour fields carried by MOV/MP4.
-            // HDR base layers without explicit tags are BT.2020 NCL, limited range.
+            // Supply BT.2020 NCL limited-range defaults when NVDEC omits tags.
             source_colorspace_ = stream->codecpar->color_space;
             source_range_ = stream->codecpar->color_range;
             if (is_hdr_ && source_colorspace_ == AVCOL_SPC_UNSPECIFIED)
@@ -290,9 +281,7 @@ namespace lfs::io {
             const char* hw_decoder_name = getHwDecoderName(codec_id);
             const AVCodec* codec = nullptr;
 
-            // The dedicated NVDEC cuvid codecs do not reliably propagate
-            // Dolby Vision RPU side-data. Use FFmpeg's native decoder for DV
-            // so libplacebo can apply the frame metadata correctly.
+            // NVDEC cuvid does not reliably preserve Dolby Vision RPU side data.
             if (hw_decoder_name && !has_dolby_vision) {
                 codec = avcodec_find_decoder_by_name(hw_decoder_name);
                 if (codec &&
@@ -320,8 +309,7 @@ namespace lfs::io {
             codec_ctx_ = avcodec_alloc_context3(codec);
             avcodec_parameters_to_context(codec_ctx_, stream->codecpar);
 #ifdef AV_CODEC_EXPORT_DATA_DOVI_RPU
-            // Required for libplacebo to consume frame-level Dolby Vision RPU
-            // metadata when FFmpeg exposes it.
+            // Export Dolby Vision RPU side data for libplacebo.
             codec_ctx_->export_side_data |= AV_CODEC_EXPORT_DATA_DOVI_RPU;
 #endif
 

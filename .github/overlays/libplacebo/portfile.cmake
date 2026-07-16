@@ -6,10 +6,7 @@ vcpkg_from_github(
     HEAD_REF master
 )
 
-# The upstream source archive intentionally excludes its Git submodules.  Two
-# of them are required at build time to generate libplacebo's shader sources.
-# Fetch precisely the revisions pinned by libplacebo v7.360.1, rather than
-# relying on a host Python installation or on network access during Meson.
+# Vendor the pinned shader-generation sources omitted from libplacebo's archive.
 vcpkg_from_github(
     OUT_SOURCE_PATH JINJA_SOURCE
     REPO pallets/jinja
@@ -29,15 +26,9 @@ file(COPY "${JINJA_SOURCE}/src/"
 file(COPY "${MARKUPSAFE_SOURCE}/src/"
      DESTINATION "${SOURCE_PATH}/3rdparty/markupsafe/src")
 
-# libplacebo v7 is written in GNU C (notably, its GPU callback tables use
-# __typeof__). Native MSVC parses those declarations incorrectly, so do not
-# attempt to emulate the extensions with source patches. Use Visual Studio's
-# clang-cl component only for this port: it targets the same MSVC ABI and CRT,
-# while LichtFeld Studio and every other dependency retain their normal MSVC
-# compiler configuration. Linux and MinGW use their native compiler unchanged.
+# libplacebo uses GNU C extensions; use clang-cl only for this Windows port.
 if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW)
-    # Builds are launched from the x64 Native Tools Command Prompt, which
-    # supplies VSINSTALLDIR for the active Visual Studio installation.
+    # VSINSTALLDIR is supplied by the x64 Native Tools Command Prompt.
     file(TO_CMAKE_PATH "$ENV{VSINSTALLDIR}" _lfs_vs_installation)
     set(_lfs_clang_cl "${_lfs_vs_installation}/VC/Tools/Llvm/x64/bin/clang-cl.exe")
     if(NOT EXISTS "${_lfs_clang_cl}")
@@ -48,9 +39,7 @@ if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW)
             "individual components.")
     endif()
 
-    # vcpkg supplies the normal MSVC native file first. Meson merges this file
-    # afterwards, replacing just C/C++ compiler selection while preserving the
-    # target triplet's CRT, include paths and linker settings.
+    # Override only Meson's C/C++ compiler; keep vcpkg's MSVC settings.
     set(_lfs_clang_native_file "${CURRENT_BUILDTREES_DIR}/clang-cl-${TARGET_TRIPLET}.ini")
     file(WRITE "${_lfs_clang_native_file}"
         "[binaries]\n"
@@ -60,19 +49,13 @@ if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW)
     set(VCPKG_MESON_NATIVE_FILE_RELEASE "${_lfs_clang_native_file}")
 endif()
 
-# The project's pinned vcpkg baseline ships Meson 0.58, while current
-# libplacebo requires >= 0.63. This helper replaces the Meson CMake helpers
-# only while this overlay port is configured; it does not alter vcpkg or any
-# other dependency's Meson version.
+# Use the overlay's newer Meson helper without changing other ports.
 include("${CURRENT_HOST_INSTALLED_DIR}/share/vcpkg-tool-meson/vcpkg-port-config.cmake")
 
-# Keep the package focused on the Vulkan renderer used by LichtFeld.  The
-# internal Dolby Vision implementation is enabled; libdovi is optional and
-# not required for the supported FFmpeg side-data mapping path.
+# Build only the Vulkan renderer and built-in Dolby Vision support used here.
 set(LIBPLACEBO_MESON_OPTIONS
     -Dvulkan=enabled
-    # The application creates pl_vulkan with default parameters. Keep the
-    # Vulkan loader enabled so libplacebo can resolve vkGetInstanceProcAddr.
+    # Required when pl_vulkan resolves Vulkan entry points internally.
     -Dvk-proc-addr=enabled
     -Dshaderc=enabled
     -Dglslang=disabled

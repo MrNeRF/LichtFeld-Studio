@@ -459,10 +459,7 @@ namespace lfs::io {
                 if (convert_hdr_to_sdr && source_range == AVCOL_RANGE_UNSPECIFIED)
                     source_range = AVCOL_RANGE_MPEG;
 
-                // Try hardware decoder first
-                // cuvid does not reliably preserve Dolby Vision RPU side data.
-                // Decode DV through FFmpeg's native codec so the shared
-                // libplacebo renderer receives the per-frame metadata.
+                // Decode Dolby Vision in software to preserve per-frame RPU metadata.
                 const char* hw_decoder_name = dv_profile > 0 ? nullptr : get_hw_decoder_name(codec_id);
                 const AVCodec* codec = nullptr;
 
@@ -480,7 +477,6 @@ namespace lfs::io {
                     }
                 }
 
-                // Fallback to software decoder
                 if (!codec) {
                     codec = avcodec_find_decoder(codec_id);
                     if (!codec) {

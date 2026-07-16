@@ -87,15 +87,11 @@ namespace lfs::io {
                 return false;
             }
 
-            // MOV/MP4 commonly carries mastering and Dolby Vision config at
-            // stream level. FFmpeg does not copy it to every decoded frame.
+            // Preserve stream-level mastering and Dolby Vision metadata.
             if (stream)
                 pl_frame_copy_stream_props(&source, stream);
 
-            // Keep display-matrix handling explicit. The HDR preview passes
-            // the dialog's current rotation here so that libplacebo applies it
-            // during rendering rather than the UI rotating an RGBA8 buffer on
-            // the CPU before every upload.
+            // Apply preview rotation during rendering to avoid CPU RGBA rotation.
             source.rotation = pl_rotation_normalize(rotation_degrees / 90);
 
             const bool texture_ready = recreateOutput(output_width, output_height, error);
@@ -178,8 +174,7 @@ namespace lfs::io {
 
             pl_log_params log_params{};
             log_params.log_cb = libplaceboLogCallback;
-            // Startup details are useful while debugging libplacebo itself but
-            // overwhelm normal application logs without helping an end user.
+            // Keep normal logs limited to warnings and errors.
             log_params.log_level = PL_LOG_WARN;
             log_ = pl_log_create(PL_API_VER, &log_params);
             vulkan_ = pl_vulkan_create(log_, nullptr);
@@ -210,8 +205,7 @@ namespace lfs::io {
             params.format = format;
             params.renderable = true;
             params.host_readable = true;
-            // libplacebo clears the render target as part of rendering; this
-            // operation is a blit and therefore requires the explicit cap.
+            // Rendering clears the target through a blit.
             params.blit_dst = true;
             if (!pl_tex_recreate(gpu_, &output_texture_, &params)) {
                 error = "libplacebo could not allocate the SDR render target";
