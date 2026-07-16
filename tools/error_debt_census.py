@@ -363,6 +363,8 @@ def check_empty_catch(source: ScannedFile) -> list[Hit]:
             or THROW_KEYWORD_RE.search(body) is not None
             or "run_guarded" in body
             or "best_effort_diagnostic" in body
+            or "make_error" in body
+            or "std::unexpected" in body
         )
         if not body.strip() or not reviewed:
             hits.append(source.hit(match.start(), "empty-catch"))

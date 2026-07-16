@@ -150,6 +150,39 @@ class ErrorDebtCensusTests(unittest.TestCase):
         )
         self.assert_rule_hits("empty-catch", [("src/app/worker.cpp", 2, "app")])
 
+    def test_empty_catch_accepts_typed_error_return(self) -> None:
+        self.write(
+            "app/worker.cpp",
+            "lfs::Result<int> run() {\n"
+            "  try { return work(); } catch (const std::exception& e) {\n"
+            "    return lfs::make_error(lfs::ErrorInit{.detail = e.what()});\n"
+            "  }\n"
+            "}\n",
+        )
+        self.assert_rule_hits("empty-catch", [])
+
+    def test_empty_catch_accepts_legacy_unexpected_return(self) -> None:
+        self.write(
+            "app/worker.cpp",
+            "std::expected<int, std::string> run() {\n"
+            "  try { return work(); } catch (const std::exception& e) {\n"
+            "    return std::unexpected(std::string(e.what()));\n"
+            "  }\n"
+            "}\n",
+        )
+        self.assert_rule_hits("empty-catch", [])
+
+    def test_empty_catch_does_not_accept_make_error_inside_literal(self) -> None:
+        self.write(
+            "app/worker.cpp",
+            "void run() {\n"
+            "  try { work(); } catch (...) {\n"
+            "    \"make_error fallback\";\n"
+            "  }\n"
+            "}\n",
+        )
+        self.assert_rule_hits("empty-catch", [("src/app/worker.cpp", 2, "app")])
+
     def test_local_check_macro_detects_non_core_definition(self) -> None:
         self.write(
             "rendering/config.h",
