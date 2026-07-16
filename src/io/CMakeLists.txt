@@ -141,10 +141,22 @@ target_include_directories(lfs_video SYSTEM PRIVATE
 target_link_libraries(lfs_video
         PRIVATE
         PkgConfig::FFMPEG
-        PkgConfig::LIBPLACEBO
         spdlog::spdlog
         CUDA::cudart
 )
+
+# libplacebo's static pkg-config dependency chain includes shaderc and
+# SPIR-V Tools. GNU ld resolves static archives left-to-right, so rescan the
+# complete chain on ELF platforms.
+if(UNIX AND NOT APPLE)
+    target_link_libraries(lfs_video PRIVATE
+            "-Wl,--start-group"
+            PkgConfig::LIBPLACEBO
+            "-Wl,--end-group"
+    )
+else()
+    target_link_libraries(lfs_video PRIVATE PkgConfig::LIBPLACEBO)
+endif()
 
 target_compile_features(lfs_video PUBLIC cxx_std_23)
 
@@ -316,7 +328,7 @@ endif()
 if(TARGET nvimgcodec_imgproc_static)
     target_compile_options(nvimgcodec_imgproc_static PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=860,3004>
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-Xcompiler "/wd4834">
+        "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-Xcompiler=/wd4834>"
     )
 endif()
 
