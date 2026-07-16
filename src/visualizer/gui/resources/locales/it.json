@@ -1506,6 +1506,7 @@
     "candidates_all": "Tutti i frame",
     "candidates_readout_fmt": "%d / ~%d frame",
     "generate_metadata": "Genera JSON metadati",
+    "convert_hdr_to_sdr": "Converti HDR in SDR (8 bit)",
     "overwrite_prompt": "La cartella contiene già fotogrammi estratti o metadati di estrazione. Rimuovere solo i file generati in questa cartella e procedere?",
     "overwrite_clear": "Procedi",
     "overwrite_cancel": "Annulla",

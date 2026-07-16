@@ -1506,6 +1506,7 @@
     "candidates_all": "Alle frames",
     "candidates_readout_fmt": "%d / ~%d frames",
     "generate_metadata": "Metadata JSON genereren",
+    "convert_hdr_to_sdr": "HDR naar SDR converteren (8-bit)",
     "overwrite_prompt": "De uitvoermap bevat al geëxtraheerde frames of extractiemetadata. Alleen de gegenereerde bestanden in deze map verwijderen?",
     "overwrite_clear": "Doorgaan",
     "overwrite_cancel": "Annuleren",

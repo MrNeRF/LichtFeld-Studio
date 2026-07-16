@@ -1506,6 +1506,7 @@
     "candidates_all": "Alle Frames",
     "candidates_readout_fmt": "%d / ~%d Bilder",
     "generate_metadata": "Metadaten-JSON erstellen",
+    "convert_hdr_to_sdr": "HDR in SDR konvertieren (8 Bit)",
     "overwrite_prompt": "Der Ausgabeordner enthält bereits extrahierte Bilder oder Extraktionsmetadaten. Nur generierte Dateien in diesem Ordner entfernen und fortfahren?",
     "overwrite_clear": "Fortfahren",
     "overwrite_cancel": "Abbrechen",

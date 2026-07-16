@@ -145,6 +145,14 @@ namespace lfs::io {
             return std::isfinite(fps) && fps > 0.0 ? fps : 0.0;
         }
 
+        [[nodiscard]] double validDurationSeconds(const int64_t duration, const AVRational time_base) {
+            if (duration == AV_NOPTS_VALUE || time_base.num <= 0 || time_base.den <= 0)
+                return 0.0;
+
+            const double seconds = static_cast<double>(duration) * av_q2d(time_base);
+            return std::isfinite(seconds) && seconds > 0.0 ? seconds : 0.0;
+        }
+
         [[nodiscard]] double frameTimestampSeconds(const AVFrame* const frame,
                                                    const double time_base,
                                                    const int frame_index,
@@ -419,6 +427,17 @@ namespace lfs::io {
                 discardNonVideoStreams(fmt_ctx, video_stream_idx);
 
                 AVStream* video_stream = fmt_ctx->streams[video_stream_idx];
+                // Header-only opening is intentionally used to avoid probing unsupported
+                // audio tracks. Some MOV files, however, expose their video duration only
+                // after packet probing. Probe after discarding every non-video stream, then
+                // reset to the beginning so extraction remains deterministic.
+                if (fmt_ctx->duration == AV_NOPTS_VALUE ||
+                    video_stream->duration == AV_NOPTS_VALUE) {
+                    if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+                        LOG_WARN("Could not complete video-only stream timing probe; sparse seeking may be unavailable");
+                    }
+                    av_seek_frame(fmt_ctx, video_stream_idx, 0, AVSEEK_FLAG_BACKWARD);
+                }
                 const AVCodecID codec_id = video_stream->codecpar->codec_id;
                 int dv_profile = 0;
                 int dv_compatibility = 0;
@@ -546,8 +565,15 @@ namespace lfs::io {
                     video_fps = validFrameRate(video_stream->r_frame_rate);
                 if (video_fps <= 0.0)
                     video_fps = 30.0;
-                const double video_duration = static_cast<double>(fmt_ctx->duration) / AV_TIME_BASE;
+                double video_duration = validDurationSeconds(fmt_ctx->duration, AVRational{1, AV_TIME_BASE});
+                if (video_duration <= 0.0)
+                    video_duration = validDurationSeconds(video_stream->duration, video_stream->time_base);
                 const double time_base = av_q2d(video_stream->time_base);
+
+                if (video_duration <= 0.0 && params.end_time <= 0.0) {
+                    error = "Could not determine video duration";
+                    throw std::runtime_error(error);
+                }
 
                 // Handle trim range
                 const double start_time = params.start_time;
@@ -699,6 +725,7 @@ namespace lfs::io {
                 int saved_count = 0;
                 int skipped_count = 0;
                 int written_count = 0;
+                int keyframe_seek_count = 0;
                 double current_frame_time = 0.0;
                 int current_src_frame = 0;
                 std::vector<void*> batch_gpu_ptrs;
@@ -731,6 +758,47 @@ namespace lfs::io {
                     double sharpness_score;
                 };
                 std::vector<FrameSaveInfo> saved_frames;
+
+                // Seeking is safe only when the requested output is sparse and
+                // no sharpness method needs to inspect surrounding frames. In
+                // particular, window mode must preserve its candidate scan.
+                const bool sparse_fps_request =
+                    params.mode == ExtractionMode::FPS && target_fps > 0.0 && video_fps > 0.0 &&
+                    target_fps * 3.0 < video_fps;
+                const bool seek_timestamps_available =
+                    std::isfinite(time_base) && time_base > 0.0 && std::isfinite(video_duration) &&
+                    video_duration > 0.0;
+                // A keyframe seek flushes and restarts the decoder. That is a
+                // net loss for software Dolby Vision: each restart reparses RPU
+                // data and discards frame-threaded decode work. Keep its native
+                // sequential path, which is both faster and RPU-consistent.
+                const bool decoder_supports_sparse_seek = using_hw_decode && dv_profile == 0;
+                const bool use_sparse_keyframe_seek =
+                    !params.sharpness.enabled && sparse_fps_request && seek_timestamps_available &&
+                    decoder_supports_sparse_seek;
+                const char* const frame_selection_reason = use_sparse_keyframe_seek
+                    ? "sparse_fps_keyframe_seek"
+                    : params.sharpness.window_mode
+                        ? "sharpness_window_requires_candidate_scan"
+                        : params.sharpness.enabled
+                            ? "sharpness_filter_uses_sequential_scan"
+                            : params.mode != ExtractionMode::FPS
+                                ? "interval_mode_preserves_frame_index_semantics"
+                                : dv_profile > 0
+                                    ? "dolby_vision_requires_sequential_decode"
+                                    : !using_hw_decode
+                                        ? "software_decoder_requires_sequential_decode"
+                                        : !sparse_fps_request
+                                            ? "request_is_not_sparse"
+                                            : "timestamps_unavailable";
+                if (use_sparse_keyframe_seek) {
+                    LOG_INFO("Sparse FPS extraction: keyframe seek enabled for {} targets; sharpness modes keep sequential decoding",
+                             estimated_total);
+                } else {
+                    LOG_INFO("Frame selection: sequential (reason={}, source_fps={:.3f}, requested_fps={:.3f}, "
+                             "estimated_targets={}, estimated_source_frames={})",
+                             frame_selection_reason, video_fps, target_fps, estimated_total, total_frames);
+                }
 
                 auto flush_jpeg_batch = [&]() {
                     if (batch_gpu_ptrs.empty())
@@ -1214,8 +1282,77 @@ namespace lfs::io {
                     throw_if_cancelled();
                 };
 
-                bool reached_end = false;
-                while (!reached_end && av_read_frame(fmt_ctx, packet) >= 0) {
+                if (use_sparse_keyframe_seek) {
+                    constexpr double TARGET_EPSILON = 1.0e-6;
+                    for (double target_time = start_time;
+                         target_time <= end_time + TARGET_EPSILON;
+                         target_time += target_interval) {
+                        throw_if_cancelled();
+                        const int64_t target_timestamp = static_cast<int64_t>(std::llround(target_time / time_base));
+                        if (av_seek_frame(fmt_ctx, video_stream_idx, target_timestamp, AVSEEK_FLAG_BACKWARD) < 0) {
+                            error = "Failed to seek to requested extraction timestamp";
+                            throw std::runtime_error(error);
+                        }
+                        ++keyframe_seek_count;
+                        avcodec_flush_buffers(codec_ctx);
+
+                        bool found_target = false;
+                        auto consume_sparse_frame = [&]() {
+                            ++decoded_frame_count;
+                            int64_t timestamp = frame->best_effort_timestamp;
+                            if (timestamp == AV_NOPTS_VALUE)
+                                timestamp = frame->pts;
+                            if (timestamp == AV_NOPTS_VALUE) {
+                                error = "Sparse extraction requires frame timestamps";
+                                throw std::runtime_error(error);
+                            }
+
+                            const double frame_time = static_cast<double>(timestamp) * time_base;
+                            if (frame_time + TARGET_EPSILON < target_time ||
+                                frame_time > end_time + TARGET_EPSILON)
+                                return;
+
+                            current_frame_time = frame_time;
+                            current_src_frame = std::max(
+                                1, static_cast<int>(std::llround(frame_time * video_fps)) + 1);
+                            if (using_hw_decode)
+                                process_frame_hw(frame);
+                            else
+                                process_frame_sw(frame);
+                            found_target = true;
+                        };
+                        while (!found_target && av_read_frame(fmt_ctx, packet) >= 0) {
+                            throw_if_cancelled();
+                            if (packet->stream_index == video_stream_idx &&
+                                avcodec_send_packet(codec_ctx, packet) == 0) {
+                                while (avcodec_receive_frame(codec_ctx, frame) == 0) {
+                                    consume_sparse_frame();
+                                    if (found_target)
+                                        break;
+                                }
+                            }
+                            av_packet_unref(packet);
+                        }
+
+                        // Frame-threaded HEVC can retain the target frame until the
+                        // decoder is drained, particularly near the end of a GOP.
+                        if (!found_target && avcodec_send_packet(codec_ctx, nullptr) >= 0) {
+                            while (avcodec_receive_frame(codec_ctx, frame) == 0) {
+                                consume_sparse_frame();
+                                if (found_target)
+                                    break;
+                            }
+                        }
+
+                        if (!found_target) {
+                            error = "Failed to decode a frame at requested extraction timestamp " +
+                                    std::to_string(target_time) + "s";
+                            throw std::runtime_error(error);
+                        }
+                    }
+                } else {
+                    bool reached_end = false;
+                    while (!reached_end && av_read_frame(fmt_ctx, packet) >= 0) {
                     throw_if_cancelled();
                     if (packet->stream_index == video_stream_idx) {
                         if (avcodec_send_packet(codec_ctx, packet) == 0) {
@@ -1280,13 +1417,13 @@ namespace lfs::io {
                             }
                         }
                     }
-                    av_packet_unref(packet);
-                }
+                        av_packet_unref(packet);
+                    }
 
-                // Flush decoder (only if we haven't reached end time)
-                if (!reached_end) {
-                    avcodec_send_packet(codec_ctx, nullptr);
-                    while (avcodec_receive_frame(codec_ctx, frame) == 0) {
+                    // Flush decoder (only if we haven't reached end time)
+                    if (!reached_end) {
+                        avcodec_send_packet(codec_ctx, nullptr);
+                        while (avcodec_receive_frame(codec_ctx, frame) == 0) {
                         throw_if_cancelled();
                         const double frame_time =
                             frameTimestampSeconds(frame, time_base, decoded_frame_count++, video_fps);
@@ -1340,6 +1477,7 @@ namespace lfs::io {
                                 process_frame_sw(frame);
                             }
                         }
+                        }
                     }
                 }
 
@@ -1356,6 +1494,113 @@ namespace lfs::io {
                 if (params.generate_metadata && !saved_frames.empty()) {
                     try {
                         nlohmann::json root;
+                        root["schema_version"] = 2;
+
+                        // Structured fields are intentionally kept alongside
+                        // the legacy top-level keys below, so existing tools
+                        // can continue reading extraction_metadata.json.
+                        AVPixelFormat input_pixel_format = codec_ctx->pix_fmt;
+                        if (input_pixel_format == AV_PIX_FMT_NONE)
+                            input_pixel_format = static_cast<AVPixelFormat>(video_stream->codecpar->format);
+                        const AVPixFmtDescriptor* const input_pixel_descriptor =
+                            av_pix_fmt_desc_get(input_pixel_format);
+                        const int input_bit_depth = input_pixel_descriptor
+                            ? input_pixel_descriptor->comp[0].depth
+                            : 0;
+                        const char* const input_primaries_name = av_color_primaries_name(
+                            static_cast<AVColorPrimaries>(video_stream->codecpar->color_primaries));
+                        const char* const input_transfer_name = av_color_transfer_name(
+                            static_cast<AVColorTransferCharacteristic>(video_stream->codecpar->color_trc));
+                        const char* const input_space_name = av_color_space_name(
+                            static_cast<AVColorSpace>(video_stream->codecpar->color_space));
+                        const char* const input_range_name = av_color_range_name(
+                            static_cast<AVColorRange>(video_stream->codecpar->color_range));
+                        root["input"] = {
+                            {"file", lfs::core::path_to_utf8(params.video_path)},
+                            {"container", fmt_ctx->iformat && fmt_ctx->iformat->name
+                                              ? fmt_ctx->iformat->name
+                                              : "unknown"},
+                            {"video", {
+                                {"codec", codec && codec->name ? codec->name : "unknown"},
+                                {"pixel_format", pixelFormatName(input_pixel_format)},
+                                {"bit_depth", input_bit_depth},
+                                {"size", {src_width, src_height}},
+                                {"fps", video_fps},
+                                {"duration_seconds", video_duration},
+                                {"color", {
+                                    {"primaries", {{"code", static_cast<int>(video_stream->codecpar->color_primaries)},
+                                                     {"name", input_primaries_name ? input_primaries_name : "unknown"}}},
+                                    {"transfer", {{"code", static_cast<int>(video_stream->codecpar->color_trc)},
+                                                    {"name", input_transfer_name ? input_transfer_name : "unknown"}}},
+                                    {"matrix", {{"code", static_cast<int>(video_stream->codecpar->color_space)},
+                                                  {"name", input_space_name ? input_space_name : "unknown"}}},
+                                    {"range", {{"code", static_cast<int>(video_stream->codecpar->color_range)},
+                                                 {"name", input_range_name ? input_range_name : "unknown"}}},
+                                }},
+                            }},
+                            {"hdr", {
+                                {"detected", isHdrFormat(hdr_format)},
+                                {"format", hdrFormatLabel(hdr_format)},
+                                {"dolby_vision_profile", dv_profile},
+                                {"dolby_vision_compatibility_id", dv_compatibility},
+                                {"source_bit_depth", input_bit_depth},
+                            }},
+                        };
+                        root["output"] = {
+                            {"format", params.format == ImageFormat::PNG ? "png" : "jpg"},
+                            {"size", (params.rotation == 90 || params.rotation == 270)
+                                         ? nlohmann::json{out_height, out_width}
+                                         : nlohmann::json{out_width, out_height}},
+                            {"bit_depth", 8},
+                            {"pixel_format", "rgb24"},
+                            {"color_space", convert_hdr_to_sdr ? "sRGB / BT.709" : "source conversion"},
+                            {"hdr_to_sdr", convert_hdr_to_sdr},
+                            {"jpeg_quality", params.jpg_quality},
+                        };
+                        root["processing"] = {
+                            {"decoder", {
+                                {"backend", using_hw_decode ? "nvdec" : "ffmpeg_software"},
+                                {"name", codec && codec->name ? codec->name : "unknown"},
+                                {"threads", using_hw_decode ? 0 : codec_ctx->thread_count},
+                            }},
+                            {"tone_mapping", {
+                                {"backend", convert_hdr_to_sdr ? "libplacebo_vulkan" : "none"},
+                                {"enabled", convert_hdr_to_sdr},
+                                {"output", convert_hdr_to_sdr ? "sdr_8bit_srgb_bt709" : "source"},
+                            }},
+                            {"image_encoder", {
+                                {"backend", gpu_encoding_enabled ? "nvimagecodec_cuda" : "cpu"},
+                                {"batch_size", gpu_encoding_enabled ? JPEG_BATCH_SIZE : 1},
+                            }},
+                            {"frame_selection", {
+                                {"strategy", use_sparse_keyframe_seek ? "keyframe_seek" : "sequential"},
+                                {"reason", frame_selection_reason},
+                                {"keyframe_seek_count", keyframe_seek_count},
+                                {"source_fps", video_fps},
+                                {"requested_fps", params.mode == ExtractionMode::FPS ? params.fps : 0.0},
+                                {"estimated_targets", estimated_total},
+                                {"estimated_source_frames", total_frames},
+                                {"sharpness_enabled", params.sharpness.enabled},
+                                {"sharpness_window_mode", params.sharpness.window_mode},
+                            }},
+                        };
+                        root["performance"] = {
+                            {"decoded_frames", decoded_frame_count},
+                            {"selected_frames", saved_count},
+                            {"written_frames", written_count},
+                            {"discarded_frames", skipped_count},
+                            {"timing_seconds", {
+                                {"total", elapsedSeconds(extraction_started)},
+                                {"tonemap_initialization", hdr_timing_total.initialization_seconds},
+                                {"tonemap_render", hdr_timing_total.render_seconds},
+                                {"tone_map_readback", hdr_timing_total.readback_seconds},
+                                {"rgba_to_rgb", hdr_timing_total.rgba_to_rgb_seconds},
+                                {"cuda_upload", cuda_upload_seconds},
+                                {"jpeg_encode", jpeg_encode_seconds},
+                                {"file_write", jpeg_write_seconds},
+                            }},
+                        };
+
                         root["source_file"] = lfs::core::path_to_utf8(params.video_path);
                         root["source_fps"] = video_fps;
                         root["trimmed_source_frames"] = total_frames;

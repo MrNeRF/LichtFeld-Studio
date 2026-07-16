@@ -1506,6 +1506,7 @@
     "candidates_all": "Wszystkie klatki",
     "candidates_readout_fmt": "%d / ~%d klatek",
     "generate_metadata": "Generuj JSON metadanych",
+    "convert_hdr_to_sdr": "Konwertuj HDR do SDR (8-bit)",
     "overwrite_prompt": "Folder wyjściowy zawiera już wyodrębnione klatki lub metadane ekstrakcji. Usunąć tylko wygenerowane pliki w tym folderze?",
     "overwrite_clear": "Kontynuuj",
     "overwrite_cancel": "Anuluj",

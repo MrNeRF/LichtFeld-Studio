@@ -1528,6 +1528,7 @@
     "candidates_all": "所有帧",
     "candidates_readout_fmt": "%d / ~%d 帧",
     "generate_metadata": "生成元数据JSON",
+    "convert_hdr_to_sdr": "将 HDR 转换为 SDR（8 位）",
     "overwrite_prompt": "输出文件夹已包含提取的帧或提取元数据。是否仅删除此文件夹中生成的文件？",
     "overwrite_clear": "继续",
     "overwrite_cancel": "取消",

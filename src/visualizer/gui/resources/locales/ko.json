@@ -1506,6 +1506,7 @@
     "candidates_all": "모든 프레임",
     "candidates_readout_fmt": "%d / ~%d 프레임",
     "generate_metadata": "메타데이터 JSON 생성",
+    "convert_hdr_to_sdr": "HDR을 SDR로 변환(8비트)",
     "overwrite_prompt": "출력 폴더에 이미 추출된 프레임 또는 추출 메타데이터가 있습니다. 이 폴더의 생성된 파일만 삭제하시겠습니까?",
     "overwrite_clear": "진행",
     "overwrite_cancel": "취소",

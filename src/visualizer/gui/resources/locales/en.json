@@ -1529,6 +1529,7 @@
     "candidates_all": "All frames",
     "candidates_readout_fmt": "%d / ~%d frames",
     "generate_metadata": "Generate metadata JSON",
+    "convert_hdr_to_sdr": "Convert HDR to SDR (8-bit)",
     "overwrite_prompt": "Output folder already contains extracted frames or extraction metadata. Remove generated files in this folder and proceed?",
     "overwrite_clear": "Proceed",
     "overwrite_cancel": "Cancel",
