@@ -6,7 +6,9 @@
 #include "core/animatable_property.hpp"
 #include "core/cuda_error.hpp"
 #include "core/data_loading_service.hpp"
+#include "core/error_reporter.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
@@ -91,34 +93,60 @@ namespace lfs::vis {
 
         void cancelRemainingWork(std::vector<Visualizer::WorkItem>& work,
                                  const size_t first,
-                                 const std::string_view queue_name) noexcept {
+                                 const std::string_view queue_name,
+                                 const std::thread::id owner_thread) noexcept {
             for (size_t i = first; i < work.size(); ++i) {
-                try {
-                    if (work[i].cancel)
+                if (!work[i].cancel)
+                    continue;
+                lfs::core::run_guarded<void>(
+                    lfs::core::TaskContext{
+                        .name = std::format("{}.cancel", queue_name),
+                        .domain = lfs::ErrorDomain::Core,
+                        .operation_id = lfs::OperationId::generate(),
+                        .site = LFS_SOURCE_SITE_CURRENT(),
+                        .expected_thread = owner_thread,
+                    },
+                    [&work, i]() -> lfs::Result<void> {
                         work[i].cancel();
-                } catch (const std::exception& e) {
-                    LOG_ERROR("Exception while cancelling {} work: {}", queue_name, e.what());
-                } catch (...) {
-                    LOG_ERROR("Unknown exception while cancelling {} work", queue_name);
-                }
+                        return {};
+                    },
+                    [](lfs::Result<void>&& result) {
+                        if (!result) {
+                            lfs::core::ErrorReporter::get().report(result.error(), lfs::core::ReportChannel::OwnerLog);
+                        }
+                    });
             }
         }
 
         // Posted work is an external callback boundary. A failing item may report
         // through its own promise, but must never unwind the GUI frame loop.
         void runPostedWork(std::vector<Visualizer::WorkItem>& work,
-                           const std::string_view queue_name) noexcept {
+                           const std::string_view queue_name,
+                           const std::thread::id owner_thread) noexcept {
             for (size_t i = 0; i < work.size(); ++i) {
-                try {
-                    if (work[i].run)
+                if (!work[i].run)
+                    continue;
+                bool item_failed = false;
+                lfs::core::run_guarded<void>(
+                    lfs::core::TaskContext{
+                        .name = std::string(queue_name),
+                        .domain = lfs::ErrorDomain::Core,
+                        .operation_id = lfs::OperationId::generate(),
+                        .site = LFS_SOURCE_SITE_CURRENT(),
+                        .expected_thread = owner_thread,
+                    },
+                    [&work, i]() -> lfs::Result<void> {
                         work[i].run();
-                } catch (const std::exception& e) {
-                    LOG_ERROR("Exception in {} work: {}", queue_name, e.what());
-                    cancelRemainingWork(work, i + 1, queue_name);
-                    return;
-                } catch (...) {
-                    LOG_ERROR("Unknown exception in {} work", queue_name);
-                    cancelRemainingWork(work, i + 1, queue_name);
+                        return {};
+                    },
+                    [&item_failed](lfs::Result<void>&& result) {
+                        if (!result) {
+                            item_failed = true;
+                            lfs::core::ErrorReporter::get().report(result.error(), lfs::core::ReportChannel::OwnerLog);
+                        }
+                    });
+                if (item_failed) {
+                    cancelRemainingWork(work, i + 1, queue_name, owner_thread);
                     return;
                 }
             }
@@ -1207,7 +1235,7 @@ namespace lfs::vis {
                 work.swap(work_queue_);
             }
             update_work_processed_ = !work.empty();
-            runPostedWork(work, "viewer");
+            runPostedWork(work, "viewer", viewer_thread_id_);
         }
 
         if (gui_manager_) {
@@ -1295,7 +1323,7 @@ namespace lfs::vis {
             return;
 
         processing_render_work_ = true;
-        runPostedWork(render_work, "render");
+        runPostedWork(render_work, "render", viewer_thread_id_);
         processing_render_work_ = false;
     }
 

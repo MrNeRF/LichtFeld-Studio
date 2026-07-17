@@ -491,6 +491,23 @@ TEST(ExceptionCore, CatchableAsStdException) {
     EXPECT_TRUE(caught_as_std_exception);
 }
 
+TEST(ErrorCoreLegacyBridge, VoidFailurePreservesDisplayMessage) {
+    auto result = from_legacy_expected<void>(
+        std::expected<void, std::string>(std::unexpected("Viewer is shutting down")),
+        LegacyErrorContext{
+            .code = ErrorCode::Internal,
+            .domain = ErrorDomain::Rendering,
+            .operation = "clearScene",
+            .source = LFS_SOURCE_SITE_CURRENT(),
+        });
+
+    ASSERT_FALSE(result);
+    const auto& error = result.error();
+    const std::string display_message(
+        error.user_message().empty() ? error.detail() : error.user_message());
+    EXPECT_EQ(display_message, "Viewer is shutting down");
+}
+
 // ---------------------------------------------------------------------------
 // OOM-safe seed: forced allocation failure, not a real OOM
 // ---------------------------------------------------------------------------

@@ -4,6 +4,10 @@
 
 #include "tcp_responder.hpp"
 
+#include "core/error.hpp"
+#include "core/error_reporter.hpp"
+#include "core/guarded_task.hpp"
+
 namespace lfs::tcp {
 
     ResponderServer::ResponderServer(int port, std::shared_ptr<lfs::vis::TrainerManager> trainer_manager_)
@@ -19,7 +23,24 @@ namespace lfs::tcp {
 
     void ResponderServer::start() {
         running_ = true;
-        response_thread_ = std::thread(&ResponderServer::run, this);
+        response_thread_ = std::thread([this] {
+            lfs::core::run_guarded<void>(
+                lfs::core::TaskContext{
+                    .name = "tcp.responder-thread",
+                    .domain = lfs::ErrorDomain::TCP,
+                    .operation_id = lfs::OperationId::generate(),
+                    .site = LFS_SOURCE_SITE_CURRENT(),
+                },
+                [this]() -> lfs::Result<void> {
+                    run();
+                    return {};
+                },
+                [](lfs::Result<void>&& result) {
+                    if (!result) {
+                        lfs::core::ErrorReporter::get().report(result.error(), lfs::core::ReportChannel::OwnerLog);
+                    }
+                });
+        });
     }
 
     void ResponderServer::stop() {

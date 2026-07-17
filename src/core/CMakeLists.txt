@@ -52,6 +52,7 @@ set(CORE_SOURCES
         cuda_error.cpp
         error.cpp
         error_reporter.cpp
+        guarded_task.cpp
         failure_report.cpp
         memory_pressure.cpp
         operator_callbacks.cpp

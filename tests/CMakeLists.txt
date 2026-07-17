@@ -230,6 +230,8 @@ set(TEST_FILES
     test_memory_pressure.cpp
     test_error_core.cpp
     test_error_reporter.cpp
+    test_run_guarded.cpp
+    test_tcp_responder.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)

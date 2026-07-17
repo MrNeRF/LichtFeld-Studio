@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training/training_manager.hpp"
+#include "core/error_reporter.hpp"
 #include "core/events.hpp"
+#include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/scene.hpp"
@@ -962,30 +964,44 @@ namespace lfs::vis {
         LOG_INFO("Training thread started");
         LOG_TIMER("Training execution");
 
-        try {
-            trainer_->setOnIterationStart([this] {
-                if (auto* pm = services().paramsOrNull(); pm && pm->consumeDirty()) {
-                    applyPendingParams();
+        trainer_->setOnIterationStart([this] {
+            if (auto* pm = services().paramsOrNull(); pm && pm->consumeDirty()) {
+                applyPendingParams();
+            }
+        });
+
+        lfs::core::run_guarded<void>(
+            lfs::core::TaskContext{
+                .name = "training-worker",
+                .domain = lfs::ErrorDomain::Training,
+                .operation_id = lfs::OperationId::generate(),
+                .site = LFS_SOURCE_SITE_CURRENT(),
+            },
+            [this, stop_token]() -> lfs::Result<void> {
+                LOG_DEBUG("Starting trainer->train() with stop token");
+                return lfs::from_legacy_expected<void>(
+                    trainer_->train(stop_token),
+                    lfs::LegacyErrorContext{
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::Training,
+                        .operation = "train",
+                        .source = LFS_SOURCE_SITE_CURRENT(),
+                    });
+            },
+            [this](lfs::Result<void>&& result) {
+                if (result) {
+                    LOG_INFO("Training completed successfully");
+                    handleTrainingComplete(true);
+                } else {
+                    const auto& error = result.error();
+                    const std::string message =
+                        error.user_message().empty() ? std::string(error.detail())
+                                                     : std::string(error.user_message());
+                    LOG_ERROR("Training failed: {}", message);
+                    lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
+                    handleTrainingComplete(false, message);
                 }
             });
-
-            LOG_DEBUG("Starting trainer->train() with stop token");
-            auto train_result = trainer_->train(stop_token);
-
-            if (!train_result) {
-                LOG_ERROR("Training failed: {}", train_result.error());
-                handleTrainingComplete(false, train_result.error());
-            } else {
-                LOG_INFO("Training completed successfully");
-                handleTrainingComplete(true);
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("Exception in training thread: {}", e.what());
-            handleTrainingComplete(false, std::format("Exception in training: {}", e.what()));
-        } catch (...) {
-            LOG_CRITICAL("Unknown exception in training thread");
-            handleTrainingComplete(false, "Unknown exception in training");
-        }
 
         LOG_INFO("Training thread finished");
     }

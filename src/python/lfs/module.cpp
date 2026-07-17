@@ -44,9 +44,11 @@
 
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
+#include "core/error.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
+#include "core/guarded_task.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
@@ -74,6 +76,7 @@
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/training/training_manager.hpp"
@@ -146,32 +149,39 @@ namespace {
             return viewer.clearScene();
         }
 
-        auto promise = std::make_shared<std::promise<std::expected<void, std::string>>>();
-        auto future = promise->get_future();
-        auto completed = std::make_shared<std::atomic_bool>(false);
-
-        auto finish = [promise, completed](std::expected<void, std::string> result) mutable {
-            if (!completed->exchange(true)) {
-                promise->set_value(std::move(result));
-            }
+        const lfs::core::TaskContext context{
+            .name = "python.clear_scene",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
         };
 
-        const bool posted = viewer.postWork(lfs::vis::Visualizer::WorkItem{
-            .run =
-                [&viewer, finish]() mutable {
-                    finish(viewer.clearScene());
-                },
-            .cancel =
-                [finish]() mutable {
-                    finish(std::unexpected("Viewer is shutting down"));
-                },
-        });
+        lfs::Result<void> result = lfs::vis::post_guarded_and_wait<void>(
+            viewer, context,
+            [&viewer]() -> lfs::Result<void> {
+                return lfs::from_legacy_expected<void>(
+                    viewer.clearScene(),
+                    lfs::LegacyErrorContext{
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::Rendering,
+                        .operation = "clearScene",
+                        .source = LFS_SOURCE_SITE_CURRENT(),
+                    });
+            },
+            lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Cancelled,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Warning,
+                .detail = "Viewer is shutting down",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
 
-        if (!posted) {
-            return std::unexpected("Viewer is shutting down");
+        if (!result) {
+            const auto& error = result.error();
+            return std::unexpected(std::string(
+                error.user_message().empty() ? error.detail() : error.user_message()));
         }
-
-        return future.get();
+        return {};
     }
 
     std::expected<void, std::string> clear_scene_from_python() {
