@@ -1713,7 +1713,15 @@
     "save_failed": "Speichern fehlgeschlagen",
     "generic": "Fehler",
     "oom_heading": "GPU-Speicher erschöpft!",
-    "oom_suggestions": "Vorschläge:\n  - Maximale Anzahl an Gaussians reduzieren (max_cap)\n  - Grad der sphärischen Harmonischen verringern (sh_degree)\n  - Bildauflösung reduzieren (resize_factor)\n  - Kachelmodus für große Bilder aktivieren"
+    "oom_suggestions": "Vorschläge:\n  - Maximale Anzahl an Gaussians reduzieren (max_cap)\n  - Grad der sphärischen Harmonischen verringern (sh_degree)\n  - Bildauflösung reduzieren (resize_factor)\n  - Kachelmodus für große Bilder aktivieren",
+    "renderer_device_lost": "Grafikgerät verloren",
+    "renderer_device_lost_body": "Das Grafikgerät ging verloren und das Rendering wurde gestoppt. Ihre Sitzung bleibt nach Möglichkeit erhalten. Bitte starten Sie LichtFeld Studio neu; falls dies erneut auftritt, aktualisieren Sie Ihren GPU-Treiber.",
+    "renderer_stalled": "Renderer blockiert",
+    "renderer_stalled_body": "Die GPU reagierte nicht mehr und das Rendering wurde angehalten, um die Anwendung nutzbar zu halten. Bitte starten Sie LichtFeld Studio neu.",
+    "renderer_failed": "Renderer-Fehler",
+    "renderer_failed_body": "Der Viewport-Renderer stieß auf einen wiederholten internen Fehler und wurde gestoppt. Wiederholen Sie das Rendering oder lassen Sie es gestoppt und speichern Sie Ihre Arbeit.",
+    "oom_render_paused": "Das Rendering ist nach wiederholtem GPU-Speichermangel pausiert; das zuletzt fertiggestellte Bild wird angezeigt. Geben Sie GPU-Speicher frei und versuchen Sie es erneut.",
+    "gpu_pressure_retrying": "GPU-Speicherdruck – Freigabe und erneuter Versuch."
   },
   "context_menu": {
     "snap_interval": "Rasterintervall",

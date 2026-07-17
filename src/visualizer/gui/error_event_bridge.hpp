@@ -33,6 +33,7 @@ namespace lfs::vis::gui {
         inline constexpr const char* kFileDrop = "open_dropped_files";
         inline constexpr const char* kCudaCheck = "cuda_check";
         inline constexpr const char* kSave = "save";
+        inline constexpr const char* kRenderFrame = "render_frame";
     } // namespace error_op
 
     LFS_VIS_API std::optional<lfs::ErrorNotification>
@@ -55,6 +56,11 @@ namespace lfs::vis::gui {
     translateCudaVersionUnsupported(const core::events::state::CudaVersionUnsupported& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateDiskSpaceSaveFailed(const core::events::state::DiskSpaceSaveFailed& e);
+
+    // Reveals the durable default log file in the OS file manager when the user
+    // presses Open Log. Shared by the event bridge and the frame-state modals so
+    // the reveal logic lives in exactly one place. Runs on the UI thread.
+    LFS_VIS_API lfs::ErrorAction openLogAction();
 
     // Subscribes every translate function above to EventBridge, publishing each
     // non-null result to ErrorBus::instance(). Independent of Python init.

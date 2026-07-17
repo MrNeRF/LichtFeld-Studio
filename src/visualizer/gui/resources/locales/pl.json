@@ -1713,7 +1713,15 @@
     "save_failed": "Zapisywanie nie powiodło się",
     "generic": "Błąd",
     "oom_heading": "Brak pamięci GPU!",
-    "oom_suggestions": "Sugestie:\n  - Zmniejsz maksymalną liczbę Gaussians (max_cap)\n  - Obniż stopień harmonik sferycznych (sh_degree)\n  - Zmniejsz rozdzielczość obrazu (resize_factor)\n  - Włącz tryb kafelków dla dużych obrazów"
+    "oom_suggestions": "Sugestie:\n  - Zmniejsz maksymalną liczbę Gaussians (max_cap)\n  - Obniż stopień harmonik sferycznych (sh_degree)\n  - Zmniejsz rozdzielczość obrazu (resize_factor)\n  - Włącz tryb kafelków dla dużych obrazów",
+    "renderer_device_lost": "Utracono urządzenie graficzne",
+    "renderer_device_lost_body": "Urządzenie graficzne zostało utracone i renderowanie zostało zatrzymane. Sesja jest zachowywana w miarę możliwości. Uruchom ponownie LichtFeld Studio; jeśli to się powtórzy, zaktualizuj sterownik GPU.",
+    "renderer_stalled": "Renderer zablokowany",
+    "renderer_stalled_body": "Praca GPU przestała odpowiadać i renderowanie zostało wstrzymane, aby aplikacja pozostała użyteczna. Uruchom ponownie LichtFeld Studio.",
+    "renderer_failed": "Błąd renderera",
+    "renderer_failed_body": "Renderer widoku napotkał powtarzający się błąd wewnętrzny i został zatrzymany. Spróbuj renderować ponownie lub pozostaw go zatrzymanym i zapisz swoją pracę.",
+    "oom_render_paused": "Renderowanie jest wstrzymane po powtarzającym się wyczerpaniu pamięci GPU; wyświetlana jest ostatnia ukończona klatka. Zwolnij pamięć GPU, a następnie spróbuj ponownie.",
+    "gpu_pressure_retrying": "Obciążenie pamięci GPU — zwalnianie i ponawianie próby."
   },
   "context_menu": {
     "snap_interval": "Interwał siatki",

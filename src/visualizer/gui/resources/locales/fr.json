@@ -1713,7 +1713,15 @@
     "save_failed": "Échec de l'enregistrement",
     "generic": "Erreur",
     "oom_heading": "Mémoire GPU insuffisante !",
-    "oom_suggestions": "Suggestions :\n  - Réduire le nombre maximal de Gaussians (max_cap)\n  - Diminuer le degré des harmoniques sphériques (sh_degree)\n  - Réduire la résolution de l'image (resize_factor)\n  - Activer le mode tuile pour les grandes images"
+    "oom_suggestions": "Suggestions :\n  - Réduire le nombre maximal de Gaussians (max_cap)\n  - Diminuer le degré des harmoniques sphériques (sh_degree)\n  - Réduire la résolution de l'image (resize_factor)\n  - Activer le mode tuile pour les grandes images",
+    "renderer_device_lost": "Périphérique graphique perdu",
+    "renderer_device_lost_body": "Le périphérique graphique a été perdu et le rendu s'est arrêté. Votre session est préservée dans la mesure du possible. Veuillez redémarrer LichtFeld Studio ; si cela se reproduit, mettez à jour le pilote de votre GPU.",
+    "renderer_stalled": "Moteur de rendu bloqué",
+    "renderer_stalled_body": "Le travail du GPU a cessé de répondre et le rendu a été arrêté pour garder l'application utilisable. Veuillez redémarrer LichtFeld Studio.",
+    "renderer_failed": "Erreur du moteur de rendu",
+    "renderer_failed_body": "Le moteur de rendu de la fenêtre a rencontré une erreur interne répétée et a été arrêté. Réessayez le rendu, ou laissez-le arrêté et enregistrez votre travail.",
+    "oom_render_paused": "Le rendu est en pause après un épuisement répété de la mémoire du GPU ; la dernière image terminée est affichée. Libérez de la mémoire GPU, puis réessayez.",
+    "gpu_pressure_retrying": "Pression sur la mémoire GPU — récupération et nouvelle tentative."
   },
   "context_menu": {
     "snap_interval": "Intervalle de grille",

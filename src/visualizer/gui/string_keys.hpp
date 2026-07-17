@@ -968,6 +968,14 @@ namespace lichtfeld::Strings {
         inline constexpr const char* OOM_SUGGESTIONS = "error_modal.oom_suggestions";
         inline constexpr const char* DETAILS = "error_modal.details";
         inline constexpr const char* REPEATED = "error_modal.repeated";
+        inline constexpr const char* RENDERER_DEVICE_LOST = "error_modal.renderer_device_lost";
+        inline constexpr const char* RENDERER_DEVICE_LOST_BODY = "error_modal.renderer_device_lost_body";
+        inline constexpr const char* RENDERER_STALLED = "error_modal.renderer_stalled";
+        inline constexpr const char* RENDERER_STALLED_BODY = "error_modal.renderer_stalled_body";
+        inline constexpr const char* RENDERER_FAILED = "error_modal.renderer_failed";
+        inline constexpr const char* RENDERER_FAILED_BODY = "error_modal.renderer_failed_body";
+        inline constexpr const char* OOM_RENDER_PAUSED = "error_modal.oom_render_paused";
+        inline constexpr const char* GPU_PRESSURE_RETRYING = "error_modal.gpu_pressure_retrying";
     } // namespace ErrorModal
 
     namespace ErrorActions {

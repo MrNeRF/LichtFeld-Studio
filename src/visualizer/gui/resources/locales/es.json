@@ -1713,7 +1713,15 @@
     "save_failed": "Error al guardar",
     "generic": "Error",
     "oom_heading": "¡Sin memoria de GPU!",
-    "oom_suggestions": "Sugerencias:\n  - Reducir el máximo de Gaussians (max_cap)\n  - Bajar el grado de armónicos esféricos (sh_degree)\n  - Reducir la resolución de imagen (resize_factor)\n  - Activar el modo de mosaico para imágenes grandes"
+    "oom_suggestions": "Sugerencias:\n  - Reducir el máximo de Gaussians (max_cap)\n  - Bajar el grado de armónicos esféricos (sh_degree)\n  - Reducir la resolución de imagen (resize_factor)\n  - Activar el modo de mosaico para imágenes grandes",
+    "renderer_device_lost": "Dispositivo gráfico perdido",
+    "renderer_device_lost_body": "Se perdió el dispositivo gráfico y se detuvo el renderizado. Su sesión se conserva cuando es posible. Reinicie LichtFeld Studio; si esto se repite, actualice el controlador de su GPU.",
+    "renderer_stalled": "Renderizador bloqueado",
+    "renderer_stalled_body": "El trabajo de la GPU dejó de responder y se detuvo el renderizado para mantener la aplicación utilizable. Reinicie LichtFeld Studio.",
+    "renderer_failed": "Error del renderizador",
+    "renderer_failed_body": "El renderizador del visor sufrió un error interno repetido y se detuvo. Reintente el renderizado, o manténgalo detenido y guarde su trabajo.",
+    "oom_render_paused": "El renderizado está en pausa tras un agotamiento repetido de la memoria de la GPU; se muestra el último fotograma completado. Libere memoria de la GPU y reintente.",
+    "gpu_pressure_retrying": "Presión de memoria de la GPU: recuperando y reintentando."
   },
   "context_menu": {
     "snap_interval": "Intervalo de Ajuste",

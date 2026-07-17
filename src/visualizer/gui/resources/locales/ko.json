@@ -1713,7 +1713,15 @@
     "save_failed": "저장 실패",
     "generic": "오류",
     "oom_heading": "GPU 메모리가 부족합니다!",
-    "oom_suggestions": "제안:\n  - 최대 가우시안 수 줄이기 (max_cap)\n  - 구면 조화 차수 낮추기 (sh_degree)\n  - 이미지 해상도 줄이기 (resize_factor)\n  - 큰 이미지에 타일 모드 활성화"
+    "oom_suggestions": "제안:\n  - 최대 가우시안 수 줄이기 (max_cap)\n  - 구면 조화 차수 낮추기 (sh_degree)\n  - 이미지 해상도 줄이기 (resize_factor)\n  - 큰 이미지에 타일 모드 활성화",
+    "renderer_device_lost": "그래픽 장치 손실됨",
+    "renderer_device_lost_body": "그래픽 장치가 손실되어 렌더링이 중지되었습니다. 가능한 경우 세션이 보존됩니다. LichtFeld Studio를 다시 시작하세요. 이 문제가 반복되면 GPU 드라이버를 업데이트하세요.",
+    "renderer_stalled": "렌더러 멈춤",
+    "renderer_stalled_body": "GPU 작업이 응답을 멈춰 애플리케이션을 사용할 수 있도록 렌더링을 중지했습니다. LichtFeld Studio를 다시 시작하세요.",
+    "renderer_failed": "렌더러 오류",
+    "renderer_failed_body": "뷰포트 렌더러에서 내부 오류가 반복되어 중지되었습니다. 렌더링을 다시 시도하거나 중지된 상태로 두고 작업을 저장하세요.",
+    "oom_render_paused": "GPU 메모리 부족이 반복되어 렌더링이 일시 중지되었습니다. 마지막으로 완료된 프레임이 표시됩니다. GPU 메모리를 확보한 후 다시 시도하세요.",
+    "gpu_pressure_retrying": "GPU 메모리 부하 — 회수 후 재시도 중."
   },
   "context_menu": {
     "snap_interval": "스냅 간격",

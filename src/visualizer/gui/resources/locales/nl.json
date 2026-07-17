@@ -1713,7 +1713,15 @@
     "save_failed": "Opslaan mislukt",
     "generic": "Fout",
     "oom_heading": "Onvoldoende GPU-geheugen!",
-    "oom_suggestions": "Suggesties:\n  - Verlaag het maximale aantal Gaussians (max_cap)\n  - Verlaag de graad van sferische harmonischen (sh_degree)\n  - Verlaag de beeldresolutie (resize_factor)\n  - Schakel tegelmodus in voor grote afbeeldingen"
+    "oom_suggestions": "Suggesties:\n  - Verlaag het maximale aantal Gaussians (max_cap)\n  - Verlaag de graad van sferische harmonischen (sh_degree)\n  - Verlaag de beeldresolutie (resize_factor)\n  - Schakel tegelmodus in voor grote afbeeldingen",
+    "renderer_device_lost": "Grafisch apparaat verloren",
+    "renderer_device_lost_body": "Het grafische apparaat is verloren gegaan en het renderen is gestopt. Uw sessie blijft waar mogelijk behouden. Start LichtFeld Studio opnieuw op; als dit zich herhaalt, werk dan uw GPU-stuurprogramma bij.",
+    "renderer_stalled": "Renderer vastgelopen",
+    "renderer_stalled_body": "Het GPU-werk reageerde niet meer en het renderen is gestopt om de applicatie bruikbaar te houden. Start LichtFeld Studio opnieuw op.",
+    "renderer_failed": "Rendererfout",
+    "renderer_failed_body": "De viewport-renderer liep tegen een herhaalde interne fout aan en is gestopt. Probeer het renderen opnieuw, of laat het gestopt en sla uw werk op.",
+    "oom_render_paused": "Het renderen is gepauzeerd na herhaald tekort aan GPU-geheugen; het laatst voltooide frame wordt getoond. Maak GPU-geheugen vrij en probeer het opnieuw.",
+    "gpu_pressure_retrying": "GPU-geheugendruk — vrijmaken en opnieuw proberen."
   },
   "context_menu": {
     "snap_interval": "Rasterinterval",

@@ -6,6 +6,7 @@
 #include "core/error_codes.hpp"
 #include "core/error_reporter.hpp"
 #include "core/events.hpp"
+#include "core/frame_state_machine.hpp"
 #include "core/modal_request.hpp"
 #include "core/source_site.hpp"
 #include "gui/error_event_bridge.hpp"
@@ -13,6 +14,7 @@
 #include "gui/gui_error_consumer.hpp"
 #include "gui/rml_status_bar.hpp"
 #include "gui/rml_toast_overlay.hpp"
+#include "gui/string_keys.hpp"
 
 #include <gtest/gtest.h>
 
@@ -554,6 +556,7 @@ TEST(GuiErrorConsumerTest, ModalGainsDetailsButton) {
 
 TEST(GuiErrorConsumerTest, DetailsButtonEnqueuesDetailsModal) {
     std::vector<lfs::core::ModalRequest> modals;
+    modals.reserve(2);
     lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
         .modal = [&](lfs::core::ModalRequest r) { modals.push_back(std::move(r)); },
         .toast = {},
@@ -616,4 +619,242 @@ TEST(GuiErrorConsumerTest, SuppressedRepeatsRenderInBody) {
 
     ASSERT_TRUE(modal.has_value());
     EXPECT_NE(modal->body_rml.find("x12"), std::string::npos);
+}
+
+// P3 §4.1: the new titleKeyFor Vulkan/Rendering mapping, verified through the
+// public consumer boundary. LOC headless returns the key, so assert the key.
+TEST(GuiErrorConsumerTest, VulkanDeviceLostMapsToDeviceLostTitle) {
+    std::optional<lfs::core::ModalRequest> modal;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest r) { modal = std::move(r); },
+        .toast = {},
+        .status = {}});
+    consumer.on_error(consumerNotification(
+                          makeError(lfs::ErrorCode::DeviceLost, lfs::ErrorDomain::Vulkan, "lost"),
+                          lfs::ErrorSurface::Modal),
+                      lfs::ErrorDeliveryInfo{});
+    ASSERT_TRUE(modal.has_value());
+    EXPECT_EQ(modal->title, std::string(lichtfeld::Strings::ErrorModal::RENDERER_DEVICE_LOST));
+}
+
+TEST(GuiErrorConsumerTest, VulkanDeadlineMapsToStalledTitle) {
+    std::optional<lfs::core::ModalRequest> modal;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest r) { modal = std::move(r); },
+        .toast = {},
+        .status = {}});
+    consumer.on_error(consumerNotification(makeError(lfs::ErrorCode::DeadlineExceeded,
+                                                     lfs::ErrorDomain::Vulkan, "stalled"),
+                                           lfs::ErrorSurface::Modal),
+                      lfs::ErrorDeliveryInfo{});
+    ASSERT_TRUE(modal.has_value());
+    EXPECT_EQ(modal->title, std::string(lichtfeld::Strings::ErrorModal::RENDERER_STALLED));
+}
+
+TEST(GuiErrorConsumerTest, RenderFrameOomMapsToGpuMemoryTitle) {
+    std::optional<lfs::core::ModalRequest> modal;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest r) { modal = std::move(r); },
+        .toast = {},
+        .status = {}});
+    consumer.on_error(
+        consumerNotification(makeError(lfs::ErrorCode::ResourceExhausted, lfs::ErrorDomain::Rendering,
+                                       "vram", lfs::vis::gui::error_op::kRenderFrame),
+                             lfs::ErrorSurface::Modal),
+        lfs::ErrorDeliveryInfo{});
+    ASSERT_TRUE(modal.has_value());
+    EXPECT_EQ(modal->title, std::string(lichtfeld::Strings::ErrorModal::OUT_OF_GPU_MEMORY));
+}
+
+using lfs::vis::FrameFault;
+using lfs::vis::FrameStateMachine;
+using lfs::vis::RendererTerminalState;
+using FsmState = lfs::vis::FrameStateMachine::State;
+
+TEST(RendererTerminalStateTest, MappingDominance) {
+    using lfs::vis::renderer_terminal_state;
+    EXPECT_EQ(renderer_terminal_state(true, false), RendererTerminalState::DeviceLost);
+    EXPECT_EQ(renderer_terminal_state(true, true), RendererTerminalState::DeviceLost);
+    EXPECT_EQ(renderer_terminal_state(false, true), RendererTerminalState::Quarantined);
+    EXPECT_EQ(renderer_terminal_state(false, false), RendererTerminalState::Running);
+}
+
+TEST(FrameStateMachineTest, OomWithinBudgetReclaimsAndToastsOnce) {
+    FrameStateMachine m;
+    for (int i = 1; i <= 8; ++i) {
+        const auto fx = m.on_fault(FrameFault::OomPressure);
+        EXPECT_TRUE(fx.run_reclaim_episode) << "fault " << i;
+        EXPECT_EQ(fx.publish_pressure_toast, i == 1) << "fault " << i;
+        EXPECT_FALSE(fx.publish_oom_modal) << "fault " << i;
+    }
+    EXPECT_EQ(m.state(), FsmState::PressureRetry);
+    EXPECT_FALSE(m.scene_render_suspended());
+}
+
+TEST(FrameStateMachineTest, OomBudgetExhaustionSuspendsOnce) {
+    FrameStateMachine m;
+    for (int i = 0; i < 8; ++i)
+        (void)m.on_fault(FrameFault::OomPressure);
+
+    const auto ninth = m.on_fault(FrameFault::OomPressure);
+    EXPECT_TRUE(ninth.publish_oom_modal);
+    EXPECT_FALSE(ninth.run_reclaim_episode);
+    EXPECT_TRUE(m.scene_render_suspended());
+
+    const auto tenth = m.on_fault(FrameFault::OomPressure);
+    EXPECT_FALSE(tenth.publish_oom_modal);
+    EXPECT_FALSE(tenth.run_reclaim_episode);
+    EXPECT_FALSE(tenth.publish_pressure_toast);
+}
+
+TEST(FrameStateMachineTest, SuccessResetsBothBudgets) {
+    {
+        FrameStateMachine m;
+        for (int i = 0; i < 7; ++i)
+            (void)m.on_fault(FrameFault::OomPressure);
+        m.on_frame_success();
+        for (int i = 0; i < 8; ++i)
+            EXPECT_FALSE(m.on_fault(FrameFault::OomPressure).publish_oom_modal) << "fault " << i;
+    }
+    {
+        FrameStateMachine m;
+        (void)m.on_fault(FrameFault::RendererInternal);
+        (void)m.on_fault(FrameFault::RendererInternal);
+        m.on_frame_success();
+        EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal);
+        EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal);
+    }
+}
+
+TEST(FrameStateMachineTest, InternalTransientThenTerminal) {
+    FrameStateMachine m;
+    EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal);
+    EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal);
+    EXPECT_FALSE(m.scene_render_suspended());
+
+    const auto third = m.on_fault(FrameFault::RendererInternal);
+    EXPECT_TRUE(third.publish_internal_modal);
+    EXPECT_TRUE(m.scene_render_suspended());
+
+    EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal);
+}
+
+TEST(FrameStateMachineTest, MixedCountersIndependent) {
+    FrameStateMachine m;
+    EXPECT_FALSE(m.on_fault(FrameFault::OomPressure).publish_oom_modal);           // oom 1
+    EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal); // int 1
+    EXPECT_FALSE(m.on_fault(FrameFault::OomPressure).publish_oom_modal);           // oom 2
+    EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal); // int 2
+    EXPECT_FALSE(m.on_fault(FrameFault::OomPressure).publish_oom_modal);           // oom 3 (< 8)
+
+    const auto crosses = m.on_fault(FrameFault::RendererInternal); // int 3 -> escalates first
+    EXPECT_TRUE(crosses.publish_internal_modal);
+    EXPECT_TRUE(m.scene_render_suspended());
+}
+
+TEST(FrameStateMachineTest, RetryRearmsExactlyOnce) {
+    FrameStateMachine m;
+    for (int i = 0; i < 3; ++i)
+        (void)m.on_fault(FrameFault::RendererInternal);
+    ASSERT_TRUE(m.scene_render_suspended());
+
+    m.on_retry_action();
+    EXPECT_EQ(m.state(), FsmState::Healthy);
+    EXPECT_FALSE(m.scene_render_suspended());
+
+    EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal);
+    EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal);
+    EXPECT_TRUE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal);
+}
+
+TEST(FrameStateMachineTest, DismissDoesNotRearm) {
+    FrameStateMachine m;
+    for (int i = 0; i < 3; ++i)
+        (void)m.on_fault(FrameFault::RendererInternal);
+    ASSERT_TRUE(m.scene_render_suspended());
+
+    for (int i = 0; i < 5; ++i) {
+        const auto fx = m.on_fault(FrameFault::RendererInternal);
+        EXPECT_FALSE(fx.publish_internal_modal);
+        EXPECT_FALSE(fx.publish_oom_modal);
+    }
+}
+
+TEST(FrameStateMachineTest, StopRendererIsSticky) {
+    FrameStateMachine m;
+    for (int i = 0; i < 3; ++i)
+        (void)m.on_fault(FrameFault::RendererInternal);
+    ASSERT_TRUE(m.scene_render_suspended());
+
+    m.on_stop_renderer_action();
+    EXPECT_TRUE(m.scene_render_suspended());
+
+    EXPECT_FALSE(m.on_fault(FrameFault::RendererInternal).publish_internal_modal);
+    m.on_retry_action(); // no-op: renderer stopped for the session, no modal to press
+    EXPECT_EQ(m.state(), FsmState::SceneSuspended);
+    EXPECT_TRUE(m.scene_render_suspended());
+}
+
+TEST(FrameStateMachineTest, DeviceLostFaultIsImmediatelyTerminal) {
+    {
+        FrameStateMachine m;
+        const auto fx = m.on_fault(FrameFault::DeviceLost);
+        EXPECT_TRUE(fx.publish_renderer_dead_modal);
+        EXPECT_EQ(fx.dead_cause, RendererTerminalState::DeviceLost);
+        EXPECT_EQ(m.state(), FsmState::RendererDead);
+
+        const auto after = m.on_fault(FrameFault::OomPressure);
+        EXPECT_FALSE(after.publish_renderer_dead_modal);
+        EXPECT_FALSE(after.run_reclaim_episode);
+    }
+    {
+        FrameStateMachine m;
+        (void)m.on_fault(FrameFault::OomPressure); // PressureRetry
+        const auto fx = m.on_fault(FrameFault::DeviceLost);
+        EXPECT_TRUE(fx.publish_renderer_dead_modal);
+        EXPECT_EQ(fx.dead_cause, RendererTerminalState::DeviceLost);
+        EXPECT_EQ(m.state(), FsmState::RendererDead);
+    }
+}
+
+TEST(FrameStateMachineTest, PollQuarantinePublishesOnceWithCause) {
+    FrameStateMachine m;
+    const auto fx = m.on_renderer_terminal(RendererTerminalState::Quarantined);
+    EXPECT_TRUE(fx.publish_renderer_dead_modal);
+    EXPECT_EQ(fx.dead_cause, RendererTerminalState::Quarantined);
+    EXPECT_EQ(m.state(), FsmState::RendererDead);
+
+    EXPECT_FALSE(m.on_renderer_terminal(RendererTerminalState::Quarantined).publish_renderer_dead_modal);
+    EXPECT_FALSE(m.on_renderer_terminal(RendererTerminalState::Running).publish_renderer_dead_modal);
+
+    FrameStateMachine healthy;
+    const auto running = healthy.on_renderer_terminal(RendererTerminalState::Running);
+    EXPECT_FALSE(running.publish_renderer_dead_modal);
+    EXPECT_EQ(healthy.state(), FsmState::Healthy);
+}
+
+TEST(FrameStateMachineTest, DeadDominatesSuspended) {
+    FrameStateMachine m;
+    for (int i = 0; i < 3; ++i)
+        (void)m.on_fault(FrameFault::RendererInternal); // internal modal fires + disarms
+    ASSERT_TRUE(m.scene_render_suspended());
+
+    const auto fx = m.on_renderer_terminal(RendererTerminalState::DeviceLost);
+    EXPECT_TRUE(fx.publish_renderer_dead_modal); // own one-shot, still armed
+    EXPECT_EQ(fx.dead_cause, RendererTerminalState::DeviceLost);
+    EXPECT_EQ(m.state(), FsmState::RendererDead);
+}
+
+TEST(FrameStateMachineTest, CustomLimits) {
+    FrameStateMachine m(FrameStateMachine::Limits{.oom_retry_budget = 2, .internal_retry_budget = 1});
+    EXPECT_TRUE(m.on_fault(FrameFault::OomPressure).run_reclaim_episode);
+    EXPECT_TRUE(m.on_fault(FrameFault::OomPressure).run_reclaim_episode);
+    const auto third = m.on_fault(FrameFault::OomPressure);
+    EXPECT_TRUE(third.publish_oom_modal);
+    EXPECT_TRUE(m.scene_render_suspended());
+
+    FrameStateMachine n(FrameStateMachine::Limits{.oom_retry_budget = 2, .internal_retry_budget = 1});
+    const auto first_internal = n.on_fault(FrameFault::RendererInternal);
+    EXPECT_TRUE(first_internal.publish_internal_modal);
+    EXPECT_TRUE(n.scene_render_suspended());
 }

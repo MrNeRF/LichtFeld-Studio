@@ -27,9 +27,11 @@
 // verbatim by the master architecture doc (Section 7.5); do not reshape it.
 namespace lfs {
 
-    // FROZEN (Section 7.5). Which native surface renders a notification. Phase 8
-    // P1 renders Modal only; Toast/StatusOnly/Panel land in P2 (until then the
-    // consumer falls Toast/Panel back to Modal and treats StatusOnly as silent).
+    // FROZEN (Section 7.5). Which native surface renders a notification. The P2
+    // consumer renders all four: Modal and Panel go to the modal sink (Panel as
+    // the developer-details modal), Toast to the toast stack (falling back to
+    // Modal when no toast sink is wired), StatusOnly to the status bar (silent
+    // without a status sink).
     enum class ErrorSurface : std::uint8_t {
         Modal,
         Toast,

@@ -19,6 +19,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         visualizer_impl.cpp
         app_store.cpp
         core/main_loop.cpp
+        core/frame_state_machine.cpp
         core/data_loading_service.cpp
         core/editor_context.cpp
         core/parameter_manager.cpp

@@ -61,7 +61,19 @@ namespace lfs::vis::gui {
                                                            : Keys::CUDA_UNSUPPORTED;
             case lfs::ErrorDomain::Training:
                 return Keys::TRAINING_FAILED;
+            case lfs::ErrorDomain::Vulkan:
+                if (code == lfs::ErrorCode::DeviceLost) {
+                    return Keys::RENDERER_DEVICE_LOST;
+                }
+                if (code == lfs::ErrorCode::DeadlineExceeded) {
+                    return Keys::RENDERER_STALLED;
+                }
+                return Keys::RENDERER_FAILED;
             case lfs::ErrorDomain::Rendering:
+                if (op == error_op::kRenderFrame) {
+                    return code == lfs::ErrorCode::ResourceExhausted ? Keys::OUT_OF_GPU_MEMORY
+                                                                     : Keys::RENDERER_FAILED;
+                }
                 return Keys::MESH2SPLAT_FAILED;
             case lfs::ErrorDomain::App:
                 return op == error_op::kLoadConfig ? Keys::CONFIG_INVALID : Keys::FILE_OPEN_FAILED;

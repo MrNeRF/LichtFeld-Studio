@@ -524,6 +524,7 @@ namespace lfs::vis {
         const auto& err = result.error();
         if (err.code() == lfs::ErrorCode::DeviceLost) {
             gpu_wait_quarantined_.store(true, std::memory_order_release);
+            gpu_device_lost_.store(true, std::memory_order_release);
         }
         if (set_framebuffer_resized_on_hard_error) {
             framebuffer_resized_ = true;
@@ -548,6 +549,7 @@ namespace lfs::vis {
         }
         if (result.error().code() == lfs::ErrorCode::DeviceLost) {
             gpu_wait_quarantined_.store(true, std::memory_order_release);
+            gpu_device_lost_.store(true, std::memory_order_release);
         }
         return fail(std::format("{}: {}", detail_on_fail, result.error().detail()));
     }
@@ -1070,6 +1072,7 @@ namespace lfs::vis {
                 }
                 if (err.code() == lfs::ErrorCode::DeviceLost) {
                     gpu_wait_quarantined_.store(true, std::memory_order_release);
+                    gpu_device_lost_.store(true, std::memory_order_release);
                 }
                 // Quarantine Unavailable and all other hard errors: fail, no recreate.
                 return fail(std::format("vkAcquireNextImageKHR failed: {}", err.detail()));

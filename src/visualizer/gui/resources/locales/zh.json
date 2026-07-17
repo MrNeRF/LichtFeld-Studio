@@ -1723,7 +1723,15 @@
     "save_failed": "保存失败",
     "generic": "错误",
     "oom_heading": "GPU 内存不足！",
-    "oom_suggestions": "建议：\n  - 减少最大高斯数量 (max_cap)\n  - 降低球谐函数阶数 (sh_degree)\n  - 降低图像分辨率 (resize_factor)\n  - 为大图像启用平铺模式"
+    "oom_suggestions": "建议：\n  - 减少最大高斯数量 (max_cap)\n  - 降低球谐函数阶数 (sh_degree)\n  - 降低图像分辨率 (resize_factor)\n  - 为大图像启用平铺模式",
+    "renderer_device_lost": "图形设备丢失",
+    "renderer_device_lost_body": "图形设备已丢失，渲染已停止。将尽可能保留您的会话。请重新启动 LichtFeld Studio；如果反复出现，请更新您的 GPU 驱动程序。",
+    "renderer_stalled": "渲染器停滞",
+    "renderer_stalled_body": "GPU 工作停止响应，为保持应用程序可用，渲染已暂停。请重新启动 LichtFeld Studio。",
+    "renderer_failed": "渲染器错误",
+    "renderer_failed_body": "视口渲染器反复出现内部错误并已停止。请重试渲染，或让其保持停止并保存您的工作。",
+    "oom_render_paused": "由于反复出现 GPU 内存耗尽，渲染已暂停；显示的是最后完成的一帧。请释放 GPU 内存后重试。",
+    "gpu_pressure_retrying": "GPU 内存压力 — 正在回收并重试。"
   },
   "context_menu": {
     "snap_interval": "吸附间隔",

@@ -28,24 +28,6 @@ namespace lfs::vis::gui {
             return lfs::ErrorAction{.kind = lfs::ErrorActionKind::Dismiss, .label = {}, .on_invoke = {}};
         }
 
-        // Reveals the durable default log file in the OS file manager. Runs on the
-        // UI thread when the user presses Open Log; the default file sink is always
-        // installed when creatable, so the path exists in normal runs.
-        lfs::ErrorAction openLogAction() {
-            return lfs::ErrorAction{
-                .kind = lfs::ErrorActionKind::OpenLog,
-                .label = {},
-                .on_invoke = [](lfs::OperationId) {
-                    const auto path =
-                        lfs::core::utf8_to_path(lfs::core::Logger::default_log_file_path());
-                    if (!lfs::core::reveal_in_file_manager(path)) {
-                        LOG_WARN("Open Log: could not reveal '{}'",
-                                 lfs::core::Logger::default_log_file_path());
-                    }
-                },
-            };
-        }
-
         // Operation-terminal failures offer Dismiss plus Open Log (§4).
         std::vector<lfs::ErrorAction> operationFailureActions() {
             return {dismissAction(), openLogAction()};
@@ -81,6 +63,23 @@ namespace lfs::vis::gui {
         }
 
     } // namespace
+
+    // Runs on the UI thread when the user presses Open Log; the default file sink
+    // is always installed when creatable, so the path exists in normal runs.
+    lfs::ErrorAction openLogAction() {
+        return lfs::ErrorAction{
+            .kind = lfs::ErrorActionKind::OpenLog,
+            .label = {},
+            .on_invoke = [](lfs::OperationId) {
+                const auto path =
+                    lfs::core::utf8_to_path(lfs::core::Logger::default_log_file_path());
+                if (!lfs::core::reveal_in_file_manager(path)) {
+                    LOG_WARN("Open Log: could not reveal '{}'",
+                             lfs::core::Logger::default_log_file_path());
+                }
+            },
+        };
+    }
 
     std::optional<lfs::ErrorNotification>
     translateTrainingCompleted(const state::TrainingCompleted& e) {

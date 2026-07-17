@@ -5,6 +5,8 @@
 #pragma once
 
 #include "core/editor_context.hpp"
+#include "core/error_codes.hpp"
+#include "core/frame_state_machine.hpp"
 #include "core/main_loop.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
@@ -160,6 +162,17 @@ namespace lfs::vis {
         // episode, other errors escalate under a rate limit.
         void handleFrameException(std::exception_ptr eptr) noexcept;
         void onFrameCompleted() noexcept;
+        // Executes the FrameStateMachine's publish effects on the UI thread
+        // (pressure toast, OOM-paused modal, renderer-dead modal + OS dialog).
+        void applyFrameStateEffects(const FrameStateMachine::Effects& effects) noexcept;
+        // Internal-terminal modal carrying the caught fault's code and developer
+        // detail; renderer-dead modal (+ AMB-P3-1 OS dialog) for a lost/stalled
+        // renderer that can no longer present its own obituary.
+        void publishRendererInternalModal(lfs::ErrorCode code, std::string detail) noexcept;
+        void publishRendererInternalModal(const lfs::Error& error) noexcept;
+        std::vector<lfs::ErrorAction> rendererInternalActions();
+        void publishRendererDeadModal(RendererTerminalState cause) noexcept;
+        void logRateLimitedFrameError(const std::exception& e) noexcept;
 
         // Event system
         void setupEventHandlers();
@@ -261,7 +274,7 @@ namespace lfs::vis {
         std::unique_ptr<MainLoop> main_loop_;
 
         // Frame exception boundary state (viewer thread only).
-        int consecutive_oom_frames_ = 0;
+        FrameStateMachine frame_state_;
         uint64_t suppressed_frame_errors_ = 0;
         std::chrono::steady_clock::time_point last_frame_error_log_{};
 

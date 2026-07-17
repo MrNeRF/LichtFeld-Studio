@@ -142,6 +142,9 @@ namespace lfs::vis::gui {
         }
 
         syncTheme();
+        // The reloaded stack element starts empty; repopulate it so surviving
+        // toasts render immediately instead of waiting for the next mutation.
+        rebuildStackRml();
     }
 
     bool RmlToastOverlay::syncTheme() {

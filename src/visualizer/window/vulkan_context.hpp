@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "renderer_terminal_state.hpp"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "vulkan_image_barrier_tracker.hpp"
@@ -63,6 +64,14 @@ namespace lfs::vis {
 
         [[nodiscard]] bool presentBootstrapFrame(float r, float g, float b, float a);
         [[nodiscard]] const std::string& lastError() const { return last_error_; }
+
+        // Typed terminal-renderer state polled by the frame state machine. Acquire
+        // loads of the two 7B cause latches; DeviceLost dominates a bare quarantine.
+        // Additive: never parse lastError() for state.
+        [[nodiscard]] RendererTerminalState rendererTerminalState() const noexcept {
+            return renderer_terminal_state(gpu_device_lost_.load(std::memory_order_acquire),
+                                           gpu_wait_quarantined_.load(std::memory_order_acquire));
+        }
 
         struct Frame {
             uint32_t image_index = 0;
@@ -461,6 +470,9 @@ namespace lfs::vis {
         bool frame_suboptimal_ = false;
         // Phase 7B: owner quarantine latch (10 s policy) shared by the six UI waits.
         std::atomic<bool> gpu_wait_quarantined_{false};
+        // Phase 8 P3: second cause latch — set only at the three DeviceLost sites so
+        // rendererTerminalState() distinguishes a lost device from a bare stall.
+        std::atomic<bool> gpu_device_lost_{false};
         // Phase 7B AMB-B3: set at shutdown() entry so mid-teardown waits yield Shutdown.
         std::atomic<bool> context_shutdown_started_{false};
         bool debug_utils_enabled_ = false;
