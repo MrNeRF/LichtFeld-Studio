@@ -1,11 +1,15 @@
 #include "gs_pipeline.h"
 #include "perf_timer.h"
 
+#include "core/error.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifdef max
@@ -69,6 +73,17 @@ namespace {
     }
 } // namespace
 
+[[noreturn]] static void throwRendererContractViolation(std::string detail,
+                                                        lfs::core::SourceSite site) {
+    throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
+        .code = lfs::ErrorCode::ContractViolation,
+        .domain = lfs::ErrorDomain::Vulkan,
+        .user_message = "Renderer internal contract violation.",
+        .detail = std::move(detail),
+        .detection = site,
+    }));
+}
+
 std::vector<uint32_t> loadSpirv(std::string spirv_path) {
 // Load the SPIR-V file
 #ifdef WIN32
@@ -123,6 +138,19 @@ VulkanGSPipeline::VulkanGSPipeline() : instance(VK_NULL_HANDLE),
                                        fence(VK_NULL_HANDLE),
                                        timestamp_query_pool(VK_NULL_HANDLE),
                                        queue_family_index(UINT32_MAX) {
+    vulkan_dispatch_ = lfs::rendering::VulkanDispatch::real();
+}
+
+void VulkanGSPipeline::setVulkanDispatch(lfs::rendering::VulkanDispatch dispatch) noexcept {
+    vulkan_dispatch_ = std::move(dispatch);
+}
+
+const lfs::rendering::VulkanDispatch& VulkanGSPipeline::vulkanDispatch() const noexcept {
+    return vulkan_dispatch_;
+}
+
+const lfs::rendering::SubmissionState& VulkanGSPipeline::lastSubmissionState() const noexcept {
+    return last_submission_state_;
 }
 
 VulkanGSPipeline::~VulkanGSPipeline() noexcept {
@@ -655,7 +683,17 @@ void VulkanGSPipeline::beginCommandBatch() {
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-    const VkResult begin_result = vkBeginCommandBuffer(command_buffer, &begin_info);
+    if (vulkan_dispatch_.begin_command_buffer == nullptr ||
+        vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr ||
+        vulkan_dispatch_.cmd_reset_query_pool == nullptr) {
+        throwRendererContractViolation(
+            "beginCommandBatch requires a complete VulkanDispatch begin prologue "
+            "(begin_command_buffer, cmd_pipeline_barrier2, cmd_reset_query_pool)",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    const VkResult begin_result =
+        vulkan_dispatch_.begin_command_buffer(command_buffer, &begin_info);
     if (begin_result != VK_SUCCESS) {
         _THROW_ERROR(std::format(
             "vkBeginCommandBuffer could not start the VkSplat batch (slot={}, command_buffer={:#x}, flags={:#x}, result={}({}))",
@@ -701,12 +739,13 @@ void VulkanGSPipeline::beginCommandBatch() {
         .imageMemoryBarrierCount = 0,
         .pImageMemoryBarriers = nullptr,
     };
-    vkCmdPipelineBarrier2(command_buffer, &reuse_dependency);
+    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &reuse_dependency);
 
     commandBatchInProgress = true;
     try {
         PerfTimer::hostToc();
-        vkCmdResetQueryPool(command_buffer, timestamp_query_pool, 0, MAX_TIMESTAMP_QUERY_COUNT);
+        vulkan_dispatch_.cmd_reset_query_pool(
+            command_buffer, timestamp_query_pool, 0, MAX_TIMESTAMP_QUERY_COUNT);
         PerfTimer::popMarkers(this);
     } catch (...) {
         cancelCommandBatch();
@@ -725,8 +764,9 @@ void VulkanGSPipeline::cancelCommandBatch() noexcept {
     if (!was_recording)
         return;
 
-    if (device != VK_NULL_HANDLE && command_buffer != VK_NULL_HANDLE) {
-        const VkResult result = vkResetCommandBuffer(command_buffer, 0);
+    if (device != VK_NULL_HANDLE && command_buffer != VK_NULL_HANDLE &&
+        vulkan_dispatch_.reset_command_buffer != nullptr) {
+        const VkResult result = vulkan_dispatch_.reset_command_buffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
             fprintf(stderr,
                     "cancelCommandBatch could not reset the cancelled command buffer (slot=%u, command_buffer=0x%llx, result=%s(%d)) at %s:%d\n",
@@ -757,8 +797,17 @@ bool VulkanGSPipeline::timelineValueComplete(const VkSemaphore semaphore,
                                              const std::uint64_t value) const {
     if (semaphore == VK_NULL_HANDLE || value == 0)
         return true;
+    if (vulkan_dispatch_.get_semaphore_counter_value == nullptr) {
+        throwRendererContractViolation(
+            std::format(
+                "vkGetSemaphoreCounterValue dispatch is null while polling a VkSplat batch (semaphore={:#x}, requested_value={})",
+                lfs::rendering::vkHandleValue(semaphore),
+                value),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     std::uint64_t completed_value = 0;
-    const VkResult result = vkGetSemaphoreCounterValue(device, semaphore, &completed_value);
+    const VkResult result =
+        vulkan_dispatch_.get_semaphore_counter_value(device, semaphore, &completed_value);
     if (result != VK_SUCCESS) {
         _THROW_ERROR(std::format(
             "vkGetSemaphoreCounterValue failed while polling a VkSplat batch (semaphore={:#x}, requested_value={}, completed_value={}, result={}({}))",
@@ -792,7 +841,12 @@ void VulkanGSPipeline::waitForPendingBatchSlot(CommandBatchSlot& slot) {
             wait_info.semaphoreCount = 1;
             wait_info.pSemaphores = &slot.pending_signal;
             wait_info.pValues = &slot.pending_signal_value;
-            const VkResult result = vkWaitSemaphores(device, &wait_info, UINT64_MAX);
+            // 7A does not convert infinite waits (Amendment 1) — and this call
+            // must stay a LITERAL vkWaitSemaphores so the census still sees it;
+            // routing it through the dispatch made it census-blind (16 -> 14).
+            // 7C converts it; it is not on the begin->submit seam path.
+            const VkResult result =
+                vkWaitSemaphores(device, &wait_info, UINT64_MAX);
             if (result != VK_SUCCESS) {
                 _THROW_ERROR(std::format(
                     "vkWaitSemaphores failed while retiring a VkSplat batch slot (semaphore={:#x}, value={}, slot_command_buffer={:#x}, result={}({}))",
@@ -959,15 +1013,43 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     }
     CommandBatchSlot& slot = command_batch_slots_[active_command_batch_slot_];
 
+    // T0 — begin lifecycle for this submit (no-reset / no-replacement row).
+    {
+        using lfs::rendering::SubmissionFencePolicy;
+        using lfs::rendering::SubmissionTransition;
+        auto begin = lfs::rendering::apply_submission_transition(
+            last_submission_state_,
+            SubmissionTransition::BeginLifecycle,
+            SubmissionFencePolicy::NoResetNoReplacement,
+            signal_value);
+        if (!begin) {
+            cancelCommandBatch();
+            throwRendererContractViolation(
+                std::format(
+                    "SubmissionState T0 BeginLifecycle failed (detail={}, signal_value={})",
+                    begin.error().detail(),
+                    signal_value),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    }
+
     if (timestampNumWritten > 0) {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.close_markers");
         while (timestampStackDepth > 0)
             PerfTimer::pushMarker(this);
     }
 
+    if (vulkan_dispatch_.end_command_buffer == nullptr ||
+        vulkan_dispatch_.queue_submit == nullptr) {
+        cancelCommandBatch();
+        throwRendererContractViolation(
+            "endCommandBatch requires VulkanDispatch end_command_buffer and queue_submit",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
     {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.vkEndCommandBuffer");
-        const VkResult end_result = vkEndCommandBuffer(command_buffer);
+        const VkResult end_result = vulkan_dispatch_.end_command_buffer(command_buffer);
         if (end_result != VK_SUCCESS) {
             cancelCommandBatch();
             _THROW_ERROR(std::format(
@@ -1048,9 +1130,31 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
 
     {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.vkQueueSubmit");
-        const VkResult submit_result = vkQueueSubmit(command_queue, 1, &submit_info,
-                                                     use_fence ? fence : VK_NULL_HANDLE);
+        const VkResult submit_result = vulkan_dispatch_.queue_submit(
+            command_queue, 1, &submit_info, use_fence ? fence : VK_NULL_HANDLE);
         if (submit_result != VK_SUCCESS) {
+            // T3 — rejected submit: no publish, no replace (no-reset row).
+            {
+                using lfs::rendering::SubmissionFencePolicy;
+                using lfs::rendering::SubmissionTransition;
+                auto rejected = lfs::rendering::apply_submission_transition(
+                    last_submission_state_,
+                    SubmissionTransition::SubmitRejected,
+                    SubmissionFencePolicy::NoResetNoReplacement);
+                if (!rejected) {
+                    // Still cancel + throw the original submit failure; surface
+                    // the contract violation only in the primary message.
+                    cancelCommandBatch();
+                    throwRendererContractViolation(
+                        std::format(
+                            "vkQueueSubmit failed and SubmissionState T3 rejected "
+                            "(submit_result={}({}), transition_detail={})",
+                            lfs::rendering::vkResultToString(submit_result),
+                            static_cast<int>(submit_result),
+                            rejected.error().detail()),
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+            }
             cancelCommandBatch();
             _THROW_ERROR(std::format(
                 "vkQueueSubmit failed for the VkSplat batch (queue={:#x}, command_buffer={:#x}, slot={}, wait_count={}, signal_count={}, fence={:#x}, result={}({}))",
@@ -1064,11 +1168,53 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
                 static_cast<int>(submit_result)));
         }
     }
+
+    // T4 — set submit_accepted BEFORE publishing the candidate (ordering, not
+    // atomicity — Amendment 1).
+    {
+        using lfs::rendering::SubmissionFencePolicy;
+        using lfs::rendering::SubmissionTransition;
+        auto accepted = lfs::rendering::apply_submission_transition(
+            last_submission_state_,
+            SubmissionTransition::SubmitAccepted,
+            SubmissionFencePolicy::NoResetNoReplacement,
+            signal_value);
+        if (!accepted) {
+            cancelCommandBatch();
+            throwRendererContractViolation(
+                std::format(
+                    "SubmissionState T4 SubmitAccepted failed after native submit "
+                    "success (detail={})",
+                    accepted.error().detail()),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    }
+
+    // T5 — publish once (host-side evidence map). Never host-signal.
     if (signal_semaphore != VK_NULL_HANDLE) {
         last_timeline_signal_values_[signal_semaphore] = signal_value;
     }
     if (secondary_signal_semaphore != VK_NULL_HANDLE) {
         last_timeline_signal_values_[secondary_signal_semaphore] = secondary_signal_value;
+    }
+    if (signal_semaphore != VK_NULL_HANDLE && signal_value != 0) {
+        using lfs::rendering::SubmissionFencePolicy;
+        using lfs::rendering::SubmissionTransition;
+        auto published = lfs::rendering::apply_submission_transition(
+            last_submission_state_,
+            SubmissionTransition::PublishTimeline,
+            SubmissionFencePolicy::NoResetNoReplacement,
+            signal_value);
+        if (!published) {
+            // Publication map already written; this is a bookkeeping fault.
+            throwRendererContractViolation(
+                std::format(
+                    "SubmissionState T5 PublishTimeline failed after host publication "
+                    "(detail={}, signal_value={})",
+                    published.error().detail(),
+                    signal_value),
+                LFS_SOURCE_SITE_CURRENT());
+        }
     }
     pending_timeline_waits_.clear();
 
@@ -1076,7 +1222,19 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
 
     if (use_fence) {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.wait_fence");
-        const VkResult wait_result = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+        if (vulkan_dispatch_.reset_fences == nullptr) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
+            throwRendererContractViolation(
+                "endCommandBatch fence path requires VulkanDispatch reset_fences",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        // 7A does not convert this infinite wait (Amendment 1) — LITERAL
+        // vkWaitForFences so the census still counts it; post-submit path,
+        // outside the begin->submit seam. 7C converts it.
+        const VkResult wait_result =
+            vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
         if (wait_result != VK_SUCCESS) {
             PerfTimer::discardMarkers();
             timestampNumWritten = 0;
@@ -1088,7 +1246,7 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
                 lfs::rendering::vkResultToString(wait_result),
                 static_cast<int>(wait_result)));
         }
-        const VkResult reset_result = vkResetFences(device, 1, &fence);
+        const VkResult reset_result = vulkan_dispatch_.reset_fences(device, 1, &fence);
         if (reset_result != VK_SUCCESS) {
             PerfTimer::discardMarkers();
             timestampNumWritten = 0;
@@ -1102,7 +1260,15 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
         }
     } else if (signal_semaphore == VK_NULL_HANDLE || signal_value == 0) {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.wait_idle");
-        const VkResult idle_result = vkQueueWaitIdle(command_queue);
+        if (vulkan_dispatch_.queue_wait_idle == nullptr) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
+            throwRendererContractViolation(
+                "endCommandBatch idle path requires VulkanDispatch queue_wait_idle",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        const VkResult idle_result = vulkan_dispatch_.queue_wait_idle(command_queue);
         if (idle_result != VK_SUCCESS) {
             PerfTimer::discardMarkers();
             timestampNumWritten = 0;
@@ -1173,7 +1339,12 @@ bool VulkanGSPipeline::writeTimestamp(int delta) {
             timestampNumWritten,
             timestampStackDepth));
     }
-    vkCmdWriteTimestamp(
+    if (vulkan_dispatch_.cmd_write_timestamp == nullptr) {
+        throwRendererContractViolation(
+            "writeTimestamp requires VulkanDispatch::cmd_write_timestamp",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    vulkan_dispatch_.cmd_write_timestamp(
         command_buffer,
         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         timestamp_query_pool, timestampNumWritten);
@@ -1191,7 +1362,9 @@ bool VulkanGSPipeline::writeTimestampNoExcept(int delta) {
         return false;
     if (delta == -1 && timestampStackDepth == 0)
         return false;
-    vkCmdWriteTimestamp(
+    if (vulkan_dispatch_.cmd_write_timestamp == nullptr)
+        return false;
+    vulkan_dispatch_.cmd_write_timestamp(
         command_buffer,
         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         timestamp_query_pool, timestampNumWritten);

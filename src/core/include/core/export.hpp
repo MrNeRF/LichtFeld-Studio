@@ -26,6 +26,9 @@
 #else
 #define LFS_MCP_API __declspec(dllimport)
 #endif
+// rendering is a static library today (lfs_rendering_tensor / lfs_vulkan_rasterizer).
+// Empty on Windows like LFS_IO_API; visibility default on ELF.
+#define LFS_RENDERING_API
 #else
 #define LFS_LOCAL_SYMBOL __attribute__((visibility("hidden")))
 #define LFS_LOGGER_API   __attribute__((visibility("default")))
@@ -33,6 +36,7 @@
 #define LFS_IO_API       __attribute__((visibility("default")))
 #define LFS_VIS_API      __attribute__((visibility("default")))
 #define LFS_MCP_API      __attribute__((visibility("default")))
+#define LFS_RENDERING_API __attribute__((visibility("default")))
 #endif
 
 // For functions in CUDA static libs (lfs_core_cuda) that are resolved directly

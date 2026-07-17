@@ -21,6 +21,7 @@
 
 #include "buffer.h"
 #include "rendering/vulkan_result.hpp"
+#include "rendering/vulkan_wait.hpp"
 
 class VulkanGSPipeline {
 public:
@@ -40,6 +41,15 @@ public:
     void cleanup();
     void cleanupBuffers(VulkanGSPipelineBuffers& buffers);
     void assignBufferLabels(VulkanGSPipelineBuffers& buffers);
+
+    // Phase 7A: injectable Vulkan dispatch (production default = real symbols).
+    // One seam for begin→submit path + QW-6 failed-submit tests.
+    void setVulkanDispatch(lfs::rendering::VulkanDispatch dispatch) noexcept;
+    [[nodiscard]] const lfs::rendering::VulkanDispatch& vulkanDispatch() const noexcept;
+    // Last SubmissionState snapshot after endCommandBatch's submit path
+    // (including rejected submit). Timeline publication bits must match
+    // wasTimelineSignalSubmitted.
+    [[nodiscard]] const lfs::rendering::SubmissionState& lastSubmissionState() const noexcept;
 
     void createBuffer(size_t size, _VulkanBuffer& buffer);
     void destroyBuffer(_VulkanBuffer& buffer);
@@ -160,6 +170,10 @@ protected:
     std::array<CommandBatchSlot, kCommandBatchSlotCount> command_batch_slots_{};
     std::uint32_t next_command_batch_slot_ = 0;
     std::uint32_t active_command_batch_slot_ = 0;
+
+    // Phase 7A submission bookkeeping (no-reset / no-replacement row).
+    lfs::rendering::VulkanDispatch vulkan_dispatch_{};
+    lfs::rendering::SubmissionState last_submission_state_{};
 
     // Vulkan objects
     VkInstance instance;

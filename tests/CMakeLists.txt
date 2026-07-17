@@ -239,6 +239,10 @@ set(TEST_FILES
     test_tcp_responder.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
+# Phase 7A: bounded-wait machine + SubmissionState + QW-6 (GPU-free).
+list(APPEND TEST_FILES test_vulkan_wait_bounded.cpp)
+list(APPEND TEST_FILES test_submission_state_transitions.cpp)
+list(APPEND TEST_FILES test_vksplat_failed_submit_no_publish.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)
 list(APPEND TEST_FILES test_lod_page_dequant.cpp)
 list(APPEND TEST_FILES test_lod_upload_engine.cpp)

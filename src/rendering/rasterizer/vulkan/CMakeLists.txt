@@ -8,6 +8,10 @@ add_library(lfs_vulkan_rasterizer STATIC
         src/gs_renderer.cpp
         src/perf_timer.cpp
         src/vma_implementation.cpp
+        # Phase 7A: shared bounded-wait + SubmissionState + VulkanDispatch seam.
+        # Lives under src/rendering/ so visualizer and tests include it without
+        # depending on the visualizer module.
+        ${CMAKE_SOURCE_DIR}/src/rendering/vulkan_wait.cpp
 )
 
 target_include_directories(lfs_vulkan_rasterizer
@@ -22,6 +26,7 @@ target_link_libraries(lfs_vulkan_rasterizer
         PUBLIC
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
+        lfs_core
         PRIVATE
         lfs_diagnostics
 )
