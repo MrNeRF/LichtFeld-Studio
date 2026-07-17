@@ -215,7 +215,7 @@ namespace fast_lfs::rasterization {
         uint64_t frame_id = 0;
         bool frame_started = false;
         try {
-            auto fail = [&](std::string message) {
+            auto fail = [&](std::string message, const bool resource_exhausted) {
                 if (frame_started && arena) {
                     arena->end_frame(frame_id);
                     frame_started = false;
@@ -223,6 +223,7 @@ namespace fast_lfs::rasterization {
                 last_forward_error = std::move(message);
                 ForwardContext error_ctx = {};
                 error_ctx.success = false;
+                error_ctx.resource_exhausted = resource_exhausted;
                 error_ctx.error_message = last_forward_error.c_str();
                 error_ctx.frame_id = frame_id;
                 return error_ctx;
@@ -231,9 +232,10 @@ namespace fast_lfs::rasterization {
             if (n_primitives <= 0 || width <= 0 || height <= 0) {
                 return fail("FastGS forward preflight: invalid dimensions"
                             " (n_primitives=" +
-                            std::to_string(n_primitives) +
-                            ", width=" + std::to_string(width) +
-                            ", height=" + std::to_string(height) + ")");
+                                std::to_string(n_primitives) +
+                                ", width=" + std::to_string(width) +
+                                ", height=" + std::to_string(height) + ")",
+                            false);
             }
 
             // Calculate grid dimensions
@@ -279,7 +281,7 @@ namespace fast_lfs::rasterization {
             char* per_tile_buffers_blob = arena_allocator(per_tile_size);
 
             if (!per_primitive_buffers_blob || !per_tile_buffers_blob) {
-                return fail("OUT_OF_MEMORY: Failed to allocate initial buffers from arena");
+                return fail("OUT_OF_MEMORY: Failed to allocate initial buffers from arena", true);
             }
 
             // Allocate helper buffers for backward pass upfront to avoid allocation failures later
@@ -291,7 +293,7 @@ namespace fast_lfs::rasterization {
             char* grad_depth_helper = arena_allocator(grad_depth_size);
 
             if (!grad_mean2d_helper || !grad_conic_helper || !grad_depth_helper) {
-                return fail("OUT_OF_MEMORY: Failed to allocate backward helper buffers from arena");
+                return fail("OUT_OF_MEMORY: Failed to allocate backward helper buffers from arena", true);
             }
 
             float3* primitive_normals = nullptr;
@@ -301,7 +303,7 @@ namespace fast_lfs::rasterization {
                 primitive_normals = reinterpret_cast<float3*>(
                     arena_allocator(static_cast<size_t>(n_primitives) * sizeof(float3)));
                 if (!primitive_normals) {
-                    return fail("OUT_OF_MEMORY: Failed to allocate primitive normal buffer from arena");
+                    return fail("OUT_OF_MEMORY: Failed to allocate primitive normal buffer from arena", true);
                 }
             }
 
@@ -349,7 +351,10 @@ namespace fast_lfs::rasterization {
 
             // Verify allocations happened
             if (forward_result.n_instances > 0 && !forward_result.sorted_primitive_indices) {
-                return fail("OUT_OF_MEMORY: Sorted primitive indices were not allocated despite n_instances > 0");
+                // Internal invariant guard, not one of the three OOM-class causes:
+                // StreamOrderedDeviceBuffer::allocate throws on real exhaustion, so
+                // this firing means broken bookkeeping — must not classify retryable.
+                return fail("OUT_OF_MEMORY: Sorted primitive indices were not allocated despite n_instances > 0", false);
             }
             // Create and return context
             ForwardContext ctx;

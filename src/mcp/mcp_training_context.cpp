@@ -431,14 +431,7 @@ namespace lfs::mcp {
                         .site = LFS_SOURCE_SITE_CURRENT(),
                     },
                     [trainer, stop]() -> lfs::Result<void> {
-                        return lfs::from_legacy_expected<void>(
-                            trainer->train(stop),
-                            lfs::LegacyErrorContext{
-                                .code = lfs::ErrorCode::Internal,
-                                .domain = lfs::ErrorDomain::Training,
-                                .operation = "train",
-                                .source = LFS_SOURCE_SITE_CURRENT(),
-                            });
+                        return trainer->train(stop);
                     },
                     [this](lfs::Result<void>&& result) {
                         if (!result) {

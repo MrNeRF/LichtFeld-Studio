@@ -171,7 +171,7 @@ protected:
 // Forward kernels
 TEST_F(FastGSKernelTest, Forward_Preprocess) {
     auto r = forward();
-    ASSERT_TRUE(r.has_value()) << r.error();
+    ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
     EXPECT_GT(r->second.forward_ctx.n_instances, 0);
 }
 
@@ -212,7 +212,7 @@ TEST_F(FastGSKernelTest, Forward_Blend) {
 
 TEST_F(FastGSKernelTest, Forward_Full) {
     auto r = forward();
-    ASSERT_TRUE(r.has_value()) << r.error();
+    ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
     EXPECT_EQ(r->first.width, W);
     EXPECT_EQ(r->first.height, H);
 }
@@ -258,7 +258,7 @@ TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSpl
     auto bg = Tensor::zeros({3}, Device::CUDA);
 
     auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
-    ASSERT_TRUE(forward.has_value()) << forward.error();
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
     ASSERT_EQ(forward->first.depth.numel(), 1);
     EXPECT_GT(forward->first.depth.item<float>(), 0.0f);
 
@@ -339,7 +339,7 @@ TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForOverlapping
     auto bg = Tensor::zeros({3}, Device::CUDA);
 
     auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
-    ASSERT_TRUE(forward.has_value()) << forward.error();
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
     ASSERT_EQ(forward->first.depth.numel(), 1);
 
     const float depth0 = means_data[2] + t_data[2];
@@ -440,13 +440,14 @@ TEST(FastGSNormalChannelTest, RendersCameraSpaceNormalForCenteredSplat) {
     auto bg = Tensor::zeros({3}, Device::CUDA);
 
     auto without_normal = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
-    ASSERT_TRUE(without_normal.has_value()) << without_normal.error();
+    ASSERT_TRUE(without_normal.has_value())
+        << lfs::format_for_developer(without_normal.error());
     EXPECT_FALSE(without_normal->first.normal.is_valid())
         << "normal channel must stay off unless requested";
     without_normal->second.release_forward_context();
 
     auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
-    ASSERT_TRUE(forward.has_value()) << forward.error();
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
     ASSERT_TRUE(forward->first.normal.is_valid());
     ASSERT_EQ(forward->first.normal.numel(), 3);
 
@@ -478,7 +479,7 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
         auto splat = scene.make_splat(quat);
         auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
         if (!forward.has_value()) {
-            throw std::runtime_error(forward.error());
+            throw lfs::Exception(std::move(forward.error()));
         }
         const auto normal_cpu = forward->first.normal.to(Device::CPU);
         const float* n = normal_cpu.ptr<float>();
@@ -489,7 +490,7 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
 
     auto splat = scene.make_splat(base_quat);
     auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
-    ASSERT_TRUE(forward.has_value()) << forward.error();
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
 
     AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
     AdamOptimizer opt(splat, cfg);

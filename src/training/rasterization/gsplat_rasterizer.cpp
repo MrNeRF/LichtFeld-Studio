@@ -4,6 +4,7 @@
 
 #include "gsplat_rasterizer.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "gsplat/Ops.h"
@@ -243,6 +244,15 @@ namespace lfs::training {
 
             // Allocate from arena
             char* blob = arena_allocator(total_size);
+            if (blob == nullptr) {
+                throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::ResourceExhausted,
+                    .domain = lfs::ErrorDomain::CUDA,
+                    .user_message = "Ran out of GPU memory while rendering during training.",
+                    .detail = std::format("gsplat forward arena allocation failed ({} bytes)", total_size),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
 
             // Carve out buffers (aligned)
             char* ptr = blob;
@@ -574,6 +584,15 @@ namespace lfs::training {
                                     v_opacities_size + v_sh_coeffs_size;
 
             char* bwd_blob = arena_allocator(total_bwd_size);
+            if (bwd_blob == nullptr) {
+                throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::ResourceExhausted,
+                    .domain = lfs::ErrorDomain::CUDA,
+                    .user_message = "Ran out of GPU memory during training backward.",
+                    .detail = std::format("gsplat backward arena allocation failed ({} bytes)", total_bwd_size),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
 
             // Carve out backward buffers
             char* bwd_ptr = bwd_blob;

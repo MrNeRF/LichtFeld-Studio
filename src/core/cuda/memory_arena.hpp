@@ -283,6 +283,8 @@ namespace lfs::core {
                                    const std::function<bool(size_t)>& commit);
         void clear_external_backing(const void* device_ptr = nullptr);
         void reset();
+        /// Reconstructs the arena with a caller-supplied capacity for deterministic OOM tests.
+        void reconfigure_for_testing(RasterizerMemoryArena::Config config);
 
     private:
         GlobalArenaManager() = default;

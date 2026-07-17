@@ -584,12 +584,7 @@ namespace lfs::core {
                                "RasterizerMemoryArena allocation");
 
             Arena& arena = get_or_create_arena(device);
-            char* const ptr = allocate_internal(arena, size, frame_id);
-            if (ptr == nullptr) {
-                throw std::runtime_error("RasterizerMemoryArena allocation failed for " +
-                                         std::to_string(size >> 20) + " MiB request");
-            }
-            return ptr;
+            return allocate_internal(arena, size, frame_id);
         };
     }
 
@@ -1335,8 +1330,10 @@ namespace lfs::core {
 
         // Sanity check
         if (aligned_size > config_.max_physical) {
-            throw std::runtime_error("Single allocation request " + std::to_string(aligned_size >> 20) +
-                                     " MB exceeds max physical size " + std::to_string(config_.max_physical >> 30) + " GB");
+            LOG_ERROR("Single allocation request %zu MB exceeds max physical size %zu MB",
+                      aligned_size >> 20,
+                      config_.max_physical >> 20);
+            return nullptr;
         }
 
         // Grows the shared exportable backing in place under its stable virtual
@@ -1785,6 +1782,11 @@ namespace lfs::core {
     void GlobalArenaManager::reset() {
         std::lock_guard<std::mutex> lock(init_mutex_);
         arena_.reset();
+    }
+
+    void GlobalArenaManager::reconfigure_for_testing(RasterizerMemoryArena::Config config) {
+        std::lock_guard<std::mutex> lock(init_mutex_);
+        arena_ = std::make_unique<RasterizerMemoryArena>(std::move(config));
     }
 
     bool RasterizerMemoryArena::is_rendering_active() const {

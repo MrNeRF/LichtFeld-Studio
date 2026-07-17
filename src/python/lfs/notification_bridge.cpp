@@ -194,9 +194,7 @@ namespace lfs::python {
             } else {
                 std::string error_msg = e.error.value_or("Unknown error occurred during training.");
 
-                // Check if this is an OOM error and format it clearly
-                if (error_msg.find("CUDA out of memory") != std::string::npos ||
-                    error_msg.find("OUT_OF_MEMORY") != std::string::npos) {
+                if (e.resource_exhausted) {
                     std::string size_info;
                     auto gb_pos = error_msg.find(" GB)");
                     if (gb_pos != std::string::npos) {

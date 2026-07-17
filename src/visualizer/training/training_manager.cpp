@@ -771,7 +771,8 @@ namespace lfs::vis {
                 .elapsed_seconds = completion.elapsed_seconds,
                 .success = completion.success,
                 .user_stopped = completion.user_stopped,
-                .error = std::move(completion.error)}
+                .error = std::move(completion.error),
+                .resource_exhausted = completion.resource_exhausted}
                 .emit();
         };
 
@@ -979,14 +980,7 @@ namespace lfs::vis {
             },
             [this, stop_token]() -> lfs::Result<void> {
                 LOG_DEBUG("Starting trainer->train() with stop token");
-                return lfs::from_legacy_expected<void>(
-                    trainer_->train(stop_token),
-                    lfs::LegacyErrorContext{
-                        .code = lfs::ErrorCode::Internal,
-                        .domain = lfs::ErrorDomain::Training,
-                        .operation = "train",
-                        .source = LFS_SOURCE_SITE_CURRENT(),
-                    });
+                return trainer_->train(stop_token);
             },
             [this](lfs::Result<void>&& result) {
                 if (result) {
@@ -999,14 +993,17 @@ namespace lfs::vis {
                                                      : std::string(error.user_message());
                     LOG_ERROR("Training failed: {}", message);
                     lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
-                    handleTrainingComplete(false, message);
+                    handleTrainingComplete(
+                        false, message,
+                        error.code() == lfs::ErrorCode::ResourceExhausted);
                 }
             });
 
         LOG_INFO("Training thread finished");
     }
 
-    void TrainerManager::handleTrainingComplete(const bool success, const std::string& error) {
+    void TrainerManager::handleTrainingComplete(const bool success, const std::string& error,
+                                                const bool resource_exhausted) {
         if (!error.empty()) {
             last_error_ = error;
             LOG_ERROR("Training error: {}", error);
@@ -1035,6 +1032,7 @@ namespace lfs::vis {
                 .elapsed_seconds = elapsed,
                 .success = success,
                 .user_stopped = user_stopped,
+                .resource_exhausted = resource_exhausted,
                 .reason = reason,
                 .error = error.empty() ? std::nullopt : std::optional(error)};
         }

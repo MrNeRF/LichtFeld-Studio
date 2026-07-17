@@ -254,7 +254,7 @@ namespace lfs::training {
         }
     }
 
-    std::expected<std::pair<RenderOutput, FastRasterizeContext>, std::string> fast_rasterize_forward(
+    std::expected<std::pair<RenderOutput, FastRasterizeContext>, lfs::Error> fast_rasterize_forward(
         core::Camera& viewpoint_camera,
         core::SplatData& gaussian_model,
         core::Tensor& bg_color,
@@ -302,7 +302,13 @@ namespace lfs::training {
 
         const int n_primitives = checked_dim_to_int(means.shape()[0], "n_primitives");
         if (n_primitives == 0) {
-            return std::unexpected("n_primitives is 0 - model has no gaussians");
+            return std::unexpected(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Rendering,
+                .user_message = "FastGS cannot render an empty Gaussian model.",
+                .detail = "n_primitives is 0 - model has no gaussians",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
 
         // Pre-allocate output tensors (reused across iterations)
@@ -427,9 +433,21 @@ namespace lfs::training {
             throw; // Re-throw after dumping
         }
 
-        // Check if forward failed due to OOM
         if (!forward_ctx.success) {
-            return std::unexpected(std::string(forward_ctx.error_message));
+            const std::string message = forward_ctx.error_message
+                                            ? forward_ctx.error_message
+                                            : "unknown forward failure";
+            return std::unexpected(lfs::make_error(lfs::ErrorInit{
+                .code = forward_ctx.resource_exhausted
+                            ? lfs::ErrorCode::ResourceExhausted
+                            : lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::CUDA,
+                .user_message = forward_ctx.resource_exhausted
+                                    ? "Ran out of GPU memory while rendering during training."
+                                    : "FastGS forward rasterization failed.",
+                .detail = message,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
 
         // Take ownership before any post-forward tensor work so exceptions cannot leak

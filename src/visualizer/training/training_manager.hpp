@@ -175,6 +175,7 @@ namespace lfs::vis {
             float elapsed_seconds = 0.0f;
             bool success = false;
             bool user_stopped = false;
+            bool resource_exhausted = false;
             FinishReason reason = FinishReason::None;
             std::optional<std::string> error;
         };
@@ -187,7 +188,8 @@ namespace lfs::vis {
         void dispatchTrainingCompleted(TrainingCompletionData completion);
 
         // State management
-        void handleTrainingComplete(bool success, const std::string& error = "");
+        void handleTrainingComplete(bool success, const std::string& error = "",
+                                    bool resource_exhausted = false);
         void setupEventHandlers();
         void setupStateMachineCallbacks();
 

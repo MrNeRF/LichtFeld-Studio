@@ -301,7 +301,7 @@ namespace lfs::app {
                     core::Tensor::trim_memory_pool();
 
                     if (const auto result = trainer->train(coordinator.stop_token()); !result) {
-                        LOG_ERROR("Training error: {}", result.error());
+                        LOG_ERROR("Training error: {}", lfs::format_for_developer(result.error()));
                         if (!params->python_scripts.empty()) {
                             core::Tensor::shutdown_memory_pool();
                             core::PinnedMemoryAllocator::instance().shutdown();
@@ -340,7 +340,7 @@ namespace lfs::app {
                     core::Tensor::trim_memory_pool();
 
                     if (const auto result = trainer->train(coordinator.stop_token()); !result) {
-                        LOG_ERROR("Training error: {}", result.error());
+                        LOG_ERROR("Training error: {}", lfs::format_for_developer(result.error()));
                         if (!params->python_scripts.empty()) {
                             core::Tensor::shutdown_memory_pool();
                             core::PinnedMemoryAllocator::instance().shutdown();
