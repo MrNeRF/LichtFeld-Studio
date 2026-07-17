@@ -3,6 +3,7 @@
 
 #include "core/cuda_error.hpp"
 
+#include "core/device_fault.hpp"
 #include "core/environment.hpp"
 #include "core/error_codes.hpp"
 #include "core/failure_report.hpp"
@@ -443,6 +444,8 @@ namespace lfs::core {
         g_last_cuda_check_failure.store(cudaSuccess, std::memory_order_relaxed);
         g_lfs_launch_watermark = 0;
         reset_failure_report_dedup_for_testing();
+        // Spec §0.3 / §1.6: device-fault host registry joins the testing reset.
+        reset_device_fault_registry_for_testing();
     }
 
     uint64_t current_cuda_breadcrumb_sequence() noexcept {

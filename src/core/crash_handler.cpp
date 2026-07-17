@@ -3,6 +3,7 @@
 
 #include "core/crash_handler.hpp"
 
+#include "core/device_fault.hpp"
 #include "core/environment.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
@@ -41,11 +42,17 @@ namespace lfs::core {
 
     void teardown_gpu_before_exit() noexcept {
         try {
+            // Phase 6C §9 Ruling 2: drain dedicated DeviceFaultRecord slots
+            // (cudaMalloc-owned, never pool memory) BEFORE the tensor memory
+            // pool shuts down. device_fault_registry_teardown is no-throw and
+            // idempotent (LFS_CUDA_LOG_TEARDOWN on every free).
+            device_fault_registry_teardown();
             Tensor::shutdown_memory_pool();
             PinnedMemoryAllocator::instance().shutdown();
         } catch (...) {
-            // LFS-CENSUS-OK(empty-catch): both calls are documented no-throw
-            // today (shutdown_memory_pool is a guarded pointer check + already
+            // LFS-CENSUS-OK(empty-catch): all three calls are documented no-throw
+            // today (device_fault_registry_teardown is LOG_TEARDOWN-only;
+            // shutdown_memory_pool is a guarded pointer check + already
             // LogOnly-policy CudaMemoryPool::shutdown; PinnedMemoryAllocator::
             // shutdown only calls its own already-LogOnly empty_cache_impl) —
             // this is defense-in-depth for the one sanctioned pre-exit step, not

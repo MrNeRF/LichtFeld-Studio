@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
+#include "core/device_fault.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
@@ -220,9 +221,15 @@ namespace {
                       static_cast<unsigned>(lfs::core::DiagnosticMode::VkFatal));
     }
 
-    TEST(DiagnosticModeParsing, DeviceTrapTokenIsParsedButHasNoConsumerYet) {
+    TEST(DiagnosticModeParsing, DeviceTrapTokenIsParsedAndConsumedByLaunchPrepHelper) {
+        // device-trap still parses into DiagnosticMode::DeviceTrap (Phase 0).
         const auto parsed = lfs::core::parse_diagnostic_modes("device-trap", std::nullopt);
         EXPECT_EQ(parsed.modes, static_cast<unsigned>(lfs::core::DiagnosticMode::DeviceTrap));
+        // Phase 6C-P2 consumer: host launch-prep helper reads the process diagnostic
+        // bitmask once and yields trap_after_record for kernels (Ruling 1: device
+        // never parses modes). Both surfaces share the same DeviceTrap bit.
+        EXPECT_EQ(lfs::core::device_fault_trap_after_record_for_launch(),
+                  lfs::core::diagnostic_mode_enabled(lfs::core::DiagnosticMode::DeviceTrap));
     }
 
     TEST(DiagnosticModeParsing, UnknownTokenWarnsAndIsIgnored) {

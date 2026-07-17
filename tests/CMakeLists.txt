@@ -83,6 +83,8 @@ set(TEST_FILES
     test_cuda_error_typed.cpp
     test_cuda_launch_check.cpp
     test_tensor_launch_check.cpp
+    test_device_fault.cpp
+    device_fault_cuda_utils.cu
     test_selection_ops.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
@@ -723,6 +725,13 @@ target_link_libraries(bench_tensor_launch_overhead PRIVATE
     CUDA::cudart
 )
 
+# Phase 6C-P3 negative nvcc TU fixtures (Ruling 1 / §1.11) live under
+# tests/cuda_fixtures/ and are intentionally NOT listed in any target SOURCES.
+# Positive nvcc TU: device_fault_cuda_utils.cu (compiled into lichtfeld_tests;
+# includes the FOUR allowed headers and exercises DeviceFaultRecord +
+# device_fault_try_record_first). A host gtest asserts the negative fixtures
+# exist and contain the forbidden includes (see test_device_fault.cpp).
+
 # Status messages
 list(LENGTH TEST_FILES TEST_COUNT)
 
@@ -732,3 +741,4 @@ message(STATUS "  Build tests: ninja lichtfeld_tests")
 message(STATUS "  Run tests: ninja run_tests")
 message(STATUS "  Run full tests: ninja run_full_tests")
 message(STATUS "  Bench (not ctest): bench_tensor_launch_overhead")
+message(STATUS "  Phase 6C device-fault tests: test_device_fault.cpp + device_fault_cuda_utils.cu")

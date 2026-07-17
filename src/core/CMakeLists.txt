@@ -51,6 +51,7 @@ set(CORE_SOURCES
         crash_handler.cpp
         cuda_error.cpp
         cuda_error_typed.cpp
+        device_fault.cpp
         error.cpp
         error_reporter.cpp
         guarded_task.cpp

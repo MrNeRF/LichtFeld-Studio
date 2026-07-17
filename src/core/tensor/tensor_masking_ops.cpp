@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/device_fault.hpp"
 #include "core/logger.hpp"
 #include "internal/cuda_stream_context.hpp"
 #include "internal/tensor_impl.hpp"
@@ -60,11 +61,11 @@ namespace lfs::core {
             return dtype == DataType::Int32 || dtype == DataType::Int64;
         }
 
-        void assert_index_tensor(const Tensor& indices,
-                                 const size_t upper_bound,
-                                 const std::string_view operation,
-                                 const bool check_bounds,
-                                 const bool allow_negative = false) {
+        // Host-only dtype/empty/upper-bound checks (tensor_masking_ops.cpp:68-78
+        // region per phase-6c §9 sign-off 4). No D2H value scan.
+        void assert_index_tensor_host_only(const Tensor& indices,
+                                           const size_t upper_bound,
+                                           const std::string_view operation) {
             LFS_ASSERT_MSG(indices.is_valid(),
                            std::string(operation) + ": invalid index tensor");
             LFS_ASSERT_MSG(is_integer_index_dtype(indices.dtype()),
@@ -76,7 +77,22 @@ namespace lfs::core {
                            std::string(operation) + ": cannot index an empty dimension");
             LFS_ASSERT_MSG(upper_bound <= static_cast<size_t>(std::numeric_limits<int>::max()),
                            std::string(operation) + ": indexed dimension exceeds Int32 kernel range");
+        }
 
+        void assert_index_tensor(const Tensor& indices,
+                                 const size_t upper_bound,
+                                 const std::string_view operation,
+                                 const bool check_bounds,
+                                 const bool allow_negative = false) {
+            assert_index_tensor_host_only(indices, upper_bound, operation);
+            if (indices.numel() == 0) {
+                return;
+            }
+
+            // D2H value scan — retained for gather/scatter/etc. Removed ONLY on
+            // the converted index_select Assert CUDA path (sign-off 4); that path
+            // calls assert_index_tensor_host_only and relies on the device fault
+            // record for release safety.
             const Tensor cpu_indices = indices.device() == Device::CPU
                                            ? indices.contiguous()
                                            : indices.cpu().contiguous();
@@ -104,6 +120,15 @@ namespace lfs::core {
                 for (size_t i = 0; i < cpu_indices.numel(); ++i) {
                     assert_value(values[i], i);
                 }
+            }
+        }
+
+        // §1.9 host entry: reject graph capture before checked index_select launch.
+        void reject_index_select_graph_capture(const cudaStream_t stream) {
+            cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+            const cudaError_t query = cudaStreamIsCapturing(stream, &capture_status);
+            if (query != cudaSuccess || capture_status != cudaStreamCaptureStatusNone) {
+                throw_device_fault_graph_capture_error(stream, LFS_SOURCE_SITE_CURRENT());
             }
         }
     } // namespace
@@ -406,8 +431,18 @@ namespace lfs::core {
             input.index_select_into(out, dim, dense_indices, mode);
             return;
         }
-        assert_index_tensor(indices, shape_[dim], "index_select_into",
-                            mode == BoundaryMode::Assert);
+        // Phase 6C-P3 sign-off 4: on the converted index_select Assert CUDA path,
+        // keep host-only dtype/empty/upper-bound checks and drop the D2H value
+        // scan. Release safety transfers to the device fault record. All other
+        // modes/devices retain the full assert_index_tensor scan.
+        const bool device_fault_assert_path =
+            device_ == Device::CUDA && mode == BoundaryMode::Assert;
+        if (device_fault_assert_path) {
+            assert_index_tensor_host_only(indices, shape_[dim], "index_select_into");
+        } else {
+            assert_index_tensor(indices, shape_[dim], "index_select_into",
+                                mode == BoundaryMode::Assert);
+        }
 
         auto indices_same_device = ensure_same_device(indices);
 
@@ -422,8 +457,20 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
             const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
+
+            // §1.9: host rejects graph capture at the checked-launch entry BEFORE
+            // prepare_inputs_for_stream can enqueue dependency edges into a capture.
+            if (device_fault_assert_path) {
+                reject_index_select_graph_capture(out.stream());
+            }
+
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&out, this, &kernel_index}, out.stream());
+
+            // Re-check after stream resolution (requested stream may differ).
+            if (device_fault_assert_path) {
+                reject_index_select_graph_capture(execution_stream);
+            }
 
             // Dispatch based on source tensor dtype
             if (dtype_ == DataType::Float32) {
@@ -454,7 +501,16 @@ namespace lfs::core {
                 "index_select kernel launch (input_shape={}, output_shape={}, "
                 "index_count={}, dimension={})",
                 shape_.str(), out.shape().str(), indices.numel(), dim);
-            // No sync - tensor operation
+            // Assert mode drains inline: the pre-6C Assert path was already
+            // synchronous (full index D2H + host scan), so a 32-byte record
+            // readback here REPLACES a sync rather than adding one, and keeps
+            // Assert's throw guarantee — enqueue_reset would otherwise drop an
+            // unconsumed fault at the next op. Clamp/Wrap stay sync-free.
+            if (device_fault_assert_path) {
+                lfs::core::device_fault_await_and_consume_or_throw(
+                    execution_stream, "tensor.masking.index_select.assert",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
         } else {
             // CPU implementation
             size_t outer = 1, inner = 1;

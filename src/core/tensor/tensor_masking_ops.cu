@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
+#include "core/device_fault.hpp"
 #include "internal/cub_workspace.hpp"
 #include "internal/cuda_memory_guard.hpp"
 #include "internal/tensor_functors.hpp"
@@ -611,11 +612,21 @@ namespace lfs::core::tensor_ops {
     }
 
     // ============= Index Operations =============
-    // Templated kernel to support multiple data types (float, int64_t, etc.)
+    // Phase 6C-P3: index_select is THE reference device-fault kernel (spec §9
+    // sign-off 1). On Assert-mode OOB: first-fault record then zero/skip.
+    // Clamp/Wrap unchanged (no BoundsViolation). gather/scatter untouched.
+    //
+    // fault / op_id / trap_after_record: host pass-through from the launch-prep
+    // helper. Production Assert path always arms a per-stream slot. Unchecked
+    // fast path (ValidatedIndexToken match) passes fault=nullptr and skips
+    // reset/harvest — host-only token never appears in this .cu TU.
     template <typename T>
     __global__ void index_select_kernel(const T* in, const int* idx, T* out,
                                         size_t outer, size_t dim_size, size_t inner,
-                                        size_t idx_size, int boundary) {
+                                        size_t idx_size, int boundary,
+                                        DeviceFaultRecord* fault,
+                                        std::uint32_t op_id,
+                                        bool trap_after_record) {
         // Support both 1D and 2D grids for large arrays
         size_t block_id = blockIdx.y * gridDim.x + blockIdx.x;
         size_t tid = block_id * blockDim.x + threadIdx.x;
@@ -632,12 +643,26 @@ namespace lfs::core::tensor_ops {
             sel = max(0, min((int)dim_size - 1, sel));
         else if (boundary == 2)
             sel = ((sel % (int)dim_size) + dim_size) % dim_size;
-        else if (sel < 0 || sel >= dim_size) {
+        else if (sel < 0 || sel >= static_cast<int>(dim_size)) {
             LFS_DEBUG_ASSERT_MSG(sel >= 0 && sel < static_cast<int>(dim_size),
                                  detail::format_cuda_safe("index_select index must be in range "
                                                           "(selected_index={}, dimension_size={}, "
                                                           "index_position={}, output_index={}, boundary_mode={})",
                                                           sel, dim_size, i, tid, boundary));
+            // Failure branch only: first-fault CAS, then zero/skip (spec §1.4).
+            // Hot success path never touches the fault record.
+            if (fault != nullptr) {
+                const std::uint64_t thread_id =
+                    (static_cast<std::uint64_t>(blockIdx.x) << 32) |
+                    static_cast<std::uint64_t>(threadIdx.x);
+                device_fault_try_record_first(
+                    fault,
+                    op_id,
+                    static_cast<std::int64_t>(sel),
+                    static_cast<std::int64_t>(dim_size),
+                    thread_id,
+                    trap_after_record);
+            }
             out[tid] = 0;
             return;
         }
@@ -652,155 +677,208 @@ namespace lfs::core::tensor_ops {
         out[tid] = in[src_idx];
     }
 
+    // Host-side launch prep for the checked Assert path (spec §1.5 steps 1–4).
+    // Graph capture is rejected by device_fault_slot_enqueue_reset (returns
+    // cudaErrorStreamCaptureUnsupported); host .cpp also pre-checks and throws
+    // typed Unsupported. Clamp/Wrap leave the fault unarmed.
+    // Unchecked ValidatedIndexToken fast path is host-only / test-stub (not here).
+    inline void prepare_index_select_device_fault(
+        const int boundary,
+        const cudaStream_t stream,
+        const char* launch_tag,
+        DeviceFaultRecord** out_fault,
+        std::uint32_t* out_op_id,
+        bool* out_trap) {
+        *out_fault = nullptr;
+        *out_op_id = 0;
+        *out_trap = false;
+        if (boundary != 0) {
+            return;
+        }
+        // §1.9: reject capture before any reset/kernel/harvest enqueue.
+        const cudaError_t reset_status = device_fault_slot_enqueue_reset(stream);
+        if (reset_status != cudaSuccess) {
+            LFS_ENSURE_CUDA_SUCCESS_MSG(
+                reset_status, "device_fault_slot_enqueue_reset(index_select)",
+                launch_tag);
+        }
+        DeviceFaultRecord* fault = nullptr;
+        const cudaError_t acquire_status = device_fault_slot_acquire(stream, &fault);
+        if (acquire_status != cudaSuccess) {
+            LFS_ENSURE_CUDA_SUCCESS_MSG(
+                acquire_status, "device_fault_slot_acquire(index_select)",
+                launch_tag);
+        }
+        *out_fault = fault;
+        // Correlate op_id with the breadcrumb sequence that LAUNCH_CHECK will also bump.
+        *out_op_id = static_cast<std::uint32_t>(
+            current_cuda_breadcrumb_sequence() & 0xffffffffu);
+        *out_trap = device_fault_trap_after_record_for_launch();
+    }
+
+    inline void finish_index_select_device_fault(
+        DeviceFaultRecord* fault,
+        const cudaStream_t stream,
+        const char* launch_tag) {
+        if (fault == nullptr) {
+            return;
+        }
+        const cudaError_t harvest_status = device_fault_slot_enqueue_harvest(stream);
+        if (harvest_status != cudaSuccess) {
+            LFS_ENSURE_CUDA_SUCCESS_MSG(
+                harvest_status, "device_fault_slot_enqueue_harvest(index_select)",
+                launch_tag);
+        }
+    }
+
+    // Shared geometry + fault arming for the four dtype overloads. LAUNCH_CHECK
+    // tags must remain string literals at each call site (macro static_assert).
+    [[nodiscard]] bool index_select_compute_geometry(const size_t* shape, size_t rank, int dim,
+                                                     size_t idx_size,
+                                                     size_t* outer, size_t* inner, size_t* total) {
+        if (idx_size == 0) {
+            return false;
+        }
+        *outer = 1;
+        *inner = 1;
+        for (int i = 0; i < dim; ++i)
+            *outer *= shape[i];
+        for (size_t i = dim + 1; i < rank; ++i)
+            *inner *= shape[i];
+        *total = (*outer) * idx_size * (*inner);
+        return *total != 0;
+    }
+
     // Float32 overload
     void launch_index_select(const float* in, const int* idx, float* out,
                              const size_t* shape, size_t rank, int dim,
                              size_t idx_size, int boundary, cudaStream_t stream) {
-        // Handle empty indices case - no kernel launch needed
-        if (idx_size == 0) {
+        size_t outer = 0, inner = 0, total = 0;
+        if (!index_select_compute_geometry(shape, rank, dim, idx_size, &outer, &inner, &total)) {
             return;
         }
 
-        size_t outer = 1, inner = 1;
-        for (int i = 0; i < dim; ++i)
-            outer *= shape[i];
-        for (size_t i = dim + 1; i < rank; ++i)
-            inner *= shape[i];
-        size_t total = outer * idx_size * inner;
+        DeviceFaultRecord* fault = nullptr;
+        std::uint32_t op_id = 0;
+        bool trap_after_record = false;
+        prepare_index_select_device_fault(boundary, stream, "tensor.masking.index_select_f32",
+                                          &fault, &op_id, &trap_after_record);
 
-        // Early return if no work to do
-        if (total == 0) {
-            return;
-        }
-
-        // Use 2D grid for large arrays to avoid exceeding grid dimension limits
         size_t num_blocks = (total + 255) / 256;
-        const size_t max_blocks_x = 65535; // Safe limit for all CUDA devices
-
+        const size_t max_blocks_x = 65535;
         if (num_blocks <= max_blocks_x) {
             index_select_kernel<float><<<num_blocks, 256, 0, stream>>>(
-                in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+                in, idx, out, outer, shape[dim], inner, idx_size, boundary,
+                fault, op_id, trap_after_record);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_f32");
         } else {
-            // Use 2D grid: gridDim.x = min(num_blocks, max), gridDim.y = ceil(num_blocks / max)
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             index_select_kernel<float><<<grid, 256, 0, stream>>>(
-                in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+                in, idx, out, outer, shape[dim], inner, idx_size, boundary,
+                fault, op_id, trap_after_record);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_f32");
         }
+        finish_index_select_device_fault(fault, stream, "tensor.masking.index_select_f32");
     }
 
     // Int64 overload
     void launch_index_select(const int64_t* in, const int* idx, int64_t* out,
                              const size_t* shape, size_t rank, int dim,
                              size_t idx_size, int boundary, cudaStream_t stream) {
-        // Handle empty indices case - no kernel launch needed
-        if (idx_size == 0) {
+        size_t outer = 0, inner = 0, total = 0;
+        if (!index_select_compute_geometry(shape, rank, dim, idx_size, &outer, &inner, &total)) {
             return;
         }
 
-        size_t outer = 1, inner = 1;
-        for (int i = 0; i < dim; ++i)
-            outer *= shape[i];
-        for (size_t i = dim + 1; i < rank; ++i)
-            inner *= shape[i];
-        size_t total = outer * idx_size * inner;
+        DeviceFaultRecord* fault = nullptr;
+        std::uint32_t op_id = 0;
+        bool trap_after_record = false;
+        prepare_index_select_device_fault(boundary, stream, "tensor.masking.index_select_i64",
+                                          &fault, &op_id, &trap_after_record);
 
-        // Early return if no work to do
-        if (total == 0) {
-            return;
-        }
-
-        // Use 2D grid for large arrays to avoid exceeding grid dimension limits
         size_t num_blocks = (total + 255) / 256;
-        const size_t max_blocks_x = 65535; // Safe limit for all CUDA devices
-
+        const size_t max_blocks_x = 65535;
         if (num_blocks <= max_blocks_x) {
             index_select_kernel<int64_t><<<num_blocks, 256, 0, stream>>>(
-                in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+                in, idx, out, outer, shape[dim], inner, idx_size, boundary,
+                fault, op_id, trap_after_record);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_i64");
         } else {
-            // Use 2D grid
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             index_select_kernel<int64_t><<<grid, 256, 0, stream>>>(
-                in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+                in, idx, out, outer, shape[dim], inner, idx_size, boundary,
+                fault, op_id, trap_after_record);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_i64");
         }
+        finish_index_select_device_fault(fault, stream, "tensor.masking.index_select_i64");
     }
 
     // Int32 overload
     void launch_index_select(const int32_t* in, const int* idx, int32_t* out,
                              const size_t* shape, size_t rank, int dim,
                              size_t idx_size, int boundary, cudaStream_t stream) {
-        if (idx_size == 0) {
+        size_t outer = 0, inner = 0, total = 0;
+        if (!index_select_compute_geometry(shape, rank, dim, idx_size, &outer, &inner, &total)) {
             return;
         }
 
-        size_t outer = 1, inner = 1;
-        for (int i = 0; i < dim; ++i)
-            outer *= shape[i];
-        for (size_t i = dim + 1; i < rank; ++i)
-            inner *= shape[i];
-        size_t total = outer * idx_size * inner;
+        DeviceFaultRecord* fault = nullptr;
+        std::uint32_t op_id = 0;
+        bool trap_after_record = false;
+        prepare_index_select_device_fault(boundary, stream, "tensor.masking.index_select_i32",
+                                          &fault, &op_id, &trap_after_record);
 
-        // Early return if no work to do
-        if (total == 0) {
-            return;
-        }
-
-        // Use 2D grid for large arrays to avoid exceeding grid dimension limits
         size_t num_blocks = (total + 255) / 256;
-        const size_t max_blocks_x = 65535; // Safe limit for all CUDA devices
-
+        const size_t max_blocks_x = 65535;
         if (num_blocks <= max_blocks_x) {
             index_select_kernel<int32_t><<<num_blocks, 256, 0, stream>>>(
-                in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+                in, idx, out, outer, shape[dim], inner, idx_size, boundary,
+                fault, op_id, trap_after_record);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_i32");
         } else {
-            // Use 2D grid
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             index_select_kernel<int32_t><<<grid, 256, 0, stream>>>(
-                in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+                in, idx, out, outer, shape[dim], inner, idx_size, boundary,
+                fault, op_id, trap_after_record);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_i32");
         }
+        finish_index_select_device_fault(fault, stream, "tensor.masking.index_select_i32");
     }
 
     // UInt8 overload
     void launch_index_select(const uint8_t* in, const int* idx, uint8_t* out,
                              const size_t* shape, size_t rank, int dim,
                              size_t idx_size, int boundary, cudaStream_t stream) {
-        if (idx_size == 0) {
+        size_t outer = 0, inner = 0, total = 0;
+        if (!index_select_compute_geometry(shape, rank, dim, idx_size, &outer, &inner, &total)) {
             return;
         }
 
-        size_t outer = 1, inner = 1;
-        for (int i = 0; i < dim; ++i)
-            outer *= shape[i];
-        for (size_t i = dim + 1; i < rank; ++i)
-            inner *= shape[i];
-        size_t total = outer * idx_size * inner;
-
-        if (total == 0) {
-            return;
-        }
+        DeviceFaultRecord* fault = nullptr;
+        std::uint32_t op_id = 0;
+        bool trap_after_record = false;
+        prepare_index_select_device_fault(boundary, stream, "tensor.masking.index_select_u8",
+                                          &fault, &op_id, &trap_after_record);
 
         size_t num_blocks = (total + 255) / 256;
         const size_t max_blocks_x = 65535;
-
         if (num_blocks <= max_blocks_x) {
             index_select_kernel<uint8_t><<<num_blocks, 256, 0, stream>>>(
-                in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+                in, idx, out, outer, shape[dim], inner, idx_size, boundary,
+                fault, op_id, trap_after_record);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_u8");
         } else {
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             index_select_kernel<uint8_t><<<grid, 256, 0, stream>>>(
-                in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+                in, idx, out, outer, shape[dim], inner, idx_size, boundary,
+                fault, op_id, trap_after_record);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_u8");
         }
+        finish_index_select_device_fault(fault, stream, "tensor.masking.index_select_u8");
     }
 
     template <typename T>
