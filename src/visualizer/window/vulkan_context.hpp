@@ -4,11 +4,14 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "rendering/vulkan_result.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "vulkan_image_barrier_tracker.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -279,6 +282,19 @@ namespace lfs::vis {
                   std::source_location location = std::source_location::current());
         bool setVkFailure(std::string message);
 
+        // Phase 7B: shared WaitContext for the six UI-frame bounded waits.
+        [[nodiscard]] lfs::rendering::WaitContext makeWaitContext(std::string_view fingerprint);
+        // Map fence/semaphore WaitOutcome → bool + last_error_. Soft Cancelled/Shutdown
+        // clear last_error_ and return false; Quarantined/DeviceLost/other fail().
+        // When set_framebuffer_resized_on_hard_error is true (image-fence site), only
+        // hard Error results set framebuffer_resized_ (never Quarantined/soft).
+        [[nodiscard]] bool mapWaitOutcome(lfs::Result<lfs::rendering::WaitOutcome> result,
+                                          std::string_view op,
+                                          bool set_framebuffer_resized_on_hard_error = false);
+        // Validation timeline waits (sites 5–6): every non-Ready path fails with detail.
+        [[nodiscard]] bool mapValidationWaitOutcome(lfs::Result<lfs::rendering::WaitOutcome> result,
+                                                    std::string_view detail_on_fail);
+
         struct QueueFamilies {
             std::optional<uint32_t> graphics;
             std::optional<uint32_t> present;
@@ -443,6 +459,10 @@ namespace lfs::vis {
         bool frame_active_ = false;
         bool frame_rendering_active_ = false;
         bool frame_suboptimal_ = false;
+        // Phase 7B: owner quarantine latch (10 s policy) shared by the six UI waits.
+        std::atomic<bool> gpu_wait_quarantined_{false};
+        // Phase 7B AMB-B3: set at shutdown() entry so mid-teardown waits yield Shutdown.
+        std::atomic<bool> context_shutdown_started_{false};
         bool debug_utils_enabled_ = false;
         bool validation_enabled_ = false;
         bool validation_errors_fatal_ = false;

@@ -408,7 +408,11 @@ namespace lfs::rendering {
                                const VkFence fence,
                                const std::stop_token stop,
                                const VulkanWaitPolicy policy,
-                               WaitContext context) {
+                               WaitContext context,
+                               bool* out_suboptimal) {
+        if (out_suboptimal != nullptr) {
+            *out_suboptimal = false;
+        }
         if (device == VK_NULL_HANDLE || swapchain == VK_NULL_HANDLE) {
             return make_error(ErrorInit{
                 .code = ErrorCode::InvalidArgument,
@@ -479,7 +483,10 @@ namespace lfs::rendering {
                 device, swapchain, timeout_ns, semaphore, fence, &image_index);
 
             if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
-                // Suboptimal still yields an index; 7B owns typed classification.
+                // SUBOPTIMAL is success-with-flag (AMB-B1); optional out bit.
+                if (out_suboptimal != nullptr) {
+                    *out_suboptimal = (result == VK_SUBOPTIMAL_KHR);
+                }
                 return image_index;
             }
             if (result == VK_TIMEOUT || result == VK_NOT_READY) {

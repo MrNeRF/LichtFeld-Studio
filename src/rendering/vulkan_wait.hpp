@@ -167,9 +167,12 @@ namespace lfs::rendering {
                             VulkanWaitPolicy policy = {},
                             WaitContext context = {});
 
-    // Ready → image index. Suboptimal/OutOfDate are returned as Result errors
-    // with ErrorCode::Unavailable (flow classification is 7B). Timeout path
-    // uses the same slice/stall/quarantine policy as fence waits.
+    // Ready → image index. VK_SUCCESS and VK_SUBOPTIMAL_KHR both yield the
+    // image index (SUBOPTIMAL is success-with-flag, not an error). Optional
+    // out_suboptimal receives true only for VK_SUBOPTIMAL_KHR; nullptr skips
+    // the side channel. OUT_OF_DATE and other hard failures are Result errors
+    // with ErrorCode::Unavailable / DeviceLost / etc. Timeout path uses the
+    // same slice/stall/quarantine policy as fence waits.
     [[nodiscard]] LFS_RENDERING_API Result<std::uint32_t>
     acquire_next_image_bounded(VkDevice device,
                                VkSwapchainKHR swapchain,
@@ -177,7 +180,8 @@ namespace lfs::rendering {
                                VkFence fence,
                                std::stop_token stop,
                                VulkanWaitPolicy policy = {},
-                               WaitContext context = {});
+                               WaitContext context = {},
+                               bool* out_suboptimal = nullptr);
 
     // Map a native VkResult that is not TIMEOUT/SUCCESS into an lfs::Error.
     // DeviceLost is always ErrorCode::DeviceLost / ErrorDomain::Vulkan.
