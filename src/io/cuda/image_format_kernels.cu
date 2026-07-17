@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "image_format_kernels.cuh"
 #include <cassert>
 
@@ -230,6 +231,7 @@ namespace lfs::io::cuda {
 
         uint8_hwc_to_float32_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, height, width, channels);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u8_hwc_to_f32_chw");
     }
 
     void launch_uint16_hwc_to_float32_chw(
@@ -245,6 +247,7 @@ namespace lfs::io::cuda {
 
         uint16_hwc_to_float32_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, height, width, channels);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u16_hwc_to_f32_chw");
     }
 
     void launch_normal_prior_u8_hwc_to_float32_chw(
@@ -260,6 +263,7 @@ namespace lfs::io::cuda {
 
         normal_prior_hwc_to_float32_chw_kernel<uint8_t><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, pixel_count, transform);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.normal_prior_u8");
     }
 
     void launch_normal_prior_u16_hwc_to_float32_chw(
@@ -275,6 +279,7 @@ namespace lfs::io::cuda {
 
         normal_prior_hwc_to_float32_chw_kernel<uint16_t><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, pixel_count, transform);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.normal_prior_u16");
     }
 
     void launch_float32_hwc_to_uint16_hwc(
@@ -290,6 +295,7 @@ namespace lfs::io::cuda {
 
         float32_hwc_to_uint16_hwc_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, total);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.f32_hwc_to_u16_hwc");
     }
 
     void launch_uint16_hwc_to_float32_hwc(
@@ -305,6 +311,7 @@ namespace lfs::io::cuda {
 
         uint16_hwc_to_float_hwc_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, total);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u16_hwc_to_f32_hwc");
     }
 
     void launch_normal_chw_to_jpeg2k_hwc(
@@ -319,6 +326,7 @@ namespace lfs::io::cuda {
 
         normal_chw_to_jpeg2k_hwc_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, pixel_count);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.normal_to_j2k");
     }
 
     void launch_jpeg2k_hwc_to_normal_chw(
@@ -333,6 +341,7 @@ namespace lfs::io::cuda {
 
         jpeg2k_hwc_to_normal_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, pixel_count);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.j2k_to_normal");
     }
 
     void launch_uint8_hwc_to_uint8_chw(
@@ -348,6 +357,7 @@ namespace lfs::io::cuda {
 
         uint8_hwc_to_uint8_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, height, width, channels);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u8_hwc_to_u8_chw");
     }
 
     void launch_uint16_hwc_to_uint8_chw(
@@ -363,6 +373,7 @@ namespace lfs::io::cuda {
 
         uint16_hwc_to_uint8_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, height, width, channels);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u16_hwc_to_u8_chw");
     }
 
     void launch_float32_chw_to_uint8_chw(
@@ -378,6 +389,7 @@ namespace lfs::io::cuda {
 
         float32_chw_to_uint8_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, total);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.f32_chw_to_u8_chw");
     }
 
     __global__ void uint8_hw_to_float32_hw_kernel(
@@ -404,6 +416,7 @@ namespace lfs::io::cuda {
 
         uint8_hw_to_float32_hw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, total);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.u8_hw_to_f32_hw");
     }
 
     __global__ void uint8_rgba_split_kernel(
@@ -463,6 +476,7 @@ namespace lfs::io::cuda {
 
         uint8_rgba_split_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, rgb_output, alpha_output, total);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.rgba_split_f32");
     }
 
     void launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
@@ -483,6 +497,7 @@ namespace lfs::io::cuda {
 
         uint8_rgba_split_uint8_rgb_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, rgb_output, alpha_output, total);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.rgba_split_u8");
     }
 
     __global__ void mask_invert_kernel(
@@ -506,6 +521,7 @@ namespace lfs::io::cuda {
         const int num_blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
         mask_invert_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, total);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.mask_invert");
     }
 
     __global__ void mask_threshold_kernel(
@@ -531,6 +547,7 @@ namespace lfs::io::cuda {
         const int num_blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
         mask_threshold_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, total, threshold);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.image.mask_threshold");
     }
 
 } // namespace lfs::io::cuda

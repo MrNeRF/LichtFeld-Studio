@@ -9,6 +9,7 @@
 #endif
 
 #include "sogs.hpp"
+#include "core/error_reporter.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
@@ -1511,370 +1512,382 @@ namespace lfs::io {
     } // anonymous namespace
 
     Result<void> save_sog(const SplatData& splat_data, const SogSaveOptions& options) {
-        LOG_INFO("SOG write: {}", lfs::core::path_to_utf8(options.output_path));
+        try {
+            LOG_INFO("SOG write: {}", lfs::core::path_to_utf8(options.output_path));
 
-        const auto report_progress = [&](float progress, const std::string& stage) -> bool {
-            return !options.progress_callback || options.progress_callback(progress, stage);
-        };
+            const auto report_progress = [&](float progress, const std::string& stage) -> bool {
+                return !options.progress_callback || options.progress_callback(progress, stage);
+            };
 
-        if (!report_progress(0.0f, "Initializing")) {
-            return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-        }
-
-        const int64_t num_rows = splat_data.size();
-        if (num_rows == 0) {
-            return make_error(ErrorCode::EMPTY_DATASET, "No splats to write", options.output_path);
-        }
-
-        // Estimate output size: 5 base textures + optional SH, ~40% compression
-        const int width = static_cast<int>(std::ceil(std::sqrt(num_rows) / 4.0)) * 4;
-        const int height = static_cast<int>(std::ceil(static_cast<double>(num_rows) / width / 4.0)) * 4;
-        constexpr int CHANNELS = 4;
-        constexpr double COMPRESSION_RATIO = 0.4;
-        constexpr size_t OVERHEAD = 4096;
-
-        const size_t texture_size = static_cast<size_t>(width) * height * CHANNELS;
-        const int sh_degree = splat_data.get_max_sh_degree();
-
-        size_t estimated_size = texture_size * 5;
-        if (sh_degree > 0) {
-            estimated_size += texture_size * 2;
-        }
-        estimated_size = static_cast<size_t>(estimated_size * COMPRESSION_RATIO) + OVERHEAD;
-
-        if (auto result = check_disk_space(options.output_path, estimated_size); !result) {
-            return std::unexpected(result.error());
-        }
-
-        if (auto result = verify_writable(options.output_path); !result) {
-            return std::unexpected(result.error());
-        }
-
-        if (num_rows > static_cast<int64_t>(std::numeric_limits<int>::max())) {
-            return make_error(ErrorCode::INVALID_DATASET,
-                              "SOG export supports at most INT_MAX splats",
-                              options.output_path);
-        }
-
-        auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
-        auto sort_indices_tensor = morton_sort_indices_for_positions(means_cuda);
-        if (!sort_indices_tensor.is_valid()) {
-            return make_error(ErrorCode::ENCODING_FAILED,
-                              "Failed to compute Morton order for SOG export",
-                              options.output_path);
-        }
-        auto sort_indices_cpu = sort_indices_tensor.cpu();
-        const auto* indices = sort_indices_cpu.ptr<int32_t>();
-
-        auto means_cpu = means_cuda.cpu();
-        const auto* means_ptr = means_cpu.ptr<float>();
-        const auto source_index = [&](int64_t sorted_index) -> int64_t {
-            return static_cast<int64_t>(indices[sorted_index]);
-        };
-
-        ScopedAtomicOutputFile atomic_output(options.output_path);
-        SogArchive archive(atomic_output.temp_path());
-
-        // Check archive was created successfully
-        if (!archive.is_valid()) {
-            return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, archive.last_error(), options.output_path);
-        }
-
-        const auto write_webp = [&](const std::string& filename,
-                                    const uint8_t* data, int w, int h) -> Result<void> {
-            return archive.add_webp(filename, data, w, h);
-        };
-
-        if (!report_progress(0.10f, "Positions")) {
-            return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-        }
-
-        std::array<std::array<double, 2>, 3> means_min_max = {{{std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
-                                                               {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
-                                                               {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}}};
-
-        for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = source_index(i);
-            for (int d = 0; d < 3; ++d) {
-                const double v = log_transform(static_cast<double>(means_ptr[idx * 3 + d]));
-                means_min_max[d][0] = std::min(means_min_max[d][0], v);
-                means_min_max[d][1] = std::max(means_min_max[d][1], v);
-            }
-        }
-
-        std::vector<uint8_t> means_l(width * height * CHANNELS, 0);
-        std::vector<uint8_t> means_u(width * height * CHANNELS, 0);
-
-        for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = source_index(i);
-            const double x = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 0])) - means_min_max[0][0]) /
-                             (means_min_max[0][1] - means_min_max[0][0]);
-            const double y = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 1])) - means_min_max[1][0]) /
-                             (means_min_max[1][1] - means_min_max[1][0]);
-            const double z = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 2])) - means_min_max[2][0]) /
-                             (means_min_max[2][1] - means_min_max[2][0]);
-
-            const auto x16 = static_cast<uint16_t>(std::clamp(x, 0.0, 65535.0));
-            const auto y16 = static_cast<uint16_t>(std::clamp(y, 0.0, 65535.0));
-            const auto z16 = static_cast<uint16_t>(std::clamp(z, 0.0, 65535.0));
-
-            const auto ti = static_cast<int>(i);
-            means_l[ti * 4 + 0] = x16 & 0xff;
-            means_l[ti * 4 + 1] = y16 & 0xff;
-            means_l[ti * 4 + 2] = z16 & 0xff;
-            means_l[ti * 4 + 3] = 0xff;
-
-            means_u[ti * 4 + 0] = (x16 >> 8) & 0xff;
-            means_u[ti * 4 + 1] = (y16 >> 8) & 0xff;
-            means_u[ti * 4 + 2] = (z16 >> 8) & 0xff;
-            means_u[ti * 4 + 3] = 0xff;
-        }
-
-        if (auto result = write_webp("means_l.webp", means_l.data(), width, height); !result) {
-            return std::unexpected(result.error());
-        }
-        if (auto result = write_webp("means_u.webp", means_u.data(), width, height); !result) {
-            return std::unexpected(result.error());
-        }
-
-        if (!report_progress(0.20f, "Rotations")) {
-            return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-        }
-
-        auto rotations = splat_data.rotation_raw().cpu();
-        const auto* rot_ptr = rotations.ptr<float>();
-
-        std::vector<uint8_t> quats(width * height * CHANNELS, 0);
-
-        for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = source_index(i);
-            float q[4] = {rot_ptr[idx * 4 + 0], rot_ptr[idx * 4 + 1], rot_ptr[idx * 4 + 2], rot_ptr[idx * 4 + 3]};
-
-            const float len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-            for (float& j : q)
-                j /= len;
-
-            int max_comp = 0;
-            for (int j = 1; j < 4; ++j) {
-                if (std::abs(q[j]) > std::abs(q[max_comp]))
-                    max_comp = j;
-            }
-
-            if (q[max_comp] < 0) {
-                for (float& j : q)
-                    j *= -1;
-            }
-
-            constexpr float SQRT2 = 1.41421356237f;
-            for (float& j : q)
-                j *= SQRT2;
-
-            static const int IDX_TABLE[4][3] = {{1, 2, 3}, {0, 2, 3}, {0, 1, 3}, {0, 1, 2}};
-            const int* other_idx = IDX_TABLE[max_comp];
-
-            const auto ti = static_cast<int>(i);
-            quats[ti * 4 + 0] = static_cast<uint8_t>(255.0f * (q[other_idx[0]] * 0.5f + 0.5f));
-            quats[ti * 4 + 1] = static_cast<uint8_t>(255.0f * (q[other_idx[1]] * 0.5f + 0.5f));
-            quats[ti * 4 + 2] = static_cast<uint8_t>(255.0f * (q[other_idx[2]] * 0.5f + 0.5f));
-            quats[ti * 4 + 3] = static_cast<uint8_t>(252 + max_comp);
-        }
-
-        if (auto result = write_webp("quats.webp", quats.data(), width, height); !result) {
-            return std::unexpected(result.error());
-        }
-
-        if (!report_progress(0.30f, "Scales k-means")) {
-            return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-        }
-
-        auto scales = splat_data.scaling_raw().cpu();
-        const auto* scales_ptr = scales.ptr<float>();
-
-        auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
-
-        std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
-        for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = source_index(i);
-            const auto ti = static_cast<int>(i);
-
-            scales_data[ti * 4 + 0] = scale_result.labels[0 * num_rows + idx];
-            scales_data[ti * 4 + 1] = scale_result.labels[1 * num_rows + idx];
-            scales_data[ti * 4 + 2] = scale_result.labels[2 * num_rows + idx];
-            scales_data[ti * 4 + 3] = 0xff;
-        }
-
-        if (auto result = write_webp("scales.webp", scales_data.data(), width, height); !result) {
-            return std::unexpected(result.error());
-        }
-
-        if (!report_progress(0.45f, "Colors k-means")) {
-            return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-        }
-
-        auto sh0 = splat_data.sh0_raw().cpu();
-        const auto* sh0_ptr = sh0.ptr<float>();
-
-        auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
-
-        auto opacity = splat_data.opacity_raw().cpu();
-        const auto* opacity_ptr = opacity.ptr<float>();
-
-        std::vector<uint8_t> sh0_data(width * height * CHANNELS, 0);
-        for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = source_index(i);
-            const auto ti = static_cast<int>(i);
-
-            sh0_data[ti * 4 + 0] = color_result.labels[0 * num_rows + idx];
-            sh0_data[ti * 4 + 1] = color_result.labels[1 * num_rows + idx];
-            sh0_data[ti * 4 + 2] = color_result.labels[2 * num_rows + idx];
-            sh0_data[ti * 4 + 3] = static_cast<uint8_t>(
-                std::max(0.0, std::min(255.0, sigmoid(static_cast<double>(opacity_ptr[idx])) * 255.0)));
-        }
-
-        if (auto result = write_webp("sh0.webp", sh0_data.data(), width, height); !result) {
-            return std::unexpected(result.error());
-        }
-
-        nlohmann::json sh_n_meta;
-
-        if (sh_degree > 0) {
-            if (!report_progress(0.60f, "SH k-means")) {
+            if (!report_progress(0.0f, "Initializing")) {
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
             }
 
-            static const int SH_COEFFS_TABLE[] = {0, 3, 8, 15};
-            const int sh_coeffs = SH_COEFFS_TABLE[sh_degree];
-            const int sh_dims = sh_coeffs * 3;
-
-            int palette_size = std::min(64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) * 1024;
-            palette_size = std::clamp(palette_size, 1024, static_cast<int>(num_rows));
-
-            const auto& shN_swizzled = splat_data.shN_raw();
-            if (!shN_swizzled.is_valid() || shN_swizzled.ndim() != 1 || shN_swizzled.numel() == 0) {
-                return make_error(ErrorCode::INVALID_DATASET,
-                                  "Invalid swizzled SH tensor for SOG export",
-                                  options.output_path);
+            const int64_t num_rows = splat_data.size();
+            if (num_rows == 0) {
+                return make_error(ErrorCode::EMPTY_DATASET, "No splats to write", options.output_path);
             }
 
-            // Run k-means directly on resident swizzled shN so SOG export does not allocate
-            // a full canonical [N, K, 3] CUDA tensor.
-            auto [sh_centroids, sh_labels] = lfs::io::kmeans_sh_swizzled(
-                shN_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                palette_size, options.kmeans_iterations);
-            if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
-                return make_error(ErrorCode::ENCODING_FAILED,
-                                  "Failed to cluster swizzled SH tensor for SOG export",
-                                  options.output_path);
+            // Estimate output size: 5 base textures + optional SH, ~40% compression
+            const int width = static_cast<int>(std::ceil(std::sqrt(num_rows) / 4.0)) * 4;
+            const int height = static_cast<int>(std::ceil(static_cast<double>(num_rows) / width / 4.0)) * 4;
+            constexpr int CHANNELS = 4;
+            constexpr double COMPRESSION_RATIO = 0.4;
+            constexpr size_t OVERHEAD = 4096;
+
+            const size_t texture_size = static_cast<size_t>(width) * height * CHANNELS;
+            const int sh_degree = splat_data.get_max_sh_degree();
+
+            size_t estimated_size = texture_size * 5;
+            if (sh_degree > 0) {
+                estimated_size += texture_size * 2;
             }
+            estimated_size = static_cast<size_t>(estimated_size * COMPRESSION_RATIO) + OVERHEAD;
 
-            auto sh_centroids_cpu = sh_centroids.cpu();
-            const auto* sh_centroids_ptr = static_cast<const float*>(sh_centroids_cpu.data_ptr());
-            const int actual_palette_size = static_cast<int>(sh_centroids.size(0));
-
-            // Keep the full SH tensor in source layout for k-means, then regroup only
-            // the much smaller centroid table into the SOG texture/codebook layout.
-            std::vector<float> sh_centroids_grouped(actual_palette_size * sh_dims);
-            for (int i = 0; i < actual_palette_size; ++i) {
-                for (int c = 0; c < 3; ++c) {
-                    for (int j = 0; j < sh_coeffs; ++j) {
-                        sh_centroids_grouped[i * sh_dims + c * sh_coeffs + j] =
-                            sh_centroids_ptr[i * sh_dims + j * 3 + c];
-                    }
-                }
-            }
-
-            auto codebook_result = cluster1d(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations);
-
-            const int centroids_width = 64 * sh_coeffs;
-            const int centroids_height = (actual_palette_size + 63) / 64;
-
-            std::vector<uint8_t> centroids_buf(centroids_width * centroids_height * CHANNELS, 0);
-
-            for (int i = 0; i < actual_palette_size; ++i) {
-                for (int j = 0; j < sh_coeffs; ++j) {
-                    const int pixel_idx = i * sh_coeffs + j;
-                    for (int c = 0; c < 3; ++c) {
-                        const int col_idx = sh_coeffs * c + j;
-                        const int label_idx = col_idx * actual_palette_size + i;
-                        centroids_buf[pixel_idx * 4 + c] = codebook_result.labels[label_idx];
-                    }
-                    centroids_buf[pixel_idx * 4 + 3] = 0xff;
-                }
-            }
-
-            if (auto result = write_webp("shN_centroids.webp", centroids_buf.data(), centroids_width, centroids_height); !result) {
+            if (auto result = check_disk_space(options.output_path, estimated_size); !result) {
                 return std::unexpected(result.error());
             }
 
-            auto sh_labels_cpu = sh_labels.cpu();
-            const auto* sh_labels_ptr = static_cast<const int32_t*>(sh_labels_cpu.data_ptr());
+            if (auto result = verify_writable(options.output_path); !result) {
+                return std::unexpected(result.error());
+            }
 
-            std::vector<uint8_t> labels_buf(width * height * CHANNELS, 0);
+            if (num_rows > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+                return make_error(ErrorCode::INVALID_DATASET,
+                                  "SOG export supports at most INT_MAX splats",
+                                  options.output_path);
+            }
+
+            auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
+            auto sort_indices_tensor = morton_sort_indices_for_positions(means_cuda);
+            if (!sort_indices_tensor.is_valid()) {
+                return make_error(ErrorCode::ENCODING_FAILED,
+                                  "Failed to compute Morton order for SOG export",
+                                  options.output_path);
+            }
+            auto sort_indices_cpu = sort_indices_tensor.cpu();
+            const auto* indices = sort_indices_cpu.ptr<int32_t>();
+
+            auto means_cpu = means_cuda.cpu();
+            const auto* means_ptr = means_cpu.ptr<float>();
+            const auto source_index = [&](int64_t sorted_index) -> int64_t {
+                return static_cast<int64_t>(indices[sorted_index]);
+            };
+
+            ScopedAtomicOutputFile atomic_output(options.output_path);
+            SogArchive archive(atomic_output.temp_path());
+
+            // Check archive was created successfully
+            if (!archive.is_valid()) {
+                return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, archive.last_error(), options.output_path);
+            }
+
+            const auto write_webp = [&](const std::string& filename,
+                                        const uint8_t* data, int w, int h) -> Result<void> {
+                return archive.add_webp(filename, data, w, h);
+            };
+
+            if (!report_progress(0.10f, "Positions")) {
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            std::array<std::array<double, 2>, 3> means_min_max = {{{std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
+                                                                   {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
+                                                                   {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}}};
+
             for (int64_t i = 0; i < num_rows; ++i) {
                 const int64_t idx = source_index(i);
-                const int32_t label = sh_labels_ptr[idx];
-                const auto ti = static_cast<int>(i);
-
-                labels_buf[ti * 4 + 0] = label & 0xff;
-                labels_buf[ti * 4 + 1] = (label >> 8) & 0xff;
-                labels_buf[ti * 4 + 2] = 0;
-                labels_buf[ti * 4 + 3] = 0xff;
+                for (int d = 0; d < 3; ++d) {
+                    const double v = log_transform(static_cast<double>(means_ptr[idx * 3 + d]));
+                    means_min_max[d][0] = std::min(means_min_max[d][0], v);
+                    means_min_max[d][1] = std::max(means_min_max[d][1], v);
+                }
             }
 
-            if (auto result = write_webp("shN_labels.webp", labels_buf.data(), width, height); !result) {
+            std::vector<uint8_t> means_l(width * height * CHANNELS, 0);
+            std::vector<uint8_t> means_u(width * height * CHANNELS, 0);
+
+            for (int64_t i = 0; i < num_rows; ++i) {
+                const int64_t idx = source_index(i);
+                const double x = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 0])) - means_min_max[0][0]) /
+                                 (means_min_max[0][1] - means_min_max[0][0]);
+                const double y = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 1])) - means_min_max[1][0]) /
+                                 (means_min_max[1][1] - means_min_max[1][0]);
+                const double z = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 2])) - means_min_max[2][0]) /
+                                 (means_min_max[2][1] - means_min_max[2][0]);
+
+                const auto x16 = static_cast<uint16_t>(std::clamp(x, 0.0, 65535.0));
+                const auto y16 = static_cast<uint16_t>(std::clamp(y, 0.0, 65535.0));
+                const auto z16 = static_cast<uint16_t>(std::clamp(z, 0.0, 65535.0));
+
+                const auto ti = static_cast<int>(i);
+                means_l[ti * 4 + 0] = x16 & 0xff;
+                means_l[ti * 4 + 1] = y16 & 0xff;
+                means_l[ti * 4 + 2] = z16 & 0xff;
+                means_l[ti * 4 + 3] = 0xff;
+
+                means_u[ti * 4 + 0] = (x16 >> 8) & 0xff;
+                means_u[ti * 4 + 1] = (y16 >> 8) & 0xff;
+                means_u[ti * 4 + 2] = (z16 >> 8) & 0xff;
+                means_u[ti * 4 + 3] = 0xff;
+            }
+
+            if (auto result = write_webp("means_l.webp", means_l.data(), width, height); !result) {
+                return std::unexpected(result.error());
+            }
+            if (auto result = write_webp("means_u.webp", means_u.data(), width, height); !result) {
                 return std::unexpected(result.error());
             }
 
-            sh_n_meta["count"] = actual_palette_size;
-            sh_n_meta["bands"] = sh_degree;
-            sh_n_meta["codebook"] = codebook_result.centroids;
-            sh_n_meta["files"] = {"shN_centroids.webp", "shN_labels.webp"};
+            if (!report_progress(0.20f, "Rotations")) {
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            auto rotations = splat_data.rotation_raw().cpu();
+            const auto* rot_ptr = rotations.ptr<float>();
+
+            std::vector<uint8_t> quats(width * height * CHANNELS, 0);
+
+            for (int64_t i = 0; i < num_rows; ++i) {
+                const int64_t idx = source_index(i);
+                float q[4] = {rot_ptr[idx * 4 + 0], rot_ptr[idx * 4 + 1], rot_ptr[idx * 4 + 2], rot_ptr[idx * 4 + 3]};
+
+                const float len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+                for (float& j : q)
+                    j /= len;
+
+                int max_comp = 0;
+                for (int j = 1; j < 4; ++j) {
+                    if (std::abs(q[j]) > std::abs(q[max_comp]))
+                        max_comp = j;
+                }
+
+                if (q[max_comp] < 0) {
+                    for (float& j : q)
+                        j *= -1;
+                }
+
+                constexpr float SQRT2 = 1.41421356237f;
+                for (float& j : q)
+                    j *= SQRT2;
+
+                static const int IDX_TABLE[4][3] = {{1, 2, 3}, {0, 2, 3}, {0, 1, 3}, {0, 1, 2}};
+                const int* other_idx = IDX_TABLE[max_comp];
+
+                const auto ti = static_cast<int>(i);
+                quats[ti * 4 + 0] = static_cast<uint8_t>(255.0f * (q[other_idx[0]] * 0.5f + 0.5f));
+                quats[ti * 4 + 1] = static_cast<uint8_t>(255.0f * (q[other_idx[1]] * 0.5f + 0.5f));
+                quats[ti * 4 + 2] = static_cast<uint8_t>(255.0f * (q[other_idx[2]] * 0.5f + 0.5f));
+                quats[ti * 4 + 3] = static_cast<uint8_t>(252 + max_comp);
+            }
+
+            if (auto result = write_webp("quats.webp", quats.data(), width, height); !result) {
+                return std::unexpected(result.error());
+            }
+
+            if (!report_progress(0.30f, "Scales k-means")) {
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            auto scales = splat_data.scaling_raw().cpu();
+            const auto* scales_ptr = scales.ptr<float>();
+
+            auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
+
+            std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
+            for (int64_t i = 0; i < num_rows; ++i) {
+                const int64_t idx = source_index(i);
+                const auto ti = static_cast<int>(i);
+
+                scales_data[ti * 4 + 0] = scale_result.labels[0 * num_rows + idx];
+                scales_data[ti * 4 + 1] = scale_result.labels[1 * num_rows + idx];
+                scales_data[ti * 4 + 2] = scale_result.labels[2 * num_rows + idx];
+                scales_data[ti * 4 + 3] = 0xff;
+            }
+
+            if (auto result = write_webp("scales.webp", scales_data.data(), width, height); !result) {
+                return std::unexpected(result.error());
+            }
+
+            if (!report_progress(0.45f, "Colors k-means")) {
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            auto sh0 = splat_data.sh0_raw().cpu();
+            const auto* sh0_ptr = sh0.ptr<float>();
+
+            auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
+
+            auto opacity = splat_data.opacity_raw().cpu();
+            const auto* opacity_ptr = opacity.ptr<float>();
+
+            std::vector<uint8_t> sh0_data(width * height * CHANNELS, 0);
+            for (int64_t i = 0; i < num_rows; ++i) {
+                const int64_t idx = source_index(i);
+                const auto ti = static_cast<int>(i);
+
+                sh0_data[ti * 4 + 0] = color_result.labels[0 * num_rows + idx];
+                sh0_data[ti * 4 + 1] = color_result.labels[1 * num_rows + idx];
+                sh0_data[ti * 4 + 2] = color_result.labels[2 * num_rows + idx];
+                sh0_data[ti * 4 + 3] = static_cast<uint8_t>(
+                    std::max(0.0, std::min(255.0, sigmoid(static_cast<double>(opacity_ptr[idx])) * 255.0)));
+            }
+
+            if (auto result = write_webp("sh0.webp", sh0_data.data(), width, height); !result) {
+                return std::unexpected(result.error());
+            }
+
+            nlohmann::json sh_n_meta;
+
+            if (sh_degree > 0) {
+                if (!report_progress(0.60f, "SH k-means")) {
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+                }
+
+                static const int SH_COEFFS_TABLE[] = {0, 3, 8, 15};
+                const int sh_coeffs = SH_COEFFS_TABLE[sh_degree];
+                const int sh_dims = sh_coeffs * 3;
+
+                int palette_size = std::min(64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) * 1024;
+                palette_size = std::clamp(palette_size, 1024, static_cast<int>(num_rows));
+
+                const auto& shN_swizzled = splat_data.shN_raw();
+                if (!shN_swizzled.is_valid() || shN_swizzled.ndim() != 1 || shN_swizzled.numel() == 0) {
+                    return make_error(ErrorCode::INVALID_DATASET,
+                                      "Invalid swizzled SH tensor for SOG export",
+                                      options.output_path);
+                }
+
+                // Run k-means directly on resident swizzled shN so SOG export does not allocate
+                // a full canonical [N, K, 3] CUDA tensor.
+                auto [sh_centroids, sh_labels] = lfs::io::kmeans_sh_swizzled(
+                    shN_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                    palette_size, options.kmeans_iterations);
+                if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
+                    return make_error(ErrorCode::ENCODING_FAILED,
+                                      "Failed to cluster swizzled SH tensor for SOG export",
+                                      options.output_path);
+                }
+
+                auto sh_centroids_cpu = sh_centroids.cpu();
+                const auto* sh_centroids_ptr = static_cast<const float*>(sh_centroids_cpu.data_ptr());
+                const int actual_palette_size = static_cast<int>(sh_centroids.size(0));
+
+                // Keep the full SH tensor in source layout for k-means, then regroup only
+                // the much smaller centroid table into the SOG texture/codebook layout.
+                std::vector<float> sh_centroids_grouped(actual_palette_size * sh_dims);
+                for (int i = 0; i < actual_palette_size; ++i) {
+                    for (int c = 0; c < 3; ++c) {
+                        for (int j = 0; j < sh_coeffs; ++j) {
+                            sh_centroids_grouped[i * sh_dims + c * sh_coeffs + j] =
+                                sh_centroids_ptr[i * sh_dims + j * 3 + c];
+                        }
+                    }
+                }
+
+                auto codebook_result = cluster1d(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations);
+
+                const int centroids_width = 64 * sh_coeffs;
+                const int centroids_height = (actual_palette_size + 63) / 64;
+
+                std::vector<uint8_t> centroids_buf(centroids_width * centroids_height * CHANNELS, 0);
+
+                for (int i = 0; i < actual_palette_size; ++i) {
+                    for (int j = 0; j < sh_coeffs; ++j) {
+                        const int pixel_idx = i * sh_coeffs + j;
+                        for (int c = 0; c < 3; ++c) {
+                            const int col_idx = sh_coeffs * c + j;
+                            const int label_idx = col_idx * actual_palette_size + i;
+                            centroids_buf[pixel_idx * 4 + c] = codebook_result.labels[label_idx];
+                        }
+                        centroids_buf[pixel_idx * 4 + 3] = 0xff;
+                    }
+                }
+
+                if (auto result = write_webp("shN_centroids.webp", centroids_buf.data(), centroids_width, centroids_height); !result) {
+                    return std::unexpected(result.error());
+                }
+
+                auto sh_labels_cpu = sh_labels.cpu();
+                const auto* sh_labels_ptr = static_cast<const int32_t*>(sh_labels_cpu.data_ptr());
+
+                std::vector<uint8_t> labels_buf(width * height * CHANNELS, 0);
+                for (int64_t i = 0; i < num_rows; ++i) {
+                    const int64_t idx = source_index(i);
+                    const int32_t label = sh_labels_ptr[idx];
+                    const auto ti = static_cast<int>(i);
+
+                    labels_buf[ti * 4 + 0] = label & 0xff;
+                    labels_buf[ti * 4 + 1] = (label >> 8) & 0xff;
+                    labels_buf[ti * 4 + 2] = 0;
+                    labels_buf[ti * 4 + 3] = 0xff;
+                }
+
+                if (auto result = write_webp("shN_labels.webp", labels_buf.data(), width, height); !result) {
+                    return std::unexpected(result.error());
+                }
+
+                sh_n_meta["count"] = actual_palette_size;
+                sh_n_meta["bands"] = sh_degree;
+                sh_n_meta["codebook"] = codebook_result.centroids;
+                sh_n_meta["files"] = {"shN_centroids.webp", "shN_labels.webp"};
+            }
+
+            if (!report_progress(0.90f, "Writing meta")) {
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            nlohmann::json meta;
+            meta["version"] = 2;
+            meta["asset"]["generator"] = "LichtFeld Studio";
+            meta["count"] = num_rows;
+
+            meta["means"]["mins"] = {means_min_max[0][0], means_min_max[1][0], means_min_max[2][0]};
+            meta["means"]["maxs"] = {means_min_max[0][1], means_min_max[1][1], means_min_max[2][1]};
+            meta["means"]["files"] = {"means_l.webp", "means_u.webp"};
+
+            meta["scales"]["codebook"] = scale_result.centroids;
+            meta["scales"]["files"] = {"scales.webp"};
+
+            meta["quats"]["files"] = {"quats.webp"};
+
+            meta["sh0"]["codebook"] = color_result.centroids;
+            meta["sh0"]["files"] = {"sh0.webp"};
+
+            if (sh_degree > 0) {
+                meta["shN"] = sh_n_meta;
+            }
+
+            std::string meta_json = meta.dump();
+            if (auto result = archive.add_file("meta.json", meta_json.c_str(), meta_json.size()); !result) {
+                return std::unexpected(result.error());
+            }
+
+            if (auto result = archive.close(); !result) {
+                return std::unexpected(result.error());
+            }
+
+            if (!report_progress(1.0f, "Complete")) {
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+
+            if (auto result = atomic_output.commit(); !result) {
+                return std::unexpected(result.error());
+            }
+
+            LOG_INFO("SOG export complete: {} splats", num_rows);
+            return {};
+        } catch (const lfs::Exception& e) {
+            lfs::Error error = lfs::Error(e.error())
+                                   .with_context("save SOG", LFS_SOURCE_SITE_CURRENT(),
+                                                 lfs::SmallFields{}.add("path", lfs::core::path_to_utf8(options.output_path)));
+            lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
+            return std::unexpected(from_lfs_error(error));
+        } catch (const std::exception& e) {
+            return make_error(ErrorCode::ENCODING_FAILED,
+                              std::format("Failed to save SOG: {}", e.what()),
+                              options.output_path);
         }
-
-        if (!report_progress(0.90f, "Writing meta")) {
-            return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-        }
-
-        nlohmann::json meta;
-        meta["version"] = 2;
-        meta["asset"]["generator"] = "LichtFeld Studio";
-        meta["count"] = num_rows;
-
-        meta["means"]["mins"] = {means_min_max[0][0], means_min_max[1][0], means_min_max[2][0]};
-        meta["means"]["maxs"] = {means_min_max[0][1], means_min_max[1][1], means_min_max[2][1]};
-        meta["means"]["files"] = {"means_l.webp", "means_u.webp"};
-
-        meta["scales"]["codebook"] = scale_result.centroids;
-        meta["scales"]["files"] = {"scales.webp"};
-
-        meta["quats"]["files"] = {"quats.webp"};
-
-        meta["sh0"]["codebook"] = color_result.centroids;
-        meta["sh0"]["files"] = {"sh0.webp"};
-
-        if (sh_degree > 0) {
-            meta["shN"] = sh_n_meta;
-        }
-
-        std::string meta_json = meta.dump();
-        if (auto result = archive.add_file("meta.json", meta_json.c_str(), meta_json.size()); !result) {
-            return std::unexpected(result.error());
-        }
-
-        if (auto result = archive.close(); !result) {
-            return std::unexpected(result.error());
-        }
-
-        if (!report_progress(1.0f, "Complete")) {
-            return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
-        }
-
-        if (auto result = atomic_output.commit(); !result) {
-            return std::unexpected(result.error());
-        }
-
-        LOG_INFO("SOG export complete: {} splats", num_rows);
-        return {};
     }
 
 } // namespace lfs::io
