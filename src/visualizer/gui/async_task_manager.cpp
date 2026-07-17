@@ -922,7 +922,7 @@ namespace lfs::vis::gui {
                         export_state_.stage = "Cancelled";
                     }
                     publishExportState();
-                    lfs::core::events::state::ExportFailed{.error = error_msg}.emit();
+                    lfs::core::events::state::ExportFailed{.error = error_msg, .cancelled = true}.emit();
                 } else {
                     LOG_ERROR("COLMAP export failed: {}", error_msg);
                     {
@@ -1200,7 +1200,8 @@ namespace lfs::vis::gui {
                     }
                     publishExportState();
                     lfs::core::events::state::ExportFailed{
-                        .error = error_msg}
+                        .error = error_msg,
+                        .cancelled = true}
                         .emit();
                 } else {
                     LOG_ERROR("Export failed: {}", error_msg);

@@ -1578,6 +1578,7 @@
     "reload": "重新加载"
   },
   "status_bar": {
+    "export_cancelled": "已取消导出",
     "gt_compare": "真值对比",
     "camera": "相机 {}",
     "ground_truth": "真值",
@@ -1700,7 +1701,15 @@
     "menu_register": "设为默认应用程序...",
     "menu_unregister": "移除默认应用程序..."
   },
+  "error_actions": {
+    "retry": "重试",
+    "choose_path": "选择位置...",
+    "open_log": "打开日志",
+    "stop_renderer": "停止渲染器"
+  },
   "error_modal": {
+    "details": "详细信息",
+    "repeated": "重复",
     "training_failed": "训练失败",
     "out_of_gpu_memory": "GPU 内存不足",
     "dataset_load_failed": "无法加载数据集",

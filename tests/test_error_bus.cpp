@@ -6,13 +6,23 @@
 #include "core/error_codes.hpp"
 #include "core/error_reporter.hpp"
 #include "core/events.hpp"
+#include "core/modal_request.hpp"
 #include "core/source_site.hpp"
 #include "gui/error_event_bridge.hpp"
+#include "gui/error_surface_types.hpp"
+#include "gui/gui_error_consumer.hpp"
+#include "gui/rml_status_bar.hpp"
+#include "gui/rml_toast_overlay.hpp"
 
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <functional>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -42,13 +52,15 @@ namespace {
 
     class RecordingConsumer final : public lfs::NativeErrorConsumer {
     public:
-        void on_error(const lfs::ErrorNotification& notification) noexcept override {
+        void on_error(const lfs::ErrorNotification& notification,
+                      const lfs::ErrorDeliveryInfo& delivery) noexcept override {
             count_.fetch_add(1, std::memory_order_relaxed);
             std::lock_guard lock(mutex_);
             codes_.push_back(notification.error.code());
             surfaces_.push_back(notification.surface);
             operation_ids_.push_back(notification.operation_id);
             action_counts_.push_back(notification.actions.size());
+            repeats_.push_back(delivery.suppressed_repeats);
         }
 
         [[nodiscard]] int count() const { return count_.load(std::memory_order_relaxed); }
@@ -58,6 +70,7 @@ namespace {
         std::vector<lfs::ErrorSurface> surfaces_;
         std::vector<lfs::OperationId> operation_ids_;
         std::vector<std::size_t> action_counts_;
+        std::vector<std::uint32_t> repeats_;
 
     private:
         std::atomic<int> count_{0};
@@ -135,10 +148,28 @@ TEST(ErrorBusTest, DedupCollapsesSameFingerprintAndOperation) {
     bus->publish(makeNotification(error, op));
     bus->publish(makeNotification(error, op)); // same fingerprint + op -> suppressed
     EXPECT_EQ(consumer.count(), 1);
+    EXPECT_EQ(consumer.repeats_.front(), 0u);
 
     // A different operation id is a distinct operation and must surface.
     bus->publish(makeNotification(error, lfs::OperationId::generate()));
     EXPECT_EQ(consumer.count(), 2);
+    EXPECT_EQ(consumer.repeats_.back(), 0u);
+}
+
+TEST(ErrorBusTest, DifferentOperationIdBypassesDedup) {
+    auto bus = lfs::ErrorBus::create_isolated_for_testing();
+    RecordingConsumer consumer;
+    auto subscription = bus->subscribe(consumer);
+
+    const lfs::Error error = makeError(lfs::ErrorCode::DeviceLost, lfs::ErrorDomain::Vulkan, "lost");
+    bus->publish(makeNotification(error, lfs::OperationId::generate()));
+    bus->publish(makeNotification(error, lfs::OperationId::generate()));
+    bus->publish(makeNotification(error, lfs::OperationId::generate()));
+
+    EXPECT_EQ(consumer.count(), 3);
+    for (const std::uint32_t repeats : consumer.repeats_) {
+        EXPECT_EQ(repeats, 0u);
+    }
 }
 
 TEST(ErrorBusTest, ThreadMarshalDeliversAllFromWorkerThreads) {
@@ -243,4 +274,346 @@ TEST(ErrorEventBridgeTest, DiskSpaceCaseIsLeftToNativeHandler) {
     const auto notification = lfs::vis::gui::translateDiskSpaceSaveFailed(other);
     ASSERT_TRUE(notification.has_value());
     EXPECT_EQ(notification->error.domain(), lfs::ErrorDomain::IO);
+}
+
+TEST(ErrorEventBridgeTest, CancelledExportMapsToStatusOnly) {
+    lfs::core::events::state::ExportFailed e{};
+    e.error = "Export cancelled by user";
+    e.cancelled = true;
+
+    const auto notification = lfs::vis::gui::translateExportFailed(e);
+    ASSERT_TRUE(notification.has_value());
+    EXPECT_EQ(notification->surface, lfs::ErrorSurface::StatusOnly);
+    EXPECT_EQ(notification->error.severity(), lfs::Severity::Info);
+    EXPECT_EQ(notification->error.code(), lfs::ErrorCode::Cancelled);
+    EXPECT_TRUE(notification->actions.empty());
+}
+
+TEST(ErrorEventBridgeTest, FailedExportStaysModal) {
+    lfs::core::events::state::ExportFailed e{};
+    e.error = "disk write error";
+    e.cancelled = false;
+
+    const auto notification = lfs::vis::gui::translateExportFailed(e);
+    ASSERT_TRUE(notification.has_value());
+    EXPECT_EQ(notification->surface, lfs::ErrorSurface::Modal);
+    bool has_open_log = false;
+    for (const lfs::ErrorAction& action : notification->actions) {
+        if (action.kind == lfs::ErrorActionKind::OpenLog)
+            has_open_log = true;
+    }
+    EXPECT_TRUE(has_open_log);
+}
+
+TEST(ErrorEventBridgeTest, CudaVersionUnsupportedMapsToToast) {
+    lfs::core::events::state::CudaVersionUnsupported e{};
+    e.major = 11;
+    e.minor = 0;
+    e.min_major = 12;
+    e.min_minor = 0;
+
+    const auto notification = lfs::vis::gui::translateCudaVersionUnsupported(e);
+    ASSERT_TRUE(notification.has_value());
+    EXPECT_EQ(notification->surface, lfs::ErrorSurface::Toast);
+    EXPECT_TRUE(notification->actions.empty());
+}
+
+namespace {
+    constexpr std::chrono::steady_clock::time_point kBase{std::chrono::seconds(100)};
+} // namespace
+
+TEST(ErrorDedupTest, RedeliveryAfterWindowCarriesSuppressedCount) {
+    lfs::ErrorDedup dedup;
+    constexpr std::uint64_t key = 0x1234;
+
+    EXPECT_FALSE(dedup.check(key, kBase).suppress); // first delivery
+    constexpr int kSuppressed = 4;
+    for (int i = 1; i <= kSuppressed; ++i) {
+        const auto decision = dedup.check(key, kBase + std::chrono::milliseconds(500 * i));
+        EXPECT_TRUE(decision.suppress);
+        EXPECT_EQ(decision.repeats, 0u);
+    }
+
+    const auto redelivery = dedup.check(key, kBase + lfs::ErrorDedup::kWindow);
+    EXPECT_FALSE(redelivery.suppress);
+    EXPECT_EQ(redelivery.repeats, static_cast<std::uint32_t>(kSuppressed));
+
+    // Counter reset: the next window boundary re-delivers with zero repeats.
+    const auto after_reset = dedup.check(key, kBase + lfs::ErrorDedup::kWindow + lfs::ErrorDedup::kWindow);
+    EXPECT_FALSE(after_reset.suppress);
+    EXPECT_EQ(after_reset.repeats, 0u);
+}
+
+TEST(ErrorDedupTest, WindowDoesNotSlideOnSuppressedRepeats) {
+    lfs::ErrorDedup dedup;
+    constexpr std::uint64_t key = 0xABCD;
+
+    EXPECT_FALSE(dedup.check(key, kBase).suppress);
+    EXPECT_TRUE(dedup.check(key, kBase + std::chrono::milliseconds(4000)).suppress);
+    EXPECT_TRUE(dedup.check(key, kBase + std::chrono::milliseconds(4900)).suppress);
+
+    // The P1 sliding bug would push delivered_at forward and suppress forever;
+    // the fixed window re-delivers exactly at kBase + kWindow.
+    const auto decision = dedup.check(key, kBase + std::chrono::milliseconds(5000));
+    EXPECT_FALSE(decision.suppress);
+    EXPECT_EQ(decision.repeats, 2u);
+}
+
+TEST(ErrorDedupTest, IdleEntriesExpire) {
+    lfs::ErrorDedup dedup;
+    constexpr std::uint64_t key = 0x55;
+
+    EXPECT_FALSE(dedup.check(key, kBase).suppress);
+    EXPECT_TRUE(dedup.check(key, kBase + std::chrono::seconds(2)).suppress); // count=1, window unmoved
+
+    // After kIdleExpiry with no re-delivery the entry is swept, so the next check
+    // is a fresh first delivery (repeats 0), not a windowed re-delivery (repeats 1).
+    const auto decision = dedup.check(key, kBase + lfs::ErrorDedup::kIdleExpiry + std::chrono::seconds(1));
+    EXPECT_FALSE(decision.suppress);
+    EXPECT_EQ(decision.repeats, 0u);
+}
+
+TEST(ToastStackTest, PushCollapsesSameFingerprint) {
+    lfs::vis::gui::ToastStack stack;
+    stack.push(lfs::vis::gui::ToastRequest{.title = "A", .message = "m", .fingerprint = 42}, kBase);
+    const bool changed = stack.push(
+        lfs::vis::gui::ToastRequest{.title = "A", .message = "m", .fingerprint = 42},
+        kBase + std::chrono::seconds(1));
+
+    EXPECT_TRUE(changed);
+    ASSERT_EQ(stack.entries.size(), 1u);
+    EXPECT_EQ(stack.entries[0].count, 2u);
+    EXPECT_EQ(stack.entries[0].shown_at, kBase + std::chrono::seconds(1)); // timer reset
+}
+
+TEST(ToastStackTest, OverflowEvictsOldest) {
+    lfs::vis::gui::ToastStack stack;
+    for (int i = 0; i < 5; ++i) {
+        // fingerprint 0 => no collapse, each pushes a fresh entry.
+        stack.push(lfs::vis::gui::ToastRequest{.title = std::to_string(i)}, kBase);
+    }
+
+    ASSERT_EQ(stack.entries.size(), lfs::vis::gui::ToastStack::kMaxVisible);
+    EXPECT_EQ(stack.entries.front().request.title, "1"); // "0" evicted
+    EXPECT_EQ(stack.entries.back().request.title, "4");
+}
+
+TEST(ToastStackTest, ExpireRemovesAfterDuration) {
+    lfs::vis::gui::ToastStack stack;
+    stack.push(lfs::vis::gui::ToastRequest{.title = "x"}, kBase);
+
+    EXPECT_FALSE(stack.expire(kBase + std::chrono::milliseconds(3000)));
+    EXPECT_EQ(stack.entries.size(), 1u);
+    EXPECT_TRUE(stack.expire(kBase + lfs::vis::gui::ToastStack::kDuration));
+    EXPECT_TRUE(stack.entries.empty());
+}
+
+TEST(ToastStackTest, AlphaFadesInFinalWindow) {
+    lfs::vis::gui::ToastStack::Entry entry;
+    entry.shown_at = kBase;
+
+    EXPECT_FLOAT_EQ(lfs::vis::gui::ToastStack::alpha(entry, kBase), 1.0f);
+    const auto near_end =
+        kBase + lfs::vis::gui::ToastStack::kDuration - std::chrono::milliseconds(250);
+    EXPECT_NEAR(lfs::vis::gui::ToastStack::alpha(entry, near_end), 0.5f, 1e-3f);
+    EXPECT_FLOAT_EQ(
+        lfs::vis::gui::ToastStack::alpha(entry, kBase + lfs::vis::gui::ToastStack::kDuration), 0.0f);
+}
+
+TEST(StatusMessageStateTest, PostThenSnapshotVisible) {
+    lfs::vis::gui::StatusMessageState state;
+    const auto before = std::chrono::steady_clock::now();
+    state.post("hello", lfs::vis::gui::ErrorNoticeLevel::Warning);
+
+    // Snapshot at/just-before the internal post time => full alpha, visible.
+    const auto snap = state.snapshot(before);
+    EXPECT_TRUE(snap.visible);
+    EXPECT_EQ(snap.text, "hello");
+    EXPECT_EQ(snap.level, lfs::vis::gui::ErrorNoticeLevel::Warning);
+    EXPECT_FLOAT_EQ(snap.alpha, 1.0f);
+}
+
+TEST(StatusMessageStateTest, ExpiresAndFades) {
+    lfs::vis::gui::StatusMessageState state;
+    const auto before = std::chrono::steady_clock::now();
+    state.post("bye", lfs::vis::gui::ErrorNoticeLevel::Error);
+
+    // Inside the final fade window: alpha strictly between 0 and 1.
+    const auto fading =
+        before + lfs::vis::gui::StatusMessageState::kDuration - std::chrono::milliseconds(200);
+    const auto fade_snap = state.snapshot(fading);
+    EXPECT_TRUE(fade_snap.visible);
+    EXPECT_GT(fade_snap.alpha, 0.0f);
+    EXPECT_LT(fade_snap.alpha, 1.0f);
+
+    // Past the duration: self-cleared.
+    const auto expired =
+        before + lfs::vis::gui::StatusMessageState::kDuration + std::chrono::seconds(1);
+    EXPECT_FALSE(state.snapshot(expired).visible);
+}
+
+namespace {
+
+    lfs::ErrorNotification consumerNotification(lfs::Error error, const lfs::ErrorSurface surface) {
+        return makeNotification(std::move(error), lfs::OperationId::generate(), surface);
+    }
+
+} // namespace
+
+TEST(GuiErrorConsumerTest, ToastSurfaceRoutesToToastSink) {
+    std::optional<lfs::vis::gui::ToastRequest> toast;
+    int modal_calls = 0;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest) { ++modal_calls; },
+        .toast = [&](lfs::vis::gui::ToastRequest r) { toast = std::move(r); },
+        .status = {},
+    });
+
+    const auto n = consumerNotification(
+        makeError(lfs::ErrorCode::FailedPrecondition, lfs::ErrorDomain::CUDA, "old driver"),
+        lfs::ErrorSurface::Toast);
+    consumer.on_error(n, lfs::ErrorDeliveryInfo{});
+
+    ASSERT_TRUE(toast.has_value());
+    EXPECT_FALSE(toast->title.empty());
+    EXPECT_EQ(toast->message, "old driver");
+    EXPECT_EQ(toast->fingerprint, lfs::core::error_fingerprint(n.error));
+    EXPECT_EQ(modal_calls, 0);
+}
+
+TEST(GuiErrorConsumerTest, ToastFallsBackToModalWithoutSink) {
+    int modal_calls = 0;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest) { ++modal_calls; },
+        .toast = {},
+        .status = {},
+    });
+
+    const auto n = consumerNotification(
+        makeError(lfs::ErrorCode::FailedPrecondition, lfs::ErrorDomain::CUDA, "old driver"),
+        lfs::ErrorSurface::Toast);
+    consumer.on_error(n, lfs::ErrorDeliveryInfo{});
+
+    EXPECT_EQ(modal_calls, 1);
+}
+
+TEST(GuiErrorConsumerTest, StatusOnlyRoutesFirstLineToStatusSink) {
+    std::optional<std::string> status_text;
+    int modal_calls = 0;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest) { ++modal_calls; },
+        .toast = {},
+        .status = [&](std::string t, lfs::vis::gui::ErrorNoticeLevel) { status_text = std::move(t); },
+    });
+
+    const auto n = consumerNotification(
+        makeError(lfs::ErrorCode::Cancelled, lfs::ErrorDomain::IO, "Export cancelled\nsecond line"),
+        lfs::ErrorSurface::StatusOnly);
+    consumer.on_error(n, lfs::ErrorDeliveryInfo{});
+
+    ASSERT_TRUE(status_text.has_value());
+    EXPECT_EQ(*status_text, "Export cancelled"); // truncated at the first newline
+    EXPECT_EQ(modal_calls, 0);
+}
+
+TEST(GuiErrorConsumerTest, PanelBuildsDetailsModal) {
+    std::optional<lfs::core::ModalRequest> modal;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest r) { modal = std::move(r); },
+        .toast = {},
+        .status = {},
+    });
+
+    const auto n = consumerNotification(
+        makeError(lfs::ErrorCode::Internal, lfs::ErrorDomain::Training, "boom"),
+        lfs::ErrorSurface::Panel);
+    consumer.on_error(n, lfs::ErrorDeliveryInfo{});
+
+    ASSERT_TRUE(modal.has_value());
+    EXPECT_EQ(modal->width_dp, 640);
+    EXPECT_NE(modal->body_rml.find("details-block"), std::string::npos);
+    EXPECT_NE(modal->body_rml.find("boom"), std::string::npos);
+}
+
+TEST(GuiErrorConsumerTest, ModalGainsDetailsButton) {
+    std::optional<lfs::core::ModalRequest> modal;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest r) { modal = std::move(r); },
+        .toast = {},
+        .status = {},
+    });
+
+    const auto n = consumerNotification(
+        makeError(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, "x"), lfs::ErrorSurface::Modal);
+    consumer.on_error(n, lfs::ErrorDeliveryInfo{});
+
+    ASSERT_TRUE(modal.has_value());
+    ASSERT_EQ(modal->buttons.size(), 2u); // OK + Details
+    EXPECT_EQ(modal->buttons.back().style, "secondary");
+}
+
+TEST(GuiErrorConsumerTest, DetailsButtonEnqueuesDetailsModal) {
+    std::vector<lfs::core::ModalRequest> modals;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest r) { modals.push_back(std::move(r)); },
+        .toast = {},
+        .status = {},
+    });
+
+    const auto n = consumerNotification(
+        makeError(lfs::ErrorCode::Internal, lfs::ErrorDomain::Training, "boom"),
+        lfs::ErrorSurface::Modal);
+    consumer.on_error(n, lfs::ErrorDeliveryInfo{});
+    ASSERT_EQ(modals.size(), 1u);
+    ASSERT_TRUE(modals[0].on_result);
+
+    const std::string details_label = modals[0].buttons.back().label;
+    modals[0].on_result(lfs::core::ModalResult{.button_label = details_label});
+
+    ASSERT_EQ(modals.size(), 2u);
+    EXPECT_EQ(modals[1].width_dp, 640);
+    EXPECT_NE(modals[1].body_rml.find("details-block"), std::string::npos);
+}
+
+TEST(GuiErrorConsumerTest, ActionInvokeReceivesFreshOperationId) {
+    std::optional<lfs::core::ModalRequest> modal;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest r) { modal = std::move(r); },
+        .toast = {},
+        .status = {},
+    });
+
+    std::vector<lfs::OperationId> seen;
+    auto n = consumerNotification(
+        makeError(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, "x"), lfs::ErrorSurface::Modal);
+    n.actions.push_back(lfs::ErrorAction{.kind = lfs::ErrorActionKind::OpenLog,
+                                         .label = "Act",
+                                         .on_invoke = [&](lfs::OperationId id) { seen.push_back(id); }});
+    consumer.on_error(n, lfs::ErrorDeliveryInfo{});
+
+    ASSERT_TRUE(modal.has_value());
+    ASSERT_TRUE(modal->on_result);
+    modal->on_result(lfs::core::ModalResult{.button_label = "Act"});
+    modal->on_result(lfs::core::ModalResult{.button_label = "Act"});
+
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_TRUE(seen[0].has_value());
+    EXPECT_NE(seen[0].value(), seen[1].value());
+    EXPECT_EQ(n.error.code(), lfs::ErrorCode::Internal); // source error untouched
+}
+
+TEST(GuiErrorConsumerTest, SuppressedRepeatsRenderInBody) {
+    std::optional<lfs::core::ModalRequest> modal;
+    lfs::vis::gui::GuiErrorConsumer consumer(lfs::vis::gui::GuiErrorConsumer::Sinks{
+        .modal = [&](lfs::core::ModalRequest r) { modal = std::move(r); },
+        .toast = {},
+        .status = {},
+    });
+
+    const auto n = consumerNotification(
+        makeError(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, "x"), lfs::ErrorSurface::Modal);
+    consumer.on_error(n, lfs::ErrorDeliveryInfo{.suppressed_repeats = 12});
+
+    ASSERT_TRUE(modal.has_value());
+    EXPECT_NE(modal->body_rml.find("x12"), std::string::npos);
 }

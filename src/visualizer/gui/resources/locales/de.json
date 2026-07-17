@@ -1621,6 +1621,7 @@
     "reload": "Neu laden"
   },
   "status_bar": {
+    "export_cancelled": "Export abgebrochen",
     "gt_compare": "GT-Vergleich",
     "camera": "Kamera {}",
     "ground_truth": "Ground Truth",
@@ -1690,7 +1691,15 @@
     "menu_register": "Als Standardanwendung festlegen...",
     "menu_unregister": "Als Standardanwendung entfernen..."
   },
+  "error_actions": {
+    "retry": "Wiederholen",
+    "choose_path": "Speicherort wählen...",
+    "open_log": "Protokoll öffnen",
+    "stop_renderer": "Renderer stoppen"
+  },
   "error_modal": {
+    "details": "Details",
+    "repeated": "Wiederholt",
     "training_failed": "Training fehlgeschlagen",
     "out_of_gpu_memory": "GPU-Speicher erschöpft",
     "dataset_load_failed": "Datensatz konnte nicht geladen werden",

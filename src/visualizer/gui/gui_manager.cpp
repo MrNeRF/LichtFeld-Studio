@@ -2786,6 +2786,7 @@ namespace lfs::vis::gui {
         // Create components
         menu_bar_ = std::make_unique<MenuBar>();
         rml_modal_overlay_ = std::make_unique<RmlModalOverlay>(&rmlui_manager_);
+        rml_toast_overlay_ = std::make_unique<RmlToastOverlay>(&rmlui_manager_);
         global_context_menu_ = std::make_unique<GlobalContextMenu>(&rmlui_manager_);
         lfs::python::set_global_context_menu(global_context_menu_.get());
         video_widget_ = lfs::gui::createVideoWidget();
@@ -3670,6 +3671,8 @@ namespace lfs::vis::gui {
 
         if (rml_modal_overlay_)
             rml_modal_overlay_->reloadResources();
+        if (rml_toast_overlay_)
+            rml_toast_overlay_->reloadResources();
         if (global_context_menu_)
             global_context_menu_->reloadResources();
 
@@ -3763,6 +3766,7 @@ namespace lfs::vis::gui {
         lfs::python::set_global_context_menu(nullptr);
 
         rml_modal_overlay_.reset();
+        rml_toast_overlay_.reset();
         global_context_menu_.reset();
         panels::ShutdownPythonConsoleRml();
         rml_status_bar_.shutdown();
@@ -6445,6 +6449,17 @@ namespace lfs::vis::gui {
                 global_context_menu_->render(panel_input.screen_w, panel_input.screen_h,
                                              panel_input.screen_x, panel_input.screen_y);
             }
+            if (rml_toast_overlay_ && rml_toast_overlay_->hasPendingRenderWork()) {
+                LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.toast_overlay", 0.25);
+                rml_toast_overlay_->render(panel_input.screen_w,
+                                           panel_input.screen_h,
+                                           panel_input.screen_x,
+                                           panel_input.screen_y,
+                                           viewport_layout_.pos.x,
+                                           viewport_layout_.pos.y,
+                                           viewport_layout_.size.x,
+                                           viewport_layout_.size.y);
+            }
             if (rml_modal_overlay_->hasPendingRenderWork()) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.modal_overlay", 0.25);
                 rml_modal_overlay_->render(panel_input.screen_w,
@@ -7110,8 +7125,14 @@ namespace lfs::vis::gui {
     void GuiManager::setupEventHandlers() {
         using namespace lfs::core::events;
 
-        error_consumer_ = std::make_unique<GuiErrorConsumer>(
-            [this](lfs::core::ModalRequest req) { enqueueModal(std::move(req)); });
+        error_consumer_ = std::make_unique<GuiErrorConsumer>(GuiErrorConsumer::Sinks{
+            .modal = [this](lfs::core::ModalRequest req) { enqueueModal(std::move(req)); },
+            .toast = [this](ToastRequest req) { enqueueToast(std::move(req)); },
+            .status = [this](std::string text, ErrorNoticeLevel level) {
+                rml_status_bar_.postStatusMessage(std::move(text), level);
+                if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr)
+                    window_manager->wakeEventLoop(); },
+        });
         error_subscription_ = lfs::ErrorBus::instance().subscribe(*error_consumer_);
         registerErrorEventBridge();
 
@@ -7415,6 +7436,15 @@ namespace lfs::vis::gui {
             window_manager->wakeEventLoop();
     }
 
+    void GuiManager::enqueueToast(ToastRequest request) {
+        if (!rml_toast_overlay_)
+            return;
+
+        rml_toast_overlay_->enqueue(std::move(request));
+        if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr)
+            window_manager->wakeEventLoop();
+    }
+
     bool GuiManager::isVramHudOverlayVisible() const {
         return show_vram_hud_ && lfs::diagnostics::VramProfiler::instance().enabled();
     }
@@ -7537,6 +7567,8 @@ namespace lfs::vis::gui {
         if (startup_overlay_.needsAnimationFrame())
             return true;
         if (rml_modal_overlay_ && rml_modal_overlay_->needsAnimationFrame())
+            return true;
+        if (rml_toast_overlay_ && rml_toast_overlay_->needsAnimationFrame())
             return true;
         if (global_context_menu_ && global_context_menu_->needsAnimationFrame())
             return true;

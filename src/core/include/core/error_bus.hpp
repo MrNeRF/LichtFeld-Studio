@@ -49,13 +49,13 @@ namespace lfs {
     };
 
     // One offered recovery/branch. `on_invoke` runs on the UI thread when the
-    // matching button is pressed; per the frozen contract it starts a new
-    // operation id and must not mutate the source error (the notification's
-    // error is const and copied into the closure by value if needed).
+    // matching button is pressed; it receives the freshly generated operation id
+    // for the work it starts and must not mutate the source error (the
+    // notification's error is const and copied into the closure by value if needed).
     struct ErrorAction {
         ErrorActionKind kind = ErrorActionKind::Dismiss;
         std::string label;
-        std::function<void()> on_invoke;
+        std::function<void(OperationId)> on_invoke;
     };
 
     // FROZEN (Section 7.5). `error` is a required lfs::Error, never a success
@@ -67,6 +67,13 @@ namespace lfs {
         OperationId operation_id;
     };
 
+    // Additive delivery metadata handed to the consumer alongside the frozen
+    // ErrorNotification. `suppressed_repeats` counts the same-key publishes
+    // collapsed since this notification's key was last delivered (see ErrorDedup).
+    struct ErrorDeliveryInfo {
+        std::uint32_t suppressed_repeats = 0;
+    };
+
     // Implemented by the native GUI consumer. on_error is called synchronously
     // on the PUBLISHING (worker) thread and must be noexcept, non-blocking, and
     // enqueue-only to a thread-safe queue drained on the UI frame. It must never
@@ -74,7 +81,8 @@ namespace lfs {
     class LFS_CORE_API NativeErrorConsumer {
     public:
         virtual ~NativeErrorConsumer() = default;
-        virtual void on_error(const ErrorNotification& notification) noexcept = 0;
+        virtual void on_error(const ErrorNotification& notification,
+                              const ErrorDeliveryInfo& delivery) noexcept = 0;
     };
 
     class ErrorBus;
@@ -101,6 +109,35 @@ namespace lfs {
         std::uint64_t id_ = 0;
     };
 
+    // Fixed-window fault de-duplication. A key (fingerprint ^ operation_id) that
+    // publishes again within kWindow of its last DELIVERY is suppressed and
+    // counted; the first publish at or after kWindow re-delivers, carrying the
+    // number of suppressed repeats since that delivery, then resets. Entries idle
+    // for kIdleExpiry are swept to bound the map.
+    struct LFS_CORE_API ErrorDedup {
+        static constexpr std::chrono::seconds kWindow{5};
+        static constexpr std::chrono::seconds kIdleExpiry{60};
+
+        struct Decision {
+            bool suppress = false;
+            std::uint32_t repeats = 0;
+        };
+
+        // NOT noexcept: the map insert can bad_alloc under extreme OOM, and
+        // publish()'s catch-all must be able to catch it and degrade rather than
+        // terminate (a noexcept boundary here would defeat that contract).
+        [[nodiscard]] Decision check(std::uint64_t key,
+                                     std::chrono::steady_clock::time_point now);
+
+    private:
+        struct Entry {
+            std::uint32_t count = 0;
+            std::chrono::steady_clock::time_point delivered_at{};
+        };
+        std::mutex mutex_;
+        std::unordered_map<std::uint64_t, Entry> entries_;
+    };
+
     class LFS_CORE_API ErrorBus {
     public:
         // Process-wide bus. Singleton for the same exe/Python-module reason
@@ -123,10 +160,6 @@ namespace lfs {
         ErrorBus() = default;
 
         void unsubscribe(std::uint64_t id) noexcept;
-        // NOT noexcept: the dedup map insert can bad_alloc under extreme OOM,
-        // and publish()'s catch-all must be able to catch it and degrade rather
-        // than terminate (a noexcept boundary here would defeat that contract).
-        [[nodiscard]] bool should_suppress(std::uint64_t key);
 
         friend class Subscription;
 
@@ -135,17 +168,11 @@ namespace lfs {
             NativeErrorConsumer* consumer = nullptr;
         };
 
-        struct DedupEntry {
-            std::uint32_t count = 0;
-            std::chrono::steady_clock::time_point last{};
-        };
-
         std::mutex subscribers_mutex_;
         std::vector<Subscriber> subscribers_;
         std::uint64_t next_id_ = 1;
 
-        std::mutex dedup_mutex_;
-        std::unordered_map<std::uint64_t, DedupEntry> dedup_;
+        ErrorDedup dedup_;
     };
 
 } // namespace lfs

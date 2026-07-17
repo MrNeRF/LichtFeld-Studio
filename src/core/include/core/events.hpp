@@ -243,7 +243,7 @@ namespace lfs::core {
                   size_t freed_bytes;
                   bool recovered;);
 
-            EVENT(ExportFailed, std::string error;);
+            EVENT(ExportFailed, std::string error; bool cancelled = false;);
             EVENT(VideoExportCompleted, std::filesystem::path path; int total_frames;);
             EVENT(VideoExportFailed, std::string error;);
             EVENT(Mesh2SplatCompleted, std::string source_name; std::string node_name; size_t num_gaussians;);

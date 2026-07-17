@@ -1621,6 +1621,7 @@
     "reload": "Herladen"
   },
   "status_bar": {
+    "export_cancelled": "Export geannuleerd",
     "gt_compare": "GT-vergelijking",
     "camera": "Cam {}",
     "ground_truth": "Ground Truth",
@@ -1690,7 +1691,15 @@
     "menu_register": "Instellen als standaardtoepassing...",
     "menu_unregister": "Verwijderen als standaardtoepassing..."
   },
+  "error_actions": {
+    "retry": "Opnieuw",
+    "choose_path": "Locatie kiezen...",
+    "open_log": "Logboek openen",
+    "stop_renderer": "Renderer stoppen"
+  },
   "error_modal": {
+    "details": "Details",
+    "repeated": "Herhaald",
     "training_failed": "Training mislukt",
     "out_of_gpu_memory": "Onvoldoende GPU-geheugen",
     "dataset_load_failed": "Kan dataset niet laden",

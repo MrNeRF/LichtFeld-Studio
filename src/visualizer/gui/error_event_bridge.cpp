@@ -7,6 +7,7 @@
 #include "core/error_bus.hpp"
 #include "core/error_codes.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/source_site.hpp"
 #include "gui/string_keys.hpp"
@@ -15,6 +16,7 @@
 #include <filesystem>
 #include <format>
 #include <utility>
+#include <vector>
 
 namespace lfs::vis::gui {
 
@@ -22,9 +24,39 @@ namespace lfs::vis::gui {
 
     namespace {
 
+        lfs::ErrorAction dismissAction() {
+            return lfs::ErrorAction{.kind = lfs::ErrorActionKind::Dismiss, .label = {}, .on_invoke = {}};
+        }
+
+        // Reveals the durable default log file in the OS file manager. Runs on the
+        // UI thread when the user presses Open Log; the default file sink is always
+        // installed when creatable, so the path exists in normal runs.
+        lfs::ErrorAction openLogAction() {
+            return lfs::ErrorAction{
+                .kind = lfs::ErrorActionKind::OpenLog,
+                .label = {},
+                .on_invoke = [](lfs::OperationId) {
+                    const auto path =
+                        lfs::core::utf8_to_path(lfs::core::Logger::default_log_file_path());
+                    if (!lfs::core::reveal_in_file_manager(path)) {
+                        LOG_WARN("Open Log: could not reveal '{}'",
+                                 lfs::core::Logger::default_log_file_path());
+                    }
+                },
+            };
+        }
+
+        // Operation-terminal failures offer Dismiss plus Open Log (§4).
+        std::vector<lfs::ErrorAction> operationFailureActions() {
+            return {dismissAction(), openLogAction()};
+        }
+
         lfs::ErrorNotification makeNotification(const lfs::ErrorCode code, const lfs::ErrorDomain domain,
                                                 const lfs::Severity severity, std::string message,
-                                                const char* operation, const lfs::core::SourceSite site) {
+                                                const char* operation, const lfs::core::SourceSite site,
+                                                const lfs::ErrorSurface surface = lfs::ErrorSurface::Modal,
+                                                std::vector<lfs::ErrorAction> actions =
+                                                    operationFailureActions()) {
             lfs::Error base = lfs::make_error(lfs::ErrorInit{
                 .code = code,
                 .domain = domain,
@@ -42,10 +74,8 @@ namespace lfs::vis::gui {
             // member must be provided rather than default-constructed.
             return lfs::ErrorNotification{
                 .error = std::move(base).with_context(operation, site),
-                .surface = lfs::ErrorSurface::Modal,
-                .actions = {lfs::ErrorAction{.kind = lfs::ErrorActionKind::Dismiss,
-                                             .label = {},
-                                             .on_invoke = {}}},
+                .surface = surface,
+                .actions = std::move(actions),
                 .operation_id = lfs::OperationId::generate(),
             };
         }
@@ -87,6 +117,12 @@ namespace lfs::vis::gui {
 
     std::optional<lfs::ErrorNotification>
     translateExportFailed(const state::ExportFailed& e) {
+        if (e.cancelled) {
+            return makeNotification(lfs::ErrorCode::Cancelled, lfs::ErrorDomain::IO, lfs::Severity::Info,
+                                    LOC(lichtfeld::Strings::StatusBar::EXPORT_CANCELLED),
+                                    error_op::kExport, LFS_SOURCE_SITE_CURRENT(),
+                                    lfs::ErrorSurface::StatusOnly, /*actions=*/{});
+        }
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
                                 std::format("Failed to export:\n\n{}", e.error), error_op::kExport,
                                 LFS_SOURCE_SITE_CURRENT());
@@ -141,7 +177,7 @@ namespace lfs::vis::gui {
     translateCudaUnavailable(const state::CudaUnavailable& e) {
         return makeNotification(lfs::ErrorCode::Unavailable, lfs::ErrorDomain::CUDA,
                                 lfs::Severity::Error, e.message, error_op::kCudaCheck,
-                                LFS_SOURCE_SITE_CURRENT());
+                                LFS_SOURCE_SITE_CURRENT(), lfs::ErrorSurface::Modal, {dismissAction()});
     }
 
     std::optional<lfs::ErrorNotification>
@@ -154,7 +190,7 @@ namespace lfs::vis::gui {
             e.major, e.minor, e.min_major, e.min_minor);
         return makeNotification(lfs::ErrorCode::FailedPrecondition, lfs::ErrorDomain::CUDA,
                                 lfs::Severity::Warning, std::move(message), error_op::kCudaCheck,
-                                LFS_SOURCE_SITE_CURRENT());
+                                LFS_SOURCE_SITE_CURRENT(), lfs::ErrorSurface::Toast, /*actions=*/{});
     }
 
     std::optional<lfs::ErrorNotification>

@@ -1621,6 +1621,7 @@
     "reload": "Ricarica"
   },
   "status_bar": {
+    "export_cancelled": "Esportazione annullata",
     "gt_compare": "Confronto GT",
     "camera": "Cam {}",
     "ground_truth": "Ground Truth",
@@ -1690,7 +1691,15 @@
     "menu_register": "Imposta come applicazione predefinita...",
     "menu_unregister": "Rimuovi come applicazione predefinita..."
   },
+  "error_actions": {
+    "retry": "Riprova",
+    "choose_path": "Scegli posizione...",
+    "open_log": "Apri log",
+    "stop_renderer": "Arresta renderer"
+  },
   "error_modal": {
+    "details": "Dettagli",
+    "repeated": "Ripetuto",
     "training_failed": "Addestramento non riuscito",
     "out_of_gpu_memory": "Memoria GPU esaurita",
     "dataset_load_failed": "Impossibile caricare il set di dati",

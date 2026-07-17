@@ -1579,6 +1579,7 @@
     "reload": "Reload"
   },
   "status_bar": {
+    "export_cancelled": "Export cancelled",
     "gt_compare": "GT Compare",
     "camera": "Cam {}",
     "ground_truth": "Ground Truth",
@@ -1701,7 +1702,15 @@
     "menu_register": "Set as Default Application...",
     "menu_unregister": "Remove as Default Application..."
   },
+  "error_actions": {
+    "retry": "Retry",
+    "choose_path": "Choose Location...",
+    "open_log": "Open Log",
+    "stop_renderer": "Stop Renderer"
+  },
   "error_modal": {
+    "details": "Details",
+    "repeated": "Repeated",
     "training_failed": "Training Failed",
     "out_of_gpu_memory": "Out of GPU Memory",
     "dataset_load_failed": "Failed to Load Dataset",

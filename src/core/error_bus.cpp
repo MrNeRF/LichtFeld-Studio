@@ -9,12 +9,6 @@
 
 namespace lfs {
 
-    namespace {
-        // Repeated frame faults collapse to a count within this window (matches
-        // the five-second frame-log cadence). Product policy per the spec §9.
-        constexpr std::chrono::seconds kDedupWindow{5};
-    } // namespace
-
     Subscription::Subscription(ErrorBus* bus, const std::uint64_t id) noexcept
         : bus_(bus),
           id_(id) {}
@@ -65,25 +59,34 @@ namespace lfs {
         std::erase_if(subscribers_, [id](const Subscriber& s) { return s.id == id; });
     }
 
-    bool ErrorBus::should_suppress(const std::uint64_t key) {
-        const auto now = std::chrono::steady_clock::now();
-        std::lock_guard lock(dedup_mutex_);
-        std::erase_if(dedup_, [&](const auto& kv) { return now - kv.second.last >= kDedupWindow; });
-        auto it = dedup_.find(key);
-        if (it != dedup_.end() && now - it->second.last < kDedupWindow) {
-            ++it->second.count;
-            it->second.last = now;
-            return true;
+    ErrorDedup::Decision ErrorDedup::check(const std::uint64_t key,
+                                           const std::chrono::steady_clock::time_point now) {
+        std::lock_guard lock(mutex_);
+        std::erase_if(entries_, [&](const auto& kv) {
+            return now - kv.second.delivered_at >= kIdleExpiry;
+        });
+        auto it = entries_.find(key);
+        if (it == entries_.end()) {
+            entries_[key] = Entry{.count = 0, .delivered_at = now};
+            return {.suppress = false, .repeats = 0};
         }
-        dedup_[key] = DedupEntry{.count = 1, .last = now};
-        return false;
+        if (now - it->second.delivered_at < kWindow) {
+            ++it->second.count;
+            return {.suppress = true, .repeats = 0};
+        }
+        const std::uint32_t repeats = it->second.count;
+        it->second.count = 0;
+        it->second.delivered_at = now;
+        return {.suppress = false, .repeats = repeats};
     }
 
     void ErrorBus::publish(ErrorNotification notification) noexcept {
         try {
             const std::uint64_t key =
                 core::error_fingerprint(notification.error) ^ notification.operation_id.value();
-            if (should_suppress(key)) {
+            const ErrorDedup::Decision decision =
+                dedup_.check(key, std::chrono::steady_clock::now());
+            if (decision.suppress) {
                 return;
             }
 
@@ -96,10 +99,11 @@ namespace lfs {
                 }
             }
 
+            const ErrorDeliveryInfo delivery{.suppressed_repeats = decision.repeats};
             bool delivered = false;
             for (NativeErrorConsumer* consumer : snapshot) {
                 if (consumer != nullptr) {
-                    consumer->on_error(notification);
+                    consumer->on_error(notification, delivery);
                     delivered = true;
                 }
             }

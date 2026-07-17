@@ -1621,6 +1621,7 @@
     "reload": "再読み込み"
   },
   "status_bar": {
+    "export_cancelled": "エクスポートをキャンセルしました",
     "gt_compare": "GT比較",
     "camera": "Cam {}",
     "ground_truth": "Ground Truth",
@@ -1690,7 +1691,15 @@
     "menu_register": "既定のアプリケーションに設定...",
     "menu_unregister": "既定のアプリケーションから解除..."
   },
+  "error_actions": {
+    "retry": "再試行",
+    "choose_path": "場所を選択...",
+    "open_log": "ログを開く",
+    "stop_renderer": "レンダラーを停止"
+  },
   "error_modal": {
+    "details": "詳細",
+    "repeated": "繰り返し",
     "training_failed": "トレーニングに失敗しました",
     "out_of_gpu_memory": "GPUメモリ不足",
     "dataset_load_failed": "データセットの読み込みに失敗しました",

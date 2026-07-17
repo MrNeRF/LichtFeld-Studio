@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/reactive/store.hpp"
+#include "gui/error_surface_types.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -12,6 +13,7 @@
 #include <chrono>
 #include <cstddef>
 #include <future>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -28,9 +30,37 @@ namespace lfs::vis {
 }
 namespace lfs::vis::gui {
 
+    // Thread-safe one-line transient status (ErrorBus StatusOnly surface).
+    // post() from any thread overwrites and restarts the timer; snapshot() copies
+    // under the mutex for the UI-thread refresh and self-clears after kDuration.
+    struct LFS_VIS_API StatusMessageState {
+        static constexpr std::chrono::milliseconds kDuration{5000};
+        static constexpr float kFadeMs = 500.0f;
+
+        void post(std::string text, ErrorNoticeLevel level);
+
+        struct Snapshot {
+            bool visible = false;
+            std::string text;
+            ErrorNoticeLevel level = ErrorNoticeLevel::Info;
+            float alpha = 0.0f;
+        };
+        [[nodiscard]] Snapshot snapshot(std::chrono::steady_clock::time_point now);
+
+    private:
+        std::mutex mutex_;
+        std::string text_;
+        ErrorNoticeLevel level_ = ErrorNoticeLevel::Info;
+        std::chrono::steady_clock::time_point posted_at_{};
+        bool has_message_ = false;
+    };
+
     class RmlStatusBar {
     public:
         void init(RmlUIManager* mgr);
+        // Thread-safe one-line transient status text (ErrorBus StatusOnly
+        // surface). Picked up by the next periodic content refresh; auto-clears.
+        void postStatusMessage(std::string text, ErrorNoticeLevel level);
         void shutdown();
         void reloadResources();
         void render(const PanelDrawContext& ctx, float x, float y, float w, float h,
@@ -158,9 +188,13 @@ namespace lfs::vis::gui {
             std::string fps_color;
             std::string fps_label;
             std::string git_commit;
+            bool show_status_message = false;
+            std::string status_message_text;
+            std::string status_message_color;
         };
 
         ModelState model_;
+        StatusMessageState status_message_;
         GpuMemoryInfo cached_gpu_mem_;
         std::future<GpuMemoryInfo> pending_gpu_mem_;
         std::chrono::steady_clock::time_point next_refresh_at_{};

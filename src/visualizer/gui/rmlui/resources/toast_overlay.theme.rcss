@@ -1,0 +1,27 @@
+/* Theme-dependent toast overlay styles. */
+
+.toast {
+    background-color: @{modal.surface};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+.toast-title,
+.toast-message {
+    color: @{text};
+}
+
+.toast-count {
+    color: @{text_dim};
+}
+
+.toast.level-info {
+    border-color: @{success};
+}
+
+.toast.level-warning {
+    border-color: @{warning};
+}
+
+.toast.level-error {
+    border-color: @{error};
+}

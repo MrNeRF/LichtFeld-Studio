@@ -1568,6 +1568,7 @@
     "reload": "Recargar"
   },
   "status_bar": {
+    "export_cancelled": "Exportación cancelada",
     "gt_compare": "Comparación GT",
     "camera": "Cam {}",
     "ground_truth": "Ground Truth",
@@ -1690,7 +1691,15 @@
     "menu_register": "Establecer como Aplicación Predeterminada...",
     "menu_unregister": "Quitar como Aplicación Predeterminada..."
   },
+  "error_actions": {
+    "retry": "Reintentar",
+    "choose_path": "Elegir ubicación...",
+    "open_log": "Abrir registro",
+    "stop_renderer": "Detener renderizador"
+  },
   "error_modal": {
+    "details": "Detalles",
+    "repeated": "Repetido",
     "training_failed": "Error de entrenamiento",
     "out_of_gpu_memory": "Sin memoria de GPU",
     "dataset_load_failed": "No se pudo cargar el conjunto de datos",

@@ -411,6 +411,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SECONDARY_VIEW = "status_bar.secondary_view";
         inline constexpr const char* GPU = "status_bar.gpu";
         inline constexpr const char* STRATEGY_DEFAULT = "status_bar.strategy_default";
+        inline constexpr const char* EXPORT_CANCELLED = "status_bar.export_cancelled";
     } // namespace StatusBar
 
     namespace Preferences {
@@ -965,6 +966,15 @@ namespace lichtfeld::Strings {
         inline constexpr const char* GENERIC = "error_modal.generic";
         inline constexpr const char* OOM_HEADING = "error_modal.oom_heading";
         inline constexpr const char* OOM_SUGGESTIONS = "error_modal.oom_suggestions";
+        inline constexpr const char* DETAILS = "error_modal.details";
+        inline constexpr const char* REPEATED = "error_modal.repeated";
     } // namespace ErrorModal
+
+    namespace ErrorActions {
+        inline constexpr const char* RETRY = "error_actions.retry";
+        inline constexpr const char* CHOOSE_PATH = "error_actions.choose_path";
+        inline constexpr const char* OPEN_LOG = "error_actions.open_log";
+        inline constexpr const char* STOP_RENDERER = "error_actions.stop_renderer";
+    } // namespace ErrorActions
 
 } // namespace lichtfeld::Strings

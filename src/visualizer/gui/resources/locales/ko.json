@@ -1621,6 +1621,7 @@
     "reload": "다시 로드"
   },
   "status_bar": {
+    "export_cancelled": "내보내기 취소됨",
     "gt_compare": "GT 비교",
     "camera": "Cam {}",
     "ground_truth": "Ground Truth",
@@ -1690,7 +1691,15 @@
     "menu_register": "기본 응용 프로그램으로 설정...",
     "menu_unregister": "기본 응용 프로그램 해제..."
   },
+  "error_actions": {
+    "retry": "다시 시도",
+    "choose_path": "위치 선택...",
+    "open_log": "로그 열기",
+    "stop_renderer": "렌더러 중지"
+  },
   "error_modal": {
+    "details": "세부 정보",
+    "repeated": "반복됨",
     "training_failed": "학습 실패",
     "out_of_gpu_memory": "GPU 메모리 부족",
     "dataset_load_failed": "데이터셋을 불러오지 못했습니다",
