@@ -239,9 +239,12 @@ namespace lfs::core {
             // respect to stream retirement; otherwise a late free can repopulate
             // a cache with the stream after the cache has already been retagged.
             std::unique_lock stream_routing_lock(stream_routing_mutex_);
-            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
-                               "releasing CUDA memory-pool stream={}",
-                               static_cast<void*>(stream));
+            ensure_cuda_success(
+                cudaStreamSynchronize(stream), "cudaStreamSynchronize(stream)",
+                ::lfs::core::detail::format_cuda_safe("releasing CUDA memory-pool stream={}",
+                                                      static_cast<void*>(stream)),
+                LFS_SOURCE_SITE_CURRENT(),
+                CudaFailureDisposition::LogOnly);
             {
                 std::lock_guard<std::mutex> lock(map_mutex_);
                 for (auto& entry : allocation_map_) {

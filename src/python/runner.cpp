@@ -1270,15 +1270,20 @@ _add_dll_dirs()
             });
             if (!stopped) {
                 lock.unlock();
+                // The bounded panic path deliberately skips GPU
+                // teardown because an in-flight worker could make device sync hang.
                 LOG_CRITICAL(
-                    "Plugin preload did not stop within {} seconds; exiting without Python teardown",
+                    "Plugin preload did not stop within {} seconds; exiting without Python or GPU teardown",
                     SHUTDOWN_TIMEOUT.count());
                 lfs::core::flush_and_exit(EXIT_FAILURE);
             }
 
             if (g_plugin_preload.worker.joinable()) {
                 if (g_plugin_preload.worker.get_id() == std::this_thread::get_id()) {
-                    LOG_CRITICAL("Plugin preload worker attempted to join itself");
+                    // The bounded panic path deliberately skips GPU
+                    // teardown because the active worker may still own CUDA work.
+                    LOG_CRITICAL(
+                        "Plugin preload worker attempted to join itself; exiting without GPU teardown");
                     lfs::core::flush_and_exit(EXIT_FAILURE);
                 }
                 worker = std::move(g_plugin_preload.worker);

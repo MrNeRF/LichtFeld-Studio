@@ -4,6 +4,7 @@
 #include "core/cuda_error.hpp"
 
 #include "core/environment.hpp"
+#include "core/error_codes.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
 
@@ -186,7 +187,7 @@ namespace lfs::core {
         void ensure_cuda_failure_report_provider_registered() {
             std::call_once(g_failure_report_provider_once, [] {
                 register_failure_report_section_provider(
-                    "CUDA runtime error", append_cuda_failure_report_sections);
+                    lfs::to_string(ErrorDomain::CUDA), append_cuda_failure_report_sections);
             });
         }
 
@@ -240,7 +241,7 @@ namespace lfs::core {
                 const std::string detail_sections = format_cuda_detail_sections(
                     state, post_sync_error, post_peek_error);
                 emit_failure_report(FailureReport{
-                    .family = "CUDA runtime error",
+                    .family = lfs::to_string(ErrorDomain::CUDA),
                     .error = error,
                     .expression = expression,
                     .message = message,

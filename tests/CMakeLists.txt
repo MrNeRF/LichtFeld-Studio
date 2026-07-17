@@ -80,6 +80,7 @@ message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tes
 set(TEST_FILES
     test_assert_hardening.cpp
     test_cuda_error.cpp
+    test_cuda_error_typed.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp

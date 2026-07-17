@@ -164,7 +164,7 @@ namespace {
         EXPECT_THROW(LFS_CUDA_CHECK(cudaSetDevice(-1)), std::runtime_error);
 
         const std::string report = capture.joined();
-        EXPECT_NE(report.find("Family: CUDA runtime error"), std::string::npos);
+        EXPECT_NE(report.find("Family: CUDA"), std::string::npos);
         EXPECT_NE(report.find("Error: cudaErrorInvalidDevice"), std::string::npos);
         EXPECT_NE(report.find("Failed expression: cudaSetDevice(-1)"), std::string::npos);
         EXPECT_NE(report.find("Detection site:"), std::string::npos);

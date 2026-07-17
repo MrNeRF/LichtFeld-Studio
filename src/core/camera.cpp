@@ -5,6 +5,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/cuda_error_typed.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
@@ -135,8 +136,24 @@ namespace lfs::core {
 
         // Non-blocking so image loading doesn't serialize with the legacy stream.
         // On failure fall back to the default stream rather than a bad handle.
-        if (const cudaError_t err = cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking); err != cudaSuccess) {
-            LOG_WARN("Camera: cudaStreamCreateWithFlags failed ({}), falling back to default stream", cudaGetErrorString(err));
+        // log_cuda_teardown_failure is the frozen no-throw log-and-continue adapter.
+        const auto stream_create_site = LFS_SOURCE_SITE_CURRENT();
+        ::lfs::core::record_cuda_breadcrumb(
+            "cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking)",
+            __FILE__, __LINE__, nullptr);
+        const auto stream_create_state = ::lfs::core::prepare_cuda_check(
+            "cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking)",
+            stream_create_site, nullptr);
+        const cudaError_t stream_create_status =
+            cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking);
+        const auto stream_create_completion =
+            ::lfs::core::complete_cuda_check(stream_create_status, stream_create_state);
+        if (stream_create_completion.effective_error != cudaSuccess) {
+            ::lfs::core::log_cuda_teardown_failure(
+                stream_create_status, stream_create_state, stream_create_completion,
+                "cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking)",
+                "camera stream creation, falling back to default stream",
+                stream_create_site);
             _stream = nullptr;
         }
     }
@@ -145,7 +162,7 @@ namespace lfs::core {
         // Destroy CUDA stream if it was created
         if (_stream) {
             CudaMemoryPool::instance().release_stream(_stream);
-            cudaStreamDestroy(_stream);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
             _stream = nullptr;
         }
     }
@@ -202,7 +219,7 @@ namespace lfs::core {
             // Destroy our current stream
             if (_stream) {
                 CudaMemoryPool::instance().release_stream(_stream);
-                cudaStreamDestroy(_stream);
+                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(_stream), _stream, "camera stream teardown");
             }
 
             // Move all members
@@ -285,8 +302,24 @@ namespace lfs::core {
 
         // Non-blocking so image loading doesn't serialize with the legacy stream.
         // On failure fall back to the default stream rather than a bad handle.
-        if (const cudaError_t err = cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking); err != cudaSuccess) {
-            LOG_WARN("Camera: cudaStreamCreateWithFlags failed ({}), falling back to default stream", cudaGetErrorString(err));
+        // log_cuda_teardown_failure is the frozen no-throw log-and-continue adapter.
+        const auto stream_create_site = LFS_SOURCE_SITE_CURRENT();
+        ::lfs::core::record_cuda_breadcrumb(
+            "cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking)",
+            __FILE__, __LINE__, nullptr);
+        const auto stream_create_state = ::lfs::core::prepare_cuda_check(
+            "cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking)",
+            stream_create_site, nullptr);
+        const cudaError_t stream_create_status =
+            cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking);
+        const auto stream_create_completion =
+            ::lfs::core::complete_cuda_check(stream_create_status, stream_create_state);
+        if (stream_create_completion.effective_error != cudaSuccess) {
+            ::lfs::core::log_cuda_teardown_failure(
+                stream_create_status, stream_create_state, stream_create_completion,
+                "cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking)",
+                "camera stream creation, falling back to default stream",
+                stream_create_site);
             _stream = nullptr;
         }
     }
@@ -334,7 +367,7 @@ namespace lfs::core {
         if (image.device() != Device::CUDA) {
             image = image.to(Device::CUDA, _stream);
             if (_stream) {
-                cudaStreamSynchronize(_stream);
+                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "image upload sync");
             }
         }
 
@@ -444,7 +477,7 @@ namespace lfs::core {
             if (mask.device() != Device::CUDA) {
                 mask = mask.to(Device::CUDA, _stream);
                 if (_stream) {
-                    cudaStreamSynchronize(_stream);
+                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
                 }
             }
             if (mask.dtype() == DataType::UInt8) {
@@ -470,7 +503,7 @@ namespace lfs::core {
             if (mask.device() != Device::CUDA) {
                 mask = mask.to(Device::CUDA, _stream);
                 if (_stream) {
-                    cudaStreamSynchronize(_stream);
+                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
                 }
             }
 
@@ -534,7 +567,7 @@ namespace lfs::core {
                 Device::CPU, DataType::Float32);
             depth = cpu_depth.to(Device::CUDA, _stream);
             if (_stream) {
-                cudaStreamSynchronize(_stream);
+                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth upload sync");
             }
             free_image_float(gray);
 
@@ -556,7 +589,7 @@ namespace lfs::core {
             if (target_w != native_w || target_h != native_h) {
                 depth = lanczos_resize_grayscale(depth, target_h, target_w, 2, _stream);
                 if (_stream) {
-                    cudaStreamSynchronize(_stream);
+                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth resize sync");
                 }
             }
         } else {
@@ -571,7 +604,7 @@ namespace lfs::core {
             if (depth.device() != Device::CUDA) {
                 depth = depth.to(Device::CUDA, _stream);
                 if (_stream) {
-                    cudaStreamSynchronize(_stream);
+                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth upload sync");
                 }
             }
 
@@ -628,7 +661,7 @@ namespace lfs::core {
                 Device::CPU, DataType::Float32);
             normal = cpu_normal.to(Device::CUDA, _stream);
             if (_stream) {
-                cudaStreamSynchronize(_stream);
+                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
             }
             free_image_float(rgb);
             normal = normal.permute({2, 0, 1}).contiguous();
@@ -642,7 +675,7 @@ namespace lfs::core {
             if (normal.is_valid() && normal.device() != Device::CUDA) {
                 normal = normal.to(Device::CUDA, _stream);
                 if (_stream) {
-                    cudaStreamSynchronize(_stream);
+                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
                 }
             }
             if (normal.is_valid()) {
@@ -702,7 +735,7 @@ namespace lfs::core {
             }
             normal = normal_cpu.to(Device::CUDA, _stream);
             if (_stream) {
-                cudaStreamSynchronize(_stream);
+                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
             }
         }
 
@@ -726,7 +759,7 @@ namespace lfs::core {
         if (target_w != native_w || target_h != native_h) {
             normal = lanczos_resize_float_chw(normal, target_h, target_w, 2, _stream);
             if (_stream) {
-                cudaStreamSynchronize(_stream);
+                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal resize sync");
             }
         }
 

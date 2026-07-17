@@ -16,6 +16,7 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda_error.hpp"
+#include "core/cuda_error_typed.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -82,16 +83,6 @@ namespace lfs::training {
     namespace {
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
-
-        void require_cuda_success(const cudaError_t status, const std::string_view operation) {
-            if (status == cudaSuccess) {
-                return;
-            }
-            const std::string message = std::format(
-                "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
-            cudaGetLastError();
-            LFS_ASSERT_MSG(status == cudaSuccess, message);
-        }
 
         // Dataset-level normal-prior convention resolution. Prior maps come in
         // several flavors (camera-space OpenCV/OpenGL, world-space in the
@@ -1258,17 +1249,21 @@ namespace lfs::training {
 
     Trainer::CameraLossHeatmapState::~CameraLossHeatmapState() {
         if (copy_stream) {
-            cudaStreamSynchronize(copy_stream);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(copy_stream), copy_stream,
+                                  "heatmap state teardown: sync copy stream");
         }
         if (done_event) {
-            cudaEventDestroy(done_event);
+            LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(done_event), nullptr,
+                                  "heatmap state teardown: destroy done event");
         }
         if (ready_event) {
-            cudaEventDestroy(ready_event);
+            LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(ready_event), nullptr,
+                                  "heatmap state teardown: destroy ready event");
         }
         if (copy_stream) {
             lfs::core::CudaMemoryPool::instance().release_stream(copy_stream);
-            cudaStreamDestroy(copy_stream);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(copy_stream), copy_stream,
+                                  "heatmap state teardown: destroy copy stream");
         }
     }
 
@@ -1280,7 +1275,8 @@ namespace lfs::training {
 
         // Sync callback stream to avoid race conditions
         if (callback_stream_) {
-            cudaStreamSynchronize(callback_stream_);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(callback_stream_), callback_stream_,
+                                  "cleanup: sync callback stream");
         }
         callback_busy_ = false;
 
@@ -2018,7 +2014,7 @@ namespace lfs::training {
 
         // Check CUDA availability
         int device_count = 0;
-        require_cuda_success(cudaGetDeviceCount(&device_count), "CUDA device discovery");
+        LFS_CUDA_TRY(cudaGetDeviceCount(&device_count), nullptr, "CUDA device discovery");
         LFS_ASSERT_MSG(device_count > 0, "CUDA is not available - aborting");
         createCudaResources();
 
@@ -2030,7 +2026,7 @@ namespace lfs::training {
         LFS_ASSERT_MSG(scene.hasTrainingData(), "Scene has no cameras");
 
         int device_count = 0;
-        require_cuda_success(cudaGetDeviceCount(&device_count), "CUDA device discovery");
+        LFS_CUDA_TRY(cudaGetDeviceCount(&device_count), nullptr, "CUDA device discovery");
         LFS_ASSERT_MSG(device_count > 0, "CUDA is not available - aborting");
         createCudaResources();
 
@@ -2039,19 +2035,19 @@ namespace lfs::training {
 
     void Trainer::createCudaResources() {
         try {
-            require_cuda_success(
+            LFS_CUDA_TRY(
                 cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking),
-                "Trainer callback stream creation");
+                nullptr, "Trainer callback stream creation");
 
             // Use the default stream flags so synchronous readbacks and cold-path
             // uploads remain ordered with training work. Overlap partners use
             // non-blocking streams with explicit event edges.
-            require_cuda_success(
-                cudaStreamCreate(&training_stream_),
+            LFS_CUDA_TRY(
+                cudaStreamCreate(&training_stream_), nullptr,
                 "Trainer training stream creation");
-            require_cuda_success(
+            LFS_CUDA_TRY(
                 cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking),
-                "Trainer metrics stream creation");
+                nullptr, "Trainer metrics stream creation");
 
             nvtxNameCudaStreamA(training_stream_, "lfs.train");
             nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
@@ -2062,15 +2058,18 @@ namespace lfs::training {
             // Roll back every member handle published by this transaction.
             destroySyncPrimitives();
             if (metrics_stream_) {
-                cudaStreamDestroy(metrics_stream_);
+                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(metrics_stream_), metrics_stream_,
+                                      "rollback: destroy metrics stream");
                 metrics_stream_ = nullptr;
             }
             if (training_stream_) {
-                cudaStreamDestroy(training_stream_);
+                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(training_stream_), training_stream_,
+                                      "rollback: destroy training stream");
                 training_stream_ = nullptr;
             }
             if (callback_stream_) {
-                cudaStreamDestroy(callback_stream_);
+                LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(callback_stream_), callback_stream_,
+                                      "rollback: destroy callback stream");
                 callback_stream_ = nullptr;
             }
             throw;
@@ -2078,18 +2077,20 @@ namespace lfs::training {
     }
 
     void Trainer::createSyncPrimitives() {
-        require_cuda_success(
+        LFS_CUDA_TRY(
             cudaEventCreateWithFlags(&params_ready_event_, cudaEventDisableTiming),
-            "Trainer parameter-ready event creation");
+            nullptr, "Trainer parameter-ready event creation");
         for (size_t i = 0; i < reader_done_events_.size(); ++i) {
-            require_cuda_success(
+            LFS_CUDA_TRY(
                 cudaEventCreateWithFlags(&reader_done_events_[i], cudaEventDisableTiming),
-                std::format("Trainer reader event {} creation", i));
+                nullptr,
+                ::lfs::core::detail::format_cuda_safe("Trainer reader event {} creation", i));
         }
         for (size_t i = 0; i < loss_slots_.size(); ++i) {
-            require_cuda_success(
+            LFS_CUDA_TRY(
                 cudaEventCreateWithFlags(&loss_slots_[i].done, cudaEventDisableTiming),
-                std::format("Trainer loss event {} creation", i));
+                nullptr,
+                ::lfs::core::detail::format_cuda_safe("Trainer loss event {} creation", i));
         }
         for (size_t i = 0; i < loss_slots_.size(); ++i) {
             loss_slots_[i].pinned = static_cast<float*>(
@@ -2106,18 +2107,21 @@ namespace lfs::training {
         reader_done_pending_ = 0;
         viewer_release_semaphore_ = nullptr;
         if (params_ready_event_) {
-            cudaEventDestroy(params_ready_event_);
+            LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(params_ready_event_), nullptr,
+                                  "destroy params-ready event");
             params_ready_event_ = nullptr;
         }
         for (auto& event : reader_done_events_) {
             if (event) {
-                cudaEventDestroy(event);
+                LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(event), nullptr,
+                                      "destroy reader-done event");
                 event = nullptr;
             }
         }
         for (auto& slot : loss_slots_) {
             if (slot.done) {
-                cudaEventDestroy(slot.done);
+                LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(slot.done), nullptr,
+                                      "destroy loss-slot event");
                 slot.done = nullptr;
             }
             if (slot.pinned) {
@@ -2127,7 +2131,8 @@ namespace lfs::training {
             slot.in_flight = false;
         }
         for (const cudaEvent_t event : orphaned_sidecar_events_) {
-            cudaEventDestroy(event);
+            LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(event), nullptr,
+                                  "destroy orphaned sidecar event");
         }
         orphaned_sidecar_events_.clear();
     }
@@ -2264,8 +2269,9 @@ namespace lfs::training {
                 if (!(reader_done_pending_ & bit)) {
                     continue;
                 }
-                LFS_CUDA_CHECK_MSG(cudaStreamWaitEvent(training_stream_, reader_done_events_[i], 0),
-                                   "model reader-done wait, slot {}", i);
+                LFS_CUDA_TRY(
+                    cudaStreamWaitEvent(training_stream_, reader_done_events_[i], 0), training_stream_,
+                    ::lfs::core::detail::format_cuda_safe("model reader-done wait, slot {}", i));
                 reader_done_pending_ &= ~bit;
             }
         }
@@ -2274,9 +2280,11 @@ namespace lfs::training {
         if (viewer_release_semaphore_ && borrow > viewer_borrow_waited_) {
             cudaExternalSemaphoreWaitParams wait_params{};
             wait_params.params.fence.value = borrow;
-            LFS_CUDA_CHECK_MSG(
+            LFS_CUDA_TRY(
                 cudaWaitExternalSemaphoresAsync(&viewer_release_semaphore_, &wait_params, 1, training_stream_),
-                "viewer-release semaphore wait, borrow value {}", borrow);
+                training_stream_,
+                ::lfs::core::detail::format_cuda_safe(
+                    "viewer-release semaphore wait, borrow value {}", borrow));
             viewer_borrow_waited_ = borrow;
         }
     }
@@ -3220,18 +3228,21 @@ namespace lfs::training {
         lfs::core::image_io::wait_for_pending_saves();
 
         if (callback_stream_) {
-            cudaStreamSynchronize(callback_stream_);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(callback_stream_), callback_stream_,
+                                  "shutdown: sync callback stream");
         }
 
         if (training_stream_) {
-            cudaStreamSynchronize(training_stream_);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(training_stream_), training_stream_,
+                                  "shutdown: sync training stream");
         }
 
         if (metrics_stream_) {
-            cudaStreamSynchronize(metrics_stream_);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(metrics_stream_), metrics_stream_,
+                                  "shutdown: sync metrics stream");
         }
 
-        cudaDeviceSynchronize();
+        LFS_CUDA_LOG_TEARDOWN(cudaDeviceSynchronize(), nullptr, "shutdown: device sync");
 
         const bool exiting_headless = params_.optimization.headless;
         if (exiting_headless) {
@@ -3293,19 +3304,22 @@ namespace lfs::training {
         setActiveImageLoader(nullptr);
 
         if (callback_stream_) {
-            cudaStreamDestroy(callback_stream_);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(callback_stream_), callback_stream_,
+                                  "shutdown: destroy callback stream");
             callback_stream_ = nullptr;
         }
         callback_busy_ = false;
 
         if (metrics_stream_) {
-            cudaStreamDestroy(metrics_stream_);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(metrics_stream_), metrics_stream_,
+                                  "shutdown: destroy metrics stream");
             metrics_stream_ = nullptr;
         }
 
         if (training_stream_) {
             destroySyncPrimitives();
-            cudaStreamDestroy(training_stream_);
+            LFS_CUDA_LOG_TEARDOWN(cudaStreamDestroy(training_stream_), training_stream_,
+                                  "shutdown: destroy training stream");
             training_stream_ = nullptr;
         }
 
@@ -3313,7 +3327,8 @@ namespace lfs::training {
             // Release GPU memory pools back to system
             lfs::core::Tensor::trim_memory_pool();
             lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
-            cudaDeviceSynchronize();
+            LFS_CUDA_LOG_TEARDOWN(cudaDeviceSynchronize(), nullptr,
+                                  "shutdown: post-trim device sync");
         }
         LOG_DEBUG("GPU memory released");
 
@@ -4171,11 +4186,13 @@ namespace lfs::training {
                         } else if (gsplat_ctx) {
                             auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
                             if (gsplat_ctx->isect_ids_ptr != nullptr) {
-                                cudaFree(gsplat_ctx->isect_ids_ptr);
+                                LFS_CUDA_LOG_TEARDOWN(cudaFree(gsplat_ctx->isect_ids_ptr), nullptr,
+                                                      "gsplat tile cleanup: free isect_ids");
                                 gsplat_ctx->isect_ids_ptr = nullptr;
                             }
                             if (gsplat_ctx->flatten_ids_ptr != nullptr) {
-                                cudaFree(gsplat_ctx->flatten_ids_ptr);
+                                LFS_CUDA_LOG_TEARDOWN(cudaFree(gsplat_ctx->flatten_ids_ptr), nullptr,
+                                                      "gsplat tile cleanup: free flatten_ids");
                                 gsplat_ctx->flatten_ids_ptr = nullptr;
                             }
                             arena.end_frame(gsplat_ctx->frame_id, lfs::core::getCurrentCUDAStream());
@@ -5596,7 +5613,9 @@ namespace lfs::training {
                 stream_guard.emplace(training_stream_);
                 // initialize() ran on another thread; order all of its CUDA work
                 // before the first training-stream kernel.
-                cudaDeviceSynchronize();
+                LFS_CUDA_TRY(
+                    cudaDeviceSynchronize(), training_stream_,
+                    "order initialize() work before first training-stream kernel");
             }
 
             // Start from current_iteration_ (allows resume from checkpoint)
@@ -5836,15 +5855,28 @@ namespace lfs::training {
                     if (!*event) {
                         continue;
                     }
+                    const auto wait_site = LFS_SOURCE_SITE_CURRENT();
+                    lfs::core::record_cuda_breadcrumb(
+                        "cudaStreamWaitEvent(training_stream_, *event, 0)", __FILE__, __LINE__,
+                        training_stream_);
+                    const auto wait_state = lfs::core::prepare_cuda_check(
+                        "cudaStreamWaitEvent(training_stream_, *event, 0)", wait_site,
+                        training_stream_);
                     const cudaError_t wait_err = cudaStreamWaitEvent(training_stream_, *event, 0);
-                    if (wait_err != cudaSuccess) {
+                    const auto wait_completion =
+                        lfs::core::complete_cuda_check(wait_err, wait_state);
+                    if (wait_completion.effective_error != cudaSuccess) {
                         orphaned_sidecar_events_.push_back(*event);
                         *event = nullptr;
-                        LFS_ENSURE_CUDA_SUCCESS_MSG(
-                            wait_err, "cudaStreamWaitEvent(sidecar loader ready)",
-                            std::format("iteration {}", iter));
+                        lfs::core::throw_cuda_error(
+                            wait_err, wait_state, wait_completion,
+                            "cudaStreamWaitEvent(training_stream_, *event, 0)",
+                            ::lfs::core::detail::format_cuda_safe(
+                                "sidecar loader ready, iteration {}", iter),
+                            wait_site);
                     }
-                    cudaEventDestroy(*event);
+                    LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(*event), nullptr,
+                                          "destroy sidecar loader-ready event");
                     *event = nullptr;
                 }
                 // Store pipelined mask for use in train_step

@@ -6,6 +6,8 @@
 #include "core/environment.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
+#include "core/pinned_memory_allocator.hpp"
+#include "core/tensor.hpp"
 
 #include <array>
 #include <cstdio>
@@ -34,6 +36,20 @@ namespace lfs::core {
         try {
             Logger::get().flush();
         } catch (...) {
+        }
+    }
+
+    void teardown_gpu_before_exit() noexcept {
+        try {
+            Tensor::shutdown_memory_pool();
+            PinnedMemoryAllocator::instance().shutdown();
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): both calls are documented no-throw
+            // today (shutdown_memory_pool is a guarded pointer check + already
+            // LogOnly-policy CudaMemoryPool::shutdown; PinnedMemoryAllocator::
+            // shutdown only calls its own already-LogOnly empty_cache_impl) —
+            // this is defense-in-depth for the one sanctioned pre-exit step, not
+            // a currently-reachable branch.
         }
     }
 

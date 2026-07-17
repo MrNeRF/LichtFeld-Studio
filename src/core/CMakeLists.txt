@@ -50,6 +50,7 @@ set(CORE_SOURCES
         abi.cpp
         crash_handler.cpp
         cuda_error.cpp
+        cuda_error_typed.cpp
         error.cpp
         error_reporter.cpp
         guarded_task.cpp
@@ -60,7 +61,6 @@ set(CORE_SOURCES
         argument_parser.cpp
         camera.cpp
         checkpoint_format.cpp
-        cuda_alloc_tracker.cpp
         image_loader.cpp
         cuda_version.cpp
         image_io.cpp

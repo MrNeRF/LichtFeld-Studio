@@ -16,6 +16,18 @@ namespace lfs::core {
     // all exceptions; safe to call before the logger has been initialized.
     LFS_CORE_API void flush_diagnostics_noexcept() noexcept;
 
+    // Explicit, idempotent, ordered GPU teardown: releases the CUDA tensor memory
+    // pool and the pinned-host allocator while CUDA and diagnostics are still
+    // alive, so static destructors at process exit find nothing left to do (the
+    // wedge scenario 6f3b93868 defended against). CPU-only processes pay only two
+    // idempotent-guard checks — see Tensor::shutdown_memory_pool's
+    // g_cuda_memory_pool_instance guard and PinnedMemoryAllocator's constructor,
+    // neither of which touches CUDA unless a prior allocation path already did.
+    // Call this before flush_and_exit, never after: a teardown failure must have a
+    // chance to reach the flushed log. Safe to call multiple times (both
+    // underlying shutdown() calls are CAS-guarded no-ops on repeat).
+    LFS_CORE_API void teardown_gpu_before_exit() noexcept;
+
     // Flushes diagnostics, then terminates the process without running
     // destructors. The single sanctioned replacement for std::_Exit/_exit.
     [[noreturn]] LFS_CORE_API void flush_and_exit(int code) noexcept;
