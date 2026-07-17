@@ -421,6 +421,7 @@ def check_vk_infinite_wait(source: ScannedFile) -> list[Hit]:
 
 KERNEL_CHECK_MARKERS = (
     "LFS_CUDA_CHECK",
+    "LFS_CUDA_LAUNCH_CHECK",
     "LFS_ENSURE_CUDA_SUCCESS",
     "cudaGetLastError",
     "cudaPeekAtLastError",

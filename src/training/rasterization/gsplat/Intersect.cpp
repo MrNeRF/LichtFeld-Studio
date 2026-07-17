@@ -169,7 +169,6 @@ namespace gsplat_lfs {
             tiles_per_gauss_out,
             nullptr, nullptr, // isect_ids, flatten_ids
             stream);
-        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "gsplat tile-count kernel launch");
 
         // GPU-based inclusive scan using CUB (replaces slow CPU cumsum)
         auto& cache = get_cache();
@@ -216,7 +215,6 @@ namespace gsplat_lfs {
             nullptr, // tiles_per_gauss (not needed in second pass)
             isect_ids.as<int64_t>(), flatten_ids.as<int32_t>(),
             stream);
-        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "gsplat intersection kernel launch");
 
         // Sort by isect_ids if requested
         if (sort && n_isects > 0) {

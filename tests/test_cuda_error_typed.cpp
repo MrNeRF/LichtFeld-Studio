@@ -233,6 +233,18 @@ namespace {
         EXPECT_NO_THROW(trainer.shutdown());
     }
 
+    TEST_F(CudaErrorTypedTest, TrainerModelReadLifecycleSucceeds) {
+        lfs::core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_camera(0));
+        lfs::training::Trainer trainer(scene);
+
+        EXPECT_NO_THROW({
+            trainer.beginModelRead(nullptr);
+            trainer.endModelRead(nullptr);
+        });
+    }
+
     TEST_F(CudaErrorTypedTest, SeveralCamerasConstructAndDestroyCleanly) {
         EXPECT_NO_THROW({
             std::vector<std::shared_ptr<lfs::core::Camera>> cameras;

@@ -94,6 +94,7 @@ void fast_lfs::rasterization::backward(
                 width,
                 height,
                 grid.x);
+            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.blend_backward");
         };
         auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
             if (grad_normal != nullptr && grad_normal_helper != nullptr) {
@@ -144,6 +145,7 @@ void fast_lfs::rasterization::backward(
                 cy,
                 sh_layout_slots,
                 fused_adam);
+            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.backward.preprocess_backward");
         };
         auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES>() {
             if (mip_filter) {

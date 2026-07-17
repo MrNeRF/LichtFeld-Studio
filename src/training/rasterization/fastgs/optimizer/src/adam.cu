@@ -89,7 +89,7 @@ void fast_lfs::optimizer::adam_step(
         bias_correction1_rcp,
         bias_correction2_sqrt_rcp);
 
-    LFS_FASTGS_PHASE_CHECK("adam step");
+    LFS_CUDA_LAUNCH_CHECK(stream, "adam step");
 }
 
 void fast_lfs::optimizer::adam_step_quantized(
@@ -116,7 +116,7 @@ void fast_lfs::optimizer::adam_step_quantized(
         param, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, param_grad,
         frozen_mask, frozen_mask_size, n_rows, row_size, lr, beta1, beta2, eps, bias_correction1_rcp, bias_correction2_sqrt_rcp);
 
-    LFS_FASTGS_PHASE_CHECK("quantized adam step");
+    LFS_CUDA_LAUNCH_CHECK(stream, "quantized adam step");
 }
 
 void fast_lfs::optimizer::adam_step_quantized_swizzled(
@@ -143,5 +143,5 @@ void fast_lfs::optimizer::adam_step_quantized_swizzled(
         param, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, param_grad,
         frozen_mask, frozen_mask_size, n_primitives, slots_per_primitive, lr, beta1, beta2, eps, bias_correction1_rcp, bias_correction2_sqrt_rcp);
 
-    LFS_FASTGS_PHASE_CHECK("quantized adam step (swizzled)");
+    LFS_CUDA_LAUNCH_CHECK(stream, "quantized adam step (swizzled)");
 }

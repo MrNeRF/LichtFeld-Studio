@@ -36,6 +36,43 @@ namespace lfs::core {
             return fields;
         }
 
+        [[nodiscard]] Error make_cuda_failure_seed_error(const CudaFailureSeed& seed,
+                                                         const std::string_view framing) {
+            const bool has_predecessor = seed.predecessor != cudaSuccess;
+            Error error = make_error(ErrorInit{
+                .code = cuda_status_to_error_code(seed.native),
+                .domain = ErrorDomain::CUDA,
+                .detail = std::format("{}: {}", framing,
+                                      seed.expression ? seed.expression : "<untagged>"),
+                .detection = seed.source,
+                .fields = SmallFields{}
+                              .add("stream", static_cast<std::int64_t>(seed.stream))
+                              .add("first_sequence", static_cast<std::int64_t>(seed.first_sequence))
+                              .add("last_sequence", static_cast<std::int64_t>(seed.last_sequence)),
+                .native = NativeError{
+                    .domain = ErrorDomain::CUDA,
+                    .code = static_cast<std::int64_t>(seed.native),
+                    .name = cuda_typed_error_text(seed.native),
+                },
+            });
+            if (has_predecessor) {
+                Error predecessor = make_error(ErrorInit{
+                    .code = cuda_status_to_error_code(seed.predecessor),
+                    .domain = ErrorDomain::CUDA,
+                    .detail = "a prior LFS_CUDA_LAUNCH_CHECK/LFS_CUDA_AWAIT already observed this "
+                              "native status; this site may not be the true origin",
+                    .detection = seed.source,
+                    .native = NativeError{
+                        .domain = ErrorDomain::CUDA,
+                        .code = static_cast<std::int64_t>(seed.predecessor),
+                        .name = cuda_typed_error_text(seed.predecessor),
+                    },
+                });
+                error = std::move(error).with_suppressed(std::move(predecessor));
+            }
+            return error;
+        }
+
     } // namespace
 
     ErrorCode cuda_status_to_error_code(const cudaError_t status) noexcept {
@@ -141,6 +178,16 @@ namespace lfs::core {
             // itself become a teardown failure; make_error/ErrorReporter::report
             // are already documented no-throw, this is defense-in-depth only.
         }
+    }
+
+    void report_cuda_launch_check_failure(const CudaFailureSeed seed) {
+        throw Exception(make_cuda_failure_seed_error(seed, "kernel launch check failed"));
+    }
+
+    void report_cuda_await_failure(const CudaFailureSeed seed) {
+        throw Exception(make_cuda_failure_seed_error(
+            seed, std::format("observed at await (submitted range [{}, {}])",
+                              seed.first_sequence, seed.last_sequence)));
     }
 
 } // namespace lfs::core

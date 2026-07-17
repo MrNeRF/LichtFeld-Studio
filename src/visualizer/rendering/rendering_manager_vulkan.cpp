@@ -1410,8 +1410,17 @@ namespace lfs::vis {
             VksplatViewportRenderer* renderer;
             ~ViewerBorrowPublisher() {
                 if (trainer && renderer) {
-                    trainer->endModelRead(renderer->renderStream());
-                    trainer->publishViewerBorrow(renderer->renderCompleteValue());
+                    try {
+                        trainer->endModelRead(renderer->renderStream());
+                        trainer->publishViewerBorrow(renderer->renderCompleteValue());
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("ViewerBorrowPublisher: endModelRead/publishViewerBorrow failed "
+                                  "during frame teardown: {}",
+                                  e.what());
+                    } catch (...) {
+                        LOG_ERROR("ViewerBorrowPublisher: endModelRead/publishViewerBorrow failed "
+                                  "during frame teardown with an unknown error");
+                    }
                 }
             }
         } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};

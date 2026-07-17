@@ -212,6 +212,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         far_,
         depth_bits,
         mip_filter);
+    LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.preprocess");
     check_cuda_with_fastgs_status(cudaGetLastError(), "preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     sync_fastgs_phase_if_requested("preprocess", forward_status, "preprocess", static_cast<uint64_t>(n_primitives), n_tiles_u64);
 
@@ -320,6 +321,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             grid.x,
             depth_bits,
             n_primitives);
+        LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");
         check_cuda_with_fastgs_status(cudaGetLastError(), "create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
         sync_fastgs_phase_if_requested("create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
 
@@ -356,6 +358,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             depth_bits,
             n_tiles_u32,
             n_instances);
+        LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.extract_instance_ranges");
         check_cuda_with_fastgs_status(cudaGetLastError(), "extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
         sync_fastgs_phase_if_requested("extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     }
@@ -379,6 +382,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             width,
             height,
             grid.x);
+        LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.blend");
     };
     if (normal != nullptr) {
         launch_blend.template operator()<true>();

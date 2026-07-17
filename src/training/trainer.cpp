@@ -2147,7 +2147,8 @@ namespace lfs::training {
             // explicit backpressure instead of silently dropping the sample.
             // The caller harvests right before submitting, so this slot's
             // value was already consumed once the event completes.
-            cudaEventSynchronize(slot.done);
+            LFS_CUDA_LOG_TEARDOWN(cudaEventSynchronize(slot.done), nullptr,
+                                  "loss readback: drain ring slot");
             slot.in_flight = false;
         }
         if (cudaMemcpyAsync(slot.pinned, total_loss.ptr<float>(), sizeof(float),
@@ -2203,7 +2204,9 @@ namespace lfs::training {
     void Trainer::beginModelRead(cudaStream_t reader_stream) {
         std::lock_guard<std::mutex> lock(stream_sync_mutex_);
         if (params_ready_event_ && params_ready_recorded_) {
-            cudaStreamWaitEvent(reader_stream, params_ready_event_, 0);
+            LFS_CUDA_TRY(cudaStreamWaitEvent(reader_stream, params_ready_event_, 0),
+                         reader_stream,
+                         "begin model read: wait params-ready event");
         }
     }
 
@@ -2218,11 +2221,12 @@ namespace lfs::training {
             // Ring full: the slot's previous record hasn't been consumed by a
             // step yet. Drain it host-side before reuse — re-recording would
             // drop the older reader's edge.
-            cudaEventSynchronize(slot);
+            LFS_CUDA_TRY(cudaEventSynchronize(slot), nullptr,
+                         "end model read: drain reader-done ring");
         }
-        if (cudaEventRecord(slot, reader_stream) == cudaSuccess) {
-            reader_done_pending_ |= bit;
-        }
+        LFS_CUDA_TRY(cudaEventRecord(slot, reader_stream), reader_stream,
+                     "end model read: record reader-done event");
+        reader_done_pending_ |= bit;
         reader_done_head_ = (reader_done_head_ + 1) % READER_DONE_RING;
     }
 
@@ -3133,7 +3137,11 @@ namespace lfs::training {
                 metrics_guard.emplace(metrics_stream_);
             }
             const lfs::core::RasterizerMemoryArena::ScopedBeginFrameTimeout arena_timeout(100);
-            beginModelRead(reader_stream);
+            try {
+                beginModelRead(reader_stream);
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("metric read window unavailable: {}", e.what()));
+            }
 
             auto& model = strategy_->get_model();
             auto& background = background_;
@@ -3158,10 +3166,21 @@ namespace lfs::training {
             } catch (const std::exception& e) {
                 // Arena busy (refining trainer holds the frame) or render error:
                 // skip this metric sample; the panel retries on its next update.
-                endModelRead(reader_stream);
+                try {
+                    endModelRead(reader_stream);
+                } catch (const std::exception& end_error) {
+                    LOG_ERROR("computeCameraMetrics: reader-done record failed during degradation: {}",
+                              end_error.what());
+                }
                 return std::unexpected(std::format("metric render unavailable: {}", e.what()));
             }
-            endModelRead(reader_stream);
+            try {
+                endModelRead(reader_stream);
+            } catch (const std::exception& e) {
+                // Without the reader-done edge the trainer may not order writes
+                // against this reader's pending kernels — discard the sample.
+                return std::unexpected(std::format("metric read-window close failed: {}", e.what()));
+            }
         }
 
         CameraMetricsSnapshot snapshot;
@@ -3569,7 +3588,10 @@ namespace lfs::training {
             bg_mix_buffer_ = lfs::core::Tensor::empty({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         }
 
-        cudaMemcpyAsync(bg_mix_buffer_.ptr<float>(), result, sizeof(result), cudaMemcpyHostToDevice, bg_mix_buffer_.stream());
+        LFS_CUDA_TRY(
+            cudaMemcpyAsync(bg_mix_buffer_.ptr<float>(), result, sizeof(result),
+                            cudaMemcpyHostToDevice, bg_mix_buffer_.stream()),
+            bg_mix_buffer_.stream(), "background modulation: upload mix color");
         return bg_mix_buffer_;
     }
 

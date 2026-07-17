@@ -37,6 +37,8 @@ namespace lfs::core {
         std::once_flag g_sync_debug_log_once;
         std::once_flag g_failure_report_provider_once;
         std::atomic<bool> g_cuda_unavailable{false};
+        std::atomic<int> g_last_cuda_check_failure{cudaSuccess};
+        thread_local uint64_t g_lfs_launch_watermark = 0;
 
         constexpr std::string_view kModeTokenCudaSync = "cuda-sync";
         constexpr std::string_view kModeTokenDeviceTrap = "device-trap";
@@ -256,10 +258,10 @@ namespace lfs::core {
 
     } // namespace
 
-    void record_cuda_breadcrumb(const char* tag,
-                                const char* file,
-                                const uint32_t line,
-                                const cudaStream_t stream) noexcept {
+    uint64_t record_cuda_breadcrumb(const char* tag,
+                                    const char* file,
+                                    const uint32_t line,
+                                    const cudaStream_t stream) noexcept {
         const uint64_t sequence = g_breadcrumb_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
         BreadcrumbSlot& slot = g_breadcrumbs[(sequence - 1) % CUDA_BREADCRUMB_CAPACITY];
         slot.sequence.store(0, std::memory_order_relaxed);
@@ -269,6 +271,7 @@ namespace lfs::core {
         slot.stream.store(reinterpret_cast<uintptr_t>(stream), std::memory_order_relaxed);
         slot.thread_id.store(current_thread_id(), std::memory_order_relaxed);
         slot.sequence.store(sequence, std::memory_order_release);
+        return sequence;
     }
 
     std::vector<CudaBreadcrumb> cuda_breadcrumbs_most_recent_first() {
@@ -437,7 +440,74 @@ namespace lfs::core {
 
     void reset_cuda_diagnostics_for_testing() noexcept {
         g_cuda_unavailable.store(false, std::memory_order_relaxed);
+        g_last_cuda_check_failure.store(cudaSuccess, std::memory_order_relaxed);
+        g_lfs_launch_watermark = 0;
         reset_failure_report_dedup_for_testing();
+    }
+
+    uint64_t current_cuda_breadcrumb_sequence() noexcept {
+        return g_breadcrumb_sequence.load(std::memory_order_acquire);
+    }
+
+    cudaError_t exchange_last_cuda_check_failure(const cudaError_t native) noexcept {
+        return static_cast<cudaError_t>(
+            g_last_cuda_check_failure.exchange(static_cast<int>(native), std::memory_order_relaxed));
+    }
+
+    CudaAwaitTicket cuda_record_range(const cudaStream_t stream, const char* operation_tag) noexcept {
+        return CudaAwaitTicket{
+            .stream = reinterpret_cast<uintptr_t>(stream),
+            .first_sequence = current_cuda_breadcrumb_sequence(),
+            .operation_tag = operation_tag,
+        };
+    }
+
+    void handle_cuda_launch_check_slow_path(const cudaError_t status,
+                                            const cudaStream_t stream,
+                                            const char* tag,
+                                            const SourceSite location,
+                                            const uint64_t last_sequence) {
+        cudaError_t effective = status;
+        if (cuda_sync_debug_enabled()) {
+            const cudaError_t sync_status =
+                stream ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
+            const cudaError_t post_peek = cudaPeekAtLastError();
+            effective = status != cudaSuccess        ? status
+                        : sync_status != cudaSuccess ? sync_status
+                                                     : post_peek;
+        }
+        if (effective == cudaSuccess) {
+            return;
+        }
+        const uint64_t first_sequence = g_lfs_launch_watermark + 1;
+        g_lfs_launch_watermark = last_sequence;
+        const cudaError_t predecessor = exchange_last_cuda_check_failure(effective);
+        report_cuda_launch_check_failure(CudaFailureSeed{
+            .native = effective,
+            .predecessor = predecessor,
+            .stream = reinterpret_cast<uintptr_t>(stream),
+            .first_sequence = first_sequence,
+            .last_sequence = last_sequence,
+            .expression = tag,
+            .source = location,
+        });
+    }
+
+    void handle_cuda_await_failure(const cudaError_t status,
+                                   const CudaAwaitTicket& ticket,
+                                   const char* tag,
+                                   const SourceSite location,
+                                   const uint64_t last_sequence) {
+        const cudaError_t predecessor = exchange_last_cuda_check_failure(status);
+        report_cuda_await_failure(CudaFailureSeed{
+            .native = status,
+            .predecessor = predecessor,
+            .stream = ticket.stream,
+            .first_sequence = ticket.first_sequence,
+            .last_sequence = last_sequence,
+            .expression = tag,
+            .source = location,
+        });
     }
 
     CudaCheckState prepare_cuda_check(const char*,

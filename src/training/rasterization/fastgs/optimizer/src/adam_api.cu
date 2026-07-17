@@ -144,7 +144,7 @@ namespace fast_lfs::optimizer {
         kernels::adam::quantize_adam_moments_cu<<<div_round_up(n_rows, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             exp_avg, exp_avg_sq, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, n_rows, row_size);
 
-        LFS_FASTGS_PHASE_CHECK("quantize_adam_moments");
+        LFS_CUDA_LAUNCH_CHECK(stream, "quantize_adam_moments");
     }
 
     void quantize_adam_moments_swizzled_raw(
@@ -170,7 +170,7 @@ namespace fast_lfs::optimizer {
         kernels::adam::quantize_adam_moments_swizzled_cu<<<div_round_up(n_primitives, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             exp_avg, exp_avg_sq, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, n_primitives, slots_per_primitive);
 
-        LFS_FASTGS_PHASE_CHECK("quantize_adam_moments_swizzled");
+        LFS_CUDA_LAUNCH_CHECK(stream, "quantize_adam_moments_swizzled");
     }
 
     void zero_rows_at_indices(
@@ -198,7 +198,7 @@ namespace fast_lfs::optimizer {
             n_indices,
             row_size);
 
-        LFS_FASTGS_PHASE_CHECK("zero_rows_at_indices");
+        LFS_CUDA_LAUNCH_CHECK(stream, "zero_rows_at_indices");
     }
 
     void zero_quantized_rows_at_indices(
@@ -222,7 +222,7 @@ namespace fast_lfs::optimizer {
         kernels::adam::zero_quantized_rows_cu<<<div_round_up(n_indices, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             tensor_q, scales, indices_device, n_indices, row_size, zero_point);
 
-        LFS_FASTGS_PHASE_CHECK("zero_quantized_rows_at_indices");
+        LFS_CUDA_LAUNCH_CHECK(stream, "zero_quantized_rows_at_indices");
     }
 
 } // namespace fast_lfs::optimizer

@@ -426,6 +426,7 @@ namespace gsplat_lfs {
                 reinterpret_cast<const float4*>(sh_rest_swizzled),
                 masks,
                 colors);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh_swizzled_fwd");
     }
 
     template <typename scalar_t>
@@ -533,6 +534,7 @@ namespace gsplat_lfs {
                 v_colors,
                 v_coeffs,
                 compute_v_dirs ? v_dirs : nullptr);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.sh_swizzled_bwd");
     }
 
     // Compute viewing directions: dir = mean - camera_position
@@ -586,6 +588,7 @@ namespace gsplat_lfs {
 
         compute_view_dirs_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             means, viewmats, C, N, dirs);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.compute_view_dirs");
     }
 
 } // namespace gsplat_lfs

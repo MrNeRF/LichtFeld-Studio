@@ -42,15 +42,53 @@ namespace lfs::core {
         cudaError_t post_peek_error = cudaSuccess;
     };
 
+    // Trivially-copyable, non-owning cold-path payload for a detected CUDA
+    // launch-check or async-await failure. FROZEN VERBATIM shape (Section
+    // 7.2.1 of .codex_tmp/error-architecture-analysis.md) — do not add,
+    // remove, reorder, or rename fields. `expression`/`source`'s file/
+    // function pointers must refer to static storage (string literals,
+    // __builtin_FILE()-backed pointers) — never a temporary or
+    // heap-allocated string. Has no default constructor (SourceSite has
+    // none); always aggregate-initialize every field, never
+    // default-construct a bare `CudaFailureSeed seed;`.
+    struct LFS_CORE_API CudaFailureSeed {
+        cudaError_t native;
+        cudaError_t predecessor;
+        std::uintptr_t stream;
+        std::uint64_t first_sequence;
+        std::uint64_t last_sequence;
+        const char* expression;
+        SourceSite source;
+    };
+    static_assert(std::is_trivially_copyable_v<CudaFailureSeed>,
+                  "CudaFailureSeed crosses the nvcc/host boundary by value; "
+                  "it must stay trivially copyable");
+
+    // A submitted-but-not-yet-awaited CUDA operation range. Value type,
+    // single-use by convention: obtained from cuda_record_range(), consumed
+    // by exactly one LFS_CUDA_AWAIT. Trivially copyable, CUDA-safe (usable
+    // from .cu and .cpp alike) — it carries no owning state, only a stream
+    // handle, the breadcrumb sequence at record time, and a static tag.
+    struct LFS_CORE_API CudaAwaitTicket {
+        std::uintptr_t stream;
+        std::uint64_t first_sequence;
+        const char* operation_tag;
+    };
+    static_assert(std::is_trivially_copyable_v<CudaAwaitTicket>,
+                  "CudaAwaitTicket crosses the nvcc/host boundary by value; "
+                  "it must stay trivially copyable");
+
     enum class CudaFailureDisposition : uint8_t {
         Throw,
         LogOnly,
     };
 
-    LFS_CORE_API void record_cuda_breadcrumb(const char* tag,
-                                             const char* file,
-                                             uint32_t line,
-                                             cudaStream_t stream = nullptr) noexcept;
+    // Returns the assigned monotonic sequence number, so LFS_CUDA_LAUNCH_CHECK/
+    // LFS_CUDA_AWAIT can name a breadcrumb range without a second call.
+    LFS_CORE_API uint64_t record_cuda_breadcrumb(const char* tag,
+                                                 const char* file,
+                                                 uint32_t line,
+                                                 cudaStream_t stream = nullptr) noexcept;
     LFS_CORE_API std::vector<CudaBreadcrumb> cuda_breadcrumbs_most_recent_first();
     LFS_CORE_API void clear_cuda_breadcrumbs_for_testing() noexcept;
 
@@ -90,8 +128,59 @@ namespace lfs::core {
     LFS_CORE_API bool cuda_is_unavailable() noexcept;
     LFS_CORE_API bool latch_cuda_unavailable(cudaError_t error) noexcept;
 
-    // Resets only the unavailable latch and failure-report deduplication state.
+    // Resets the unavailable latch, launch/await attribution state, and
+    // failure-report deduplication state. Breadcrumb storage is reset separately.
     LFS_CORE_API void reset_cuda_diagnostics_for_testing() noexcept;
+
+    // Current breadcrumb sequence counter without recording a new entry.
+    // CUDA-safe, allocation-free, one relaxed atomic load.
+    [[nodiscard]] LFS_CORE_API uint64_t current_cuda_breadcrumb_sequence() noexcept;
+
+    // Most-recent-overwrite (not first-wins) process-wide latch of the last
+    // native status observed by any LFS_CUDA_LAUNCH_CHECK/LFS_CUDA_AWAIT cold
+    // path. Returns the value that was recorded before this call (cudaSuccess
+    // if none since the last reset_cuda_diagnostics_for_testing()), then
+    // stores `native`. Called only from the two cold paths below — never on
+    // any fast/success path.
+    LFS_CORE_API cudaError_t exchange_last_cuda_check_failure(cudaError_t native) noexcept;
+
+    // Opens a submitted-range ticket for a later LFS_CUDA_AWAIT. Does not
+    // wait, allocate, or synchronize. `operation_tag` must be a static string
+    // literal.
+    [[nodiscard]] LFS_CORE_API CudaAwaitTicket cuda_record_range(
+        cudaStream_t stream, const char* operation_tag) noexcept;
+
+    // Cold-path dispatch for LFS_CUDA_LAUNCH_CHECK. May return normally (the
+    // sync-debug-only, no-real-failure case); calls the [[noreturn]] bridge
+    // below otherwise. Declared here (CUDA-safe) so the macro can call it
+    // from a .cu TU; defined in cuda_error.cpp (also CUDA-safe — it never
+    // constructs lfs::Error, only a CudaFailureSeed).
+    LFS_CORE_API void handle_cuda_launch_check_slow_path(
+        cudaError_t status,
+        cudaStream_t stream,
+        const char* tag,
+        SourceSite location,
+        uint64_t last_sequence);
+
+    // Cold-path dispatch for LFS_CUDA_AWAIT. Always builds and forwards a
+    // seed (unlike the launch-check path, AWAIT's cold path is entered only
+    // on a genuine non-success status — no sync-debug-only entry exists for
+    // it, since it wraps a real expression that already ran).
+    LFS_CORE_API void handle_cuda_await_failure(
+        cudaError_t status,
+        const CudaAwaitTicket& ticket,
+        const char* tag,
+        SourceSite location,
+        uint64_t last_sequence);
+
+    // The two cold bridges. CUDA-safe declarations (CudaFailureSeed is the
+    // only host-visible type in the signature); their C++23 .cpp definitions
+    // alone construct/throw Exception(Error) — see cuda_error_typed.cpp §1.2.
+    // Never call these directly from a .cu file; only
+    // handle_cuda_launch_check_slow_path/handle_cuda_await_failure do.
+    [[noreturn]] LFS_CORE_API void report_cuda_launch_check_failure(CudaFailureSeed seed);
+    [[noreturn]] LFS_CORE_API void report_cuda_await_failure(CudaFailureSeed seed);
+
     LFS_CORE_API CudaCheckState prepare_cuda_check(
         const char* expression,
         SourceSite location,
@@ -201,4 +290,51 @@ namespace lfs::core {
         static_assert(std::is_array_v<std::remove_reference_t<decltype(tag)>>,           \
                       "LFS_CUDA_BREADCRUMB_STREAM tag must be a static string literal"); \
         ::lfs::core::record_cuda_breadcrumb((tag), __FILE__, __LINE__, (stream_value));  \
+    } while (false)
+
+// Every public launcher or logical phase performs this immediately after its
+// kernel<<<...>>>() launch, on the actual stream: ONE cudaPeekAtLastError,
+// no sync, no allocation, no formatting on the success path (Section 5.12).
+// `tag` must be a static string literal. Under LFS_CUDA_SYNC_DEBUG=cuda-sync
+// the slow path additionally synchronizes to catch async faults early —
+// production behavior does not change.
+#define LFS_CUDA_LAUNCH_CHECK(stream, tag)                                          \
+    do {                                                                            \
+        static_assert(std::is_array_v<std::remove_reference_t<decltype(tag)>>,      \
+                      "LFS_CUDA_LAUNCH_CHECK tag must be a static string literal"); \
+        const cudaStream_t _lfs_launch_stream = (stream);                           \
+        const uint64_t _lfs_launch_seq = ::lfs::core::record_cuda_breadcrumb(       \
+            (tag), __FILE__, __LINE__, _lfs_launch_stream);                         \
+        const cudaError_t _lfs_launch_status = cudaPeekAtLastError();               \
+        if (_lfs_launch_status != cudaSuccess ||                                    \
+            ::lfs::core::cuda_sync_debug_enabled()) [[unlikely]] {                  \
+            ::lfs::core::handle_cuda_launch_check_slow_path(                        \
+                _lfs_launch_status, _lfs_launch_stream, (tag),                      \
+                LFS_SOURCE_SITE_CURRENT(), _lfs_launch_seq);                        \
+        }                                                                           \
+    } while (false)
+
+// `call` is the EXISTING wait/completion expression the algorithm already
+// performs (cudaStreamWaitEvent/cudaEventSynchronize/cudaStreamSynchronize/
+// etc., returning cudaError_t), evaluated exactly once — LFS_CUDA_AWAIT never
+// adds a wait that was not already there. `ticket` came from
+// cuda_record_range(); `tag` describes THIS await site (distinct from the
+// ticket's own submission-site tag) and must be a static string literal.
+#define LFS_CUDA_AWAIT(ticket, call, tag)                                             \
+    do {                                                                              \
+        static_assert(std::is_array_v<std::remove_reference_t<decltype(tag)>>,        \
+                      "LFS_CUDA_AWAIT tag must be a static string literal");          \
+        const ::lfs::core::CudaAwaitTicket _lfs_await_ticket = (ticket);              \
+        const cudaError_t _lfs_await_status = (call);                                 \
+        static_assert(std::is_same_v<std::remove_cv_t<decltype(_lfs_await_status)>,   \
+                                     cudaError_t>,                                    \
+                      "LFS_CUDA_AWAIT requires an expression returning cudaError_t"); \
+        const uint64_t _lfs_await_seq = ::lfs::core::record_cuda_breadcrumb(          \
+            (tag), __FILE__, __LINE__,                                                \
+            reinterpret_cast<cudaStream_t>(_lfs_await_ticket.stream));                \
+        if (_lfs_await_status != cudaSuccess) [[unlikely]] {                          \
+            ::lfs::core::handle_cuda_await_failure(                                   \
+                _lfs_await_status, _lfs_await_ticket, (tag),                          \
+                LFS_SOURCE_SITE_CURRENT(), _lfs_await_seq);                           \
+        }                                                                             \
     } while (false)

@@ -67,6 +67,8 @@ int edge_compute::rasterization::edge_forward(
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
 
     // Preprocess primitives
+    const auto instances_ticket = ::lfs::core::cuda_record_range(
+        stream, "edge.forward.preprocess_through_scan");
     kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
         means,
         scales_raw,
@@ -91,7 +93,7 @@ int edge_compute::rasterization::edge_forward(
         far_,
         depth_bits,
         mip_filter);
-    LFS_EDGE_PHASE_CHECK("preprocess");
+    LFS_CUDA_LAUNCH_CHECK(stream, "edge.forward.preprocess");
 
     LFS_CUDA_CHECK_MSG(
         cub::DeviceScan::InclusiveSum(
@@ -110,7 +112,9 @@ int edge_compute::rasterization::edge_forward(
             &n_instances_u32, per_primitive_buffers.offset + n_primitives - 1,
             sizeof(n_instances_u32), cudaMemcpyDeviceToHost, stream),
         "edge instance-count readback");
-    LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "edge instance-count stream sync");
+    LFS_CUDA_AWAIT(
+        instances_ticket, cudaStreamSynchronize(stream),
+        "edge instance-count stream sync");
     LFS_EDGE_PHASE_CHECK("cudaMemcpy(n_instances)");
     const int n_instances = checked_to_int(n_instances_u32, "n_instances exceeds int range");
 
@@ -131,7 +135,7 @@ int edge_compute::rasterization::edge_forward(
             grid.x,
             depth_bits,
             n_primitives);
-        LFS_EDGE_PHASE_CHECK("create_instances");
+        LFS_CUDA_LAUNCH_CHECK(stream, "edge.forward.create_instances");
 
         LFS_CUDA_CHECK_MSG(
             cub::DeviceRadixSort::SortPairs(
@@ -152,7 +156,7 @@ int edge_compute::rasterization::edge_forward(
             per_tile_buffers.instance_ranges,
             depth_bits,
             n_instances);
-        LFS_EDGE_PHASE_CHECK("extract_instance_ranges");
+        LFS_CUDA_LAUNCH_CHECK(stream, "edge.forward.extract_instance_ranges");
     }
 
     // Perform blending
@@ -166,7 +170,7 @@ int edge_compute::rasterization::edge_forward(
         grid.x,
         pixel_weights,
         accum_weights);
-    LFS_EDGE_PHASE_CHECK("blend");
+    LFS_CUDA_LAUNCH_CHECK(stream, "edge.forward.blend");
 
     return n_instances;
 }
