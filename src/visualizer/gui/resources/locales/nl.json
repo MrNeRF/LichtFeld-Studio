@@ -1690,6 +1690,22 @@
     "menu_register": "Instellen als standaardtoepassing...",
     "menu_unregister": "Verwijderen als standaardtoepassing..."
   },
+  "error_modal": {
+    "training_failed": "Training mislukt",
+    "out_of_gpu_memory": "Onvoldoende GPU-geheugen",
+    "dataset_load_failed": "Kan dataset niet laden",
+    "export_failed": "Exporteren mislukt",
+    "video_export_failed": "Video exporteren mislukt",
+    "mesh2splat_failed": "Mesh-naar-splat mislukt",
+    "config_invalid": "Ongeldig configuratiebestand",
+    "file_open_failed": "Kan bestand niet openen",
+    "cuda_unavailable": "CUDA niet beschikbaar",
+    "cuda_unsupported": "Niet-ondersteund CUDA-stuurprogramma",
+    "save_failed": "Opslaan mislukt",
+    "generic": "Fout",
+    "oom_heading": "Onvoldoende GPU-geheugen!",
+    "oom_suggestions": "Suggesties:\n  - Verlaag het maximale aantal Gaussians (max_cap)\n  - Verlaag de graad van sferische harmonischen (sh_degree)\n  - Verlaag de beeldresolutie (resize_factor)\n  - Schakel tegelmodus in voor grote afbeeldingen"
+  },
   "context_menu": {
     "snap_interval": "Rasterinterval",
     "preview_scale": "Voorbeeldgrootte",

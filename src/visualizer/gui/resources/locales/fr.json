@@ -1690,6 +1690,22 @@
     "menu_register": "Définir comme application par défaut...",
     "menu_unregister": "Retirer comme application par défaut..."
   },
+  "error_modal": {
+    "training_failed": "Échec de l'entraînement",
+    "out_of_gpu_memory": "Mémoire GPU insuffisante",
+    "dataset_load_failed": "Échec du chargement du jeu de données",
+    "export_failed": "Échec de l'exportation",
+    "video_export_failed": "Échec de l'exportation vidéo",
+    "mesh2splat_failed": "Échec de la conversion maillage vers splat",
+    "config_invalid": "Fichier de configuration non valide",
+    "file_open_failed": "Impossible d'ouvrir le fichier",
+    "cuda_unavailable": "CUDA indisponible",
+    "cuda_unsupported": "Pilote CUDA non pris en charge",
+    "save_failed": "Échec de l'enregistrement",
+    "generic": "Erreur",
+    "oom_heading": "Mémoire GPU insuffisante !",
+    "oom_suggestions": "Suggestions :\n  - Réduire le nombre maximal de Gaussians (max_cap)\n  - Diminuer le degré des harmoniques sphériques (sh_degree)\n  - Réduire la résolution de l'image (resize_factor)\n  - Activer le mode tuile pour les grandes images"
+  },
   "context_menu": {
     "snap_interval": "Intervalle de grille",
     "preview_scale": "Taille de l'aperçu",

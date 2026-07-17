@@ -1701,6 +1701,22 @@
     "menu_register": "Set as Default Application...",
     "menu_unregister": "Remove as Default Application..."
   },
+  "error_modal": {
+    "training_failed": "Training Failed",
+    "out_of_gpu_memory": "Out of GPU Memory",
+    "dataset_load_failed": "Failed to Load Dataset",
+    "export_failed": "Export Failed",
+    "video_export_failed": "Video Export Failed",
+    "mesh2splat_failed": "Mesh to Splat Failed",
+    "config_invalid": "Invalid Config File",
+    "file_open_failed": "Cannot Open File",
+    "cuda_unavailable": "CUDA Unavailable",
+    "cuda_unsupported": "Unsupported CUDA Driver",
+    "save_failed": "Save Failed",
+    "generic": "Error",
+    "oom_heading": "Out of GPU memory!",
+    "oom_suggestions": "Suggestions:\n  - Reduce max Gaussians (max_cap)\n  - Lower spherical harmonics degree (sh_degree)\n  - Reduce image resolution (resize_factor)\n  - Enable tile mode for large images"
+  },
   "context_menu": {
     "snap_interval": "Snap Interval",
     "preview_scale": "Preview Scale",

@@ -1690,6 +1690,22 @@
     "menu_register": "Als Standardanwendung festlegen...",
     "menu_unregister": "Als Standardanwendung entfernen..."
   },
+  "error_modal": {
+    "training_failed": "Training fehlgeschlagen",
+    "out_of_gpu_memory": "GPU-Speicher erschöpft",
+    "dataset_load_failed": "Datensatz konnte nicht geladen werden",
+    "export_failed": "Export fehlgeschlagen",
+    "video_export_failed": "Videoexport fehlgeschlagen",
+    "mesh2splat_failed": "Mesh-zu-Splat fehlgeschlagen",
+    "config_invalid": "Ungültige Konfigurationsdatei",
+    "file_open_failed": "Datei kann nicht geöffnet werden",
+    "cuda_unavailable": "CUDA nicht verfügbar",
+    "cuda_unsupported": "Nicht unterstützter CUDA-Treiber",
+    "save_failed": "Speichern fehlgeschlagen",
+    "generic": "Fehler",
+    "oom_heading": "GPU-Speicher erschöpft!",
+    "oom_suggestions": "Vorschläge:\n  - Maximale Anzahl an Gaussians reduzieren (max_cap)\n  - Grad der sphärischen Harmonischen verringern (sh_degree)\n  - Bildauflösung reduzieren (resize_factor)\n  - Kachelmodus für große Bilder aktivieren"
+  },
   "context_menu": {
     "snap_interval": "Rasterintervall",
     "preview_scale": "Vorschaugröße",

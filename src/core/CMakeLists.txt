@@ -53,6 +53,7 @@ set(CORE_SOURCES
         cuda_error_typed.cpp
         device_fault.cpp
         error.cpp
+        error_bus.cpp
         error_reporter.cpp
         guarded_task.cpp
         failure_report.cpp

@@ -190,4 +190,24 @@ namespace lfs::core {
         return capture_stack_policy(code);
     }
 
+    std::uint64_t error_fingerprint(const Error& error) noexcept {
+        try {
+            // fingerprint_site already folds detection source + native code +
+            // top-frame operation; combine with code + domain (the two
+            // dimensions FailureReport keeps in its separate dedup slots) so the
+            // key covers the full Section 5.2 fingerprint.
+            std::uint64_t hash = std::hash<std::string>{}(fingerprint_site(error));
+            const std::uint64_t code_domain =
+                (static_cast<std::uint64_t>(error.code()) << 16) ^
+                static_cast<std::uint64_t>(error.domain());
+            hash ^= code_domain + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+            return hash;
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): noexcept dedup helper; an allocation
+            // failure while formatting the site degrades to a fixed key rather
+            // than propagating into ErrorBus::publish.
+            return 0;
+        }
+    }
+
 } // namespace lfs::core

@@ -237,6 +237,7 @@ set(TEST_FILES
     test_memory_pressure.cpp
     test_error_core.cpp
     test_error_reporter.cpp
+    test_error_bus.cpp
     test_run_guarded.cpp
     test_tcp_responder.cpp
 )

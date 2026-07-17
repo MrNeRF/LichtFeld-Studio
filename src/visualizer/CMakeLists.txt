@@ -85,6 +85,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/film_strip_renderer.cpp
         gui/sequencer_ui_manager.cpp
         gui/rml_modal_overlay.cpp
+        gui/gui_error_consumer.cpp
+        gui/error_event_bridge.cpp
         gui/rml_sequencer_overlay.cpp
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp

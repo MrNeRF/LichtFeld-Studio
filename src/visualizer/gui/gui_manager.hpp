@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/cuda_version.hpp"
+#include "core/error_bus.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
@@ -12,6 +13,7 @@
 #include "gui/async_task_manager.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/global_context_menu.hpp"
+#include "gui/gui_error_consumer.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
@@ -445,6 +447,13 @@ namespace lfs::vis {
             };
 
             DevResourceWatchState dev_resource_watch_;
+
+            // Native ErrorBus surfacing (Phase 8). Declared last so
+            // error_subscription_ unsubscribes before any other member (the
+            // modal overlay included) is torn down; error_consumer_ outlives
+            // its subscription per the frozen lifetime rule.
+            std::unique_ptr<GuiErrorConsumer> error_consumer_;
+            lfs::Subscription error_subscription_;
         };
     } // namespace gui
 } // namespace lfs::vis

@@ -64,4 +64,11 @@ namespace lfs::core {
     // of by scraping captured stack-trace text.
     [[nodiscard]] LFS_CORE_API bool should_capture_stack_for_testing(ErrorCode code) noexcept;
 
+    // Stable 64-bit dedup key over the Section 5.2 fingerprint dimensions
+    // (code + native code + detection source + top context-frame operation).
+    // Reuses ErrorReporter's existing fingerprint_site() algorithm rather than
+    // duplicating it; ErrorBus keys repeated-fault suppression off this. Equal
+    // for two errors that share those dimensions, different otherwise.
+    [[nodiscard]] LFS_CORE_API std::uint64_t error_fingerprint(const Error& error) noexcept;
+
 } // namespace lfs::core

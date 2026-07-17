@@ -1690,6 +1690,22 @@
     "menu_register": "Imposta come applicazione predefinita...",
     "menu_unregister": "Rimuovi come applicazione predefinita..."
   },
+  "error_modal": {
+    "training_failed": "Addestramento non riuscito",
+    "out_of_gpu_memory": "Memoria GPU esaurita",
+    "dataset_load_failed": "Impossibile caricare il set di dati",
+    "export_failed": "Esportazione non riuscita",
+    "video_export_failed": "Esportazione video non riuscita",
+    "mesh2splat_failed": "Conversione mesh in splat non riuscita",
+    "config_invalid": "File di configurazione non valido",
+    "file_open_failed": "Impossibile aprire il file",
+    "cuda_unavailable": "CUDA non disponibile",
+    "cuda_unsupported": "Driver CUDA non supportato",
+    "save_failed": "Salvataggio non riuscito",
+    "generic": "Errore",
+    "oom_heading": "Memoria GPU esaurita!",
+    "oom_suggestions": "Suggerimenti:\n  - Ridurre il numero massimo di Gaussians (max_cap)\n  - Abbassare il grado delle armoniche sferiche (sh_degree)\n  - Ridurre la risoluzione dell'immagine (resize_factor)\n  - Abilitare la modalità tile per immagini grandi"
+  },
   "context_menu": {
     "snap_interval": "Intervallo griglia",
     "preview_scale": "Scala anteprima",

@@ -19,6 +19,7 @@
 #include "core/tensor.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
+#include "gui/error_event_bridge.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/line_renderer.hpp"
 #include "gui/native_panels.hpp"
@@ -7108,6 +7109,11 @@ namespace lfs::vis::gui {
 
     void GuiManager::setupEventHandlers() {
         using namespace lfs::core::events;
+
+        error_consumer_ = std::make_unique<GuiErrorConsumer>(
+            [this](lfs::core::ModalRequest req) { enqueueModal(std::move(req)); });
+        error_subscription_ = lfs::ErrorBus::instance().subscribe(*error_consumer_);
+        registerErrorEventBridge();
 
         ui::FileDropReceived::when([this](const auto&) {
             if (startup_overlay_.isPluginLoadComplete())

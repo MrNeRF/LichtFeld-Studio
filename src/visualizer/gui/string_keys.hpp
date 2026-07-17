@@ -44,7 +44,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* MENU = "menu.help";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
-    } // namespace Menu
+    }     // namespace Menu
 
     namespace Window {
         inline constexpr const char* ABOUT = "window.about";
@@ -73,7 +73,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* BUILD_TYPE = "about.build_info.build_type";
             inline constexpr const char* PLATFORM = "about.build_info.platform";
         } // namespace BuildInfo
-    } // namespace About
+    }     // namespace About
 
     namespace Training {
         namespace Section {
@@ -253,7 +253,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ADD = "training.button.add";
             inline constexpr const char* REMOVE = "training.button.remove";
         } // namespace Button
-    } // namespace Training
+    }     // namespace Training
 
     namespace Scene {
         inline constexpr const char* ADD_PLY = "scene.add_ply";
@@ -949,5 +949,22 @@ namespace lichtfeld::Strings {
         inline constexpr const char* MENU_REGISTER = "file_association.menu_register";
         inline constexpr const char* MENU_UNREGISTER = "file_association.menu_unregister";
     } // namespace FileAssociation
+
+    namespace ErrorModal {
+        inline constexpr const char* TRAINING_FAILED = "error_modal.training_failed";
+        inline constexpr const char* OUT_OF_GPU_MEMORY = "error_modal.out_of_gpu_memory";
+        inline constexpr const char* DATASET_LOAD_FAILED = "error_modal.dataset_load_failed";
+        inline constexpr const char* EXPORT_FAILED = "error_modal.export_failed";
+        inline constexpr const char* VIDEO_EXPORT_FAILED = "error_modal.video_export_failed";
+        inline constexpr const char* MESH2SPLAT_FAILED = "error_modal.mesh2splat_failed";
+        inline constexpr const char* CONFIG_INVALID = "error_modal.config_invalid";
+        inline constexpr const char* FILE_OPEN_FAILED = "error_modal.file_open_failed";
+        inline constexpr const char* CUDA_UNAVAILABLE = "error_modal.cuda_unavailable";
+        inline constexpr const char* CUDA_UNSUPPORTED = "error_modal.cuda_unsupported";
+        inline constexpr const char* SAVE_FAILED = "error_modal.save_failed";
+        inline constexpr const char* GENERIC = "error_modal.generic";
+        inline constexpr const char* OOM_HEADING = "error_modal.oom_heading";
+        inline constexpr const char* OOM_SUGGESTIONS = "error_modal.oom_suggestions";
+    } // namespace ErrorModal
 
 } // namespace lichtfeld::Strings

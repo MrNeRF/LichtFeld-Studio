@@ -1690,6 +1690,22 @@
     "menu_register": "Ustaw jako domyślną aplikację...",
     "menu_unregister": "Usuń jako domyślną aplikację..."
   },
+  "error_modal": {
+    "training_failed": "Trening nie powiódł się",
+    "out_of_gpu_memory": "Brak pamięci GPU",
+    "dataset_load_failed": "Nie udało się załadować zestawu danych",
+    "export_failed": "Eksport nie powiódł się",
+    "video_export_failed": "Eksport wideo nie powiódł się",
+    "mesh2splat_failed": "Konwersja siatki na splat nie powiodła się",
+    "config_invalid": "Nieprawidłowy plik konfiguracyjny",
+    "file_open_failed": "Nie można otworzyć pliku",
+    "cuda_unavailable": "CUDA niedostępna",
+    "cuda_unsupported": "Nieobsługiwany sterownik CUDA",
+    "save_failed": "Zapisywanie nie powiodło się",
+    "generic": "Błąd",
+    "oom_heading": "Brak pamięci GPU!",
+    "oom_suggestions": "Sugestie:\n  - Zmniejsz maksymalną liczbę Gaussians (max_cap)\n  - Obniż stopień harmonik sferycznych (sh_degree)\n  - Zmniejsz rozdzielczość obrazu (resize_factor)\n  - Włącz tryb kafelków dla dużych obrazów"
+  },
   "context_menu": {
     "snap_interval": "Interwał siatki",
     "preview_scale": "Skala podglądu",

@@ -1690,6 +1690,22 @@
     "menu_register": "기본 응용 프로그램으로 설정...",
     "menu_unregister": "기본 응용 프로그램 해제..."
   },
+  "error_modal": {
+    "training_failed": "학습 실패",
+    "out_of_gpu_memory": "GPU 메모리 부족",
+    "dataset_load_failed": "데이터셋을 불러오지 못했습니다",
+    "export_failed": "내보내기 실패",
+    "video_export_failed": "동영상 내보내기 실패",
+    "mesh2splat_failed": "메시를 스플랫으로 변환 실패",
+    "config_invalid": "잘못된 구성 파일",
+    "file_open_failed": "파일을 열 수 없습니다",
+    "cuda_unavailable": "CUDA를 사용할 수 없음",
+    "cuda_unsupported": "지원되지 않는 CUDA 드라이버",
+    "save_failed": "저장 실패",
+    "generic": "오류",
+    "oom_heading": "GPU 메모리가 부족합니다!",
+    "oom_suggestions": "제안:\n  - 최대 가우시안 수 줄이기 (max_cap)\n  - 구면 조화 차수 낮추기 (sh_degree)\n  - 이미지 해상도 줄이기 (resize_factor)\n  - 큰 이미지에 타일 모드 활성화"
+  },
   "context_menu": {
     "snap_interval": "스냅 간격",
     "preview_scale": "미리보기 크기",
