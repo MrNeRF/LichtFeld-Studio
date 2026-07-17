@@ -843,3 +843,189 @@ TEST(VulkanWaitBounded, ImageFenceHardErrorSetsResizeFlagQuarantineDoesNot) {
     EXPECT_EQ(map_fence_error_for_begin_frame(ErrorCode::Internal), MapAction::Fail);
     EXPECT_EQ(map_fence_error_for_begin_frame(ErrorCode::DeviceLost), MapAction::FailAndLatch);
 }
+
+// ---------------------------------------------------------------------------
+// Phase 7C-P3: outcome mapping tables for gs_pipeline / VkSplat / mesh2splat
+// (pure tables — production TUs own the same decisions; locks the contract).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+    // C1/C2 throw dialect: Ready continues; flow outcomes + errors throw typed.
+    enum class GsPipelineWaitAction : std::uint8_t {
+        Continue,
+        ThrowCancelled,
+        ThrowUnavailable,
+        ThrowDeviceLost,
+        ThrowOtherError,
+    };
+
+    [[nodiscard]] GsPipelineWaitAction map_gs_pipeline_wait_outcome(
+        const WaitOutcome o) {
+        switch (o) {
+        case WaitOutcome::Ready: return GsPipelineWaitAction::Continue;
+        case WaitOutcome::Cancelled:
+        case WaitOutcome::Shutdown: return GsPipelineWaitAction::ThrowCancelled;
+        case WaitOutcome::Quarantined: return GsPipelineWaitAction::ThrowUnavailable;
+        }
+        return GsPipelineWaitAction::ThrowUnavailable;
+    }
+
+    [[nodiscard]] GsPipelineWaitAction map_gs_pipeline_wait_error(
+        const ErrorCode code) {
+        if (code == ErrorCode::DeviceLost) {
+            return GsPipelineWaitAction::ThrowDeviceLost;
+        }
+        if (code == ErrorCode::Cancelled) {
+            return GsPipelineWaitAction::ThrowCancelled;
+        }
+        return GsPipelineWaitAction::ThrowOtherError;
+    }
+
+    // C7 ring slot: non-Ready must NOT clear ring_completion_values_[slot].
+    enum class RingSlotWaitAction : std::uint8_t {
+        ClearSlotAndContinue,
+        FailRetainSlotValue,
+    };
+
+    [[nodiscard]] RingSlotWaitAction map_vksplat_ring_slot_wait(
+        const WaitOutcome o) {
+        return o == WaitOutcome::Ready ? RingSlotWaitAction::ClearSlotAndContinue
+                                       : RingSlotWaitAction::FailRetainSlotValue;
+    }
+
+    // C8 readback: expected dialect; fence is persistent (never destroyed here).
+    enum class ReadbackWaitAction : std::uint8_t {
+        ContinueInvalidate,
+        UnexpectedRetainFence,
+    };
+
+    [[nodiscard]] ReadbackWaitAction map_vksplat_readback_wait(const WaitOutcome o) {
+        return o == WaitOutcome::Ready ? ReadbackWaitAction::ContinueInvalidate
+                                       : ReadbackWaitAction::UnexpectedRetainFence;
+    }
+
+    // C9 + §1.D mesh2splat retain table.
+    enum class Mesh2SplatResourceAction : std::uint8_t {
+        DestroyFenceAndCb,
+        RetainFenceAndCb,
+    };
+
+    // submitted=false means queue submit never accepted (destroy OK).
+    [[nodiscard]] Mesh2SplatResourceAction map_mesh2splat_resource_disposition(
+        const bool submitted,
+        const bool wait_ready) {
+        if (!submitted) {
+            return Mesh2SplatResourceAction::DestroyFenceAndCb;
+        }
+        return wait_ready ? Mesh2SplatResourceAction::DestroyFenceAndCb
+                          : Mesh2SplatResourceAction::RetainFenceAndCb;
+    }
+
+} // namespace
+
+TEST(VulkanWaitBounded, Phase7CP3GsPipelineThrowDialectMapping) {
+    EXPECT_EQ(map_gs_pipeline_wait_outcome(WaitOutcome::Ready),
+              GsPipelineWaitAction::Continue);
+    EXPECT_EQ(map_gs_pipeline_wait_outcome(WaitOutcome::Cancelled),
+              GsPipelineWaitAction::ThrowCancelled);
+    EXPECT_EQ(map_gs_pipeline_wait_outcome(WaitOutcome::Shutdown),
+              GsPipelineWaitAction::ThrowCancelled);
+    EXPECT_EQ(map_gs_pipeline_wait_outcome(WaitOutcome::Quarantined),
+              GsPipelineWaitAction::ThrowUnavailable);
+    EXPECT_EQ(map_gs_pipeline_wait_error(ErrorCode::DeviceLost),
+              GsPipelineWaitAction::ThrowDeviceLost);
+    EXPECT_EQ(map_gs_pipeline_wait_error(ErrorCode::Cancelled),
+              GsPipelineWaitAction::ThrowCancelled);
+    EXPECT_EQ(map_gs_pipeline_wait_error(ErrorCode::ResourceExhausted),
+              GsPipelineWaitAction::ThrowOtherError);
+}
+
+TEST(VulkanWaitBounded, Phase7CP3VkSplatRingSlotDoesNotClearOnQuarantine) {
+    EXPECT_EQ(map_vksplat_ring_slot_wait(WaitOutcome::Ready),
+              RingSlotWaitAction::ClearSlotAndContinue);
+    EXPECT_EQ(map_vksplat_ring_slot_wait(WaitOutcome::Quarantined),
+              RingSlotWaitAction::FailRetainSlotValue);
+    EXPECT_EQ(map_vksplat_ring_slot_wait(WaitOutcome::Cancelled),
+              RingSlotWaitAction::FailRetainSlotValue);
+    EXPECT_EQ(map_vksplat_ring_slot_wait(WaitOutcome::Shutdown),
+              RingSlotWaitAction::FailRetainSlotValue);
+}
+
+TEST(VulkanWaitBounded, Phase7CP3VkSplatReadbackRetainFenceOnNonReady) {
+    EXPECT_EQ(map_vksplat_readback_wait(WaitOutcome::Ready),
+              ReadbackWaitAction::ContinueInvalidate);
+    EXPECT_EQ(map_vksplat_readback_wait(WaitOutcome::Quarantined),
+              ReadbackWaitAction::UnexpectedRetainFence);
+    EXPECT_EQ(map_vksplat_readback_wait(WaitOutcome::Cancelled),
+              ReadbackWaitAction::UnexpectedRetainFence);
+}
+
+TEST(VulkanWaitBounded, Phase7CP3Mesh2SplatRetainOnQuarantineTable) {
+    // Submit failed before wait — destroy fence/CB (never in-flight).
+    EXPECT_EQ(map_mesh2splat_resource_disposition(/*submitted=*/false, /*wait_ready=*/false),
+              Mesh2SplatResourceAction::DestroyFenceAndCb);
+    // Ready after successful submit — destroy as today.
+    EXPECT_EQ(map_mesh2splat_resource_disposition(/*submitted=*/true, /*wait_ready=*/true),
+              Mesh2SplatResourceAction::DestroyFenceAndCb);
+    // Quarantined / Cancelled / DeviceLost path: retain until Ready-proven shutdown.
+    EXPECT_EQ(map_mesh2splat_resource_disposition(/*submitted=*/true, /*wait_ready=*/false),
+              Mesh2SplatResourceAction::RetainFenceAndCb);
+}
+
+TEST(VulkanWaitBounded, Phase7CP3PipelineFingerprintsQuarantineViaDispatch) {
+    // Smoke: vksplat.pipeline fingerprints reach quarantine through dispatch
+    // (gs_pipeline routes wait_*_bounded with wait_ctx.dispatch = &vulkan_dispatch_).
+    FakeClock clock;
+    FenceWaitScript script;
+    script.clock = &clock;
+    script.ready_at_ms = 100'000;
+    BindScript bind(script);
+    ScriptedObserver observer;
+    std::atomic<bool> quarantine{false};
+
+    const VulkanDispatch dispatch = make_dispatch();
+    WaitContext ctx;
+    ctx.dispatch = &dispatch;
+    ctx.now = clock.fn();
+    ctx.observer = &observer;
+    ctx.fingerprint = "vksplat.pipeline.wait_post_submit_fence";
+    ctx.owner_quarantine_flag = &quarantine;
+
+    std::stop_source stop;
+    auto result = wait_fence_bounded(fake_device(), fake_fence(), stop.get_token(),
+                                     VulkanWaitPolicy{}, ctx);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(*result, WaitOutcome::Quarantined);
+    EXPECT_TRUE(quarantine.load());
+    EXPECT_EQ(observer.last_quarantine, "vksplat.pipeline.wait_post_submit_fence");
+}
+
+TEST(VulkanWaitBounded, Phase7CP3Mesh2SplatFingerprintQuarantine) {
+    FakeClock clock;
+    FenceWaitScript script;
+    script.clock = &clock;
+    script.ready_at_ms = 100'000;
+    BindScript bind(script);
+    ScriptedObserver observer;
+    std::atomic<bool> quarantine{false};
+
+    const VulkanDispatch dispatch = make_dispatch();
+    WaitContext ctx;
+    ctx.dispatch = &dispatch;
+    ctx.now = clock.fn();
+    ctx.observer = &observer;
+    ctx.fingerprint = "mesh2splat.submit_and_wait";
+    ctx.owner_quarantine_flag = &quarantine;
+
+    std::stop_source stop;
+    auto result = wait_fence_bounded(fake_device(), fake_fence(), stop.get_token(),
+                                     VulkanWaitPolicy{}, ctx);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(*result, WaitOutcome::Quarantined);
+    EXPECT_TRUE(quarantine.load());
+    EXPECT_EQ(observer.last_quarantine, "mesh2splat.submit_and_wait");
+    // Mapping table still says retain when wait is not Ready after submit.
+    EXPECT_EQ(map_mesh2splat_resource_disposition(true, false),
+              Mesh2SplatResourceAction::RetainFenceAndCb);
+}

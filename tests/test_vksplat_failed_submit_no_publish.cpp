@@ -197,9 +197,11 @@ TEST(VkSplatFailedSubmitNoPublish, QW6_FailThenSuccessNoFalsePublication) {
     // --- Attempt 1: vkQueueSubmit fails ---
     pipeline.beginCommandBatch();
     EXPECT_TRUE(pipeline.isCommandBatchInProgress());
+    // P4 retired _THROW_ERROR: the rejected submit now surfaces as the typed
+    // lfs::Exception (DeviceLost/Vulkan with native code and detail).
     EXPECT_THROW(
         pipeline.endCommandBatch(/*use_fence=*/false, semaphore, value_fail),
-        std::runtime_error);
+        lfs::Exception);
 
     EXPECT_FALSE(pipeline.isCommandBatchInProgress());
     EXPECT_FALSE(pipeline.wasTimelineSignalSubmitted(semaphore, value_fail));

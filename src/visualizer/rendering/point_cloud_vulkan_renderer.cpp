@@ -6,15 +6,18 @@
 
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_result.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstring>
 #include <format>
 #include <glm/gtc/type_ptr.hpp>
 #include <mutex>
 #include <source_location>
+#include <stop_token>
 #include <utility>
 #include <vk_mem_alloc.h>
 
@@ -37,6 +40,30 @@ namespace lfs::vis {
         constexpr std::uint32_t kBindingSelectionColors = 5;
         constexpr std::uint32_t kBindingDeletedMask = 6;
         constexpr std::uint32_t kDescriptorBindingCount = 7;
+
+        // Phase 7C-P2: point-cloud is the ResetPreWaitReplacement row only.
+        constexpr lfs::rendering::SubmissionFencePolicy kPointCloudFencePolicy =
+            lfs::rendering::SubmissionFencePolicy::ResetPreWaitReplacement;
+
+        [[nodiscard]] const char* waitOutcomeLabel(
+            const lfs::rendering::WaitOutcome outcome) noexcept {
+            using lfs::rendering::WaitOutcome;
+            switch (outcome) {
+            case WaitOutcome::Ready: return "Ready";
+            case WaitOutcome::Cancelled: return "Cancelled";
+            case WaitOutcome::Shutdown: return "Shutdown";
+            case WaitOutcome::Quarantined: return "Quarantined";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] std::string formatWaitFailure(
+            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) {
+            if (outcome.has_value()) {
+                return waitOutcomeLabel(*outcome);
+            }
+            return std::string(outcome.error().detail());
+        }
 
         // Push constants exactly mirror the layout in point_cloud.vert.
         // Packed to 256 bytes (the Vulkan portable upper bound). Counts/flags
@@ -431,9 +458,57 @@ namespace lfs::vis {
         VkFence fence = VK_NULL_HANDLE;
         std::mutex command_mutex;
 
+        // Phase 7C-P2: closed SubmissionState table for reset-before-submit.
+        lfs::rendering::SubmissionState submission_state_{};
+        std::atomic<bool> gpu_wait_quarantined_{false};
+
         bool initialized = false;
 
         ~Impl() { destroy(); }
+
+        [[nodiscard]] lfs::rendering::WaitContext makeWaitContext(
+            const std::string_view fingerprint) noexcept {
+            lfs::rendering::WaitContext wait_ctx;
+            wait_ctx.fingerprint = fingerprint;
+            wait_ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
+            return wait_ctx;
+        }
+
+        [[nodiscard]] std::string formatFenceWaitUnexpected(
+            const std::string_view what,
+            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) const {
+            return std::format(
+                "Point-cloud {} did not reach Ready (device={:#x}, fence={:#x}): {}",
+                what,
+                vkHandleValue(device),
+                vkHandleValue(fence),
+                formatWaitFailure(outcome));
+        }
+
+        // T3 helper: only replace when the transition table authorizes it
+        // (ResetPreWaitReplacement + fence_reset). Ruling-1 reset failures
+        // call replaceFenceSignaled directly and never enter here.
+        void rejectSubmissionAndMaybeReplace(const char* const failed_operation,
+                                             const VkResult failed_result) {
+            using lfs::rendering::SubmissionTransition;
+            using lfs::rendering::apply_submission_transition;
+            auto effects = apply_submission_transition(
+                submission_state_,
+                SubmissionTransition::SubmitRejected,
+                kPointCloudFencePolicy);
+            if (!effects) {
+                LOG_ERROR(
+                    "Point-cloud SubmissionState T3 SubmitRejected illegal "
+                    "(detail={}, op={}, result={})",
+                    effects.error().detail(),
+                    failed_operation,
+                    static_cast<int>(failed_result));
+                return;
+            }
+            if (effects->replace_fence_signaled) {
+                (void)replaceFenceSignaled(failed_operation, failed_result);
+            }
+        }
 
         [[nodiscard]] std::string vkError(
             const std::string_view what,
@@ -1067,25 +1142,36 @@ namespace lfs::vis {
             if (device == VK_NULL_HANDLE) {
                 return;
             }
+            // C3: bounded teardown drain. Non-Ready retains fence + command pool
+            // (AMB-4 / AMB-C5 — quarantine never authorizes free of in-flight work).
+            bool command_resources_ready = true;
             if (fence != VK_NULL_HANDLE) {
-                const VkResult wait_result = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-                if (wait_result != VK_SUCCESS) {
-                    LOG_ERROR("Vulkan: {}",
-                              formatVkCheckFailure(
-                                  "vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX)",
-                                  wait_result,
-                                  std::format("Point-cloud renderer destruction fence did not retire (device={:#x}, fence={:#x}, command_pool={:#x}, command_buffer={:#x})",
-                                              vkHandleValue(device),
-                                              vkHandleValue(fence),
-                                              vkHandleValue(command_pool),
-                                              vkHandleValue(command_buffer)),
-                                  __FILE__,
-                                  __LINE__));
+                auto wait_ctx = makeWaitContext("point_cloud.destroy.wait_fence");
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device,
+                    fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                const bool ready = wait_outcome.has_value() &&
+                                   *wait_outcome == lfs::rendering::WaitOutcome::Ready;
+                if (ready) {
+                    vkDestroyFence(device, fence, nullptr);
+                    fence = VK_NULL_HANDLE;
+                } else {
+                    command_resources_ready = false;
+                    LOG_ERROR(
+                        "Vulkan: Point-cloud renderer destruction fence did not retire "
+                        "(device={:#x}, fence={:#x}, command_pool={:#x}, command_buffer={:#x}): "
+                        "{} — retaining fence and command pool until process exit",
+                        vkHandleValue(device),
+                        vkHandleValue(fence),
+                        vkHandleValue(command_pool),
+                        vkHandleValue(command_buffer),
+                        formatWaitFailure(wait_outcome));
                 }
-                vkDestroyFence(device, fence, nullptr);
-                fence = VK_NULL_HANDLE;
             }
-            if (command_pool != VK_NULL_HANDLE) {
+            if (command_resources_ready && command_pool != VK_NULL_HANDLE) {
                 vkDestroyCommandPool(device, command_pool, nullptr);
                 command_pool = VK_NULL_HANDLE;
                 command_buffer = VK_NULL_HANDLE;
@@ -1491,10 +1577,20 @@ namespace lfs::vis {
             // Wait for the previous frame on this renderer to finish before
             // touching slot resources — the cb is shared across slots and a
             // size change would otherwise destroy images the in-flight submit
-            // is still sampling.
-            VkResult r = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-            if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkWaitForFences(render prewait)", r));
+            // is still sampling. (C4: bounded prewait.)
+            {
+                auto wait_ctx = makeWaitContext("point_cloud.render.prewait");
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device,
+                    fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                if (!wait_outcome.has_value() ||
+                    *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                    return std::unexpected<std::string>(
+                        formatFenceWaitUnexpected("render prewait", wait_outcome));
+                }
             }
 
             auto& slot = slots[slot_idx];
@@ -1510,14 +1606,14 @@ namespace lfs::vis {
                                     context->lastError()));
                 }
             }
-            if (auto r = ensureOutputImages(slot, req.size); !r) {
-                return std::unexpected<std::string>(r.error());
+            if (auto ensure = ensureOutputImages(slot, req.size); !ensure) {
+                return std::unexpected<std::string>(ensure.error());
             }
             for (auto& s : pending_stagings) {
                 destroyBuffer(allocator, s);
             }
             pending_stagings.clear();
-            r = vkResetCommandBuffer(command_buffer, 0);
+            VkResult r = vkResetCommandBuffer(command_buffer, 0);
             if (r != VK_SUCCESS) {
                 return std::unexpected<std::string>(vkError("vkResetCommandBuffer", r));
             }
@@ -1705,11 +1801,49 @@ namespace lfs::vis {
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &command_buffer;
+
+            // Phase 7C-P2 Appendix A.1: ResetPreWaitReplacement lifecycle.
+            {
+                using lfs::rendering::SubmissionTransition;
+                using lfs::rendering::apply_submission_transition;
+                auto begin = apply_submission_transition(
+                    submission_state_,
+                    SubmissionTransition::BeginLifecycle,
+                    kPointCloudFencePolicy);
+                if (!begin) {
+                    restore_tracked_layouts();
+                    return std::unexpected<std::string>(std::format(
+                        "Point-cloud render SubmissionState T0 BeginLifecycle failed (detail={})",
+                        begin.error().detail()));
+                }
+            }
+
             r = vkResetFences(device, 1, &fence);
             if (r != VK_SUCCESS) {
+                // Binding Ruling 1: reset-failure replace is OUTSIDE SubmissionState
+                // (no transition; lifecycle restarts at T0 with the fresh fence).
                 restore_tracked_layouts();
                 (void)replaceFenceSignaled("vkResetFences", r);
                 return std::unexpected<std::string>(vkError("vkResetFences", r));
+            }
+            {
+                using lfs::rendering::SubmissionTransition;
+                using lfs::rendering::apply_submission_transition;
+                auto fence_reset = apply_submission_transition(
+                    submission_state_,
+                    SubmissionTransition::FenceReset,
+                    kPointCloudFencePolicy);
+                if (!fence_reset) {
+                    restore_tracked_layouts();
+                    // Fence is unsignaled after successful reset but state machine
+                    // rejected T1 — replace defensively so the next prewait sees
+                    // a signaled fence (same recovery shape as a poisoned fence).
+                    (void)replaceFenceSignaled("SubmissionState T1 FenceReset",
+                                               VK_ERROR_INITIALIZATION_FAILED);
+                    return std::unexpected<std::string>(std::format(
+                        "Point-cloud render SubmissionState T1 FenceReset failed (detail={})",
+                        fence_reset.error().detail()));
+                }
             }
             const VkQueue submit_queue = context->graphicsQueue();
             if (submit_queue == VK_NULL_HANDLE || command_buffer == VK_NULL_HANDLE ||
@@ -1728,15 +1862,30 @@ namespace lfs::vis {
                     __FILE__,
                     __LINE__);
                 restore_tracked_layouts();
-                (void)replaceFenceSignaled("point-cloud render submit integrity check",
-                                           VK_ERROR_INITIALIZATION_FAILED);
+                rejectSubmissionAndMaybeReplace("point-cloud render submit integrity check",
+                                                VK_ERROR_INITIALIZATION_FAILED);
                 return std::unexpected<std::string>(error);
             }
             r = vkQueueSubmit(submit_queue, 1, &si, fence);
             if (r != VK_SUCCESS) {
                 restore_tracked_layouts();
-                (void)replaceFenceSignaled("vkQueueSubmit", r);
+                rejectSubmissionAndMaybeReplace("vkQueueSubmit", r);
                 return std::unexpected<std::string>(vkError("vkQueueSubmit", r));
+            }
+            {
+                using lfs::rendering::SubmissionTransition;
+                using lfs::rendering::apply_submission_transition;
+                auto accepted = apply_submission_transition(
+                    submission_state_,
+                    SubmissionTransition::SubmitAccepted,
+                    kPointCloudFencePolicy);
+                if (!accepted) {
+                    // Submit already queued — do not replace (would manufacture readiness).
+                    LOG_ERROR(
+                        "Point-cloud render SubmissionState T4 SubmitAccepted illegal after "
+                        "successful vkQueueSubmit (detail={})",
+                        accepted.error().detail());
+                }
             }
 
             slot.color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1785,9 +1934,20 @@ namespace lfs::vis {
             if (!ctx.waitForSubmittedFrames()) {
                 return std::unexpected<std::string>(ctx.lastError());
             }
-            VkResult r = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-            if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkWaitForFences(readback prewait)", r));
+            // C5: bounded readback prewait.
+            {
+                auto wait_ctx = makeWaitContext("point_cloud.readback.prewait");
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device,
+                    fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                if (!wait_outcome.has_value() ||
+                    *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                    return std::unexpected<std::string>(
+                        formatFenceWaitUnexpected("readback prewait", wait_outcome));
+                }
             }
             for (auto& s : pending_stagings) {
                 destroyBuffer(allocator, s);
@@ -1814,7 +1974,7 @@ namespace lfs::vis {
             alloc_info.flags =
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            r = vmaCreateBuffer(
+            VkResult r = vmaCreateBuffer(
                 allocator,
                 &buffer_info,
                 &alloc_info,
@@ -1896,10 +2056,41 @@ namespace lfs::vis {
                 return std::unexpected<std::string>(vkError("vkEndCommandBuffer(point-cloud readback)", r));
             }
 
+            // Phase 7C-P2 Appendix A.1: ResetPreWaitReplacement lifecycle (readback).
+            {
+                using lfs::rendering::SubmissionTransition;
+                using lfs::rendering::apply_submission_transition;
+                auto begin = apply_submission_transition(
+                    submission_state_,
+                    SubmissionTransition::BeginLifecycle,
+                    kPointCloudFencePolicy);
+                if (!begin) {
+                    return std::unexpected<std::string>(std::format(
+                        "Point-cloud readback SubmissionState T0 BeginLifecycle failed (detail={})",
+                        begin.error().detail()));
+                }
+            }
+
             r = vkResetFences(device, 1, &fence);
             if (r != VK_SUCCESS) {
+                // Binding Ruling 1: reset-failure replace is OUTSIDE SubmissionState.
                 (void)replaceFenceSignaled("vkResetFences(point-cloud readback)", r);
                 return std::unexpected<std::string>(vkError("vkResetFences(point-cloud readback)", r));
+            }
+            {
+                using lfs::rendering::SubmissionTransition;
+                using lfs::rendering::apply_submission_transition;
+                auto fence_reset = apply_submission_transition(
+                    submission_state_,
+                    SubmissionTransition::FenceReset,
+                    kPointCloudFencePolicy);
+                if (!fence_reset) {
+                    (void)replaceFenceSignaled("SubmissionState T1 FenceReset(point-cloud readback)",
+                                               VK_ERROR_INITIALIZATION_FAILED);
+                    return std::unexpected<std::string>(std::format(
+                        "Point-cloud readback SubmissionState T1 FenceReset failed (detail={})",
+                        fence_reset.error().detail()));
+                }
             }
             VkSubmitInfo submit_info{};
             submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1925,18 +2116,43 @@ namespace lfs::vis {
                     submit_info.signalSemaphoreCount,
                     __FILE__,
                     __LINE__);
-                (void)replaceFenceSignaled("point-cloud readback submit integrity check",
-                                           VK_ERROR_INITIALIZATION_FAILED);
+                rejectSubmissionAndMaybeReplace("point-cloud readback submit integrity check",
+                                                VK_ERROR_INITIALIZATION_FAILED);
                 return std::unexpected<std::string>(error);
             }
             r = vkQueueSubmit(submit_queue, 1, &submit_info, fence);
             if (r != VK_SUCCESS) {
-                (void)replaceFenceSignaled("vkQueueSubmit(point-cloud readback)", r);
+                rejectSubmissionAndMaybeReplace("vkQueueSubmit(point-cloud readback)", r);
                 return std::unexpected<std::string>(vkError("vkQueueSubmit(point-cloud readback)", r));
             }
-            r = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-            if (r != VK_SUCCESS) {
-                return std::unexpected<std::string>(vkError("vkWaitForFences(point-cloud readback)", r));
+            {
+                using lfs::rendering::SubmissionTransition;
+                using lfs::rendering::apply_submission_transition;
+                auto accepted = apply_submission_transition(
+                    submission_state_,
+                    SubmissionTransition::SubmitAccepted,
+                    kPointCloudFencePolicy);
+                if (!accepted) {
+                    LOG_ERROR(
+                        "Point-cloud readback SubmissionState T4 SubmitAccepted illegal after "
+                        "successful vkQueueSubmit (detail={})",
+                        accepted.error().detail());
+                }
+            }
+            // C6: bounded post-submit wait.
+            {
+                auto wait_ctx = makeWaitContext("point_cloud.readback.wait_fence");
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device,
+                    fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                if (!wait_outcome.has_value() ||
+                    *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                    return std::unexpected<std::string>(
+                        formatFenceWaitUnexpected("readback wait_fence", wait_outcome));
+                }
             }
 
             r = vmaInvalidateAllocation(allocator, staging.allocation, 0, byte_count);

@@ -78,7 +78,10 @@ namespace lfs::rendering {
     // Apply one closed-table transition. Illegal transitions return
     // ErrorCode::ContractViolation (domain Vulkan). Legal transitions return
     // side-effect flags; they never host-signal timelines.
-    [[nodiscard]] LFS_RENDERING_API Result<SubmissionTransitionEffects>
+    // Fully qualify lfs::Result — lfs::rendering::Result is an unrelated
+    // std::expected<T,std::string> alias in rendering.hpp and must not win
+    // when that header is included before this one (point-cloud TU).
+    [[nodiscard]] LFS_RENDERING_API lfs::Result<SubmissionTransitionEffects>
     apply_submission_transition(SubmissionState& state,
                                 SubmissionTransition event,
                                 SubmissionFencePolicy policy = SubmissionFencePolicy::NoResetNoReplacement,
@@ -153,14 +156,14 @@ namespace lfs::rendering {
     // Bounded wait family
     // ---------------------------------------------------------------------------
 
-    [[nodiscard]] LFS_RENDERING_API Result<WaitOutcome>
+    [[nodiscard]] LFS_RENDERING_API lfs::Result<WaitOutcome>
     wait_fence_bounded(VkDevice device,
                        VkFence fence,
                        std::stop_token stop,
                        VulkanWaitPolicy policy = {},
                        WaitContext context = {});
 
-    [[nodiscard]] LFS_RENDERING_API Result<WaitOutcome>
+    [[nodiscard]] LFS_RENDERING_API lfs::Result<WaitOutcome>
     wait_semaphores_bounded(VkDevice device,
                             const VkSemaphoreWaitInfo& wait_info,
                             std::stop_token stop,
@@ -173,7 +176,7 @@ namespace lfs::rendering {
     // the side channel. OUT_OF_DATE and other hard failures are Result errors
     // with ErrorCode::Unavailable / DeviceLost / etc. Timeout path uses the
     // same slice/stall/quarantine policy as fence waits.
-    [[nodiscard]] LFS_RENDERING_API Result<std::uint32_t>
+    [[nodiscard]] LFS_RENDERING_API lfs::Result<std::uint32_t>
     acquire_next_image_bounded(VkDevice device,
                                VkSwapchainKHR swapchain,
                                VkSemaphore semaphore,

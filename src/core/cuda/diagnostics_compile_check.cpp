@@ -92,10 +92,35 @@ namespace lfs::core::compile_check {
 
         [[nodiscard]] bool compile_vk_result_macros(const VkResult result,
                                                     const int value) {
-            LFS_VK_CHECK_MSG(result, "compile-check Vulkan zero arguments");
-            LFS_VK_CHECK_MSG(result, "compile-check Vulkan one={}", value);
-            LFS_VK_CHECK_MSG(
-                result, "compile-check Vulkan many={}/{}/{}", value, 1, 2);
+            if (!lfs::vis::vk_try_bool(
+                    result,
+                    "result",
+                    lfs::rendering::formatVulkanDiagnostic("compile-check Vulkan zero arguments"),
+                    std::source_location::current())) {
+                return false;
+            }
+            if (!lfs::vis::vk_try_bool(
+                    result,
+                    "result",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "compile-check Vulkan one={}",
+                                value
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
+            if (!lfs::vis::vk_try_bool(
+                    result,
+                    "result",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "compile-check Vulkan many={}/{}/{}",
+                                value,
+                                1,
+                                2
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             return true;
         }
 
@@ -145,7 +170,7 @@ namespace lfs::core::compile_check {
         compile_vk_debug_assert_arities(device);
 
         if (device < -1) {
-            _THROW_ERROR(std::string{"compile-check Vulkan throw wrapper"});
+            lfs::rendering::throw_renderer_contract(std::string{"compile-check Vulkan throw wrapper"}, LFS_SOURCE_SITE_CURRENT());
         }
 
         LFS_ENSURE_CUDA_SUCCESS(cudaSuccess, "compile-check status");

@@ -9,11 +9,11 @@
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/image_layout.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
-
-#include "rendering/cuda_vulkan_interop.hpp"
 
 #include <vulkan/vulkan.h>
 
@@ -23,7 +23,9 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <stop_token>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -32,6 +34,25 @@ namespace lfs::vis::gui {
     namespace {
         VulkanContext* g_texture_context = nullptr;
         lfs::rendering::CudaVulkanUploadStream g_texture_upload_stream;
+
+        [[nodiscard]] const char* waitOutcomeLabel(const lfs::rendering::WaitOutcome outcome) noexcept {
+            using lfs::rendering::WaitOutcome;
+            switch (outcome) {
+            case WaitOutcome::Ready: return "Ready";
+            case WaitOutcome::Cancelled: return "Cancelled";
+            case WaitOutcome::Shutdown: return "Shutdown";
+            case WaitOutcome::Quarantined: return "Quarantined";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] std::string formatWaitFailure(
+            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) {
+            if (outcome.has_value()) {
+                return waitOutcomeLabel(*outcome);
+            }
+            return std::string(outcome.error().detail());
+        }
 
         [[nodiscard]] std::vector<std::uint8_t> toRgba(const std::uint8_t* pixels,
                                                        const int width,
@@ -207,29 +228,72 @@ namespace lfs::vis::gui {
         }
 
         // Wait for all in-flight uploads to finish, then release them. Used before destroying the image.
+        // Non-Ready waits retain the entry (AMB-4); Ready (or null fence) entries are destroyed.
         void waitAndReleasePendingUpload() {
-            for (auto& upload : pending_uploads) {
-                if (upload.fence != VK_NULL_HANDLE) {
-                    vkWaitForFences(device, 1, &upload.fence, VK_TRUE,
-                                    std::numeric_limits<std::uint64_t>::max());
+            auto write = pending_uploads.begin();
+            for (auto read = pending_uploads.begin(); read != pending_uploads.end(); ++read) {
+                bool ready = true;
+                if (read->fence != VK_NULL_HANDLE) {
+                    lfs::rendering::WaitContext wait_ctx;
+                    wait_ctx.fingerprint = "ui_texture.pending_upload.wait";
+                    auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                        device,
+                        read->fence,
+                        std::stop_token{},
+                        lfs::rendering::VulkanWaitPolicy{},
+                        wait_ctx);
+                    ready = wait_outcome.has_value() &&
+                            *wait_outcome == lfs::rendering::WaitOutcome::Ready;
+                    if (!ready) {
+                        LOG_ERROR(
+                            "Vulkan UI texture pending-upload wait did not reach Ready "
+                            "(fence={:#x}): {} — retaining upload resources",
+                            lfs::rendering::vkHandleValue(read->fence),
+                            formatWaitFailure(wait_outcome));
+                    }
                 }
-                destroyPendingUpload(upload);
+                if (ready) {
+                    destroyPendingUpload(*read);
+                } else {
+                    if (write != read) {
+                        *write = *read;
+                    }
+                    ++write;
+                }
             }
-            pending_uploads.clear();
+            pending_uploads.erase(write, pending_uploads.end());
         }
 
         // Block only when the ring is full: wait on the oldest entry to free a slot.
-        void enforcePendingUploadBound() {
+        // Returns false if the oldest entry cannot be drained (quarantine/cancel/error).
+        [[nodiscard]] bool enforcePendingUploadBound() {
             tryReleasePendingUpload();
             while (pending_uploads.size() >= kMaxPendingUploads) {
                 PendingUpload& oldest = pending_uploads.front();
                 if (oldest.fence != VK_NULL_HANDLE) {
-                    vkWaitForFences(device, 1, &oldest.fence, VK_TRUE,
-                                    std::numeric_limits<std::uint64_t>::max());
+                    lfs::rendering::WaitContext wait_ctx;
+                    wait_ctx.fingerprint = "ui_texture.pending_upload.bound";
+                    auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                        device,
+                        oldest.fence,
+                        std::stop_token{},
+                        lfs::rendering::VulkanWaitPolicy{},
+                        wait_ctx);
+                    if (!wait_outcome.has_value() ||
+                        *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                        LOG_ERROR(
+                            "Vulkan UI texture pending-upload bound wait did not reach Ready "
+                            "(fence={:#x}, pending={}): {} — retaining oldest slot",
+                            lfs::rendering::vkHandleValue(oldest.fence),
+                            pending_uploads.size(),
+                            formatWaitFailure(wait_outcome));
+                        return false;
+                    }
                 }
                 destroyPendingUpload(oldest);
                 pending_uploads.erase(pending_uploads.begin());
             }
+            return true;
         }
 
         [[nodiscard]] bool init(VulkanContext& ctx) {
@@ -384,20 +448,57 @@ namespace lfs::vis::gui {
             fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             VkFence submit_fence = VK_NULL_HANDLE;
             VkResult submit_status = vkCreateFence(device, &fence_info, nullptr, &submit_fence);
+            bool submitted = false;
+            bool wait_ready = false;
             if (submit_status == VK_SUCCESS) {
                 submit_status = vkQueueSubmit(graphics_queue, 1, &submit_info, submit_fence);
+                if (submit_status == VK_SUCCESS) {
+                    submitted = true;
+                }
             }
             if (submit_status == VK_SUCCESS) {
-                submit_status = vkWaitForFences(device, 1, &submit_fence, VK_TRUE, std::numeric_limits<std::uint64_t>::max());
+                lfs::rendering::WaitContext wait_ctx;
+                wait_ctx.fingerprint = "ui_texture.oneshot.wait";
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device,
+                    submit_fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                if (wait_outcome.has_value() &&
+                    *wait_outcome == lfs::rendering::WaitOutcome::Ready) {
+                    wait_ready = true;
+                } else {
+                    submit_status = VK_TIMEOUT;
+                    LOG_ERROR(
+                        "Vulkan UI texture one-shot wait did not reach Ready (fence={:#x}): {}",
+                        lfs::rendering::vkHandleValue(submit_fence),
+                        formatWaitFailure(wait_outcome));
+                }
             }
-            if (submit_status != VK_SUCCESS) {
+            if (submit_status != VK_SUCCESS && submit_status != VK_TIMEOUT) {
                 LOG_ERROR("Failed to submit Vulkan UI texture upload: {}", static_cast<int>(submit_status));
             }
+            // AMB-4: destroy fence/CB only when never submitted or wait Ready.
             if (submit_fence != VK_NULL_HANDLE) {
-                vkDestroyFence(device, submit_fence, nullptr);
+                if (!submitted || wait_ready) {
+                    vkDestroyFence(device, submit_fence, nullptr);
+                } else {
+                    LOG_ERROR(
+                        "Vulkan: retaining UI texture one-shot fence after non-Ready wait "
+                        "(fence={:#x})",
+                        lfs::rendering::vkHandleValue(submit_fence));
+                }
             }
-            vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
-            return submit_status == VK_SUCCESS;
+            if (!submitted || wait_ready) {
+                vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
+            } else {
+                LOG_ERROR(
+                    "Vulkan: retaining UI texture one-shot command buffer after non-Ready wait "
+                    "(command_buffer={:#x})",
+                    lfs::rendering::vkHandleValue(command_buffer));
+            }
+            return submit_status == VK_SUCCESS && wait_ready;
         }
 
         void transitionImageLayout(const VkCommandBuffer command_buffer,
@@ -705,7 +806,9 @@ namespace lfs::vis::gui {
             }
 
             // Reap completed uploads; block only if the in-flight ring is full.
-            enforcePendingUploadBound();
+            if (!enforcePendingUploadBound()) {
+                return false;
+            }
 
             const VkDeviceSize upload_size = static_cast<VkDeviceSize>(rgba.size());
             VkBuffer staging_buffer = VK_NULL_HANDLE;

@@ -10,6 +10,8 @@
 #include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "rendering/vulkan_result.hpp"
+#include "rendering/vulkan_wait.hpp"
 
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
@@ -18,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -28,6 +31,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -457,6 +461,26 @@ void main() {
 
         [[nodiscard]] std::string vkError(const char* op, const VkResult result) {
             return std::format("{} failed: {}", op, vkResultName(result));
+        }
+
+        [[nodiscard]] const char* waitOutcomeLabel(
+            const lfs::rendering::WaitOutcome outcome) noexcept {
+            using lfs::rendering::WaitOutcome;
+            switch (outcome) {
+            case WaitOutcome::Ready: return "Ready";
+            case WaitOutcome::Cancelled: return "Cancelled";
+            case WaitOutcome::Shutdown: return "Shutdown";
+            case WaitOutcome::Quarantined: return "Quarantined";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] std::string formatWaitFailure(
+            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) {
+            if (outcome.has_value()) {
+                return waitOutcomeLabel(*outcome);
+            }
+            return std::string(outcome.error().detail());
         }
 
         [[nodiscard]] glm::vec3 compute_face_normal(const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2) {
@@ -1057,6 +1081,9 @@ void main() {
                 return cmd;
             }
 
+            // Phase 7C-P3 C9 + §1.D: bounded wait; retain fence+CB on
+            // Quarantined/non-Ready (AMB-4). Destroy only after Ready, or on
+            // submit-never-accepted, or after DeviceWaitIdle in shutdown.
             [[nodiscard]] std::optional<std::string> submitAndWait(VkCommandBuffer cmd) const {
                 VkResult result = vkEndCommandBuffer(cmd);
                 if (result != VK_SUCCESS) {
@@ -1074,13 +1101,44 @@ void main() {
                 submit.commandBufferCount = 1;
                 submit.pCommandBuffers = &cmd;
                 result = vkQueueSubmit(queue_, 1, &submit, fence);
-                if (result == VK_SUCCESS)
-                    result = vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
-                vkDestroyFence(device_, fence, nullptr);
-                vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
-                if (result != VK_SUCCESS)
-                    return vkError("vkQueueSubmit/vkWaitForFences", result);
-                return std::nullopt;
+                if (result != VK_SUCCESS) {
+                    // Submit never accepted — fence is not in flight; free OK.
+                    vkDestroyFence(device_, fence, nullptr);
+                    vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
+                    return vkError("vkQueueSubmit", result);
+                }
+
+                lfs::rendering::WaitContext wait_ctx;
+                wait_ctx.fingerprint = "mesh2splat.submit_and_wait";
+                wait_ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device_,
+                    fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                if (wait_outcome.has_value() &&
+                    *wait_outcome == lfs::rendering::WaitOutcome::Ready) {
+                    vkDestroyFence(device_, fence, nullptr);
+                    vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
+                    return std::nullopt;
+                }
+
+                // Non-Ready: retain fence + CB. shutdown() destroys retained
+                // fences only after DeviceWaitIdle (idempotent; list may grow).
+                retained_fences_.push_back(fence);
+                retained_command_buffers_.push_back(cmd);
+                LOG_ERROR(
+                    "Vulkan: Mesh2Splat submitAndWait did not reach Ready "
+                    "(device={:#x}, fence={:#x}, command_buffer={:#x}): {} — "
+                    "retaining fence and command buffer until process exit / context shutdown",
+                    lfs::rendering::vkHandleValue(device_),
+                    lfs::rendering::vkHandleValue(fence),
+                    lfs::rendering::vkHandleValue(cmd),
+                    formatWaitFailure(wait_outcome));
+                return std::format(
+                    "wait_fence_bounded(mesh2splat.submit_and_wait) did not reach Ready: {}",
+                    formatWaitFailure(wait_outcome));
             }
 
             [[nodiscard]] std::optional<std::string> uploadBuffer(const void* data, VkDeviceSize size, Buffer& dst) const {
@@ -1215,8 +1273,19 @@ void main() {
             }
 
             void shutdown() {
+                // Idempotent: second call is a no-op (handles already nulled).
+                // After DeviceWaitIdle, retained quarantine fences are safe to
+                // destroy (GPU has finished). CBs free with the command pool.
                 if (device_)
                     vkDeviceWaitIdle(device_);
+                for (VkFence fence : retained_fences_) {
+                    if (fence != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
+                        vkDestroyFence(device_, fence, nullptr);
+                    }
+                }
+                retained_fences_.clear();
+                // Retained CBs are pool-owned; destroyCommandPool frees them.
+                retained_command_buffers_.clear();
                 if (command_pool_)
                     vkDestroyCommandPool(device_, command_pool_, nullptr);
                 if (device_)
@@ -1229,6 +1298,7 @@ void main() {
                 physical_device_ = VK_NULL_HANDLE;
                 instance_ = VK_NULL_HANDLE;
                 graphics_family_ = 0;
+                gpu_wait_quarantined_.store(false, std::memory_order_relaxed);
             }
 
             VkInstance instance_ = VK_NULL_HANDLE;
@@ -1238,6 +1308,10 @@ void main() {
             VkCommandPool command_pool_ = VK_NULL_HANDLE;
             uint32_t graphics_family_ = 0;
             mutable std::uint64_t allocation_serial_ = 0;
+            // Phase 7C-P3: quarantine latch + retain lists for submitAndWait.
+            mutable std::atomic<bool> gpu_wait_quarantined_{false};
+            mutable std::vector<VkFence> retained_fences_{};
+            mutable std::vector<VkCommandBuffer> retained_command_buffers_{};
         };
 
         VulkanMesh2SplatContext& vulkan_context() {

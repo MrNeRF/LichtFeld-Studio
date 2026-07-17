@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/image_layout.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
@@ -17,7 +18,9 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <stop_token>
 #include <string>
+#include <string_view>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <vk_mem_alloc.h>
@@ -28,6 +31,26 @@
 namespace lfs::vis {
 
     namespace {
+
+        [[nodiscard]] const char* waitOutcomeLabel(const lfs::rendering::WaitOutcome outcome) noexcept {
+            using lfs::rendering::WaitOutcome;
+            switch (outcome) {
+            case WaitOutcome::Ready: return "Ready";
+            case WaitOutcome::Cancelled: return "Cancelled";
+            case WaitOutcome::Shutdown: return "Shutdown";
+            case WaitOutcome::Quarantined: return "Quarantined";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] std::string formatWaitFailure(
+            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) {
+            if (outcome.has_value()) {
+                return waitOutcomeLabel(*outcome);
+            }
+            return std::string(outcome.error().detail());
+        }
+
 
         struct SplitPush {
             float split[4];       // x = position, y = left_flip_y, z = right_flip_y, w = pad
@@ -178,11 +201,18 @@ namespace lfs::vis {
             pool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
             pool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
             pool.queueFamilyIndex = ctx.graphicsQueueFamily();
-            LFS_VK_CHECK_MSG(vkCreateCommandPool(device, &pool, nullptr, &transfer_pool),
-                             "Split-view transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
-                             vkHandleValue(device),
-                             pool.queueFamilyIndex,
-                             static_cast<std::uint32_t>(pool.flags));
+            if (!vk_try_bool(
+                    vkCreateCommandPool(device, &pool, nullptr, &transfer_pool),
+                    "vkCreateCommandPool(device, &pool, nullptr, &transfer_pool)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Split-view transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                                vkHandleValue(device),
+                                pool.queueFamilyIndex,
+                                static_cast<std::uint32_t>(pool.flags)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
                                         transfer_pool,
                                         "split_view.transfer.pool");
@@ -229,12 +259,19 @@ namespace lfs::vis {
             s.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             s.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            LFS_VK_CHECK_MSG(vkCreateSampler(device, &s, nullptr, &sampler),
-                             "Split-view sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
-                             vkHandleValue(device),
-                             static_cast<int>(s.magFilter),
-                             static_cast<int>(s.minFilter),
-                             static_cast<int>(s.addressModeU));
+            if (!vk_try_bool(
+                    vkCreateSampler(device, &s, nullptr, &sampler),
+                    "vkCreateSampler(device, &s, nullptr, &sampler)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Split-view sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
+                                vkHandleValue(device),
+                                static_cast<int>(s.magFilter),
+                                static_cast<int>(s.minFilter),
+                                static_cast<int>(s.addressModeU)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_SAMPLER,
                                         sampler,
                                         "split_view.panel.sampler");
@@ -253,11 +290,18 @@ namespace lfs::vis {
             li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             li.bindingCount = static_cast<std::uint32_t>(bindings.size());
             li.pBindings = bindings.data();
-            LFS_VK_CHECK_MSG(vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout),
-                             "Split-view descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
-                             vkHandleValue(device),
-                             li.bindingCount,
-                             static_cast<int>(bindings[0].descriptorType));
+            if (!vk_try_bool(
+                    vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout),
+                    "vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Split-view descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                                vkHandleValue(device),
+                                li.bindingCount,
+                                static_cast<int>(bindings[0].descriptorType)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                                         desc_layout,
                                         "split_view.descriptor.layout");
@@ -271,12 +315,19 @@ namespace lfs::vis {
             pi.maxSets = frame_count;
             pi.poolSizeCount = 1;
             pi.pPoolSizes = &ps;
-            LFS_VK_CHECK_MSG(vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool),
-                             "Split-view descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
-                             vkHandleValue(device),
-                             frame_count,
-                             pi.maxSets,
-                             ps.descriptorCount);
+            if (!vk_try_bool(
+                    vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool),
+                    "vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Split-view descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                                vkHandleValue(device),
+                                frame_count,
+                                pi.maxSets,
+                                ps.descriptorCount
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL,
                                         desc_pool,
                                         "split_view.descriptor.pool");
@@ -287,12 +338,19 @@ namespace lfs::vis {
             ai.descriptorPool = desc_pool;
             ai.descriptorSetCount = frame_count;
             ai.pSetLayouts = layouts.data();
-            LFS_VK_CHECK_MSG(vkAllocateDescriptorSets(device, &ai, sets.data()),
-                             "Split-view descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
-                             vkHandleValue(device),
-                             vkHandleValue(desc_pool),
-                             vkHandleValue(desc_layout),
-                             ai.descriptorSetCount);
+            if (!vk_try_bool(
+                    vkAllocateDescriptorSets(device, &ai, sets.data()),
+                    "vkAllocateDescriptorSets(device, &ai, sets.data())",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Split-view descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                                vkHandleValue(device),
+                                vkHandleValue(desc_pool),
+                                vkHandleValue(desc_layout),
+                                ai.descriptorSetCount
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             frame_descriptors.resize(frame_count);
             for (std::size_t i = 0; i < sets.size(); ++i) {
                 frame_descriptors[i].set = sets[i];
@@ -485,26 +543,30 @@ namespace lfs::vis {
             // Drain any pending transfer submit so we never destroy device memory
             // that the GPU is still reading from.
             if (p.fence != VK_NULL_HANDLE) {
-                const VkResult wait_result =
-                    vkWaitForFences(device,
-                                    1,
-                                    &p.fence,
-                                    VK_TRUE,
-                                    std::numeric_limits<std::uint64_t>::max());
-                if (wait_result != VK_SUCCESS) {
-                    LOG_ERROR("Vulkan: {}",
-                              formatVkCheckFailure(
-                                  "vkWaitForFences(device, 1, &p.fence, VK_TRUE, UINT64_MAX)",
-                                  wait_result,
-                                  std::format("Split-view panel image retirement fence did not complete (device={:#x}, fence={:#x}, image={:#x}, image_view={:#x}, panel_size={}x{})",
-                                              vkHandleValue(device),
-                                              vkHandleValue(p.fence),
-                                              vkHandleValue(p.image),
-                                              vkHandleValue(p.view),
-                                              p.width,
-                                              p.height),
-                                  __FILE__,
-                                  __LINE__));
+                lfs::rendering::WaitContext wait_ctx;
+                wait_ctx.fingerprint = "pass.split_view.destroy_drain";
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device,
+                    p.fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                const bool ready = wait_outcome.has_value() &&
+                                   *wait_outcome == lfs::rendering::WaitOutcome::Ready;
+                if (!ready) {
+                    // AMB-4: retain panel image + fence while GPU may still read them.
+                    LOG_ERROR(
+                        "Vulkan: split-view destroy_drain did not reach Ready "
+                        "(device={:#x}, fence={:#x}, image={:#x}, image_view={:#x}, "
+                        "panel_size={}x{}): {} — retaining panel resources",
+                        vkHandleValue(device),
+                        vkHandleValue(p.fence),
+                        vkHandleValue(p.image),
+                        vkHandleValue(p.view),
+                        p.width,
+                        p.height,
+                        formatWaitFailure(wait_outcome));
+                    return;
                 }
             }
             if (p.view != VK_NULL_HANDLE) {
@@ -583,13 +645,19 @@ namespace lfs::vis {
             sa.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
             VmaAllocationInfo ai{};
-            LFS_VK_CHECK_MSG(
-                vmaCreateBuffer(allocator, &bi, &sa, &p.staging_buffer, &p.staging_alloc, &ai),
-                "Split-view panel staging-buffer allocation failed (side={}, allocator={:#x}, requested_size={}, usage={:#x})",
-                side,
-                reinterpret_cast<std::uintptr_t>(allocator),
-                bytes,
-                static_cast<std::uint32_t>(bi.usage));
+            if (!vk_try_bool(
+                    vmaCreateBuffer(allocator, &bi, &sa, &p.staging_buffer, &p.staging_alloc, &ai),
+                    "vmaCreateBuffer(allocator, &bi, &sa, &p.staging_buffer, &p.staging_alloc, &ai)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Split-view panel staging-buffer allocation failed (side={}, allocator={:#x}, requested_size={}, usage={:#x})",
+                                side,
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                bytes,
+                                static_cast<std::uint32_t>(bi.usage)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             p.staging_mapped = ai.pMappedData;
             p.staging_capacity = bytes;
             context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
@@ -618,12 +686,19 @@ namespace lfs::vis {
             a.commandPool = transfer_pool;
             a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
             a.commandBufferCount = 1;
-            LFS_VK_CHECK_MSG(vkAllocateCommandBuffers(device, &a, &p.cmd),
-                             "Split-view panel command-buffer allocation failed (side={}, device={:#x}, command_pool={:#x}, requested_count={})",
-                             side,
-                             vkHandleValue(device),
-                             vkHandleValue(transfer_pool),
-                             a.commandBufferCount);
+            if (!vk_try_bool(
+                    vkAllocateCommandBuffers(device, &a, &p.cmd),
+                    "vkAllocateCommandBuffers(device, &a, &p.cmd)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Split-view panel command-buffer allocation failed (side={}, device={:#x}, command_pool={:#x}, requested_count={})",
+                                side,
+                                vkHandleValue(device),
+                                vkHandleValue(transfer_pool),
+                                a.commandBufferCount
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_COMMAND_BUFFER,
                                          p.cmd,
                                          "split_view.{}.transfer.command",
@@ -726,15 +801,21 @@ namespace lfs::vis {
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             VmaAllocationInfo allocation_info{};
             const char* const side = &p == &left ? "left" : "right";
-            LFS_VK_CHECK_MSG(
-                vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, &allocation_info),
-                "Split-view panel image allocation failed (side={}, allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
-                side,
-                reinterpret_cast<std::uintptr_t>(allocator),
-                w,
-                h,
-                static_cast<int>(img.format),
-                static_cast<std::uint32_t>(img.usage));
+            if (!vk_try_bool(
+                    vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, &allocation_info),
+                    "vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, &allocation_info)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Split-view panel image allocation failed (side={}, allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
+                                side,
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                w,
+                                h,
+                                static_cast<int>(img.format),
+                                static_cast<std::uint32_t>(img.usage)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
                                          p.image,
                                          "split_view.{}.image[{}x{}]",
@@ -874,17 +955,26 @@ namespace lfs::vis {
 
             // Wait for any prior submit on this command buffer before re-recording. The fence is
             // created signaled, so the first upload does not block.
-            result = vkWaitForFences(device, 1, &panel.fence, VK_TRUE,
-                                     std::numeric_limits<std::uint64_t>::max());
-            if (result != VK_SUCCESS) {
-                return reportVkFailure(
-                    "vkWaitForFences(device, 1, &panel.fence, VK_TRUE, UINT64_MAX)",
-                    result,
-                    std::format("Split-view prior panel upload did not retire before command-buffer reuse (side={}, device={:#x}, fence={:#x}, command_buffer={:#x}, fence_count=1)",
-                                side,
-                                vkHandleValue(device),
-                                vkHandleValue(panel.fence),
-                                vkHandleValue(panel.cmd)));
+            {
+                lfs::rendering::WaitContext wait_ctx;
+                wait_ctx.fingerprint = "pass.split_view.transfer_prewait";
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device,
+                    panel.fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                if (!wait_outcome.has_value() ||
+                    *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                    return logVkFailure(std::format(
+                        "wait_fence_bounded(pass.split_view.transfer_prewait) did not reach Ready "
+                        "(side={}, device={:#x}, fence={:#x}, command_buffer={:#x}): {}",
+                        side,
+                        vkHandleValue(device),
+                        vkHandleValue(panel.fence),
+                        vkHandleValue(panel.cmd),
+                        formatWaitFailure(wait_outcome)));
+                }
             }
             result = vkResetFences(device, 1, &panel.fence);
             if (result != VK_SUCCESS) {

@@ -15,6 +15,7 @@
 #include "window/vulkan_context.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -609,6 +610,9 @@ namespace lfs::vis {
         // When set, the capture rasterizer writes expected (alpha-weighted) depth.
         bool depth_capture_expected_ = false;
         std::array<std::uint64_t, kFrameRingSize> ring_completion_values_{};
+        // Phase 7C-P3: owner latch for bounded ring/readback waits. Quarantine
+        // never zeros ring_completion_values_ (would manufacture a free slot).
+        mutable std::atomic<bool> gpu_wait_quarantined_{false};
         std::size_t next_ring_slot_ = 0;
         // Whether the last main render used the macro-tile chain; the
         // selection-overlay re-render reuses its sorted buffers and must match.

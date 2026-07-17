@@ -38,11 +38,6 @@
 
 typedef int32_t sortingKey_t;
 
-#define _THROW_ERROR(message)                                              \
-    do {                                                                   \
-        ::lfs::rendering::throwVulkanError((message), __FILE__, __LINE__); \
-    } while (0)
-
 // Vulkan keeps its call-site idiom while sharing the core debug primitive.
 // In Release, neither the condition nor the formatting arguments are evaluated.
 #ifndef LFS_VK_DEBUG_ASSERT

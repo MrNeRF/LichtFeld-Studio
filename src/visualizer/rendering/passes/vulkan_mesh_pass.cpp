@@ -8,6 +8,7 @@
 #include "core/material.hpp"
 #include "core/mesh_data.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
@@ -16,6 +17,8 @@
 #include <cstring>
 #include <format>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -32,6 +35,25 @@
 namespace lfs::vis {
 
     namespace {
+
+        [[nodiscard]] const char* waitOutcomeLabel(const lfs::rendering::WaitOutcome outcome) noexcept {
+            using lfs::rendering::WaitOutcome;
+            switch (outcome) {
+            case WaitOutcome::Ready: return "Ready";
+            case WaitOutcome::Cancelled: return "Cancelled";
+            case WaitOutcome::Shutdown: return "Shutdown";
+            case WaitOutcome::Quarantined: return "Quarantined";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] std::string formatWaitFailure(
+            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) {
+            if (outcome.has_value()) {
+                return waitOutcomeLabel(*outcome);
+            }
+            return std::string(outcome.error().detail());
+        }
 
         struct MeshVertex {
             float position[3];
@@ -209,11 +231,18 @@ namespace lfs::vis {
             pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
             pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
             pool_info.queueFamilyIndex = ctx.graphicsQueueFamily();
-            LFS_VK_CHECK_MSG(vkCreateCommandPool(device, &pool_info, nullptr, &transfer_pool),
-                             "Mesh transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
-                             vkHandleValue(device),
-                             pool_info.queueFamilyIndex,
-                             static_cast<std::uint32_t>(pool_info.flags));
+            if (!vk_try_bool(
+                    vkCreateCommandPool(device, &pool_info, nullptr, &transfer_pool),
+                    "vkCreateCommandPool(device, &pool_info, nullptr, &transfer_pool)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                                vkHandleValue(device),
+                                pool_info.queueFamilyIndex,
+                                static_cast<std::uint32_t>(pool_info.flags)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
                                         transfer_pool,
                                         "mesh.transfer.pool");
@@ -324,6 +353,8 @@ namespace lfs::vis {
                     reinterpret_cast<std::uintptr_t>(submit.pCommandBuffers),
                     submit.pCommandBuffers != nullptr ? vkHandleValue(submit.pCommandBuffers[0]) : 0);
             }
+            bool submitted = false;
+            bool wait_ready = false;
             if (r == VK_SUCCESS) {
                 r = vkQueueSubmit(graphics_queue, 1, &submit, fence);
                 if (r != VK_SUCCESS) {
@@ -333,25 +364,54 @@ namespace lfs::vis {
                         vkHandleValue(graphics_queue),
                         vkHandleValue(cb),
                         vkHandleValue(fence));
+                } else {
+                    submitted = true;
                 }
             }
             if (r == VK_SUCCESS) {
-                r = vkWaitForFences(device, 1, &fence, VK_TRUE,
-                                    std::numeric_limits<std::uint64_t>::max());
-                if (r != VK_SUCCESS) {
-                    failed_expression =
-                        "vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX)";
+                lfs::rendering::WaitContext wait_ctx;
+                wait_ctx.fingerprint = "pass.mesh.oneshot_wait";
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device,
+                    fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                if (wait_outcome.has_value() &&
+                    *wait_outcome == lfs::rendering::WaitOutcome::Ready) {
+                    wait_ready = true;
+                } else {
+                    r = VK_TIMEOUT;
+                    failed_expression = "wait_fence_bounded(pass.mesh.oneshot_wait)";
                     failed_context = std::format(
-                        "Mesh one-shot submission did not retire (device={:#x}, fence={:#x}, command_buffer={:#x}, fence_count=1)",
+                        "Mesh one-shot submission did not retire "
+                        "(device={:#x}, fence={:#x}, command_buffer={:#x}): {}",
                         vkHandleValue(device),
+                        vkHandleValue(fence),
+                        vkHandleValue(cb),
+                        formatWaitFailure(wait_outcome));
+                }
+            }
+            // AMB-4: destroy fence/CB only when never submitted or wait Ready.
+            if (fence != VK_NULL_HANDLE) {
+                if (!submitted || wait_ready) {
+                    vkDestroyFence(device, fence, nullptr);
+                } else {
+                    LOG_ERROR(
+                        "Vulkan: retaining mesh one-shot fence after non-Ready wait "
+                        "(fence={:#x}, command_buffer={:#x})",
                         vkHandleValue(fence),
                         vkHandleValue(cb));
                 }
             }
-            if (fence != VK_NULL_HANDLE) {
-                vkDestroyFence(device, fence, nullptr);
+            if (!submitted || wait_ready) {
+                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
+            } else {
+                LOG_ERROR(
+                    "Vulkan: retaining mesh one-shot command buffer after non-Ready wait "
+                    "(command_buffer={:#x})",
+                    vkHandleValue(cb));
             }
-            vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
             if (r != VK_SUCCESS) {
                 return reportVkFailure(
                     failed_expression,
@@ -430,12 +490,19 @@ namespace lfs::vis {
             info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
             info.maxLod = VK_LOD_CLAMP_NONE;
             info.anisotropyEnable = VK_FALSE;
-            LFS_VK_CHECK_MSG(vkCreateSampler(device, &info, nullptr, &sampler),
-                             "Mesh material sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
-                             vkHandleValue(device),
-                             static_cast<int>(info.magFilter),
-                             static_cast<int>(info.minFilter),
-                             static_cast<int>(info.addressModeU));
+            if (!vk_try_bool(
+                    vkCreateSampler(device, &info, nullptr, &sampler),
+                    "vkCreateSampler(device, &info, nullptr, &sampler)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh material sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
+                                vkHandleValue(device),
+                                static_cast<int>(info.magFilter),
+                                static_cast<int>(info.minFilter),
+                                static_cast<int>(info.addressModeU)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_SAMPLER,
                                         sampler,
                                         "mesh.material.sampler");
@@ -452,12 +519,19 @@ namespace lfs::vis {
             shadow_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
             shadow_info.compareEnable = VK_TRUE;
             shadow_info.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
-            LFS_VK_CHECK_MSG(vkCreateSampler(device, &shadow_info, nullptr, &shadow_sampler),
-                             "Mesh shadow sampler creation failed (device={:#x}, compare_enable={}, compare_op={}, address_mode={})",
-                             vkHandleValue(device),
-                             shadow_info.compareEnable == VK_TRUE,
-                             static_cast<int>(shadow_info.compareOp),
-                             static_cast<int>(shadow_info.addressModeU));
+            if (!vk_try_bool(
+                    vkCreateSampler(device, &shadow_info, nullptr, &shadow_sampler),
+                    "vkCreateSampler(device, &shadow_info, nullptr, &shadow_sampler)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh shadow sampler creation failed (device={:#x}, compare_enable={}, compare_op={}, address_mode={})",
+                                vkHandleValue(device),
+                                shadow_info.compareEnable == VK_TRUE,
+                                static_cast<int>(shadow_info.compareOp),
+                                static_cast<int>(shadow_info.addressModeU)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_SAMPLER,
                                         shadow_sampler,
                                         "mesh.shadow.sampler");
@@ -479,10 +553,17 @@ namespace lfs::vis {
             light_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             light_info.bindingCount = static_cast<std::uint32_t>(light_b.size());
             light_info.pBindings = light_b.data();
-            LFS_VK_CHECK_MSG(vkCreateDescriptorSetLayout(device, &light_info, nullptr, &light_layout),
-                             "Mesh light descriptor-set layout creation failed (device={:#x}, binding_count={})",
-                             vkHandleValue(device),
-                             light_info.bindingCount);
+            if (!vk_try_bool(
+                    vkCreateDescriptorSetLayout(device, &light_info, nullptr, &light_layout),
+                    "vkCreateDescriptorSetLayout(device, &light_info, nullptr, &light_layout)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh light descriptor-set layout creation failed (device={:#x}, binding_count={})",
+                                vkHandleValue(device),
+                                light_info.bindingCount
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                                         light_layout,
                                         "mesh.light.descriptor.layout");
@@ -503,10 +584,17 @@ namespace lfs::vis {
             mat_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             mat_info.bindingCount = static_cast<std::uint32_t>(mat_b.size());
             mat_info.pBindings = mat_b.data();
-            LFS_VK_CHECK_MSG(vkCreateDescriptorSetLayout(device, &mat_info, nullptr, &material_layout),
-                             "Mesh material descriptor-set layout creation failed (device={:#x}, binding_count={})",
-                             vkHandleValue(device),
-                             mat_info.bindingCount);
+            if (!vk_try_bool(
+                    vkCreateDescriptorSetLayout(device, &mat_info, nullptr, &material_layout),
+                    "vkCreateDescriptorSetLayout(device, &mat_info, nullptr, &material_layout)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh material descriptor-set layout creation failed (device={:#x}, binding_count={})",
+                                vkHandleValue(device),
+                                mat_info.bindingCount
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                                         material_layout,
                                         "mesh.material.descriptor.layout");
@@ -610,14 +698,20 @@ namespace lfs::vis {
             VmaAllocationCreateInfo a{};
             a.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             VmaAllocationInfo allocation_info{};
-            LFS_VK_CHECK_MSG(
-                vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info),
-                "Mesh shadow image allocation failed (allocator={:#x}, target_address={:#x}, requested_resolution={}, format={}, usage={:#x})",
-                reinterpret_cast<std::uintptr_t>(allocator),
-                reinterpret_cast<std::uintptr_t>(&out),
-                resolution,
-                static_cast<int>(img.format),
-                static_cast<std::uint32_t>(img.usage));
+            if (!vk_try_bool(
+                    vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info),
+                    "vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh shadow image allocation failed (allocator={:#x}, target_address={:#x}, requested_resolution={}, format={}, usage={:#x})",
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                reinterpret_cast<std::uintptr_t>(&out),
+                                resolution,
+                                static_cast<int>(img.format),
+                                static_cast<std::uint32_t>(img.usage)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             const bool is_dummy = &out == &shadow_dummy;
             if (is_dummy) {
                 context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
@@ -841,14 +935,21 @@ namespace lfs::vis {
             pool_info.poolSizeCount = static_cast<std::uint32_t>(std::size(pool_sizes));
             pool_info.pPoolSizes = pool_sizes;
             VkDescriptorPool new_pool = VK_NULL_HANDLE;
-            LFS_VK_CHECK_MSG(vkCreateDescriptorPool(device, &pool_info, nullptr, &new_pool),
-                             "Mesh light descriptor-pool creation failed (device={:#x}, frame_slot={}, required_count={}, capacity={}, max_sets={}, pool_size_count={})",
-                             vkHandleValue(device),
-                             frame_slot,
-                             required,
-                             capacity,
-                             pool_info.maxSets,
-                             pool_info.poolSizeCount);
+            if (!vk_try_bool(
+                    vkCreateDescriptorPool(device, &pool_info, nullptr, &new_pool),
+                    "vkCreateDescriptorPool(device, &pool_info, nullptr, &new_pool)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh light descriptor-pool creation failed (device={:#x}, frame_slot={}, required_count={}, capacity={}, max_sets={}, pool_size_count={})",
+                                vkHandleValue(device),
+                                frame_slot,
+                                required,
+                                capacity,
+                                pool_info.maxSets,
+                                pool_info.poolSizeCount
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_DESCRIPTOR_POOL,
                                          new_pool,
                                          "mesh.light.descriptor.pool[{}]",
@@ -978,15 +1079,21 @@ namespace lfs::vis {
             VmaAllocationCreateInfo a{};
             a.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             VmaAllocationInfo allocation_info{};
-            LFS_VK_CHECK_MSG(
-                vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info),
-                "Mesh texture image allocation failed (label='{}', allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
-                label,
-                reinterpret_cast<std::uintptr_t>(allocator),
-                w,
-                h,
-                static_cast<int>(img.format),
-                static_cast<std::uint32_t>(img.usage));
+            if (!vk_try_bool(
+                    vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info),
+                    "vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh texture image allocation failed (label='{}', allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
+                                label,
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                w,
+                                h,
+                                static_cast<int>(img.format),
+                                static_cast<std::uint32_t>(img.usage)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
                                          out.image,
                                          "mesh.texture.{}[{}x{}]",
@@ -1717,13 +1824,19 @@ namespace lfs::vis {
             VmaAllocationCreateInfo a{};
             a.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
             a.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            LFS_VK_CHECK_MSG(
-                vmaCreateBuffer(allocator, &b, &a, &out.ubo, &out.ubo_alloc, nullptr),
-                "Mesh material UBO allocation failed (allocator={:#x}, material_index={}, requested_size={}, usage={:#x})",
-                reinterpret_cast<std::uintptr_t>(allocator),
-                material_index,
-                b.size,
-                static_cast<std::uint32_t>(b.usage));
+            if (!vk_try_bool(
+                    vmaCreateBuffer(allocator, &b, &a, &out.ubo, &out.ubo_alloc, nullptr),
+                    "vmaCreateBuffer(allocator, &b, &a, &out.ubo, &out.ubo_alloc, nullptr)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh material UBO allocation failed (allocator={:#x}, material_index={}, requested_size={}, usage={:#x})",
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                material_index,
+                                b.size,
+                                static_cast<std::uint32_t>(b.usage)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
                                          out.ubo,
                                          "mesh.material[{}].ubo",
@@ -1818,11 +1931,18 @@ namespace lfs::vis {
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            LFS_VK_CHECK_MSG(vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr),
-                             "Mesh device-local buffer allocation failed (allocator={:#x}, requested_size={}, usage={:#x})",
-                             reinterpret_cast<std::uintptr_t>(allocator),
-                             size,
-                             static_cast<std::uint32_t>(info.usage));
+            if (!vk_try_bool(
+                    vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr),
+                    "vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh device-local buffer allocation failed (allocator={:#x}, requested_size={}, usage={:#x})",
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                size,
+                                static_cast<std::uint32_t>(info.usage)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             return true;
         }
 
@@ -1838,12 +1958,19 @@ namespace lfs::vis {
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
             ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            LFS_VK_CHECK_MSG(vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr),
-                             "Mesh staging-buffer allocation failed (allocator={:#x}, source={:#x}, requested_size={}, usage={:#x})",
-                             reinterpret_cast<std::uintptr_t>(allocator),
-                             reinterpret_cast<std::uintptr_t>(data),
-                             size,
-                             static_cast<std::uint32_t>(info.usage));
+            if (!vk_try_bool(
+                    vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr),
+                    "vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Mesh staging-buffer allocation failed (allocator={:#x}, source={:#x}, requested_size={}, usage={:#x})",
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                reinterpret_cast<std::uintptr_t>(data),
+                                size,
+                                static_cast<std::uint32_t>(info.usage)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             if (!writeBuffer(alloc, data, static_cast<std::size_t>(size))) {
                 vmaDestroyBuffer(allocator, buffer, alloc);
                 buffer = VK_NULL_HANDLE;

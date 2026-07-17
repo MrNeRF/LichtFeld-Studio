@@ -2,6 +2,7 @@
 
 #include <algorithm> // std::sort
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring> // memcpy
@@ -174,6 +175,9 @@ protected:
     // Phase 7A submission bookkeeping (no-reset / no-replacement row).
     lfs::rendering::VulkanDispatch vulkan_dispatch_{};
     lfs::rendering::SubmissionState last_submission_state_{};
+    // Phase 7C-P3: owner latch for bounded wait quarantine (C1/C2). Never
+    // authorizes replaceFenceSignaled — policy stays NoResetNoReplacement.
+    std::atomic<bool> gpu_wait_quarantined_{false};
 
     // Vulkan objects
     VkInstance instance;
@@ -355,11 +359,13 @@ public:
                 printf("DeviceGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
-            _THROW_ERROR(std::format(
+            lfs::rendering::throw_renderer_contract(
+                std::format(
                 "DeviceGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_started_batch={})",
                 cbip,
                 pipeline->isCommandBatchInProgress(),
-                !cbip));
+                !cbip),
+                LFS_SOURCE_SITE_CURRENT());
         }
     }
 };
@@ -397,11 +403,13 @@ public:
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
             pipeline->cancelCommandBatch();
-            _THROW_ERROR(std::format(
+            lfs::rendering::throw_renderer_contract(
+                std::format(
                 "HostGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_paused_batch={})",
                 cbip,
                 pipeline->isCommandBatchInProgress(),
-                cbip));
+                cbip),
+                LFS_SOURCE_SITE_CURRENT());
         }
     }
 };

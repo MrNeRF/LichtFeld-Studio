@@ -34,6 +34,9 @@ target_link_libraries(lfs_rendering_tensor
         lfs_oiio
         spdlog::spdlog
         TBB::tbb
+        # Phase 7C-P3: mesh2splat submitAndWait uses wait_fence_bounded
+        # (implemented in lfs_vulkan_rasterizer's vulkan_wait.cpp).
+        lfs_vulkan_rasterizer
 )
 
 set_property(SOURCE raster_rendering_engine.cpp APPEND PROPERTY COMPILE_DEFINITIONS FMT_HEADER_ONLY=1)

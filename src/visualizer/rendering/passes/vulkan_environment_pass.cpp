@@ -8,6 +8,7 @@
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "internal/resource_paths.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_result.hpp"
@@ -18,7 +19,9 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <vk_mem_alloc.h>
 
@@ -28,6 +31,26 @@
 namespace lfs::vis {
 
     namespace {
+
+        [[nodiscard]] const char* waitOutcomeLabel(const lfs::rendering::WaitOutcome outcome) noexcept {
+            using lfs::rendering::WaitOutcome;
+            switch (outcome) {
+            case WaitOutcome::Ready: return "Ready";
+            case WaitOutcome::Cancelled: return "Cancelled";
+            case WaitOutcome::Shutdown: return "Shutdown";
+            case WaitOutcome::Quarantined: return "Quarantined";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] std::string formatWaitFailure(
+            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) {
+            if (outcome.has_value()) {
+                return waitOutcomeLabel(*outcome);
+            }
+            return std::string(outcome.error().detail());
+        }
+
 
         struct EnvPush {
             float cam_to_world[16];
@@ -112,11 +135,18 @@ namespace lfs::vis {
             pi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
             pi.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
             pi.queueFamilyIndex = ctx.graphicsQueueFamily();
-            LFS_VK_CHECK_MSG(vkCreateCommandPool(device, &pi, nullptr, &transfer_pool),
-                             "Environment transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
-                             vkHandleValue(device),
-                             pi.queueFamilyIndex,
-                             static_cast<std::uint32_t>(pi.flags));
+            if (!vk_try_bool(
+                    vkCreateCommandPool(device, &pi, nullptr, &transfer_pool),
+                    "vkCreateCommandPool(device, &pi, nullptr, &transfer_pool)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Environment transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                                vkHandleValue(device),
+                                pi.queueFamilyIndex,
+                                static_cast<std::uint32_t>(pi.flags)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
                                         transfer_pool,
                                         "environment.transfer.pool");
@@ -202,13 +232,20 @@ namespace lfs::vis {
             info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             info.maxLod = 0.0f;
-            LFS_VK_CHECK_MSG(vkCreateSampler(device, &info, nullptr, &sampler),
-                             "Environment sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode_u={}, address_mode_v={})",
-                             vkHandleValue(device),
-                             static_cast<int>(info.magFilter),
-                             static_cast<int>(info.minFilter),
-                             static_cast<int>(info.addressModeU),
-                             static_cast<int>(info.addressModeV));
+            if (!vk_try_bool(
+                    vkCreateSampler(device, &info, nullptr, &sampler),
+                    "vkCreateSampler(device, &info, nullptr, &sampler)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Environment sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode_u={}, address_mode_v={})",
+                                vkHandleValue(device),
+                                static_cast<int>(info.magFilter),
+                                static_cast<int>(info.minFilter),
+                                static_cast<int>(info.addressModeU),
+                                static_cast<int>(info.addressModeV)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_SAMPLER,
                                         sampler,
                                         "environment.texture.sampler");
@@ -225,11 +262,18 @@ namespace lfs::vis {
             li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             li.bindingCount = 1;
             li.pBindings = &b;
-            LFS_VK_CHECK_MSG(vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout),
-                             "Environment descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
-                             vkHandleValue(device),
-                             li.bindingCount,
-                             static_cast<int>(b.descriptorType));
+            if (!vk_try_bool(
+                    vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout),
+                    "vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Environment descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                                vkHandleValue(device),
+                                li.bindingCount,
+                                static_cast<int>(b.descriptorType)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                                         desc_layout,
                                         "environment.descriptor.layout");
@@ -243,12 +287,19 @@ namespace lfs::vis {
             pci.maxSets = frame_count;
             pci.poolSizeCount = 1;
             pci.pPoolSizes = &ps;
-            LFS_VK_CHECK_MSG(vkCreateDescriptorPool(device, &pci, nullptr, &desc_pool),
-                             "Environment descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
-                             vkHandleValue(device),
-                             frame_count,
-                             pci.maxSets,
-                             ps.descriptorCount);
+            if (!vk_try_bool(
+                    vkCreateDescriptorPool(device, &pci, nullptr, &desc_pool),
+                    "vkCreateDescriptorPool(device, &pci, nullptr, &desc_pool)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Environment descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                                vkHandleValue(device),
+                                frame_count,
+                                pci.maxSets,
+                                ps.descriptorCount
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL,
                                         desc_pool,
                                         "environment.descriptor.pool");
@@ -259,12 +310,19 @@ namespace lfs::vis {
             ai.descriptorPool = desc_pool;
             ai.descriptorSetCount = frame_count;
             ai.pSetLayouts = layouts.data();
-            LFS_VK_CHECK_MSG(vkAllocateDescriptorSets(device, &ai, sets.data()),
-                             "Environment descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
-                             vkHandleValue(device),
-                             vkHandleValue(desc_pool),
-                             vkHandleValue(desc_layout),
-                             ai.descriptorSetCount);
+            if (!vk_try_bool(
+                    vkAllocateDescriptorSets(device, &ai, sets.data()),
+                    "vkAllocateDescriptorSets(device, &ai, sets.data())",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Environment descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                                vkHandleValue(device),
+                                vkHandleValue(desc_pool),
+                                vkHandleValue(desc_layout),
+                                ai.descriptorSetCount
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             frame_descriptors.resize(frame_count);
             for (std::size_t i = 0; i < sets.size(); ++i) {
                 frame_descriptors[i].set = sets[i];
@@ -556,6 +614,8 @@ namespace lfs::vis {
                     reinterpret_cast<std::uintptr_t>(si.pCommandBuffers),
                     si.pCommandBuffers != nullptr ? vkHandleValue(si.pCommandBuffers[0]) : 0);
             }
+            bool submitted = false;
+            bool wait_ready = false;
             if (r == VK_SUCCESS) {
                 r = vkQueueSubmit(graphics_queue, 1, &si, fence);
                 if (r != VK_SUCCESS) {
@@ -565,24 +625,55 @@ namespace lfs::vis {
                         vkHandleValue(graphics_queue),
                         vkHandleValue(cb),
                         vkHandleValue(fence));
+                } else {
+                    submitted = true;
                 }
             }
             if (r == VK_SUCCESS) {
-                r = vkWaitForFences(device, 1, &fence, VK_TRUE,
-                                    std::numeric_limits<std::uint64_t>::max());
-                if (r != VK_SUCCESS) {
+                lfs::rendering::WaitContext wait_ctx;
+                wait_ctx.fingerprint = "pass.environment.upload_wait";
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device,
+                    fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                if (wait_outcome.has_value() &&
+                    *wait_outcome == lfs::rendering::WaitOutcome::Ready) {
+                    wait_ready = true;
+                } else {
+                    r = VK_TIMEOUT;
                     failed_expression =
-                        "vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX)";
+                        "wait_fence_bounded(pass.environment.upload_wait)";
                     failed_context = std::format(
-                        "Environment upload submission did not retire (device={:#x}, fence={:#x}, command_buffer={:#x}, fence_count=1)",
+                        "Environment upload submission did not retire "
+                        "(device={:#x}, fence={:#x}, command_buffer={:#x}): {}",
                         vkHandleValue(device),
+                        vkHandleValue(fence),
+                        vkHandleValue(cb),
+                        formatWaitFailure(wait_outcome));
+                }
+            }
+            // AMB-4: destroy fence/CB only when never submitted or wait Ready.
+            if (fence != VK_NULL_HANDLE) {
+                if (!submitted || wait_ready) {
+                    vkDestroyFence(device, fence, nullptr);
+                } else {
+                    LOG_ERROR(
+                        "Vulkan: retaining environment upload fence after non-Ready wait "
+                        "(fence={:#x}, command_buffer={:#x})",
                         vkHandleValue(fence),
                         vkHandleValue(cb));
                 }
             }
-            if (fence != VK_NULL_HANDLE)
-                vkDestroyFence(device, fence, nullptr);
-            vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
+            if (!submitted || wait_ready) {
+                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
+            } else {
+                LOG_ERROR(
+                    "Vulkan: retaining environment upload command buffer after non-Ready wait "
+                    "(command_buffer={:#x})",
+                    vkHandleValue(cb));
+            }
             if (r != VK_SUCCESS) {
                 return reportVkFailure(
                     failed_expression,
@@ -658,15 +749,21 @@ namespace lfs::vis {
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             VmaAllocationInfo allocation_info{};
-            LFS_VK_CHECK_MSG(
-                vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info),
-                "Environment image allocation failed (allocator={:#x}, path='{}', requested_extent={}x{}, format={}, usage={:#x})",
-                reinterpret_cast<std::uintptr_t>(allocator),
-                utf8,
-                w,
-                h,
-                static_cast<int>(img.format),
-                static_cast<std::uint32_t>(img.usage));
+            if (!vk_try_bool(
+                    vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info),
+                    "vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info)",
+                    lfs::rendering::formatVulkanDiagnostic(
+                                "Environment image allocation failed (allocator={:#x}, path='{}', requested_extent={}x{}, format={}, usage={:#x})",
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                utf8,
+                                w,
+                                h,
+                                static_cast<int>(img.format),
+                                static_cast<std::uint32_t>(img.usage)
+                            ),
+                    std::source_location::current())) {
+                return false;
+            }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
                                          image,
                                          "environment.image[{}x{}]",

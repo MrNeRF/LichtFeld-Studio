@@ -206,3 +206,66 @@ TEST(SubmissionStateTransitions, AcceptedSubmitWithoutTimelineIsLegal) {
     EXPECT_TRUE(s.submit_accepted);
     EXPECT_FALSE(s.timeline_published);
 }
+
+// Phase 7C-P2: ResetPreWaitReplacement end-to-end (point-cloud pure-fence row).
+
+TEST(SubmissionStateTransitions, ResetPreWaitHappyPathT0T1T4NoTimeline) {
+    // Appendix A.1 happy path: T0 → T1 → T4; no T5 on pure-fence.
+    SubmissionState s;
+    ASSERT_TRUE(apply_submission_transition(s, SubmissionTransition::BeginLifecycle,
+                                            SubmissionFencePolicy::ResetPreWaitReplacement));
+    expect_fresh(s);
+
+    auto t1 = apply_submission_transition(s, SubmissionTransition::FenceReset,
+                                          SubmissionFencePolicy::ResetPreWaitReplacement);
+    ASSERT_TRUE(t1.has_value());
+    EXPECT_TRUE(s.fence_reset);
+    EXPECT_FALSE(t1->replace_fence_signaled);
+
+    auto t4 = apply_submission_transition(s, SubmissionTransition::SubmitAccepted,
+                                          SubmissionFencePolicy::ResetPreWaitReplacement);
+    ASSERT_TRUE(t4.has_value());
+    EXPECT_TRUE(s.submit_accepted);
+    EXPECT_FALSE(s.timeline_published);
+    EXPECT_FALSE(t4->replace_fence_signaled);
+}
+
+TEST(SubmissionStateTransitions, ResetPreWaitRejectEndToEndThenRestartT0) {
+    // T0 → T1 → T3 (replace) → T0 restarts clean for the next attempt.
+    SubmissionState s;
+    ASSERT_TRUE(apply_submission_transition(s, SubmissionTransition::BeginLifecycle,
+                                            SubmissionFencePolicy::ResetPreWaitReplacement));
+    ASSERT_TRUE(apply_submission_transition(s, SubmissionTransition::FenceReset,
+                                            SubmissionFencePolicy::ResetPreWaitReplacement));
+    EXPECT_TRUE(s.fence_reset);
+
+    auto t3 = apply_submission_transition(s, SubmissionTransition::SubmitRejected,
+                                          SubmissionFencePolicy::ResetPreWaitReplacement);
+    ASSERT_TRUE(t3.has_value());
+    EXPECT_TRUE(t3->replace_fence_signaled);
+    EXPECT_FALSE(s.fence_reset); // replaced signaled fence is not "reset"
+    EXPECT_FALSE(s.submit_accepted);
+    EXPECT_FALSE(s.timeline_published);
+
+    auto restart = apply_submission_transition(s, SubmissionTransition::BeginLifecycle,
+                                               SubmissionFencePolicy::ResetPreWaitReplacement);
+    ASSERT_TRUE(restart.has_value());
+    expect_fresh(s);
+    EXPECT_FALSE(restart->replace_fence_signaled);
+}
+
+TEST(SubmissionStateTransitions, T3RejectedWithoutFenceResetDoesNotReplace) {
+    // §1.C.3: never replace when fence was not reset. Ruling-1 reset-failure
+    // recovery is modeled outside the table (host-side replace only).
+    SubmissionState s;
+    ASSERT_TRUE(apply_submission_transition(s, SubmissionTransition::BeginLifecycle,
+                                            SubmissionFencePolicy::ResetPreWaitReplacement));
+    EXPECT_FALSE(s.fence_reset);
+
+    auto t3 = apply_submission_transition(s, SubmissionTransition::SubmitRejected,
+                                          SubmissionFencePolicy::ResetPreWaitReplacement);
+    ASSERT_TRUE(t3.has_value());
+    EXPECT_FALSE(t3->replace_fence_signaled);
+    EXPECT_FALSE(s.fence_reset);
+    EXPECT_FALSE(s.submit_accepted);
+}

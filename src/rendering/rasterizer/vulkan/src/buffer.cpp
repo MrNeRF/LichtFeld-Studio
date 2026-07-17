@@ -165,11 +165,13 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
 
 void VulkanGSPipeline::allocStagingBuffer(size_t size) {
     if (size == 0) {
-        _THROW_ERROR(std::format(
+        lfs::rendering::throw_renderer_contract(
+            std::format(
             "allocStagingBuffer requires a non-zero allocation (requested_bytes={}, existing_buffer={:#x}, existing_bytes={})",
             size,
             lfs::rendering::vkHandleValue(stager.buffer),
-            stager.allocSize));
+            stager.allocSize),
+            LFS_SOURCE_SITE_CURRENT());
     }
     if (stager.buffer != VK_NULL_HANDLE && stager.allocSize >= size)
         return;
@@ -202,13 +204,17 @@ void VulkanGSPipeline::allocStagingBuffer(size_t size) {
     if (result != VK_SUCCESS) {
         stager.buffer = VK_NULL_HANDLE;
         stager.allocation = VK_NULL_HANDLE;
-        _THROW_ERROR(std::format(
+        lfs::rendering::throw_vk_result(
+            result,
+            "vmaCreateBuffer",
+            std::format(
             "VkSplat staging-buffer allocation failed (requested_bytes={}, allocator={:#x}, usage={:#x}, result={}({}))",
             size,
             lfs::rendering::vkHandleValue(allocator),
             static_cast<std::uint32_t>(staging_info.usage),
             lfs::rendering::vkResultToString(result),
-            static_cast<int>(result)));
+            static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
     }
 
     stager.allocSize = size;
@@ -217,12 +223,14 @@ void VulkanGSPipeline::allocStagingBuffer(size_t size) {
 
 void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     if (size == 0 || buffer.buffer != VK_NULL_HANDLE || buffer.allocation != VK_NULL_HANDLE) {
-        _THROW_ERROR(std::format(
+        lfs::rendering::throw_renderer_contract(
+            std::format(
             "createBuffer requires a non-zero size and an empty destination (requested_bytes={}, existing_buffer={:#x}, existing_allocation={:#x}, label='{}')",
             size,
             lfs::rendering::vkHandleValue(buffer.buffer),
             lfs::rendering::vkHandleValue(buffer.allocation),
-            buffer.label ? buffer.label : "<unlabeled>"));
+            buffer.label ? buffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
     }
     buffer.allocSize = size;
     buffer.capacity = size;
@@ -250,14 +258,18 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
         buffer.capacity = 0;
         buffer.size = 0;
         buffer.offset = 0;
-        _THROW_ERROR(std::format(
+        lfs::rendering::throw_vk_result(
+            result,
+            "vmaCreateBuffer",
+            std::format(
             "VkSplat device-buffer allocation failed (requested_bytes={}, allocator={:#x}, usage={:#x}, label='{}', result={}({}))",
             size,
             lfs::rendering::vkHandleValue(allocator),
             static_cast<std::uint32_t>(buffer_info.usage),
             buffer.label ? buffer.label : "<unlabeled>",
             lfs::rendering::vkResultToString(result),
-            static_cast<int>(result)));
+            static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
     }
 
     if (buffer.label && debug_name_writer_.enabled()) {
@@ -280,24 +292,28 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
 
 void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     if (commandBatchInProgress) {
-        _THROW_ERROR(std::format(
+        lfs::rendering::throw_renderer_contract(
+            std::format(
             "destroyBuffer cannot destroy an allocation referenced by an active command batch (batch_active={}, buffer={:#x}, allocation={:#x}, bytes={}, label='{}')",
             commandBatchInProgress,
             lfs::rendering::vkHandleValue(buffer.buffer),
             lfs::rendering::vkHandleValue(buffer.allocation),
             buffer.allocSize,
-            buffer.label ? buffer.label : "<unlabeled>"));
+            buffer.label ? buffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
     }
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
         waitForPendingBatch();
         vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
         if (current_vram < buffer.allocSize) {
-            _THROW_ERROR(std::format(
+            lfs::rendering::throw_renderer_contract(
+                std::format(
                 "VkSplat VRAM accounting underflowed while destroying a buffer (tracked_bytes={}, buffer_bytes={}, buffer={:#x}, label='{}')",
                 current_vram,
                 buffer.allocSize,
                 lfs::rendering::vkHandleValue(buffer.buffer),
-                buffer.label ? buffer.label : "<unlabeled>"));
+                buffer.label ? buffer.label : "<unlabeled>"),
+                LFS_SOURCE_SITE_CURRENT());
         }
         current_vram -= buffer.allocSize;
         if (buffer.label) {
@@ -320,8 +336,11 @@ void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t ne
         destroyBuffer(deviceBuffer);
         try {
             createBuffer(new_byte_size, deviceBuffer);
-        } catch (const std::runtime_error& err) {
-            _THROW_ERROR(std::string(err.what()) + ". createBuffer failed inside resizeDeviceBuffer");
+        } catch (const lfs::Exception& ex) {
+            lfs::rendering::throw_vk_error(
+                lfs::Error{ex.error()}.with_context(
+                    "createBuffer failed inside resizeDeviceBuffer",
+                    LFS_SOURCE_SITE_CURRENT()));
         }
     }
     deviceBuffer.size = new_byte_size;
@@ -331,12 +350,14 @@ template <typename T>
 _VulkanBuffer& VulkanGSPipeline::resizeDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool no_shrink) {
     auto& deviceBuffer = buffer.deviceBuffer;
     if (new_size > std::numeric_limits<size_t>::max() / sizeof(T)) {
-        _THROW_ERROR(std::format(
+        lfs::rendering::throw_renderer_contract(
+            std::format(
             "resizeDeviceBuffer element count overflows byte sizing (elements={}, element_bytes={}, max_elements={}, label='{}')",
             new_size,
             sizeof(T),
             std::numeric_limits<size_t>::max() / sizeof(T),
-            deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"));
+            deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
     }
     size_t new_byte_size = new_size * sizeof(T);
     resizeDeviceBuffer(deviceBuffer, new_byte_size, no_shrink);
@@ -375,12 +396,14 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
     auto& deviceBuffer = buffer.deviceBuffer;
 
     if (new_size > std::numeric_limits<size_t>::max() / sizeof(T)) {
-        _THROW_ERROR(std::format(
+        lfs::rendering::throw_renderer_contract(
+            std::format(
             "resizeAndCopyDeviceBuffer element count overflows byte sizing (elements={}, element_bytes={}, max_elements={}, label='{}')",
             new_size,
             sizeof(T),
             std::numeric_limits<size_t>::max() / sizeof(T),
-            deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"));
+            deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
     }
     size_t new_byte_size = new_size * sizeof(T);
     size_t old_byte_size = deviceBuffer.size;
@@ -411,9 +434,11 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
     newBuffer.label = deviceBuffer.label;
     try {
         createBuffer(new_byte_size, newBuffer);
-    } catch (const std::runtime_error& err) {
-        _THROW_ERROR(std::string(err.what()) +
-                     ". createBuffer failed inside resizeAndCopyDeviceBuffer");
+    } catch (const lfs::Exception& ex) {
+        lfs::rendering::throw_vk_error(
+            lfs::Error{ex.error()}.with_context(
+                "createBuffer failed inside resizeAndCopyDeviceBuffer",
+                LFS_SOURCE_SITE_CURRENT()));
     }
 
     {
