@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_nn_ops.hpp"
 #include <cassert>
@@ -96,6 +97,7 @@ namespace lfs::core::tensor_ops {
         const int num_blocks = (total + BLOCK_SIZE - 1) / BLOCK_SIZE;
         max_pool2d_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, N, C, H_in, W_in, H_out, W_out, kernel_size, stride, padding);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.nn.max_pool2d");
     }
 
     void launch_adaptive_avg_pool2d(const float* input, float* output,
@@ -109,6 +111,7 @@ namespace lfs::core::tensor_ops {
         const int num_blocks = (total + BLOCK_SIZE - 1) / BLOCK_SIZE;
         adaptive_avg_pool2d_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, N, C, H_in, W_in, H_out, W_out);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.nn.adaptive_avg_pool2d");
     }
 
     __global__ void bias_relu_kernel(const float* __restrict__ input,
@@ -142,6 +145,7 @@ namespace lfs::core::tensor_ops {
         const int num_blocks = (total_elements + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bias_relu_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, bias, output, total_elements, channels, spatial_size);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.nn.bias_relu");
     }
 
     void launch_bias_add(const float* input, const float* bias, float* output,
@@ -152,6 +156,7 @@ namespace lfs::core::tensor_ops {
         const int num_blocks = (total_elements + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bias_add_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, bias, output, total_elements, channels, spatial_size);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.nn.bias_add");
     }
 
     __global__ void relu_kernel(const float* __restrict__ input,
@@ -167,6 +172,7 @@ namespace lfs::core::tensor_ops {
             return;
         const int num_blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
         relu_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(input, output, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.nn.relu");
     }
 
 } // namespace lfs::core::tensor_ops

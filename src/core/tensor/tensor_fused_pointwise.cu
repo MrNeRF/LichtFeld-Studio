@@ -68,9 +68,11 @@ namespace lfs::core::tensor_ops {
             const size_t vec_n = (n + 3) / 4;
             const int grid = static_cast<int>((vec_n + BLOCK_SIZE - 1) / BLOCK_SIZE);
             affine_transform_vec4_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(input, output, n, a, b);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.affine_vec4");
         } else {
             const int grid = static_cast<int>((n + BLOCK_SIZE - 1) / BLOCK_SIZE);
             affine_transform_scalar_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(input, output, n, a, b);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.affine_scalar");
         }
     }
 
@@ -155,9 +157,11 @@ namespace lfs::core::tensor_ops {
             const size_t vec_n = (n + 3) / 4;
             const int grid = static_cast<int>((vec_n + BLOCK_SIZE - 1) / BLOCK_SIZE);
             pointwise_chain_vec4_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(input, output, n, chain);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.chain_vec4");
         } else {
             const int grid = static_cast<int>((n + BLOCK_SIZE - 1) / BLOCK_SIZE);
             pointwise_chain_scalar_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(input, output, n, chain);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.chain_scalar");
         }
     }
 
@@ -317,9 +321,11 @@ namespace lfs::core::tensor_ops {
 
         fused_transform_reduce_stage1_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
             input, partial, n, chain, reduce_op_int);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.transform_reduce_stage1");
 
         fused_reduce_stage2_kernel<<<1, BLOCK_SIZE, 0, stream>>>(
             partial, output, grid_size, reduce_op_int);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.transform_reduce_stage2");
 
         if (reduce_op == ReduceOp::Mean) {
             const float scale = 1.0f / static_cast<float>(n);
@@ -404,6 +410,7 @@ namespace lfs::core::tensor_ops {
         const int grid_size = static_cast<int>(std::min(num_segments, size_t(2048)));
         fused_segmented_transform_reduce_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
             input, output, num_segments, segment_size, chain, reduce_op_int);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.segmented_transform_reduce");
     }
 
 } // namespace lfs::core::tensor_ops

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor_fwd.hpp"
 #include "internal/memory_pool.hpp"
@@ -97,6 +98,7 @@ namespace lfs::core::tensor_ops {
 
         const int num_blocks = (dst_elements + BLOCK_SIZE - 1) / BLOCK_SIZE;
         broadcast_strided_kernel<T><<<num_blocks, BLOCK_SIZE, 0, stream>>>(src, dst, params);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.strided");
     }
 
     void launch_broadcast_strided(const float* src, float* dst,
@@ -181,6 +183,7 @@ namespace lfs::core::tensor_ops {
 
         const int num_blocks = (src_elements + BLOCK_SIZE - 1) / BLOCK_SIZE;
         pad_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(src, dst, params);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.pad");
     }
 
     // Broadcasting index functor

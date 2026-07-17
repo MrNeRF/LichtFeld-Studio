@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT (original Lanczos implementation)
  */
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_memory_guard.hpp"
 #include "lanczos_resize.hpp"
@@ -490,6 +491,7 @@ namespace lfs::core {
                 layout_x->stride, layout_y->stride,
                 coef_x.get(), coef_y.get(),
                 input.ptr<uint8_t>(), 1.0f / 255.0f, output.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(cuda_stream, "core.lanczos.grayscale_resample");
         } else {
             detail::LanczosResampleGrayscaleCUDA<float><<<tile_grid, block, 0, cuda_stream>>>(
                 input_h, input_w, output_h, output_w, kernel_size,

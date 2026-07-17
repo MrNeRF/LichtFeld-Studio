@@ -313,6 +313,7 @@ namespace lfs::core::tensor_ops {
 
         int blocks = (c_elements + 255) / 256;
         compare_eq_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.compare_eq");
     }
 
     void launch_compare_lt(const float* a, const float* b, unsigned char* c,
@@ -332,6 +333,7 @@ namespace lfs::core::tensor_ops {
 
         int blocks = (c_elements + 255) / 256;
         compare_lt_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.compare_lt");
     }
 
     void launch_compare_gt(const float* a, const float* b, unsigned char* c,
@@ -351,6 +353,7 @@ namespace lfs::core::tensor_ops {
 
         int blocks = (c_elements + 255) / 256;
         compare_gt_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.compare_gt");
     }
 
     void launch_logical_and(const unsigned char* a, const unsigned char* b, unsigned char* c,
@@ -370,6 +373,7 @@ namespace lfs::core::tensor_ops {
 
         int blocks = (c_elements + 255) / 256;
         logical_and_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.logical_and");
     }
 
     void launch_logical_or(const unsigned char* a, const unsigned char* b, unsigned char* c,
@@ -389,6 +393,7 @@ namespace lfs::core::tensor_ops {
 
         int blocks = (c_elements + 255) / 256;
         logical_or_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.logical_or");
     }
 
     void launch_logical_xor(const unsigned char* a, const unsigned char* b, unsigned char* c,
@@ -408,6 +413,7 @@ namespace lfs::core::tensor_ops {
 
         int blocks = (c_elements + 255) / 256;
         logical_xor_kernel<<<blocks, 256, 0, stream>>>(a, b, c, shapes, info, c_elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.logical_xor");
     }
 
     // ============= Masking Operations =============
@@ -483,6 +489,7 @@ namespace lfs::core::tensor_ops {
         int blocks = (n + 255) / 256;
         masked_scatter_compact_kernel<T><<<blocks, 256, 0, stream>>>(
             data, mask, src, scan_result.as<int>(), n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.masked_scatter_compact");
     }
 
     void launch_masked_scatter(float* data, const unsigned char* mask,
@@ -555,11 +562,13 @@ namespace lfs::core::tensor_ops {
         if (num_blocks <= max_blocks_x) {
             where_kernel<<<num_blocks, 256, 0, stream>>>(
                 cond, x, y, r, shapes, cond_rank, x_rank, y_rank, r_rank, total);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.where");
         } else {
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             where_kernel<<<grid, 256, 0, stream>>>(
                 cond, x, y, r, shapes, cond_rank, x_rank, y_rank, r_rank, total);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.where");
         }
     }
 
@@ -671,12 +680,14 @@ namespace lfs::core::tensor_ops {
         if (num_blocks <= max_blocks_x) {
             index_select_kernel<float><<<num_blocks, 256, 0, stream>>>(
                 in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_f32");
         } else {
             // Use 2D grid: gridDim.x = min(num_blocks, max), gridDim.y = ceil(num_blocks / max)
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             index_select_kernel<float><<<grid, 256, 0, stream>>>(
                 in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_f32");
         }
     }
 
@@ -708,12 +719,14 @@ namespace lfs::core::tensor_ops {
         if (num_blocks <= max_blocks_x) {
             index_select_kernel<int64_t><<<num_blocks, 256, 0, stream>>>(
                 in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_i64");
         } else {
             // Use 2D grid
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             index_select_kernel<int64_t><<<grid, 256, 0, stream>>>(
                 in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_i64");
         }
     }
 
@@ -744,12 +757,14 @@ namespace lfs::core::tensor_ops {
         if (num_blocks <= max_blocks_x) {
             index_select_kernel<int32_t><<<num_blocks, 256, 0, stream>>>(
                 in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_i32");
         } else {
             // Use 2D grid
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             index_select_kernel<int32_t><<<grid, 256, 0, stream>>>(
                 in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_i32");
         }
     }
 
@@ -778,11 +793,13 @@ namespace lfs::core::tensor_ops {
         if (num_blocks <= max_blocks_x) {
             index_select_kernel<uint8_t><<<num_blocks, 256, 0, stream>>>(
                 in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_u8");
         } else {
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
             index_select_kernel<uint8_t><<<grid, 256, 0, stream>>>(
                 in, idx, out, outer, shape[dim], inner, idx_size, boundary);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.index_select_u8");
         }
     }
 
@@ -882,6 +899,7 @@ namespace lfs::core::tensor_ops {
         gather_kernel<float><<<blocks, 256, 0, stream>>>(
             in, idx, out, d_in_shape.get(), d_idx_shape.get(),
             rank, rank, dim, total, boundary);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.gather_f32");
     }
 
     void launch_gather(const int64_t* in, const int* idx, int64_t* out,
@@ -901,6 +919,7 @@ namespace lfs::core::tensor_ops {
         gather_kernel<int64_t><<<blocks, 256, 0, stream>>>(
             in, idx, out, d_in_shape.get(), d_idx_shape.get(),
             rank, rank, dim, total, boundary);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.gather_i64");
     }
 
     void launch_take(const float* in, const int* idx, float* out,
@@ -1009,11 +1028,13 @@ namespace lfs::core::tensor_ops {
         if (num_blocks <= MAX_BLOCKS_X) {
             scatter_kernel<T><<<num_blocks, 256, 0, stream>>>(
                 out, idx, in, outer, out_shape[dim], inner, in_shape[dim], mode);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.scatter");
         } else {
             const dim3 grid(std::min(num_blocks, MAX_BLOCKS_X),
                             (num_blocks + MAX_BLOCKS_X - 1) / MAX_BLOCKS_X);
             scatter_kernel<T><<<grid, 256, 0, stream>>>(
                 out, idx, in, outer, out_shape[dim], inner, in_shape[dim], mode);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.masking.scatter");
         }
     }
 

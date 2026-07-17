@@ -213,12 +213,14 @@ namespace lfs::core::tensor_ops {
             // Don't cap grid_size - we need to process ALL elements!
 
             clamp_kernel_vectorized<<<grid_size, BLOCK_SIZE, 0, stream>>>(data, min_val, max_val, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.clamp_vectorized");
         } else {
             // Fallback to scalar kernel for unaligned data
             int grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             // No cap needed - grid-stride loop handles any size
 
             clamp_kernel_optimized<<<grid_size, BLOCK_SIZE, 0, stream>>>(data, min_val, max_val, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.clamp_optimized");
         }
     }
 
@@ -277,14 +279,17 @@ namespace lfs::core::tensor_ops {
     // Helper functions to initialize scalars on GPU without CPU→GPU transfer
     inline void init_scalar_gpu(float* d_ptr, float value, cudaStream_t stream = nullptr) {
         init_scalar_float_kernel<<<1, 1, 0, stream>>>(d_ptr, value);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.init_scalar_f32");
     }
 
     inline void init_scalar_gpu(int* d_ptr, int value, cudaStream_t stream = nullptr) {
         init_scalar_int_kernel<<<1, 1, 0, stream>>>(d_ptr, value);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.init_scalar_i32");
     }
 
     inline void init_scalar_gpu(int64_t* d_ptr, int64_t value, cudaStream_t stream = nullptr) {
         init_scalar_int64_kernel<<<1, 1, 0, stream>>>(d_ptr, value);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.init_scalar_i64");
     }
 
     void launch_clamp_fused(const float* src, float* dst, float min_val, float max_val,
@@ -303,11 +308,13 @@ namespace lfs::core::tensor_ops {
             // Don't cap grid_size!
 
             clamp_kernel_fused_vectorized<<<grid_size, BLOCK_SIZE, 0, stream>>>(src, dst, min_val, max_val, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.clamp_fused_vectorized");
         } else {
             int grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             // No cap needed - grid-stride loop handles any size
 
             clamp_kernel_fused<<<grid_size, BLOCK_SIZE, 0, stream>>>(src, dst, min_val, max_val, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.clamp_fused");
         }
     }
 
@@ -573,21 +580,25 @@ namespace lfs::core::tensor_ops {
             multi_axis_reduce_kernel<<<blocks, 256, 0, stream>>>(
                 input, output, input_shape, is_reduced_dim,
                 input_rank, output_elements, init_val, ops::add_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.multi_axis_reduce_sum");
             break;
         case ReduceOp::Max:
             multi_axis_reduce_kernel<<<blocks, 256, 0, stream>>>(
                 input, output, input_shape, is_reduced_dim,
                 input_rank, output_elements, init_val, ops::maximum_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.multi_axis_reduce_max");
             break;
         case ReduceOp::Min:
             multi_axis_reduce_kernel<<<blocks, 256, 0, stream>>>(
                 input, output, input_shape, is_reduced_dim,
                 input_rank, output_elements, init_val, ops::minimum_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.multi_axis_reduce_min");
             break;
         case ReduceOp::Prod:
             multi_axis_reduce_kernel<<<blocks, 256, 0, stream>>>(
                 input, output, input_shape, is_reduced_dim,
                 input_rank, output_elements, init_val, ops::mul_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.multi_axis_reduce_prod");
             break;
         default:
             LFS_ASSERT_MSG(false,
@@ -1105,6 +1116,7 @@ namespace lfs::core::tensor_ops {
                 thrust::raw_pointer_cast(d_shape.data()),
                 thrust::raw_pointer_cast(d_reduced.data()),
                 rank, output_elements, int64_t{0}, ops::add_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.multi_axis_reduce_sum");
             break;
         case ReduceOp::Prod:
             LFS_ASSERT_MSG(output_dtype == DataType::Int64,
@@ -1114,6 +1126,7 @@ namespace lfs::core::tensor_ops {
                 thrust::raw_pointer_cast(d_shape.data()),
                 thrust::raw_pointer_cast(d_reduced.data()),
                 rank, output_elements, int64_t{1}, ops::mul_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.multi_axis_reduce_prod");
             break;
         case ReduceOp::Max:
             LFS_ASSERT_MSG(output_dtype == DataType::Int32,
@@ -1123,6 +1136,7 @@ namespace lfs::core::tensor_ops {
                 thrust::raw_pointer_cast(d_shape.data()),
                 thrust::raw_pointer_cast(d_reduced.data()),
                 rank, output_elements, std::numeric_limits<int32_t>::lowest(), IntegerMaximumOp{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.multi_axis_reduce_max");
             break;
         case ReduceOp::Min:
             LFS_ASSERT_MSG(output_dtype == DataType::Int32,
@@ -1132,6 +1146,7 @@ namespace lfs::core::tensor_ops {
                 thrust::raw_pointer_cast(d_shape.data()),
                 thrust::raw_pointer_cast(d_reduced.data()),
                 rank, output_elements, std::numeric_limits<int32_t>::max(), IntegerMinimumOp{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.multi_axis_reduce_min");
             break;
         default:
             LFS_ASSERT_MSG(false,
@@ -1333,6 +1348,7 @@ namespace lfs::core::tensor_ops {
 
                 bool_reduce_axis_kernel<<<blocks, threads, 0, stream>>>(
                     d_in, d_out_bool, outer_size, reduce_combined, inner_size, op == ReduceOp::All);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.bool_reduce_axis");
                 return;
             }
 
@@ -1342,6 +1358,7 @@ namespace lfs::core::tensor_ops {
 
             bool_reduce_axis_kernel<<<blocks, threads, 0, stream>>>(
                 d_in, d_out_bool, outer_size, reduce_size, inner_size, op == ReduceOp::All);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.bool_reduce_axis");
         }
     }
 
@@ -1456,6 +1473,7 @@ namespace lfs::core::tensor_ops {
             size_t total_scans = outer_size * inner_size;
             int blocks = (total_scans + 255) / 256;
             cumsum_noncontiguous_kernel<<<blocks, 256, 0, stream>>>(data, outer_size, dim_size, inner_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cumsum_noncontiguous");
         }
     }
 
@@ -1707,19 +1725,23 @@ namespace lfs::core::tensor_ops {
                 dim3 block(BLOCK_SIZE, BLOCK_SIZE);
                 dim3 grid = make_grid_3d(M, N, BLOCK_SIZE);
                 cdist_l2_vectorized_kernel<<<grid, block, 0, stream>>>(a, b, out, N, M, D);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cdist_l2_vectorized");
             } else {
                 dim3 block(BLOCK_SIZE, BLOCK_SIZE);
                 dim3 grid = make_grid_3d(M, N, BLOCK_SIZE);
                 cdist_l2_optimized_kernel<BLOCK_SIZE><<<grid, block, 0, stream>>>(a, b, out, N, M, D);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cdist_l2_optimized");
             }
         } else if (p == 1.0f) {
             dim3 block(BLOCK_SIZE, BLOCK_SIZE);
             dim3 grid = make_grid_3d(M, N, BLOCK_SIZE);
             cdist_l1_optimized_kernel<BLOCK_SIZE><<<grid, block, 0, stream>>>(a, b, out, N, M, D);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cdist_l1_optimized");
         } else {
             dim3 block(16, 16);
             dim3 grid = make_grid_3d(M, N, 16);
             cdist_lp_kernel<<<grid, block, 0, stream>>>(a, b, out, N, M, D, p);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cdist_lp");
         }
     }
 
@@ -1792,6 +1814,7 @@ namespace lfs::core::tensor_ops {
                 extract_slice_kernel<<<blocks, 256, 0, stream>>>(
                     values, thrust::raw_pointer_cast(temp_vals.data()),
                     outer_size, dim_size, inner_size, outer, inner);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.sort2d_extract_slice");
 
                 thrust::sequence(thrust::cuda::par_nosync.on(stream), temp_idx.begin(), temp_idx.end(), 0LL);
 
@@ -1810,6 +1833,7 @@ namespace lfs::core::tensor_ops {
                     thrust::raw_pointer_cast(temp_vals.data()),
                     thrust::raw_pointer_cast(temp_idx.data()),
                     outer_size, dim_size, inner_size, outer, inner);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.sort2d_write_slice");
             }
         }
     }
@@ -1964,6 +1988,7 @@ namespace lfs::core::tensor_ops {
                 static_cast<const float*>(tensors[0].data_ptr()),
                 static_cast<const float*>(tensors[1].data_ptr()),
                 num_pixels);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cat_rgb_to_rgba");
             return;
         }
 
@@ -2014,6 +2039,7 @@ namespace lfs::core::tensor_ops {
                 num_tensors,
                 num_rows,
                 row_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cat_last_dim");
         } else {
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
@@ -2024,6 +2050,7 @@ namespace lfs::core::tensor_ops {
                 num_tensors,
                 num_rows,
                 row_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cat_last_dim");
         }
 
         // Return metadata arrays to memory pool (instant, cached for reuse)
@@ -2129,6 +2156,7 @@ namespace lfs::core::tensor_ops {
                 outer_size,
                 inner_size,
                 total_dim_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cat_middle_dim");
         } else {
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
@@ -2140,6 +2168,7 @@ namespace lfs::core::tensor_ops {
                 outer_size,
                 inner_size,
                 total_dim_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.cat_middle_dim");
         }
 
         // Return metadata arrays to memory pool
@@ -2826,6 +2855,7 @@ namespace lfs::core::tensor_ops {
             if (num_blocks <= max_blocks_x) {
                 fill_strided_1d_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
                     data, value, shape[0], strides[0], storage_offset);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.fill_strided_1d");
             } else {
                 dim3 grid(std::min(num_blocks, max_blocks_x),
                           (num_blocks + max_blocks_x - 1) / max_blocks_x);
@@ -2844,6 +2874,7 @@ namespace lfs::core::tensor_ops {
             if (num_blocks <= max_blocks_x) {
                 fill_strided_2d_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
                     data, value, storage_offset, strides[0], n);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.fill_strided_2d");
             } else {
                 dim3 grid(std::min(num_blocks, max_blocks_x),
                           (num_blocks + max_blocks_x - 1) / max_blocks_x);
@@ -2865,6 +2896,7 @@ namespace lfs::core::tensor_ops {
                     shape[0], shape[1], shape[2],
                     strides[0], strides[1], strides[2],
                     storage_offset, n);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.fill_strided_3d");
             } else {
                 dim3 grid(std::min(num_blocks, max_blocks_x),
                           (num_blocks + max_blocks_x - 1) / max_blocks_x);
@@ -2889,6 +2921,7 @@ namespace lfs::core::tensor_ops {
                     shape[0], shape[1], shape[2], shape[3],
                     strides[0], strides[1], strides[2], strides[3],
                     storage_offset, n);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.fill_strided_4d");
             } else {
                 dim3 grid(std::min(num_blocks, max_blocks_x),
                           (num_blocks + max_blocks_x - 1) / max_blocks_x);
@@ -2916,6 +2949,7 @@ namespace lfs::core::tensor_ops {
             if (num_blocks <= max_blocks_x) {
                 fill_strided_immediate_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
                     data, value, meta, storage_offset, ndim, n);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.fill_strided_immediate");
             } else {
                 dim3 grid(std::min(num_blocks, max_blocks_x),
                           (num_blocks + max_blocks_x - 1) / max_blocks_x);
@@ -2943,6 +2977,7 @@ namespace lfs::core::tensor_ops {
         if (num_blocks <= max_blocks_x) {
             fill_strided_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
                 data, value, d_shape, d_strides, storage_offset, ndim, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.fill_strided_generic");
         } else {
             dim3 grid(std::min(num_blocks, max_blocks_x),
                       (num_blocks + max_blocks_x - 1) / max_blocks_x);
@@ -3096,9 +3131,11 @@ namespace lfs::core::tensor_ops {
                 const size_t n_vec4 = (n + 3) / 4;
                 const int num_blocks = std::min(static_cast<int>((n_vec4 + BLOCK_SIZE - 1) / BLOCK_SIZE), MAX_BLOCKS);
                 check_special_value_kernel_vec4<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, n, d_result, check_nan);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.check_special_value_vec4");
             } else {
                 const int num_blocks = std::min(static_cast<int>((n + BLOCK_SIZE - 1) / BLOCK_SIZE), MAX_BLOCKS);
                 check_special_value_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, n, d_result, check_nan);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.check_special_value_scalar");
             }
 
             // Copy result back using pinned memory (very fast!)

@@ -82,6 +82,8 @@ set(TEST_FILES
     test_cuda_error.cpp
     test_cuda_error_typed.cpp
     test_cuda_launch_check.cpp
+    test_tensor_launch_check.cpp
+    test_selection_ops.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
@@ -696,6 +698,27 @@ if(WIN32)
     endforeach()
 endif()
 
+# Standalone tensor launch-overhead bench (Phase 6B-2 P2 §9 pin).
+# Built with the test target; NOT registered with ctest; not part of any
+# commit list. Depends only on the public tensor API.
+add_executable(bench_tensor_launch_overhead
+    bench_tensor_launch_overhead.cpp
+)
+set_target_properties(bench_tensor_launch_overhead PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(bench_tensor_launch_overhead PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(bench_tensor_launch_overhead PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+
 # Status messages
 list(LENGTH TEST_FILES TEST_COUNT)
 
@@ -704,3 +727,4 @@ message(STATUS "  Unit tests: ${TEST_COUNT} files -> lichtfeld_tests")
 message(STATUS "  Build tests: ninja lichtfeld_tests")
 message(STATUS "  Run tests: ninja run_tests")
 message(STATUS "  Run full tests: ninja run_full_tests")
+message(STATUS "  Bench (not ctest): bench_tensor_launch_overhead")
