@@ -165,6 +165,19 @@ def mask_source(text: str) -> str:
 
         if text[index] in {'"', "'"}:
             quote = text[index]
+            # C++14 digit separators (e.g. 100'000, 0xAB'CD): a quote directly
+            # flanked by hex/decimal digits is not a character literal — skip it
+            # instead of opening a literal span. Separators are adjacent by
+            # definition, so only the immediate neighbors matter.
+            if (
+                quote == "'"
+                and index >= 1
+                and index + 1 < length
+                and text[index - 1] in "0123456789abcdefABCDEF"
+                and text[index + 1] in "0123456789abcdefABCDEF"
+            ):
+                index += 1
+                continue
             end = index + 1
             while end < length:
                 if text[end] == "\\":

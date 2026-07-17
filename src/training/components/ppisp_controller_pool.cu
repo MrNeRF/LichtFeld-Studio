@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
@@ -53,6 +54,7 @@ namespace lfs::training {
                                   cudaStream_t stream) {
             const int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             relu_backward_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(grad, input, out, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ppisp_controller_pool.relu_backward");
         }
 
         __global__ void outer_product_accumulate_kernel(const float* a, const float* b, float* c,
@@ -69,6 +71,7 @@ namespace lfs::training {
             const dim3 block(TILE_SIZE, TILE_SIZE);
             const dim3 grid((n + TILE_SIZE - 1) / TILE_SIZE, (m + TILE_SIZE - 1) / TILE_SIZE);
             outer_product_accumulate_kernel<<<grid, block, 0, stream>>>(a, b, c, m, n, scale);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ppisp_controller_pool.outer_product");
         }
 
         __global__ void bias_grad_accumulate_kernel(const float* grad, float* bias_grad, const int n) {
@@ -81,6 +84,7 @@ namespace lfs::training {
         void launch_bias_grad_accumulate(const float* grad, float* bias_grad, const int n, cudaStream_t stream) {
             const int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             bias_grad_accumulate_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(grad, bias_grad, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ppisp_controller_pool.bias_grad");
         }
 
     } // namespace

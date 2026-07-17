@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/tensor/internal/tensor_generic_ops.cuh"
 #include "lfs/cuda_scratch.hpp"
 #include "mrnf_kernels.hpp"
@@ -103,6 +104,7 @@ namespace lfs::training::mrnf_strategy {
             means, raw_opacities, vis_count,
             frozen_mask, frozen_mask_size,
             lr_mean, noise_weight, median_scale, N, seed);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.noise_injection");
     }
 
     __global__ void mrnf_decay_kernel(
@@ -155,6 +157,7 @@ namespace lfs::training::mrnf_strategy {
         mrnf_decay_kernel<<<blocks, threads, 0, s>>>(
             raw_opacities, log_scales, frozen_mask, frozen_mask_size,
             opacity_decay, scale_decay, train_t, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.decay");
     }
 
     __global__ void elementwise_add_inplace_kernel(
@@ -177,6 +180,7 @@ namespace lfs::training::mrnf_strategy {
         const int blocks = static_cast<int>((N + threads - 1) / threads);
         cudaStream_t s = resolve_stream(stream);
         elementwise_add_inplace_kernel<<<blocks, threads, 0, s>>>(a, b, N);
+        LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.elementwise_add");
     }
 
     __global__ void extract_axis_kernel(
@@ -376,8 +380,10 @@ namespace lfs::training::mrnf_strategy {
             });
             gumbel_key_for_indices_kernel<<<blocks, threads, 0, s>>>(
                 weights, d_indices, d_keys, sort_count, seed);
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gumbel_keys_indices");
         } else {
             gumbel_key_kernel<<<blocks, threads, 0, s>>>(weights, d_keys, sort_count, seed);
+            LFS_CUDA_LAUNCH_CHECK(s, "training.mrnf.gumbel_keys");
             auto indices_ptr = thrust::device_pointer_cast(d_indices);
             lfs::core::tensor_ops::run_with_thrust_policy(s, [&](auto policy) {
                 thrust::sequence(policy, indices_ptr, indices_ptr + static_cast<std::ptrdiff_t>(sort_count));

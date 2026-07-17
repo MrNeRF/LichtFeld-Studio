@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "grad_alpha.hpp"
 #include <cstdint>
 
@@ -152,6 +153,7 @@ namespace lfs::training::kernels {
         if (is_chw_layout) {
             fused_grad_alpha_chw_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
                 grad_image, bg_color, grad_alpha, H, W);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.fused_chw");
         } else {
             bool is_aligned = (reinterpret_cast<uintptr_t>(grad_image) % 16 == 0) &&
                               (reinterpret_cast<uintptr_t>(bg_color) % 16 == 0);
@@ -162,9 +164,11 @@ namespace lfs::training::kernels {
                     reinterpret_cast<const float3*>(bg_color),
                     grad_alpha,
                     H, W);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.fused_hwc_vec");
             } else {
                 fused_grad_alpha_hwc_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
                     grad_image, bg_color, grad_alpha, H, W);
+                LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.fused_hwc");
             }
         }
     }
@@ -201,6 +205,7 @@ namespace lfs::training::kernels {
 
         fused_grad_alpha_with_image_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             grad_image, bg_image, grad_alpha, H, W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.fused_with_image");
     }
 
     void launch_fused_background_blend(
@@ -215,6 +220,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(total);
         fused_background_compose_kernel<false, false><<<blocks, kThreadsPerBlock, 0, stream>>>(
             image, alpha, bg_color, output, H, W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.bg_blend");
     }
 
     void launch_fused_background_blend_with_image(
@@ -229,6 +235,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(total);
         fused_background_compose_kernel<true, false><<<blocks, kThreadsPerBlock, 0, stream>>>(
             image, alpha, bg_image, output, H, W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.bg_blend_image");
     }
 
     void launch_fused_background_unblend(
@@ -242,6 +249,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(total);
         fused_background_compose_kernel<false, true><<<blocks, kThreadsPerBlock, 0, stream>>>(
             image, alpha, bg_color, image, H, W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.bg_unblend");
     }
 
     void launch_fused_background_unblend_with_image(
@@ -255,6 +263,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(total);
         fused_background_compose_kernel<true, true><<<blocks, kThreadsPerBlock, 0, stream>>>(
             image, alpha, bg_image, image, H, W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.bg_unblend_image");
     }
 
     // ==================== Sigmoid Backward ====================
@@ -281,6 +290,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(N);
         sigmoid_backward_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             v_opacities, sigmoid, N);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.sigmoid_bwd");
     }
 
     // ==================== Exp Backward ====================
@@ -307,6 +317,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(total);
         exp_backward_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             v_scales, scales, N);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.exp_bwd");
     }
 
     // ==================== Quaternion Normalize Backward ====================
@@ -373,6 +384,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(N);
         quat_normalize_backward_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             v_quats, quats_normalized, quats_raw, N);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.quat_normalize_bwd");
     }
 
     // ==================== Gradient Accumulation ====================
@@ -397,6 +409,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(n_elements);
         grad_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             dst, src, n_elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.grad_accumulate");
     }
 
     // Accumulate with unsqueeze: src [N] -> dst [N, 1]
@@ -458,6 +471,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(N);
         grad_accumulate_sh_swizzled_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             dst_sh0, dst_shN, src, N, K_src, shN_layout_rest);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.grad_accumulate_sh");
     }
 
     // ==================== Gradient Norm Accumulate ====================
@@ -492,6 +506,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(N);
         grad_norm_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             densification_info, grad_means, N);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.grad_norm_accumulate");
     }
 
     // ==================== CHW to HWC Permute ====================
@@ -525,6 +540,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(total);
         permute_chw_to_hwc_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             src, dst, C, H, W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.permute_chw_hwc");
     }
 
     // ==================== HWC to CHW Permute ====================
@@ -556,6 +572,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(total);
         permute_hwc_to_chw_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             src, dst, C, H, W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.permute_hwc_chw");
     }
 
     // ==================== 1HW to HW Squeeze ====================
@@ -637,6 +654,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(total);
         bilinear_resize_chw_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             src, dst, C, src_H, src_W, dst_H, dst_W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.bilinear_resize_chw");
     }
 
     __device__ __forceinline__ uint32_t pcg_hash(uint32_t v) {
@@ -674,6 +692,7 @@ namespace lfs::training::kernels {
         const unsigned int blocks = num_blocks_1d(HW);
         random_background_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             output, HW, static_cast<uint32_t>(seed));
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.grad_alpha.random_background");
     }
 
 } // namespace lfs::training::kernels

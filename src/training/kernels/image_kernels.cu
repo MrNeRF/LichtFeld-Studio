@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "image_kernels.hpp"
 
 #include "cuda.h"
@@ -186,6 +187,7 @@ namespace lfs::training::kernels {
 
         fused_canny_edge_filter_chw_kernel<InputT><<<gridDim, blockDim, 0, stream>>>(
             d_input_chw, d_output_hw, height, width);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.image.canny_edge_chw");
     }
 
     void launch_fused_canny_edge_filter_chw(
@@ -222,5 +224,6 @@ namespace lfs::training::kernels {
         constexpr int block_size = 256;
         const int grid_size = static_cast<int>(std::min<std::size_t>((n + block_size - 1) / block_size, 4096));
         normalize_by_device_scalar_kernel<<<grid_size, block_size, 0, stream>>>(d_data, n, d_scalar, skip_below);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.image.normalize_by_scalar");
     }
 } // namespace lfs::training::kernels

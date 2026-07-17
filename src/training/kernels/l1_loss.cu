@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/kernels/l1_loss.cuh"
 #include <type_traits>
@@ -109,11 +110,13 @@ namespace lfs::training::kernels {
         // Launch fused kernel
         fused_l1_kernel<TargetT><<<num_blocks, block_size, 0, stream>>>(
             img1, img2, grad_out, temp_buffer, N, grad_scale);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.l1.fused");
 
         // Launch final reduction (normalize by N for mean)
         float norm_factor = 1.0f / static_cast<float>(N);
         final_reduce_kernel<<<1, block_size, 0, stream>>>(
             temp_buffer, loss_out, num_blocks, norm_factor);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.l1.final_reduce");
     }
 
     void launch_fused_l1_loss(

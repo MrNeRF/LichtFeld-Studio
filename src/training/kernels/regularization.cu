@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/kernels/regularization.cuh"
 
@@ -97,10 +98,12 @@ namespace lfs::training::kernels {
         // Launch fused kernel
         fused_scale_regularization_kernel<<<num_blocks, block_size, 0, stream>>>(
             params, param_grads, temp_buffer, n, grad_scale);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.regularization.scale");
 
         // Launch final reduction
         final_scale_reduce_kernel<<<1, block_size, 0, stream>>>(
             temp_buffer, loss_out, num_blocks, weight, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.regularization.scale_reduce");
     }
 
     // =============================================================================
@@ -191,10 +194,12 @@ namespace lfs::training::kernels {
         // Launch fused kernel
         fused_opacity_regularization_kernel<<<num_blocks, block_size, 0, stream>>>(
             params, param_grads, temp_buffer, n, grad_scale);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.regularization.opacity");
 
         // Launch final reduction
         final_opacity_reduce_kernel<<<1, block_size, 0, stream>>>(
             temp_buffer, loss_out, num_blocks, weight, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.regularization.opacity_reduce");
     }
 
 } // namespace lfs::training::kernels

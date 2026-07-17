@@ -277,6 +277,20 @@ class ErrorDebtCensusTests(unittest.TestCase):
         )
         self.assert_rule_hits("unchecked-kernel-launch", [])
 
+    def test_unchecked_kernel_launch_counts_after_digit_separator(self) -> None:
+        """C++14 digit separators must not blank the rest of the TU via mask_source."""
+        self.write(
+            "training/digit_sep.cu",
+            "int x = 100'000;\n"
+            "void launch() {\n"
+            "  kernel<<<grid, block>>>(input, output);\n"
+            "}\n",
+        )
+        self.assert_rule_hits(
+            "unchecked-kernel-launch",
+            [("src/training/digit_sep.cu", 3, "training")],
+        )
+
     def test_result_in_cu_detects_each_token_inside_tests_path(self) -> None:
         self.write(
             "tests/cuda/result_leak.cu",

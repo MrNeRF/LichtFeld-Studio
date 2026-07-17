@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "lfs/core/memory_ops.cuh"
 #include "lfs/kernels/bilateral_grid.cuh"
 #include <cuda_runtime.h>
@@ -92,6 +93,7 @@ namespace lfs::training::kernels {
         const int blocks = (h * w + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bilateral_grid_slice_forward_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
             grid, rgb, output, L, H, W, h, w);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_forward");
     }
 
     // CHW layout forward kernel
@@ -172,6 +174,7 @@ namespace lfs::training::kernels {
         const int blocks = (h * w + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bilateral_grid_slice_forward_chw_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
             grid, rgb, output, L, H, W, h, w);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_forward_chw");
     }
 
 } // namespace lfs::training::kernels
