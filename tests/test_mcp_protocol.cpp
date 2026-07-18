@@ -12,6 +12,7 @@
 
 #include <httplib/httplib.h>
 
+#include <cstdint>
 #include <stdexcept>
 
 namespace lfs::mcp {
@@ -356,16 +357,195 @@ namespace lfs::mcp {
         const auto res = client.Post("/mcp", call_req.dump(), "application/json");
         ASSERT_TRUE(res);
 
+        // A thrown tool handler is now a tool-execution error, not a protocol
+        // error: the registry catches it and returns a successful JSON-RPC
+        // response whose tool result carries a stable envelope. The two
+        // load-bearing invariants are preserved: the id is echoed and the
+        // thrown detail appears nowhere in the body.
         EXPECT_EQ(res->body.find(leaked_detail), std::string::npos);
 
         const auto body = json::parse(res->body);
         ASSERT_TRUE(body.contains("id"));
         EXPECT_EQ(body["id"], "req-42");
-        ASSERT_TRUE(body.contains("error"));
-        EXPECT_EQ(body["error"]["code"], JsonRpcError::INTERNAL_ERROR);
-        EXPECT_EQ(body["error"]["message"].get<std::string>().find(leaked_detail), std::string::npos);
+        ASSERT_TRUE(body.contains("result"));
+        const auto& result = body["result"];
+        EXPECT_TRUE(result["isError"].get<bool>());
+        ASSERT_TRUE(result["structuredContent"].contains("error"));
+        EXPECT_EQ(result["structuredContent"]["error"]["code"], "Internal");
 
         server.stop();
+    }
+
+    TEST(McpHttpServerTest, HandlerThrowOutsideToolBecomesInternalErrorWithEnvelopeData) {
+        static constexpr const char* prefix = "lichtfeld://throwtest/";
+        static constexpr const char* leaked_detail = "resource sensitive detail";
+        ScopedResourcePrefixRegistration cleanup(prefix);
+
+        ResourceRegistry::instance().register_resource_prefix(
+            prefix,
+            [](const std::string&) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                throw std::runtime_error(leaked_detail);
+            });
+
+        McpHttpServer server;
+        ASSERT_TRUE(server.start(47693));
+
+        httplib::Client client("127.0.0.1", 47693);
+
+        const json init_req{
+            {"jsonrpc", "2.0"},
+            {"id", 1},
+            {"method", "initialize"},
+            {"params", json::object()}};
+        ASSERT_TRUE(client.Post("/mcp", init_req.dump(), "application/json"));
+
+        const json read_req{
+            {"jsonrpc", "2.0"},
+            {"id", "res-7"},
+            {"method", "resources/read"},
+            {"params", json{{"uri", "lichtfeld://throwtest/item"}}}};
+        const auto res = client.Post("/mcp", read_req.dump(), "application/json");
+        ASSERT_TRUE(res);
+
+        EXPECT_EQ(res->body.find(leaked_detail), std::string::npos);
+
+        const auto body = json::parse(res->body);
+        EXPECT_EQ(body["id"], "res-7");
+        ASSERT_TRUE(body.contains("error"));
+        EXPECT_EQ(body["error"]["code"], JsonRpcError::INTERNAL_ERROR);
+        ASSERT_TRUE(body["error"].contains("data"));
+        EXPECT_TRUE(body["error"]["data"].contains("code"));
+        EXPECT_EQ(body["error"]["data"]["domain"], "MCP");
+
+        server.stop();
+    }
+
+    TEST(McpProtocolTest, LegacyStringErrorBecomesEnvelopeWithCompatMirror) {
+        static constexpr const char* tool_name = "test.legacy_string_error";
+        ScopedToolRegistration cleanup(tool_name);
+
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Legacy string error handler",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "query"}},
+            [](const json&) -> json {
+                return json{{"error", "No scene loaded"}, {"detail_field", 7}};
+            });
+
+        McpServer server;
+        ASSERT_TRUE(server.handle_request(JsonRpcRequest{
+                                              .id = int64_t{1},
+                                              .method = "initialize",
+                                              .params = json::object()})
+                        .result.has_value());
+
+        const auto response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{2},
+            .method = "tools/call",
+            .params = json{{"name", tool_name}, {"arguments", json::object()}}});
+
+        ASSERT_TRUE(response.result.has_value());
+        const auto& structured = (*response.result)["structuredContent"];
+        EXPECT_TRUE((*response.result)["isError"].get<bool>());
+        EXPECT_EQ(structured["error"]["code"], "FailedPrecondition");
+        EXPECT_EQ(structured["error"]["domain"], "MCP");
+        EXPECT_EQ(structured["error"]["message"], "No scene loaded");
+        EXPECT_FALSE(structured["error"]["retryable"].get<bool>());
+        EXPECT_EQ(structured["error_message"], "No scene loaded");
+        EXPECT_EQ(structured["detail_field"], 7);
+    }
+
+    TEST(McpProtocolTest, ToolNotFoundAndMissingParameterYieldTypedEnvelopes) {
+        const auto not_found =
+            ToolRegistry::instance().call_tool("does.not.exist", json::object());
+        ASSERT_TRUE(not_found.contains("error"));
+        EXPECT_EQ(not_found["error"]["code"], "NotFound");
+        EXPECT_EQ(not_found["error"]["details"]["parameter"], "does.not.exist");
+        EXPECT_EQ(not_found["error_message"], "Tool not found: does.not.exist");
+
+        static constexpr const char* tool_name = "test.requires_param";
+        ScopedToolRegistration cleanup(tool_name);
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Requires a parameter",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {"value"}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "query"}},
+            [](const json&) -> json { return json{{"success", true}}; });
+
+        const auto missing = ToolRegistry::instance().call_tool(tool_name, json::object());
+        ASSERT_TRUE(missing.contains("error"));
+        EXPECT_EQ(missing["error"]["code"], "InvalidArgument");
+        EXPECT_EQ(missing["error"]["details"]["parameter"], "value");
+        EXPECT_EQ(missing["error_message"], "Missing required parameter: value");
+    }
+
+    TEST(McpProtocolTest, TypedEnvelopeHandlerResultIsPassedThroughWithMirror) {
+        static constexpr const char* tool_name = "test.typed_envelope";
+        ScopedToolRegistration cleanup(tool_name);
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Emits a typed envelope directly",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "query"}},
+            [](const json&) -> json {
+                return json{{"error", json{
+                                          {"code", "NotFound"},
+                                          {"domain", "IO"},
+                                          {"message", "Dataset was not found"},
+                                          {"retryable", false},
+                                          {"operation_id", 0}}}};
+            });
+
+        const auto result = ToolRegistry::instance().call_tool(tool_name, json::object());
+        ASSERT_TRUE(result["error"].is_object());
+        EXPECT_EQ(result["error"]["code"], "NotFound");
+        EXPECT_EQ(result["error"]["domain"], "IO");
+        EXPECT_EQ(result["error_message"], "Dataset was not found");
+    }
+
+    TEST(McpProtocolTest, ResourceUnknownUriYieldsNotFoundEnvelopeData) {
+        McpServer server;
+        ASSERT_TRUE(server.handle_request(JsonRpcRequest{
+                                              .id = int64_t{1},
+                                              .method = "initialize",
+                                              .params = json::object()})
+                        .result.has_value());
+
+        const auto response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{2},
+            .method = "resources/read",
+            .params = json{{"uri", "lichtfeld://nonexistent/thing"}}});
+
+        ASSERT_TRUE(response.error.has_value());
+        EXPECT_EQ(response.error->code, JsonRpcError::INVALID_PARAMS);
+        ASSERT_TRUE(response.error->data.has_value());
+        EXPECT_EQ((*response.error->data)["code"], "NotFound");
+        EXPECT_EQ((*response.error->data)["domain"], "MCP");
+    }
+
+    TEST(McpProtocolTest, RegistryCaughtHandlerFailureCarriesOperationId) {
+        static constexpr const char* tool_name = "test.correlated_throw";
+        ScopedToolRegistration cleanup(tool_name);
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Throws for correlation testing",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "command"}},
+            [](const json&) -> json { throw std::runtime_error("boom"); });
+
+        const lfs::OperationId operation_id = lfs::OperationId::generate();
+        const auto result =
+            ToolRegistry::instance().call_tool(tool_name, json::object(), operation_id);
+
+        ASSERT_TRUE(result.contains("error"));
+        EXPECT_NE(operation_id.value(), 0u);
+        EXPECT_EQ(result["error"]["operation_id"].get<std::uint64_t>(), operation_id.value());
+        EXPECT_EQ(result["error"]["code"], "Internal");
     }
 
 } // namespace lfs::mcp

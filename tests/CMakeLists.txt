@@ -240,6 +240,7 @@ set(TEST_FILES
     test_error_bus.cpp
     test_run_guarded.cpp
     test_tcp_responder.cpp
+    test_error_envelope.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 # Phase 7A: bounded-wait machine + SubmissionState + QW-6 (GPU-free).

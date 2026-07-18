@@ -612,6 +612,7 @@ namespace lfs {
         ErrorDomain domain;
         std::string operation;
         core::SourceSite source;
+        OperationId operation_id{};
     };
 
     // Shared out-of-line implementation for from_legacy_expected<T> below;

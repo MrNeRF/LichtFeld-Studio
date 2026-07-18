@@ -422,6 +422,7 @@ namespace lfs::mcp {
         auto trainer = trainer_;
         training_active_.store(true, std::memory_order_release);
         try {
+            last_training_error_.clear();
             training_thread_ = std::make_unique<std::jthread>([this, trainer](std::stop_token stop) {
                 lfs::core::run_guarded<void>(
                     lfs::core::TaskContext{
@@ -435,6 +436,7 @@ namespace lfs::mcp {
                     },
                     [this](lfs::Result<void>&& result) {
                         if (!result) {
+                            last_training_error_.set(result.error());
                             lfs::core::ErrorReporter::get().report(result.error(), lfs::core::ReportChannel::OwnerLog);
                         }
                         training_active_.store(false, std::memory_order_release);
@@ -442,7 +444,15 @@ namespace lfs::mcp {
             });
         } catch (const std::exception& e) {
             training_active_.store(false, std::memory_order_release);
-            return std::unexpected(std::string("Failed to start training thread: ") + e.what());
+            std::string message = std::string("Failed to start training thread: ") + e.what();
+            last_training_error_.set(lfs::make_legacy_error(message, lfs::LegacyErrorContext{
+                                                                         .code = lfs::ErrorCode::FailedPrecondition,
+                                                                         .domain = lfs::ErrorDomain::Training,
+                                                                         .operation = "mcp.training.start",
+                                                                         .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                         .operation_id = lfs::OperationId::generate(),
+                                                                     }));
+            return std::unexpected(std::move(message));
         }
 
         LOG_INFO("MCP: Training started");
@@ -549,6 +559,10 @@ namespace lfs::mcp {
                 if (!scene)
                     return std::unexpected("No scene loaded");
                 return count_visible_model_gaussians(*scene);
+            },
+            .last_training_error =
+                []() -> std::optional<lfs::Error> {
+                return TrainingContext::instance().last_training_error();
             }});
 
         auto& registry = ToolRegistry::instance();

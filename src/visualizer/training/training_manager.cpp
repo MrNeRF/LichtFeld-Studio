@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training/training_manager.hpp"
+#include "core/error_envelope.hpp"
 #include "core/error_reporter.hpp"
 #include "core/events.hpp"
 #include "core/guarded_task.hpp"
@@ -155,6 +156,7 @@ namespace lfs::vis {
                 }
                 clearEvaluationMetrics();
                 last_error_.clear();
+                last_training_error_.clear();
             }
         });
     }
@@ -296,14 +298,23 @@ namespace lfs::vis {
         if (auto error = trainer_->getParams().validate(); !error.empty()) {
             LOG_ERROR("Cannot start training: {}", error);
             last_error_ = error;
+            lfs::Error typed = lfs::make_legacy_error(error, lfs::LegacyErrorContext{
+                                                                 .code = lfs::ErrorCode::InvalidArgument,
+                                                                 .domain = lfs::ErrorDomain::Training,
+                                                                 .operation = "training.start",
+                                                                 .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                 .operation_id = lfs::OperationId::generate(),
+                                                             });
             state::TrainingCompleted{
                 .iteration = 0,
                 .final_loss = 0.0f,
                 .elapsed_seconds = 0.0f,
                 .success = false,
                 .user_stopped = false,
-                .error = last_error_}
+                .error = last_error_,
+                .error_info = core::to_wire_error(typed)}
                 .emit();
+            last_training_error_.set(std::move(typed));
             if (!state_machine_.transitionToFinished(FinishReason::Error)) {
                 LOG_WARN("Failed to transition to Finished(Error)");
             }
@@ -325,14 +336,23 @@ namespace lfs::vis {
                         !result) {
                         LOG_ERROR("Failed to migrate initialized training model: {}", result.error());
                         last_error_ = result.error();
+                        lfs::Error typed = lfs::make_legacy_error(result.error(), lfs::LegacyErrorContext{
+                                                                                      .code = lfs::ErrorCode::FailedPrecondition,
+                                                                                      .domain = lfs::ErrorDomain::Training,
+                                                                                      .operation = "training.start",
+                                                                                      .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                                      .operation_id = lfs::OperationId::generate(),
+                                                                                  });
                         state::TrainingCompleted{
                             .iteration = getCurrentIteration(),
                             .final_loss = 0.0f,
                             .elapsed_seconds = 0.0f,
                             .success = false,
                             .user_stopped = false,
-                            .error = last_error_}
+                            .error = last_error_,
+                            .error_info = core::to_wire_error(typed)}
                             .emit();
+                        last_training_error_.set(std::move(typed));
                         if (!state_machine_.transitionToFinished(FinishReason::Error)) {
                             LOG_WARN("Failed to transition to Finished(Error)");
                         }
@@ -353,6 +373,14 @@ namespace lfs::vis {
                     LOG_ERROR("Failed to initialize model: {}", result.error());
                     last_error_ = result.error();
 
+                    lfs::Error typed = lfs::make_legacy_error(last_error_, lfs::LegacyErrorContext{
+                                                                               .code = lfs::ErrorCode::FailedPrecondition,
+                                                                               .domain = lfs::ErrorDomain::Training,
+                                                                               .operation = "training.start",
+                                                                               .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                               .operation_id = lfs::OperationId::generate(),
+                                                                           });
+
                     std::string error_msg = result.error();
                     if (auto pos = error_msg.find("CUDA out of memory"); pos != std::string::npos) {
                         error_msg = error_msg.substr(pos);
@@ -363,8 +391,10 @@ namespace lfs::vis {
                         .elapsed_seconds = 0.0f,
                         .success = false,
                         .user_stopped = false,
-                        .error = error_msg}
+                        .error = error_msg,
+                        .error_info = core::to_wire_error(typed)}
                         .emit();
+                    last_training_error_.set(std::move(typed));
 
                     if (!state_machine_.transitionToFinished(FinishReason::Error)) {
                         LOG_WARN("Failed to transition to Finished(Error)");
@@ -378,6 +408,14 @@ namespace lfs::vis {
                 LOG_ERROR("Failed to initialize trainer: {}", result.error());
                 last_error_ = result.error();
 
+                lfs::Error typed = lfs::make_legacy_error(last_error_, lfs::LegacyErrorContext{
+                                                                           .code = lfs::ErrorCode::FailedPrecondition,
+                                                                           .domain = lfs::ErrorDomain::Training,
+                                                                           .operation = "training.start",
+                                                                           .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                           .operation_id = lfs::OperationId::generate(),
+                                                                       });
+
                 std::string error_msg = result.error();
                 if (auto pos = error_msg.find("CUDA out of memory"); pos != std::string::npos) {
                     error_msg = error_msg.substr(pos);
@@ -388,8 +426,10 @@ namespace lfs::vis {
                     .elapsed_seconds = 0.0f,
                     .success = false,
                     .user_stopped = false,
-                    .error = error_msg}
+                    .error = error_msg,
+                    .error_info = core::to_wire_error(typed)}
                     .emit();
+                last_training_error_.set(std::move(typed));
 
                 if (!state_machine_.transitionToFinished(FinishReason::Error)) {
                     LOG_WARN("Failed to transition to Finished(Error)");
@@ -703,6 +743,7 @@ namespace lfs::vis {
         }
         completion_pending_.store(true, std::memory_order_release);
 
+        last_training_error_.clear();
         auto worker = std::make_unique<std::jthread>(
             [this](const std::stop_token stop_token) {
                 trainingThreadFunc(stop_token);
@@ -772,7 +813,10 @@ namespace lfs::vis {
                 .success = completion.success,
                 .user_stopped = completion.user_stopped,
                 .error = std::move(completion.error),
-                .resource_exhausted = completion.resource_exhausted}
+                .resource_exhausted = completion.resource_exhausted,
+                .error_info = completion.typed_error
+                                  ? std::optional(core::to_wire_error(*completion.typed_error))
+                                  : std::nullopt}
                 .emit();
         };
 
@@ -995,7 +1039,7 @@ namespace lfs::vis {
                     lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
                     handleTrainingComplete(
                         false, message,
-                        error.code() == lfs::ErrorCode::ResourceExhausted);
+                        error.code() == lfs::ErrorCode::ResourceExhausted, error);
                 }
             });
 
@@ -1003,10 +1047,14 @@ namespace lfs::vis {
     }
 
     void TrainerManager::handleTrainingComplete(const bool success, const std::string& error,
-                                                const bool resource_exhausted) {
+                                                const bool resource_exhausted,
+                                                const std::optional<lfs::Error>& typed_error) {
         if (!error.empty()) {
             last_error_ = error;
             LOG_ERROR("Training error: {}", error);
+        }
+        if (typed_error) {
+            last_training_error_.set(*typed_error);
         }
 
         const float elapsed = getElapsedSeconds();
@@ -1034,7 +1082,8 @@ namespace lfs::vis {
                 .user_stopped = user_stopped,
                 .resource_exhausted = resource_exhausted,
                 .reason = reason,
-                .error = error.empty() ? std::nullopt : std::optional(error)};
+                .error = error.empty() ? std::nullopt : std::optional(error),
+                .typed_error = typed_error};
         }
     }
 

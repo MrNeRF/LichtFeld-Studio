@@ -456,7 +456,7 @@ namespace lfs {
             .domain = context.domain,
             .severity = Severity::Error,
             .retryability = Retryability::NotRetryable,
-            .operation_id = OperationId{},
+            .operation_id = context.operation_id,
             .user_message = legacy_message,
             .detail = std::move(legacy_message),
             .detection = context.source,

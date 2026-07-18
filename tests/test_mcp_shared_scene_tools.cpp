@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/error.hpp"
 #include "core/path_utils.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "mcp/shared_scene_tools.hpp"
@@ -15,12 +16,13 @@ namespace {
 
     using json = nlohmann::json;
 
-    constexpr std::array<const char*, 5> kSharedSceneToolNames = {
+    constexpr std::array<const char*, 6> kSharedSceneToolNames = {
         "scene.load_dataset",
         "scene.load_checkpoint",
         "scene.save_checkpoint",
         "scene.save_ply",
         "training.start",
+        "training.get_last_error",
     };
 
     class ScopedSharedSceneToolRegistration {
@@ -129,4 +131,41 @@ TEST(McpSharedSceneToolsTest, LoadDatasetHonorsExplicitOutputPathAndCanonicalStr
               std::string(lfs::core::param::kStrategyIGSPlus));
     EXPECT_EQ(result["output_path"].get<std::string>(), output_path.string());
     EXPECT_EQ(result["strategy"].get<std::string>(), std::string(lfs::core::param::kStrategyIGSPlus));
+}
+
+TEST(McpSharedSceneToolsTest, GetLastErrorReturnsEnvelopeWhenLatched) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend fake;
+    auto backend = fake.backend();
+    backend.last_training_error = []() -> std::optional<lfs::Error> {
+        return lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::ResourceExhausted,
+            .domain = lfs::ErrorDomain::CUDA,
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+    };
+    lfs::mcp::register_shared_scene_tools(backend);
+
+    const auto result =
+        lfs::mcp::ToolRegistry::instance().call_tool("training.get_last_error", json::object());
+
+    ASSERT_TRUE(result["success"].get<bool>());
+    EXPECT_EQ(result["last_error"]["code"], "ResourceExhausted");
+    EXPECT_EQ(result["last_error"]["domain"], "CUDA");
+    EXPECT_EQ(result["last_error_message"], result["last_error"]["message"]);
+}
+
+TEST(McpSharedSceneToolsTest, GetLastErrorReturnsNullWhenNoFailureLatched) {
+    ScopedSharedSceneToolRegistration cleanup;
+    FakeSharedSceneBackend fake;
+    auto backend = fake.backend();
+    backend.last_training_error = []() -> std::optional<lfs::Error> { return std::nullopt; };
+    lfs::mcp::register_shared_scene_tools(backend);
+
+    const auto result =
+        lfs::mcp::ToolRegistry::instance().call_tool("training.get_last_error", json::object());
+
+    ASSERT_TRUE(result["success"].get<bool>());
+    EXPECT_TRUE(result["last_error"].is_null());
+    EXPECT_TRUE(result["last_error_message"].is_null());
 }

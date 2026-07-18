@@ -4,6 +4,10 @@
 #include "mcp_http_server.hpp"
 #include "mcp_server.hpp"
 
+#include "core/error.hpp"
+#include "core/error_envelope.hpp"
+#include "core/error_reporter.hpp"
+#include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 
 #include <httplib/httplib.h>
@@ -63,11 +67,28 @@ namespace lfs::mcp {
                 return;
             }
 
-            auto rpc_resp = try_or_log("MCP request handler failed", [&] { return mcp_server_->handle_request(*rpc_req); });
-            if (!rpc_resp) {
-                rpc_resp = make_error_response(rpc_req->id, JsonRpcError::INTERNAL_ERROR, "internal error");
-            }
-            res.set_content(serialize_response(*rpc_resp), "application/json");
+            const lfs::OperationId operation_id = lfs::OperationId::generate();
+            JsonRpcResponse rpc_resp;
+            lfs::core::run_guarded<JsonRpcResponse>(
+                lfs::core::TaskContext{
+                    .name = "mcp.request",
+                    .domain = lfs::ErrorDomain::MCP,
+                    .operation_id = operation_id,
+                    .site = LFS_SOURCE_SITE_CURRENT(),
+                },
+                [this, &rpc_req, operation_id]() -> lfs::Result<JsonRpcResponse> {
+                    return mcp_server_->handle_request(*rpc_req, operation_id);
+                },
+                [&rpc_resp, &rpc_req](lfs::Result<JsonRpcResponse>&& result) {
+                    if (result) {
+                        rpc_resp = std::move(result).value();
+                    } else {
+                        rpc_resp = make_error_response(rpc_req->id, JsonRpcError::INTERNAL_ERROR,
+                                                       "internal error",
+                                                       lfs::core::to_wire_envelope(result.error()));
+                    }
+                });
+            res.set_content(serialize_response(rpc_resp), "application/json");
         });
 
         if (!http_server_->bind_to_port("127.0.0.1", port)) {
@@ -77,7 +98,23 @@ namespace lfs::mcp {
 
         listener_thread_ = std::jthread([this, port](std::stop_token /*st*/) {
             LOG_INFO("MCP HTTP server listening on http://127.0.0.1:{}/mcp", port);
-            try_or_log("MCP HTTP server listener thread failed", [this] { http_server_->listen_after_bind(); });
+            lfs::core::run_guarded<void>(
+                lfs::core::TaskContext{
+                    .name = "mcp.http-listener",
+                    .domain = lfs::ErrorDomain::MCP,
+                    .operation_id = lfs::OperationId::generate(),
+                    .site = LFS_SOURCE_SITE_CURRENT(),
+                },
+                [this]() -> lfs::Result<void> {
+                    http_server_->listen_after_bind();
+                    return {};
+                },
+                [](lfs::Result<void>&& result) {
+                    if (!result) {
+                        lfs::core::ErrorReporter::get().report(result.error(),
+                                                               lfs::core::ReportChannel::OwnerLog);
+                    }
+                });
         });
 
         return true;

@@ -1,12 +1,17 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/error_envelope.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/events.hpp"
 #include "tcp_publisher.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -44,4 +49,37 @@ TEST(TcpPublisherTest, ConcurrentEmittersStopAndDrainCleanly) {
         bridge.handler_count(typeid(lfs::core::events::state::TrainingProgress)),
         0u);
     bridge.clear_all();
+}
+
+TEST(TcpPublisherTest, WireErrorSerializesFiveCoreFieldsWithoutDetails) {
+    const lfs::core::WireError wire{
+        .code = "ResourceExhausted",
+        .domain = "CUDA",
+        .message = "Out of GPU memory",
+        .operation_id = 42,
+        .retryable = false};
+
+    const nlohmann::json payload = wire;
+    EXPECT_EQ(payload["code"], "ResourceExhausted");
+    EXPECT_EQ(payload["domain"], "CUDA");
+    EXPECT_EQ(payload["message"], "Out of GPU memory");
+    EXPECT_EQ(payload["operation_id"].get<std::uint64_t>(), 42u);
+    EXPECT_FALSE(payload["retryable"].get<bool>());
+    EXPECT_FALSE(payload.contains("details"));
+}
+
+TEST(TcpPublisherTest, OptionalWireErrorSerializesPresenceAndNull) {
+    const std::optional<lfs::core::WireError> present{lfs::core::WireError{
+        .code = "NotFound",
+        .domain = "TCP",
+        .message = "gone",
+        .operation_id = 1,
+        .retryable = false}};
+    const nlohmann::json present_json = present;
+    ASSERT_TRUE(present_json.is_object());
+    EXPECT_EQ(present_json["code"], "NotFound");
+
+    const std::optional<lfs::core::WireError> absent;
+    const nlohmann::json absent_json = absent;
+    EXPECT_TRUE(absent_json.is_null());
 }

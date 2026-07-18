@@ -172,6 +172,17 @@ class ErrorDebtCensusTests(unittest.TestCase):
         )
         self.assert_rule_hits("empty-catch", [])
 
+    def test_empty_catch_accepts_normalize_current_exception(self) -> None:
+        self.write(
+            "tcp/tcp_responder.cpp",
+            "void run() {\n"
+            "  try { respond(); } catch (...) {\n"
+            "    const lfs::Error error = detail::normalize_current_exception(ctx);\n"
+            "  }\n"
+            "}\n",
+        )
+        self.assert_rule_hits("empty-catch", [])
+
     def test_empty_catch_accepts_legacy_unexpected_return(self) -> None:
         self.write(
             "app/worker.cpp",

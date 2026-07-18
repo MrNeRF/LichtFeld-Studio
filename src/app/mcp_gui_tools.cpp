@@ -1996,6 +1996,11 @@ namespace lfs::app {
                 return post_and_wait(viewer, [viewer]() -> std::expected<int64_t, std::string> {
                     return count_visible_model_gaussians(viewer->getScene());
                 });
+            },
+            .last_training_error =
+                [viewer_impl]() -> std::optional<lfs::Error> {
+                auto* trainer_manager = viewer_impl->getTrainerManager();
+                return trainer_manager ? trainer_manager->lastTrainingError() : std::nullopt;
             }});
 
         registry.register_tool(

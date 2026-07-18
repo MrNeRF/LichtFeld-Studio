@@ -382,6 +382,9 @@ def check_empty_catch(source: ScannedFile) -> list[Hit]:
             # error and report it (ErrorBus/log) — a contained catch, not a swallow.
             or "contain_python_callback" in body
             or "contain_cxx_callback" in body
+            # Phase 10 task-boundary normalization: classifies the active
+            # exception into a typed Error, reported/returned — a contained catch.
+            or "normalize_current_exception" in body
         )
         if not body.strip() or not reviewed:
             hits.append(source.hit(match.start(), "empty-catch"))
