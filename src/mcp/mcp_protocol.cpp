@@ -73,7 +73,7 @@ namespace lfs::mcp {
             j["error"] = err;
         }
 
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string serialize_notification(const std::string& method, const json& params) {
@@ -81,7 +81,7 @@ namespace lfs::mcp {
         j["jsonrpc"] = "2.0";
         j["method"] = method;
         j["params"] = params;
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     json tool_to_json(const McpTool& tool) {

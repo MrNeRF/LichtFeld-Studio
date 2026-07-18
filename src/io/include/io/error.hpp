@@ -255,6 +255,13 @@ namespace lfs::io {
     // can bridge today without waiting for that phase. Header-only: this
     // header must not be included from a CUDA translation unit as a result
     // (core/error.hpp already enforces that with a hard #error if it is).
+    // A deliberately-divergent sibling map lives in src/python/lfs/py_io.cpp
+    // (map_io_code) with different NotFound/InvalidArgument biases and the
+    // `requested_bytes` field-name variant. When adding an ErrorCode, update both.
+    // NOTE: this map's `required_bytes` SmallField key is NOT in the wire
+    // envelope allowlist (core/error_envelope.cpp kAllowlistedFields), so io
+    // byte-counts never reach wire details while python's `requested_bytes`
+    // does; tracked as post-campaign P11-L1.
     constexpr lfs::ErrorCode to_lfs_error_code(const ErrorCode code) noexcept {
         switch (code) {
         case ErrorCode::SUCCESS: return lfs::ErrorCode::Internal; // precondition: caller has a failure

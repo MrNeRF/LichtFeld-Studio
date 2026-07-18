@@ -106,7 +106,7 @@ namespace lfs::tcp {
     }
 
     zmq::message_t TCPServer::toZMQ(const nlohmann::json& data) {
-        auto msg_str = data.dump();
+        auto msg_str = data.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         zmq::message_t req(msg_str.length());
         memcpy(req.data(), msg_str.data(), msg_str.length());
         return req;

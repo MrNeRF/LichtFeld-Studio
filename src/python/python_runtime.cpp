@@ -913,6 +913,26 @@ namespace lfs::python {
             Py_DECREF(traceback_module);
             return message;
         }
+
+        // Name alone is not identity: only asyncio's CancelledError (and the
+        // lichtfeld re-export) mean cancellation. An unrelated user class merely
+        // named CancelledError must stay Internal, not vanish as benign Cancelled.
+        bool is_cancelled_exception(PyObject* type, const std::string& py_type_name) {
+            if (py_type_name != "CancelledError")
+                return false;
+            PyObject* module_attr = type ? PyObject_GetAttrString(type, "__module__") : nullptr;
+            if (!module_attr) {
+                PyErr_Clear();
+                return false;
+            }
+            std::string module;
+            if (const char* text = PyUnicode_AsUTF8(module_attr))
+                module = text;
+            Py_DECREF(module_attr);
+            return module == "asyncio" || module.starts_with("asyncio.") ||
+                   module == "concurrent.futures" || module.starts_with("concurrent.futures.") ||
+                   module == "lichtfeld";
+        }
     } // namespace
 
     lfs::Error error_from_python(lfs::core::SourceSite site, lfs::OperationId op) noexcept {
@@ -983,7 +1003,7 @@ namespace lfs::python {
                 const auto matches = [&](PyObject* exc) {
                     return type && exc && PyErr_GivenExceptionMatches(type, exc);
                 };
-                if (matches(PyExc_KeyboardInterrupt) || py_type_name == "CancelledError") {
+                if (matches(PyExc_KeyboardInterrupt) || is_cancelled_exception(type, py_type_name)) {
                     code = lfs::ErrorCode::Cancelled;
                 } else if (matches(PyExc_MemoryError)) {
                     code = lfs::ErrorCode::ResourceExhausted;

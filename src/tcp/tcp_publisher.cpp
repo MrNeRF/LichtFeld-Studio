@@ -339,6 +339,10 @@ namespace lfs::tcp {
             {"event_type", event_type},
             {"data", data}};
     }
+
+    nlohmann::json PublisherServer::wireMessageFor(const core::events::state::TrainingCompleted& event) {
+        return makeEventMessage(nlohmann::json(event), "TrainingCompleted");
+    }
 } // namespace lfs::tcp
 
 #undef SUBSCRIBE_EVENT

@@ -26,28 +26,9 @@ namespace lfs::python {
             operator bool() const { return obj != nullptr; }
         };
 
-        std::string pyobj_to_string(PyObject* obj) {
-            if (!obj)
-                return "";
-            PyObjectGuard str(PyObject_Str(obj));
-            if (!str)
-                return "";
-            const char* c_str = PyUnicode_AsUTF8(str.get());
-            return c_str ? c_str : "";
-        }
-
         void print_python_error() {
             if (PyErr_Occurred()) {
-                PyObject *type, *value, *traceback;
-                PyErr_Fetch(&type, &value, &traceback);
-                PyErr_NormalizeException(&type, &value, &traceback);
-
-                std::string msg = pyobj_to_string(value);
-                std::println(stderr, "Error: {}", msg);
-
-                Py_XDECREF(type);
-                Py_XDECREF(value);
-                Py_XDECREF(traceback);
+                std::println(stderr, "Error: {}", extract_python_error());
             }
         }
 

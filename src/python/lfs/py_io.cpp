@@ -34,6 +34,11 @@ namespace lfs::python {
         // Phase 9 Section 1.5: py_io is the one reference binding group converted
         // to typed errors. Each throw carries a correct ErrorCode + ErrorDomain::IO
         // so the LIFO translator maps it to the right lichtfeld.* subclass.
+        // NOTE: deliberate fork of io/error.hpp's to_lfs_error_code: this map biases
+        // filesystem-shaped codes toward NotFound and header/JSON damage toward
+        // InvalidArgument (Python exception ergonomics), and throw_io_error emits the
+        // Phase 9 pinned attr name `requested_bytes` where io::to_lfs_error emits
+        // `required_bytes`. When io::ErrorCode gains a value, update BOTH maps.
         lfs::ErrorCode map_io_code(const io::ErrorCode code) noexcept {
             switch (code) {
             case io::ErrorCode::PATH_NOT_FOUND:

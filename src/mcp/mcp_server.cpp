@@ -47,7 +47,7 @@ namespace lfs::mcp {
 
             return json::array({json{
                 {"type", "text"},
-                {"text", result.dump(2)},
+                {"text", result.dump(2, ' ', false, nlohmann::json::error_handler_t::replace)},
             }});
         }
 

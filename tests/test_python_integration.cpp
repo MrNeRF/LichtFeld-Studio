@@ -7,6 +7,7 @@
 #include <torch/torch.h>
 
 #include "core/camera.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/logger.hpp"
@@ -24,6 +25,7 @@
 
 #include <array>
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -1147,6 +1149,62 @@ handler.on_post_step(_hook)
     EXPECT_EQ(result[3], static_cast<long long>(live_callback.num_gaussians));
     EXPECT_EQ(result[4], live_callback.iteration);
     EXPECT_EQ(result[5], static_cast<long long>(live_callback.num_gaussians));
+}
+
+namespace {
+    class CountingPythonInitConsumer final : public lfs::NativeErrorConsumer {
+    public:
+        void on_error(const lfs::ErrorNotification& notification,
+                      const lfs::ErrorDeliveryInfo&) noexcept override {
+            if (notification.error.domain() == lfs::ErrorDomain::Python &&
+                notification.error.code() == lfs::ErrorCode::Unavailable)
+                count.fetch_add(1, std::memory_order_relaxed);
+        }
+        std::atomic<int> count{0};
+    };
+} // namespace
+
+TEST_F(PythonIntegrationTest, ConcurrentEnsureInitializedLatchesOnceUnderRace) {
+    struct InitLatchResetGuard {
+        ~InitLatchResetGuard() {
+            lfs::python::force_python_init_failure_for_testing(false);
+            lfs::python::reset_python_init_state_for_testing();
+        }
+    } reset_guard;
+
+    lfs::python::reset_python_init_state_for_testing();
+
+    CountingPythonInitConsumer consumer;
+    auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+
+    lfs::python::force_python_init_failure_for_testing(true);
+
+    constexpr int kThreads = 8;
+    std::vector<lfs::Status> results(kThreads);
+    std::barrier start(kThreads);
+    {
+        std::vector<std::jthread> threads;
+        threads.reserve(kThreads);
+        for (int i = 0; i < kThreads; ++i) {
+            threads.emplace_back([&, i] {
+                start.arrive_and_wait();
+                results[i] = lfs::python::ensure_initialized();
+            });
+        }
+    }
+
+    for (const lfs::Status& result : results) {
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code(), lfs::ErrorCode::Unavailable);
+        EXPECT_EQ(result.error().domain(), lfs::ErrorDomain::Python);
+    }
+    EXPECT_EQ(lfs::python::init_state().state, lfs::python::PyInitState::Failed);
+    // The race-safety invariant: 8 concurrent callers never double-publish the
+    // failure (the duplicate-toast hazard). Exact-once liveness depends on a
+    // fresh process-global publish latch, which the test-only reset seam cannot
+    // guarantee against sibling tests in a shared process; it is covered by the
+    // single-threaded forced-failure path instead.
+    EXPECT_LE(consumer.count.load(), 1);
 }
 
 // NOTE: Tests that actually execute Python scripts require the lichtfeld module

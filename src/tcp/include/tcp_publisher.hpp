@@ -17,6 +17,10 @@
 #include <thread>
 #include <vector>
 
+namespace lfs::core::events::state {
+    struct TrainingCompleted;
+}
+
 namespace lfs::tcp {
     class PublisherServer : public TCPServer {
     public:
@@ -25,6 +29,11 @@ namespace lfs::tcp {
         void start() override;
         void stop() override;
         void join() override;
+
+        // The exact wire message the publisher emits for one event. The
+        // ENABLE_TO_JSON serializers are TU-local to tcp_publisher.cpp, so tests
+        // must serialize through this seam instead of redefining to_json (IFNDR).
+        static nlohmann::json wireMessageFor(const core::events::state::TrainingCompleted& event);
 
     private:
         struct QueuedEvent {

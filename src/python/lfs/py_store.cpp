@@ -59,6 +59,10 @@ namespace lfs::python {
                         subscription->callback(value);
                     }
                 } catch (nb::python_error& e) {
+                    // Containment needs the GIL to extract and report; if it is
+                    // gone the interpreter is dead or finalizing, and swallowing
+                    // here is deliberate — the pre-Phase 9 e.what() log ran
+                    // GIL-unsafe and was itself a shutdown crash class.
                     if (can_acquire_gil()) {
                         const GilAcquire gil;
                         (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
@@ -97,6 +101,10 @@ namespace lfs::python {
                         subscription->callback(convert(value));
                     }
                 } catch (nb::python_error& e) {
+                    // Containment needs the GIL to extract and report; if it is
+                    // gone the interpreter is dead or finalizing, and swallowing
+                    // here is deliberate — the pre-Phase 9 e.what() log ran
+                    // GIL-unsafe and was itself a shutdown crash class.
                     if (can_acquire_gil()) {
                         const GilAcquire gil;
                         (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);

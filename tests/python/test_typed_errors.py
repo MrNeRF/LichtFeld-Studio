@@ -149,6 +149,25 @@ class TestContainmentRoundTrip:
         info = lf._testing.probe_python_error(raise_fnf)
         assert info["code"] == "NotFound"
 
+    def test_asyncio_cancelled_error_maps_to_cancelled(self, lf):
+        import asyncio
+
+        def raise_cancelled():
+            raise asyncio.CancelledError()
+
+        info = lf._testing.probe_python_error(raise_cancelled)
+        assert info["code"] == "Cancelled"
+
+    def test_lookalike_cancelled_error_stays_internal(self, lf):
+        class CancelledError(Exception):  # name collision, not a cancellation
+            pass
+
+        def raise_fake():
+            raise CancelledError("not a real cancel")
+
+        info = lf._testing.probe_python_error(raise_fake)
+        assert info["code"] == "Internal"
+
 
 class TestFrameCallbackDisable:
     """Section 2.3 site 1: a failing on_frame callback is unregistered after one tick."""

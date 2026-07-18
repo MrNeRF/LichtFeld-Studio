@@ -277,6 +277,19 @@ namespace lfs::mcp {
         EXPECT_FALSE(body.contains("id"));
     }
 
+    TEST(McpProtocolTest, WireSerializationIsTotalOverIllFormedUtf8) {
+        JsonRpcResponse response;
+        response.id = 7;
+        response.result = json{{"error", std::string("bad \xC3 byte")}};
+        std::string serialized;
+        EXPECT_NO_THROW(serialized = serialize_response(response));
+        EXPECT_NE(serialized.find("\xEF\xBF\xBD"), std::string::npos);
+
+        EXPECT_NO_THROW(
+            serialized = serialize_notification("event", json{{"error", std::string("\xFF")}}));
+        EXPECT_NE(serialized.find("\xEF\xBF\xBD"), std::string::npos);
+    }
+
     TEST(McpProtocolTest, ToolsCallMissingNameReturnsInvalidParams) {
         McpServer server;
         ASSERT_TRUE(server.handle_request(JsonRpcRequest{.id = int64_t{1}, .method = "initialize"}).result.has_value());
