@@ -88,6 +88,7 @@ target_link_libraries(lfs_python_runtime
         Python::Python
         glm::glm
     PRIVATE
+        lfs_core
         lfs_logger
 )
 
