@@ -461,6 +461,140 @@ class ErrorDebtCensusTests(unittest.TestCase):
             stdout.getvalue(),
         )
 
+    def _write_baseline(self, baseline_path: Path) -> None:
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                0,
+                census.main(
+                    ["--root", str(self.root), "--write-baseline", str(baseline_path)]
+                ),
+            )
+
+    def test_gate_fails_on_count_decrease_without_regeneration(self) -> None:
+        self.write(
+            "rendering/vulkan.cpp",
+            "void submit() {\n  _THROW_ERROR(vkQueueSubmit());\n"
+            "  _THROW_ERROR(vkQueuePresent());\n}\n",
+        )
+        baseline_path = Path(self.temporary_directory.name) / "baseline.json"
+        self._write_baseline(baseline_path)
+
+        self.write(
+            "rendering/vulkan.cpp",
+            "void submit() {\n  _THROW_ERROR(vkQueueSubmit());\n}\n",
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            status = census.main(
+                ["--root", str(self.root), "--baseline", str(baseline_path)]
+            )
+        self.assertEqual(1, status)
+        self.assertEqual(
+            "stale-baseline\traw-vk-check\trendering\tsrc/rendering/vulkan.cpp\t2->1\n",
+            stdout.getvalue(),
+        )
+        self.assertIn("--write-baseline", stderr.getvalue())
+
+    def test_gate_fails_when_baselined_file_disappears(self) -> None:
+        path = self.write(
+            "rendering/vulkan.cpp",
+            "void submit() {\n  _THROW_ERROR(vkQueueSubmit());\n}\n",
+        )
+        baseline_path = Path(self.temporary_directory.name) / "baseline.json"
+        self._write_baseline(baseline_path)
+
+        path.unlink()
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            status = census.main(
+                ["--root", str(self.root), "--baseline", str(baseline_path)]
+            )
+        self.assertEqual(1, status)
+        self.assertEqual(
+            "stale-baseline\traw-vk-check\trendering\tsrc/rendering/vulkan.cpp\t1->0\n",
+            stdout.getvalue(),
+        )
+
+    def test_gate_passes_after_regeneration_acknowledges_decrease(self) -> None:
+        self.write(
+            "rendering/vulkan.cpp",
+            "void submit() {\n  _THROW_ERROR(vkQueueSubmit());\n"
+            "  _THROW_ERROR(vkQueuePresent());\n}\n",
+        )
+        baseline_path = Path(self.temporary_directory.name) / "baseline.json"
+        self._write_baseline(baseline_path)
+
+        self.write(
+            "rendering/vulkan.cpp",
+            "void submit() {\n  _THROW_ERROR(vkQueueSubmit());\n}\n",
+        )
+        self._write_baseline(baseline_path)
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            status = census.main(
+                ["--root", str(self.root), "--baseline", str(baseline_path)]
+            )
+        self.assertEqual(0, status)
+        self.assertEqual("", stdout.getvalue())
+
+    def test_gate_reports_increase_and_decrease_together(self) -> None:
+        self.write("rendering/a.cpp", "void a() {\n  _THROW_ERROR(vkA());\n}\n")
+        self.write(
+            "rendering/b.cpp",
+            "void b() {\n  _THROW_ERROR(vkB());\n  _THROW_ERROR(vkC());\n}\n",
+        )
+        baseline_path = Path(self.temporary_directory.name) / "baseline.json"
+        self._write_baseline(baseline_path)
+
+        self.write(
+            "rendering/a.cpp",
+            "void a() {\n  _THROW_ERROR(vkA());\n  _THROW_ERROR(vkA2());\n}\n",
+        )
+        self.write("rendering/b.cpp", "void b() {\n  _THROW_ERROR(vkB());\n}\n")
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            status = census.main(
+                ["--root", str(self.root), "--baseline", str(baseline_path)]
+            )
+        self.assertEqual(1, status)
+        output = stdout.getvalue()
+        self.assertIn("raw-vk-check\trendering\tsrc/rendering/a.cpp:3\n", output)
+        self.assertIn(
+            "stale-baseline\traw-vk-check\trendering\tsrc/rendering/b.cpp\t2->1\n",
+            output,
+        )
+
+    def test_gate_catches_wrapper_refactor_that_hides_sites(self) -> None:
+        self.write(
+            "rendering/wait.cpp",
+            "void wait_all(VkDevice device, VkFence fence) {\n"
+            "  vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);\n"
+            "  vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);\n"
+            "}\n",
+        )
+        baseline_path = Path(self.temporary_directory.name) / "baseline.json"
+        self._write_baseline(baseline_path)
+
+        self.write(
+            "rendering/wait.cpp",
+            "void wait_all(VkDevice device, VkFence fence) {\n"
+            "  waitBounded(fence);\n"
+            "  waitBounded(fence);\n"
+            "}\n",
+        )
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            status = census.main(
+                ["--root", str(self.root), "--baseline", str(baseline_path)]
+            )
+        self.assertEqual(1, status)
+        self.assertEqual(
+            "stale-baseline\tvk-infinite-wait\trendering\tsrc/rendering/wait.cpp\t2->0\n",
+            stdout.getvalue(),
+        )
+
     def test_empty_catch_reviewed_annotation_is_exempt(self) -> None:
         self.write(
             "core/reviewed.cpp",

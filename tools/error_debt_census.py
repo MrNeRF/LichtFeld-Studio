@@ -12,6 +12,11 @@ intentionally under-counted to avoid false positives. A real AST-based
 CUDA driver API calls (the lowercase ``cu*`` family) are outside Phase 0. CUDA
 status checking only recognizes bare CUDA runtime statements, and the
 CUDA-language Result rule is extension-based rather than CMake-aware.
+
+The baseline gate is a two-sided count ratchet: increases list new locations,
+decreases fail as ``stale-baseline`` until the baseline is regenerated in the
+same change (an honest fix and a matcher-evading refactor are indistinguishable
+to a lexical scanner, so both must be acknowledged explicitly).
 """
 
 from __future__ import annotations
@@ -554,7 +559,7 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
         line_pattern=r"from_legacy_expected",
         owner="error-architecture",
         reason="the sanctioned legacy string bridge's own declaration",
-        expiry="Phase 11 (legacy adapters removed)",
+        expiry="post-campaign (expected-string workoff)",
     ),
 )
 
@@ -751,6 +756,34 @@ def _new_violations(
     return sorted(new_hits, key=lambda hit: (hit.rule, hit.module, hit.file, hit.line))
 
 
+def _stale_decreases(
+    hits: Sequence[Hit], baseline: dict[str, dict[str, set[str]]]
+) -> list[tuple[str, str, str, int, int]]:
+    """The other half of the ratchet (the 7A lesson): a per-(rule, file) count
+    below the baseline is indistinguishable from a matcher-evading refactor,
+    so it fails until the baseline is regenerated in the same change."""
+    baseline_entries: dict[tuple[str, str], tuple[str, int]] = {}
+    for rule_id, modules in baseline.items():
+        for module, locations in modules.items():
+            for location in locations:
+                key = (rule_id, location.rsplit(":", 1)[0])
+                previous = baseline_entries.get(key)
+                count = (previous[1] if previous else 0) + 1
+                baseline_entries[key] = (previous[0] if previous else module, count)
+
+    unique_current = {(hit.rule, hit.module, hit.file, hit.line) for hit in hits}
+    current_counts: dict[tuple[str, str], int] = {}
+    for rule, _module, file, _line in unique_current:
+        current_counts[(rule, file)] = current_counts.get((rule, file), 0) + 1
+
+    stale = [
+        (rule, module, file, count, current_counts.get((rule, file), 0))
+        for (rule, file), (module, count) in baseline_entries.items()
+        if current_counts.get((rule, file), 0) < count
+    ]
+    return sorted(stale)
+
+
 def _rules_help() -> str:
     rule_lines = "\n".join(
         f"  {rule.rule_id:<36} {rule.description}" for rule in RULES
@@ -764,6 +797,13 @@ literals are masked, but inactive preprocessor branches remain visible.
 A reviewed catch-all may be exempted with a raw comment inside the catch body:
 `// LFS-CENSUS-OK(empty-catch): <reason>`. Sanctioned permanent exceptions live
 in ALLOWLIST (each with owner, reason, and expiry).
+
+The --baseline gate is a two-sided per-(rule,file) count ratchet. Increases
+list the likely-new locations. Decreases print a `stale-baseline` line and also
+fail: to a lexical scanner an honest fix and a matcher-evading refactor (the
+"7A lesson" — routing counted call sites through a wrapper so the token
+disappears) look identical, so a reduction must be acknowledged by regenerating
+the baseline (--write-baseline) in the same change.
 
 Known over-counts: mutually exclusive macro definitions are counted separately;
 inactive #if branches count; and a non-launch <<< token can resemble a kernel
@@ -800,7 +840,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--baseline",
         type=Path,
         metavar="FILE",
-        help="fail on current locations absent from the location baseline",
+        help=(
+            "fail on new locations and on per-(rule,file) count decreases vs the "
+            "location baseline (regenerate the baseline in the same change to "
+            "acknowledge a reduction)"
+        ),
     )
     mode.add_argument(
         "--write-baseline",
@@ -858,9 +902,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
         new_hits = _new_violations(hits, baseline)
-        if new_hits:
-            for hit in new_hits:
-                print(f"{hit.rule}\t{hit.module}\t{hit.location}")
+        stale = _stale_decreases(hits, baseline)
+        for hit in new_hits:
+            print(f"{hit.rule}\t{hit.module}\t{hit.location}")
+        for rule, module, file, baseline_count, current_count in stale:
+            print(f"stale-baseline\t{rule}\t{module}\t{file}\t{baseline_count}->{current_count}")
+        if stale:
+            print(
+                "error: per-(rule,file) counts decreased vs the baseline; an honest fix "
+                "and a matcher-evading refactor look identical here. If the reduction is "
+                f"intentional, regenerate in the same change: --write-baseline {args.baseline}",
+                file=sys.stderr,
+            )
+        if new_hits or stale:
             return 1
         print("no new error-debt violations", file=sys.stderr)
         return 0
