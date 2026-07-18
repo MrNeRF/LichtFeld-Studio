@@ -197,6 +197,14 @@ namespace lfs {
         std::optional<NativeError> native;
     };
 
+    class Error;
+
+    // Declared before Error so the friend declarations inside the class are
+    // not the first declarations MSVC sees — attaching dllexport/dllimport
+    // only on a later redeclaration is C2375 (redefinition; different linkage).
+    [[nodiscard]] LFS_CORE_API Error make_error(ErrorInit init) noexcept;
+    [[nodiscard]] LFS_CORE_API Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
+
     // One-pointer immutable COW error handle. See the file-level comment for
     // the ownership/COW contract. Public surface matches Section 5.2/7.2
     // exactly, plus two additive, non-contradictory members not shown in
