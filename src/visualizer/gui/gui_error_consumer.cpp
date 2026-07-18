@@ -75,6 +75,8 @@ namespace lfs::vis::gui {
                                                                      : Keys::RENDERER_FAILED;
                 }
                 return Keys::MESH2SPLAT_FAILED;
+            case lfs::ErrorDomain::Python:
+                return Keys::PLUGINS_DISABLED;
             case lfs::ErrorDomain::App:
                 return op == error_op::kLoadConfig ? Keys::CONFIG_INVALID : Keys::FILE_OPEN_FAILED;
             case lfs::ErrorDomain::IO:

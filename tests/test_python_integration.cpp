@@ -50,7 +50,7 @@ protected:
         const auto module_dir = findPythonModuleDir();
         ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module for Python tests";
         prependPythonPath(module_dir);
-        lfs::python::ensure_initialized();
+        (void)lfs::python::ensure_initialized();
     }
 
     std::filesystem::path createTempScript(const std::string& content) {
@@ -453,7 +453,44 @@ namespace {
 
 TEST_F(PythonIntegrationTest, InitializationSucceeds) {
     // Just verify that initialization doesn't throw
-    EXPECT_NO_THROW(lfs::python::ensure_initialized());
+    EXPECT_NO_THROW((void)lfs::python::ensure_initialized());
+}
+
+TEST_F(PythonIntegrationTest, ForcedInitFailureLatchesQueryableError) {
+    // The forced-failure latch is terminal; the RAII guard restores the real
+    // (Ready) latch even if an ASSERT below returns early, so sibling tests in
+    // the shuffle are unaffected.
+    struct InitLatchResetGuard {
+        ~InitLatchResetGuard() {
+            lfs::python::force_python_init_failure_for_testing(false);
+            lfs::python::reset_python_init_state_for_testing();
+        }
+    } reset_guard;
+
+    lfs::python::reset_python_init_state_for_testing();
+
+    lfs::python::force_python_init_failure_for_testing(true);
+    const lfs::Status first = lfs::python::ensure_initialized();
+    ASSERT_FALSE(first.has_value());
+    EXPECT_EQ(first.error().code(), lfs::ErrorCode::Unavailable);
+    EXPECT_EQ(first.error().domain(), lfs::ErrorDomain::Python);
+
+    const auto latched = lfs::python::init_state();
+    EXPECT_EQ(latched.state, lfs::python::PyInitState::Failed);
+    ASSERT_TRUE(latched.error.has_value());
+    EXPECT_EQ(latched.error->code(), lfs::ErrorCode::Unavailable);
+
+    // Idempotent: a second call re-returns the same latched failure.
+    const lfs::Status second = lfs::python::ensure_initialized();
+    ASSERT_FALSE(second.has_value());
+    EXPECT_EQ(second.error().code(), lfs::ErrorCode::Unavailable);
+    EXPECT_EQ(second.error().domain(), lfs::ErrorDomain::Python);
+}
+
+TEST_F(PythonIntegrationTest, ReadyStateAfterSuccessfulInit) {
+    lfs::python::reset_python_init_state_for_testing();
+    EXPECT_TRUE(lfs::python::ensure_initialized().has_value());
+    EXPECT_EQ(lfs::python::init_state().state, lfs::python::PyInitState::Ready);
 }
 
 TEST_F(PythonIntegrationTest, OutputCallbackCanBeSet) {

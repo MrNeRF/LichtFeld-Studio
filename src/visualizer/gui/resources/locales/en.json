@@ -1722,6 +1722,7 @@
     "cuda_unavailable": "CUDA Unavailable",
     "cuda_unsupported": "Unsupported CUDA Driver",
     "save_failed": "Save Failed",
+    "plugins_disabled": "Plugins Disabled",
     "generic": "Error",
     "oom_heading": "Out of GPU memory!",
     "oom_suggestions": "Suggestions:\n  - Reduce max Gaussians (max_cap)\n  - Lower spherical harmonics degree (sh_degree)\n  - Reduce image resolution (resize_factor)\n  - Enable tile mode for large images",

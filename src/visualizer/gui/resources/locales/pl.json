@@ -1711,6 +1711,7 @@
     "cuda_unavailable": "CUDA niedostępna",
     "cuda_unsupported": "Nieobsługiwany sterownik CUDA",
     "save_failed": "Zapisywanie nie powiodło się",
+    "plugins_disabled": "Wtyczki wyłączone",
     "generic": "Błąd",
     "oom_heading": "Brak pamięci GPU!",
     "oom_suggestions": "Sugestie:\n  - Zmniejsz maksymalną liczbę Gaussians (max_cap)\n  - Obniż stopień harmonik sferycznych (sh_degree)\n  - Zmniejsz rozdzielczość obrazu (resize_factor)\n  - Włącz tryb kafelków dla dużych obrazów",

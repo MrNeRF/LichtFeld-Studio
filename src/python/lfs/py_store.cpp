@@ -4,6 +4,7 @@
 #include "py_store.hpp"
 
 #include "core/logger.hpp"
+#include "py_error.hpp"
 #include "python/gil.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -57,10 +58,13 @@ namespace lfs::python {
                     } else {
                         subscription->callback(value);
                     }
-                } catch (const nb::python_error& e) {
-                    LOG_ERROR("Python app store subscriber failed: {}", e.what());
+                } catch (nb::python_error& e) {
+                    if (can_acquire_gil()) {
+                        const GilAcquire gil;
+                        (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
+                    }
                 } catch (const std::exception& e) {
-                    LOG_ERROR("Python app store subscriber failed: {}", e.what());
+                    (void)contain_cxx_callback(e.what(), PyCallbackPolicy::WarnAndContinue);
                 }
             });
 
@@ -92,10 +96,13 @@ namespace lfs::python {
                     } else {
                         subscription->callback(convert(value));
                     }
-                } catch (const nb::python_error& e) {
-                    LOG_ERROR("Python app store subscriber failed: {}", e.what());
+                } catch (nb::python_error& e) {
+                    if (can_acquire_gil()) {
+                        const GilAcquire gil;
+                        (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
+                    }
                 } catch (const std::exception& e) {
-                    LOG_ERROR("Python app store subscriber failed: {}", e.what());
+                    (void)contain_cxx_callback(e.what(), PyCallbackPolicy::WarnAndContinue);
                 }
             });
 

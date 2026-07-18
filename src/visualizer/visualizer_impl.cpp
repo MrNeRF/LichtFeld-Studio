@@ -1369,7 +1369,7 @@ namespace lfs::vis {
 
         {
             LOG_TIMER("startup.python.ensure_initialized");
-            python::ensure_initialized();
+            (void)python::ensure_initialized();
         }
         {
             LOG_TIMER("startup.python.builtin_ui_registered");

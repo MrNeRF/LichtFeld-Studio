@@ -1711,6 +1711,7 @@
     "cuda_unavailable": "CUDA를 사용할 수 없음",
     "cuda_unsupported": "지원되지 않는 CUDA 드라이버",
     "save_failed": "저장 실패",
+    "plugins_disabled": "플러그인이 비활성화됨",
     "generic": "오류",
     "oom_heading": "GPU 메모리가 부족합니다!",
     "oom_suggestions": "제안:\n  - 최대 가우시안 수 줄이기 (max_cap)\n  - 구면 조화 차수 낮추기 (sh_degree)\n  - 이미지 해상도 줄이기 (resize_factor)\n  - 큰 이미지에 타일 모드 활성화",

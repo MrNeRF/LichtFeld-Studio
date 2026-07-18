@@ -378,6 +378,10 @@ def check_empty_catch(source: ScannedFile) -> list[Hit]:
             or "best_effort_diagnostic" in body
             or "make_error" in body
             or "std::unexpected" in body
+            # Phase 9 Python-callback containment primitives: they extract the
+            # error and report it (ErrorBus/log) — a contained catch, not a swallow.
+            or "contain_python_callback" in body
+            or "contain_cxx_callback" in body
         )
         if not body.strip() or not reviewed:
             hits.append(source.hit(match.start(), "empty-catch"))

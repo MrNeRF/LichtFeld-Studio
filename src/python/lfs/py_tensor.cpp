@@ -1388,7 +1388,13 @@ namespace lfs::python {
             try {
                 capsule = nb::cast<nb::capsule>(dlpack_fn(nb::arg("stream") = consumer));
                 stream_handshake = true;
-            } catch (const std::exception&) {
+            } catch (const nb::python_error& e) {
+                // Only the capability-signaling TypeError ("__dlpack__ takes no
+                // stream argument") warrants the legacy zero-arg retry; any other
+                // producer error propagates so a real bug is not masked by a silent
+                // second producer execution (Phase 9 Section 1.5 / doc :202).
+                if (!e.matches(PyExc_TypeError))
+                    throw;
                 capsule = nb::cast<nb::capsule>(dlpack_fn());
             }
         } else if (nb::isinstance<nb::capsule>(obj)) {
@@ -1706,25 +1712,32 @@ namespace lfs::python {
                     return self.iadd(other);
                 },
                 nb::rv_policy::reference, "In-place add tensor")
-            .def("__iadd__", [](PyTensor& self, float scalar) -> PyTensor& { return self.iadd_scalar(scalar); }, nb::rv_policy::reference, "In-place add scalar")
+            .def(
+                "__iadd__", [](PyTensor& self, float scalar) -> PyTensor& { return self.iadd_scalar(scalar); }, nb::rv_policy::reference, "In-place add scalar")
 
             .def("__sub__", &PyTensor::sub, "Subtract tensor")
             .def("__sub__", &PyTensor::sub_scalar, "Subtract scalar")
             .def("__rsub__", &PyTensor::rsub_scalar, "Reverse subtract scalar")
-            .def("__isub__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.isub(other); }, nb::rv_policy::reference, "In-place subtract tensor")
-            .def("__isub__", [](PyTensor& self, float scalar) -> PyTensor& { return self.isub_scalar(scalar); }, nb::rv_policy::reference, "In-place subtract scalar")
+            .def(
+                "__isub__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.isub(other); }, nb::rv_policy::reference, "In-place subtract tensor")
+            .def(
+                "__isub__", [](PyTensor& self, float scalar) -> PyTensor& { return self.isub_scalar(scalar); }, nb::rv_policy::reference, "In-place subtract scalar")
 
             .def("__mul__", &PyTensor::mul, "Multiply tensor")
             .def("__mul__", &PyTensor::mul_scalar, "Multiply scalar")
             .def("__rmul__", &PyTensor::mul_scalar, "Reverse multiply scalar")
-            .def("__imul__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.imul(other); }, nb::rv_policy::reference, "In-place multiply tensor")
-            .def("__imul__", [](PyTensor& self, float scalar) -> PyTensor& { return self.imul_scalar(scalar); }, nb::rv_policy::reference, "In-place multiply scalar")
+            .def(
+                "__imul__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.imul(other); }, nb::rv_policy::reference, "In-place multiply tensor")
+            .def(
+                "__imul__", [](PyTensor& self, float scalar) -> PyTensor& { return self.imul_scalar(scalar); }, nb::rv_policy::reference, "In-place multiply scalar")
 
             .def("__truediv__", &PyTensor::div, "Divide tensor")
             .def("__truediv__", &PyTensor::div_scalar, "Divide scalar")
             .def("__rtruediv__", &PyTensor::rdiv_scalar, "Reverse divide scalar")
-            .def("__itruediv__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.idiv(other); }, nb::rv_policy::reference, "In-place divide tensor")
-            .def("__itruediv__", [](PyTensor& self, float scalar) -> PyTensor& { return self.idiv_scalar(scalar); }, nb::rv_policy::reference, "In-place divide scalar")
+            .def(
+                "__itruediv__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.idiv(other); }, nb::rv_policy::reference, "In-place divide tensor")
+            .def(
+                "__itruediv__", [](PyTensor& self, float scalar) -> PyTensor& { return self.idiv_scalar(scalar); }, nb::rv_policy::reference, "In-place divide scalar")
 
             .def("fill_", &PyTensor::fill_, nb::rv_policy::reference, "Fill tensor with value in-place")
             .def("zero_", &PyTensor::zero_, nb::rv_policy::reference, "Zero tensor in-place")
@@ -1874,11 +1887,12 @@ namespace lfs::python {
 
             // __array__ protocol for zero-copy NumPy interop (CPU only)
             // Allows: np.asarray(tensor) for zero-copy when tensor is CPU + contiguous
-            .def("__array__", [](PyTensor& self, nb::object dtype) -> nb::object {
-                (void)dtype;              // We return our native dtype, ignore requested dtype
-                return self.numpy(false); // Zero-copy
-            },
-                 nb::arg("dtype") = nb::none(), "Return numpy array view (zero-copy for CPU contiguous tensors)");
+            .def(
+                "__array__", [](PyTensor& self, nb::object dtype) -> nb::object {
+                    (void)dtype;              // We return our native dtype, ignore requested dtype
+                    return self.numpy(false); // Zero-copy
+                },
+                nb::arg("dtype") = nb::none(), "Return numpy array view (zero-copy for CPU contiguous tensors)");
     }
 
 } // namespace lfs::python

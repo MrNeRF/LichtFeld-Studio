@@ -1711,6 +1711,7 @@
     "cuda_unavailable": "CUDA non disponibile",
     "cuda_unsupported": "Driver CUDA non supportato",
     "save_failed": "Salvataggio non riuscito",
+    "plugins_disabled": "Plugin disattivati",
     "generic": "Errore",
     "oom_heading": "Memoria GPU esaurita!",
     "oom_suggestions": "Suggerimenti:\n  - Ridurre il numero massimo di Gaussians (max_cap)\n  - Abbassare il grado delle armoniche sferiche (sh_degree)\n  - Ridurre la risoluzione dell'immagine (resize_factor)\n  - Abilitare la modalità tile per immagini grandi",

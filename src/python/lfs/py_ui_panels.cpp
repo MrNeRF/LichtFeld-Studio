@@ -123,6 +123,8 @@ namespace lfs::python {
                 nb::object os_fspath = nb::module_::import_("os").attr("fspath");
                 return nb::cast<std::string>(os_fspath(value));
             } catch (const std::exception&) {
+                // LFS-CENSUS-OK(empty-catch): rethrows a typed Python validation error via
+                // throw_type_error; the trailing return is unreachable.
                 throw_type_error(std::string(field_name) + " must be a string or os.PathLike");
                 return {};
             }
@@ -132,6 +134,8 @@ namespace lfs::python {
             try {
                 return nb::cast<PanelSpace>(value);
             } catch (const std::exception&) {
+                // LFS-CENSUS-OK(empty-catch): rethrows a typed Python validation error via
+                // throw_type_error.
                 throw_type_error(std::string(field_name) + " must be a PanelSpace enum value");
             }
             return PanelSpace::Floating;
@@ -141,6 +145,8 @@ namespace lfs::python {
             try {
                 return static_cast<int>(nb::cast<PanelHeightMode>(value));
             } catch (const std::exception&) {
+                // LFS-CENSUS-OK(empty-catch): rethrows a typed Python validation error via
+                // throw_type_error.
                 throw_type_error(std::string(field_name) + " must be a PanelHeightMode enum value");
             }
             return 0;
@@ -154,6 +160,8 @@ namespace lfs::python {
             try {
                 return nb::cast<gui::PanelOption>(value);
             } catch (const std::exception&) {
+                // LFS-CENSUS-OK(empty-catch): rethrows a typed Python validation error via
+                // throw_type_error.
                 throw_type_error("options entries must be PanelOption enum values");
             }
             return gui::PanelOption::DEFAULT_CLOSED;
@@ -163,6 +171,8 @@ namespace lfs::python {
             try {
                 return nb::cast<PollDependency>(value);
             } catch (const std::exception&) {
+                // LFS-CENSUS-OK(empty-catch): rethrows a typed Python validation error via
+                // throw_type_error.
                 throw_type_error("poll_dependencies entries must be PollDependency enum values");
             }
             return PollDependency::NONE;

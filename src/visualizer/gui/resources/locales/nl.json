@@ -1711,6 +1711,7 @@
     "cuda_unavailable": "CUDA niet beschikbaar",
     "cuda_unsupported": "Niet-ondersteund CUDA-stuurprogramma",
     "save_failed": "Opslaan mislukt",
+    "plugins_disabled": "Plug-ins uitgeschakeld",
     "generic": "Fout",
     "oom_heading": "Onvoldoende GPU-geheugen!",
     "oom_suggestions": "Suggesties:\n  - Verlaag het maximale aantal Gaussians (max_cap)\n  - Verlaag de graad van sferische harmonischen (sh_degree)\n  - Verlaag de beeldresolutie (resize_factor)\n  - Schakel tegelmodus in voor grote afbeeldingen",

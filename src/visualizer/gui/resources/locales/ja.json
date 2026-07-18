@@ -1711,6 +1711,7 @@
     "cuda_unavailable": "CUDAが利用できません",
     "cuda_unsupported": "サポートされていないCUDAドライバー",
     "save_failed": "保存に失敗しました",
+    "plugins_disabled": "プラグインが無効です",
     "generic": "エラー",
     "oom_heading": "GPUメモリが不足しています！",
     "oom_suggestions": "推奨事項:\n  - 最大ガウス数を減らす (max_cap)\n  - 球面調和関数の次数を下げる (sh_degree)\n  - 画像解像度を下げる (resize_factor)\n  - 大きな画像でタイルモードを有効にする",

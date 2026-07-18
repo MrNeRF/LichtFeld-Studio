@@ -161,6 +161,17 @@ class ErrorDebtCensusTests(unittest.TestCase):
         )
         self.assert_rule_hits("empty-catch", [])
 
+    def test_empty_catch_accepts_python_callback_containment(self) -> None:
+        self.write(
+            "python/lfs/py_ui.cpp",
+            "void draw() {\n"
+            "  try { invoke_cb(); } catch (const std::exception& e) {\n"
+            "    (void)contain_cxx_callback(e.what(), PyCallbackPolicy::WarnAndContinue);\n"
+            "  }\n"
+            "}\n",
+        )
+        self.assert_rule_hits("empty-catch", [])
+
     def test_empty_catch_accepts_legacy_unexpected_return(self) -> None:
         self.write(
             "app/worker.cpp",

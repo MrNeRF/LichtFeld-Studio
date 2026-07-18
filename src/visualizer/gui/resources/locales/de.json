@@ -1711,6 +1711,7 @@
     "cuda_unavailable": "CUDA nicht verfügbar",
     "cuda_unsupported": "Nicht unterstützter CUDA-Treiber",
     "save_failed": "Speichern fehlgeschlagen",
+    "plugins_disabled": "Plug-ins deaktiviert",
     "generic": "Fehler",
     "oom_heading": "GPU-Speicher erschöpft!",
     "oom_suggestions": "Vorschläge:\n  - Maximale Anzahl an Gaussians reduzieren (max_cap)\n  - Grad der sphärischen Harmonischen verringern (sh_degree)\n  - Bildauflösung reduzieren (resize_factor)\n  - Kachelmodus für große Bilder aktivieren",

@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "mcp/mcp_protocol.hpp"
 #include "mcp/mcp_tools.hpp"
+#include "py_error.hpp"
 
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -151,8 +152,12 @@ namespace lfs::python {
                     nb::dict py_args = nb::cast<nb::dict>(json_to_python(args));
                     nb::object result = callback(**py_args);
                     return python_value_to_json(result);
+                } catch (nb::python_error& e) {
+                    const lfs::Error error = contain_python_callback(e, PyCallbackPolicy::FailOwner);
+                    return mcp::json{{"error", std::string("Python tool error: ") + std::string(error.user_message())}};
                 } catch (const std::exception& e) {
-                    return mcp::json{{"error", std::string("Python tool error: ") + e.what()}};
+                    const lfs::Error error = contain_cxx_callback(e.what(), PyCallbackPolicy::FailOwner);
+                    return mcp::json{{"error", std::string("Python tool error: ") + std::string(error.user_message())}};
                 }
             };
         }

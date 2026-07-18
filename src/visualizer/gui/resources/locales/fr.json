@@ -1711,6 +1711,7 @@
     "cuda_unavailable": "CUDA indisponible",
     "cuda_unsupported": "Pilote CUDA non pris en charge",
     "save_failed": "Échec de l'enregistrement",
+    "plugins_disabled": "Extensions désactivées",
     "generic": "Erreur",
     "oom_heading": "Mémoire GPU insuffisante !",
     "oom_suggestions": "Suggestions :\n  - Réduire le nombre maximal de Gaussians (max_cap)\n  - Diminuer le degré des harmoniques sphériques (sh_degree)\n  - Réduire la résolution de l'image (resize_factor)\n  - Activer le mode tuile pour les grandes images",

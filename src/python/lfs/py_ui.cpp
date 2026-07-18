@@ -22,6 +22,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "py_command.hpp"
+#include "py_error.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
 #include "py_params.hpp"
@@ -2083,8 +2084,8 @@ namespace lfs::python {
         if (clicked && !callback.is_none()) {
             try {
                 callback();
-            } catch (const nb::python_error& e) {
-                LOG_ERROR("Button callback error: {}", e.what());
+            } catch (nb::python_error& e) {
+                (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
             }
         }
         return clicked;
@@ -3251,6 +3252,8 @@ namespace lfs::python {
                     info_str = "Tensor(" + shape_str + ", " + dtype_str + ", " +
                                nb::cast<std::string>(nb::str(device)) + ") " + size_buf;
                 } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): read-only tensor introspection for a
+                    // display label; any failure falls back to a placeholder string.
                     info_str = "Tensor(...)";
                 }
             }
@@ -3274,8 +3277,8 @@ namespace lfs::python {
                 if (!update_cb.is_none() && PyCallable_Check(update_cb.ptr())) {
                     try {
                         update_cb(data, nb::none());
-                    } catch (const nb::python_error& e) {
-                        LOG_ERROR("Property update callback error: {}", e.what());
+                    } catch (nb::python_error& e) {
+                        (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
                     }
                 }
             }
@@ -3753,7 +3756,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);

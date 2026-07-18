@@ -1721,6 +1721,7 @@
     "cuda_unavailable": "CUDA 不可用",
     "cuda_unsupported": "不支持的 CUDA 驱动程序",
     "save_failed": "保存失败",
+    "plugins_disabled": "插件已禁用",
     "generic": "错误",
     "oom_heading": "GPU 内存不足！",
     "oom_suggestions": "建议：\n  - 减少最大高斯数量 (max_cap)\n  - 降低球谐函数阶数 (sh_degree)\n  - 降低图像分辨率 (resize_factor)\n  - 为大图像启用平铺模式",

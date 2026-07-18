@@ -28,6 +28,25 @@ from . import (
 )
 
 
+class Error(RuntimeError):
+    """
+    Base class for every typed LichtFeld error crossing the Python boundary. Derives RuntimeError for backward compatibility. Carries .code, .domain, .user_message, .operation_id, .retryable, .details, and .context.
+    """
+
+class InvalidArgumentError(Error, ValueError):
+    """Raised for InvalidArgument / BoundsViolation errors."""
+
+class NotFoundError(Error, FileNotFoundError):
+    """Raised for NotFound errors; also a FileNotFoundError."""
+
+class CancelledError(Error):
+    """Raised when an operation was cancelled."""
+
+class ResourceError(Error):
+    """
+    Raised for ResourceExhausted errors (memory/disk/queue). Carries .requested_bytes / .available_bytes (int or None).
+    """
+
 class RenderMode(enum.Enum):
     SPLATS = 0
 

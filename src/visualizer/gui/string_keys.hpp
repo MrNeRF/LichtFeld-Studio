@@ -963,6 +963,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* CUDA_UNAVAILABLE = "error_modal.cuda_unavailable";
         inline constexpr const char* CUDA_UNSUPPORTED = "error_modal.cuda_unsupported";
         inline constexpr const char* SAVE_FAILED = "error_modal.save_failed";
+        inline constexpr const char* PLUGINS_DISABLED = "error_modal.plugins_disabled";
         inline constexpr const char* GENERIC = "error_modal.generic";
         inline constexpr const char* OOM_HEADING = "error_modal.oom_heading";
         inline constexpr const char* OOM_SUGGESTIONS = "error_modal.oom_suggestions";

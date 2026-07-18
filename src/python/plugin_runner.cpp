@@ -54,7 +54,9 @@ namespace lfs::python {
     } // anonymous namespace
 
     int run_plugin_command(const lfs::core::args::PluginMode& mode) {
-        ensure_initialized();
+        if (!ensure_initialized()) {
+            return 1;
+        }
 
         int result = 0;
         {
