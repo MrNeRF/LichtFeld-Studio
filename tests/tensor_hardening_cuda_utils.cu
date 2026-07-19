@@ -15,7 +15,7 @@ namespace tensor_hardening {
         }
     } // namespace
 
-    cudaError_t launch_delay_kernel(const cudaStream_t stream, const uint64_t cycles) {
+    cudaError_t launch_delay_kernel(cudaStream_t stream, uint64_t cycles) {
         delay_kernel<<<1, 1, 0, stream>>>(cycles);
         return cudaGetLastError();
     }
