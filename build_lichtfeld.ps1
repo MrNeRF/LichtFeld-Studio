@@ -621,6 +621,24 @@ function Copy-RequiredDLLs {
         }
     }
 
+    # Copy uv.exe to output directory if found on the system
+    $UvSrc = "C:\Users\clmix\.local\bin\uv.exe"
+    if (-not (Test-Path $UvSrc)) {
+        $UvPath = Get-Command "uv" -ErrorAction SilentlyContinue
+        if ($UvPath) { $UvSrc = $UvPath.Source }
+    }
+    if (Test-Path $UvSrc) {
+        $UvDest = Join-Path $OutputDir "uv.exe"
+        if (-not (Test-Path $UvDest)) {
+            try {
+                Copy-Item $UvSrc $UvDest -Force -ErrorAction Stop
+                Write-Host "  Copied: uv.exe (bundled)" -ForegroundColor Gray
+            } catch {
+                Write-Host "  WARNING: Failed to copy uv.exe: $_" -ForegroundColor Yellow
+            }
+        }
+    }
+
     if ($CopiedCount -gt 0) {
         Write-Host "DLL copy completed! ($CopiedCount files)" -ForegroundColor Green
     } else {

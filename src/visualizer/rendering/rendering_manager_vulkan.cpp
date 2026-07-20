@@ -966,7 +966,9 @@ namespace lfs::vis {
 
         const bool is_training = scene_manager.hasDataset() &&
                                  scene_manager.getTrainerManager() &&
-                                 scene_manager.getTrainerManager()->isRunning();
+                                 scene_manager.getTrainerManager()->isRunning() &&
+                                 scene_manager.getTrainerManager()->getTrainer() &&
+                                 scene_manager.getTrainerManager()->getTrainer()->is_running();
 
         VksplatViewportRenderer::SelectionMaskRequest request{
             .frame_view = frame_view,
@@ -1000,7 +1002,9 @@ namespace lfs::vis {
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
-                                 trainer_manager && trainer_manager->isRunning();
+                                 trainer_manager && trainer_manager->isRunning() &&
+                                 trainer_manager->getTrainer() &&
+                                 trainer_manager->getTrainer()->is_running();
         if (!is_training && vksplat_viewport_renderer_) {
             // Clear a callback capturing the previous trainer before any cached or
             // minimized-frame early return can leave it reachable by an auxiliary submit.

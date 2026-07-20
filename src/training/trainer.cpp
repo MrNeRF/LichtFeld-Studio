@@ -5629,6 +5629,11 @@ namespace lfs::training {
             }
         }
 
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            is_running_ = false;
+        }
+
         const int terminal_iteration = current_iteration_.load();
         const bool user_stopped = stop_requested_.load() || stop_token.stop_requested();
         const bool rotate_checkpoint = get_active_sparsify_steps() == 0;
@@ -5653,10 +5658,6 @@ namespace lfs::training {
                                               terminal_iteration, e.what()));
         }
 
-        {
-            std::lock_guard<std::mutex> lock(params_mutex_);
-            is_running_ = false;
-        }
         training_complete_ = true;
         clearActiveImageLoader();
         cache_loader.clear_cpu_cache();
@@ -5710,6 +5711,17 @@ namespace lfs::training {
                                                        const int iter_num,
                                                        const bool join_threads,
                                                        const bool save_checkpoint_file) {
+
+        // GPU-side wait to ensure the last Vulkan viewport frame has finished rendering
+        // and released the interop buffers before we start copying model data to the host.
+        waitForModelReaders();
+        if (training_stream_) {
+            cudaStreamSynchronize(training_stream_);
+        }
+        cudaDeviceSynchronize();
+
+        std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
+        std::unique_lock<std::shared_mutex> model_lock(model_access_mutex_);
 
         std::filesystem::path ply_output_path = filename.empty() ? save_path / ("splat_" + std::to_string(iter_num) + ".ply") : save_path / (filename + ".ply");
 
