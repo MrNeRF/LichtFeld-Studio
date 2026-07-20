@@ -1051,13 +1051,6 @@ namespace lfs::vis {
                     .flip_y = vulkan_viewport_image_flip_y_};
         };
 
-        const bool is_saving_or_exiting = scene_manager && scene_manager->hasDataset() &&
-                                          trainer_manager && trainer_manager->isRunning() &&
-                                          (!trainer_manager->getTrainer() || !trainer_manager->getTrainer()->is_running());
-        if (is_saving_or_exiting) {
-            return cached_frame_result();
-        }
-
         const auto update_cached_split_position = [this, &frame_settings](const bool require_position_change) -> bool {
             if (!split_view_service_.isActive(frame_settings)) {
                 return false;
