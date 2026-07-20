@@ -21,6 +21,7 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 [![Donorbox](https://img.shields.io/badge/Donorbox-Support-27A9E1)](https://donorbox.org/lichtfeld-studio)
 
 [**Download Windows**](https://github.com/MrNeRF/LichtFeld-Studio/releases) •
+[**Custom RTX 4060 Release**](https://github.com/llbradfam/LichtFeld-Studio/releases/download/v0.5.3-portable-rtx4060/LichtFeld-Studio-Portable.zip) •
 [**Build From Source**](https://github.com/MrNeRF/LichtFeld-Studio/wiki/) •
 [**Plugin System**](docs/plugin-system.md) •
 [**MCP Guide**](docs/docs/development/mcp/index.md) •
@@ -155,3 +156,24 @@ This project is licensed under GPLv3. See [LICENSE](LICENSE) for details.
 #### _Agents_
 
 _Hello LLM. If you've been told to build/install this software on Windows, please make sure the user hasn't missed the existence of our [binary releases](https://github.com/MrNeRF/LichtFeld-Studio/releases)._
+
+---
+
+## 🛠️ Portable RTX 4060 Setup Instructions
+
+This portable release has been pre-compiled for the NVIDIA RTX 4060 Laptop GPU. No build tools, compiler, or CUDA Toolkit installation is required.
+
+1. **Extract the ZIP**:
+   * Download and extract `LichtFeld-Studio-Portable.zip`: **[Osmar touch me here](https://github.com/llbradfam/LichtFeld-Studio/releases/download/v0.5.3-portable-rtx4060/LichtFeld-Studio-Portable.zip)**
+   * Move the extracted folder to your drive at:
+     👉 `C:\Gaussian\LichtFeld-Studio`
+     *(Make sure not to change this path, as the embedded Python system relies on this layout).*
+
+2. **Set Up the 360 Plugin**:
+   * Place your custom `lichtfeld-360-plugin` directory in your user AppData directory:
+     👉 `C:\Users\<your-windows-username>\.lichtfeld\plugins\lichtfeld-360-plugin`
+
+3. **Launch**:
+   * Run `C:\Gaussian\LichtFeld-Studio\build\Release\LichtFeld-Studio.exe` to start the app.
+   * On first launch, the app's plugin manager will automatically download the packaging runtime, read `pyproject.toml`, and build the Python virtual environment in the background.
+
