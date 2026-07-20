@@ -5712,16 +5712,18 @@ namespace lfs::training {
                                                        const bool join_threads,
                                                        const bool save_checkpoint_file) {
 
+        std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
+        std::unique_lock<std::shared_mutex> model_lock(model_access_mutex_);
+
         // GPU-side wait to ensure the last Vulkan viewport frame has finished rendering
         // and released the interop buffers before we start copying model data to the host.
+        // We do this AFTER acquiring the model_lock so that we are guaranteed that any active
+        // GUI thread render pass has finished submitting and published its timeline borrow value.
         waitForModelReaders();
         if (training_stream_) {
             cudaStreamSynchronize(training_stream_);
         }
         cudaDeviceSynchronize();
-
-        std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
-        std::unique_lock<std::shared_mutex> model_lock(model_access_mutex_);
 
         std::filesystem::path ply_output_path = filename.empty() ? save_path / ("splat_" + std::to_string(iter_num) + ".ply") : save_path / (filename + ".ply");
 
