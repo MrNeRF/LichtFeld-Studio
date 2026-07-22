@@ -1138,7 +1138,7 @@ struct Uniforms {
     float expected_far;
     // Explicit padding to keep dist_coeffs 16-byte aligned; mirrors the C++
     // struct exactly (192 bytes total).
-    uint uniforms_pad0;
+    uint depth_wave;
     uint uniforms_pad1;
     uint uniforms_pad2;
     float4 dist_coeffs;

@@ -20,8 +20,6 @@ namespace PerfTimer {
     const char* diagnosticStageScope(const TrainStage stage) {
         switch (stage) {
         case ProjectionForward: return "vksplat.shaders.slang.spirv.projection_forward";
-        case GenerateKeys: return "vksplat.shaders.slang.spirv.generate_keys";
-        case ComputeTileRanges: return "vksplat.shaders.slang.spirv.compute_tile_ranges";
         case RasterizeForward: return "vksplat.shaders.slang.spirv.rasterize_forward";
         case _Cumsum: return "vksplat.shaders.slang.spirv.cumsum";
         case CalculateIndexBufferOffset: return "vksplat.shaders.slang.spirv.index_buffer_offset";
@@ -34,7 +32,6 @@ namespace PerfTimer {
         case CopyPrimitiveSortIndices: return "vksplat.shaders.slang.spirv.copy_primitive_sort_indices";
         case ApplyDepthOrdering: return "vksplat.shaders.slang.spirv.apply_depth_ordering";
         case PrepareTileSort: return "vksplat.shaders.slang.spirv.prepare_tile_sort";
-        case SortRTS: return "vksplat.shaders.glsl.spirv.radix_sort";
         case END: break;
         }
         return nullptr;

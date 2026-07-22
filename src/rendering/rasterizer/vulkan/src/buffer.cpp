@@ -64,6 +64,8 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(sorting_gauss_idx_2);
     ADD_OWNED(tile_sort_count);
     ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(depth_wave_dispatch);
+    ADD_OWNED(wave_predicates);
     ADD_OWNED(tile_ranges);
     ADD_OWNED(tile_batch_counts);
     ADD_OWNED(tile_batch_offsets);
@@ -73,6 +75,7 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(tile_batch_n_contributors);
     ADD_OWNED(pixel_state);
     ADD_OWNED(pixel_depth);
+    ADD_OWNED(pixel_depth_weight);
     ADD_OWNED(n_contributors);
     ADD_OWNED(_cumsum_blockSums);
     ADD_OWNED(_cumsum_blockSums2);
@@ -144,6 +147,8 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(sorting_gauss_idx_2);
     ADD_OWNED(tile_sort_count);
     ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(depth_wave_dispatch);
+    ADD_OWNED(wave_predicates);
     ADD_OWNED(tile_ranges);
     ADD_OWNED(tile_batch_counts);
     ADD_OWNED(tile_batch_offsets);
@@ -153,6 +158,7 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(tile_batch_n_contributors);
     ADD_OWNED(pixel_state);
     ADD_OWNED(pixel_depth);
+    ADD_OWNED(pixel_depth_weight);
     ADD_OWNED(n_contributors);
     ADD_OWNED(_cumsum_blockSums);
     ADD_OWNED(_cumsum_blockSums2);
@@ -243,7 +249,8 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                        buffer.extra_usage;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo aci = {};

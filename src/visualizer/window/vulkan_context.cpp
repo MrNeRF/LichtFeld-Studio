@@ -2328,6 +2328,8 @@ namespace lfs::vis {
         const bool swapchain_maintenance1_available =
             instance_surface_maintenance_enabled_ &&
             extensionAvailable(available_extensions, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+        const bool conditional_rendering_available =
+            extensionAvailable(available_extensions, VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
 
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT supported_atomic_float_features{};
         supported_atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
@@ -2346,6 +2348,9 @@ namespace lfs::vis {
         VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT supported_swapchain_maintenance1{};
         supported_swapchain_maintenance1.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+        VkPhysicalDeviceConditionalRenderingFeaturesEXT supported_conditional_rendering{};
+        supported_conditional_rendering.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT;
 
         void* opt_supported_head = nullptr;
         if (swapchain_maintenance1_available) {
@@ -2355,6 +2360,10 @@ namespace lfs::vis {
         if (enable_host_image_copy) {
             supported_host_image_copy.pNext = opt_supported_head;
             opt_supported_head = &supported_host_image_copy;
+        }
+        if (conditional_rendering_available) {
+            supported_conditional_rendering.pNext = opt_supported_head;
+            opt_supported_head = &supported_conditional_rendering;
         }
 
         VkPhysicalDeviceVulkan11Features supported_features11{};
@@ -2428,6 +2437,19 @@ namespace lfs::vis {
             enabled_chain_head = &swapchain_maintenance1_features;
         }
 
+        const bool enable_conditional_rendering =
+            conditional_rendering_available &&
+            supported_conditional_rendering.conditionalRendering == VK_TRUE;
+        VkPhysicalDeviceConditionalRenderingFeaturesEXT conditional_rendering_features{};
+        conditional_rendering_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT;
+        if (enable_conditional_rendering) {
+            appendUniqueExtension(extensions, VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
+            conditional_rendering_features.conditionalRendering = VK_TRUE;
+            conditional_rendering_features.pNext = enabled_chain_head;
+            enabled_chain_head = &conditional_rendering_features;
+        }
+
         // 16-bit storage for the fp16 splat raster path (half4 partials,
         // half-packed staging). Mirrors device support; consumers must check
         // hasFloat16Storage() and fall back to fp32 shader variants.
@@ -2473,6 +2495,18 @@ namespace lfs::vis {
                 return fail("VK_KHR_push_descriptor is enabled but vkCmdPushDescriptorSetKHR could not be loaded");
             }
         }
+        if (enable_conditional_rendering) {
+            vk_cmd_begin_conditional_rendering_ =
+                reinterpret_cast<PFN_vkCmdBeginConditionalRenderingEXT>(
+                    vkGetDeviceProcAddr(device_, "vkCmdBeginConditionalRenderingEXT"));
+            vk_cmd_end_conditional_rendering_ =
+                reinterpret_cast<PFN_vkCmdEndConditionalRenderingEXT>(
+                    vkGetDeviceProcAddr(device_, "vkCmdEndConditionalRenderingEXT"));
+            if (vk_cmd_begin_conditional_rendering_ == nullptr ||
+                vk_cmd_end_conditional_rendering_ == nullptr) {
+                return fail("VK_EXT_conditional_rendering is enabled but its commands could not be loaded");
+            }
+        }
 
         vkGetDeviceQueue(device_, graphics_queue_family_, 0, &graphics_queue_);
         vkGetDeviceQueue(device_, present_queue_family_, 0, &present_queue_);
@@ -2500,6 +2534,7 @@ namespace lfs::vis {
         has_push_descriptor_ = enable_push_descriptor;
         has_float16_storage_ = features12.shaderFloat16 == VK_TRUE &&
                                features11.storageBuffer16BitAccess == VK_TRUE;
+        has_conditional_rendering_ = enable_conditional_rendering;
         has_host_image_copy_ = enable_host_image_copy_feature;
         has_fill_mode_non_solid_ = features2.features.fillModeNonSolid == VK_TRUE;
         has_wide_lines_ = features2.features.wideLines == VK_TRUE;
@@ -3136,7 +3171,8 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::importExternalBuffer(ExternalNativeHandle handle,
-                                             const VkDeviceSize size,
+                                             const VkDeviceSize buffer_size,
+                                             const VkDeviceSize exported_allocation_size,
                                              const VkBufferUsageFlags usage,
                                              ExternalBuffer& out,
                                              const std::string_view diagnostic_scope,
@@ -3146,8 +3182,14 @@ namespace lfs::vis {
         if (!device_ || !physical_device_) {
             return fail("Cannot import external Vulkan buffer before device initialization");
         }
-        if (size == 0) {
-            return fail("Imported external Vulkan buffer requires a non-zero size");
+        if (buffer_size == 0 || exported_allocation_size == 0) {
+            return fail("Imported external Vulkan buffer requires non-zero buffer and allocation sizes");
+        }
+        if (buffer_size > exported_allocation_size) {
+            return fail(std::format(
+                "Imported external Vulkan buffer exceeds its exported allocation (buffer_bytes={}, allocation_bytes={})",
+                buffer_size,
+                exported_allocation_size));
         }
         if (!externalNativeHandleValid(handle)) {
             return fail("Imported external Vulkan buffer requires a valid native handle");
@@ -3160,7 +3202,7 @@ namespace lfs::vis {
         VkBufferCreateInfo buffer_info{};
         buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         buffer_info.pNext = &external_buffer_info;
-        buffer_info.size = size;
+        buffer_info.size = buffer_size;
         buffer_info.usage = usage |
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
@@ -3185,21 +3227,57 @@ namespace lfs::vis {
         setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
                             out.buffer,
                             "interop.imported.buffer[{}]",
-                            size);
+                            buffer_size);
 
         VkMemoryRequirements memory_requirements{};
         vkGetBufferMemoryRequirements(device_, out.buffer, &memory_requirements);
-        out.size = size;
-        out.allocation_size = memory_requirements.size;
+        out.size = buffer_size;
+        out.allocation_size = exported_allocation_size;
         out.diagnostic_scope = diagnostic_scope.empty() ? "vulkan.external.imported_buffer" : std::string(diagnostic_scope);
         out.diagnostic_label = makeAllocationDiagnosticLabel(diagnostic_label);
+        if (memory_requirements.size > exported_allocation_size) {
+            destroyExternalBuffer(out);
+            return fail(std::format(
+                "Imported external allocation is smaller than the Vulkan buffer requirements (buffer_bytes={}, allocation_bytes={}, required_bytes={})",
+                buffer_size,
+                exported_allocation_size,
+                memory_requirements.size));
+        }
+
+        uint32_t compatible_memory_type_bits = memory_requirements.memoryTypeBits;
 
 #ifdef _WIN32
+        // Unlike POSIX OPAQUE_FD, Vulkan permits querying a foreign NT handle.
+        // Restrict the buffer-compatible mask to the types the CUDA payload can
+        // actually be imported as before selecting a device-local type.
+        auto get_memory_handle_properties =
+            reinterpret_cast<PFN_vkGetMemoryWin32HandlePropertiesKHR>(
+                vkGetDeviceProcAddr(device_, "vkGetMemoryWin32HandlePropertiesKHR"));
+        if (get_memory_handle_properties == nullptr) {
+            destroyExternalBuffer(out);
+            return fail("vkGetMemoryWin32HandlePropertiesKHR is unavailable");
+        }
+        VkMemoryWin32HandlePropertiesKHR handle_properties{};
+        handle_properties.sType = VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR;
+        result = get_memory_handle_properties(
+            device_, kExternalMemoryHandleType, handle, &handle_properties);
+        if (result != VK_SUCCESS) {
+            destroyExternalBuffer(out);
+            return fail(std::format(
+                "vkGetMemoryWin32HandlePropertiesKHR failed: {}",
+                vkResultToString(result)));
+        }
+        compatible_memory_type_bits &= handle_properties.memoryTypeBits;
+
         VkImportMemoryWin32HandleInfoKHR import_info{};
         import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
         import_info.handleType = kExternalMemoryHandleType;
         import_info.handle = handle;
 #else
+        // vkGetMemoryFdPropertiesKHR explicitly rejects OPAQUE_FD (VUID 00674).
+        // For CUDA's opaque POSIX handle, the buffer requirements are therefore
+        // the only legal Vulkan memory-type mask; the NVIDIA driver validates the
+        // foreign payload when vkAllocateMemory consumes the duplicated fd.
         // NVIDIA's driver takes ownership of the fd we pass to vkAllocateMemory and
         // will close it on vkFreeMemory. Dup so the original exporter (CUDA) can
         // still own its copy; both close their fd independently on teardown.
@@ -3217,19 +3295,20 @@ namespace lfs::vis {
         VkMemoryAllocateInfo allocate_info{};
         allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocate_info.pNext = &import_info;
-        // The exporter created exactly `size` bytes; the importer must allocate the
-        // SAME size, not memory_requirements.size which can be larger (e.g. when
-        // Vulkan would round up for its own alignment). vkAllocateMemory with import
-        // requires the original allocation size.
-        allocate_info.allocationSize = size;
+        // Import the exact physical payload size recorded by the exporter, not
+        // either the logical buffer view or Vulkan's memory-requirements size.
+        allocate_info.allocationSize = exported_allocation_size;
         allocate_info.memoryTypeIndex =
-            findMemoryType(memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            findMemoryType(compatible_memory_type_bits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
 #ifndef _WIN32
             ::close(dup_fd);
 #endif
             destroyExternalBuffer(out);
-            return fail("Could not find Vulkan device-local memory type for imported buffer");
+            return fail(std::format(
+                "Could not find a compatible Vulkan device-local memory type for imported buffer (buffer_type_bits={:#x}, compatible_type_bits={:#x})",
+                memory_requirements.memoryTypeBits,
+                compatible_memory_type_bits));
         }
 
         result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
@@ -3244,7 +3323,7 @@ namespace lfs::vis {
         setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
                             out.memory,
                             "interop.imported.buffer[{}].memory",
-                            size);
+                            exported_allocation_size);
 
         result = vkBindBufferMemory(device_, out.buffer, out.memory, 0);
         if (result != VK_SUCCESS) {
@@ -3254,6 +3333,14 @@ namespace lfs::vis {
 
         // We do NOT own the handle; the exporter retains it. Leave native_handle invalid.
         out.native_handle = kInvalidExternalNativeHandle;
+        LOG_DEBUG(
+            "Imported foreign external buffer: buffer={} bytes, payload={} bytes, requirements={} bytes, buffer_type_bits={:#x}, compatible_type_bits={:#x}, memory_type={}",
+            buffer_size,
+            exported_allocation_size,
+            memory_requirements.size,
+            memory_requirements.memoryTypeBits,
+            compatible_memory_type_bits,
+            allocate_info.memoryTypeIndex);
         return true;
     }
 

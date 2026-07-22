@@ -55,6 +55,12 @@ struct Uniforms {
     // uint32_t stride;
 };
 
+[ForceInline]
+int32_t sat_add(int32_t a, int32_t b) {
+    const uint32_t sum = uint32_t(a) + uint32_t(b);
+    return int32_t(min(sum, 0x7fffffffu));
+}
+
 #if CUMSUM_INDIRECT
 #define RESOLVE_NUM_ELEMENTS(u) uint32_t(max(g_counts[(u).numElements], 0))
 #else
@@ -70,10 +76,9 @@ int32_t subgroupScan(int32_t val, uint laneId) {
         // int32_t temp = WaveReadLaneAt(val, (laneId - offset) & (SUBGROUP_SIZE - 1));
         int32_t temp = WaveReadLaneAt(val, laneId - offset);
         if (laneId >= offset)
-            val += temp;
+            val = sat_add(val, temp);
     }
     return val;
-    // return val + WavePrefixSum(val);
 }
 
 
@@ -114,7 +119,7 @@ void blockScan(
     // Block-level scan of subgroup sums
     if (active && tid < (BLOCK_SIZE / SUBGROUP_SIZE)) {
         int32_t subgroupSumVal = s_data[tid * SUBGROUP_SIZE + SUBGROUP_SIZE - 1];
-        int32_t blockScanResult = subgroupSumVal + WavePrefixSum(subgroupSumVal);
+        int32_t blockScanResult = subgroupScan(subgroupSumVal, laneId);
         s_data[tid * SUBGROUP_SIZE + SUBGROUP_SIZE - 1] = blockScanResult;
     }
     GroupMemoryBarrierWithGroupSync();
@@ -122,7 +127,7 @@ void blockScan(
     // Distribute block scan results back to subgroups
     if (active && subgroupId > 0 && laneId != SUBGROUP_SIZE - 1) {
         int32_t subgroupOffset = s_data[subgroupId * SUBGROUP_SIZE - 1];
-        s_data[tid] += subgroupOffset;
+        s_data[tid] = sat_add(s_data[tid], subgroupOffset);
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -169,14 +174,14 @@ void scanBlockSums(
 
     if (active && tid < (BLOCK_SIZE / SUBGROUP_SIZE)) {
         int32_t subgroupSumVal = s_data[tid * SUBGROUP_SIZE + SUBGROUP_SIZE - 1];
-        int32_t blockScanResult = subgroupSumVal + WavePrefixSum(subgroupSumVal);
+        int32_t blockScanResult = subgroupScan(subgroupSumVal, laneId);
         s_data[tid * SUBGROUP_SIZE + SUBGROUP_SIZE - 1] = blockScanResult;
     }
     GroupMemoryBarrierWithGroupSync();
 
     if (active && subgroupId > 0 && laneId != SUBGROUP_SIZE-1) {
         int32_t subgroupOffset = s_data[subgroupId * SUBGROUP_SIZE - 1];
-        s_data[tid] += subgroupOffset;
+        s_data[tid] = sat_add(s_data[tid], subgroupOffset);
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -202,7 +207,7 @@ void addBlockOffsets(
     uint gid = blockId * BLOCK_SIZE + tid;
 
     if (gid < numElements && blockId > 0) {
-        g_output[gid] += g_blockSums[blockId-1];
+        g_output[gid] = sat_add(g_output[gid], g_blockSums[blockId-1]);
     }
 }
 
@@ -226,7 +231,8 @@ void singlePassPrefixSum(
     // Up-sweep (reduction) phase
     for (uint stride = 1; stride < BLOCK_SIZE_0; stride <<= 1) {
         if (tid % (stride * 2) == 0) {
-            s_data[tid + stride * 2 - 1] += s_data[tid + stride - 1];
+            s_data[tid + stride * 2 - 1] = sat_add(
+                s_data[tid + stride * 2 - 1], s_data[tid + stride - 1]);
         }
         GroupMemoryBarrierWithGroupSync();
     }
@@ -242,13 +248,13 @@ void singlePassPrefixSum(
         if (tid % (stride * 2) == 0) {
             int32_t temp = s_data[tid + stride - 1];
             s_data[tid + stride - 1] = s_data[tid + stride * 2 - 1];
-            s_data[tid + stride * 2 - 1] += temp;
+            s_data[tid + stride * 2 - 1] = sat_add(s_data[tid + stride * 2 - 1], temp);
         }
         GroupMemoryBarrierWithGroupSync();
     }
 
     // Write exclusive prefix sum result
     if (gid < numElements) {
-        g_output[gid] = s_data[tid] + v_in;
+        g_output[gid] = sat_add(s_data[tid], v_in);
     }
 }

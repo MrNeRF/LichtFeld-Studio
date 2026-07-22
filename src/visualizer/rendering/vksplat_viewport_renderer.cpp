@@ -62,9 +62,6 @@ namespace lfs::vis {
         constexpr std::uint32_t kRingPickPhaseNone = 0u;
         constexpr std::uint32_t kRingPickPhaseFindMin = 1u;
         constexpr std::uint32_t kRingPickPhaseWritePick = 2u;
-        constexpr std::size_t kMaxTileInstanceCount =
-            static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
-
         // Readback frames of deferred-wants-with-zero-admissions before the
         // pool counts as frozen: long enough to outlast the publish
         // protection window (3) and the eviction freshness window (12), so
@@ -635,8 +632,10 @@ namespace lfs::vis {
                 {"selection_mask", (root / "generated/selection_mask.spv").string()},
                 {"selection_polygon_rasterize",
                  (root / "generated/selection_polygon_rasterize.spv").string()},
-                {"generate_keys", (root / "generated/generate_keys.spv").string()},
+                {"generate_keys_wave", (root / "generated/generate_keys_wave.spv").string()},
                 {"compute_tile_ranges", (root / "generated/compute_tile_ranges.spv").string()},
+                {"compute_tile_ranges_and_batch_counts",
+                 (root / "generated/compute_tile_ranges_and_batch_counts.spv").string()},
                 {"rasterize_forward", (root / "generated/rasterize_forward.spv").string()},
                 {"rasterize_forward_3dgut", (root / "generated/rasterize_forward_3dgut.spv").string()},
                 {"rasterize_forward_plain", (root / "generated/rasterize_forward_plain.spv").string()},
@@ -646,7 +645,6 @@ namespace lfs::vis {
                  (root / "generated/rasterize_forward_light.spv").string()},
                 {"rasterize_forward_light_plain",
                  (root / "generated/rasterize_forward_light_plain.spv").string()},
-                {"tile_batch_counts", (root / "generated/tile_batch_counts.spv").string()},
                 {"tile_batch_descriptors", (root / "generated/tile_batch_descriptors.spv").string()},
                 {"rasterize_forward_batches",
                  (root / "generated/rasterize_forward_batches.spv").string()},
@@ -660,6 +658,9 @@ namespace lfs::vis {
                 {"cumsum_block_scan", (root / "generated/cumsum_block_scan.spv").string()},
                 {"cumsum_scan_block_sums", (root / "generated/cumsum_scan_block_sums.spv").string()},
                 {"cumsum_add_block_offsets", (root / "generated/cumsum_add_block_offsets.spv").string()},
+                {"radix_histogram_clear", (root / "generated/radix_histogram_clear.spv").string()},
+                {"expected_depth_finalize",
+                 (root / "generated/expected_depth_finalize.spv").string()},
                 {"radix_sort/upsweep_indirect", (root / "radix_sort/upsweep_indirect.spv").string()},
                 {"radix_sort/spine_indirect", (root / "radix_sort/spine_indirect.spv").string()},
                 {"radix_sort/downsweep_indirect", (root / "radix_sort/downsweep_indirect.spv").string()},
@@ -688,10 +689,13 @@ namespace lfs::vis {
                  (root / "generated/cumsum_add_block_offsets_indirect.spv").string()},
                 {"prepare_tile_sort_visible",
                  (root / "generated/prepare_tile_sort_visible.spv").string()},
+                {"wave_partition", (root / "generated/wave_partition.spv").string()},
+                {"wave_partition_visible",
+                 (root / "generated/wave_partition_visible.spv").string()},
                 {"macro_coverage", (root / "generated/macro_coverage.spv").string()},
-                {"generate_macro_keys", (root / "generated/generate_macro_keys.spv").string()},
+                {"generate_macro_keys_wave",
+                 (root / "generated/generate_macro_keys_wave.spv").string()},
                 {"compute_macro_ranges", (root / "generated/compute_macro_ranges.spv").string()},
-                {"macro_batch_counts", (root / "generated/macro_batch_counts.spv").string()},
                 {"macro_batch_prepare", (root / "generated/macro_batch_prepare.spv").string()},
                 {"macro_raster", (root / "generated/macro_raster.spv").string()},
                 {"macro_raster_fp32", (root / "generated/macro_raster_fp32.spv").string()},
@@ -1847,15 +1851,12 @@ namespace lfs::vis {
         }
         buffers_.num_splats = 0;
         buffers_.num_indices = 0;
-        buffers_.num_indices_high_water = 0;
-        render_tile_count_high_water_ = 0;
         buffers_.is_unsorted_1 = true;
         resident_sort_capacity_ = 0;
+        resident_depth_wave_armed_ = 0;
+        resident_sort_bits_ = 0;
         last_render_used_macro_chain_ = false;
         macro_chain_warmup_pending_ = true;
-        visible_high_water_ = 0;
-        visible_clamp_pending_ = false;
-        instance_clamp_pending_ = false;
         uploaded_lod_indices_ = {};
         uploaded_lod_logical_indices_ = {};
         uploaded_lod_levels_ = {};
@@ -2014,11 +2015,12 @@ namespace lfs::vis {
         next_ring_slot_ = 0;
         current_input_sh_degree_ = -1;
         resident_sort_capacity_ = 0;
+        resident_depth_wave_armed_ = 0;
+        resident_sort_bits_ = 0;
         last_render_used_macro_chain_ = false;
         macro_chain_warmup_pending_ = true;
         compose_.reset();
         buffers_ = {};
-        render_tile_count_high_water_ = 0;
         uploaded_lod_indices_ = {};
         uploaded_lod_logical_indices_ = {};
         uploaded_lod_levels_ = {};
@@ -3068,10 +3070,15 @@ namespace lfs::vis {
         const auto add_count = [&](const std::size_t count, const std::size_t elem_size) {
             add(count * elem_size);
         };
-        const std::size_t dense_batch_capacity = denseTileBatchCapacity(sort_capacity, num_tiles);
+        const std::size_t dense_batch_capacity =
+            denseTileBatchCapacity(HIGS_DEPTH_WAVE_INSTANCES, num_tiles);
+        // CUDA training can require N-wide sort scratch while the Vulkan wave
+        // chain is fixed at K. Both consumers share this arena layout.
+        const std::size_t sort_region_elems = std::max(num_splats, sort_capacity);
         // Macro chain: per-splat outputs live at compact slots (visible
         // capacity), and the legacy-only buffers are not part of the frame.
         const std::size_t per_visible = macro_chain ? visible_capacity : num_splats;
+        const std::size_t cumsum_elements = std::max(per_visible, num_tiles);
 
         if (!macro_chain) {
             add_count(num_splats, sizeof(std::uint32_t)); // primitive_depth_keys
@@ -3092,29 +3099,30 @@ namespace lfs::vis {
             add_count(num_splats, sizeof(std::int32_t)); // visible_flags
             add_count(num_splats, sizeof(std::int32_t)); // visible_prefix
         }
-        add_count(2, sizeof(std::uint32_t));                                                                      // visible_count
-        add_count(indirect::VisibleSortDispatch::kLayout.word_count, sizeof(std::uint32_t));                      // visible_sort_dispatch_args
-        add_count(per_visible, sizeof(std::int32_t));                                                             // index_buffer_offset
-        add_count(sort_capacity, sizeof(sortingKey_t));                                                           // sorting_keys_1
-        add_count(sort_capacity, sizeof(sortingKey_t));                                                           // sorting_keys_2
-        add_count(sort_capacity, sizeof(std::int32_t));                                                           // sorting_gauss_idx_1
-        add_count(sort_capacity, sizeof(std::int32_t));                                                           // sorting_gauss_idx_2
-        add_count(2, sizeof(std::uint32_t));                                                                      // tile_sort_count
-        add_count(indirect::TileSortDispatch::kLayout.word_count, sizeof(std::uint32_t));                         // tile_sort_dispatch_args
-        add_count(num_tiles + 1, sizeof(std::int32_t));                                                           // tile_ranges
-        add_count(num_tiles, sizeof(std::int32_t));                                                               // tile_batch_counts
-        add_count(num_tiles, sizeof(std::int32_t));                                                               // tile_batch_offsets
-        add_count(indirect::TileBatchDispatch::kLayout.word_count, sizeof(std::uint32_t));                        // tile_batch_dispatch_args
-        add_count(4 * dense_batch_capacity, sizeof(std::uint32_t));                                               // tile_batch_descriptors
-        add_count(4 * dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(float));                            // tile_batch_pixel_state
-        add_count(dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(std::int32_t));                         // tile_batch_n_contributors
-        add_count(4 * num_pixels, sizeof(float));                                                                 // pixel_state
-        add_count(num_pixels, sizeof(float));                                                                     // pixel_depth
-        add_count(num_pixels, sizeof(std::int32_t));                                                              // n_contributors
-        add_count(_CEIL_DIV(per_visible, std::size_t{1024}), sizeof(std::int32_t));                               // _cumsum_blockSums
-        add_count(_CEIL_DIV(_CEIL_DIV(per_visible, std::size_t{1024}), std::size_t{1024}), sizeof(std::int32_t)); // _cumsum_blockSums2
-        add_count(8 * 256, sizeof(std::int32_t));                                                                 // _sorting_histogram
-        add_count(_CEIL_DIV(sort_capacity, std::size_t{512 * 8}) * 256, sizeof(std::int32_t));                    // _sorting_histogram_cumsum
+        add_count(2, sizeof(std::uint32_t));                                                                          // visible_count
+        add_count(indirect::VisibleSortDispatch::kLayout.word_count, sizeof(std::uint32_t));                          // visible_sort_dispatch_args
+        add_count(per_visible, sizeof(std::int32_t));                                                                 // index_buffer_offset
+        add_count(sort_region_elems, sizeof(sortingKey_t));                                                           // sorting_keys_1
+        add_count(sort_region_elems, sizeof(sortingKey_t));                                                           // sorting_keys_2
+        add_count(sort_region_elems, sizeof(std::int32_t));                                                           // sorting_gauss_idx_1
+        add_count(sort_region_elems, sizeof(std::int32_t));                                                           // sorting_gauss_idx_2
+        add_count(2, sizeof(std::uint32_t));                                                                          // tile_sort_count
+        add_count(indirect::TileSortDispatch::kLayout.word_count, sizeof(std::uint32_t));                             // tile_sort_dispatch_args
+        add_count(num_tiles + 1, sizeof(std::int32_t));                                                               // tile_ranges
+        add_count(num_tiles, sizeof(std::int32_t));                                                                   // tile_batch_counts
+        add_count(num_tiles, sizeof(std::int32_t));                                                                   // tile_batch_offsets
+        add_count(indirect::TileBatchDispatch::kLayout.word_count, sizeof(std::uint32_t));                            // tile_batch_dispatch_args
+        add_count(4 * dense_batch_capacity, sizeof(std::uint32_t));                                                   // tile_batch_descriptors
+        add_count(4 * dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(float));                                // tile_batch_pixel_state
+        add_count(dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(std::int32_t));                             // tile_batch_n_contributors
+        add_count(4 * num_pixels, sizeof(float));                                                                     // pixel_state
+        add_count(num_pixels, sizeof(float));                                                                         // pixel_depth
+        add_count(num_pixels, sizeof(float));                                                                         // pixel_depth_weight
+        add_count(num_pixels, sizeof(std::int32_t));                                                                  // n_contributors
+        add_count(_CEIL_DIV(cumsum_elements, std::size_t{1024}), sizeof(std::int32_t));                               // _cumsum_blockSums
+        add_count(_CEIL_DIV(_CEIL_DIV(cumsum_elements, std::size_t{1024}), std::size_t{1024}), sizeof(std::int32_t)); // _cumsum_blockSums2
+        add_count(8 * 256, sizeof(std::int32_t));                                                                     // _sorting_histogram
+        add_count(_CEIL_DIV(sort_region_elems, std::size_t{512 * 8}) * 256, sizeof(std::int32_t));                    // _sorting_histogram_cumsum
         return alignUp(cursor, kRegionAlignment);
     }
 
@@ -3218,6 +3226,7 @@ namespace lfs::vis {
                     VulkanContext::ExternalBuffer reimported{};
                     if (!context.importExternalBuffer(shared_scratch_.block->handle.native,
                                                       static_cast<VkDeviceSize>(shared_scratch_.block->size),
+                                                      static_cast<VkDeviceSize>(shared_scratch_.block->handle.size),
                                                       usage,
                                                       reimported,
                                                       "shared.scratch",
@@ -3265,6 +3274,7 @@ namespace lfs::vis {
         VulkanContext::ExternalBuffer imported{};
         if (!context.importExternalBuffer((*block_result)->handle.native,
                                           static_cast<VkDeviceSize>((*block_result)->size),
+                                          static_cast<VkDeviceSize>((*block_result)->handle.size),
                                           usage,
                                           imported,
                                           "shared.scratch",
@@ -3318,6 +3328,7 @@ namespace lfs::vis {
         VulkanContext::ExternalBuffer reimported{};
         if (!context.importExternalBuffer(shared_scratch_.block->handle.native,
                                           static_cast<VkDeviceSize>(shared_scratch_.block->size),
+                                          static_cast<VkDeviceSize>(shared_scratch_.block->handle.size),
                                           usage,
                                           reimported,
                                           "shared.scratch",
@@ -3359,11 +3370,8 @@ namespace lfs::vis {
             return std::unexpected("VkSplat training shared-scratch prime tile count overflows size_t");
         }
         const std::size_t num_tiles = tiles_x * tiles_y;
-        const std::size_t sort_capacity = std::min(
-            kMaxTileInstanceCount,
-            num_splats > (std::numeric_limits<std::size_t>::max() / 4u)
-                ? num_splats
-                : num_splats * 4u);
+        const std::size_t sort_capacity =
+            std::max(num_splats, std::size_t{HIGS_DEPTH_WAVE_INSTANCES});
         const std::size_t required_shared_scratch =
             estimateSharedScratchBytes(num_splats,
                                        num_splats,
@@ -3406,6 +3414,7 @@ namespace lfs::vis {
         // Mirror estimateSharedScratchBytes exactly; the two walk the same
         // cursor so every region lands at the estimated offset.
         const std::size_t per_visible = macro_chain ? visible_capacity : num_splats;
+        const std::size_t cumsum_elements = std::max(per_visible, num_tiles);
         if (!macro_chain) {
             bind_count(buffers_.primitive_depth_keys, num_splats);
             bind_count(buffers_.tiles_touched, num_splats);
@@ -3430,16 +3439,18 @@ namespace lfs::vis {
                    indirect::VisibleSortDispatch::kLayout.word_count);
         bind_count(buffers_.index_buffer_offset, per_visible);
         const std::size_t per_splat_end = cursor;
-        bind_count(buffers_.sorting_keys_1, sort_capacity);
-        bind_count(buffers_.sorting_keys_2, sort_capacity);
-        bind_count(buffers_.sorting_gauss_idx_1, sort_capacity);
-        bind_count(buffers_.sorting_gauss_idx_2, sort_capacity);
+        const std::size_t sort_region_elems = std::max(num_splats, sort_capacity);
+        bind_count(buffers_.sorting_keys_1, sort_region_elems);
+        bind_count(buffers_.sorting_keys_2, sort_region_elems);
+        bind_count(buffers_.sorting_gauss_idx_1, sort_region_elems);
+        bind_count(buffers_.sorting_gauss_idx_2, sort_region_elems);
         const std::size_t sort_end = cursor;
         bind_count(buffers_.tile_sort_count, 2);
         bind_count(buffers_.tile_sort_dispatch_args,
                    indirect::TileSortDispatch::kLayout.word_count);
         bind_count(buffers_.tile_ranges, num_tiles + 1);
-        const std::size_t dense_batch_capacity = denseTileBatchCapacity(sort_capacity, num_tiles);
+        const std::size_t dense_batch_capacity =
+            denseTileBatchCapacity(HIGS_DEPTH_WAVE_INSTANCES, num_tiles);
         bind_count(buffers_.tile_batch_counts, num_tiles);
         bind_count(buffers_.tile_batch_offsets, num_tiles);
         bind_count(buffers_.tile_batch_dispatch_args,
@@ -3450,13 +3461,14 @@ namespace lfs::vis {
         const std::size_t tiles_end = cursor;
         bind_count(buffers_.pixel_state, 4 * num_pixels);
         bind_count(buffers_.pixel_depth, num_pixels);
+        bind_count(buffers_.pixel_depth_weight, num_pixels);
         bind_count(buffers_.n_contributors, num_pixels);
         const std::size_t pixel_end = cursor;
-        bind_count(buffers_._cumsum_blockSums, _CEIL_DIV(per_visible, std::size_t{1024}));
-        bind_count(buffers_._cumsum_blockSums2, _CEIL_DIV(_CEIL_DIV(per_visible, std::size_t{1024}), std::size_t{1024}));
+        bind_count(buffers_._cumsum_blockSums, _CEIL_DIV(cumsum_elements, std::size_t{1024}));
+        bind_count(buffers_._cumsum_blockSums2, _CEIL_DIV(_CEIL_DIV(cumsum_elements, std::size_t{1024}), std::size_t{1024}));
         bind_count(buffers_._sorting_histogram, 8 * 256);
         bind_count(buffers_._sorting_histogram_cumsum,
-                   _CEIL_DIV(sort_capacity, std::size_t{512 * 8}) * 256);
+                   _CEIL_DIV(sort_region_elems, std::size_t{512 * 8}) * 256);
 
         // Attribute the committed arena exactly: each region's span comes straight from
         // the bind cursor, and reserve_unbound is the committed-but-unbound remainder.
@@ -3521,6 +3533,7 @@ namespace lfs::vis {
         RELEASE_PRIVATE_SCRATCH(tile_batch_n_contributors);
         RELEASE_PRIVATE_SCRATCH(pixel_state);
         RELEASE_PRIVATE_SCRATCH(pixel_depth);
+        RELEASE_PRIVATE_SCRATCH(pixel_depth_weight);
         RELEASE_PRIVATE_SCRATCH(n_contributors);
         RELEASE_PRIVATE_SCRATCH(_cumsum_blockSums);
         RELEASE_PRIVATE_SCRATCH(_cumsum_blockSums2);
@@ -3615,6 +3628,7 @@ namespace lfs::vis {
         DETACH_SHARED(tile_batch_n_contributors);
         DETACH_SHARED(pixel_state);
         DETACH_SHARED(pixel_depth);
+        DETACH_SHARED(pixel_depth_weight);
         DETACH_SHARED(n_contributors);
         DETACH_SHARED(_cumsum_blockSums);
         DETACH_SHARED(_cumsum_blockSums2);
@@ -4155,7 +4169,10 @@ namespace lfs::vis {
                                          use_async_compute ? context.computeQueueFamily()
                                                            : context.graphicsQueueFamily(),
                                          context.allocator(),
-                                         context.pipelineCache());
+                                         context.pipelineCache(),
+                                         context.hasConditionalRendering(),
+                                         context.vkCmdBeginConditionalRendering(),
+                                         context.vkCmdEndConditionalRendering());
             renderer_.assignBufferLabels(buffers_);
             renderer_.setCpuTimerCallback([](const std::string_view name, const double ms) {
                 LOG_PERF("{} took {:.2f}ms", name, ms);
@@ -6338,6 +6355,9 @@ namespace lfs::vis {
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
+        if (input_binding->model_snapshot_changed) {
+            macro_chain_warmup_pending_ = true;
+        }
         // The borrowed Vulkan-external model storage stays resident across selection calls.
         // Stale data is detected via the model snapshot and its CUDA producer stream is ordered
         // into the Vulkan batch by the per-ring upload timeline.
@@ -6883,7 +6903,11 @@ namespace lfs::vis {
         if (num_splats == 0 || buffers_.num_splats != num_splats) {
             return std::unexpected("VkSplat selection overlay cached model does not match the current model");
         }
-        if (resident_sort_capacity_ == 0 ||
+        if (resident_sort_capacity_ != HIGS_DEPTH_WAVE_INSTANCES ||
+            resident_depth_wave_armed_ == 0 ||
+            resident_sort_bits_ <= 0 ||
+            !hasDeviceBuffer(buffers_.depth_wave_dispatch) ||
+            !hasDeviceBuffer(buffers_.wave_predicates) ||
             !hasDeviceBuffer(buffers_.sorted_gauss_idx()) ||
             !hasDeviceBuffer(buffers_.tile_ranges) ||
             !hasDeviceBuffer(buffers_.xy_vs) ||
@@ -6972,26 +6996,31 @@ namespace lfs::vis {
                     if (last_render_used_macro_chain_) {
                         // The resident sort/range buffers hold the macro chain's
                         // layout; re-rasterize through the macro path.
-                        renderer_.executeMacroRasterCompose(uniforms,
-                                                            buffers_,
-                                                            uniforms.sort_capacity,
-                                                            overlay_bindings->selection_mask,
-                                                            overlay_bindings->preview_mask,
-                                                            overlay_bindings->selection_colors,
-                                                            overlay_bindings->overlay_params,
-                                                            overlay_bindings->raster_overlays_active);
+                        renderer_.executeMacroDepthWaves(
+                            uniforms,
+                            buffers_,
+                            resident_depth_wave_armed_,
+                            resident_sort_bits_,
+                            overlay_bindings->selection_mask,
+                            overlay_bindings->preview_mask,
+                            overlay_bindings->selection_colors,
+                            overlay_bindings->overlay_params,
+                            overlay_bindings->raster_overlays_active);
                     } else {
-                        renderer_.executeRasterizeForward(uniforms,
-                                                          buffers_,
-                                                          overlay_bindings->selection_mask,
-                                                          overlay_bindings->preview_mask,
-                                                          overlay_bindings->selection_colors,
-                                                          buffers_.overlay_flags.deviceBuffer,
-                                                          overlay_bindings->overlay_params,
-                                                          overlay_bindings->transform_indices,
-                                                          overlay_bindings->model_transforms,
-                                                          request.gut,
-                                                          overlay_bindings->raster_overlays_active);
+                        renderer_.executeLegacyDepthWaves(
+                            uniforms,
+                            buffers_,
+                            resident_depth_wave_armed_,
+                            resident_sort_bits_,
+                            overlay_bindings->selection_mask,
+                            overlay_bindings->preview_mask,
+                            overlay_bindings->selection_colors,
+                            buffers_.overlay_flags.deviceBuffer,
+                            overlay_bindings->overlay_params,
+                            overlay_bindings->transform_indices,
+                            overlay_bindings->model_transforms,
+                            request.gut,
+                            overlay_bindings->raster_overlays_active);
                     }
                 }
                 {
@@ -7106,12 +7135,9 @@ namespace lfs::vis {
         // From this point onward a failed render may have partially rewritten the
         // shared sort/raster state. Publish it for overlay reuse only after submit.
         resident_sort_capacity_ = 0;
-        // Track whether each deferred capacity readback produced fresh stats
-        // this frame; feeds the one-shot-capture settle signal computed below.
-        bool visibility_stats_polled = false;
-        bool instance_stats_polled = false;
+        resident_depth_wave_armed_ = 0;
+        resident_sort_bits_ = 0;
         if (const auto visibility_stats = renderer_.pollDeferredPrimitiveVisibilityStats()) {
-            visibility_stats_polled = true;
             const double ratio = visibility_stats->num_splats == 0
                                      ? 0.0
                                      : static_cast<double>(visibility_stats->visible_count) /
@@ -7120,73 +7146,22 @@ namespace lfs::vis {
                      visibility_stats->visible_count,
                      visibility_stats->num_splats,
                      ratio);
-            const std::size_t decayed = visible_high_water_ - visible_high_water_ / 8;
-            visible_clamp_pending_ =
-                visibility_stats->raw_count > visibility_stats->visible_count;
-            // A clamped frame means the camera is moving toward more content;
-            // overshoot the mark so the heal converges in one round instead of
-            // chasing the zoom frame by frame.
-            const std::size_t grown = visible_clamp_pending_
-                                          ? std::min(visibility_stats->num_splats,
-                                                     visibility_stats->raw_count +
-                                                         visibility_stats->raw_count / 2)
-                                          : visibility_stats->raw_count;
-            visible_high_water_ = std::max(grown, decayed);
-            if (visible_clamp_pending_) {
-                LOG_PERF("vksplat.render.visible_clamped raw={} rendered={}",
-                         visibility_stats->raw_count,
-                         visibility_stats->visible_count);
-            }
         }
         if (const auto instance_stats = renderer_.pollDeferredTileInstanceStats()) {
-            instance_stats_polled = true;
             if (instance_stats->count_overflow) {
                 buffers_.num_indices = 0;
-                instance_clamp_pending_ = false;
-                last_preview_capture_settled_ = false;
                 return std::unexpected(
                     "VkSplat tile-instance prefix sum overflowed signed 32-bit capacity");
             }
-            // One frame stale; drives the capacity high-water mark. A clamped
-            // frame (raw > clamped) grows the mark so the next frames render
-            // complete content.
-            buffers_.num_indices = instance_stats->instance_count;
-            instance_clamp_pending_ =
-                instance_stats->raw_count > instance_stats->instance_count;
-            const std::size_t instance_target = std::min(
-                kMaxTileInstanceCount,
-                instance_clamp_pending_
-                    ? instance_stats->raw_count + instance_stats->raw_count / 2
-                    : instance_stats->raw_count);
-            buffers_.num_indices_high_water =
-                std::max(buffers_.num_indices_high_water, instance_target);
-            if (instance_clamp_pending_) {
-                LOG_PERF("vksplat.render.tile_instances_clamped raw={} rendered={}",
-                         instance_stats->raw_count,
-                         instance_stats->instance_count);
+            buffers_.num_indices = instance_stats->raw_count;
+            if (instance_stats->waves_needed > instance_stats->waves_armed) {
+                return std::unexpected(std::format(
+                    "VkSplat depth-wave budget exceeded: frame required {} waves of {} armed "
+                    "(K={} instances/wave)",
+                    instance_stats->waves_needed,
+                    instance_stats->waves_armed,
+                    HIGS_DEPTH_WAVE_INSTANCES));
             }
-        }
-        {
-            // Settle signal for one-shot preview/export captures. The interactive
-            // loop tolerates a capacity-clamped frame because it self-heals on the
-            // next frame; a single-shot capture reads back immediately, so it must
-            // not present a clamped (partial) frame. Mark "settled" only when the
-            // deferred readback of the previous render — which must have used the
-            // same steady-state chain the next pass will use, so a warm-up frame is
-            // rejected — reports complete, unclamped content.
-            const bool config_uses_macro =
-                !request.gut && renderer_.supportsFloat16Storage() &&
-                !synchronize_input_upload && !depth_capture_mode_;
-            const bool stats_complete = visibility_stats_polled && instance_stats_polled;
-            const bool clamp_observed = visible_clamp_pending_ || instance_clamp_pending_;
-            // last_render_used_macro_chain_ still reflects the just-polled
-            // (previous) render here; it is updated for the current render only
-            // after rasterization. Requiring it to match the steady-state chain
-            // rejects the legacy warm-up frame as a convergence point.
-            const bool observed_matches_steady_state =
-                last_render_used_macro_chain_ == config_uses_macro;
-            last_preview_capture_settled_ =
-                stats_complete && !clamp_observed && observed_matches_steady_state;
         }
         if (const auto lod_stats = renderer_.pollDeferredLodSelectionStats()) {
             gpu_lod_last_candidate_count_ = lod_stats->candidate_count;
@@ -7688,15 +7663,9 @@ namespace lfs::vis {
         // uniform the selected rasterizer reads — no backend-specific pipeline. The
         // far plane doubles as the expected-mode flag and bounds out junk far splats.
         uniforms.expected_far = depth_capture_expected_ ? request.frame_view.far_plane : 0.0f;
-        // Visible capacity follows the decaying high-water mark; until the
-        // first readback lands, size at the render domain (always sufficient).
-        // A clamped frame self-heals: the raw emit count grows the mark and
-        // the next frames render complete content.
-        const std::size_t higs_visible_capacity =
-            visible_high_water_ == 0
-                ? static_cast<std::size_t>(uniforms.num_splats)
-                : std::min<std::size_t>(static_cast<std::size_t>(uniforms.num_splats),
-                                        visible_high_water_ + visible_high_water_ / 4 + 65536);
+        // Projection/compaction storage is exact for the active render domain;
+        // tile-instance scratch is independently fixed at K and reused per wave.
+        const std::size_t visible_capacity = active_splat_count;
 
         if (uniforms.lod_enabled != 0u) {
             static std::uint32_t lod_dispatch_log_counter = 0;
@@ -7727,48 +7696,24 @@ namespace lfs::vis {
             }
         }
 
-        const std::size_t target_sort_capacity = std::min(
-            kMaxTileInstanceCount,
-            std::max(buffers_.num_indices, active_splat_count));
-        // Reserve from the deferred tile-instance count. The 4x estimate seeds
-        // the first frame; subsequent frames use the GPU-reported high-water mark.
-        const std::size_t first_frame_estimate =
-            buffers_.num_indices_high_water == 0
-                ? (active_splat_count > (std::numeric_limits<std::size_t>::max() / 4u)
-                       ? active_splat_count
-                       : active_splat_count * 4u)
-                : 0u;
         const std::size_t num_tiles =
             static_cast<std::size_t>(uniforms.grid_width) * static_cast<std::size_t>(uniforms.grid_height);
-        if (render_tile_count_high_water_ > 0 &&
-            num_tiles > render_tile_count_high_water_ &&
-            buffers_.num_indices_high_water > 0) {
-            buffers_.num_indices_high_water = std::min(
-                kMaxTileInstanceCount,
-                buffers_.num_indices_high_water * num_tiles / render_tile_count_high_water_);
-        }
-        render_tile_count_high_water_ = std::max(render_tile_count_high_water_, num_tiles);
-        // A genuine new peak renders one capacity-clamped frame, then deferred
-        // readback grows the block. Cap at INT32_MAX because the prefix scan is signed.
-        const std::size_t shared_sort_capacity =
-            std::min(kMaxTileInstanceCount,
-                     std::max({buffers_.num_indices, active_splat_count,
-                               buffers_.num_indices_high_water, first_frame_estimate}));
+        const std::size_t sort_region_elems =
+            std::max(active_splat_count, std::size_t{HIGS_DEPTH_WAVE_INSTANCES});
         const std::size_t num_pixels =
             static_cast<std::size_t>(uniforms.image_width) * static_cast<std::size_t>(uniforms.image_height);
         bool shared_scratch_bound = false;
         std::uint64_t shared_scratch_attempt_id = 0;
         const auto shared_scratch_context = [&]() {
             return std::format(
-                "attempt_id={}, required={}MiB, capacity={}MiB, generation={}, sort_capacity={}, high_water={}, last_indices={}, splats={}, viewport={}x{}, grid={}x{}, ring={}, next_render_value={}",
+                "attempt_id={}, required={}MiB, capacity={}MiB, generation={}, sort_region_elems={}, last_indices={}, splats={}, viewport={}x{}, grid={}x{}, ring={}, next_render_value={}",
                 shared_scratch_attempt_id,
-                estimateSharedScratchBytes(active_splat_count, higs_visible_capacity, higs_active,
-                                           shared_sort_capacity, num_pixels, num_tiles) >>
+                estimateSharedScratchBytes(active_splat_count, visible_capacity, higs_active,
+                                           sort_region_elems, num_pixels, num_tiles) >>
                     20,
                 shared_scratch_.bytes >> 20,
                 shared_scratch_.generation,
-                shared_sort_capacity,
-                buffers_.num_indices_high_water,
+                sort_region_elems,
                 buffers_.num_indices,
                 active_splat_count,
                 static_cast<std::uint32_t>(uniforms.image_width),
@@ -7784,8 +7729,8 @@ namespace lfs::vis {
             // Do not resize output images until this render is guaranteed to proceed.
             releasePrivateScratchBuffers();
             const std::size_t required_shared_scratch =
-                estimateSharedScratchBytes(active_splat_count, higs_visible_capacity, higs_active,
-                                           shared_sort_capacity, num_pixels, num_tiles);
+                estimateSharedScratchBytes(active_splat_count, visible_capacity, higs_active,
+                                           sort_region_elems, num_pixels, num_tiles);
             shared_scratch_attempt_id = ++shared_scratch_attempt_serial_;
             if (auto ok = ensureSharedScratchArena(context, required_shared_scratch); ok) {
                 try {
@@ -7799,13 +7744,13 @@ namespace lfs::vis {
                         shared_arena_guard.reset();
                         return std::unexpected(rok.error());
                     }
-                    bindSharedScratchBuffers(active_splat_count, higs_visible_capacity, higs_active,
-                                             shared_sort_capacity, num_pixels, num_tiles);
+                    bindSharedScratchBuffers(active_splat_count, visible_capacity, higs_active,
+                                             sort_region_elems, num_pixels, num_tiles);
                     shared_scratch_bound = true;
-                    LOG_PERF("vksplat.memory.shared_scratch required={}MiB capacity={}MiB sort_capacity={} splats={}",
+                    LOG_PERF("vksplat.memory.shared_scratch required={}MiB capacity={}MiB sort_region_elems={} splats={}",
                              required_shared_scratch >> 20,
                              shared_scratch_.bytes >> 20,
-                             shared_sort_capacity,
+                             sort_region_elems,
                              active_splat_count);
                 } catch (const std::exception& e) {
                     shared_arena_guard.reset();
@@ -7828,15 +7773,6 @@ namespace lfs::vis {
             }
         });
 
-        if (!synchronize_input_upload &&
-            renderer_.shrinkSortBuffersForCapacity(buffers_,
-                                                   target_sort_capacity,
-                                                   higs_active ? higs_visible_capacity : 0)) {
-            LOG_PERF("vksplat.memory.shrink_sort_buffers target_capacity={} splats={}",
-                     target_sort_capacity,
-                     active_splat_count);
-        }
-
         auto overlay_bindings = [&] {
             LOG_TIMER("vksplat.render.uploadOverlayBindings");
             return uploadOverlayBindings(
@@ -7853,6 +7789,8 @@ namespace lfs::vis {
         }
 
         std::expected<void, std::string> compose_status;
+        std::size_t armed_depth_waves = 0;
+        int depth_wave_sort_bits = 0;
         try {
             // Timer/guard ordering trick: the LOG_TIMER for batch_total is
             // declared FIRST so it destructs LAST. The DeviceGuard `batch`
@@ -7987,7 +7925,7 @@ namespace lfs::vis {
                                                                     overlay_bindings->node_mask,
                                                                     overlay_bindings->overlay_params,
                                                                     overlay_bindings->model_transforms,
-                                                                    higs_visible_capacity,
+                                                                    visible_capacity,
                                                                     lod_indices_buffer,
                                                                     lod_logical_indices_buffer,
                                                                     lod_levels_buffer,
@@ -8018,20 +7956,20 @@ namespace lfs::vis {
                 // The HiGS chain runs the same stages bounded by the GPU-resident
                 // visible count: the survivor projection already appended the
                 // depth-sort input at compact slots.
-                uniforms.sort_capacity = static_cast<std::uint32_t>(shared_sort_capacity);
+                uniforms.sort_capacity = HIGS_DEPTH_WAVE_INSTANCES;
                 if (higs_active) {
                     {
                         LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
-                        renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, higs_visible_capacity);
+                        renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, visible_capacity);
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeMacroCoverage");
-                        renderer_.executeMacroCoverage(uniforms, buffers_, higs_visible_capacity);
+                        renderer_.executeMacroCoverage(uniforms, buffers_, visible_capacity);
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeCalculateIndexBufferOffset");
                         renderer_.executeCalculateIndexBufferOffsetVisible(
-                            uniforms, buffers_, higs_visible_capacity, shared_sort_capacity);
+                            uniforms, buffers_, visible_capacity, HIGS_DEPTH_WAVE_INSTANCES);
                     }
                 } else {
                     {
@@ -8045,105 +7983,92 @@ namespace lfs::vis {
                     {
                         LOG_TIMER("vksplat.render.record.executeCalculateIndexBufferOffset");
                         renderer_.executeCalculateIndexBufferOffset(
-                            uniforms, buffers_, shared_sort_capacity);
+                            uniforms, buffers_, HIGS_DEPTH_WAVE_INSTANCES);
                     }
                 }
-                if (active_splat_count > 0) {
-                    const double instances_per_splat =
-                        static_cast<double>(buffers_.num_indices) /
-                        static_cast<double>(active_splat_count);
-                    const std::uint32_t grid_width = uniforms.grid_width;
-                    const std::uint32_t grid_height = uniforms.grid_height;
-                    // lod_rendered is the selector's appended count from the
-                    // deferred readback (one frame stale; 0 until the first
-                    // readback lands).
-                    const std::size_t lod_rendered =
-                        gpu_lod_render_active
-                            ? std::min<std::size_t>(gpu_lod_last_candidate_count_, gpu_lod_render_capacity)
-                            : 0u;
-                    LOG_PERF("vksplat.render.tile_instances count={} splats={} lod_rendered={} instances_per_splat={:.3f} grid={}x{}",
-                             buffers_.num_indices,
-                             active_splat_count,
-                             lod_rendered,
-                             instances_per_splat,
-                             grid_width,
-                             grid_height);
+                // Stage-2 sort bits cover the tile-id sentinel as well as all
+                // real ids. The same id count bounds one rank's emission.
+                std::size_t id_count = num_tiles;
+                if (higs_active) {
+                    const std::size_t mgw =
+                        (static_cast<std::size_t>(uniforms.grid_width) +
+                         HIGS_MACRO_T16_W - 1u) /
+                        HIGS_MACRO_T16_W;
+                    const std::size_t mgh =
+                        (static_cast<std::size_t>(uniforms.grid_height) +
+                         HIGS_MACRO_T16_H - 1u) /
+                        HIGS_MACRO_T16_H;
+                    id_count = mgw * mgh;
                 }
-                // Both chains consume the GPU-resident clamped count. Record
-                // against capacity; radix and range dispatch sizes stay indirect.
-                if (shared_sort_capacity > 0) {
-                    {
-                        LOG_TIMER("vksplat.render.record.executeGenerateKeys");
-                        if (higs_active) {
-                            renderer_.executeGenerateMacroKeys(
-                                uniforms, buffers_, higs_visible_capacity, shared_sort_capacity);
-                        } else {
-                            renderer_.executeGenerateKeys(
-                                uniforms, buffers_, shared_sort_capacity);
-                        }
+                for (std::size_t value = id_count; value != 0; value >>= 1u)
+                    ++depth_wave_sort_bits;
+                if (depth_wave_sort_bits == 0)
+                    depth_wave_sort_bits = 1;
+
+                const bool export_wave_batch = output_slot == OutputSlot::Preview;
+                if (export_wave_batch) {
+                    const auto gate = renderer_.synchronizeTileInstanceGate(buffers_);
+                    if (gate.count_overflow) {
+                        throw std::runtime_error(
+                            "export tile-instance prefix sum overflowed signed 32-bit capacity");
                     }
-                    // Stage-2 sort bits: ceil(log2(id_max + 1)) — render-tile ids for
-                    // the legacy chain, macro-tile ids for the HiGS chain. The
-                    // sentinel id (count) sorts to the end either way.
-                    uint32_t id_max = uniforms.grid_width * uniforms.grid_height;
-                    if (higs_active) {
-                        const std::uint32_t mgw =
-                            (uniforms.grid_width + HIGS_MACRO_T16_W - 1u) / HIGS_MACRO_T16_W;
-                        const std::uint32_t mgh =
-                            (uniforms.grid_height + HIGS_MACRO_T16_H - 1u) / HIGS_MACRO_T16_H;
-                        id_max = mgw * mgh;
+                    buffers_.num_indices = gate.raw_count;
+                    if (id_count > HIGS_DEPTH_WAVE_INSTANCES / 2u) {
+                        throw std::runtime_error(std::format(
+                            "export requires subdivision: K={} is less than twice max_rank_emission={} (chain={})",
+                            HIGS_DEPTH_WAVE_INSTANCES,
+                            id_count,
+                            higs_active ? "macro" : "legacy"));
                     }
-                    int sort_bits = 0;
-                    while (id_max) {
-                        id_max >>= 1;
-                        ++sort_bits;
+                    armed_depth_waves = indirect::depthWaveRecordUpperBound(
+                        gate.raw_count,
+                        id_count,
+                        HIGS_DEPTH_WAVE_INSTANCES);
+                    if (armed_depth_waves == 0) {
+                        throw std::runtime_error(
+                            "export could not derive a non-zero depth-wave record bound");
                     }
-                    {
-                        LOG_TIMER("vksplat.render.record.executeSort");
-                        renderer_.executeSortTileInstances(
-                            uniforms, buffers_, sort_bits, shared_sort_capacity);
-                    }
-                    if (higs_active) {
-                        {
-                            LOG_TIMER("vksplat.render.record.executeComputeMacroRanges");
-                            renderer_.executeComputeMacroRanges(uniforms, buffers_, shared_sort_capacity);
-                        }
-                        {
-                            LOG_TIMER("vksplat.render.record.executeMacroBatches");
-                            renderer_.executeMacroBatches(uniforms, buffers_);
-                        }
-                        {
-                            LOG_TIMER("vksplat.render.record.executeRasterizeForward");
-                            renderer_.executeMacroRasterCompose(uniforms,
-                                                                buffers_,
-                                                                shared_sort_capacity,
-                                                                overlay_bindings->selection_mask,
-                                                                overlay_bindings->preview_mask,
-                                                                overlay_bindings->selection_colors,
-                                                                overlay_bindings->overlay_params,
-                                                                overlay_bindings->raster_overlays_active);
-                        }
-                    } else {
-                        {
-                            LOG_TIMER("vksplat.render.record.executeComputeTileRanges");
-                            renderer_.executeComputeTileRanges(
-                                uniforms, buffers_, shared_sort_capacity);
-                        }
-                        {
-                            LOG_TIMER("vksplat.render.record.executeRasterizeForward");
-                            renderer_.executeRasterizeForward(uniforms,
-                                                              buffers_,
-                                                              overlay_bindings->selection_mask,
-                                                              overlay_bindings->preview_mask,
-                                                              overlay_bindings->selection_colors,
-                                                              buffers_.overlay_flags.deviceBuffer,
-                                                              overlay_bindings->overlay_params,
-                                                              overlay_bindings->transform_indices,
-                                                              overlay_bindings->model_transforms,
-                                                              request.gut,
-                                                              overlay_bindings->raster_overlays_active);
-                        }
-                    }
+                    LOG_PERF("vksplat.render.export_gate raw_instances={} wave_records={} K={} max_rank_emission={}",
+                             gate.raw_count,
+                             armed_depth_waves,
+                             HIGS_DEPTH_WAVE_INSTANCES,
+                             id_count);
+                } else {
+                    armed_depth_waves = renderer_.supportsConditionalRendering()
+                                            ? HIGS_DEPTH_MAX_WAVES
+                                            : HIGS_DEPTH_MAX_WAVES_FALLBACK;
+                }
+
+                renderer_.executeWavePartition(
+                    uniforms, buffers_, armed_depth_waves, higs_active);
+                if (higs_active) {
+                    renderer_.executeMacroDepthWaves(
+                        uniforms,
+                        buffers_,
+                        armed_depth_waves,
+                        depth_wave_sort_bits,
+                        overlay_bindings->selection_mask,
+                        overlay_bindings->preview_mask,
+                        overlay_bindings->selection_colors,
+                        overlay_bindings->overlay_params,
+                        overlay_bindings->raster_overlays_active,
+                        /*predicate_waves=*/!export_wave_batch);
+                } else {
+                    renderer_.executeLegacyDepthWaves(
+                        uniforms,
+                        buffers_,
+                        armed_depth_waves,
+                        depth_wave_sort_bits,
+                        overlay_bindings->selection_mask,
+                        overlay_bindings->preview_mask,
+                        overlay_bindings->selection_colors,
+                        buffers_.overlay_flags.deviceBuffer,
+                        overlay_bindings->overlay_params,
+                        overlay_bindings->transform_indices,
+                        overlay_bindings->model_transforms,
+                        request.gut,
+                        overlay_bindings->raster_overlays_active,
+                        /*predicate_waves=*/!export_wave_batch);
                 }
                 LOG_TIMER("vksplat.render.record.composePixelState");
                 // Record compose into the rasterizer's batch so the entire frame
@@ -8192,7 +8117,9 @@ namespace lfs::vis {
         // scratch this batch still reads.
         last_submitted_render_value_ = completion_value;
         last_render_used_macro_chain_ = higs_active;
-        resident_sort_capacity_ = shared_sort_capacity;
+        resident_sort_capacity_ = HIGS_DEPTH_WAVE_INSTANCES;
+        resident_depth_wave_armed_ = armed_depth_waves;
+        resident_sort_bits_ = depth_wave_sort_bits;
         if (shared_arena_guard) {
             shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
         }
@@ -8225,8 +8152,7 @@ namespace lfs::vis {
             gpu_lod_last_publish_frame_ = lod_page_cache_.frameIndex();
         }
         // Keep frames coming until fade-ins of freshly published pages finish,
-        // not just until the decode queue drains. Clamp self-heal rides the
-        // same flag: schedule until a readback confirms an unclamped frame.
+        // not just until the decode queue drains.
         // Deferred wants count too: the dirty-driven loop must keep rendering
         // so priority decay can age out idle victims and admission can retry.
         // Otherwise the frame clock freezes with misses still wanted and the
@@ -8238,13 +8164,12 @@ namespace lfs::vis {
             lod_fade_frames_ > 0 &&
             lod_page_cache_.frameIndex() < gpu_lod_last_publish_frame_ + lod_fade_frames_;
         const bool lod_streaming_active =
-            (lod_page_inputs_active &&
-             (lod_page_cache_.hasOutstandingWork() ||
-              (lod_page_cache_.deferredRequestCount() > 0 &&
-               gpu_lod_frozen_frames_ < kLodAdmissionFrozenFrames) ||
-              !lod_upload_engine_.idle() ||
-              lod_fades_active)) ||
-            visible_clamp_pending_ || instance_clamp_pending_;
+            lod_page_inputs_active &&
+            (lod_page_cache_.hasOutstandingWork() ||
+             (lod_page_cache_.deferredRequestCount() > 0 &&
+              gpu_lod_frozen_frames_ < kLodAdmissionFrozenFrames) ||
+             !lod_upload_engine_.idle() ||
+             lod_fades_active);
         return RenderResult{
             .image = output.image.image,
             .image_view = output.image.view,
@@ -8260,7 +8185,6 @@ namespace lfs::vis {
             .completion_value = completion_value,
             .lod_page_generation = lod_page_generation,
             .lod_streaming_active = lod_streaming_active,
-            .capacity_readback_settled = last_preview_capture_settled_,
         };
     }
 

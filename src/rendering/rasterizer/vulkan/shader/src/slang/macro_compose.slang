@@ -177,7 +177,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
     // wave 0 initializes it.
     float4 curr_pixel_state;
     float median_depth;
-    if (uniforms.wave_base == 0u) {
+    if (uniforms.depth_wave == 0u && uniforms.wave_base == 0u) {
         curr_pixel_state = float4(0.0f, 0.0f, 0.0f, 1.0f);
         median_depth = FAR_DEPTH;
     } else {

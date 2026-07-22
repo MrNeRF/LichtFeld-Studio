@@ -103,6 +103,9 @@ public:
         HOST_WRITE,
         HOST_READ_WRITE,
         INDIRECT_DISPATCH_READ,
+        COMPUTE_SHADER_INDIRECT_READ,
+        TRANSFER_COMPUTE_SHADER_INDIRECT_READ,
+        CONDITIONAL_RENDERING_READ,
     };
 
 protected:
@@ -146,6 +149,12 @@ protected:
     }
 
     void bufferMemoryBarrier(const std::vector<std::pair<_VulkanBuffer, BarrierMask>>& buffers, BarrierMask dstMask);
+    struct BufferBarrier {
+        _VulkanBuffer buffer;
+        BarrierMask src_mask;
+        BarrierMask dst_mask;
+    };
+    void bufferMemoryBarrier(const std::vector<BufferBarrier>& barriers);
 
     size_t current_vram = 0;
     size_t peak_vram = 0;

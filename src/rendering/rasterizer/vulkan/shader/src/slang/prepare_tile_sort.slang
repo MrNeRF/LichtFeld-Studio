@@ -31,7 +31,7 @@ void main(uniform Uniforms uniforms) {
     const uint32_t tail = min(visible_count[0], uniforms.num_splats);
     if (tail > 0u) {
         const int32_t signed_count = index_buffer_offset[tail - 1u];
-        count_overflow = signed_count < 0;
+        count_overflow = signed_count < 0 || signed_count >= int32_t(0x7fffffffu);
         if (!count_overflow) {
             raw_instance_count = uint32_t(signed_count);
             tile_instance_count = min(raw_instance_count, uniforms.sort_capacity);
@@ -40,7 +40,7 @@ void main(uniform Uniforms uniforms) {
 #else
     if (uniforms.num_splats > 0u) {
         const int32_t signed_count = index_buffer_offset[uniforms.num_splats - 1u];
-        count_overflow = signed_count < 0;
+        count_overflow = signed_count < 0 || signed_count >= int32_t(0x7fffffffu);
         if (!count_overflow) {
             raw_instance_count = uint32_t(signed_count);
             tile_instance_count = min(raw_instance_count, uniforms.sort_capacity);

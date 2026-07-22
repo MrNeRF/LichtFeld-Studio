@@ -12,8 +12,6 @@ namespace PerfTimer {
 
 #define PERF_TIMER_TRAIN_STAGES   \
     _(ProjectionForward)          \
-    _(GenerateKeys)               \
-    _(ComputeTileRanges)          \
     _(RasterizeForward)           \
     _(_Cumsum)                    \
     _(CalculateIndexBufferOffset) \
@@ -26,7 +24,6 @@ namespace PerfTimer {
     _(CopyPrimitiveSortIndices)   \
     _(ApplyDepthOrdering)         \
     _(PrepareTileSort)            \
-    _(SortRTS)                    \
     _(CullSplats)                 \
     _(ProjectionSurvivors)
 

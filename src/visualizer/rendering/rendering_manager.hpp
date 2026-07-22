@@ -585,8 +585,7 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
-            PreviewImageReadback readback,
-            bool settle_capacity = false);
+            PreviewImageReadback readback);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -603,8 +602,7 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
-            std::optional<bool> transparent_background_override,
-            bool settle_capacity = false);
+            std::optional<bool> transparent_background_override);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -692,8 +690,6 @@ namespace lfs::vis {
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
         bool lod_controller_needs_sync_traversal_ = false;
         std::uint64_t lod_controller_page_map_generation_ = 0;
-        int vksplat_camera_settle_passes_remaining_ = 0;
-        glm::ivec2 last_vksplat_render_size_{0, 0};
         // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
         // only when the source sh0_raw() pointer/size changes so the Vulkan
         // renderer's per-tensor upload cache stays warm across frames.
@@ -725,7 +721,6 @@ namespace lfs::vis {
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
-        std::atomic_bool camera_pose_dirty_{false};
 
         RenderAnimationState animation_state_;
         ViewportArtifactService viewport_artifact_service_;

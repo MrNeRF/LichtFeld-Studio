@@ -262,6 +262,7 @@ namespace lfs::vis {
                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         if (!context.importExternalBuffer(storage.block->handle.native,
                                           static_cast<VkDeviceSize>(storage.block->size),
+                                          static_cast<VkDeviceSize>(storage.block->handle.size),
                                           usage,
                                           imported,
                                           "vulkan.external_tensor.alias",

@@ -36,6 +36,25 @@
 #define LFS_VK_SURVIVOR_STATE_WORD_COUNT              \
     (LFS_VK_SURVIVOR_STATE_PROJECTION_WORD_OFFSET + LFS_VK_DISPATCH_COMMAND_WORD_COUNT)
 
+// Bounded depth-wave partition output. Slot zero is the frame header; every
+// following 256-byte slot is both a storage record and a collection of aligned
+// VkDispatchIndirectCommand values for one depth wave.
+#define LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS       64u
+#define LFS_VK_DEPTH_WAVE_HEADER_NEEDED_WORD         0u
+#define LFS_VK_DEPTH_WAVE_HEADER_RAW_WORD            1u
+#define LFS_VK_DEPTH_WAVE_COUNT_WORD_OFFSET          0u
+#define LFS_VK_DEPTH_WAVE_KEYGEN_WORD_OFFSET         4u
+#define LFS_VK_DEPTH_WAVE_FILL_WORD_OFFSET           7u
+#define LFS_VK_DEPTH_WAVE_RADIX_WORD_OFFSET         10u
+#define LFS_VK_DEPTH_WAVE_RANGE_WORD_OFFSET         13u
+#define LFS_VK_DEPTH_WAVE_PER_TILE_WORD_OFFSET      16u
+#define LFS_VK_DEPTH_WAVE_FULLSCREEN_WORD_OFFSET    19u
+#define LFS_VK_DEPTH_WAVE_RANK_BASE_WORD            22u
+#define LFS_VK_DEPTH_WAVE_RANK_COUNT_WORD           23u
+#define LFS_VK_DEPTH_WAVE_INSTANCE_BASE_WORD        24u
+#define LFS_VK_DEPTH_WAVE_WORD_COUNT(armed) \
+    ((1u + (armed)) * LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS)
+
 // macro_batch_prepare: one raster and one compose command per wave.
 #define LFS_VK_MACRO_WAVE_DISPATCH_WAVE_STRIDE_WORDS LFS_VK_DISPATCH_COMMAND_WORD_COUNT
 #define LFS_VK_MACRO_WAVE_DISPATCH_RASTER_BASE_WORD_OFFSET  0u

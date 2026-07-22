@@ -49,12 +49,8 @@ namespace lfs::vis {
             VkSemaphore completion_semaphore = VK_NULL_HANDLE;
             std::uint64_t completion_value = 0;
             std::uint64_t lod_page_generation = 0;
-            // True while page decodes/uploads are still in flight, or a
-            // deferred capacity readback found a clamped VkSplat frame.
+            // True while page decodes/uploads are still in flight.
             bool lod_streaming_active = false;
-            // True when the deferred capacity readbacks from the previous pass
-            // confirm an unclamped frame for the current steady-state path.
-            bool capacity_readback_settled = false;
         };
 
         struct ModelInputSnapshot {
@@ -264,13 +260,6 @@ namespace lfs::vis {
             std::size_t streaming_jobs = 0;
         };
         [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus() const;
-
-        // True when the most recent render's start-of-frame deferred poll
-        // confirmed the previously rendered frame produced complete, unclamped
-        // content using the steady-state rasterizer chain. One-shot preview/
-        // export captures poll this to avoid reading back a capacity-clamped
-        // (partial) frame; see RenderingManager::renderPreviewImageToPreviewSlotWithState.
-        [[nodiscard]] bool previewCaptureSettled() const { return last_preview_capture_settled_; }
 
     private:
         struct ComposePipeline;
@@ -621,28 +610,11 @@ namespace lfs::vis {
         // Deferred CPU count readbacks are intentionally one frame stale, so
         // selection overlays must not use buffers_.num_indices as residency state.
         std::size_t resident_sort_capacity_ = 0;
-        // Monotonic across split-panel alternation so viewport growth cannot
-        // repeatedly compound the deferred instance high-water mark.
-        std::size_t render_tile_count_high_water_ = 0;
-        // The first frame after a model/input reset needs the synchronous
-        // render-tile chain so the viewport never presents the macro chain's
-        // zero-count warm-up frame.
+        std::size_t resident_depth_wave_armed_ = 0;
+        int resident_sort_bits_ = 0;
+        // The first frame after an input reset remains on the legacy chain;
+        // it uses the same fixed-K wave machinery as every other legacy frame.
         bool macro_chain_warmup_pending_ = true;
-        // Visible-splat capacity high-water mark, fed by the deferred raw emit
-        // count (decays /8 per poll, grows after a clamped frame). 0 until the
-        // first readback lands; the first frames size at the render domain.
-        std::size_t visible_high_water_ = 0;
-        // A clamped frame was observed and a complete one has not landed yet;
-        // keeps frames scheduled while idle so the capacity self-heal converges.
-        bool visible_clamp_pending_ = false;
-        bool instance_clamp_pending_ = false;
-        // Set each render from the start-of-frame deferred poll: true once a
-        // representative frame (one that used the same steady-state rasterizer
-        // chain the next pass will use) is confirmed complete and unclamped.
-        // Drives the synchronous capacity self-heal used by one-shot preview/
-        // export captures, which cannot tolerate the interactive loop's
-        // one-frame clamp transient.
-        bool last_preview_capture_settled_ = false;
 
         static constexpr std::size_t kInputRingSize = kFrameRingSize;
         std::array<CudaOpacityCopySlot, kInputRingSize> cuda_opacity_copies_{};
