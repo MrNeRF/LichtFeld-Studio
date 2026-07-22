@@ -693,6 +693,7 @@ namespace lfs::vis {
         bool lod_controller_needs_sync_traversal_ = false;
         std::uint64_t lod_controller_page_map_generation_ = 0;
         int vksplat_camera_settle_passes_remaining_ = 0;
+        glm::ivec2 last_vksplat_render_size_{0, 0};
         // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
         // only when the source sh0_raw() pointer/size changes so the Vulkan
         // renderer's per-tensor upload cache stays warm across frames.

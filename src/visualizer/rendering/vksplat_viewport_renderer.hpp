@@ -621,6 +621,9 @@ namespace lfs::vis {
         // Deferred CPU count readbacks are intentionally one frame stale, so
         // selection overlays must not use buffers_.num_indices as residency state.
         std::size_t resident_sort_capacity_ = 0;
+        // Monotonic across split-panel alternation so viewport growth cannot
+        // repeatedly compound the deferred instance high-water mark.
+        std::size_t render_tile_count_high_water_ = 0;
         // The first frame after a model/input reset needs the synchronous
         // render-tile chain so the viewport never presents the macro chain's
         // zero-count warm-up frame.

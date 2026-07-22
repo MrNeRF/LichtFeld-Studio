@@ -1848,6 +1848,7 @@ namespace lfs::vis {
         buffers_.num_splats = 0;
         buffers_.num_indices = 0;
         buffers_.num_indices_high_water = 0;
+        render_tile_count_high_water_ = 0;
         buffers_.is_unsorted_1 = true;
         resident_sort_capacity_ = 0;
         last_render_used_macro_chain_ = false;
@@ -2017,6 +2018,7 @@ namespace lfs::vis {
         macro_chain_warmup_pending_ = true;
         compose_.reset();
         buffers_ = {};
+        render_tile_count_high_water_ = 0;
         uploaded_lod_indices_ = {};
         uploaded_lod_logical_indices_ = {};
         uploaded_lod_levels_ = {};
@@ -7736,6 +7738,16 @@ namespace lfs::vis {
                        ? active_splat_count
                        : active_splat_count * 4u)
                 : 0u;
+        const std::size_t num_tiles =
+            static_cast<std::size_t>(uniforms.grid_width) * static_cast<std::size_t>(uniforms.grid_height);
+        if (render_tile_count_high_water_ > 0 &&
+            num_tiles > render_tile_count_high_water_ &&
+            buffers_.num_indices_high_water > 0) {
+            buffers_.num_indices_high_water = std::min(
+                kMaxTileInstanceCount,
+                buffers_.num_indices_high_water * num_tiles / render_tile_count_high_water_);
+        }
+        render_tile_count_high_water_ = std::max(render_tile_count_high_water_, num_tiles);
         // A genuine new peak renders one capacity-clamped frame, then deferred
         // readback grows the block. Cap at INT32_MAX because the prefix scan is signed.
         const std::size_t shared_sort_capacity =
@@ -7744,8 +7756,6 @@ namespace lfs::vis {
                                buffers_.num_indices_high_water, first_frame_estimate}));
         const std::size_t num_pixels =
             static_cast<std::size_t>(uniforms.image_width) * static_cast<std::size_t>(uniforms.image_height);
-        const std::size_t num_tiles =
-            static_cast<std::size_t>(uniforms.grid_width) * static_cast<std::size_t>(uniforms.grid_height);
         bool shared_scratch_bound = false;
         std::uint64_t shared_scratch_attempt_id = 0;
         const auto shared_scratch_context = [&]() {

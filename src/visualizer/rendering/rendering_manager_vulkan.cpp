@@ -1139,6 +1139,7 @@ namespace lfs::vis {
         glm::ivec2 render_size(
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
+        const bool vksplat_render_size_changed = render_size != last_vksplat_render_size_;
 
         const DirtyMask pending_dirty = dirty_mask_.load(std::memory_order_relaxed);
         const bool only_split_position_pending =
@@ -1259,7 +1260,11 @@ namespace lfs::vis {
         }
         const bool camera_pose_changed =
             camera_pose_dirty_.exchange(false, std::memory_order_acq_rel);
-        if (camera_pose_changed) {
+        const bool vksplat_split_layout_changed =
+            (frame_dirty & (DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLIT_POSITION)) != 0;
+        const bool vksplat_view_changed =
+            camera_pose_changed || vksplat_render_size_changed || vksplat_split_layout_changed;
+        if (vksplat_view_changed) {
             vksplat_camera_settle_passes_remaining_ = kMaxInteractiveVksplatSettlePasses;
         }
         const bool settle_vksplat_capacity =
@@ -1526,6 +1531,7 @@ namespace lfs::vis {
         bool vksplat_capacity_settle_checked = false;
         const auto note_vksplat_render_progress =
             [&](const VksplatViewportRenderer::RenderResult& result) {
+                last_vksplat_render_size_ = render_size;
                 if (result.lod_streaming_active) {
                     requestRenderFollowUp();
                 }
@@ -1533,7 +1539,7 @@ namespace lfs::vis {
                     return;
                 }
                 vksplat_capacity_settle_checked = true;
-                if (camera_pose_changed) {
+                if (vksplat_view_changed) {
                     requestRenderFollowUp();
                     return;
                 }
