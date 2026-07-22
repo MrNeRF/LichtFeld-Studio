@@ -401,10 +401,12 @@ namespace lfs::python {
             return core::NULL_NODE;
         }
         const auto* const added = scene_->getNodeById(node_id);
+        assert(added);
         const std::string added_name = added ? added->name : name;
 
         lfs::core::events::state::PLYAdded{
             .name = added_name,
+            .uuid = added->uuid,
             .node_gaussians = gaussian_count,
             .total_gaussians = scene_->getTotalGaussianCount(),
             .is_visible = true,
@@ -642,6 +644,16 @@ namespace lfs::python {
 
     std::optional<PySceneNode> PyScene::get_node_by_id(int32_t id) {
         auto* node = scene_->getNodeById(id);
+        if (!node)
+            return std::nullopt;
+        return PySceneNode(node, scene_);
+    }
+
+    std::optional<PySceneNode> PyScene::get_node_by_uuid(const std::string& uuid) {
+        const auto parsed = core::Uuid::from_string(uuid);
+        if (!parsed)
+            return std::nullopt;
+        auto* node = scene_->getNodeByUuid(*parsed);
         if (!node)
             return std::nullopt;
         return PySceneNode(node, scene_);
@@ -1121,6 +1133,7 @@ namespace lfs::python {
             .def("set", &PySceneNode::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
             // Identity (read-only)
             .def_prop_ro("id", &PySceneNode::id, "Unique node identifier")
+            .def_prop_ro("uuid", &PySceneNode::uuid, "Durable node UUID")
             .def_prop_ro("parent_id", &PySceneNode::parent_id, "Parent node identifier (-1 for root)")
             .def_prop_ro("children", &PySceneNode::children, "List of child node IDs")
             .def_prop_ro("type", &PySceneNode::type, "Node type (SPLAT, GROUP, CAMERA, etc.)")
@@ -1297,6 +1310,8 @@ Returns:
             // Queries
             .def("get_node_by_id", &PyScene::get_node_by_id, nb::arg("id"),
                  "Find a node by its integer ID (None if not found)")
+            .def("get_node_by_uuid", &PyScene::get_node_by_uuid, nb::arg("uuid"),
+                 "Find a node by its durable UUID (None if invalid or not found)")
             .def("get_node", &PyScene::get_node, nb::arg("name"),
                  "Find a node by name (None if not found)")
             .def(
@@ -1327,12 +1342,14 @@ Returns:
             .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
             .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")
             // Bounds (by name)
-            .def("get_node_bounds", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         return decltype(self.get_node_bounds(0)){std::nullopt};
                     return self.get_node_bounds(node->id()); }, nb::arg("name"), "Get axis-aligned bounding box by node name")
-            .def("get_node_bounds_center", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds_center", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         throw std::runtime_error("Node not found: " + name);
@@ -1379,7 +1396,7 @@ Returns:
             .def("apply_deleted", &PyScene::apply_deleted, "Permanently remove soft-deleted Gaussians from all nodes")
             .def("invalidate_cache", &PyScene::invalidate_cache, "Invalidate the combined model cache")
             .def("notify_changed", &PyScene::notify_changed, "Notify the renderer that scene data has changed")
-            .def("duplicate_node", &PyScene::duplicate_node, nb::arg("name"), "Duplicate a node by name, returns new node ID")
+            .def("duplicate_node", &PyScene::duplicate_node, nb::arg("name"), "Duplicate a node by name, returns the new node name")
             .def("merge_group", &PyScene::merge_group, nb::arg("group_name"), "Merge all splats in a group into a single node, returns merged node ID")
             .def_prop_ro("nodes", &PyScene::nodes, "Iterable collection of all scene nodes");
     }

@@ -3,10 +3,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -21,6 +25,7 @@
 #include "io/loader.hpp"
 #include "io/loaders/checkpoint_loader.hpp"
 #include "training/checkpoint.hpp"
+#include "training/components/sparsity_optimizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 #include "training/strategies/mcmc.hpp"
 #include "training/strategies/strategy_factory.hpp"
@@ -221,6 +226,27 @@ namespace {
             1.0f);
     }
 
+    void add_checkpoint_test_camera(lfs::core::Scene& scene) {
+        const auto cameras = scene.addGroup("Cameras");
+        auto camera = std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f,
+            100.0f,
+            32.0f,
+            32.0f,
+            lfs::core::Tensor{},
+            lfs::core::Tensor{},
+            lfs::core::CameraModelType::PINHOLE,
+            "camera.png",
+            std::filesystem::path{},
+            std::filesystem::path{},
+            64,
+            64,
+            0);
+        scene.addCamera("camera.png", cameras, std::move(camera));
+    }
+
     std::streamoff first_model_tensor_header_offset(const std::filesystem::path& checkpoint) {
         std::ifstream file(checkpoint, std::ios::binary);
         if (!file)
@@ -256,6 +282,71 @@ namespace {
             file.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
         file.flush();
         return file.good();
+    }
+
+    TEST(CheckpointVersionTest, VersionOneWithoutSparsityLoads) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_v1_load";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir;
+        params.optimization.strategy = "mcmc";
+        params.optimization.iterations = 20;
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 16;
+        auto source_model = make_checkpoint_test_splat(3);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 4, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir);
+        ASSERT_TRUE(overwrite_checkpoint_field(
+            checkpoint,
+            static_cast<std::streamoff>(offsetof(lfs::core::CheckpointHeader, version)),
+            lfs::core::CHECKPOINT_MIN_SUPPORTED_VERSION));
+
+        auto target_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC target_strategy(*target_model);
+        const auto loaded = lfs::training::load_checkpoint(
+            checkpoint, target_strategy, params, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(*loaded, 4);
+        EXPECT_EQ(target_strategy.get_model().size(), 3);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointVersionTest, VersionOneRejectsSparsityFlag) {
+        lfs::core::CheckpointHeader header;
+        header.version = 1;
+        header.flags = lfs::core::CheckpointFlags::HAS_SPARSITY;
+
+        const auto result = lfs::core::validate_checkpoint_header(header, sizeof(header));
+        ASSERT_FALSE(result.has_value());
+        EXPECT_NE(result.error().find("unknown feature flags"), std::string::npos);
+    }
+
+    TEST(CheckpointVersionTest, FutureVersionIsRejected) {
+        lfs::core::CheckpointHeader header;
+        header.version = lfs::core::CHECKPOINT_VERSION + 1;
+
+        const auto result = lfs::core::validate_checkpoint_header(header, sizeof(header));
+        ASSERT_FALSE(result.has_value());
+        EXPECT_NE(
+            result.error().find("Unsupported version: " + std::to_string(header.version)),
+            std::string::npos);
+    }
+
+    TEST(CheckpointVersionTest, UnknownFlagsAreRejectedForCurrentVersion) {
+        lfs::core::CheckpointHeader header;
+        header.flags = static_cast<lfs::core::CheckpointFlags>(1u << 31);
+
+        const auto result = lfs::core::validate_checkpoint_header(header, sizeof(header));
+        ASSERT_FALSE(result.has_value());
+        EXPECT_NE(result.error().find("unknown feature flags"), std::string::npos);
     }
 
     TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsFullInitPointCloudUntilTrainingStarts) {
@@ -352,7 +443,8 @@ namespace {
 
         auto source_model = make_checkpoint_test_splat(count);
         lfs::training::MCMC source_strategy(*source_model);
-        auto save_result = lfs::training::save_checkpoint(temp_dir, 7, source_strategy, params);
+        auto save_result = lfs::training::save_checkpoint(
+            temp_dir, 7, source_strategy, params, nullptr, nullptr, nullptr, nullptr);
         ASSERT_TRUE(save_result.has_value()) << save_result.error();
 
         struct AllocationCall {
@@ -377,7 +469,7 @@ namespace {
         auto load_params = params;
         const auto checkpoint_path = lfs::training::checkpoint_output_path(temp_dir);
         auto load_result = lfs::training::load_checkpoint(
-            checkpoint_path, target_strategy, load_params, nullptr, nullptr, nullptr, allocator);
+            checkpoint_path, target_strategy, load_params, nullptr, nullptr, nullptr, nullptr, allocator);
         ASSERT_TRUE(load_result.has_value()) << load_result.error();
 
         EXPECT_EQ(*load_result, 7);
@@ -404,7 +496,9 @@ namespace {
 
         auto source_model = make_checkpoint_test_splat(4);
         lfs::training::MCMC source_strategy(*source_model);
-        ASSERT_TRUE(lfs::training::save_checkpoint(temp_dir, 7, source_strategy, params).has_value());
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 7, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
 
         const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir);
         const auto tensor_offset = first_model_tensor_header_offset(checkpoint);
@@ -419,7 +513,7 @@ namespace {
         lfs::training::MCMC target_strategy(*target_model);
         auto loaded_params = params;
         const auto result = lfs::training::load_checkpoint(
-            checkpoint, target_strategy, loaded_params, nullptr, nullptr, nullptr);
+            checkpoint, target_strategy, loaded_params, nullptr, nullptr, nullptr, nullptr);
 
         ASSERT_FALSE(result.has_value());
         EXPECT_NE(result.error().find("unsupported dtype"), std::string::npos);
@@ -445,7 +539,9 @@ namespace {
         auto source_model = make_checkpoint_test_splat(4);
         lfs::training::MCMC source_strategy(*source_model);
         source_strategy.initialize(params.optimization);
-        ASSERT_TRUE(lfs::training::save_checkpoint(temp_dir, 9, source_strategy, params).has_value());
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 9, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
 
         const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir);
         const auto header = lfs::core::load_checkpoint_header(checkpoint);
@@ -464,7 +560,7 @@ namespace {
         auto loaded_params = params;
 
         const auto result = lfs::training::load_checkpoint(
-            checkpoint, target_strategy, loaded_params, nullptr, nullptr, nullptr);
+            checkpoint, target_strategy, loaded_params, nullptr, nullptr, nullptr, nullptr);
 
         ASSERT_FALSE(result.has_value());
         EXPECT_NE(result.error().find("invalid parameter id"), std::string::npos);
@@ -486,7 +582,9 @@ namespace {
         params.optimization.strategy = "mcmc";
         auto source_model = make_checkpoint_test_splat(2);
         lfs::training::MCMC source_strategy(*source_model);
-        ASSERT_TRUE(lfs::training::save_checkpoint(temp_dir, 3, source_strategy, params).has_value());
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 3, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
 
         const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir);
         constexpr uint64_t oversized_json = lfs::core::MAX_CHECKPOINT_JSON_BYTES + 1;
@@ -585,7 +683,8 @@ namespace {
         source->initialize(params.optimization);
         source->get_optimizer().set_lr(0.0123f);
 
-        auto save_result = lfs::training::save_checkpoint(temp_dir, 11, *source, params);
+        auto save_result = lfs::training::save_checkpoint(
+            temp_dir, 11, *source, params, nullptr, nullptr, nullptr, nullptr);
         ASSERT_TRUE(save_result.has_value()) << save_result.error();
 
         auto target_model = make_checkpoint_test_splat(1, model_device);
@@ -597,7 +696,7 @@ namespace {
         auto loaded_params = params;
         const auto load_result = lfs::training::load_checkpoint(
             lfs::training::checkpoint_output_path(temp_dir),
-            *target, loaded_params, nullptr, nullptr, nullptr);
+            *target, loaded_params, nullptr, nullptr, nullptr, nullptr);
 
         ASSERT_TRUE(load_result.has_value()) << load_result.error();
         EXPECT_EQ(*load_result, 11);
@@ -621,6 +720,483 @@ namespace {
                 name.begin(), name.end(), [](const unsigned char c) { return !std::isalnum(c); }, '_');
             return name;
         });
+
+    TEST(SplatDataFrozenRangesTest, FrozenRangesSurviveSerializeRoundTrip) {
+        auto model = make_checkpoint_test_splat(6);
+        model->set_frozen_ranges({{1, 2}, {4, 1}});
+
+        std::stringstream stream;
+        model->serialize(stream);
+
+        lfs::core::SplatData loaded;
+        loaded.deserialize(stream, {});
+
+        ASSERT_EQ(loaded.size(), 6);
+        const auto& ranges = loaded.frozen_ranges();
+        ASSERT_EQ(ranges.size(), 2u);
+        EXPECT_EQ(ranges[0].start, 1u);
+        EXPECT_EQ(ranges[0].count, 2u);
+        EXPECT_EQ(ranges[1].start, 4u);
+        EXPECT_EQ(ranges[1].count, 1u);
+    }
+
+    TEST(SplatDataFrozenRangesTest, Version3StreamLoadsWithEmptyRanges) {
+        auto model = make_checkpoint_test_splat(4);
+        std::stringstream v4_stream;
+        model->serialize(v4_stream);
+
+        // A v4 stream with no frozen ranges is a v3 stream plus one trailing flag byte.
+        auto bytes = v4_stream.str();
+        ASSERT_GT(bytes.size(), sizeof(uint32_t) * 2);
+        ASSERT_EQ(bytes.back(), '\0');
+        constexpr uint32_t v3 = 3;
+        std::memcpy(bytes.data() + sizeof(uint32_t), &v3, sizeof(v3));
+        bytes.pop_back();
+
+        std::stringstream v3_stream(bytes);
+        lfs::core::SplatData loaded;
+        loaded.set_frozen_ranges({{0, 1}});
+        loaded.deserialize(v3_stream, {});
+
+        ASSERT_EQ(loaded.size(), 4);
+        EXPECT_TRUE(loaded.frozen_ranges().empty());
+    }
+
+    TEST(SplatDataFrozenRangesTest, RejectsFrozenRangeBeyondGaussianCount) {
+        auto model = make_checkpoint_test_splat(4);
+        model->set_frozen_ranges({{3, 1}});
+
+        std::stringstream stream;
+        model->serialize(stream);
+
+        auto bytes = stream.str();
+        ASSERT_GE(bytes.size(), sizeof(uint64_t));
+        constexpr uint64_t corrupted_count = 2;
+        std::memcpy(bytes.data() + bytes.size() - sizeof(corrupted_count),
+                    &corrupted_count,
+                    sizeof(corrupted_count));
+
+        std::stringstream corrupted(bytes);
+        lfs::core::SplatData loaded;
+        EXPECT_THROW(loaded.deserialize(corrupted, {}), std::runtime_error);
+    }
+
+    TEST(SplatDataFrozenRangesTest, RejectsInvalidRangesBeforeWriting) {
+        const auto expect_rejected = [](std::vector<lfs::core::SplatData::FrozenRange> ranges) {
+            auto model = make_checkpoint_test_splat(4);
+            model->set_frozen_ranges(std::move(ranges));
+
+            std::stringstream stream;
+            EXPECT_THROW(model->serialize(stream), std::runtime_error);
+            EXPECT_TRUE(stream.str().empty());
+        };
+
+        expect_rejected({{0, 0}});
+        expect_rejected({{4, 1}});
+        expect_rejected({{0, 2}, {1, 2}});
+    }
+
+    lfs::core::param::TrainingParameters make_params_json_test_params(
+        const std::filesystem::path& output_path) {
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = output_path;
+        params.optimization.strategy = "mcmc";
+        params.optimization.iterations = 20;
+        params.optimization.sh_degree = 0;
+        params.optimization.max_cap = 16;
+        return params;
+    }
+
+    TEST(CheckpointFrozenRangesRoundTripTest, EmbeddedSplatRangesSurviveFullCheckpoint) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_frozen_ranges";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        auto source_model = make_checkpoint_test_splat(6);
+        source_model->set_frozen_ranges({{1, 2}, {4, 1}});
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 5, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        auto target_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC target_strategy(*target_model);
+        const auto loaded = lfs::training::load_checkpoint(
+            lfs::training::checkpoint_output_path(temp_dir),
+            target_strategy,
+            params,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+
+        const auto& ranges = target_strategy.get_model().frozen_ranges();
+        ASSERT_EQ(target_strategy.get_model().size(), 6);
+        ASSERT_EQ(ranges.size(), 2u);
+        EXPECT_EQ(ranges[0].start, 1u);
+        EXPECT_EQ(ranges[0].count, 2u);
+        EXPECT_EQ(ranges[1].start, 4u);
+        EXPECT_EQ(ranges[1].count, 1u);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(TrainerCheckpointFrozenMaskTest, LoadedRangesReplacePreexistingOptimizerMask) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_trainer_checkpoint_frozen_mask";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.dataset.data_path = temp_dir;
+        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        source_model->set_frozen_ranges({{1, 2}});
+        lfs::training::MCMC source_strategy(*source_model);
+        source_strategy.initialize(params.optimization);
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 5, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        lfs::core::Scene scene;
+        add_checkpoint_test_camera(scene);
+        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        target_model->set_frozen_ranges({{0, 1}});
+        scene.addSplat("Model", std::move(target_model));
+        scene.setTrainingModelNode("Model");
+
+        lfs::training::Trainer trainer(scene);
+        const auto initialized = trainer.initialize(params);
+        ASSERT_TRUE(initialized.has_value()) << initialized.error();
+        EXPECT_EQ(trainer.get_strategy().get_optimizer().frozen_mask().cpu().to_vector_bool(),
+                  (std::vector<bool>{true, false, false, false}));
+
+        const auto loaded = trainer.load_checkpoint(lfs::training::checkpoint_output_path(temp_dir));
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        const auto& loaded_model = trainer.get_strategy().get_model();
+        ASSERT_EQ(loaded_model.frozen_ranges().size(), 1u);
+        EXPECT_EQ(loaded_model.frozen_ranges()[0].start, 1u);
+        EXPECT_EQ(loaded_model.frozen_ranges()[0].count, 2u);
+        EXPECT_EQ(trainer.get_strategy().get_optimizer().frozen_mask().cpu().to_vector_bool(),
+                  (std::vector<bool>{false, true, true, false}));
+
+        trainer.shutdown();
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(TrainerCheckpointFrozenMaskTest, EmptyLoadedRangesClearPreexistingOptimizerMask) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_trainer_checkpoint_empty_frozen_mask";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.dataset.data_path = temp_dir;
+        auto source_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        lfs::training::MCMC source_strategy(*source_model);
+        source_strategy.initialize(params.optimization);
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 5, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        lfs::core::Scene scene;
+        add_checkpoint_test_camera(scene);
+        auto target_model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        target_model->set_frozen_ranges({{0, 1}});
+        scene.addSplat("Model", std::move(target_model));
+        scene.setTrainingModelNode("Model");
+
+        lfs::training::Trainer trainer(scene);
+        const auto initialized = trainer.initialize(params);
+        ASSERT_TRUE(initialized.has_value()) << initialized.error();
+        ASSERT_TRUE(trainer.get_strategy().get_optimizer().frozen_mask().is_valid());
+
+        const auto loaded = trainer.load_checkpoint(lfs::training::checkpoint_output_path(temp_dir));
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_TRUE(trainer.get_strategy().get_model().frozen_ranges().empty());
+        EXPECT_FALSE(trainer.get_strategy().get_optimizer().frozen_mask().is_valid());
+
+        trainer.shutdown();
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointParamsJsonTest, RejectsMismatchedSplatFreezeMetadataOnSave) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_params_mismatch_save";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.add_splat_paths = {"one.ply", "two.ply"};
+        params.add_splat_freeze = {true};
+        auto source_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC source_strategy(*source_model);
+
+        const auto saved = lfs::training::save_checkpoint(
+            temp_dir, 5, source_strategy, params, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_FALSE(saved.has_value());
+        EXPECT_NE(saved.error().find("add_splat_freeze count"), std::string::npos);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointParamsJsonTest, SplatCompositionParamsRoundTrip) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_params_json";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.view_paths = {"/tmp/lfs_view_a.ply", "/tmp/lfs_view_b.spz"};
+        params.import_cameras_path = std::filesystem::path("/tmp/lfs_sparse/0");
+        params.add_splat_paths = {"/tmp/lfs_statue.ply", "/tmp/lfs_pedestal.ply"};
+        params.add_splat_freeze = {true, false};
+
+        auto source_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 5, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir);
+        auto loaded = lfs::core::load_checkpoint_params(checkpoint);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(loaded->view_paths, params.view_paths);
+        ASSERT_TRUE(loaded->import_cameras_path.has_value());
+        EXPECT_EQ(*loaded->import_cameras_path, *params.import_cameras_path);
+        EXPECT_EQ(loaded->add_splat_paths, params.add_splat_paths);
+        EXPECT_EQ(loaded->add_splat_freeze, params.add_splat_freeze);
+
+        auto target_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC target_strategy(*target_model);
+        auto resumed_params = make_params_json_test_params(temp_dir);
+        const auto load_result = lfs::training::load_checkpoint(
+            checkpoint, target_strategy, resumed_params, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+        EXPECT_EQ(resumed_params.view_paths, params.view_paths);
+        ASSERT_TRUE(resumed_params.import_cameras_path.has_value());
+        EXPECT_EQ(*resumed_params.import_cameras_path, *params.import_cameras_path);
+        EXPECT_EQ(resumed_params.add_splat_paths, params.add_splat_paths);
+        EXPECT_EQ(resumed_params.add_splat_freeze, params.add_splat_freeze);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointParamsJsonTest, RejectsMismatchedSplatFreezeMetadataOnLoad) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_params_mismatch_load";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.add_splat_paths = {"one.ply", "two.ply"};
+        params.add_splat_freeze = {true, false};
+        auto source_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 5, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir);
+        std::fstream file(checkpoint, std::ios::binary | std::ios::in | std::ios::out);
+        ASSERT_TRUE(file.is_open());
+        std::string bytes(std::istreambuf_iterator<char>(file), {});
+        constexpr std::string_view original = "[true,false]";
+        constexpr std::string_view replacement = "[true      ]";
+        static_assert(original.size() == replacement.size());
+        const auto offset = bytes.find(original);
+        ASSERT_NE(offset, std::string::npos);
+        file.clear();
+        file.seekp(static_cast<std::streamoff>(offset));
+        file.write(replacement.data(), static_cast<std::streamsize>(replacement.size()));
+        file.close();
+
+        const auto loaded = lfs::core::load_checkpoint_params(checkpoint);
+        ASSERT_FALSE(loaded.has_value());
+        EXPECT_NE(loaded.error().find("add_splat_freeze count"), std::string::npos);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointParamsJsonTest, MissingSplatCompositionKeysDefaultCleanly) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_params_json_defaults";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        const auto params = make_params_json_test_params(temp_dir);
+        auto source_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 5, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        auto loaded = lfs::core::load_checkpoint_params(
+            lfs::training::checkpoint_output_path(temp_dir));
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_TRUE(loaded->view_paths.empty());
+        EXPECT_FALSE(loaded->import_cameras_path.has_value());
+        EXPECT_TRUE(loaded->add_splat_paths.empty());
+        EXPECT_TRUE(loaded->add_splat_freeze.empty());
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    constexpr lfs::training::ADMMSparsityOptimizer::Config kAdmmTestConfig{
+        .sparsify_steps = 100,
+        .init_rho = 0.001f,
+        .prune_ratio = 0.25f,
+        .update_every = 50,
+        .start_iteration = 20};
+
+    TEST(CheckpointSparsityRoundTripTest, AdmmStateRoundTripsThroughCheckpoint) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_sparsity_roundtrip";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsify_steps = kAdmmTestConfig.sparsify_steps;
+        params.optimization.init_rho = kAdmmTestConfig.init_rho;
+        params.optimization.prune_ratio = kAdmmTestConfig.prune_ratio;
+        auto source_model = make_checkpoint_test_splat(4);
+        lfs::training::MCMC source_strategy(*source_model);
+
+        lfs::training::ADMMSparsityOptimizer source_admm(kAdmmTestConfig);
+        const auto opacities = lfs::core::Tensor::from_vector(
+            std::vector<float>{-1.0f, 0.5f, 2.0f, -0.25f},
+            {size_t{4}, size_t{1}}, lfs::core::Device::CUDA);
+        ASSERT_TRUE(source_admm.initialize(opacities).has_value());
+        ASSERT_TRUE(source_admm.update_state(opacities).has_value());
+
+        ASSERT_TRUE(lfs::training::save_checkpoint(temp_dir, 7, source_strategy, params,
+                                                   nullptr, nullptr, nullptr, &source_admm)
+                        .has_value());
+        const auto header = lfs::core::load_checkpoint_header(
+            lfs::training::checkpoint_output_path(temp_dir));
+        ASSERT_TRUE(header.has_value()) << header.error();
+        EXPECT_EQ(header->version, lfs::core::CHECKPOINT_VERSION);
+        EXPECT_TRUE(lfs::core::has_flag(header->flags, lfs::core::CheckpointFlags::HAS_SPARSITY));
+
+        auto target_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC target_strategy(*target_model);
+        lfs::training::ADMMSparsityOptimizer target_admm({
+            .sparsify_steps = 1,
+            .init_rho = 0.5f,
+            .prune_ratio = 0.9f,
+            .update_every = 1,
+            .start_iteration = 0,
+        });
+        auto loaded_params = params;
+        const auto load_result = lfs::training::load_checkpoint(
+            lfs::training::checkpoint_output_path(temp_dir), target_strategy, loaded_params,
+            nullptr, nullptr, nullptr, &target_admm);
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+
+        ASSERT_TRUE(target_admm.is_initialized());
+        EXPECT_EQ(target_admm.state_size(), 4u);
+        EXPECT_EQ(target_admm.config().sparsify_steps, kAdmmTestConfig.sparsify_steps);
+        EXPECT_FLOAT_EQ(target_admm.config().init_rho, kAdmmTestConfig.init_rho);
+        EXPECT_FLOAT_EQ(target_admm.config().prune_ratio, kAdmmTestConfig.prune_ratio);
+        EXPECT_EQ(target_admm.config().update_every, kAdmmTestConfig.update_every);
+        EXPECT_EQ(target_admm.config().start_iteration, kAdmmTestConfig.start_iteration);
+        std::ostringstream source_bytes, target_bytes;
+        source_admm.serialize(source_bytes);
+        target_admm.serialize(target_bytes);
+        EXPECT_EQ(source_bytes.str(), target_bytes.str());
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointSparsityRoundTripTest, CheckpointWithoutSparsityClearsInitializedOptimizer) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_sparsity_absent";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        const auto params = make_params_json_test_params(temp_dir);
+        auto source_model = make_checkpoint_test_splat(4);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 7, source_strategy, params, nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        auto target_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC target_strategy(*target_model);
+        lfs::training::ADMMSparsityOptimizer target_admm(kAdmmTestConfig);
+        const auto target_opacity = lfs::core::Tensor::zeros(
+            {size_t{1}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        ASSERT_TRUE(target_admm.initialize(target_opacity).has_value());
+        ASSERT_TRUE(target_admm.is_initialized());
+        auto loaded_params = params;
+        const auto load_result = lfs::training::load_checkpoint(
+            lfs::training::checkpoint_output_path(temp_dir), target_strategy, loaded_params,
+            nullptr, nullptr, nullptr, &target_admm);
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+        EXPECT_FALSE(target_admm.is_initialized());
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointSparsityRoundTripTest, SparsityBlobIsConsumedWhenNoOptimizerIsProvided) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_sparsity_consume";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsify_steps = kAdmmTestConfig.sparsify_steps;
+        params.optimization.init_rho = kAdmmTestConfig.init_rho;
+        params.optimization.prune_ratio = kAdmmTestConfig.prune_ratio;
+        auto source_model = make_checkpoint_test_splat(4);
+        lfs::training::MCMC source_strategy(*source_model);
+        lfs::training::ADMMSparsityOptimizer source_admm(kAdmmTestConfig);
+        const auto opacities = lfs::core::Tensor::zeros(
+            {size_t{4}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        ASSERT_TRUE(source_admm.initialize(opacities).has_value());
+        ASSERT_TRUE(lfs::training::save_checkpoint(
+                        temp_dir, 7, source_strategy, params, nullptr, nullptr, nullptr, &source_admm)
+                        .has_value());
+
+        auto target_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC target_strategy(*target_model);
+        const auto loaded = lfs::training::load_checkpoint(
+            lfs::training::checkpoint_output_path(temp_dir),
+            target_strategy,
+            params,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr);
+        ASSERT_TRUE(loaded.has_value()) << loaded.error();
+        EXPECT_EQ(target_strategy.get_model().size(), 4);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointSparsityRoundTripTest, RejectsSparsityStateWithWrongModelRowCount) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_sparsity_row_mismatch";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+
+        const auto params = make_params_json_test_params(temp_dir);
+        auto source_model = make_checkpoint_test_splat(4);
+        lfs::training::MCMC source_strategy(*source_model);
+        lfs::training::ADMMSparsityOptimizer source_admm(kAdmmTestConfig);
+        const auto wrong_size_opacities = lfs::core::Tensor::zeros(
+            {size_t{3}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        ASSERT_TRUE(source_admm.initialize(wrong_size_opacities).has_value());
+
+        const auto saved = lfs::training::save_checkpoint(
+            temp_dir, 7, source_strategy, params, nullptr, nullptr, nullptr, &source_admm);
+        ASSERT_FALSE(saved.has_value());
+        EXPECT_NE(saved.error().find("does not match model count"), std::string::npos);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
 
     class CheckpointResumeTest : public ::testing::TestWithParam<std::tuple<std::string, int, int, int>> {
     protected:

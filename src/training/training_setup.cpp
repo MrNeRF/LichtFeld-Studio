@@ -421,8 +421,11 @@ namespace lfs::training {
             if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
                 auto model = std::make_unique<lfs::core::SplatData>(std::move(*data));
                 applyTrainingSHDegree(*model, params.optimization.sh_degree);
-                scene.addSplat("loaded_model", std::move(model));
-                scene.setTrainingModelNode("loaded_model");
+                const auto model_id = scene.addSplat("loaded_model", std::move(model));
+                if (model_id == lfs::core::NULL_NODE) {
+                    return std::unexpected("Failed to add loaded training model to scene");
+                }
+                scene.setTrainingModelNode(model_id);
                 LOG_INFO("Loaded PLY directly into scene");
                 return {};
 
@@ -463,8 +466,11 @@ namespace lfs::training {
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Initialized {} Gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                        scene.addSplat("Model", std::move(model), dataset_id);
-                        scene.setTrainingModelNode("Model");
+                        const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                        if (model_id == lfs::core::NULL_NODE) {
+                            return std::unexpected("Failed to add initialized training model to scene");
+                        }
+                        scene.setTrainingModelNode(model_id);
                     } else {
                         auto loader = lfs::io::Loader::create();
                         auto init_result = loader->load(init_file);
@@ -483,8 +489,11 @@ namespace lfs::training {
 
                             LOG_INFO("Loaded {} Gaussians from {} (sh={})",
                                      model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                            scene.addSplat("Model", std::move(model), dataset_id);
-                            scene.setTrainingModelNode("Model");
+                            const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                            if (model_id == lfs::core::NULL_NODE) {
+                                return std::unexpected("Failed to add loaded training model to scene");
+                            }
+                            scene.setTrainingModelNode(model_id);
                         } catch (const std::bad_variant_access&) {
                             return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }
@@ -755,15 +764,18 @@ namespace lfs::training {
         }
         LOG_INFO("Created training model with {} gaussians", model->size());
         const lfs::core::NodeId model_id = scene.addSplat("Model", std::move(model), parent_id);
-        if (node_transform != glm::mat4{1.0f}) {
-            scene.setNodeTransform("Model", node_transform);
+        if (model_id == lfs::core::NULL_NODE) {
+            return std::unexpected("Failed to add training model to scene");
         }
-        scene.setTrainingModelNode("Model");
+        if (node_transform != glm::mat4{1.0f}) {
+            scene.setNodeTransform(model_id, node_transform);
+        }
+        scene.setTrainingModelNode(model_id);
         if (has_preserved_cropbox && model_id != lfs::core::NULL_NODE) {
             const lfs::core::NodeId model_cropbox_id = scene.addCropBox("Model_cropbox", model_id);
             if (model_cropbox_id != lfs::core::NULL_NODE) {
                 scene.setCropBoxData(model_cropbox_id, preserved_cropbox_data);
-                scene.setNodeTransform("Model_cropbox", preserved_cropbox_transform);
+                scene.setNodeTransform(model_cropbox_id, preserved_cropbox_transform);
             }
         }
 
@@ -800,8 +812,11 @@ namespace lfs::training {
             if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
                 auto model = std::make_unique<lfs::core::SplatData>(std::move(*data));
                 applyTrainingSHDegree(*model, params.optimization.sh_degree);
-                scene.addSplat("loaded_model", std::move(model));
-                scene.setTrainingModelNode("loaded_model");
+                const auto model_id = scene.addSplat("loaded_model", std::move(model));
+                if (model_id == lfs::core::NULL_NODE) {
+                    return std::unexpected("Failed to add loaded training model to scene");
+                }
+                scene.setTrainingModelNode(model_id);
                 return {};
 
             } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
@@ -839,8 +854,11 @@ namespace lfs::training {
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Init {} gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                        scene.addSplat("Model", std::move(model), dataset_id);
-                        scene.setTrainingModelNode("Model");
+                        const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                        if (model_id == lfs::core::NULL_NODE) {
+                            return std::unexpected("Failed to add initialized training model to scene");
+                        }
+                        scene.setTrainingModelNode(model_id);
                     } else {
                         auto loader = lfs::io::Loader::create();
                         auto init_result = loader->load(init_file);
@@ -858,8 +876,11 @@ namespace lfs::training {
 
                             LOG_INFO("Loaded {} gaussians from {} (sh={})",
                                      model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                            scene.addSplat("Model", std::move(model), dataset_id);
-                            scene.setTrainingModelNode("Model");
+                            const auto model_id = scene.addSplat("Model", std::move(model), dataset_id);
+                            if (model_id == lfs::core::NULL_NODE) {
+                                return std::unexpected("Failed to add loaded training model to scene");
+                            }
+                            scene.setTrainingModelNode(model_id);
                         } catch (const std::bad_variant_access&) {
                             return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }

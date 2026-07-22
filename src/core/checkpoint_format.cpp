@@ -6,6 +6,7 @@
 #include "core/path_utils.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <utility>
 
 namespace lfs::core {
@@ -69,7 +70,8 @@ namespace lfs::core {
             return std::unexpected("Invalid checkpoint: file exceeds byte budget");
         if (header.magic != CHECKPOINT_MAGIC)
             return std::unexpected("Invalid checkpoint: wrong magic");
-        if (header.version != CHECKPOINT_VERSION)
+        if (header.version < CHECKPOINT_MIN_SUPPORTED_VERSION ||
+            header.version > CHECKPOINT_VERSION)
             return std::unexpected("Unsupported version: " + std::to_string(header.version));
         if (header.iteration < 0)
             return std::unexpected("Invalid checkpoint: iteration must be nonnegative");
@@ -78,9 +80,12 @@ namespace lfs::core {
         if (header.sh_degree < 0 || header.sh_degree > 3)
             return std::unexpected("Invalid checkpoint: unsupported SH degree");
 
-        constexpr auto known_flags = static_cast<uint32_t>(CheckpointFlags::HAS_BILATERAL_GRID) |
-                                     static_cast<uint32_t>(CheckpointFlags::HAS_PPISP) |
-                                     static_cast<uint32_t>(CheckpointFlags::HAS_PPISP_CONTROLLER);
+        auto known_flags = static_cast<uint32_t>(CheckpointFlags::HAS_BILATERAL_GRID) |
+                           static_cast<uint32_t>(CheckpointFlags::HAS_PPISP) |
+                           static_cast<uint32_t>(CheckpointFlags::HAS_PPISP_CONTROLLER);
+        if (header.version >= CHECKPOINT_VERSION_HAS_SPARSITY) {
+            known_flags |= static_cast<uint32_t>(CheckpointFlags::HAS_SPARSITY);
+        }
         if ((static_cast<uint32_t>(header.flags) & ~known_flags) != 0)
             return std::unexpected("Invalid checkpoint: unknown feature flags");
 
@@ -154,28 +159,7 @@ namespace lfs::core {
                 if (!file)
                     return std::unexpected("Invalid checkpoint: truncated parameter JSON");
 
-                const auto params_json = nlohmann::json::parse(params_str);
-                if (params_json.contains("optimization")) {
-                    params.optimization = param::OptimizationParameters::from_json(params_json["optimization"]);
-                    if (params_json.contains("dataset")) {
-                        params.dataset = param::DatasetConfig::from_json(params_json["dataset"]);
-                    }
-                    if (params_json.contains("init_path")) {
-                        params.init_path = params_json["init_path"].get<std::string>();
-                    }
-                    if (params_json.contains("server")) {
-                        params.server = param::ServerConfig::from_json(params_json["server"]);
-                    }
-                    if (params_json.contains("exclude_frozen_add_splats_from_export")) {
-                        params.exclude_frozen_add_splats_from_export =
-                            params_json["exclude_frozen_add_splats_from_export"].get<bool>();
-                    }
-                    if (params_json.contains("disabled_camera_uids")) {
-                        params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();
-                    }
-                } else {
-                    params.optimization = param::OptimizationParameters::from_json(params_json);
-                }
+                params = parse_checkpoint_params_json(params_str);
             }
 
             if (params.optimization.max_cap < 0)
@@ -193,6 +177,66 @@ namespace lfs::core {
         } catch (const std::exception& e) {
             return std::unexpected(std::string("Load params failed: ") + e.what());
         }
+    }
+
+    param::TrainingParameters parse_checkpoint_params_json(
+        const std::string_view json_text,
+        param::TrainingParameters base_params) {
+        const auto params_json = nlohmann::json::parse(json_text);
+        const auto validate_splat_composition = [](const param::TrainingParameters& params) {
+            if (!params.add_splat_paths.empty() && !params.add_splat_freeze.empty() &&
+                params.add_splat_paths.size() != params.add_splat_freeze.size()) {
+                throw std::runtime_error(
+                    "Invalid checkpoint parameters: add_splat_freeze count does not match add_splat_paths");
+            }
+        };
+        if (!params_json.contains("optimization")) {
+            base_params.optimization = param::OptimizationParameters::from_json(params_json);
+            validate_splat_composition(base_params);
+            return base_params;
+        }
+
+        base_params.optimization = param::OptimizationParameters::from_json(params_json["optimization"]);
+        if (params_json.contains("dataset")) {
+            base_params.dataset = param::DatasetConfig::from_json(params_json["dataset"]);
+        }
+        if (params_json.contains("init_path")) {
+            base_params.init_path = params_json["init_path"].get<std::string>();
+        }
+        if (params_json.contains("server")) {
+            base_params.server = param::ServerConfig::from_json(params_json["server"]);
+        }
+        if (params_json.contains("exclude_frozen_add_splats_from_export")) {
+            base_params.exclude_frozen_add_splats_from_export =
+                params_json["exclude_frozen_add_splats_from_export"].get<bool>();
+        }
+        if (params_json.contains("disabled_camera_uids")) {
+            base_params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();
+        }
+
+        const auto utf8_to_paths = [](const nlohmann::json& array) {
+            std::vector<std::filesystem::path> paths;
+            paths.reserve(array.size());
+            for (const auto& entry : array) {
+                paths.push_back(utf8_to_path(entry.get<std::string>()));
+            }
+            return paths;
+        };
+        if (params_json.contains("view_paths")) {
+            base_params.view_paths = utf8_to_paths(params_json["view_paths"]);
+        }
+        if (params_json.contains("import_cameras_path")) {
+            base_params.import_cameras_path =
+                utf8_to_path(params_json["import_cameras_path"].get<std::string>());
+        }
+        if (params_json.contains("add_splat_paths")) {
+            base_params.add_splat_paths = utf8_to_paths(params_json["add_splat_paths"]);
+        }
+        if (params_json.contains("add_splat_freeze")) {
+            base_params.add_splat_freeze = params_json["add_splat_freeze"].get<std::vector<bool>>();
+        }
+        validate_splat_composition(base_params);
+        return base_params;
     }
 
 } // namespace lfs::core

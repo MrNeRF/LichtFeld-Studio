@@ -3,53 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/layout_state.hpp"
+#include "core/config_paths.hpp"
 #include "core/logger.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-#ifdef _WIN32
-#include <cstdlib>
-#include <shlobj.h>
-#else
-#include <pwd.h>
-#include <unistd.h>
-#endif
-
 namespace lfs::vis::gui {
 
     std::filesystem::path LayoutState::getConfigDir() {
-        std::filesystem::path config_dir;
-#ifdef _WIN32
-        wchar_t path[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
-            config_dir = std::filesystem::path(path) / "LichtFeldStudio";
-        } else {
-            const char* appdata = std::getenv("APPDATA");
-            if (appdata) {
-                config_dir = std::filesystem::path(appdata) / "LichtFeldStudio";
-            } else {
-                config_dir = std::filesystem::current_path() / "config";
-            }
-        }
-#else
-        const char* xdg = std::getenv("XDG_CONFIG_HOME");
-        if (xdg) {
-            config_dir = std::filesystem::path(xdg) / "LichtFeldStudio";
-        } else {
-            const char* home = std::getenv("HOME");
-            if (!home) {
-                struct passwd* pw = getpwuid(getuid());
-                if (pw)
-                    home = pw->pw_dir;
-            }
-            if (home) {
-                config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio";
-            } else {
-                config_dir = std::filesystem::current_path() / "config";
-            }
-        }
-#endif
-        return config_dir;
+        return lfs::core::user_config_dir();
     }
 
     std::filesystem::path LayoutState::getConfigPath() {
@@ -66,6 +28,7 @@ namespace lfs::vis::gui {
             j["scene_panel_ratio"] = scene_panel_ratio;
             j["python_console_width"] = python_console_width;
             j["bottom_dock_height"] = bottom_dock_height;
+            j["left_dock_width"] = left_dock_width;
             j["show_sequencer"] = show_sequencer;
 
             if (!file_association.empty())
@@ -112,6 +75,7 @@ namespace lfs::vis::gui {
             scene_panel_ratio = j.value("scene_panel_ratio", scene_panel_ratio);
             python_console_width = j.value("python_console_width", python_console_width);
             bottom_dock_height = j.value("bottom_dock_height", bottom_dock_height);
+            left_dock_width = j.value("left_dock_width", left_dock_width);
             show_sequencer = j.value("show_sequencer", show_sequencer);
             file_association = j.value("file_association", file_association);
 

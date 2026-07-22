@@ -99,8 +99,11 @@ namespace lfs::app {
             }
 
             auto splat_data = std::make_unique<core::SplatData>(std::move(*splat_result));
-            scene.addSplat("Model", std::move(splat_data), core::NULL_NODE);
-            scene.setTrainingModelNode("Model");
+            const auto model_id = scene.addSplat("Model", std::move(splat_data), core::NULL_NODE);
+            if (model_id == core::NULL_NODE) {
+                return std::unexpected("Failed to add checkpoint training model to scene");
+            }
+            scene.setTrainingModelNode(model_id);
 
             checkpoint_params.resume_checkpoint = *params.resume_checkpoint;
             return checkpoint_params;

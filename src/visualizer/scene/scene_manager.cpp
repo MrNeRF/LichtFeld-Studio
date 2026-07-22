@@ -650,8 +650,16 @@ namespace lfs::vis {
     }
 
     std::optional<std::filesystem::path> SceneManager::getPlyPath(const std::string& name) const {
+        const auto* node = scene_.getNode(name);
+        return node ? getPlyPath(node->uuid) : std::nullopt;
+    }
+
+    std::optional<std::filesystem::path> SceneManager::getPlyPath(const core::Uuid& uuid) const {
+        if (uuid.is_nil()) {
+            return std::nullopt;
+        }
         std::lock_guard<std::mutex> lock(state_mutex_);
-        const auto it = splat_paths_.find(name);
+        const auto it = splat_paths_.find(uuid);
         if (it == splat_paths_.end()) {
             return std::nullopt;
         }
@@ -659,25 +667,44 @@ namespace lfs::vis {
     }
 
     void SceneManager::setPlyPath(const std::string& name, const std::filesystem::path& path) {
+        const auto* node = scene_.getNode(name);
+        if (!node) {
+            LOG_WARN("Cannot set PLY path: node '{}' does not resolve", name);
+            return;
+        }
+        setPlyPath(node->uuid, path);
+    }
+
+    void SceneManager::setPlyPath(const core::Uuid& uuid, const std::filesystem::path& path) {
+        if (uuid.is_nil()) {
+            LOG_WARN("Cannot set PLY path for nil node UUID");
+            return;
+        }
         std::lock_guard<std::mutex> lock(state_mutex_);
-        splat_paths_[name] = path;
+        splat_paths_[uuid] = path;
     }
 
     void SceneManager::clearPlyPath(const std::string& name) {
+        const auto* node = scene_.getNode(name);
+        if (node) {
+            clearPlyPath(node->uuid);
+        }
+    }
+
+    void SceneManager::clearPlyPath(const core::Uuid& uuid) {
+        if (uuid.is_nil()) {
+            return;
+        }
         std::lock_guard<std::mutex> lock(state_mutex_);
-        splat_paths_.erase(name);
+        splat_paths_.erase(uuid);
     }
 
     void SceneManager::movePlyPath(const std::string& old_name, const std::string& new_name) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        auto it = splat_paths_.find(old_name);
-        if (it == splat_paths_.end()) {
-            splat_paths_.erase(new_name);
-            return;
+        // UUID-keyed paths do not move when a display label changes. Resolve
+        // either side only to preserve the legacy call's validation behavior.
+        if (!scene_.getNode(new_name) && !scene_.getNode(old_name)) {
+            LOG_WARN("Cannot rebind PLY path: neither '{}' nor '{}' resolves", old_name, new_name);
         }
-        const auto path = it->second;
-        splat_paths_.erase(it);
-        splat_paths_[new_name] = path;
     }
 
     void SceneManager::setDatasetPath(const std::filesystem::path& path) {
@@ -739,13 +766,14 @@ namespace lfs::vis {
                     throw std::runtime_error("Failed to add mesh node '" + name + "'");
                 }
                 const auto* const added = scene_.getNodeById(node_id);
+                assert(added);
                 const std::string added_name = added ? added->name : name;
 
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
                     content_type_ = ContentType::SplatFiles;
                     splat_paths_.clear();
-                    splat_paths_[added_name] = path;
+                    splat_paths_[added->uuid] = path;
                 }
 
                 state::SceneLoaded{
@@ -759,6 +787,7 @@ namespace lfs::vis {
 
                 state::PLYAdded{
                     .name = added_name,
+                    .uuid = added->uuid,
                     .node_gaussians = 0,
                     .total_gaussians = scene_.getTotalGaussianCount(),
                     .is_visible = true,
@@ -787,13 +816,14 @@ namespace lfs::vis {
                     throw std::runtime_error("Failed to add splat node '" + name + "'");
                 }
                 const auto* const added = scene_.getNodeById(node_id);
+                assert(added);
                 const std::string added_name = added ? added->name : name;
 
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
                     content_type_ = ContentType::SplatFiles;
                     splat_paths_.clear();
-                    splat_paths_[added_name] = path;
+                    splat_paths_[added->uuid] = path;
                 }
 
                 state::SceneLoaded{
@@ -807,6 +837,7 @@ namespace lfs::vis {
 
                 state::PLYAdded{
                     .name = added_name,
+                    .uuid = added->uuid,
                     .node_gaussians = gaussian_count,
                     .total_gaussians = scene_.getTotalGaussianCount(),
                     .is_visible = true,
@@ -839,6 +870,7 @@ namespace lfs::vis {
                             LOG_DEBUG("Emitting PLYAdded for cropbox '{}'", cropbox_node->name);
                             state::PLYAdded{
                                 .name = cropbox_node->name,
+                                .uuid = cropbox_node->uuid,
                                 .node_gaussians = 0,
                                 .total_gaussians = scene_.getTotalGaussianCount(),
                                 .is_visible = true,
@@ -920,6 +952,10 @@ namespace lfs::vis {
 
             const bool has_controller = (controller_pool != nullptr);
             setAppearanceModel(std::move(ppisp), std::move(controller_pool));
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                ppisp_path_ = ppisp_path;
+            }
             ui::AppearanceModelLoaded{.has_controller = has_controller}.emit();
 
         } catch (const std::exception& e) {
@@ -967,14 +1003,16 @@ namespace lfs::vis {
                 }
                 scene_.setNodeVisibility(node_id, is_visible);
                 const auto* const added = scene_.getNodeById(node_id);
+                assert(added);
                 const std::string added_name = added ? added->name : name;
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
-                    splat_paths_[added_name] = path;
+                    splat_paths_[added->uuid] = path;
                 }
 
                 state::PLYAdded{
                     .name = added_name,
+                    .uuid = added->uuid,
                     .node_gaussians = 0,
                     .total_gaussians = scene_.getTotalGaussianCount(),
                     .is_visible = is_visible,
@@ -1005,11 +1043,12 @@ namespace lfs::vis {
             }
             scene_.setNodeVisibility(node_id, is_visible);
             const auto* const added = scene_.getNodeById(node_id);
+            assert(added);
             const std::string added_name = added ? added->name : name;
 
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
-                splat_paths_[added_name] = path;
+                splat_paths_[added->uuid] = path;
             }
 
             // RAD assets always enter LOD mode; availability still reflects tree presence.
@@ -1034,6 +1073,7 @@ namespace lfs::vis {
 
             state::PLYAdded{
                 .name = added_name,
+                .uuid = added->uuid,
                 .node_gaussians = gaussian_count,
                 .total_gaussians = scene_.getTotalGaussianCount(),
                 .is_visible = is_visible,
@@ -1229,6 +1269,8 @@ namespace lfs::vis {
             content_type_ = ContentType::Empty;
             splat_paths_.clear();
             dataset_path_.clear();
+            colmap_sparse_path_.clear();
+            ppisp_path_.clear();
             cached_params_.reset();
         }
 
@@ -1239,23 +1281,18 @@ namespace lfs::vis {
     }
 
     SceneManager::TrainingRemovalImpact SceneManager::classifyTrainingRemovalImpact(const std::string& name) const {
-        const auto& training_name = scene_.getTrainingModelNodeName();
-        if (!training_name.empty() && name == training_name) {
-            return TrainingRemovalImpact::TrainingModel;
-        }
-
-        if (!training_name.empty()) {
-            for (const auto* n = scene_.getNode(training_name); n && n->parent_id != core::NULL_NODE;) {
-                n = scene_.getNodeById(n->parent_id);
-                if (n && n->name == name) {
-                    return TrainingRemovalImpact::TrainingModel;
-                }
-            }
-        }
-
         const auto* root = scene_.getNode(name);
         if (!root) {
             return TrainingRemovalImpact::None;
+        }
+
+        for (const auto* training_node = scene_.getNodeByUuid(scene_.getTrainingModelNodeUuid()); training_node;) {
+            if (training_node->id == root->id) {
+                return TrainingRemovalImpact::TrainingModel;
+            }
+            training_node = training_node->parent_id == core::NULL_NODE
+                                ? nullptr
+                                : scene_.getNodeById(training_node->parent_id);
         }
 
         std::vector<core::NodeId> pending{root->id};
@@ -1326,6 +1363,14 @@ namespace lfs::vis {
             }
         }
 
+        const auto history_options = sceneGraphCaptureOptions(true, true);
+        std::optional<op::SceneGraphStateSnapshot> history_before;
+        if (record_history) {
+            // Capture the durable training binding before stopping/clearing the
+            // live trainer. Undo must restore the UUID, not the post-stop state.
+            history_before = op::SceneGraphPatchEntry::captureState(*this, {name}, history_options);
+        }
+
         if (removes_training_model) {
             if (auto* trainer = services().trainerOrNull()) {
                 LOG_INFO("Stopping training due to node deletion: {}", name);
@@ -1338,12 +1383,6 @@ namespace lfs::vis {
             }
         }
 
-        const auto history_options = sceneGraphCaptureOptions(true, true);
-        std::optional<op::SceneGraphStateSnapshot> history_before;
-        if (record_history) {
-            history_before = op::SceneGraphPatchEntry::captureState(*this, {name}, history_options);
-        }
-
         std::string parent_name;
         if (node_to_remove->parent_id != core::NULL_NODE) {
             if (const auto* parent = scene_.getNodeById(node_to_remove->parent_id)) {
@@ -1353,12 +1392,13 @@ namespace lfs::vis {
 
         const core::NodeId removed_id = scene_.getNodeIdByName(name);
         std::vector<core::NodeId> ids_to_deselect;
-        std::vector<std::string> names_to_remove;
+        std::vector<core::Uuid> uuids_to_remove;
+        const core::Uuid removed_uuid = node_to_remove->uuid;
         if (removed_id != core::NULL_NODE && !keep_children) {
             std::function<void(core::NodeId)> collect = [&](core::NodeId id) {
                 ids_to_deselect.push_back(id);
                 if (const auto* node = scene_.getNodeById(id)) {
-                    names_to_remove.push_back(node->name);
+                    uuids_to_remove.push_back(node->uuid);
                     for (const core::NodeId child_id : node->children) {
                         collect(child_id);
                     }
@@ -1367,7 +1407,7 @@ namespace lfs::vis {
             collect(removed_id);
         } else if (removed_id != core::NULL_NODE) {
             ids_to_deselect.push_back(removed_id);
-            names_to_remove.push_back(name);
+            uuids_to_remove.push_back(removed_uuid);
         }
 
         drainGpuForTensorRelease();
@@ -1380,8 +1420,8 @@ namespace lfs::vis {
         scheduleConsolidatedCompaction();
         {
             std::lock_guard lock(state_mutex_);
-            for (const auto& node_name : names_to_remove) {
-                splat_paths_.erase(node_name);
+            for (const auto& uuid : uuids_to_remove) {
+                splat_paths_.erase(uuid);
             }
         }
         for (const core::NodeId id : ids_to_deselect) {
@@ -1393,6 +1433,7 @@ namespace lfs::vis {
 
         state::PLYRemoved{
             .name = name,
+            .uuid = removed_uuid,
             .children_kept = keep_children,
             .parent_of_removed = parent_name,
             .from_history = false,
@@ -2762,6 +2803,11 @@ namespace lfs::vis {
 
             scene_.setSceneCenter(std::move(scene_center));
 
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                colmap_sparse_path_ = sparse_path;
+            }
+
             state::SceneLoaded{
                 .scene = nullptr,
                 .path = sparse_path,
@@ -2948,7 +2994,7 @@ namespace lfs::vis {
                 checkpoint_iteration);
 
             ui::PointCloudModeChanged{.enabled = false, .voxel_size = DEFAULT_VOXEL_SIZE}.emit();
-            selectNode(MODEL_NAME);
+            selectNode(scene_.getTrainingModelNodeId());
             ui::FocusTrainingPanel{}.emit();
 
         } catch (const std::exception& e) {
@@ -2978,8 +3024,7 @@ namespace lfs::vis {
             return;
         }
 
-        const std::string model_name = scene_.getTrainingModelNodeName();
-        auto* model_node = model_name.empty() ? nullptr : scene_.getMutableNode(model_name);
+        auto* model_node = scene_.getNodeByUuid(scene_.getTrainingModelNodeUuid());
         if (!model_node || !model_node->model) {
             LOG_WARN("switchToEditMode: no training model");
             return;
@@ -3009,7 +3054,7 @@ namespace lfs::vis {
             }
         }
 
-        model_node = scene_.getMutableNode(model_name);
+        model_node = scene_.getNodeByUuid(scene_.getTrainingModelNodeUuid());
         if (!model_node || !model_node->model) {
             LOG_WARN("switchToEditMode: no training model after stopping trainer");
             return;
@@ -3040,11 +3085,13 @@ namespace lfs::vis {
         scene_.clear();
 
         constexpr const char* MODEL_NAME = "Trained Model";
-        scene_.addSplat(MODEL_NAME, std::move(splat_data));
-        selectNode(MODEL_NAME);
+        const core::NodeId edit_model_id = scene_.addSplat(MODEL_NAME, std::move(splat_data));
+        assert(edit_model_id != core::NULL_NODE);
+        scene_.markPayloadDiverged(edit_model_id);
+        selectNode(edit_model_id);
 
         // Restore the world transform
-        scene_.setNodeTransform(MODEL_NAME, old_model_world);
+        scene_.setNodeTransform(edit_model_id, old_model_world);
 
         if (ppisp) {
             setAppearanceModel(std::move(ppisp), std::move(controller_pool));
@@ -3125,7 +3172,7 @@ namespace lfs::vis {
         // be owned by the trainer; cull it through the render-state node mask
         // instead of letting the model pointer disappear.
         if (hidden_dataset_training_model) {
-            const auto* const training_node = scene_.getNode(scene_.getTrainingModelNodeName());
+            const auto* const training_node = scene_.getNodeByUuid(scene_.getTrainingModelNodeUuid());
             const glm::mat4 transform = training_node
                                             ? scene_.getWorldTransform(training_node->id)
                                             : glm::mat4(1.0f);
@@ -3227,7 +3274,7 @@ namespace lfs::vis {
             info.num_nodes = scene_.getNodeCount();
             info.source_type = "Splat";
             if (!splat_paths_.empty()) {
-                info.source_path = splat_paths_.rbegin()->second; // get the "last" element of the splat_paths_
+                info.source_path = splat_paths_.begin()->second;
                 // Determine specific type from extension
                 auto ext = info.source_path.extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -3399,6 +3446,7 @@ namespace lfs::vis {
                 node->point_cloud = std::make_shared<lfs::core::PointCloud>(
                     means.index_select(0, indices), colors.index_select(0, indices));
                 node->gaussian_count.store(filtered_count, std::memory_order_release);
+                scene_.markPayloadDiverged(node->id);
 
                 LOG_INFO("Cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
 
@@ -3443,11 +3491,13 @@ namespace lfs::vis {
                 if (new_visible == original_visible) {
                     continue;
                 }
+                scene_.markPayloadDiverged(node->id);
 
                 LOG_INFO("Cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
 
                 state::PLYAdded{
                     .name = node_name,
+                    .uuid = node->uuid,
                     .node_gaussians = new_visible,
                     .total_gaussians = scene_.getTotalGaussianCount(),
                     .is_visible = true,
@@ -3559,6 +3609,7 @@ namespace lfs::vis {
                 node->point_cloud = std::make_shared<lfs::core::PointCloud>(
                     means.index_select(0, indices), colors.index_select(0, indices));
                 node->gaussian_count.store(filtered_count, std::memory_order_release);
+                scene_.markPayloadDiverged(node->id);
                 LOG_INFO("Ellipsoid cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
             }
         }
@@ -3599,9 +3650,11 @@ namespace lfs::vis {
                 LOG_INFO("Ellipsoid cropped '{}': {} -> {} visible", node_name, original_visible, new_visible);
                 if (new_visible == original_visible)
                     continue;
+                scene_.markPayloadDiverged(node->id);
 
                 state::PLYAdded{
                     .name = node_name,
+                    .uuid = node->uuid,
                     .node_gaussians = new_visible,
                     .total_gaussians = scene_.getTotalGaussianCount(),
                     .is_visible = true,
@@ -3660,8 +3713,6 @@ namespace lfs::vis {
         const bool success = scene_.renameNode(id, new_name);
 
         if (success && old_name != new_name) {
-            movePlyPath(old_name, new_name);
-
             LOG_INFO("Successfully renamed '{}' to '{}'", old_name, new_name);
             pushSceneGraphMetadataHistoryEntry(
                 *this,
@@ -3789,6 +3840,7 @@ namespace lfs::vis {
         selection_.invalidateNodeMask();
         state::PLYAdded{
             .name = unique_name,
+            .uuid = scene_.getNodeUuid(group_id),
             .node_gaussians = 0,
             .total_gaussians = scene_.getTotalGaussianCount(),
             .is_visible = true,
@@ -3824,6 +3876,7 @@ namespace lfs::vis {
         selection_.invalidateNodeMask();
         state::PLYAdded{
             .name = sequence_name,
+            .uuid = scene_.getNodeUuid(sequence_id),
             .node_gaussians = frame_count,
             .total_gaussians = scene_.getTotalGaussianCount(),
             .is_visible = true,
@@ -3894,6 +3947,7 @@ namespace lfs::vis {
             added->locked.setQuiet(locked);
             added->training_enabled = training_enabled;
             added->transform_dirty = true;
+            scene_.markPayloadDiverged(node_id);
         }
 
         if (getContentType() == ContentType::Empty) {
@@ -3909,6 +3963,7 @@ namespace lfs::vis {
         if (const auto* added = scene_.getNodeById(node_id)) {
             state::PLYAdded{
                 .name = generated_name,
+                .uuid = added->uuid,
                 .node_gaussians = added->gaussian_count.load(std::memory_order_acquire),
                 .total_gaussians = scene_.getTotalGaussianCount(),
                 .is_visible = added->visible,
@@ -3983,6 +4038,7 @@ namespace lfs::vis {
 
                 state::PLYAdded{
                     .name = node->name,
+                    .uuid = node->uuid,
                     .node_gaussians = node->gaussian_count.load(std::memory_order_acquire),
                     .total_gaussians = scene_.getTotalGaussianCount(),
                     .is_visible = node->visible,
@@ -4012,6 +4068,7 @@ namespace lfs::vis {
         const auto history_options = sceneGraphCaptureOptions(true, false);
         auto history_before = op::SceneGraphPatchEntry::captureState(*this, {name}, history_options);
         const core::NodeId group_id = group->id;
+        const core::Uuid group_uuid = group->uuid;
         const core::NodeId parent_id = group->parent_id;
 
         std::string parent_name;
@@ -4032,11 +4089,11 @@ namespace lfs::vis {
         }
 
         // Collect children to emit PLYRemoved events
-        std::vector<std::string> children_to_remove;
+        std::vector<std::pair<std::string, core::Uuid>> children_to_remove;
         std::function<void(const core::SceneNode*)> collect_children = [&](const core::SceneNode* n) {
             for (const core::NodeId cid : n->children) {
                 if (const auto* c = scene_.getNodeById(cid)) {
-                    children_to_remove.push_back(c->name);
+                    children_to_remove.emplace_back(c->name, c->uuid);
                     collect_children(c);
                 }
             }
@@ -4075,15 +4132,17 @@ namespace lfs::vis {
         {
             core::Scene::Transaction txn(scene_);
             scene_.removeNode(name, false);
-            scene_.addSplat(name, std::move(merged_model), parent_id);
+            const auto merged_id = scene_.addSplat(name, std::move(merged_model), parent_id);
+            scene_.markPayloadDiverged(merged_id);
         }
         const std::string merged_name = name;
         selection_.invalidateNodeMask();
 
         // Emit PLYRemoved for all original children and the group
-        for (const auto& child_name : children_to_remove) {
+        for (const auto& [child_name, child_uuid] : children_to_remove) {
             state::PLYRemoved{
                 .name = child_name,
+                .uuid = child_uuid,
                 .children_kept = false,
                 .parent_of_removed = {},
                 .from_history = false,
@@ -4092,6 +4151,7 @@ namespace lfs::vis {
         }
         state::PLYRemoved{
             .name = name,
+            .uuid = group_uuid,
             .children_kept = false,
             .parent_of_removed = {},
             .from_history = false,
@@ -4103,6 +4163,7 @@ namespace lfs::vis {
         if (merged) {
             state::PLYAdded{
                 .name = merged->name,
+                .uuid = merged->uuid,
                 .node_gaussians = merged->gaussian_count.load(std::memory_order_acquire),
                 .total_gaussians = scene_.getTotalGaussianCount(),
                 .is_visible = merged->visible,
@@ -4612,10 +4673,12 @@ namespace lfs::vis {
             LOG_WARN("Failed to paste Gaussians as '{}'", name);
             return {};
         }
+        scene_.markPayloadDiverged(pasted_id);
         selection_.invalidateNodeMask();
 
         state::PLYAdded{
             .name = name,
+            .uuid = scene_.getNodeUuid(pasted_id),
             .node_gaussians = count,
             .total_gaussians = scene_.getTotalGaussianCount(),
             .is_visible = true,
@@ -4681,6 +4744,7 @@ namespace lfs::vis {
 
             const auto center = lfs::core::compute_selection_center(model, *mask);
             lfs::core::mirror_gaussians(model, *mask, axis, center);
+            scene_.markPayloadDiverged(node->id);
         }
 
         if (total_count == 0) {
@@ -4748,6 +4812,7 @@ namespace lfs::vis {
                 }
 
                 pasted_id = scene_.addSplat(name, std::move(paste_data));
+                scene_.markPayloadDiverged(pasted_id);
             } else {
                 continue;
             }
@@ -4774,6 +4839,7 @@ namespace lfs::vis {
 
             state::PLYAdded{
                 .name = pasted_name,
+                .uuid = pasted_node->uuid,
                 .node_gaussians = pasted_node->gaussian_count.load(std::memory_order_acquire),
                 .total_gaussians = scene_.getTotalGaussianCount(),
                 .is_visible = true,
@@ -4788,6 +4854,7 @@ namespace lfs::vis {
                     if (const auto* cropbox_node = scene_.getNodeById(cropbox_id)) {
                         state::PLYAdded{
                             .name = cropbox_node->name,
+                            .uuid = cropbox_node->uuid,
                             .node_gaussians = 0,
                             .total_gaussians = scene_.getTotalGaussianCount(),
                             .is_visible = true,
@@ -4966,10 +5033,17 @@ namespace lfs::vis {
         if (plan.consolidated) {
             auto* combined = const_cast<core::SplatData*>(scene_.getCombinedModel());
             combined->soft_delete(plan.selection_mask);
+            for (const auto* node : scene_.getNodes()) {
+                if (node && node->type == core::NodeType::SPLAT && node->model &&
+                    scene_.isNodeEffectivelyVisible(node->id)) {
+                    scene_.markPayloadDiverged(node->id);
+                }
+            }
         } else {
             for (const auto& slice : plan.partial_slices) {
                 auto* node = scene_.getMutableNode(slice.node_name);
                 node->model->soft_delete(plan.selection_mask.slice(0, slice.begin, slice.end));
+                scene_.markPayloadDiverged(node->id);
             }
 
             for (const auto& [node_name, impact] : removed_node_impacts) {

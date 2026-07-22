@@ -58,6 +58,7 @@ namespace lfs::training {
         int num_images() const { return num_images_; }
         double get_lr() const { return current_lr_; }
         int64_t get_step() const { return step_; }
+        const Config& get_config() const { return config_; }
         const lfs::core::Tensor& grids() const { return grids_; }
 
         // Serialization

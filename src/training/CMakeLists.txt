@@ -91,6 +91,7 @@ set(TRAINING_NEW_SOURCES
     rasterization/fast_rasterizer.cpp
     rasterization/gsplat_rasterizer.cpp
     rasterization/edge_rasterizer.cpp
+    components/config_serialization.cpp
     components/bilateral_grid.cpp
     components/ppisp.cpp
     components/ppisp_controller.cu

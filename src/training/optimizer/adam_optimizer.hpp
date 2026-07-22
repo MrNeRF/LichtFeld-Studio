@@ -105,6 +105,7 @@ namespace lfs::training {
         FastGSFusedAdamState prepare_fastgs_fused_adam(int iteration);
         void commit_fastgs_fused_adam(int iteration);
         void set_frozen_mask(lfs::core::Tensor mask);
+        [[nodiscard]] const lfs::core::Tensor& frozen_mask() const { return frozen_mask_; }
 
         // Gradient management
         void allocate_gradients();

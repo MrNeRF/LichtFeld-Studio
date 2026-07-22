@@ -290,6 +290,7 @@ namespace lfs::app {
         register_handler.template operator()<core::events::state::PLYAdded>("scene.node_added", [](const auto& event) {
             return nlohmann::json{
                 {"name", event.name},
+                {"uuid", event.uuid.to_string()},
                 {"node_gaussians", static_cast<int64_t>(event.node_gaussians)},
                 {"total_gaussians", static_cast<int64_t>(event.total_gaussians)},
                 {"is_visible", event.is_visible},
@@ -301,6 +302,7 @@ namespace lfs::app {
         register_handler.template operator()<core::events::state::PLYRemoved>("scene.node_removed", [](const auto& event) {
             return nlohmann::json{
                 {"name", event.name},
+                {"uuid", event.uuid.to_string()},
                 {"children_kept", event.children_kept},
                 {"parent_of_removed", event.parent_of_removed},
             };

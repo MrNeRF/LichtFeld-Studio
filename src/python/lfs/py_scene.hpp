@@ -218,6 +218,7 @@ namespace lfs::python {
         }
 
         int32_t id() const { return node_->id; }
+        std::string uuid() const { return node_->uuid.to_string(); }
         int32_t parent_id() const { return node_->parent_id; }
         std::vector<int32_t> children() const { return node_->children; }
         core::NodeType type() const { return node_->type; }
@@ -318,7 +319,7 @@ namespace lfs::python {
 
         nb::list python_dir() const {
             nb::list result;
-            for (const char* attr : {"id", "parent_id", "children", "type",
+            for (const char* attr : {"id", "uuid", "parent_id", "children", "type",
                                      "world_transform", "set_local_transform",
                                      "gaussian_count", "centroid",
                                      "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid", "keyframe_data",
@@ -450,6 +451,7 @@ namespace lfs::python {
 
         // Queries
         std::optional<PySceneNode> get_node_by_id(int32_t id);
+        std::optional<PySceneNode> get_node_by_uuid(const std::string& uuid);
         std::optional<PySceneNode> get_node(const std::string& name);
         std::vector<PySceneNode> get_nodes();
         std::vector<PySceneNode> get_visible_nodes();

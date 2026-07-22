@@ -813,6 +813,7 @@ namespace lfs::vis::cap {
             } else {
                 continue;
             }
+            scene.markPayloadDiverged(node->id);
 
             preserve_child_world_transforms(scene_manager, *node, local_transform);
             scene_manager.setNodeTransform(name, glm::mat4(1.0f));
@@ -910,6 +911,7 @@ namespace lfs::vis::cap {
         } else {
             field->index_copy_(0, index_tensor, src_tensor);
         }
+        scene.markPayloadDiverged(node->id);
 
         auto entry = std::make_unique<vis::op::TensorUndoEntry>(
             "gaussians.write",
@@ -1058,6 +1060,7 @@ namespace lfs::vis::cap {
         if (cropbox_node) {
             core::events::state::PLYAdded{
                 .name = cropbox_node->name,
+                .uuid = cropbox_node->uuid,
                 .node_gaussians = 0,
                 .total_gaussians = scene.getTotalGaussianCount(),
                 .is_visible = cropbox_node->visible,
@@ -1363,6 +1366,7 @@ namespace lfs::vis::cap {
         if (ellipsoid_node) {
             core::events::state::PLYAdded{
                 .name = ellipsoid_node->name,
+                .uuid = ellipsoid_node->uuid,
                 .node_gaussians = 0,
                 .total_gaussians = scene.getTotalGaussianCount(),
                 .is_visible = ellipsoid_node->visible,

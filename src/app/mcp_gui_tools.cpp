@@ -298,6 +298,7 @@ namespace lfs::app {
         json node_summary_json(const core::Scene& scene, const core::SceneNode& node) {
             json result{
                 {"name", node.name},
+                {"uuid", node.uuid.to_string()},
                 {"type", node_type_to_string(node.type)},
                 {"visible", static_cast<bool>(node.visible)},
                 {"locked", static_cast<bool>(node.locked)},
@@ -318,14 +319,71 @@ namespace lfs::app {
             return result;
         }
 
+        enum class NodeReferenceErrorCode : uint8_t {
+            INVALID_UUID,
+            UUID_NOT_FOUND,
+            NAME_NOT_FOUND,
+            MISSING_REFERENCE,
+        };
+
+        struct NodeReferenceError {
+            NodeReferenceErrorCode code = NodeReferenceErrorCode::MISSING_REFERENCE;
+            std::string message;
+        };
+
+        std::expected<const core::SceneNode*, NodeReferenceError> resolve_node_reference(
+            const core::Scene& scene,
+            const json& args,
+            const std::string_view name_key = "name",
+            const std::string_view uuid_key = "uuid") {
+            const std::string uuid_key_string(uuid_key);
+            if (args.contains(uuid_key_string) && !args[uuid_key_string].is_null()) {
+                if (!args[uuid_key_string].is_string())
+                    return std::unexpected(NodeReferenceError{
+                        .code = NodeReferenceErrorCode::INVALID_UUID,
+                        .message = "Field '" + uuid_key_string + "' must be a UUID string",
+                    });
+                const std::string uuid_text = args[uuid_key_string].get<std::string>();
+                const auto uuid = core::Uuid::from_string(uuid_text);
+                if (!uuid)
+                    return std::unexpected(NodeReferenceError{
+                        .code = NodeReferenceErrorCode::INVALID_UUID,
+                        .message = "Invalid node UUID: " + uuid_text,
+                    });
+                const auto* node = scene.getNodeByUuid(*uuid);
+                if (!node)
+                    return std::unexpected(NodeReferenceError{
+                        .code = NodeReferenceErrorCode::UUID_NOT_FOUND,
+                        .message = "Node UUID does not resolve: " + uuid_text,
+                    });
+                return node;
+            }
+
+            const std::string name_key_string(name_key);
+            if (!args.contains(name_key_string) || !args[name_key_string].is_string())
+                return std::unexpected(NodeReferenceError{
+                    .code = NodeReferenceErrorCode::MISSING_REFERENCE,
+                    .message = "Either '" + uuid_key_string + "' or '" + name_key_string + "' is required",
+                });
+            const std::string name = args[name_key_string].get<std::string>();
+            const auto* node = scene.getNode(name);
+            if (!node)
+                return std::unexpected(NodeReferenceError{
+                    .code = NodeReferenceErrorCode::NAME_NOT_FOUND,
+                    .message = "Node not found: " + name,
+                });
+            return node;
+        }
+
         json transform_info_json(const core::Scene& scene, const core::SceneNode& node) {
-            const glm::mat4 local = scene.getNodeTransform(node.name);
+            const glm::mat4 local = scene.getNodeTransform(node.id);
             const glm::mat4 world = vis::scene_coords::nodeVisualizerWorldTransform(scene, node.id);
             const auto local_components = decompose_transform(local);
             const auto world_components = decompose_transform(world);
 
             return json{
                 {"name", node.name},
+                {"uuid", node.uuid.to_string()},
                 {"type", node_type_to_string(node.type)},
                 {"local", json{
                               {"translation", vec3_to_json(local_components.translation)},
@@ -611,10 +669,12 @@ namespace lfs::app {
                                  {"show_pivot", settings.show_pivot},
                                  {"split_view_mode", settings.split_view_mode},
                                  {"split_position", settings.split_position},
+                                 {"split_view_offset", settings.split_view_offset},
                                  {"raster_backend", std::string(lfs::rendering::gaussianRasterBackendId(static_cast<lfs::rendering::GaussianRasterBackend>(settings.raster_backend)))},
                                  {"equirectangular", settings.equirectangular},
                                  {"orthographic", settings.orthographic},
                                  {"ortho_scale", settings.ortho_scale},
+                                 {"depth_view", settings.depth_view},
                                  {"depth_view_min", settings.depth_view_min},
                                  {"depth_view_max", settings.depth_view_max},
                                  {"depth_visualization_mode", static_cast<int>(settings.depth_visualization_mode)},
@@ -748,11 +808,16 @@ namespace lfs::app {
             set_bool("show_pivot", settings.show_pivot);
             set_int("split_view_mode", settings.split_view_mode);
             set_float("split_position", settings.split_position);
+            if (args.contains("split_view_offset")) {
+                settings.split_view_offset = args["split_view_offset"].get<size_t>();
+                touched = true;
+            }
             if (auto result = set_raster_backend(settings); !result)
                 return std::unexpected(result.error());
             set_bool("equirectangular", settings.equirectangular);
             set_bool("orthographic", settings.orthographic);
             set_float("ortho_scale", settings.ortho_scale);
+            set_bool("depth_view", settings.depth_view);
             set_float("depth_view_min", settings.depth_view_min);
             set_float("depth_view_max", settings.depth_view_max);
             set_int("depth_visualization_mode", settings.depth_visualization_mode);
@@ -1175,6 +1240,7 @@ namespace lfs::app {
 
             json camera{
                 {"name", node.name},
+                {"uuid", node.uuid.to_string()},
                 {"uid", node.camera_uid},
                 {"camera_id", node.camera->camera_id()},
                 {"image_name", node.camera->image_name()},
@@ -1335,7 +1401,29 @@ namespace lfs::app {
             const auto& scene = scene_manager.getScene();
 
             std::vector<std::string> requested;
-            if (args.contains("nodes")) {
+            if (args.contains("uuids")) {
+                const auto& uuids = args["uuids"];
+                if (!uuids.is_array())
+                    return std::unexpected("Field 'uuids' must be an array of UUID strings");
+                requested.reserve(uuids.size());
+                for (const auto& item : uuids) {
+                    if (!item.is_string())
+                        return std::unexpected("Field 'uuids' must contain only UUID strings");
+                    const std::string uuid_text = item.get<std::string>();
+                    const auto uuid = core::Uuid::from_string(uuid_text);
+                    if (!uuid)
+                        return std::unexpected("Invalid node UUID: " + uuid_text);
+                    const auto* node = scene.getNodeByUuid(*uuid);
+                    if (!node)
+                        return std::unexpected("Node UUID does not resolve: " + uuid_text);
+                    requested.push_back(node->name);
+                }
+            } else if (args.contains("uuid")) {
+                const auto node = resolve_node_reference(scene, args, "node", "uuid");
+                if (!node)
+                    return std::unexpected(node.error().message);
+                requested.push_back((*node)->name);
+            } else if (args.contains("nodes")) {
                 const auto& nodes = args["nodes"];
                 if (!nodes.is_array())
                     return std::unexpected("Field 'nodes' must be an array of node names");
@@ -1347,9 +1435,8 @@ namespace lfs::app {
             } else {
                 requested = scene_manager.getSelectedNodeNames();
                 if (requested.empty()) {
-                    const auto& training_name = scene.getTrainingModelNodeName();
-                    if (!training_name.empty())
-                        requested.push_back(training_name);
+                    if (const auto* training_node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid()))
+                        requested.push_back(training_node->name);
                 }
                 if (requested.empty()) {
                     const auto* node = find_first_visible_splat_node(scene);
@@ -1401,7 +1488,7 @@ namespace lfs::app {
             if (node->model->has_deleted_mask())
                 return plan;
 
-            if (node->name == scene.getTrainingModelNodeName()) {
+            if (node->uuid == scene.getTrainingModelNodeUuid()) {
                 const auto* const trainer_manager = scene_manager.getTrainerManager();
                 const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
                 if (trainer && trainer->is_running() && !trainer->is_paused())
@@ -1576,11 +1663,9 @@ namespace lfs::app {
                     return selected_name;
             }
 
-            const auto& training_name = scene.getTrainingModelNodeName();
-            if (!training_name.empty()) {
-                const auto* const node = scene.getNode(training_name);
-                if (node && node->model)
-                    return training_name;
+            if (const auto* node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+                node && node->model) {
+                return node->name;
             }
 
             const auto* fallback = find_first_visible_splat_node(scene);
@@ -2421,20 +2506,21 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Node name"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}},
                         {"visible", json{{"type", "boolean"}, {"description", "Whether the node should be visible"}}}},
-                    .required = {"name", "visible"}}},
+                    .required = {"visible"}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
                 const bool visible = args["visible"].get<bool>();
 
-                return post_and_wait(viewer_impl, [viewer_impl, name, visible]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, visible]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const node = scene.getNode(name);
-                    if (!node)
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const node = *resolved;
 
                     core::events::cmd::SetNodeVisibilityById{
                         .node_id = node->id,
@@ -2442,7 +2528,7 @@ namespace lfs::app {
                         .emit();
                     if (const auto* const updated = scene.getNodeById(node->id))
                         return json{{"success", true}, {"node", node_summary_json(scene, *updated)}};
-                    return json{{"success", true}, {"name", name}, {"visible", visible}};
+                    return json{{"success", true}, {"name", node->name}, {"visible", visible}};
                 });
             });
 
@@ -2454,19 +2540,21 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Node name"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}},
                         {"locked", json{{"type", "boolean"}, {"description", "Whether the node should be locked"}}}},
-                    .required = {"name", "locked"}}},
+                    .required = {"locked"}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
                 const bool locked = args["locked"].get<bool>();
 
-                return post_and_wait(viewer_impl, [viewer_impl, name, locked]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, locked]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    if (!scene.getNode(name))
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const std::string name = (*resolved)->name;
 
                     core::events::cmd::SetNodeLocked{.name = name, .locked = locked}.emit();
                     if (const auto* const node = scene.getNode(name))
@@ -2483,20 +2571,21 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"old_name", json{{"type", "string"}, {"description", "Current node name"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over old_name"}}},
                         {"new_name", json{{"type", "string"}, {"description", "New node name"}}}},
-                    .required = {"old_name", "new_name"}}},
+                    .required = {"new_name"}}},
             [viewer_impl](const json& args) -> json {
-                const std::string old_name = args["old_name"].get<std::string>();
                 const std::string new_name = args["new_name"].get<std::string>();
 
-                return post_and_wait(viewer_impl, [viewer_impl, old_name, new_name]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, new_name]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const node = scene.getNode(old_name);
-                    if (!node)
-                        return json{{"error", "Node not found: " + old_name}};
+                    const auto resolved = resolve_node_reference(scene, args, "old_name", "uuid");
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const node = *resolved;
 
                     core::events::cmd::RenameNodeById{.node_id = node->id, .new_name = new_name}.emit();
                     if (const auto* const updated = scene.getNodeById(node->id);
@@ -2514,26 +2603,28 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Node to move"}}},
-                        {"parent", json{{"type", "string"}, {"description", "New parent node; omit or null for root"}}}},
-                    .required = {"name"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}},
+                        {"parent", json{{"type", "string"}, {"description", "New parent node; omit or null for root"}}},
+                        {"parent_uuid", json{{"type", "string"}, {"description", "Durable parent UUID; wins over parent"}}}},
+                    .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
-                const auto parent = optional_string_arg(args, "parent");
-
-                return post_and_wait(viewer_impl, [viewer_impl, name, parent]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const node = scene.getNode(name);
-                    if (!node)
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const node = *resolved;
+                    const std::string name = node->name;
                     core::NodeId parent_id = core::NULL_NODE;
-                    if (parent) {
-                        const auto* const parent_node = scene.getNode(*parent);
-                        if (!parent_node)
-                            return json{{"error", "Parent node not found: " + *parent}};
-                        parent_id = parent_node->id;
+                    if ((args.contains("parent_uuid") && !args["parent_uuid"].is_null()) ||
+                        (args.contains("parent") && !args["parent"].is_null())) {
+                        const auto parent = resolve_node_reference(scene, args, "parent", "parent_uuid");
+                        if (!parent)
+                            return json{{"error", parent.error().message}};
+                        parent_id = (*parent)->id;
                     }
 
                     core::events::cmd::ReparentNodeById{
@@ -2557,23 +2648,24 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Requested group name"}}},
-                        {"parent", json{{"type", "string"}, {"description", "Optional parent node name"}}}},
+                        {"parent", json{{"type", "string"}, {"description", "Optional parent node name"}}},
+                        {"parent_uuid", json{{"type", "string"}, {"description", "Optional durable parent UUID; wins over parent"}}}},
                     .required = {"name"}}},
             [viewer_impl](const json& args) -> json {
                 const std::string name = args["name"].get<std::string>();
-                const auto parent = optional_string_arg(args, "parent");
 
-                return post_and_wait(viewer_impl, [viewer_impl, name, parent]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, name]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
                     core::NodeId parent_id = core::NULL_NODE;
-                    if (parent) {
-                        const auto* const parent_node = scene.getNode(*parent);
-                        if (!parent_node)
-                            return json{{"error", "Parent node not found: " + *parent}};
-                        parent_id = parent_node->id;
+                    if ((args.contains("parent_uuid") && !args["parent_uuid"].is_null()) ||
+                        (args.contains("parent") && !args["parent"].is_null())) {
+                        const auto parent = resolve_node_reference(scene, args, "parent", "parent_uuid");
+                        if (!parent)
+                            return json{{"error", parent.error().message}};
+                        parent_id = (*parent)->id;
                     }
 
                     std::unordered_set<std::string> before;
@@ -2600,19 +2692,19 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"name", json{{"type", "string"}, {"description", "Node to duplicate"}}}},
-                    .required = {"name"}}},
+                        {"name", json{{"type", "string"}, {"description", "Node to duplicate"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}}},
+                    .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, name]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const node = scene.getNode(name);
-                    if (!node)
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const node = *resolved;
 
                     std::unordered_set<std::string> before;
                     for (const auto* const node : scene.getNodes()) {
@@ -2641,19 +2733,20 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"name", json{{"type", "string"}, {"description", "Group node to merge"}}}},
-                    .required = {"name"}}},
+                        {"name", json{{"type", "string"}, {"description", "Group node to merge"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable group UUID; wins over name"}}}},
+                    .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, name]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    const auto* const group = scene.getNode(name);
-                    if (!group)
-                        return json{{"error", "Node not found: " + name}};
+                    const auto resolved = resolve_node_reference(scene, args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const auto* const group = *resolved;
+                    const std::string name = group->name;
                     if (group->type != core::NodeType::GROUP)
                         return json{{"error", "Node is not a group: " + name}};
 
@@ -2696,6 +2789,8 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
@@ -2735,6 +2830,8 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
@@ -2774,6 +2871,8 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
@@ -2813,6 +2912,8 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
@@ -2852,6 +2953,8 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination .usdz file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
@@ -2891,6 +2994,8 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
@@ -2930,6 +3035,8 @@ namespace lfs::app {
                         {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
                         {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
                     .required = {"path"}}},
             [viewer_impl](const json& args) -> json {
@@ -3339,16 +3446,21 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"name", json{{"type", "string"}, {"description", "Node name to select"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Durable node UUID; wins over name"}}},
                         {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add"})}, {"description", "Selection update mode (default: replace)"}}}},
-                    .required = {"name"}}},
+                    .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
                 const std::string mode = args.value("mode", "replace");
 
-                return post_and_wait(viewer_impl, [viewer_impl, name, mode]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args, mode]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
+
+                    const auto resolved = resolve_node_reference(scene_manager->getScene(), args);
+                    if (!resolved)
+                        return json{{"error", resolved.error().message}};
+                    const std::string name = (*resolved)->name;
 
                     if (auto result = vis::cap::selectNode(*scene_manager, name, mode); !result)
                         return json{{"error", result.error()}};
@@ -3370,16 +3482,24 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"node", json{{"type", "string"}, {"description", "Optional node name; defaults to the current selected node(s)"}}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name; defaults to the current selected node(s)"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}}},
                     .required = {}}},
             [viewer_impl](const json& args) -> json {
-                const auto requested_node = optional_string_arg(args, "node");
-
-                return post_and_wait(viewer_impl, [viewer_impl, requested_node]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, args]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
 
+                    std::optional<std::string> requested_node;
+                    if (args.contains("uuid")) {
+                        const auto resolved = resolve_node_reference(scene_manager->getScene(), args, "node", "uuid");
+                        if (!resolved)
+                            return json{{"error", resolved.error().message}};
+                        requested_node = (*resolved)->name;
+                    } else {
+                        requested_node = optional_string_arg(args, "node");
+                    }
                     auto targets = resolve_transform_targets(*scene_manager, requested_node);
                     if (!targets)
                         return json{{"error", targets.error()}};

@@ -73,6 +73,7 @@ set(CORE_SOURCES
         property_registry.cpp
         reactive_store.cpp
         scene.cpp
+        uuid.cpp
         splat_simplify.cpp
         bhatt_lod.cpp
         octree_lod.cpp
@@ -135,6 +136,10 @@ endif()
 # Platform-specific settings
 if(UNIX)
     target_link_libraries(lfs_core PUBLIC dl)
+endif()
+
+if(WIN32)
+    target_link_libraries(lfs_core PRIVATE bcrypt)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)

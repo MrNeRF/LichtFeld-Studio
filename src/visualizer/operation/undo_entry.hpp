@@ -187,17 +187,19 @@ namespace lfs::vis::op {
         bool selection_changed_ = false;
         bool prefer_dense_selection_storage_ = false;
 
-        std::unordered_map<std::string, glm::mat4> transforms_before_;
-        std::unordered_map<std::string, glm::mat4> transforms_after_;
+        std::unordered_map<lfs::core::Uuid, glm::mat4> transforms_before_;
+        std::unordered_map<lfs::core::Uuid, glm::mat4> transforms_after_;
 
-        std::unordered_map<std::string, TensorPresenceSnapshot> deleted_masks_before_;
-        std::unordered_map<std::string, TensorSwapStorage> deleted_mask_storage_;
+        std::unordered_map<lfs::core::Uuid, TensorPresenceSnapshot> deleted_masks_before_;
+        std::unordered_map<lfs::core::Uuid, TensorSwapStorage> deleted_mask_storage_;
+        std::unordered_map<lfs::core::Uuid, bool> payload_diverged_before_;
+        std::unordered_map<lfs::core::Uuid, bool> payload_diverged_after_;
         std::optional<TensorPresenceSnapshot> combined_deleted_before_;
         TensorSwapStorage combined_deleted_storage_;
 
         ModifiesFlag captured_ = ModifiesFlag::NONE;
 
-        void captureDeletedMasks(std::unordered_map<std::string, TensorPresenceSnapshot>& target);
+        void captureDeletedMasks(std::unordered_map<lfs::core::Uuid, TensorPresenceSnapshot>& target);
         void compactSelection();
         void compactTopology();
         void applySelection(bool undo_direction);
@@ -383,6 +385,8 @@ namespace lfs::vis::op {
         SceneGraphNodeSnapshot& operator=(SceneGraphNodeSnapshot&& other) noexcept;
         ~SceneGraphNodeSnapshot();
 
+        lfs::core::Uuid uuid;
+        lfs::core::Uuid parent_uuid;
         std::string name;
         std::string parent_name;
         lfs::core::NodeType type = lfs::core::NodeType::SPLAT;
@@ -390,10 +394,13 @@ namespace lfs::vis::op {
         bool visible = true;
         bool locked = false;
         bool training_enabled = true;
+        bool payload_diverged = false;
         size_t gaussian_count = 0;
         glm::vec3 centroid{0.0f};
         lfs::core::Device payload_device = lfs::core::Device::CUDA;
+        lfs::core::Device selection_slice_device = lfs::core::Device::CUDA;
         std::optional<std::filesystem::path> source_path;
+        std::shared_ptr<lfs::core::Tensor> selection_slice;
         std::unique_ptr<lfs::core::SplatData> model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
@@ -407,22 +414,27 @@ namespace lfs::vis::op {
     struct SceneGraphContextSnapshot {
         int content_type = 0;
         std::filesystem::path dataset_path;
+        lfs::core::Uuid training_model_uuid;
         std::string training_model_node_name;
     };
 
     struct LFS_VIS_API SceneGraphStateSnapshot {
         std::vector<SceneGraphNodeSnapshot> roots;
+        std::optional<std::vector<lfs::core::Uuid>> selected_node_uuids;
         std::optional<std::vector<std::string>> selected_node_names;
         std::optional<SceneGraphContextSnapshot> context;
     };
 
     struct LFS_VIS_API SceneGraphNodeMetadataSnapshot {
+        lfs::core::Uuid uuid;
+        lfs::core::Uuid parent_uuid;
         std::string name;
         std::string parent_name;
         glm::mat4 local_transform{1.0f};
         bool visible = true;
         bool locked = false;
         bool training_enabled = true;
+        bool payload_diverged = false;
         std::optional<std::filesystem::path> source_path;
         int order_index = -1;
     };

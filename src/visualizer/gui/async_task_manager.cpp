@@ -133,7 +133,7 @@ namespace lfs::vis::gui {
         if (node->model->has_deleted_mask())
             return plan;
 
-        if (node->name == scene.getTrainingModelNodeName()) {
+        if (node->uuid == scene.getTrainingModelNodeUuid()) {
             const auto* const trainer_manager = scene_manager.getTrainerManager();
             const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
             if (trainer && trainer->is_running() && !trainer->is_paused())

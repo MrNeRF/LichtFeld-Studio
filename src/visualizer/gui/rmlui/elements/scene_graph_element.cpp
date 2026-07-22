@@ -956,7 +956,7 @@ namespace lfs::vis::gui {
         if (!update_cached_rows || training_model_node_name.empty())
             return false;
 
-        const core::NodeId node_id = scene.getNodeIdByName(training_model_node_name);
+        const core::NodeId node_id = scene.getTrainingModelNodeId();
         const auto snapshot_it = node_snapshots_.find(node_id);
         if (node_id == core::NULL_NODE || snapshot_it == node_snapshots_.end() ||
             snapshot_it->second.type != core::NodeType::SPLAT) {

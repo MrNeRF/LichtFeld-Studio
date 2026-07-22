@@ -3,6 +3,7 @@
 
 #include "localization_manager.hpp"
 
+#include "core/config_paths.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <filesystem>
@@ -17,6 +18,38 @@ namespace lfs::event {
     namespace {
         constexpr const char* LANGUAGE_NAME_KEY = "_language_name";
         constexpr const char* DEFAULT_LANGUAGE = "en";
+        constexpr const char* LANGUAGE_PREFERENCE_FILE = "language_preference";
+
+        std::string loadLanguagePreference() {
+            try {
+                const auto pref_path = lfs::core::user_config_dir() / LANGUAGE_PREFERENCE_FILE;
+                std::error_code ec;
+                if (!fs::exists(pref_path, ec) || ec)
+                    return {};
+                std::ifstream file;
+                if (!lfs::core::open_file_for_read(pref_path, file))
+                    return {};
+                std::string pref;
+                if (file >> pref)
+                    return pref;
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to load language preference: {}", e.what());
+            }
+            return {};
+        }
+
+        void saveLanguagePreference(const std::string& language_code) {
+            try {
+                const auto config_dir = lfs::core::user_config_dir();
+                fs::create_directories(config_dir);
+                std::ofstream file;
+                if (lfs::core::open_file_for_write(config_dir / LANGUAGE_PREFERENCE_FILE, file)) {
+                    file << language_code;
+                }
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to save language preference: {}", e.what());
+            }
+        }
     } // namespace
 
     LocalizationManager& LocalizationManager::getInstance() {
@@ -65,6 +98,15 @@ namespace lfs::event {
         }
 
         LOG_INFO("Found {} language(s)", available_languages_.size());
+
+        const std::string saved = loadLanguagePreference();
+        const bool saved_available = !saved.empty() &&
+                                     std::find(available_languages_.begin(),
+                                               available_languages_.end(),
+                                               saved) != available_languages_.end();
+        if (saved_available && setLanguage(saved)) {
+            return true;
+        }
 
         const bool has_default = std::find(available_languages_.begin(),
                                            available_languages_.end(),
@@ -131,6 +173,7 @@ namespace lfs::event {
             return false;
 
         current_language_ = language_code;
+        saveLanguagePreference(language_code);
         LOG_INFO("Language set to: {}", language_code);
         return true;
     }

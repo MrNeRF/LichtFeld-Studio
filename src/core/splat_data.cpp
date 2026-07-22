@@ -1020,10 +1020,32 @@ namespace lfs::core {
 
     namespace {
         constexpr uint32_t SPLAT_DATA_MAGIC = 0x4C465350; // "LFSP"
-        constexpr uint32_t SPLAT_DATA_VERSION = 3;
+        constexpr uint32_t SPLAT_DATA_VERSION = 4;
+        constexpr uint32_t SPLAT_DATA_MIN_VERSION_FROZEN_RANGES = 4;
+
+        void validate_frozen_ranges(
+            const std::vector<SplatData::FrozenRange>& ranges,
+            const size_t gaussian_count) {
+            for (size_t i = 0; i < ranges.size(); ++i) {
+                const auto& range = ranges[i];
+                if (range.count == 0 || range.start >= gaussian_count ||
+                    range.count > gaussian_count - range.start) {
+                    throw std::runtime_error("Invalid SplatData: frozen range exceeds Gaussian count");
+                }
+                const size_t range_end = range.start + range.count;
+                for (size_t j = 0; j < i; ++j) {
+                    const auto& previous = ranges[j];
+                    const size_t previous_end = previous.start + previous.count;
+                    if (range.start < previous_end && previous.start < range_end) {
+                        throw std::runtime_error("Invalid SplatData: frozen ranges overlap");
+                    }
+                }
+            }
+        }
     } // namespace
 
     void SplatData::serialize(std::ostream& os) const {
+        validate_frozen_ranges(_frozen_ranges, size());
         os.write(reinterpret_cast<const char*>(&SPLAT_DATA_MAGIC), sizeof(SPLAT_DATA_MAGIC));
         os.write(reinterpret_cast<const char*>(&SPLAT_DATA_VERSION), sizeof(SPLAT_DATA_VERSION));
         os.write(reinterpret_cast<const char*>(&_active_sh_degree), sizeof(_active_sh_degree));
@@ -1052,6 +1074,19 @@ namespace lfs::core {
         if (has_densification)
             os << _densification_info;
 
+        const uint8_t has_frozen_ranges = _frozen_ranges.empty() ? 0 : 1;
+        os.write(reinterpret_cast<const char*>(&has_frozen_ranges), sizeof(has_frozen_ranges));
+        if (has_frozen_ranges) {
+            const uint64_t range_count = _frozen_ranges.size();
+            os.write(reinterpret_cast<const char*>(&range_count), sizeof(range_count));
+            for (const auto& range : _frozen_ranges) {
+                const uint64_t start = range.start;
+                const uint64_t count = range.count;
+                os.write(reinterpret_cast<const char*>(&start), sizeof(start));
+                os.write(reinterpret_cast<const char*>(&count), sizeof(count));
+            }
+        }
+
         LOG_DEBUG("Serialized SplatData: {} Gaussians, SH {}/{}", size(), _active_sh_degree, _max_sh_degree);
     }
 
@@ -1063,7 +1098,7 @@ namespace lfs::core {
         if (magic != SPLAT_DATA_MAGIC) {
             throw std::runtime_error("Invalid SplatData: wrong magic");
         }
-        if (version != SPLAT_DATA_VERSION) {
+        if (version != 3 && version != SPLAT_DATA_VERSION) {
             throw std::runtime_error("Unsupported SplatData version: " + std::to_string(version));
         }
 
@@ -1103,6 +1138,34 @@ namespace lfs::core {
         Tensor densification;
         if (has_densification)
             is >> densification;
+
+        std::vector<FrozenRange> loaded_frozen_ranges;
+        if (version >= SPLAT_DATA_MIN_VERSION_FROZEN_RANGES) {
+            uint8_t has_frozen_ranges = 0;
+            serialization_detail::read_exact(
+                is, &has_frozen_ranges, sizeof(has_frozen_ranges), "SplatData frozen-ranges flag");
+            if (has_frozen_ranges > 1)
+                throw std::runtime_error("Invalid SplatData: frozen-ranges flag must be boolean");
+            if (has_frozen_ranges) {
+                uint64_t range_count = 0;
+                serialization_detail::read_exact(
+                    is, &range_count, sizeof(range_count), "SplatData frozen-range count");
+                if (range_count == 0)
+                    throw std::runtime_error("Invalid SplatData: frozen-range count must be positive");
+                if (range_count > std::numeric_limits<uint32_t>::max())
+                    throw std::runtime_error("Invalid SplatData: frozen-range count exceeds supported range");
+                serialization_detail::require_remaining_bytes(
+                    is, range_count * 2 * sizeof(uint64_t), "SplatData frozen ranges");
+                loaded_frozen_ranges.reserve(range_count);
+                for (uint64_t i = 0; i < range_count; ++i) {
+                    uint64_t start = 0, count = 0;
+                    serialization_detail::read_exact(is, &start, sizeof(start), "SplatData frozen-range start");
+                    serialization_detail::read_exact(is, &count, sizeof(count), "SplatData frozen-range count");
+                    loaded_frozen_ranges.push_back({static_cast<std::size_t>(start),
+                                                    static_cast<std::size_t>(count)});
+                }
+            }
+        }
 
         const auto require_shape = [](const Tensor& value,
                                       const DataType dtype,
@@ -1148,6 +1211,7 @@ namespace lfs::core {
             if (!valid_shape)
                 throw std::runtime_error("Invalid SplatData: densification state has incompatible schema");
         }
+        validate_frozen_ranges(loaded_frozen_ranges, n);
 
         const auto copy_param = [&](Tensor source, std::string_view name) {
             Tensor source_cuda = std::move(source).cuda();
@@ -1218,6 +1282,7 @@ namespace lfs::core {
         _shN = std::move(loaded_shN);
         _deleted = std::move(loaded_deleted);
         _densification_info = std::move(loaded_densification);
+        _frozen_ranges = std::move(loaded_frozen_ranges);
         _max_sh_degree = max_sh;
         _active_sh_degree = active_sh;
         _scene_scale = scene_scale;

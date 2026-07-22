@@ -23,6 +23,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 
 namespace lfs::vis {
 
@@ -93,9 +94,22 @@ namespace lfs::vis {
             std::lock_guard<std::mutex> lock(state_mutex_);
             return dataset_path_;
         }
+
+        std::filesystem::path getColmapSparsePath() const {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            return colmap_sparse_path_;
+        }
+
+        std::filesystem::path getPPISPPath() const {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            return ppisp_path_;
+        }
         [[nodiscard]] std::optional<std::filesystem::path> getPlyPath(const std::string& name) const;
+        [[nodiscard]] std::optional<std::filesystem::path> getPlyPath(const core::Uuid& uuid) const;
         void setPlyPath(const std::string& name, const std::filesystem::path& path);
+        void setPlyPath(const core::Uuid& uuid, const std::filesystem::path& path);
         void clearPlyPath(const std::string& name);
+        void clearPlyPath(const core::Uuid& uuid);
         void movePlyPath(const std::string& old_name, const std::string& new_name);
         void setDatasetPath(const std::filesystem::path& path);
 
@@ -366,9 +380,12 @@ namespace lfs::vis {
         mutable std::mutex state_mutex_;
 
         ContentType content_type_ = ContentType::Empty;
-        // splat name to splat path
-        std::map<std::string, std::filesystem::path> splat_paths_;
+        // Durable splat identity to source path. Display-name adapters above
+        // resolve to UUID at the API boundary.
+        std::unordered_map<core::Uuid, std::filesystem::path> splat_paths_;
         std::filesystem::path dataset_path_;
+        std::filesystem::path colmap_sparse_path_;
+        std::filesystem::path ppisp_path_;
 
         // Cache for parameters
         std::optional<lfs::core::param::TrainingParameters> cached_params_;

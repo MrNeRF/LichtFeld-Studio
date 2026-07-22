@@ -5,7 +5,9 @@
 
 #include "core/tensor.hpp"
 #include <expected>
+#include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace lfs::training {
@@ -164,8 +166,19 @@ namespace lfs::training {
 
         void reset() override;
 
+        /// Serialized ADMM state row count ([N, 1] tensors); 0 when uninitialized.
+        [[nodiscard]] size_t state_size() const { return initialized_ ? z_.size(0) : 0; }
+        [[nodiscard]] const Config& config() const { return config_; }
+
+        void serialize(std::ostream& os) const;
+        void deserialize(std::istream& is);
+        [[nodiscard]] size_t checkpoint_size_bytes(size_t expected_rows) const;
+        [[nodiscard]] static size_t consume_checkpoint(std::istream& is);
+        void adopt_checkpoint_state(ADMMSparsityOptimizer& loaded) noexcept;
+
     private:
         std::expected<void, std::string> ensure_state_matches(const lfs::core::Tensor& opacities, const char* phase);
+        void validate_checkpoint_state(std::optional<size_t> expected_rows) const;
 
         /**
          * @brief Apply soft thresholding to enforce sparsity

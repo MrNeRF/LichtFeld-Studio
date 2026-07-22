@@ -59,11 +59,13 @@ namespace lfs::vis {
         p.split_view_mode = static_cast<int>(s.split_view_mode);
         p.gt_comparison_mode = static_cast<int>(s.gt_comparison_mode);
         p.split_position = s.split_position;
+        p.split_view_offset = s.split_view_offset;
         p.raster_backend = static_cast<int>(s.raster_backend);
         p.gut = lfs::rendering::isGutBackend(s.raster_backend);
         p.equirectangular = s.equirectangular;
         p.orthographic = s.orthographic;
         p.ortho_scale = s.ortho_scale;
+        p.depth_view = s.depth_view;
         p.depth_view_min = s.depth_view_min;
         p.depth_view_max = s.depth_view_max;
         p.depth_visualization_mode = static_cast<int>(s.depth_visualization_mode);
@@ -87,12 +89,14 @@ namespace lfs::vis {
         p.depth_filter_rotation = detail::to_array(s.depth_filter_transform.getRotation());
         p.depth_filter_translation = detail::to_array(s.depth_filter_transform.getTranslation());
         p.lod_enabled = s.lod_enabled;
+        p.lod_auto_enable_rad = s.lod_auto_enable_rad;
         p.lod_debug_colors = s.lod_debug_colors;
         p.lod_max_splats = static_cast<float>(s.lod_max_splats);
         p.lod_page_pool_splats = static_cast<float>(s.lod_page_pool_splats);
         p.lod_pool_vram_fraction = s.lod_pool_vram_fraction;
         p.lod_fade_frames = static_cast<float>(s.lod_fade_frames);
         p.lod_render_scale = s.lod_render_scale;
+        p.lod_behind_camera_penalty = s.lod_behind_camera_penalty;
         p.lod_cone_foveation = s.lod_cone_foveation;
         p.lod_cone_inner_degrees = s.lod_cone_inner_degrees;
         p.lod_cone_outer_degrees = s.lod_cone_outer_degrees;
@@ -143,6 +147,7 @@ namespace lfs::vis {
         s.gt_comparison_mode = static_cast<GTComparisonMode>(p.gt_comparison_mode);
         sanitizeGTComparisonSettings(s);
         s.split_position = p.split_position;
+        s.split_view_offset = p.split_view_offset;
         const auto previous_backend = s.raster_backend;
         const bool previous_gut = s.gut;
         const auto requested_backend = static_cast<lfs::rendering::GaussianRasterBackend>(p.raster_backend);
@@ -155,6 +160,7 @@ namespace lfs::vis {
         enforceProjectionBackend(s);
         s.orthographic = p.orthographic;
         s.ortho_scale = p.ortho_scale;
+        s.depth_view = p.depth_view;
         s.depth_view_min = p.depth_view_min;
         s.depth_view_max = p.depth_view_max;
         s.depth_visualization_mode =
@@ -181,12 +187,14 @@ namespace lfs::vis {
             lfs::geometry::EuclideanTransform(detail::to_quat(p.depth_filter_rotation),
                                               detail::to_vec3(p.depth_filter_translation));
         s.lod_enabled = p.lod_enabled;
+        s.lod_auto_enable_rad = p.lod_auto_enable_rad;
         s.lod_debug_colors = p.lod_debug_colors;
         s.lod_max_splats = static_cast<size_t>(p.lod_max_splats);
         s.lod_page_pool_splats = static_cast<size_t>(p.lod_page_pool_splats);
         s.lod_pool_vram_fraction = std::clamp(p.lod_pool_vram_fraction, 0.05f, 0.9f);
         s.lod_fade_frames = std::clamp(static_cast<int>(p.lod_fade_frames), 0, 240);
         s.lod_render_scale = p.lod_render_scale;
+        s.lod_behind_camera_penalty = p.lod_behind_camera_penalty;
         s.lod_cone_foveation = p.lod_cone_foveation;
         s.lod_cone_inner_degrees = p.lod_cone_inner_degrees;
         s.lod_cone_outer_degrees = p.lod_cone_outer_degrees;

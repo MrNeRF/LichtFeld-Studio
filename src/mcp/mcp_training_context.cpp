@@ -353,12 +353,7 @@ namespace lfs::mcp {
             return std::unexpected("No training session to save");
         }
 
-        auto result = training::save_checkpoint(
-            path,
-            trainer_->get_current_iteration(),
-            trainer_->get_strategy(),
-            params_,
-            nullptr);
+        auto result = trainer_->save_checkpoint_to(path, trainer_->get_current_iteration());
 
         if (!result) {
             return std::unexpected(result.error());

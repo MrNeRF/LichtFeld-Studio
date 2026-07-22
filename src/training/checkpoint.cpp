@@ -5,6 +5,7 @@
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
+#include "components/sparsity_optimizer.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -12,9 +13,13 @@
 #include "io/error.hpp"
 #include "strategies/istrategy.hpp"
 #include "strategies/strategy_factory.hpp"
+#include <algorithm>
+#include <cstring>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -38,10 +43,33 @@ namespace lfs::training {
                 return allocator(std::move(shape), capacity, dtype, name);
             };
         }
+
+        [[nodiscard]] size_t checked_add_checkpoint_bytes(const size_t lhs, const size_t rhs) {
+            if (rhs > std::numeric_limits<size_t>::max() - lhs) {
+                throw std::runtime_error("Checkpoint size estimate overflows");
+            }
+            return lhs + rhs;
+        }
+
+        [[nodiscard]] size_t checked_multiply_checkpoint_bytes(const size_t lhs, const size_t rhs) {
+            if (lhs != 0 && rhs > std::numeric_limits<size_t>::max() / lhs) {
+                throw std::runtime_error("Checkpoint size estimate overflows");
+            }
+            return lhs * rhs;
+        }
+
+        [[nodiscard]] ADMMSparsityOptimizer::Config sparsity_config_from_params(
+            const lfs::core::param::OptimizationParameters& params) {
+            return {
+                .sparsify_steps = params.enable_sparsity ? std::max(0, params.sparsify_steps) : 0,
+                .init_rho = params.init_rho,
+                .prune_ratio = params.prune_ratio,
+                .update_every = 50,
+                .start_iteration = static_cast<int>(params.iterations),
+            };
+        }
     } // namespace
 
-    using lfs::core::CHECKPOINT_MAGIC;
-    using lfs::core::CHECKPOINT_VERSION;
     using lfs::core::CheckpointFlags;
     using lfs::core::CheckpointHeader;
     using lfs::core::has_flag;
@@ -53,12 +81,18 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         const BilateralGrid* bilateral_grid,
         const PPISP* ppisp,
-        const PPISPControllerPool* ppisp_controller_pool) {
+        const PPISPControllerPool* ppisp_controller_pool,
+        const ADMMSparsityOptimizer* sparsity_optimizer) {
 
         try {
             // Validate input path
             if (path.empty()) {
                 return std::unexpected("Cannot save checkpoint: output path is empty");
+            }
+            if (!params.add_splat_paths.empty() && !params.add_splat_freeze.empty() &&
+                params.add_splat_paths.size() != params.add_splat_freeze.size()) {
+                return std::unexpected(
+                    "Cannot save checkpoint: add_splat_freeze count does not match add_splat_paths");
             }
 
             const auto checkpoint_dir = checkpoint_directory(path);
@@ -78,52 +112,58 @@ namespace lfs::training {
             }
 
             const auto& model = strategy.get_model();
+            const bool save_sparsity = sparsity_optimizer && sparsity_optimizer->is_initialized();
+            const size_t sparsity_bytes = save_sparsity
+                                              ? sparsity_optimizer->checkpoint_size_bytes(model.size())
+                                              : 0;
 
             // Model tensors
             size_t model_bytes = 0;
-            model_bytes += model.means().bytes();
-            model_bytes += model.sh0().bytes();
-            model_bytes += model.scaling_raw().bytes();
-            model_bytes += model.rotation_raw().bytes();
-            model_bytes += model.opacity_raw().bytes();
+            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.means().bytes());
+            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.sh0().bytes());
+            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.scaling_raw().bytes());
+            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.rotation_raw().bytes());
+            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.opacity_raw().bytes());
             if (model.shN().is_valid()) {
-                model_bytes += model.shN().bytes();
+                model_bytes = checked_add_checkpoint_bytes(model_bytes, model.shN().bytes());
             }
             if (model.deleted().is_valid()) {
-                model_bytes += model.deleted().bytes();
+                model_bytes = checked_add_checkpoint_bytes(model_bytes, model.deleted().bytes());
             }
             if (model._densification_info.is_valid()) {
-                model_bytes += model._densification_info.bytes();
+                model_bytes = checked_add_checkpoint_bytes(model_bytes, model._densification_info.bytes());
             }
 
             // Optimizer: 2x model (Adam m & v)
-            const size_t optimizer_bytes = model_bytes * 2;
+            const size_t optimizer_bytes = checked_multiply_checkpoint_bytes(model_bytes, 2);
 
             // Bilateral grid: 3x (grids + Adam state)
             size_t bilateral_grid_bytes = 0;
             if (bilateral_grid) {
-                bilateral_grid_bytes = bilateral_grid->grids().bytes() * 3;
+                bilateral_grid_bytes = checked_multiply_checkpoint_bytes(bilateral_grid->grids().bytes(), 3);
             }
 
             // PPISP: estimate based on num_cameras and num_frames
             size_t ppisp_bytes = 0;
             if (ppisp) {
                 // exposure + vignetting + color + crf, each with params + 2x Adam state
-                const size_t exp_size = ppisp->num_frames() * sizeof(float) * 3;
-                const size_t vig_size = ppisp->num_cameras() * 3 * 5 * sizeof(float) * 3;
-                const size_t color_size = ppisp->num_frames() * 8 * sizeof(float) * 3;
-                const size_t crf_size = ppisp->num_cameras() * 3 * 4 * sizeof(float) * 3;
-                ppisp_bytes = exp_size + vig_size + color_size + crf_size;
+                const size_t exp_size = checked_multiply_checkpoint_bytes(ppisp->num_frames(), sizeof(float) * 3);
+                const size_t vig_size = checked_multiply_checkpoint_bytes(ppisp->num_cameras(), 3 * 5 * sizeof(float) * 3);
+                const size_t color_size = checked_multiply_checkpoint_bytes(ppisp->num_frames(), 8 * sizeof(float) * 3);
+                const size_t crf_size = checked_multiply_checkpoint_bytes(ppisp->num_cameras(), 3 * 4 * sizeof(float) * 3);
+                ppisp_bytes = checked_add_checkpoint_bytes(exp_size, vig_size);
+                ppisp_bytes = checked_add_checkpoint_bytes(ppisp_bytes, color_size);
+                ppisp_bytes = checked_add_checkpoint_bytes(ppisp_bytes, crf_size);
             }
 
             constexpr size_t OVERHEAD_BYTES = 64 * 1024;
 
-            const size_t estimated_size = sizeof(CheckpointHeader) +
-                                          model_bytes +
-                                          optimizer_bytes +
-                                          bilateral_grid_bytes +
-                                          ppisp_bytes +
-                                          OVERHEAD_BYTES;
+            size_t estimated_size = checked_add_checkpoint_bytes(sizeof(CheckpointHeader), model_bytes);
+            estimated_size = checked_add_checkpoint_bytes(estimated_size, optimizer_bytes);
+            estimated_size = checked_add_checkpoint_bytes(estimated_size, bilateral_grid_bytes);
+            estimated_size = checked_add_checkpoint_bytes(estimated_size, ppisp_bytes);
+            estimated_size = checked_add_checkpoint_bytes(estimated_size, sparsity_bytes);
+            estimated_size = checked_add_checkpoint_bytes(estimated_size, OVERHEAD_BYTES);
 
             if (auto space_check = lfs::io::check_disk_space(checkpoint_path, estimated_size, 1.1f);
                 !space_check) {
@@ -159,6 +199,8 @@ namespace lfs::training {
                 header.flags = header.flags | CheckpointFlags::HAS_PPISP;
             if (ppisp_controller_pool)
                 header.flags = header.flags | CheckpointFlags::HAS_PPISP_CONTROLLER;
+            if (save_sparsity)
+                header.flags = header.flags | CheckpointFlags::HAS_SPARSITY;
 
             const auto header_pos = file.tellp();
             file.write(reinterpret_cast<const char*>(&header), sizeof(header));
@@ -193,6 +235,12 @@ namespace lfs::training {
                 LOG_DEBUG("PPISP controller pool saved: {} cameras", ppisp_controller_pool->num_cameras());
             }
 
+            // Sparsity ADMM state (if mid-sparsify)
+            if (save_sparsity) {
+                sparsity_optimizer->serialize(file);
+                LOG_DEBUG("Sparsity ADMM state saved: {} rows", sparsity_optimizer->state_size());
+            }
+
             // Training parameters as JSON
             const auto params_pos = file.tellp();
             nlohmann::json params_json;
@@ -206,6 +254,25 @@ namespace lfs::training {
             }
             if (!params.disabled_camera_uids.empty()) {
                 params_json["disabled_camera_uids"] = params.disabled_camera_uids;
+            }
+            const auto paths_to_utf8 = [](const std::vector<std::filesystem::path>& paths) {
+                auto array = nlohmann::json::array();
+                for (const auto& p : paths) {
+                    array.push_back(lfs::core::path_to_utf8(p));
+                }
+                return array;
+            };
+            if (!params.view_paths.empty()) {
+                params_json["view_paths"] = paths_to_utf8(params.view_paths);
+            }
+            if (params.import_cameras_path.has_value()) {
+                params_json["import_cameras_path"] = lfs::core::path_to_utf8(*params.import_cameras_path);
+            }
+            if (!params.add_splat_paths.empty()) {
+                params_json["add_splat_paths"] = paths_to_utf8(params.add_splat_paths);
+            }
+            if (!params.add_splat_freeze.empty()) {
+                params_json["add_splat_freeze"] = params.add_splat_freeze;
             }
             const std::string params_str = params_json.dump();
             file.write(params_str.data(), static_cast<std::streamsize>(params_str.size()));
@@ -233,6 +300,8 @@ namespace lfs::training {
                 extras += ", +ppisp";
             if (ppisp_controller_pool)
                 extras += ", +ppisp_ctrl(" + std::to_string(ppisp_controller_pool->num_cameras()) + ")";
+            if (save_sparsity)
+                extras += ", +sparsity";
             LOG_INFO("Checkpoint saved: {} ({} Gaussians, iter {}{})",
                      lfs::core::path_to_utf8(checkpoint_path), header.num_gaussians, iteration,
                      extras);
@@ -254,6 +323,7 @@ namespace lfs::training {
         BilateralGrid* bilateral_grid,
         PPISP* ppisp,
         PPISPControllerPool* ppisp_controller_pool,
+        ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator) {
         try {
             std::ifstream file;
@@ -311,25 +381,7 @@ namespace lfs::training {
                 const auto cli_data_path = loaded_params.dataset.data_path;
                 const auto cli_output_path = loaded_params.dataset.output_path;
 
-                const auto params_json = nlohmann::json::parse(params_str);
-                if (params_json.contains("optimization")) {
-                    loaded_params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json["optimization"]);
-                    if (params_json.contains("dataset")) {
-                        loaded_params.dataset = lfs::core::param::DatasetConfig::from_json(params_json["dataset"]);
-                    }
-                    if (params_json.contains("init_path")) {
-                        loaded_params.init_path = params_json["init_path"].get<std::string>();
-                    }
-                    if (params_json.contains("exclude_frozen_add_splats_from_export")) {
-                        loaded_params.exclude_frozen_add_splats_from_export =
-                            params_json["exclude_frozen_add_splats_from_export"].get<bool>();
-                    }
-                    if (params_json.contains("disabled_camera_uids")) {
-                        loaded_params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();
-                    }
-                } else {
-                    loaded_params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json);
-                }
+                loaded_params = lfs::core::parse_checkpoint_params_json(params_str, std::move(loaded_params));
 
                 if (!cli_data_path.empty())
                     loaded_params.dataset.data_path = cli_data_path;
@@ -426,6 +478,28 @@ namespace lfs::training {
                 LOG_WARN("PPISP controller pool requested but not in checkpoint - using fresh state");
             }
 
+            // Sparsity ADMM state (if present in checkpoint)
+            std::unique_ptr<ADMMSparsityOptimizer> loaded_sparsity;
+            const bool has_sparsity =
+                header.version >= lfs::core::CHECKPOINT_VERSION_HAS_SPARSITY &&
+                has_flag(header.flags, CheckpointFlags::HAS_SPARSITY);
+            if (has_sparsity) {
+                if (sparsity_optimizer) {
+                    auto parsed = std::make_unique<ADMMSparsityOptimizer>(
+                        sparsity_config_from_params(loaded_params.optimization));
+                    parsed->deserialize(file);
+                    if (parsed->state_size() != static_cast<size_t>(loaded_model.size()))
+                        throw std::runtime_error("Invalid checkpoint: sparsity ADMM state does not match model count");
+                    loaded_sparsity = std::move(parsed);
+                } else {
+                    if (ADMMSparsityOptimizer::consume_checkpoint(file) !=
+                        static_cast<size_t>(loaded_model.size())) {
+                        throw std::runtime_error("Invalid checkpoint: sparsity ADMM state does not match model count");
+                    }
+                    LOG_WARN("Checkpoint has sparsity ADMM state but none provided - skipping data");
+                }
+            }
+
             // Reserve capacity for densification after the checkpoint params are resolved.
             if (header.params_json_size > 0) {
                 const auto serialized_state_end = file.tellg();
@@ -467,6 +541,12 @@ namespace lfs::training {
                 LOG_INFO("PPISP controller pool restored: {} cameras (lr={:.2e})",
                          ppisp_controller_pool->num_cameras(),
                          ppisp_controller_pool->get_learning_rate());
+            }
+            if (loaded_sparsity) {
+                sparsity_optimizer->adopt_checkpoint_state(*loaded_sparsity);
+                LOG_INFO("Sparsity ADMM state restored: {} rows", sparsity_optimizer->state_size());
+            } else if (sparsity_optimizer && !has_sparsity) {
+                sparsity_optimizer->reset();
             }
 
             LOG_INFO("Checkpoint loaded: {} ({} Gaussians, iter {})",

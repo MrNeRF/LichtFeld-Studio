@@ -510,12 +510,7 @@ namespace lfs::training {
         [[nodiscard]] std::optional<lfs::core::Tensor> compute_training_cropbox_remove_mask(
             const lfs::core::Scene& scene,
             const lfs::core::SplatData& model) {
-            const auto training_model_name = scene.getTrainingModelNodeName();
-            if (training_model_name.empty()) {
-                return std::nullopt;
-            }
-
-            const auto* training_node = scene.getNode(training_model_name);
+            const auto* training_node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
             if (!training_node) {
                 return std::nullopt;
             }
@@ -6148,7 +6143,8 @@ namespace lfs::training {
         if (save_checkpoint_file) {
             auto ckpt_result = lfs::training::save_checkpoint(save_path, iter_num, *strategy_,
                                                               params_for_checkpoint_save(),
-                                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save);
+                                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save,
+                                                              dynamic_cast<const ADMMSparsityOptimizer*>(sparsity_optimizer_.get()));
             if (!ckpt_result) {
                 LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
                 errors.push_back("checkpoint: " + ckpt_result.error());
@@ -6196,7 +6192,8 @@ namespace lfs::training {
         const auto params = getParams();
         return lfs::training::save_checkpoint(params.dataset.output_path, iteration, *strategy_,
                                               params_for_checkpoint_save(),
-                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save);
+                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save,
+                                              dynamic_cast<const ADMMSparsityOptimizer*>(sparsity_optimizer_.get()));
     }
 
     std::expected<void, std::string> Trainer::save_checkpoint_to(const std::filesystem::path& output_path,
@@ -6209,7 +6206,8 @@ namespace lfs::training {
 
         return lfs::training::save_checkpoint(output_path, iteration, *strategy_,
                                               params_for_checkpoint_save(),
-                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save);
+                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save,
+                                              dynamic_cast<const ADMMSparsityOptimizer*>(sparsity_optimizer_.get()));
     }
 
     lfs::core::Tensor Trainer::applyPPISPForViewport(const lfs::core::Tensor& rgb, const int camera_uid,
@@ -6336,10 +6334,12 @@ namespace lfs::training {
 
         auto result = lfs::training::load_checkpoint(
             checkpoint_path, *strategy_, params_, bilateral_grid_.get(), ppisp_.get(),
-            ppisp_controller_pool_.get(), splat_tensor_allocator_);
+            ppisp_controller_pool_.get(),
+            dynamic_cast<ADMMSparsityOptimizer*>(sparsity_optimizer_.get()), splat_tensor_allocator_);
         if (!result) {
             return result;
         }
+        apply_frozen_ranges_to_optimizer(strategy_->get_model(), strategy_->get_optimizer());
         {
             std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
             if (auto storage_result = ensureModelTensorAllocatorStorage(

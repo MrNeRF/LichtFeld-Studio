@@ -5,6 +5,7 @@
 #pragma once
 #include "core/error_envelope.hpp"
 #include "core/event_bridge/event_bridge.hpp"
+#include "core/uuid.hpp"
 #include "geometry/bounding_box.hpp"
 #include <cstdint>
 #include <filesystem>
@@ -183,8 +184,8 @@ namespace lfs::core {
             EVENT(SceneChanged, uint32_t mutation_flags = 0;);
             EVENT(SelectionChanged, bool has_selection; int count;);
             // node_type stores core::NodeType as int.
-            EVENT(PLYAdded, std::string name; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);
-            EVENT(PLYRemoved, std::string name; bool children_kept = false; std::string parent_of_removed; bool from_history = false;);
+            EVENT(PLYAdded, std::string name; Uuid uuid; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);
+            EVENT(PLYRemoved, std::string name; Uuid uuid; bool children_kept = false; std::string parent_of_removed; bool from_history = false;);
             EVENT(NodeReparented, std::string name; std::string old_parent; std::string new_parent; bool from_history = false;);
 
             // Data loading

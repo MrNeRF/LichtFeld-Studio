@@ -8,6 +8,39 @@
 
 namespace lfs::vis {
 
+    std::expected<core::NodeId, PlySequenceResolveError> resolvePlySequenceNode(
+        const core::Scene& scene,
+        const core::Uuid& node_uuid,
+        const std::string_view node_name) {
+        if (!node_uuid.is_nil()) {
+            const auto node_id = scene.getNodeIdByUuid(node_uuid);
+            if (node_id == core::NULL_NODE) {
+                return std::unexpected(PlySequenceResolveError{
+                    .code = PlySequenceResolveErrorCode::UUID_NOT_FOUND,
+                    .message = "PLY sequence node UUID " + node_uuid.to_string() +
+                               " does not resolve",
+                });
+            }
+            return node_id;
+        }
+
+        if (node_name.empty()) {
+            return std::unexpected(PlySequenceResolveError{
+                .code = PlySequenceResolveErrorCode::LEGACY_NAME_NOT_FOUND,
+                .message = "PLY sequence node has neither UUID nor display label",
+            });
+        }
+        const auto node_id = scene.getNodeIdByName(std::string(node_name));
+        if (node_id == core::NULL_NODE) {
+            return std::unexpected(PlySequenceResolveError{
+                .code = PlySequenceResolveErrorCode::LEGACY_NAME_NOT_FOUND,
+                .message = "PLY sequence node label '" + std::string(node_name) +
+                           "' does not resolve",
+            });
+        }
+        return node_id;
+    }
+
     namespace {
         constexpr float KEYFRAME_SEEK_EPS = 1e-4f;
 
@@ -462,7 +495,9 @@ namespace lfs::vis {
                                              std::string node_name,
                                              std::vector<std::filesystem::path> paths,
                                              std::vector<std::string> node_names,
-                                             const float fps) {
+                                             const float fps,
+                                             core::Uuid node_uuid,
+                                             std::vector<core::Uuid> node_uuids) {
         const size_t frame_count = std::min(paths.size(), node_names.size());
         if (frame_count == 0) {
             clearPlySequence();
@@ -472,12 +507,14 @@ namespace lfs::vis {
         PlySequenceClip sequence;
         sequence.directory = std::move(directory);
         sequence.node_name = std::move(node_name);
+        sequence.node_uuid = node_uuid;
         sequence.fps = clampSequenceFps(fps);
         sequence.frames.reserve(frame_count);
         for (size_t i = 0; i < frame_count; ++i) {
             sequence.frames.push_back({
                 .path = std::move(paths[i]),
                 .node_name = std::move(node_names[i]),
+                .node_uuid = i < node_uuids.size() ? node_uuids[i] : core::Uuid{},
             });
         }
 

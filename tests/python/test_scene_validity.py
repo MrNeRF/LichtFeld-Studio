@@ -35,6 +35,16 @@ class TestSceneValidityAPI:
         assert hasattr(scene_class, "is_valid")
         assert hasattr(scene_class, "generation")
 
+    def test_scene_uuid_api_is_additive(self, lf):
+        """UUID lookup/properties coexist with the existing name-based API."""
+        scene_class = lf.scene.Scene
+        node_class = lf.scene.SceneNode
+        assert hasattr(scene_class, "get_node")
+        assert hasattr(scene_class, "get_node_by_uuid")
+        assert hasattr(scene_class, "duplicate_node")
+        assert hasattr(node_class, "id")
+        assert hasattr(node_class, "uuid")
+
     def test_generation_is_stable_without_changes(self, lf):
         """Test generation doesn't change spontaneously."""
         gen1 = lf.get_scene_generation()

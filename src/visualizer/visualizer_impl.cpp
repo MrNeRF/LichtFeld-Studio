@@ -2231,11 +2231,9 @@ namespace lfs::vis {
     void VisualizerImpl::handleTrainingCompleted([[maybe_unused]] const state::TrainingCompleted& event) {
         if (scene_manager_) {
             auto& scene = scene_manager_->getScene();
-            const std::string& model_name = scene.getTrainingModelNodeName();
-            if (!model_name.empty()) {
-                if (const auto* model_node = scene.getNode(model_name); model_node && !model_node->visible) {
-                    scene.setNodeVisibility(model_name, true);
-                }
+            if (const auto* model_node = scene.getNodeByUuid(scene.getTrainingModelNodeUuid());
+                model_node && !model_node->visible) {
+                scene.setNodeVisibility(model_node->id, true);
             }
         }
 

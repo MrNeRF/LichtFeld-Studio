@@ -37,6 +37,7 @@ namespace lfs::training {
     class BilateralGrid;
     class PPISP;
     class PPISPControllerPool;
+    class ADMMSparsityOptimizer;
 
     /// Save complete training checkpoint
     std::expected<void, std::string> save_checkpoint(
@@ -44,18 +45,20 @@ namespace lfs::training {
         int iteration,
         const IStrategy& strategy,
         const lfs::core::param::TrainingParameters& params,
-        const BilateralGrid* bilateral_grid = nullptr,
-        const PPISP* ppisp = nullptr,
-        const PPISPControllerPool* ppisp_controller_pool = nullptr);
+        const BilateralGrid* bilateral_grid,
+        const PPISP* ppisp,
+        const PPISPControllerPool* ppisp_controller_pool,
+        const ADMMSparsityOptimizer* sparsity_optimizer);
 
     /// Load complete training checkpoint (strategy + optional appearance components)
     std::expected<int, std::string> load_checkpoint(
         const std::filesystem::path& path,
         IStrategy& strategy,
         lfs::core::param::TrainingParameters& params,
-        BilateralGrid* bilateral_grid = nullptr,
-        PPISP* ppisp = nullptr,
-        PPISPControllerPool* ppisp_controller_pool = nullptr,
+        BilateralGrid* bilateral_grid,
+        PPISP* ppisp,
+        PPISPControllerPool* ppisp_controller_pool,
+        ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator = {});
 
 } // namespace lfs::training
