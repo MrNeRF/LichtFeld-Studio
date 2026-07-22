@@ -138,7 +138,10 @@ set(TEST_FILES
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
+    test_component_config_serialization.cpp
     test_atomic_output.cpp
+    test_json_chapter_dom.cpp
+    test_project_container.cpp
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
@@ -181,7 +184,9 @@ set(TEST_FILES
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
+    test_uuid.cpp
     test_render_settings_defaults.cpp
+    test_config_paths.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp
