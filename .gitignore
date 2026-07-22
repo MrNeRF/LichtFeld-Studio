@@ -23,6 +23,7 @@ data
 !tests/python/**/*.py
 !docs/plugins/examples/**/*.py
 !tools/*.py
+!tools/licht_inspect/**/*.py
 .venv/
 *.png
 !src/**/assets/**/*.png

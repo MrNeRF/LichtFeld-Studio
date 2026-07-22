@@ -1,0 +1,4 @@
+snapshot_bench/snapshot_bench
+os_semantics/os_semantics
+*.exe
+*.o
