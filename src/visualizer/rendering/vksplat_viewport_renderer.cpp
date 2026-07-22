@@ -1852,7 +1852,6 @@ namespace lfs::vis {
         buffers_.num_splats = 0;
         buffers_.num_indices = 0;
         buffers_.is_unsorted_1 = true;
-        resident_sort_capacity_ = 0;
         resident_depth_wave_armed_ = 0;
         resident_sort_bits_ = 0;
         last_render_used_macro_chain_ = false;
@@ -2014,7 +2013,6 @@ namespace lfs::vis {
         ring_completion_values_ = {};
         next_ring_slot_ = 0;
         current_input_sh_degree_ = -1;
-        resident_sort_capacity_ = 0;
         resident_depth_wave_armed_ = 0;
         resident_sort_bits_ = 0;
         last_render_used_macro_chain_ = false;
@@ -3106,8 +3104,7 @@ namespace lfs::vis {
         add_count(sort_region_elems, sizeof(sortingKey_t));                                                           // sorting_keys_2
         add_count(sort_region_elems, sizeof(std::int32_t));                                                           // sorting_gauss_idx_1
         add_count(sort_region_elems, sizeof(std::int32_t));                                                           // sorting_gauss_idx_2
-        add_count(2, sizeof(std::uint32_t));                                                                          // tile_sort_count
-        add_count(indirect::TileSortDispatch::kLayout.word_count, sizeof(std::uint32_t));                             // tile_sort_dispatch_args
+        add_count(1, sizeof(std::uint32_t));                                                                          // tile_sort_count
         add_count(num_tiles + 1, sizeof(std::int32_t));                                                               // tile_ranges
         add_count(num_tiles, sizeof(std::int32_t));                                                                   // tile_batch_counts
         add_count(num_tiles, sizeof(std::int32_t));                                                                   // tile_batch_offsets
@@ -3445,9 +3442,7 @@ namespace lfs::vis {
         bind_count(buffers_.sorting_gauss_idx_1, sort_region_elems);
         bind_count(buffers_.sorting_gauss_idx_2, sort_region_elems);
         const std::size_t sort_end = cursor;
-        bind_count(buffers_.tile_sort_count, 2);
-        bind_count(buffers_.tile_sort_dispatch_args,
-                   indirect::TileSortDispatch::kLayout.word_count);
+        bind_count(buffers_.tile_sort_count, 1);
         bind_count(buffers_.tile_ranges, num_tiles + 1);
         const std::size_t dense_batch_capacity =
             denseTileBatchCapacity(HIGS_DEPTH_WAVE_INSTANCES, num_tiles);
@@ -3523,7 +3518,6 @@ namespace lfs::vis {
         RELEASE_PRIVATE_SCRATCH(sorting_gauss_idx_1);
         RELEASE_PRIVATE_SCRATCH(sorting_gauss_idx_2);
         RELEASE_PRIVATE_SCRATCH(tile_sort_count);
-        RELEASE_PRIVATE_SCRATCH(tile_sort_dispatch_args);
         RELEASE_PRIVATE_SCRATCH(tile_ranges);
         RELEASE_PRIVATE_SCRATCH(tile_batch_counts);
         RELEASE_PRIVATE_SCRATCH(tile_batch_offsets);
@@ -3618,7 +3612,6 @@ namespace lfs::vis {
         DETACH_SHARED(sorting_gauss_idx_1);
         DETACH_SHARED(sorting_gauss_idx_2);
         DETACH_SHARED(tile_sort_count);
-        DETACH_SHARED(tile_sort_dispatch_args);
         DETACH_SHARED(tile_ranges);
         DETACH_SHARED(tile_batch_counts);
         DETACH_SHARED(tile_batch_offsets);
@@ -6903,8 +6896,7 @@ namespace lfs::vis {
         if (num_splats == 0 || buffers_.num_splats != num_splats) {
             return std::unexpected("VkSplat selection overlay cached model does not match the current model");
         }
-        if (resident_sort_capacity_ != HIGS_DEPTH_WAVE_INSTANCES ||
-            resident_depth_wave_armed_ == 0 ||
+        if (resident_depth_wave_armed_ == 0 ||
             resident_sort_bits_ <= 0 ||
             !hasDeviceBuffer(buffers_.depth_wave_dispatch) ||
             !hasDeviceBuffer(buffers_.wave_predicates) ||
@@ -6951,9 +6943,7 @@ namespace lfs::vis {
                                           request.gut,
                                           request.mip_filter);
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
-            uniforms.sort_capacity = static_cast<uint32_t>(
-                std::min<std::size_t>(resident_sort_capacity_,
-                                      static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())));
+            uniforms.sort_capacity = HIGS_DEPTH_WAVE_INSTANCES;
         }
 
         // This pass re-reads the resident sort buffers in shared arena scratch:
@@ -7134,7 +7124,6 @@ namespace lfs::vis {
         }
         // From this point onward a failed render may have partially rewritten the
         // shared sort/raster state. Publish it for overlay reuse only after submit.
-        resident_sort_capacity_ = 0;
         resident_depth_wave_armed_ = 0;
         resident_sort_bits_ = 0;
         if (const auto visibility_stats = renderer_.pollDeferredPrimitiveVisibilityStats()) {
@@ -7969,7 +7958,7 @@ namespace lfs::vis {
                     {
                         LOG_TIMER("vksplat.render.record.executeCalculateIndexBufferOffset");
                         renderer_.executeCalculateIndexBufferOffsetVisible(
-                            uniforms, buffers_, visible_capacity, HIGS_DEPTH_WAVE_INSTANCES);
+                            uniforms, buffers_, visible_capacity);
                     }
                 } else {
                     {
@@ -7982,8 +7971,7 @@ namespace lfs::vis {
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeCalculateIndexBufferOffset");
-                        renderer_.executeCalculateIndexBufferOffset(
-                            uniforms, buffers_, HIGS_DEPTH_WAVE_INSTANCES);
+                        renderer_.executeCalculateIndexBufferOffset(uniforms, buffers_);
                     }
                 }
                 // Stage-2 sort bits cover the tile-id sentinel as well as all
@@ -8117,7 +8105,6 @@ namespace lfs::vis {
         // scratch this batch still reads.
         last_submitted_render_value_ = completion_value;
         last_render_used_macro_chain_ = higs_active;
-        resident_sort_capacity_ = HIGS_DEPTH_WAVE_INSTANCES;
         resident_depth_wave_armed_ = armed_depth_waves;
         resident_sort_bits_ = depth_wave_sort_bits;
         if (shared_arena_guard) {

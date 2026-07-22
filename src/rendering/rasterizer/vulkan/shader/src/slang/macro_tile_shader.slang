@@ -251,7 +251,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
     if (mt >= num_macro)
         return;
 
-    const uint num_isects = min(tile_instance_count[0], uniforms.sort_capacity);
+    const uint num_isects = tile_instance_count[0];
     const uint range_start = lower_bound_macro(mt, num_isects);
     const uint range_end = lower_bound_macro(mt + 1u, num_isects);
     out_macro_ranges[mt] = int32_t(range_start);
@@ -372,8 +372,7 @@ void main(uniform Uniforms uniforms) {
 #endif
     const uint per_tile_groups = (num_tiles + 255u) / 256u;
 
-    for (uint i = 0u; i < LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS; ++i)
-        out_wave_dispatch[i] = 0u;
+    out_wave_dispatch[LFS_VK_DEPTH_WAVE_HEADER_NEEDED_WORD] = 0u;
     for (uint w = 0u; w < armed; ++w) {
         write_empty_record(out_wave_dispatch,
                            w,
@@ -383,10 +382,9 @@ void main(uniform Uniforms uniforms) {
         out_wave_predicates[w] = w == 0u ? 1u : 0u;
     }
 
-    const uint raw = tile_sort_count[1];
+    const uint raw = tile_sort_count[0];
     if (raw == 0xffffffffu) {
         out_wave_dispatch[LFS_VK_DEPTH_WAVE_HEADER_NEEDED_WORD] = 0u;
-        out_wave_dispatch[LFS_VK_DEPTH_WAVE_HEADER_RAW_WORD] = 0xffffffffu;
         return;
     }
 
@@ -435,11 +433,6 @@ void main(uniform Uniforms uniforms) {
                        (rank_end - rank_begin + 63u) / 64u,
                        1u,
                        1u);
-        write_dispatch(out_wave_dispatch,
-                       record + LFS_VK_DEPTH_WAVE_FILL_WORD_OFFSET,
-                       (span + 255u) / 256u,
-                       span > 0u ? 1u : 0u,
-                       span > 0u ? 1u : 0u);
         write_dispatch(out_wave_dispatch,
                        record + LFS_VK_DEPTH_WAVE_RADIX_WORD_OFFSET,
                        max((span + 512u * 8u - 1u) / (512u * 8u), 1u),
@@ -518,8 +511,6 @@ void main(uniform Uniforms uniforms) {
 
     out_wave_dispatch[LFS_VK_DEPTH_WAVE_HEADER_NEEDED_WORD] =
         overflow ? 0xffffffffu : needed;
-    out_wave_dispatch[LFS_VK_DEPTH_WAVE_HEADER_RAW_WORD] =
-        overflow ? 0xffffffffu : raw;
 }
 
 #endif

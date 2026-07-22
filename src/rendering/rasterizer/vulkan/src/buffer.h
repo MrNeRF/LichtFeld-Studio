@@ -23,12 +23,13 @@
 struct _VulkanBuffer {
     VkBuffer buffer;
     VmaAllocation allocation;
-    size_t allocSize;               // total VkBuffer size in bytes (not the VMA memory-allocation size)
-    size_t capacity;                // accessible bytes in this view, beginning at offset
-    size_t size;                    // active bytes in this view; must not exceed capacity
-    VkDeviceSize offset;            // absolute VkBuffer binding offset (0 for owned buffers)
-    const char* label;              // diagnostics label; nullptr = untracked
-    VkBufferUsageFlags extra_usage; // opt-in usage bits for specialized buffers
+    size_t allocSize;                            // total VkBuffer size in bytes (not the VMA memory-allocation size)
+    size_t capacity;                             // accessible bytes in this view, beginning at offset
+    size_t size;                                 // active bytes in this view; must not exceed capacity
+    VkDeviceSize offset;                         // absolute VkBuffer binding offset (0 for owned buffers)
+    const char* label;                           // diagnostics label; nullptr = untracked
+    VkBufferUsageFlags extra_usage;              // requested opt-in usage bits; immutable while live
+    VkBufferUsageFlags created_with_extra_usage; // opt-in usage bits used at VkBuffer creation
 
     _VulkanBuffer()
         : buffer(VK_NULL_HANDLE),
@@ -38,7 +39,8 @@ struct _VulkanBuffer {
           size(0),
           offset(0),
           label(nullptr),
-          extra_usage(0) {}
+          extra_usage(0),
+          created_with_extra_usage(0) {}
 
     _VulkanBuffer(const _VulkanBuffer& other)
         : buffer(other.buffer),
@@ -48,7 +50,8 @@ struct _VulkanBuffer {
           size(other.size),
           offset(other.offset),
           label(other.label),
-          extra_usage(other.extra_usage) {}
+          extra_usage(other.extra_usage),
+          created_with_extra_usage(other.created_with_extra_usage) {}
 
     _VulkanBuffer& operator=(const _VulkanBuffer& other) {
         buffer = other.buffer;
@@ -59,6 +62,7 @@ struct _VulkanBuffer {
         offset = other.offset;
         label = other.label;
         extra_usage = other.extra_usage;
+        created_with_extra_usage = other.created_with_extra_usage;
         return *this;
     }
 
@@ -66,7 +70,8 @@ struct _VulkanBuffer {
     bool operator==(const _VulkanBuffer& other) const {
         return buffer == other.buffer && allocation == other.allocation &&
                allocSize == other.allocSize && capacity == other.capacity &&
-               offset == other.offset && extra_usage == other.extra_usage;
+               offset == other.offset && extra_usage == other.extra_usage &&
+               created_with_extra_usage == other.created_with_extra_usage;
     }
 
     // A view is described in two coordinate systems: offset is absolute in the
@@ -185,8 +190,7 @@ struct VulkanGSPipelineBuffers {
     Buffer<sortingKey_t> sorting_keys_2;       // NInt [no_shrink]
     Buffer<int32_t> sorting_gauss_idx_1;       // NInt [no_shrink]
     Buffer<int32_t> sorting_gauss_idx_2;       // NInt [no_shrink]
-    Buffer<uint32_t> tile_sort_count;          // [0]=clamped, [1]=raw count/overflow sentinel
-    Buffer<uint32_t> tile_sort_dispatch_args;  // TileSortDispatch: radix + range
+    Buffer<uint32_t> tile_sort_count;          // raw count/overflow sentinel
     Buffer<uint32_t> depth_wave_dispatch;      // DepthWave header + one record per armed wave
     Buffer<uint32_t> wave_predicates;          // one conditional-rendering predicate per wave
     Buffer<int32_t> tile_ranges;               // (Gh*Gw, 2)

@@ -188,7 +188,6 @@ _vulkan_add_slang_shader(cumsum_single_pass        cumsum.slang CUMSUM_PHASE=0)
 _vulkan_add_slang_shader(radix_histogram_clear     radix_histogram_clear.slang)
 _vulkan_add_slang_shader(expected_depth_finalize   expected_depth_finalize.slang)
 
-# tile_shader.slang → 2 entries
 _vulkan_add_slang_shader(generate_keys_wave        tile_shader.slang EXPORT_MODE=0 ENTRY=1)
 _vulkan_add_slang_shader(compute_tile_ranges       tile_shader.slang EXPORT_MODE=0 ENTRY=2)
 _vulkan_add_slang_shader(compute_tile_ranges_and_batch_counts tile_shader.slang EXPORT_MODE=0 ENTRY=3)

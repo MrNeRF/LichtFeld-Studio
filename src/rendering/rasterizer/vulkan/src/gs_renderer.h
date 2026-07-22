@@ -143,8 +143,7 @@ public:
         size_t num_splats = 0;
     };
     struct TileInstanceStats {
-        size_t instance_count = 0; // clamped to the frame's capacity
-        size_t raw_count = 0;      // unclamped; > capacity means the frame clamped
+        size_t raw_count = 0;
         size_t waves_needed = 0;
         size_t waves_armed = 0;
         bool count_overflow = false;
@@ -188,7 +187,7 @@ public:
     [[nodiscard]] std::optional<PrimitiveVisibilityStats> pollDeferredPrimitiveVisibilityStats();
     [[nodiscard]] std::optional<LodSelectionStats> pollDeferredLodSelectionStats();
     [[nodiscard]] std::optional<TileInstanceStats> pollDeferredTileInstanceStats();
-    // Export-only exact gate. Records a dedicated two-word count copy, submits
+    // Export-only exact gate. Records the raw count/sentinel, submits
     // and fence-waits batch A, invalidates the mapped allocation, then starts
     // batch B before returning the raw count/sentinel result.
     [[nodiscard]] TileInstanceGate synchronizeTileInstanceGate(
@@ -261,8 +260,7 @@ public:
     // by GPU count/dispatch preparation and deferred count readback.
     void executeCalculateIndexBufferOffsetVisible(const VulkanGSRendererUniforms& uniforms,
                                                   VulkanGSPipelineBuffers& buffers,
-                                                  size_t visible_capacity,
-                                                  size_t instance_capacity);
+                                                  size_t visible_capacity);
     void executeWavePartition(const VulkanGSRendererUniforms& uniforms,
                               VulkanGSPipelineBuffers& buffers,
                               size_t armed,
@@ -316,8 +314,7 @@ public:
                                           const _VulkanBuffer& polygon_mask);
 
     void executeCalculateIndexBufferOffset(const VulkanGSRendererUniforms& uniforms,
-                                           VulkanGSPipelineBuffers& buffers,
-                                           size_t instance_capacity);
+                                           VulkanGSPipelineBuffers& buffers);
 
     // Two-stage sort stage 1: sort the N primitives by depth (radial distance
     // squared, written into buffers.primitive_depth_keys by projection_forward).
@@ -361,8 +358,7 @@ protected:
                                       const char* cpu_timer_prefix,
                                       bool wave_barriers_hoisted);
     void executePrepareTileSort(const VulkanGSRendererUniforms& uniforms,
-                                VulkanGSPipelineBuffers& buffers,
-                                size_t instance_capacity);
+                                VulkanGSPipelineBuffers& buffers);
 
     _ComputePipeline pipeline_projection_forward = _ComputePipeline(24);
     _ComputePipeline pipeline_projection_forward_3dgut = _ComputePipeline(24);
@@ -377,7 +373,7 @@ protected:
     _ComputePipeline pipeline_apply_depth_ordering = _ComputePipeline(4);
     _ComputePipeline pipeline_visible_flags = _ComputePipeline(2);
     _ComputePipeline pipeline_prepare_visible_sort = _ComputePipeline(3);
-    _ComputePipeline pipeline_prepare_tile_sort = _ComputePipeline(3);
+    _ComputePipeline pipeline_prepare_tile_sort = _ComputePipeline(2);
     _ComputePipeline pipeline_compact_visible_primitives = _ComputePipeline(5);
     _ComputePipeline pipeline_lod_map_indices = _ComputePipeline(3);
     _ComputePipeline pipeline_lod_select_threshold = _ComputePipeline(12);
@@ -398,7 +394,7 @@ protected:
         _ComputePipeline scan_block_sums = _ComputePipeline(4);
         _ComputePipeline add_block_offsets = _ComputePipeline(4);
     } pipeline_cumsum_indirect;
-    _ComputePipeline pipeline_prepare_tile_sort_visible = _ComputePipeline(4);
+    _ComputePipeline pipeline_prepare_tile_sort_visible = _ComputePipeline(3);
     _ComputePipeline pipeline_wave_partition = _ComputePipeline(4);
     _ComputePipeline pipeline_wave_partition_visible = _ComputePipeline(5);
     // HiGS macro chain

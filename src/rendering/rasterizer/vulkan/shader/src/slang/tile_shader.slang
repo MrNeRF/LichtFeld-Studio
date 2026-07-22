@@ -247,14 +247,10 @@ void main(
     const uint grid_width = uniforms.grid_width;
     const uint32_t num_tiles = grid_height*grid_width;
 
-    const uint32_t num_isects = min(tile_instance_count[0], uniforms.sort_capacity);
+    const uint32_t num_isects = tile_instance_count[0];
     if (globalIdx > num_isects)
         return;
 
-    // Two-stage sort: keys are tile-id-only (no depth packed), so the tile
-    // id is the key value clamped to [0, num_tiles]. The sentinel invocation
-    // at globalIdx == num_isects must not read sorted_keys[num_isects], which
-    // is out of bounds when num_isects is clamped to sort_capacity.
     uint32_t currtile = num_tiles;
     if (globalIdx < num_isects) {
         currtile = min((uint32_t)sorted_keys[globalIdx], num_tiles);
@@ -303,7 +299,7 @@ void main(
     if (tile_idx >= num_tiles)
         return;
 
-    const uint num_isects = min(tile_instance_count[0], uniforms.sort_capacity);
+    const uint num_isects = tile_instance_count[0];
     const uint range_start = lower_bound_tile(tile_idx, num_isects);
     const uint range_end = lower_bound_tile(tile_idx + 1u, num_isects);
     out_tile_ranges[tile_idx] = int32_t(range_start);
