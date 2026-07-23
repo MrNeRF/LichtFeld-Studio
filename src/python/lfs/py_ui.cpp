@@ -569,25 +569,27 @@ namespace lfs::python {
             return renderer && renderer->isFrameActive() ? renderer : nullptr;
         }
 
-        std::vector<glm::vec2> roundedRectPoints(const float x0, const float y0,
-                                                 const float x1, const float y1,
-                                                 const float requested_radius) {
+        const std::vector<glm::vec2>& roundedRectPoints(
+            const float x0, const float y0, const float x1, const float y1,
+            const float requested_radius) {
+            static thread_local std::vector<glm::vec2> points;
+            points.clear();
+
             const glm::vec2 min = glm::min(glm::vec2{x0, y0}, glm::vec2{x1, y1});
             const glm::vec2 max = glm::max(glm::vec2{x0, y0}, glm::vec2{x1, y1});
             const float radius =
                 std::clamp(requested_radius, 0.0f,
                            0.5f * std::min(max.x - min.x, max.y - min.y));
             if (radius <= 0.0f) {
-                return {
-                    {min.x, min.y},
-                    {max.x, min.y},
-                    {max.x, max.y},
-                    {min.x, max.y},
-                };
+                points.emplace_back(min.x, min.y);
+                points.emplace_back(max.x, min.y);
+                points.emplace_back(max.x, max.y);
+                points.emplace_back(min.x, max.y);
+                return points;
             }
 
             const int segments = std::clamp(
-                static_cast<int>(std::ceil(radius * 0.35f)), 3, 12);
+                static_cast<int>(std::ceil(radius * 0.35f)), 3, 24);
             const std::array<glm::vec2, 4> centers = {
                 glm::vec2{max.x - radius, min.y + radius},
                 glm::vec2{max.x - radius, max.y - radius},
@@ -601,7 +603,6 @@ namespace lfs::python {
                 kPi,
             };
 
-            std::vector<glm::vec2> points;
             points.reserve(static_cast<std::size_t>(segments + 1) * centers.size());
             for (std::size_t corner = 0; corner < centers.size(); ++corner) {
                 for (int segment = 0; segment <= segments; ++segment) {
@@ -671,6 +672,7 @@ namespace lfs::python {
         struct KeyboardFrameState {
             std::array<bool, SDL_SCANCODE_COUNT> previous{};
             std::array<bool, SDL_SCANCODE_COUNT> current{};
+            std::thread::id ui_thread;
             bool initialized = false;
         };
 
@@ -715,6 +717,7 @@ namespace lfs::python {
                     g_keyboard_frame.current.size());
                 std::copy_n(state, count, g_keyboard_frame.current.begin());
             }
+            g_keyboard_frame.ui_thread = std::this_thread::get_id();
             g_keyboard_frame.initialized = true;
         }
 
@@ -731,7 +734,9 @@ namespace lfs::python {
 
         [[nodiscard]] bool is_key_pressed(const PyKey key) {
             if (!g_keyboard_frame.initialized)
-                begin_keyboard_ui_frame();
+                return false;
+            assert(g_keyboard_frame.ui_thread == std::this_thread::get_id() &&
+                   "is_key_pressed must be queried on the UI thread");
 
             const auto scancode = to_sdl_scancode(key);
             if (scancode == SDL_SCANCODE_UNKNOWN)
@@ -1806,13 +1811,32 @@ namespace lfs::python {
         if (!isDrawHook())
             return;
 
-        static std::mutex mutex;
-        static std::unordered_set<std::string> warned_methods;
-        std::lock_guard lock(mutex);
-        if (warned_methods.emplace(method).second) {
-            LOG_WARN("UILayout::{} unsupported in draw hooks; use a panel or document hook",
-                     method);
+        // All call sites pass static method-name literals, so pointer storage is stable.
+        static std::array<std::atomic<const char*>, 256> warned_methods{};
+        size_t hash = 1469598103934665603ULL;
+        for (const unsigned char c : std::string_view(method)) {
+            hash ^= c;
+            hash *= 1099511628211ULL;
         }
+
+        for (size_t probe = 0; probe < warned_methods.size(); ++probe) {
+            auto& entry = warned_methods[(hash + probe) % warned_methods.size()];
+            const char* existing = entry.load(std::memory_order_acquire);
+            if (existing && std::strcmp(existing, method) == 0)
+                return;
+            if (!existing) {
+                const char* expected = nullptr;
+                if (entry.compare_exchange_strong(
+                        expected, method, std::memory_order_acq_rel)) {
+                    LOG_WARN("UILayout::{} unsupported in draw hooks; use a panel or document hook",
+                             method);
+                    return;
+                }
+                if (expected && std::strcmp(expected, method) == 0)
+                    return;
+            }
+        }
+        assert(false && "draw-hook warning registry exhausted");
     }
 
     namespace {
@@ -1943,7 +1967,7 @@ namespace lfs::python {
                                        nb::object color, const float rounding,
                                        const float thickness, bool) {
         if (auto* const renderer = activeOverlayRenderer()) {
-            const auto points = roundedRectPoints(x0, y0, x1, y1, rounding);
+            const auto& points = roundedRectPoints(x0, y0, x1, y1, rounding);
             renderer->addPolyline(points, overlayColor(color), true, thickness);
         }
     }
@@ -1952,7 +1976,7 @@ namespace lfs::python {
         const float x0, const float y0, const float x1, const float y1,
         nb::object color, const float rounding, bool) {
         if (auto* const renderer = activeOverlayRenderer()) {
-            const auto points = roundedRectPoints(x0, y0, x1, y1, rounding);
+            const auto& points = roundedRectPoints(x0, y0, x1, y1, rounding);
             renderer->addConvexPolyFilled(points, overlayColor(color));
         }
     }
@@ -2519,8 +2543,14 @@ namespace lfs::python {
     void PyUILayout::pop_id() { warnUnsupportedInDrawHook("pop_id"); }
     bool PyUILayout::begin_window(const std::string&, int) {
         if (isDrawHook()) {
-            window_pos_ = next_window_pos_;
-            window_size_ = next_window_size_;
+            if (next_window_pos_set_)
+                window_pos_ = next_window_pos_;
+            if (next_window_size_set_)
+                window_size_ = next_window_size_;
+            next_window_pos_ = {0.0f, 0.0f};
+            next_window_size_ = {0.0f, 0.0f};
+            next_window_pos_set_ = false;
+            next_window_size_set_ = false;
         }
         return true;
     }
@@ -2540,9 +2570,11 @@ namespace lfs::python {
     }
     void PyUILayout::set_next_window_pos(std::tuple<float, float> pos, bool) {
         next_window_pos_ = pos;
+        next_window_pos_set_ = true;
     }
     void PyUILayout::set_next_window_size(std::tuple<float, float> size, bool) {
         next_window_size_ = size;
+        next_window_size_set_ = true;
     }
     void PyUILayout::set_next_window_pos_centered(bool) {
         const auto [viewport_x, viewport_y] = get_viewport_pos();
@@ -2551,6 +2583,7 @@ namespace lfs::python {
             viewport_x + (viewport_w - std::get<0>(next_window_size_)) * 0.5f,
             viewport_y + (viewport_h - std::get<1>(next_window_size_)) * 0.5f,
         };
+        next_window_pos_set_ = true;
     }
     void PyUILayout::set_next_window_bg_alpha(float) {
         warnUnsupportedInDrawHook("set_next_window_bg_alpha");
@@ -3534,7 +3567,9 @@ namespace lfs::python {
                 (void)repeat;
                 return is_key_pressed(key);
             },
-            nb::arg("key"), nb::arg("repeat") = true, "Check if a key was pressed this frame");
+            nb::arg("key"), nb::arg("repeat") = false,
+            "Edge-triggered key press for the current UI frame. Queries must run "
+            "on the UI thread; key repeat is not emitted.");
 
         m.def(
             "is_key_down",

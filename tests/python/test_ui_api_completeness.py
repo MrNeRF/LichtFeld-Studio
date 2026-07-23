@@ -4,12 +4,8 @@
 
 import ctypes
 import ctypes.util
-from pathlib import Path
 
 import pytest
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_draw_hook_receives_overlay_capable_layout(lf):
@@ -82,6 +78,8 @@ def test_is_key_down_matches_live_sdl_state_when_a_mapped_key_is_held(lf):
 def test_key_queries_are_boolean_in_headless_processes(lf):
     assert isinstance(lf.ui.is_key_down(lf.ui.Key.SPACE), bool)
     assert isinstance(lf.ui.is_key_pressed(lf.ui.Key.SPACE), bool)
+    assert "repeat: bool = False" in lf.ui.is_key_pressed.__doc__
+    assert "key repeat is not emitted" in lf.ui.is_key_pressed.__doc__
 
 
 def test_path_input_binding_round_trips_all_arguments_headlessly(lf):
@@ -97,28 +95,19 @@ def test_path_input_binding_round_trips_all_arguments_headlessly(lf):
     assert path == "/tmp/example"
 
 
-def test_split_and_grid_flow_define_persistent_flex_structure(lf):
+def test_split_and_grid_flow_bindings_document_composition_arguments(lf):
     split_doc = lf.ui.RmlUILayout.split.__doc__
     grid_doc = lf.ui.RmlUILayout.grid_flow.__doc__
     assert "factor: float = 0.5" in split_doc
     assert "columns: int = 0" in grid_doc
+    assert "even_columns: bool = True" in grid_doc
+    assert "even_rows: bool = True" in grid_doc
 
-    source = (
-        PROJECT_ROOT / "src/python/lfs/rml_im_mode_layout.cpp"
-    ).read_text(encoding="utf-8")
-    stylesheet = (
-        PROJECT_ROOT
-        / "src/visualizer/gui/rmlui/resources/im_mode_panel.rcss"
-    ).read_text(encoding="utf-8")
 
-    assert "RmlLayoutType::Split" in source
-    assert "RmlLayoutType::GridFlow" in source
-    assert "push_persistent_container(container_key_, container_element_)" in source
-    assert 'SetProperty("flex-basis", basis)' in source
-    assert "100.0f / static_cast<float>(columns_)" in source
-    assert ".im-split" in stylesheet
-    assert ".im-grid-flow" in stylesheet
-    assert "flex-wrap: wrap" in stylesheet
+def test_table_row_binding_documents_stable_and_positional_identity(lf):
+    doc = lf.ui.RmlUILayout.table_next_row.__doc__
+    assert "push_id()/pop_id()" in doc
+    assert "position identity" in doc
 
 
 def test_legacy_template_stubs_raise_instead_of_claiming_success(lf):

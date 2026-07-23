@@ -90,7 +90,11 @@ namespace lfs::python {
             .def("begin_table", &RmlImModeLayout::begin_table, nb::arg("id"), nb::arg("columns"))
             .def("table_setup_column", &RmlImModeLayout::table_setup_column, nb::arg("label"), nb::arg("width") = 0.0f)
             .def("end_table", &RmlImModeLayout::end_table)
-            .def("table_next_row", &RmlImModeLayout::table_next_row)
+            .def(
+                "table_next_row", &RmlImModeLayout::table_next_row,
+                "Advance to the next row. Wrap the call in push_id()/pop_id() "
+                "(a ##hidden key is accepted) for stable row identity across "
+                "reorder/removal; rows without an explicit key use position identity.")
             .def("table_next_column", &RmlImModeLayout::table_next_column)
             .def("table_set_column_index", &RmlImModeLayout::table_set_column_index, nb::arg("column"))
             .def("table_headers_row", &RmlImModeLayout::table_headers_row)
@@ -299,7 +303,10 @@ namespace lfs::python {
             .def("tree_pop", &RmlSubLayout::tree_pop)
             .def("begin_table", &RmlSubLayout::begin_table, nb::arg("id"), nb::arg("columns"))
             .def("table_setup_column", &RmlSubLayout::table_setup_column, nb::arg("label"), nb::arg("width") = 0.0f)
-            .def("table_next_row", &RmlSubLayout::table_next_row)
+            .def(
+                "table_next_row", &RmlSubLayout::table_next_row,
+                "Advance to the next row. Use push_id()/pop_id() around the "
+                "call for stable identity; otherwise rows use position identity.")
             .def("table_next_column", &RmlSubLayout::table_next_column)
             .def("table_headers_row", &RmlSubLayout::table_headers_row)
             .def("end_table", &RmlSubLayout::end_table)

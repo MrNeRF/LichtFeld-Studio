@@ -680,6 +680,8 @@ namespace lfs::python {
         Mode mode_ = Mode::Legacy;
         std::tuple<float, float> next_window_pos_{0.0f, 0.0f};
         std::tuple<float, float> next_window_size_{0.0f, 0.0f};
+        bool next_window_pos_set_ = false;
+        bool next_window_size_set_ = false;
         std::tuple<float, float> window_pos_{0.0f, 0.0f};
         std::tuple<float, float> window_size_{0.0f, 0.0f};
     };

@@ -87,14 +87,50 @@ namespace {
         }
     }
 
-    size_t hash_combo_items(const std::vector<std::string>& items) {
-        size_t result = items.size();
+    struct ComboItemsFingerprint {
+        size_t primary = 0;
+        size_t secondary = 0;
+    };
+
+    ComboItemsFingerprint hash_combo_items(const std::vector<std::string>& items) {
+        ComboItemsFingerprint result{
+            .primary = items.size(),
+            .secondary = items.size() ^ 0xd6e8feb86659fd93ULL,
+        };
         const std::hash<std::string_view> hash_string;
         for (const auto& item : items) {
             const size_t item_hash = hash_string(item);
-            result ^= item_hash + 0x9e3779b9 + (result << 6) + (result >> 2);
+            result.primary ^=
+                item_hash + 0x9e3779b9 + (result.primary << 6) + (result.primary >> 2);
+            result.secondary ^= item.size();
+            result.secondary *= 1099511628211ULL;
+            for (const unsigned char byte : std::string_view(item)) {
+                result.secondary ^= byte;
+                result.secondary *= 1099511628211ULL;
+            }
+            result.secondary ^= 0xff;
+            result.secondary *= 1099511628211ULL;
         }
         return result;
+    }
+
+    using PathDialogCallback = std::function<std::filesystem::path(
+        bool, const std::filesystem::path&, const std::optional<std::string>&)>;
+
+    PathDialogCallback default_path_dialog_callback() {
+        return [](const bool folder_mode, const std::filesystem::path& default_path,
+                  const std::optional<std::string>& title) {
+            if (folder_mode)
+                return title ? lfs::vis::gui::PickFolderDialog(default_path, *title)
+                             : lfs::vis::gui::PickFolderDialog(default_path);
+            return title ? lfs::vis::gui::OpenFileDialog(default_path, *title)
+                         : lfs::vis::gui::OpenFileDialog(default_path);
+        };
+    }
+
+    PathDialogCallback& path_dialog_callback() {
+        static PathDialogCallback callback = default_path_dialog_callback();
+        return callback;
     }
 
     bool set_attribute_if_changed(Rml::Element* element, const char* name,
@@ -434,10 +470,15 @@ namespace lfs::python {
                                         const std::string& content) {
         assert(index < slot.content.size());
         assert(element);
-        if (slot.content[index] && *slot.content[index] == content)
+        if (slot.content[index] && *slot.content[index] == content) {
+            slot.numeric_content[index].reset();
             return;
+        }
 
-        if (element->GetNumChildren() == 1) {
+        if (element->GetNumChildren() == 0) {
+            assert(doc_);
+            element->AppendChild(doc_->CreateTextNode(Rml::String(content)));
+        } else if (element->GetNumChildren() == 1) {
             if (auto* text = dynamic_cast<Rml::ElementText*>(element->GetFirstChild()))
                 text->SetText(Rml::String(content));
             else
@@ -446,6 +487,35 @@ namespace lfs::python {
             element->SetInnerRML(Rml::String(content));
         }
         slot.content[index] = content;
+        slot.numeric_content[index].reset();
+    }
+
+    void RmlImModeLayout::set_slot_float_text(Slot& slot, const size_t index,
+                                              Rml::Element* element, const float value) {
+        assert(index < slot.numeric_content.size());
+        if (slot.numeric_content[index] && *slot.numeric_content[index] == value)
+            return;
+        set_slot_text(slot, index, element, std::format("{:.2f}", value));
+        slot.numeric_content[index] = value;
+    }
+
+    void RmlImModeLayout::set_slot_int_text(Slot& slot, const size_t index,
+                                            Rml::Element* element, const int value) {
+        assert(index < slot.numeric_content.size());
+        if (slot.numeric_content[index] && *slot.numeric_content[index] == value)
+            return;
+        set_slot_text(slot, index, element, std::to_string(value));
+        slot.numeric_content[index] = value;
+    }
+
+    void RmlImModeLayout::set_path_dialog_callback_for_testing(
+        PathDialogCallback callback) {
+        assert(callback);
+        path_dialog_callback() = std::move(callback);
+    }
+
+    void RmlImModeLayout::reset_path_dialog_callback_for_testing() {
+        path_dialog_callback() = default_path_dialog_callback();
     }
 
     void RmlImModeLayout::warn_unsupported(const char* method) {
@@ -859,7 +929,6 @@ namespace lfs::python {
         const auto max_text = Rml::String(std::to_string(max));
         const auto step_text = step_to_string(compute_slider_step(min, max));
         const auto pushed_value = Rml::String(std::to_string(value));
-        const auto value_text = std::format("{:.2f}", value);
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -882,7 +951,7 @@ namespace lfs::python {
 
             auto val_text = doc_->CreateElement("span");
             val_text->SetClass("slider-value", true);
-            set_slot_text(slot, 0, val_text.get(), value_text);
+            set_slot_float_text(slot, 0, val_text.get(), value);
 
             wrapper->AppendChild(std::move(lbl));
             wrapper->AppendChild(std::move(input));
@@ -902,8 +971,9 @@ namespace lfs::python {
                 set_attribute_if_changed(input, "value", pushed_value);
             auto* val_text = slot.element->GetChild(2);
             if (val_text) {
-                float display_val = slot.events->changed ? slot.events->float_value : value;
-                set_slot_text(slot, 0, val_text, std::format("{:.2f}", display_val));
+                const float display_val =
+                    slot.events->changed ? slot.events->float_value : value;
+                set_slot_float_text(slot, 0, val_text, display_val);
             }
         }
 
@@ -947,7 +1017,7 @@ namespace lfs::python {
 
             auto val_text = doc_->CreateElement("span");
             val_text->SetClass("slider-value", true);
-            set_slot_text(slot, 0, val_text.get(), value_text);
+            set_slot_int_text(slot, 0, val_text.get(), value);
 
             wrapper->AppendChild(std::move(lbl));
             wrapper->AppendChild(std::move(input));
@@ -967,8 +1037,9 @@ namespace lfs::python {
                 set_attribute_if_changed(input, "value", value_text);
             auto* val_text = slot.element->GetChild(2);
             if (val_text) {
-                int display_val = slot.events->changed ? static_cast<int>(slot.events->float_value) : value;
-                set_slot_text(slot, 0, val_text, std::to_string(display_val));
+                const int display_val =
+                    slot.events->changed ? static_cast<int>(slot.events->float_value) : value;
+                set_slot_int_text(slot, 0, val_text, display_val);
             }
         }
 
@@ -1014,7 +1085,6 @@ namespace lfs::python {
         const float step = (speed > 0.0f) ? std::fabs(speed) : compute_slider_step(min, max);
         const auto step_text = step_to_string(step);
         const auto pushed_value = Rml::String(std::to_string(value));
-        const auto value_text = std::format("{:.2f}", value);
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -1037,7 +1107,7 @@ namespace lfs::python {
 
             auto val_text = doc_->CreateElement("span");
             val_text->SetClass("slider-value", true);
-            set_slot_text(slot, 0, val_text.get(), value_text);
+            set_slot_float_text(slot, 0, val_text.get(), value);
 
             wrapper->AppendChild(std::move(lbl));
             wrapper->AppendChild(std::move(input));
@@ -1057,8 +1127,9 @@ namespace lfs::python {
                 set_attribute_if_changed(input, "value", pushed_value);
             auto* val_text = slot.element->GetChild(2);
             if (val_text) {
-                float display_val = slot.events->changed ? slot.events->float_value : value;
-                set_slot_text(slot, 0, val_text, std::format("{:.2f}", display_val));
+                const float display_val =
+                    slot.events->changed ? slot.events->float_value : value;
+                set_slot_float_text(slot, 0, val_text, display_val);
             }
         }
 
@@ -1104,7 +1175,7 @@ namespace lfs::python {
 
             auto val_text = doc_->CreateElement("span");
             val_text->SetClass("slider-value", true);
-            set_slot_text(slot, 0, val_text.get(), pushed_value);
+            set_slot_int_text(slot, 0, val_text.get(), value);
 
             wrapper->AppendChild(std::move(lbl));
             wrapper->AppendChild(std::move(input));
@@ -1124,8 +1195,9 @@ namespace lfs::python {
                 set_attribute_if_changed(input, "value", pushed_value);
             auto* val_text = slot.element->GetChild(2);
             if (val_text) {
-                int display_val = slot.events->changed ? static_cast<int>(slot.events->float_value) : value;
-                set_slot_text(slot, 0, val_text, std::to_string(display_val));
+                const int display_val =
+                    slot.events->changed ? static_cast<int>(slot.events->float_value) : value;
+                set_slot_int_text(slot, 0, val_text, display_val);
             }
         }
 
@@ -1332,6 +1404,10 @@ namespace lfs::python {
                                                               const std::string& dialog_title) {
         push_id("path_input:" + label);
         auto [changed, edited_value] = input_text(label, value);
+        assert(!containers_.empty() && containers_.back().cursor > 0);
+        Slot* const input_slot =
+            &containers_.back().slots[containers_.back().cursor - 1];
+        assert(input_slot->type == SlotType::InputText);
         same_line();
         const bool browse = small_button("Browse##path_browse");
         pop_id();
@@ -1339,18 +1415,25 @@ namespace lfs::python {
         if (!browse)
             return {changed, std::move(edited_value)};
 
-        const std::string title =
-            dialog_title.empty()
-                ? (folder_mode ? "Select Folder" : "Select File")
-                : dialog_title;
         const auto default_path = lfs::core::utf8_to_path(edited_value);
-        const auto selected =
-            folder_mode
-                ? lfs::vis::gui::PickFolderDialog(default_path, title)
-                : lfs::vis::gui::OpenFileDialog(default_path, title);
+        const std::optional<std::string> title =
+            dialog_title.empty() ? std::nullopt
+                                 : std::optional<std::string>(dialog_title);
+        std::filesystem::path selected;
+        {
+            nb::gil_scoped_release release;
+            selected = path_dialog_callback()(folder_mode, default_path, title);
+        }
         if (selected.empty())
             return {changed, std::move(edited_value)};
-        return {true, lfs::core::path_to_utf8(selected)};
+
+        auto selected_value = lfs::core::path_to_utf8(selected);
+        auto* const input = find_direct_input(input_slot->element);
+        assert(input);
+        set_attribute_if_changed(input, "value", Rml::String(selected_value));
+        input_slot->events->string_value = selected_value;
+        input_slot->events->changed = false;
+        return {true, std::move(selected_value)};
     }
 
     // ── Color ───────────────────────────────────────────────
@@ -1458,11 +1541,12 @@ namespace lfs::python {
         auto* line = ensure_line_container();
         auto& slot = ensure_slot(SlotType::Combo, build_slot_id("combo", &label));
 
-        const size_t items_hash = hash_combo_items(items);
+        const ComboItemsFingerprint items_fingerprint = hash_combo_items(items);
         const bool items_dirty =
             !slot.events->items_initialized ||
             slot.events->items_count != items.size() ||
-            slot.events->items_hash != items_hash;
+            slot.events->items_hash != items_fingerprint.primary ||
+            slot.events->items_hash_secondary != items_fingerprint.secondary;
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -1484,7 +1568,8 @@ namespace lfs::python {
             }
 
             slot.events->int_value = current_idx;
-            slot.events->items_hash = items_hash;
+            slot.events->items_hash = items_fingerprint.primary;
+            slot.events->items_hash_secondary = items_fingerprint.secondary;
             slot.events->items_count = items.size();
             slot.events->items_initialized = true;
             select->AddEventListener(Rml::EventId::Change, new SlotEventListener(slot.events));
@@ -1516,7 +1601,8 @@ namespace lfs::python {
                     slot.element->RemoveChild(select);
                     slot.element->AppendChild(std::move(new_select));
 
-                    slot.events->items_hash = items_hash;
+                    slot.events->items_hash = items_fingerprint.primary;
+                    slot.events->items_hash_secondary = items_fingerprint.secondary;
                     slot.events->items_count = items.size();
                     slot.events->items_initialized = true;
                     slot.events->int_value = current_idx;
@@ -1718,6 +1804,7 @@ namespace lfs::python {
         table_->num_columns = columns;
         table_->column_widths.resize(columns, 0.0f);
         table_->key = slot.key;
+        table_->id_stack_depth = id_stack_.size();
         table_->table_element = slot.element;
         return true;
     }
@@ -1744,10 +1831,12 @@ namespace lfs::python {
         const int keep_cells = table_->current_column + 1;
         while (table_->current_row->GetNumChildren() > keep_cells) {
             const int cell_index = table_->current_row->GetNumChildren() - 1;
-            child_slots_.erase(std::format(
-                "{}/row:{}/cell:{}", table_->key, table_->current_row_index, cell_index));
+            auto* const cell = table_->current_row->GetChild(cell_index);
+            const auto cell_key = cell->GetAttribute<Rml::String>("data-im-cell", "");
+            if (!cell_key.empty())
+                child_slots_.erase(cell_key);
             removed_elements_.push_back(
-                table_->current_row->RemoveChild(table_->current_row->GetChild(cell_index)));
+                table_->current_row->RemoveChild(cell));
         }
     }
 
@@ -1761,8 +1850,10 @@ namespace lfs::python {
             const int row_index = table_->table_element->GetNumChildren() - 1;
             auto* row = table_->table_element->GetChild(row_index);
             for (int cell_index = 0; cell_index < row->GetNumChildren(); ++cell_index) {
-                child_slots_.erase(std::format(
-                    "{}/row:{}/cell:{}", table_->key, row_index, cell_index));
+                const auto cell_key = row->GetChild(cell_index)
+                                          ->GetAttribute<Rml::String>("data-im-cell", "");
+                if (!cell_key.empty())
+                    child_slots_.erase(cell_key);
             }
             removed_elements_.push_back(table_->table_element->RemoveChild(row));
         }
@@ -1775,16 +1866,58 @@ namespace lfs::python {
 
         finish_table_row();
         table_->current_row_index++;
-        if (table_->current_row_index < table_->table_element->GetNumChildren()) {
-            table_->current_row =
-                table_->table_element->GetChild(table_->current_row_index);
+
+        if (id_stack_.size() > table_->id_stack_depth) {
+            table_->current_row_key = table_->key + "/row-id";
+            for (size_t i = table_->id_stack_depth; i < id_stack_.size(); ++i) {
+                auto token = stable_label_token(id_stack_[i]);
+                if (token.empty())
+                    token = id_stack_[i];
+                table_->current_row_key +=
+                    std::format(":{}:{}", token.size(), token);
+            }
         } else {
+            table_->current_row_key =
+                std::format("{}/row:{}", table_->key, table_->current_row_index);
+        }
+
+        Rml::Element* matching_row = nullptr;
+        for (int i = table_->current_row_index;
+             i < table_->table_element->GetNumChildren(); ++i) {
+            auto* const candidate = table_->table_element->GetChild(i);
+            if (candidate->GetAttribute<Rml::String>("data-im-row", "") ==
+                table_->current_row_key) {
+                matching_row = candidate;
+                break;
+            }
+        }
+
+        if (!matching_row) {
             auto row = doc_->CreateElement("div");
             row->SetClass("im-table-row", true);
-            row->SetAttribute(
-                "data-im-row",
-                Rml::String(std::format("{}/row:{}", table_->key, table_->current_row_index)));
-            table_->current_row = table_->table_element->AppendChild(std::move(row));
+            row->SetAttribute("data-im-row", Rml::String(table_->current_row_key));
+            auto* const insertion_point =
+                table_->current_row_index < table_->table_element->GetNumChildren()
+                    ? table_->table_element->GetChild(table_->current_row_index)
+                    : nullptr;
+            table_->current_row =
+                table_->table_element->InsertBefore(std::move(row), insertion_point);
+        } else if (matching_row !=
+                   table_->table_element->GetChild(table_->current_row_index)) {
+            Rml::Element* restore_focus = nullptr;
+            if (auto* const context = matching_row->GetContext()) {
+                auto* const focused = context->GetFocusElement();
+                if (is_descendant_of(focused, matching_row))
+                    restore_focus = focused;
+            }
+            auto moved_row = table_->table_element->RemoveChild(matching_row);
+            table_->current_row = table_->table_element->InsertBefore(
+                std::move(moved_row),
+                table_->table_element->GetChild(table_->current_row_index));
+            if (restore_focus)
+                restore_focus->Focus();
+        } else {
+            table_->current_row = matching_row;
         }
         table_->current_cell = nullptr;
         table_->current_column = -1;
@@ -1797,8 +1930,7 @@ namespace lfs::python {
         finish_table_cell();
         table_->current_column++;
         const auto cell_key = std::format(
-            "{}/row:{}/cell:{}",
-            table_->key, table_->current_row_index, table_->current_column);
+            "{}/cell:{}", table_->current_row_key, table_->current_column);
 
         if (table_->current_column < table_->current_row->GetNumChildren()) {
             table_->current_cell = table_->current_row->GetChild(table_->current_column);
@@ -1811,13 +1943,19 @@ namespace lfs::python {
 
         int col = table_->current_column;
         if (col < static_cast<int>(table_->column_widths.size())) {
-            float w = table_->column_widths[col];
-            table_->current_cell->SetClass("im-table-cell--fill", w <= 0.0f);
-            if (w > 0.0f) {
-                table_->current_cell->SetProperty(
-                    "width", Rml::String(std::to_string(static_cast<int>(w)) + "dp"));
-            } else {
-                table_->current_cell->RemoveProperty("width");
+            const float width = table_->column_widths[col];
+            const Rml::String width_key =
+                width > 0.0f
+                    ? Rml::String(std::to_string(static_cast<int>(width)) + "dp")
+                    : Rml::String("fill");
+            if (set_attribute_if_changed(
+                    table_->current_cell, "data-im-cell-width", width_key)) {
+                table_->current_cell->SetClass(
+                    "im-table-cell--fill", width <= 0.0f);
+                if (width > 0.0f)
+                    table_->current_cell->SetProperty("width", width_key);
+                else
+                    table_->current_cell->RemoveProperty("width");
             }
         }
 
@@ -2575,7 +2713,13 @@ namespace lfs::python {
         auto& slot = ensure_slot(SlotType::PlotLines, build_slot_id("plot_lines", &label));
         auto* parent = containers_.back().parent;
         const auto display = strip_legacy_id(label);
-        update_values_deque(values, slot.plot_values);
+        update_values_deque(values, slot.plot_scratch);
+        const bool data_dirty =
+            !slot.plot_initialized || slot.plot_values != slot.plot_scratch;
+        if (data_dirty) {
+            slot.plot_values.swap(slot.plot_scratch);
+            slot.plot_initialized = true;
+        }
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -2599,19 +2743,37 @@ namespace lfs::python {
             set_slot_text(slot, 0, title, display);
 
         const auto [width, height] = size;
-        if (width > 0.0f)
-            slot.element->SetProperty("width", Rml::String(std::format("{:.0f}dp", width)));
-        else
-            slot.element->RemoveProperty("width");
+        const float effective_width = width > 0.0f ? width : 0.0f;
+        if (!slot.plot_width || *slot.plot_width != effective_width) {
+            const Rml::String width_value =
+                width > 0.0f ? Rml::String(std::format("{:.0f}dp", width))
+                             : Rml::String("100%");
+            if (set_attribute_if_changed(
+                    slot.element, "data-im-plot-width", width_value))
+                slot.element->SetProperty("width", width_value);
+            slot.plot_width = effective_width;
+        }
 
         auto* graph_el = slot.element->GetChild(1);
         if (graph_el) {
-            graph_el->SetProperty("height", Rml::String(std::format("{:.0f}dp", height > 0.0f ? height : 72.0f)));
-            if (auto* graph = dynamic_cast<lfs::vis::gui::LossGraphElement*>(graph_el))
-                graph->setData(slot.plot_values);
-            else
-                set_slot_text(
-                    slot, 1, graph_el, slot.plot_values.empty() ? "" : "plot");
+            const float effective_height = height > 0.0f ? height : 72.0f;
+            if (!slot.plot_height || *slot.plot_height != effective_height) {
+                const Rml::String height_value =
+                    Rml::String(std::format("{:.0f}dp", effective_height));
+                if (set_attribute_if_changed(
+                        graph_el, "data-im-plot-height", height_value))
+                    graph_el->SetProperty("height", height_value);
+                slot.plot_height = effective_height;
+            }
+            if (data_dirty) {
+                if (auto* graph =
+                        dynamic_cast<lfs::vis::gui::LossGraphElement*>(graph_el))
+                    graph->setData(slot.plot_values);
+                else
+                    set_slot_text(
+                        slot, 1, graph_el,
+                        slot.plot_values.empty() ? "" : "plot");
+            }
         }
 
         last_element_ = slot.element;
@@ -3079,10 +3241,34 @@ namespace lfs::python {
             if (set_attribute_if_changed(child, "data-im-flex-basis", basis))
                 child->SetProperty("flex-basis", basis);
         };
+        const auto apply_property = [](Rml::Element* child, const char* marker,
+                                       const char* property, const Rml::String& value) {
+            assert(child);
+            if (set_attribute_if_changed(child, marker, value))
+                child->SetProperty(property, value);
+        };
 
         if (type_ == RmlLayoutType::Split) {
-            assert(child_count <= 2 && "split layouts support exactly two children");
-            const float first = std::clamp(factor_, 0.0f, 1.0f);
+            if (child_count > 2 && !parent_->warned_split_overflow_) {
+                parent_->warned_split_overflow_ = true;
+                LOG_WARN("RmlImModeLayout: split supports two children; hiding {} excess child(ren)",
+                         child_count - 2);
+            }
+            for (int i = 0; i < child_count; ++i) {
+                auto* const child = container_element_->GetChild(i);
+                if (i < 2) {
+                    if (child->HasAttribute("data-im-split-overflow")) {
+                        child->RemoveAttribute("data-im-split-overflow");
+                        child->RemoveProperty("display");
+                    }
+                } else {
+                    apply_property(
+                        child, "data-im-split-overflow", "display", "none");
+                }
+            }
+
+            const float first =
+                std::isfinite(factor_) ? std::clamp(factor_, 0.0f, 1.0f) : 0.5f;
             if (child_count > 0)
                 apply_basis(container_element_->GetChild(0),
                             Rml::String(std::format("{:.4g}%", first * 100.0f)));
@@ -3091,15 +3277,21 @@ namespace lfs::python {
                             Rml::String(std::format("{:.4g}%", (1.0f - first) * 100.0f)));
         } else if (type_ == RmlLayoutType::GridFlow) {
             const Rml::String basis =
-                columns_ > 0
+                even_columns_ && columns_ > 0
                     ? Rml::String(std::format("{:.4g}%", 100.0f / static_cast<float>(columns_)))
-                    : Rml::String("100dp");
-            for (int i = 0; i < child_count; ++i)
-                apply_basis(container_element_->GetChild(i), basis);
+                    : Rml::String(even_columns_ ? "100dp" : "auto");
+            for (int i = 0; i < child_count; ++i) {
+                auto* const child = container_element_->GetChild(i);
+                apply_basis(child, basis);
+                apply_property(
+                    child, "data-im-flex-grow", "flex-grow",
+                    even_rows_ ? Rml::String("1") : Rml::String("0"));
+                apply_property(
+                    child, "data-im-align-self", "align-self",
+                    even_rows_ ? Rml::String("stretch")
+                               : Rml::String("flex-start"));
+            }
         }
-
-        (void)even_columns_;
-        (void)even_rows_;
         container_element_ = nullptr;
         container_key_.clear();
     }

@@ -229,6 +229,7 @@ set(TEST_FILES
     test_colmap_binary_error_taxonomy.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
+    test_rml_im_mode_layout.cpp
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp
     test_tensor_d4_from_blob_stream.cpp
@@ -271,6 +272,7 @@ set(TEST_SOURCES test_main.cpp ${TEST_FILES})
 list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_modal_registry.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_ui_modals.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
 )

@@ -402,6 +402,7 @@ namespace lfs::vis::gui {
             std::vector<glm::vec2> polygon(input.begin(), input.end());
             std::vector<glm::vec2> output;
             output.reserve(input.size() + 4);
+            constexpr float kClipDivisionEpsilon = 1.0e-6f;
 
             const auto clip_edge = [&](const auto inside,
                                        const auto intersection) {
@@ -426,26 +427,42 @@ namespace lfs::vis::gui {
             clip_edge(
                 [&](const glm::vec2 p) { return p.x >= clip.min.x; },
                 [&](const glm::vec2 a, const glm::vec2 b) {
-                    const float t = (clip.min.x - a.x) / (b.x - a.x);
-                    return glm::mix(a, b, t);
+                    const float delta = b.x - a.x;
+                    if (!std::isfinite(delta) ||
+                        std::fabs(delta) <= kClipDivisionEpsilon)
+                        return glm::vec2{clip.min.x, 0.5f * (a.y + b.y)};
+                    const float t = (clip.min.x - a.x) / delta;
+                    return glm::vec2{clip.min.x, std::lerp(a.y, b.y, t)};
                 });
             clip_edge(
                 [&](const glm::vec2 p) { return p.x <= clip.max.x; },
                 [&](const glm::vec2 a, const glm::vec2 b) {
-                    const float t = (clip.max.x - a.x) / (b.x - a.x);
-                    return glm::mix(a, b, t);
+                    const float delta = b.x - a.x;
+                    if (!std::isfinite(delta) ||
+                        std::fabs(delta) <= kClipDivisionEpsilon)
+                        return glm::vec2{clip.max.x, 0.5f * (a.y + b.y)};
+                    const float t = (clip.max.x - a.x) / delta;
+                    return glm::vec2{clip.max.x, std::lerp(a.y, b.y, t)};
                 });
             clip_edge(
                 [&](const glm::vec2 p) { return p.y >= clip.min.y; },
                 [&](const glm::vec2 a, const glm::vec2 b) {
-                    const float t = (clip.min.y - a.y) / (b.y - a.y);
-                    return glm::mix(a, b, t);
+                    const float delta = b.y - a.y;
+                    if (!std::isfinite(delta) ||
+                        std::fabs(delta) <= kClipDivisionEpsilon)
+                        return glm::vec2{0.5f * (a.x + b.x), clip.min.y};
+                    const float t = (clip.min.y - a.y) / delta;
+                    return glm::vec2{std::lerp(a.x, b.x, t), clip.min.y};
                 });
             clip_edge(
                 [&](const glm::vec2 p) { return p.y <= clip.max.y; },
                 [&](const glm::vec2 a, const glm::vec2 b) {
-                    const float t = (clip.max.y - a.y) / (b.y - a.y);
-                    return glm::mix(a, b, t);
+                    const float delta = b.y - a.y;
+                    if (!std::isfinite(delta) ||
+                        std::fabs(delta) <= kClipDivisionEpsilon)
+                        return glm::vec2{0.5f * (a.x + b.x), clip.max.y};
+                    const float t = (clip.max.y - a.y) / delta;
+                    return glm::vec2{std::lerp(a.x, b.x, t), clip.max.y};
                 });
             return polygon;
         }

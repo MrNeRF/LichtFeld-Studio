@@ -15,6 +15,8 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -68,6 +70,7 @@ namespace lfs::python {
         int int_value = 0;
         float float_value = 0.0f;
         size_t items_hash = 0;
+        size_t items_hash_secondary = 0;
         size_t items_count = 0;
         bool items_initialized = false;
         std::string string_value;
@@ -81,7 +84,12 @@ namespace lfs::python {
         Rml::Element* element = nullptr;
         std::shared_ptr<SlotEventState> events = std::make_shared<SlotEventState>();
         std::array<std::optional<std::string>, 3> content;
+        std::array<std::optional<double>, 3> numeric_content;
         std::deque<float> plot_values;
+        std::deque<float> plot_scratch;
+        bool plot_initialized = false;
+        std::optional<float> plot_width;
+        std::optional<float> plot_height;
     };
 
     struct ContainerLevel {
@@ -108,6 +116,8 @@ namespace lfs::python {
         int current_column = -1;
         std::vector<float> column_widths;
         std::string key;
+        std::string current_row_key;
+        size_t id_stack_depth = 0;
         Rml::Element* table_element = nullptr;
         Rml::Element* current_row = nullptr;
         Rml::Element* current_cell = nullptr;
@@ -125,9 +135,11 @@ namespace lfs::python {
     };
 
     class RmlSubLayout;
+    class RmlImModeLayoutTestAccess;
 
     class RmlImModeLayout {
         friend class RmlSubLayout;
+        friend class RmlImModeLayoutTestAccess;
 
     public:
         RmlImModeLayout() = default;
@@ -438,8 +450,17 @@ namespace lfs::python {
         std::string build_slot_id(const char* prefix, const std::string* label = nullptr) const;
         std::string color_to_css(nb::object color) const;
         static std::string stable_label_token(const std::string& label);
-        static void set_slot_text(Slot& slot, size_t index, Rml::Element* element,
-                                  const std::string& content);
+        void set_slot_text(Slot& slot, size_t index, Rml::Element* element,
+                           const std::string& content);
+        void set_slot_float_text(Slot& slot, size_t index, Rml::Element* element,
+                                 float value);
+        void set_slot_int_text(Slot& slot, size_t index, Rml::Element* element,
+                               int value);
+
+        using PathDialogCallback = std::function<std::filesystem::path(
+            bool, const std::filesystem::path&, const std::optional<std::string>&)>;
+        static void set_path_dialog_callback_for_testing(PathDialogCallback callback);
+        static void reset_path_dialog_callback_for_testing();
 
         void warn_unsupported(const char* method);
 
@@ -482,6 +503,7 @@ namespace lfs::python {
         MouseState mouse_;
         std::optional<TableState> table_;
         float cached_line_height_ = 18.0f;
+        bool warned_split_overflow_ = false;
 
         std::vector<float> item_width_stack_;
         void apply_item_width(Rml::Element* el);

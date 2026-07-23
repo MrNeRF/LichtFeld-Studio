@@ -324,8 +324,10 @@
 }
 
 .im-split > * {
+    width: auto;
     min-width: 0;
     flex-grow: 0;
+    /* RmlUi 6.2 shrinks the percentage bases over the width left after the gap. */
     flex-shrink: 1;
 }
 
@@ -339,6 +341,7 @@
 }
 
 .im-grid-flow > * {
+    width: auto;
     min-width: 0;
     flex-grow: 1;
     flex-shrink: 1;

@@ -643,8 +643,10 @@ namespace lfs::vis::gui {
                                           screen.work_pos.y, screen.work_pos.y + panel_h, &dock_input);
         }
         left_dock_visible_ = preloaded_h > 0.0f;
-        if (!left_dock_visible_)
+        if (!left_dock_visible_) {
+            drawLeftDockResizeIndicator(draw_ctx, dpi, false, false);
             return;
+        }
 
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_layout.left_dock.draw", 0.25);
