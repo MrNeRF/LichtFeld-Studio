@@ -564,7 +564,8 @@ namespace lfs::core::internal {
             record_relaxed_max(lazy_executor_diagnostics_counters().max_registry_entries,
                                static_cast<uint64_t>(registry.by_node_id.size()));
             if (registry.by_node_id.size() >= kRegistryPruneThreshold) {
-                retired = prune_expired_materializers_locked(registry);
+                auto expired = prune_expired_materializers_locked(registry);
+                std::move(expired.begin(), expired.end(), std::back_inserter(retired));
             }
         }
     }
