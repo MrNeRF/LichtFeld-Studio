@@ -84,6 +84,7 @@ namespace lfs::core {
     enum class CudaFailureDisposition : uint8_t {
         Throw,
         LogOnly,
+        LogOnlyNoLatch,
     };
 
     // Returns the assigned monotonic sequence number, so LFS_CUDA_LAUNCH_CHECK/

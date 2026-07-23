@@ -90,7 +90,7 @@ namespace {
                         "ptr={}, bytes={}, label={}", ptr_, size_,
                         label_ ? label_ : "rasterizer.fastgs.scratch"),
                     LFS_SOURCE_SITE_CURRENT(),
-                    lfs::core::CudaFailureDisposition::LogOnly);
+                    lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
             }
             ptr_ = nullptr;
             size_ = 0;

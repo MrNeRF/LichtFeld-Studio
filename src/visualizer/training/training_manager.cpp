@@ -12,8 +12,12 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/tensor_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "training/rasterization/fast_rasterizer.hpp"
+#include "training/rasterization/gsplat/Ops.h"
+#include "training/rasterization/gsplat_rasterizer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/visualizer_impl.hpp"
 #include "window/vulkan_context.hpp"
@@ -45,6 +49,13 @@ namespace lfs::vis {
             params.save_steps = steps;
             if (params.enable_eval)
                 params.eval_steps = steps;
+        }
+
+        void release_training_thread_local_cuda_caches() noexcept {
+            (void)lfs::training::release_fast_rasterizer_thread_local_caches();
+            (void)lfs::training::release_gsplat_rasterizer_thread_local_caches();
+            (void)gsplat_lfs::release_intersect_thread_local_cache();
+            (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
         }
 
         [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl* viewer) {
@@ -1042,6 +1053,8 @@ namespace lfs::vis {
                         error.code() == lfs::ErrorCode::ResourceExhausted, error);
                 }
             });
+
+        release_training_thread_local_cuda_caches();
 
         LOG_INFO("Training thread finished");
     }

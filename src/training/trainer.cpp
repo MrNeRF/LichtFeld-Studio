@@ -4606,6 +4606,7 @@ namespace lfs::training {
                                         const int depth_width = static_cast<int>(rendered_depth.shape()[1]);
                                         const int depth_height = static_cast<int>(rendered_depth.shape()[0]);
                                         const float depth_prior_qstep = cam->depth_prior_quantization_step();
+                                        lfs::core::pin_operands({&rendered_depth, &rendered_alpha, &target_depth});
                                         lfs::training::kernels::launch_depth_loss(
                                             rendered_depth.ptr<float>(),
                                             rendered_alpha.ptr<float>(),
@@ -4715,6 +4716,7 @@ namespace lfs::training {
                                     }
                                     normal_loss_partials_.set_stream(normal_stream);
 
+                                    lfs::core::pin_operands({&rendered_normal, &rendered_alpha, &target_normal});
                                     lfs::training::kernels::launch_normal_loss(
                                         rendered_normal.ptr<float>(),
                                         rendered_alpha.ptr<float>(),
@@ -4772,6 +4774,7 @@ namespace lfs::training {
                                             const float cy = cam->center_y() * static_cast<float>(render_h) /
                                                              static_cast<float>(cam->camera_height());
 
+                                            lfs::core::pin_operands({&target_normal, &rendered_depth, &rendered_alpha});
                                             lfs::training::kernels::launch_normal_prior_depth_loss(
                                                 target_normal.ptr<float>(),
                                                 rendered_depth.ptr<float>(),
@@ -4884,6 +4887,8 @@ namespace lfs::training {
                                 const float cy = cam->center_y() * static_cast<float>(render_h) /
                                                  static_cast<float>(cam->camera_height());
 
+                                lfs::core::pin_operands(
+                                    {&rendered_normal, &rendered_depth, &rendered_alpha, &tile_grad_normal});
                                 lfs::training::kernels::launch_normal_consistency_loss(
                                     rendered_normal.ptr<float>(),
                                     rendered_depth.ptr<float>(),
@@ -4993,6 +4998,7 @@ namespace lfs::training {
                             LFS_VRAM_SCOPE("train.densification_error_map");
                             LOG_VRAM_DIFF("train.densification_error_map.normalize");
                             const auto map_mean = tile_error_map.mean();
+                            lfs::core::pin_operands({&tile_error_map, &map_mean});
                             lfs::training::kernels::launch_normalize_by_device_scalar(
                                 tile_error_map.ptr<float>(), tile_error_map.numel(),
                                 map_mean.ptr<float>(), 1e-6f);

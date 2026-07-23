@@ -31,7 +31,7 @@ namespace lfs::core {
             if (status != cudaSuccess) {
                 ensure_cuda_success(
                     status, "direct CUDA allocation free", {},
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 cudaGetLastError();
             }
         }
@@ -61,7 +61,7 @@ namespace lfs::core {
             if (status != cudaSuccess) {
                 ensure_cuda_success(
                     status, "stream-ordered CUDA allocation free", {},
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 cudaGetLastError();
             }
         }
@@ -107,8 +107,8 @@ namespace lfs::core {
         UniqueCudaAllocation& operator=(const UniqueCudaAllocation&) = delete;
 
         UniqueCudaAllocation(UniqueCudaAllocation&& other) noexcept(
-            std::is_nothrow_move_constructible_v<Allocator> &&
-            std::is_nothrow_move_constructible_v<Hooks>)
+            std::is_nothrow_move_constructible_v<Allocator>&&
+                std::is_nothrow_move_constructible_v<Hooks>)
             : ptr_(std::exchange(other.ptr_, nullptr)),
               bytes_(std::exchange(other.bytes_, 0)),
               stream_(std::exchange(other.stream_, nullptr)),
@@ -116,8 +116,8 @@ namespace lfs::core {
               hooks_(std::move(other.hooks_)) {}
 
         UniqueCudaAllocation& operator=(UniqueCudaAllocation&& other) noexcept(
-            std::is_nothrow_move_assignable_v<Allocator> &&
-            std::is_nothrow_move_assignable_v<Hooks>) {
+            std::is_nothrow_move_assignable_v<Allocator>&&
+                std::is_nothrow_move_assignable_v<Hooks>) {
             if (this != &other) {
                 reset();
                 allocator_ = std::move(other.allocator_);
@@ -172,8 +172,8 @@ namespace lfs::core {
         }
 
         void swap(UniqueCudaAllocation& other) noexcept(
-            std::is_nothrow_swappable_v<Allocator> &&
-            std::is_nothrow_swappable_v<Hooks>) {
+            std::is_nothrow_swappable_v<Allocator>&&
+                std::is_nothrow_swappable_v<Hooks>) {
             using std::swap;
             swap(ptr_, other.ptr_);
             swap(bytes_, other.bytes_);

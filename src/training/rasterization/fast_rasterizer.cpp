@@ -18,6 +18,20 @@
 namespace lfs::training {
 
     namespace {
+        struct FastRasterizerThreadLocalCaches {
+            core::Tensor image;
+            core::Tensor alpha;
+            core::Tensor depth;
+            core::Tensor normal;
+            core::Tensor grad_alpha;
+            int width = -1;
+            int height = -1;
+            int grad_alpha_height = 0;
+            int grad_alpha_width = 0;
+        };
+
+        thread_local FastRasterizerThreadLocalCaches fast_rasterizer_thread_caches;
+
         [[nodiscard]] int checked_dim_to_int(size_t value, const char* name) {
             if (value > static_cast<size_t>(std::numeric_limits<int>::max())) {
                 throw std::overflow_error(std::string(name) + " exceeds int range");
@@ -312,12 +326,12 @@ namespace lfs::training {
         }
 
         // Pre-allocate output tensors (reused across iterations)
-        thread_local core::Tensor image;
-        thread_local core::Tensor alpha;
-        thread_local core::Tensor depth;
-        thread_local core::Tensor normal;
-        thread_local int last_width = -1;
-        thread_local int last_height = -1;
+        auto& image = fast_rasterizer_thread_caches.image;
+        auto& alpha = fast_rasterizer_thread_caches.alpha;
+        auto& depth = fast_rasterizer_thread_caches.depth;
+        auto& normal = fast_rasterizer_thread_caches.normal;
+        auto& last_width = fast_rasterizer_thread_caches.width;
+        auto& last_height = fast_rasterizer_thread_caches.height;
 
         // Thread-local outputs can survive a Trainer. A same-sized render on the
         // next Trainer must not reuse tensors whose stream handle was destroyed
@@ -540,8 +554,9 @@ namespace lfs::training {
             throw std::runtime_error("Unexpected grad_image shape");
         }
 
-        thread_local core::Tensor cached_grad_alpha;
-        thread_local int cached_ga_h = 0, cached_ga_w = 0;
+        auto& cached_grad_alpha = fast_rasterizer_thread_caches.grad_alpha;
+        auto& cached_ga_h = fast_rasterizer_thread_caches.grad_alpha_height;
+        auto& cached_ga_w = fast_rasterizer_thread_caches.grad_alpha_width;
         const cudaStream_t stream = grad_image.stream();
         if (!cached_grad_alpha.is_valid() || cached_ga_h != H || cached_ga_w != W ||
             cached_grad_alpha.stream() != stream) {
@@ -555,6 +570,7 @@ namespace lfs::training {
 
         // Use background image kernel if available, otherwise use solid color kernel
         if (has_background_image(ctx.bg_image) && is_chw_layout) {
+            core::pin_operands({&grad_image, &ctx.bg_image});
             kernels::launch_fused_grad_alpha_with_image(
                 grad_image.ptr<float>(),
                 ctx.bg_image.ptr<float>(),
@@ -562,6 +578,7 @@ namespace lfs::training {
                 H, W,
                 stream);
         } else {
+            core::pin_operands({&grad_image, &ctx.bg_color});
             kernels::launch_fused_grad_alpha(
                 grad_image.ptr<float>(),
                 ctx.bg_color.ptr<float>(),
@@ -726,5 +743,22 @@ namespace lfs::training {
         if (fused_adam.enabled) {
             optimizer.commit_fastgs_fused_adam(iteration);
         }
+    }
+
+    bool release_fast_rasterizer_thread_local_caches() noexcept {
+        fast_rasterizer_thread_caches.image = {};
+        fast_rasterizer_thread_caches.alpha = {};
+        fast_rasterizer_thread_caches.depth = {};
+        fast_rasterizer_thread_caches.normal = {};
+        fast_rasterizer_thread_caches.grad_alpha = {};
+        fast_rasterizer_thread_caches.width = -1;
+        fast_rasterizer_thread_caches.height = -1;
+        fast_rasterizer_thread_caches.grad_alpha_height = 0;
+        fast_rasterizer_thread_caches.grad_alpha_width = 0;
+        return !fast_rasterizer_thread_caches.image.is_valid() &&
+               !fast_rasterizer_thread_caches.alpha.is_valid() &&
+               !fast_rasterizer_thread_caches.depth.is_valid() &&
+               !fast_rasterizer_thread_caches.normal.is_valid() &&
+               !fast_rasterizer_thread_caches.grad_alpha.is_valid();
     }
 } // namespace lfs::training

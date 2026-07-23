@@ -12,12 +12,16 @@
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/guarded_task.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/internal/tensor_ops.hpp"
 #include "io/exporter.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/selection_ops.hpp"
 #include "training/checkpoint.hpp"
 #include "training/dataset.hpp"
+#include "training/rasterization/fast_rasterizer.hpp"
+#include "training/rasterization/gsplat/Ops.h"
+#include "training/rasterization/gsplat_rasterizer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/selection/selection_group_mask.hpp"
 
@@ -58,6 +62,13 @@ namespace lfs::mcp {
             }
             const auto bool_mask = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
             return static_cast<int64_t>(bool_mask.sum_scalar());
+        }
+
+        void release_training_thread_local_cuda_caches() noexcept {
+            (void)lfs::training::release_fast_rasterizer_thread_local_caches();
+            (void)lfs::training::release_gsplat_rasterizer_thread_local_caches();
+            (void)gsplat_lfs::release_intersect_thread_local_cache();
+            (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
         }
 
         std::expected<int64_t, std::string> count_visible_model_gaussians(const core::Scene& scene) {
@@ -441,6 +452,7 @@ namespace lfs::mcp {
                         }
                         training_active_.store(false, std::memory_order_release);
                     });
+                release_training_thread_local_cuda_caches();
             });
         } catch (const std::exception& e) {
             training_active_.store(false, std::memory_order_release);

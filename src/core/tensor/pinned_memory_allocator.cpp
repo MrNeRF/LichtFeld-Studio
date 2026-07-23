@@ -21,7 +21,7 @@ namespace lfs::core {
         constexpr size_t DEFAULT_CACHE_LIMIT = 1024ULL * MIB;
 
         bool is_cuda_shutdown(const cudaError_t status) {
-            return status == cudaErrorCudartUnloading;
+            return status == cudaErrorCudartUnloading || is_cuda_unavailable_error(status);
         }
 
         size_t configured_cache_limit() {
@@ -53,7 +53,7 @@ namespace lfs::core {
             if (status != cudaSuccess) {
                 ensure_cuda_success(
                     status, "cudaEventDestroy(pinned static teardown)", {},
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 cudaGetLastError();
             }
         }
@@ -408,7 +408,7 @@ namespace lfs::core {
                     ensure_cuda_success(status, "cudaFreeHost(pinned block)",
                                         std::format("bytes={}", block.size),
                                         LFS_SOURCE_SITE_CURRENT(),
-                                        CudaFailureDisposition::LogOnly);
+                                        CudaFailureDisposition::LogOnlyNoLatch);
                     cudaGetLastError();
                 }
             } else {

@@ -174,6 +174,8 @@ set(TEST_FILES
     test_gradient_accumulation.cpp
     test_image_resize_parallel.cpp
     test_tensor_slicing_safety.cpp
+    test_tensor_deferred_d1_copy_registry.cpp
+    test_tensor_deferred_d3_pin_operands.cpp
     test_tensor_lazy_ir.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp

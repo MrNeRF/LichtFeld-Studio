@@ -393,9 +393,10 @@ namespace lfs::core {
                                       const std::string_view message,
                                       const SourceSite& location,
                                       const cudaError_t post_sync_error,
-                                      const cudaError_t post_peek_error) noexcept {
+                                      const cudaError_t post_peek_error,
+                                      const bool latch_unavailable) noexcept {
             try {
-                if (is_cuda_unavailable_error(effective_error)) {
+                if (latch_unavailable && is_cuda_unavailable_error(effective_error)) {
                     if (!latch_cuda_unavailable(effective_error)) {
                         return;
                     }
@@ -416,6 +417,8 @@ namespace lfs::core {
                     .stacktrace_skip_frames = 2,
                 });
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): publishing a CUDA failure report must not
+                // throw a second failure out of the reporting path itself.
             }
         }
 
@@ -576,8 +579,8 @@ namespace lfs::core {
                 }
             }
         } catch (...) {
-            // Parsing must never turn a startup env-var read into a crash;
-            // fall back to whatever modes were resolved before the failure.
+            // LFS-CENSUS-OK(empty-catch): parsing must never turn a startup env-var read
+            // into a crash; fall back to whatever modes were resolved before the failure.
         }
         return result;
     }
@@ -602,6 +605,8 @@ namespace lfs::core {
                         parsed.unknown_tokens.c_str());
                 }
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): a diagnostics warning about bad env tokens
+                // must not itself become a failure mode.
             }
             return parsed.modes;
         }();
@@ -628,8 +633,8 @@ namespace lfs::core {
                 });
             }
         } catch (...) {
-            // Diagnostic initialization must not turn a checked CUDA call into
-            // a process termination.
+            // LFS-CENSUS-OK(empty-catch): diagnostic initialization must not turn a
+            // checked CUDA call into a process termination.
         }
     }
 
@@ -665,6 +670,8 @@ namespace lfs::core {
                     "CUDA unavailable — GPU features disabled. A driver restart may be required. ({})",
                     cuda_error_text(error)));
         } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): the CUDA-unavailable notice is best-effort;
+            // logging failure must not mask the original driver condition.
         }
         return true;
     }
@@ -682,6 +689,8 @@ namespace lfs::core {
             g_next_dead_cuda_address_range = 0;
             g_dead_cuda_address_range_count = 0;
         } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): test-only forensic-table reset must never
+            // propagate; a partial reset is still a usable baseline.
         }
         reset_failure_report_dedup_for_testing();
         // Spec §0.3 / §1.6: device-fault host registry joins the testing reset.
@@ -801,7 +810,7 @@ namespace lfs::core {
         const SourceSite location) {
         emit_cuda_failure_report(
             completion.effective_error, state, expression, message, location,
-            completion.post_sync_error, completion.post_peek_error);
+            completion.post_sync_error, completion.post_peek_error, true);
         throw std::runtime_error(std::format(
             "CUDA call failed: {} at {}:{}", expression, location.file_name(), location.line()));
     }
@@ -836,10 +845,12 @@ namespace lfs::core {
             const std::string expression_copy(expression);
             emit_cuda_failure_report(
                 result, state, expression_copy.c_str(), message, location,
-                cudaSuccess, cudaSuccess);
+                cudaSuccess, cudaSuccess,
+                disposition != CudaFailureDisposition::LogOnlyNoLatch);
         } catch (...) {
-            // Recovery, teardown, and allocator fallback paths use LogOnly and
-            // must never acquire a new failure mode from diagnostics themselves.
+            // LFS-CENSUS-OK(empty-catch): recovery, teardown, and allocator fallback
+            // paths use LogOnly and must never acquire a new failure mode from
+            // diagnostics themselves.
         }
     }
 

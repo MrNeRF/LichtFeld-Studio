@@ -44,7 +44,7 @@ namespace fast_lfs::rasterization {
                     lfs::core::detail::format_cuda_safe(
                         "ptr={}, stream={}", ptr, static_cast<void*>(stream)),
                     LFS_SOURCE_SITE_CURRENT(),
-                    lfs::core::CudaFailureDisposition::LogOnly);
+                    lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
             }
         }
 

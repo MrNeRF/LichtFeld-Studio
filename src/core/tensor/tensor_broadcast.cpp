@@ -47,6 +47,7 @@ namespace lfs::core {
         }
 
         if (src.device() == Device::CUDA) {
+            pin_operands({&src});
             const auto& src_strides = src.strides();
             const bool strided = !src.is_contiguous();
 

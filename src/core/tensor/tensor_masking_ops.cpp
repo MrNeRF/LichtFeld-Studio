@@ -176,6 +176,7 @@ namespace lfs::core {
         auto result = empty({output_size}, device_, dtype_);
 
         if (device_ == Device::CUDA) {
+            pin_operands({this, &mask});
             result.set_stream(stream());
             switch (dtype_) {
             case DataType::Float32:
@@ -208,6 +209,7 @@ namespace lfs::core {
                 mask.shape().str(), output_size, static_cast<const void*>(stream()));
             // No sync - tensor operation
         } else {
+            pin_operands({this, &mask});
             switch (dtype_) {
             case DataType::Float32:
                 masked_select_cpu(ptr<float>(), mask.ptr<unsigned char>(), result.ptr<float>(), numel());
@@ -264,6 +266,7 @@ namespace lfs::core {
         const Tensor& dense_mask = logical_mask->contiguous_read(mask_materialized);
 
         if (device_ == Device::CUDA) {
+            pin_operands({this, &dense_mask});
             switch (dtype_) {
             case DataType::Float32:
                 tensor_ops::launch_masked_fill(ptr<float>(), dense_mask.ptr<unsigned char>(),
@@ -291,6 +294,7 @@ namespace lfs::core {
             }
             // No sync - tensor operation
         } else {
+            pin_operands({this, &dense_mask});
             const unsigned char* mask_data = dense_mask.ptr<unsigned char>();
 
             switch (dtype_) {
@@ -453,10 +457,11 @@ namespace lfs::core {
             // Only convert for the kernel call, not in-place
             indices_int32 = indices_same_device.to(DataType::Int32);
         }
+        const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
         if (device_ == Device::CUDA) {
-            const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
-            const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
+            pin_operands({this, &kernel_index});
+            const int* idx_ptr = kernel_index.ptr<int>();
 
             // §1.9: host rejects graph capture at the checked-launch entry BEFORE
             // prepare_inputs_for_stream can enqueue dependency edges into a capture.
@@ -513,13 +518,14 @@ namespace lfs::core {
             }
         } else {
             // CPU implementation
+            pin_operands({this, &kernel_index});
             size_t outer = 1, inner = 1;
             for (int i = 0; i < dim; ++i)
                 outer *= shape_[i];
             for (size_t i = dim + 1; i < shape_.rank(); ++i)
                 inner *= shape_[i];
 
-            const int* const idx = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
+            const int* const idx = kernel_index.ptr<int>();
             const size_t n_indices = indices.numel();
             const size_t dim_size = shape_[dim];
 
@@ -618,10 +624,11 @@ namespace lfs::core {
         if (is_int64) {
             indices_int32 = indices_same_device.to(DataType::Int32);
         }
-        const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
+        const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
         if (device_ == Device::CUDA) {
-            const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
+            pin_operands({this, &kernel_index});
+            const int* idx_ptr = kernel_index.ptr<int>();
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&result, this, &kernel_index}, result.stream());
             if (dtype_ == DataType::Float32) {
@@ -643,7 +650,8 @@ namespace lfs::core {
                 static_cast<int>(mode), static_cast<const void*>(execution_stream));
             // No sync - tensor operation
         } else {
-            const int* idx_data = idx_ptr;
+            pin_operands({this, &kernel_index});
+            const int* idx_data = kernel_index.ptr<int>();
 
             size_t total_elements = indices.numel();
 
@@ -710,6 +718,7 @@ namespace lfs::core {
 
         // DEBUG: Log device and CUDA state
         if (device_ == Device::CUDA) {
+            pin_operands({&flat, &indices_int32});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &indices_int32});
             CUDAStreamGuard guard(execution_stream);
@@ -718,6 +727,7 @@ namespace lfs::core {
                                     result.ptr<float>(), flat.numel(), indices_int32.numel(), result.stream());
             // No sync - tensor operation
         } else {
+            pin_operands({&flat, &indices_int32});
             result = empty(indices.shape(), device_, dtype_);
             const float* src = flat.ptr<float>();
             float* dst = result.ptr<float>();
@@ -798,11 +808,11 @@ namespace lfs::core {
             if (is_int64) {
                 indices_int32 = indices_same_device.to(DataType::Int32);
             }
-
-            const int* indices = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
+            const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
             if (device_ == Device::CUDA) {
-                const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
+                pin_operands({this, &kernel_index, &src_same_device});
+                const int* indices = kernel_index.ptr<int>();
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
                 if (dtype_ == DataType::Float32) {
@@ -825,6 +835,8 @@ namespace lfs::core {
                                    "scatter_ encountered an unsupported CUDA dtype");
                 }
             } else {
+                pin_operands({this, &kernel_index, &src_same_device});
+                const int* indices = kernel_index.ptr<int>();
                 const auto scatter_1d = [&](auto* dst, const auto* src_data) {
                     for (size_t i = 0; i < idx.numel(); ++i) {
                         int pos = indices[i];
@@ -879,10 +891,11 @@ namespace lfs::core {
         if (is_int64) {
             idx_int32 = idx_same_device.to(DataType::Int32);
         }
-        const int* idx_ptr = is_int64 ? idx_int32.ptr<int>() : idx_same_device.ptr<int>();
+        const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
 
         if (device_ == Device::CUDA) {
-            const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
+            pin_operands({this, &kernel_index, &src_same_device});
+            const int* idx_ptr = kernel_index.ptr<int>();
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
             if (dtype_ == DataType::Float32) {
@@ -908,6 +921,7 @@ namespace lfs::core {
                                "scatter_ encountered an unsupported CUDA dtype");
             }
         } else {
+            pin_operands({this, &kernel_index, &src_same_device});
             size_t outer = 1;
             for (int i = 0; i < dim; ++i) {
                 outer *= shape_[i];
@@ -918,7 +932,7 @@ namespace lfs::core {
                 inner *= shape_[i];
             }
 
-            const int* indices = idx_ptr;
+            const int* indices = kernel_index.ptr<int>();
 
             const auto scatter_nd = [&](auto* dst, const auto* src_data) {
                 for (size_t o = 0; o < outer; ++o) {
@@ -1052,10 +1066,11 @@ namespace lfs::core {
         if (is_int64) {
             idx_int32 = idx_same_device.to(DataType::Int32);
         }
-        const int* idx_ptr = is_int64 ? idx_int32.ptr<int>() : idx_same_device.ptr<int>();
+        const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
 
         if (device_ == Device::CUDA) {
-            const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
+            pin_operands({this, &kernel_index, &src_same_device});
+            const int* idx_ptr = kernel_index.ptr<int>();
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
             if (dtype_ == DataType::Float32) {
@@ -1075,13 +1090,14 @@ namespace lfs::core {
                                "index_copy_ encountered an unsupported CUDA dtype");
             }
         } else {
+            pin_operands({this, &kernel_index, &src_same_device});
             size_t outer = 1, inner = 1;
             for (int i = 0; i < dim; ++i)
                 outer *= shape_[i];
             for (size_t i = dim + 1; i < shape_.rank(); ++i)
                 inner *= shape_[i];
 
-            const int* indices = idx_ptr;
+            const int* indices = kernel_index.ptr<int>();
             const auto index_copy = [&](auto* dst, const auto* src_data) {
                 for (size_t o = 0; o < outer; ++o) {
                     for (size_t i = 0; i < idx.numel(); ++i) {
@@ -1165,6 +1181,7 @@ namespace lfs::core {
                 auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
                                      ? idx_same_device.to(DataType::Int32)
                                      : idx_same_device;
+                pin_operands({this, &idx_int32, &src_same_device});
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &idx_int32, &src_same_device}, stream());
 
@@ -1184,6 +1201,7 @@ namespace lfs::core {
                 // No sync - tensor operation
             } else {
                 // CPU path - dispatch based on data type
+                pin_operands({this, &idx_same_device, &src_same_device});
                 if (dtype_ == DataType::Float32) {
                     float* data = ptr<float>();
                     const float* src_data = src_same_device.ptr<float>();
@@ -1259,6 +1277,7 @@ namespace lfs::core {
             auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
                                  ? idx_same_device.to(DataType::Int32)
                                  : idx_same_device;
+            pin_operands({this, &idx_int32, &src_same_device});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &idx_int32, &src_same_device}, stream());
 
@@ -1277,6 +1296,7 @@ namespace lfs::core {
             }
             // No sync - tensor operation
         } else {
+            pin_operands({this, &idx_same_device, &src_same_device});
             size_t outer = 1;
             for (int i = 0; i < dim; ++i) {
                 outer *= shape_[i];
@@ -1456,6 +1476,7 @@ namespace lfs::core {
                 Tensor idx_int32 = (idx_same_device.dtype() == DataType::Int32)
                                        ? idx_same_device
                                        : idx_same_device.to(DataType::Int32);
+                pin_operands({this, &idx_int32, &vals_same_device});
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream(
                         {this, &idx_int32, &vals_same_device}, stream());
@@ -1474,6 +1495,7 @@ namespace lfs::core {
                 auto cpu_idx = idx_same_device.to(Device::CPU);
                 auto cpu_vals = vals_same_device.to(Device::CPU);
 
+                pin_operands({&cpu_tensor, &cpu_idx, &cpu_vals});
                 DataT* data = cpu_tensor.ptr<DataT>();
                 const IndexT* indices = cpu_idx.ptr<IndexT>();
                 const DataT* values = cpu_vals.ptr<DataT>();
@@ -1517,6 +1539,7 @@ namespace lfs::core {
                 LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
             } else {
                 // CPU implementation
+                pin_operands({this, &idx_same_device, &vals_same_device});
                 DataT* data = ptr<DataT>();
                 const IndexT* indices = idx_same_device.ptr<IndexT>();
                 const DataT* values = vals_same_device.ptr<DataT>();
@@ -1668,6 +1691,7 @@ namespace lfs::core {
             if (device_ == Device::CUDA) {
                 Tensor row_idx_cpu = row_idx.to(Device::CPU);
                 Tensor col_idx_cpu = col_idx.to(Device::CPU);
+                pin_operands({this, &row_idx_cpu, &col_idx_cpu, &vals_same_device});
                 const int64_t* row_ptr = row_idx_cpu.ptr<int64_t>();
                 const int64_t* col_ptr = col_idx_cpu.ptr<int64_t>();
                 const float* val_ptr = vals_same_device.ptr<float>();
@@ -1695,6 +1719,7 @@ namespace lfs::core {
                     }
                 }
             } else {
+                pin_operands({this, &row_idx, &col_idx, &vals_same_device});
                 const int64_t* row_ptr = row_idx.ptr<int64_t>();
                 const int64_t* col_ptr = col_idx.ptr<int64_t>();
                 const float* val_ptr = vals_same_device.ptr<float>();
@@ -2225,6 +2250,7 @@ namespace lfs::core {
                        "masked assignment value count must equal selected element count");
 
         if (tensor_->device() == Device::CUDA) {
+            pin_operands({tensor_, &mask_, &other});
             switch (tensor_->dtype()) {
             case DataType::Float32:
                 tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<float>(),
@@ -2255,6 +2281,7 @@ namespace lfs::core {
             }
             LFS_CUDA_CHECK(cudaGetLastError());
         } else {
+            pin_operands({tensor_, &mask_, &other});
             const unsigned char* mask = mask_.ptr<unsigned char>();
             switch (tensor_->dtype()) {
             case DataType::Float32:
@@ -2391,11 +2418,12 @@ namespace lfs::core {
         if (is_int64) {
             indices_int32 = indices_same_device.to(DataType::Int32);
         }
-        const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
+        const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
+        pin_operands({this, &kernel_index});
+        const int* idx_ptr = kernel_index.ptr<int>();
 
         // Launch kernel to append gathered rows directly to the end
         if (device_ == Device::CUDA) {
-            const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index}, stream());
             LOG_DEBUG("  Launching index_select kernel: write_offset_elements={}, output_offset_bytes={}, n_gather={}",

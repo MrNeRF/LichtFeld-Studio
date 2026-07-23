@@ -436,74 +436,105 @@ namespace lfs::core {
         deferred.is_view_ = false;
         deferred.data_ = nullptr;
         deferred.data_owner_.reset();
-        deferred.state_->has_deferred_expr = true;
-        deferred.state_->materializing_deferred_expr = false;
-        deferred.state_->deferred_expr_node_id = 0;
-        deferred.state_->deferred_materializer = std::move(materializer);
+        deferred.state_->lazy = std::make_shared<LazyExprState>();
+        deferred.state_->lazy->materializer = std::move(materializer);
         deferred.id_ = next_id_++;
         deferred.compute_alignment();
 
         if (internal::lazy_ir_active()) {
-            deferred.state_->deferred_expr_node_id =
+            deferred.state_->lazy->node_id =
                 internal::lazy_ir_record_deferred(deferred, "deferred_expr", lazy_input_ids);
         }
-        if (deferred.state_->deferred_expr_node_id != 0) {
+        if (deferred.state_->lazy->node_id != 0) {
             internal::lazy_executor_register_deferred_materializer(
-                deferred.state_->deferred_expr_node_id,
-                deferred.state_->deferred_materializer,
-                std::weak_ptr<void>(deferred.state_));
+                deferred.state_->lazy->node_id,
+                deferred.state_->lazy->materializer,
+                deferred.state_->lazy);
         }
 
         return deferred;
     }
 
-    void Tensor::materialize_if_deferred() {
-        if (!state_ || !state_->has_deferred_expr) {
+    void Tensor::materialize_deferred_slow() {
+        const std::shared_ptr<LazyExprState> lazy = state_ ? state_->lazy : nullptr;
+        if (!lazy) {
             return;
         }
-        const uint64_t lazy_node_id = lazy_expr_id();
-        Tensor materialized;
-
-        if (lazy_node_id != 0) {
-            Tensor cached_materialized;
-            if (internal::lazy_executor_lookup_cached_materialization(lazy_node_id, cached_materialized)) {
-                materialized = std::move(cached_materialized);
-            }
+        const std::thread::id current_thread = std::this_thread::get_id();
+        if (lazy->gate_owner.load(std::memory_order_acquire) == current_thread) {
+            throw std::runtime_error("Recursive deferred tensor materialization detected");
         }
+        const uint64_t lazy_node_id = lazy->node_id != 0 ? lazy->node_id : lazy_expr_id();
+        Tensor published;
 
-        if (!materialized.is_valid()) {
-            if (state_->materializing_deferred_expr) {
-                throw std::runtime_error("Recursive deferred tensor materialization detected");
+        {
+            std::unique_lock<std::mutex> lock(lazy->gate);
+            lazy->gate_owner.store(current_thread, std::memory_order_release);
+            struct GateOwnerReset {
+                std::atomic<std::thread::id>& owner;
+                ~GateOwnerReset() {
+                    owner.store(std::thread::id{}, std::memory_order_release);
+                }
+            } gate_owner_reset{lazy->gate_owner};
+
+            const auto unregister_published_materializer = [&] {
+                if (lazy_node_id != 0 && !lazy->materializer_unregistered) {
+                    internal::lazy_executor_unregister_deferred_materializer(lazy_node_id);
+                    lazy->materializer_unregistered = true;
+                }
+            };
+            const auto validate_materialized = [](const Tensor& materialized) {
+                LFS_ASSERT_MSG(materialized.is_valid(),
+                               "Deferred tensor materializer returned invalid tensor");
+                LFS_ASSERT_MSG(!materialized.is_deferred(),
+                               "Deferred tensor materializer returned a deferred tensor");
+            };
+
+            if (lazy->result.is_valid()) {
+                published = lazy->result;
+                unregister_published_materializer();
+            } else {
+                Tensor materialized;
+                if (lazy_node_id != 0) {
+                    Tensor cached_materialized;
+                    if (internal::lazy_executor_lookup_cached_materialization(
+                            lazy_node_id, cached_materialized)) {
+                        validate_materialized(cached_materialized);
+                        lazy->result = cached_materialized;
+                        published = lazy->result;
+                        unregister_published_materializer();
+                    }
+                }
+
+                if (!published.is_valid()) {
+                    if (!lazy->materializer) {
+                        throw std::runtime_error("Deferred tensor has no materializer");
+                    }
+                    auto materializer = std::move(lazy->materializer);
+                    lazy->materializer = {};
+
+                    try {
+                        materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
+                        validate_materialized(materialized);
+                        lazy->result = materialized;
+                        if (lazy_node_id != 0) {
+                            internal::lazy_executor_cache_materialization(lazy_node_id, lazy->result);
+                        }
+                    } catch (...) {
+                        if (!lazy->result.is_valid()) {
+                            lazy->materializer = std::move(materializer);
+                        }
+                        throw;
+                    }
+                    published = lazy->result;
+                    unregister_published_materializer();
+                }
             }
-            if (!state_->deferred_materializer) {
-                throw std::runtime_error("Deferred tensor has no materializer");
-            }
-
-            state_->materializing_deferred_expr = true;
-            auto materializer = std::move(state_->deferred_materializer);
-            state_->deferred_materializer = {};
-
-            try {
-                materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
-            } catch (...) {
-                state_->deferred_materializer = std::move(materializer);
-                state_->materializing_deferred_expr = false;
-                throw;
-            }
-            state_->materializing_deferred_expr = false;
-
-            if (lazy_node_id != 0) {
-                internal::lazy_executor_cache_materialization(lazy_node_id, materialized);
-            }
-        }
-
-        if (!materialized.is_valid()) {
-            throw std::runtime_error("Deferred tensor materializer returned invalid tensor");
         }
 
         const void* old_storage = data_;
-        const void* new_storage = materialized.data_;
-        const size_t storage_bytes = materialized.bytes();
+        const void* new_storage = published.data_;
+        const size_t storage_bytes = published.bytes();
         LFS_CUDA_BREADCRUMB_ARGS(
             "tensor.deferred.storage_move",
             reinterpret_cast<uintptr_t>(old_storage),
@@ -515,47 +546,38 @@ namespace lfs::core {
         const std::string preserved_name = state_->name;
         const cudaStream_t preserved_stream = state_->stream;
 
-        data_ = materialized.data_;
-        data_owner_ = std::move(materialized.data_owner_);
-        shape_ = std::move(materialized.shape_);
-        strides_ = std::move(materialized.strides_);
-        storage_offset_ = materialized.storage_offset_;
-        is_contiguous_ = materialized.is_contiguous_;
-        device_ = materialized.device_;
-        dtype_ = materialized.dtype_;
-        is_view_ = materialized.is_view_;
-        storage_meta_ = std::move(materialized.storage_meta_);
+        data_ = published.data_;
+        data_owner_ = published.data_owner_;
+        shape_ = published.shape_;
+        strides_ = published.strides_;
+        storage_offset_ = published.storage_offset_;
+        is_contiguous_ = published.is_contiguous_;
+        device_ = published.device_;
+        dtype_ = published.dtype_;
+        is_view_ = published.is_view_;
+        storage_meta_ = published.storage_meta_;
 #ifndef NDEBUG
-        view_generation_snapshot_ = materialized.view_generation_snapshot_;
+        view_generation_snapshot_ = published.view_generation_snapshot_;
 #endif
 
-        state_ = std::move(materialized.state_);
-        if (!state_) {
-            state_ = std::make_shared<TensorState>();
-        }
-        state_->has_deferred_expr = false;
-        state_->materializing_deferred_expr = false;
-        if (lazy_node_id != 0) {
-            internal::lazy_executor_unregister_deferred_materializer(lazy_node_id);
-        }
-        state_->deferred_expr_node_id = 0;
-        state_->deferred_materializer = {};
-        state_->tracked = state_->tracked || preserved_tracked;
-        if (!preserved_name.empty()) {
+        state_->capacity = published.state_->capacity;
+        state_->logical_size = published.state_->logical_size;
+        state_->tracked = published.state_->tracked || preserved_tracked;
+        if (preserved_name.empty()) {
+            state_->name = published.state_->name;
+        } else {
             state_->name = preserved_name;
         }
-        // Keep the actual materialization stream when one exists. The deferred hint is
-        // only a fallback for materializers that do not stamp stream metadata.
-        if (state_->stream == nullptr && preserved_stream) {
-            state_->stream = preserved_stream;
-        }
+        const cudaStream_t materialized_stream = published.state_->stream;
+        state_->stream = materialized_stream != nullptr ? materialized_stream : preserved_stream;
+        state_->lazy.reset();
 
         id_ = preserved_id;
         compute_alignment();
-
-        materialized.data_ = nullptr;
-        materialized.storage_offset_ = 0;
-        materialized.is_view_ = false;
+#ifndef NDEBUG
+        LFS_ASSERT_MSG(!data_ || is_view_ || data_owner_,
+                       "Tensor::materialize_deferred_slow produced unowned storage");
+#endif
     }
 
     // ============= Helper Functions =============
@@ -805,11 +827,23 @@ namespace lfs::core {
     void Tensor::set_stream(cudaStream_t stream) {
         LFS_ASSERT_MSG(is_valid(),
                        "set_stream requires a valid tensor");
-        if (device_ == Device::CUDA && data_owner_ && state_->stream != stream) {
-            // Rehoming changes where future writes occur. Preserve prior writes
-            // from the old home before changing allocator ownership metadata.
-            bridgeStreams(state_->stream, stream);
-            CudaMemoryPool::instance().rehome_stream(data_owner_.get(), stream);
+        if (device_ == Device::CUDA) {
+            if (!data_owner_) {
+                if (state_->stream != stream) {
+                    static std::atomic<bool> warned{false};
+                    if (!warned.exchange(true, std::memory_order_relaxed)) {
+                        LOG_WARN("set_stream cannot rehome non-owning CUDA tensor storage "
+                                 "(data={}, old_stream={}, new_stream={})",
+                                 data_, static_cast<const void*>(state_->stream),
+                                 static_cast<const void*>(stream));
+                    }
+                }
+            } else if (state_->stream != stream) {
+                // Rehoming changes where future writes occur. Preserve prior writes
+                // from the old home before changing allocator ownership metadata.
+                bridgeStreams(state_->stream, stream);
+                CudaMemoryPool::instance().rehome_stream(data_owner_.get(), stream);
+            }
         }
         state_->stream = stream;
     }
@@ -818,6 +852,14 @@ namespace lfs::core {
         LFS_ASSERT_MSG(is_valid(),
                        "record_stream requires a valid tensor");
         if (!data_owner_) {
+            if (device_ == Device::CUDA) {
+                static std::atomic<bool> warned{false};
+                if (!warned.exchange(true, std::memory_order_relaxed)) {
+                    LOG_WARN("record_stream ignored for non-owning CUDA tensor storage "
+                             "(data={}, stream={})",
+                             data_, static_cast<const void*>(stream));
+                }
+            }
             return;
         }
         if (device_ == Device::CUDA) {
@@ -925,6 +967,10 @@ namespace lfs::core {
                 "while cloning tensor '{}' shape={} dtype={} dst={} src={}",
                 tensor_debug_name(*this), shape_.str(), dtype_name(dtype_),
                 destination, source);
+#ifndef NDEBUG
+            LFS_ASSERT_MSG(!result.data_ || result.is_view_ || result.data_owner_,
+                           "Tensor::clone CUDA path produced unowned storage");
+#endif
         } else {
             std::memcpy(destination, source, num_bytes);
         }
@@ -2157,6 +2203,7 @@ namespace lfs::core {
             if (!is_contiguous() && src.is_contiguous() &&
                 device_ == Device::CUDA && src.device_ == Device::CUDA &&
                 dtype_ == DataType::Float32 && src.dtype_ == DataType::Int32 && ndim() == 2) {
+                pin_operands({this, &src});
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &src}, stream());
                 const size_t shape_arr[2] = {static_cast<size_t>(size(0)), static_cast<size_t>(size(1))};
@@ -2177,6 +2224,7 @@ namespace lfs::core {
 
         // Both contiguous: direct memcpy
         if (dst_contig && src_contig) {
+            pin_operands({this, &src});
             if (device_ == Device::CUDA && src.device_ == Device::CUDA) {
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &src}, stream());
@@ -2196,6 +2244,7 @@ namespace lfs::core {
 
         // Strided destination, contiguous source (CUDA)
         if (!dst_contig && src_contig && device_ == Device::CUDA && src.device_ == Device::CUDA) {
+            pin_operands({this, &src});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &src}, stream());
             const size_t rank = ndim();
@@ -2265,7 +2314,7 @@ namespace lfs::core {
                        "broadcast_to requires a valid tensor");
         LFS_ASSERT_MSG(can_broadcast_to(target_shape),
                        std::format("cannot broadcast shape {} to {}", shape_.str(), target_shape.str()));
-        if (state_ && state_->has_deferred_expr) {
+        if (state_ && state_->lazy) {
             const uint64_t source_id = lazy_expr_id();
             Tensor source = *this;
             TensorShape deferred_shape = target_shape;
@@ -3334,7 +3383,7 @@ namespace lfs::core {
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(tensor reserve storage)", {},
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
                 Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
             });
@@ -3441,7 +3490,7 @@ namespace lfs::core {
             if (cleanup_status != cudaSuccess) {
                 ensure_cuda_success(
                     cleanup_status, "cudaFree(failed zeros_direct allocation)", {},
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
             }
             LFS_ENSURE_CUDA_SUCCESS_MSG(
                 err, "cudaMemset(zeros_direct)", std::format("bytes={}", total_bytes));
@@ -3457,7 +3506,7 @@ namespace lfs::core {
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(zeros_direct storage)", {},
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
                 Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
             }

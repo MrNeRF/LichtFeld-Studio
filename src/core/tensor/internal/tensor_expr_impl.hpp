@@ -344,19 +344,12 @@ namespace lfs::core {
                 bool needs_broadcast = (left_tensor.shape() != shape) ||
                                        (right_tensor.shape() != shape);
 
-                // Broadcasting kernels capture raw shape/data pointers. Materialize deferred
-                // operands first so argument evaluation cannot observe stale storage after
-                // ptr() triggers a move during materialization.
-                if (device == Device::CUDA && needs_broadcast) {
-                    (void)left_tensor.data_ptr();
-                    (void)right_tensor.data_ptr();
-                }
-
                 // Check input dtypes to determine correct template instantiation
                 if (left_tensor.dtype() == DataType::Float16 && right_tensor.dtype() == DataType::Float16) {
                     // Float16,Float16 -> Float16 operations
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<__half>(),
                                 right_tensor.template ptr<__half>(),
@@ -367,6 +360,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<__half>(),
                                 right_tensor.template ptr<__half>(),
@@ -376,6 +370,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const __half* left_ptr = left_tensor.template ptr<__half>();
                             const __half* right_ptr = right_tensor.template ptr<__half>();
                             __half* out_ptr = result.template ptr<__half>();
@@ -394,6 +389,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const __half* left_ptr = left_broadcast.template ptr<__half>();
                             const __half* right_ptr = right_broadcast.template ptr<__half>();
                             __half* out_ptr = result.template ptr<__half>();
@@ -409,6 +405,7 @@ namespace lfs::core {
                     // Int64,Int64 -> Int64 operations
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<int64_t>(),
                                 right_tensor.template ptr<int64_t>(),
@@ -419,6 +416,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<int64_t>(),
                                 right_tensor.template ptr<int64_t>(),
@@ -428,6 +426,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const int64_t* left_ptr = left_tensor.template ptr<int64_t>();
                             const int64_t* right_ptr = right_tensor.template ptr<int64_t>();
                             int64_t* out_ptr = result.template ptr<int64_t>();
@@ -444,6 +443,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const int64_t* left_ptr = left_broadcast.template ptr<int64_t>();
                             const int64_t* right_ptr = right_broadcast.template ptr<int64_t>();
                             int64_t* out_ptr = result.template ptr<int64_t>();
@@ -457,6 +457,7 @@ namespace lfs::core {
                     // UInt8,UInt8 -> UInt8 operations
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<uint8_t>(),
                                 right_tensor.template ptr<uint8_t>(),
@@ -467,6 +468,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<uint8_t>(),
                                 right_tensor.template ptr<uint8_t>(),
@@ -476,6 +478,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const uint8_t* left_ptr = left_tensor.template ptr<uint8_t>();
                             const uint8_t* right_ptr = right_tensor.template ptr<uint8_t>();
                             uint8_t* out_ptr = result.template ptr<uint8_t>();
@@ -492,6 +495,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const uint8_t* left_ptr = left_broadcast.template ptr<uint8_t>();
                             const uint8_t* right_ptr = right_broadcast.template ptr<uint8_t>();
                             uint8_t* out_ptr = result.template ptr<uint8_t>();
@@ -505,6 +509,7 @@ namespace lfs::core {
                     // Int32,Int32 -> Int32 operations (add, sub, mul, div, etc.)
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<int>(),
                                 right_tensor.template ptr<int>(),
@@ -515,6 +520,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<int>(),
                                 right_tensor.template ptr<int>(),
@@ -524,6 +530,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const int* left_ptr = left_tensor.template ptr<int>();
                             const int* right_ptr = right_tensor.template ptr<int>();
                             int* out_ptr = result.template ptr<int>();
@@ -540,6 +547,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const int* left_ptr = left_broadcast.template ptr<int>();
                             const int* right_ptr = right_broadcast.template ptr<int>();
                             int* out_ptr = result.template ptr<int>();
@@ -554,6 +562,7 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             // Use broadcast binary kernel
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_float_broadcast_with_numeric_policy(
                                 left_tensor.template ptr<float>(),
                                 right_tensor.template ptr<float>(),
@@ -565,6 +574,7 @@ namespace lfs::core {
                                 result.numel(), op, result.stream());
                         } else {
                             // Element-wise binary operation (no broadcasting)
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_float_binary_with_numeric_policy(
                                 left_tensor.template ptr<float>(),
                                 right_tensor.template ptr<float>(),
@@ -575,6 +585,7 @@ namespace lfs::core {
                         // CPU fallback: apply operation element-wise
                         if (!needs_broadcast) {
                             // Simple element-wise operation
+                            pin_operands({&left_tensor, &right_tensor});
                             const float* left_ptr = left_tensor.template ptr<float>();
                             const float* right_ptr = right_tensor.template ptr<float>();
                             float* out_ptr = result.template ptr<float>();
@@ -592,6 +603,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const float* left_ptr = left_broadcast.template ptr<float>();
                             const float* right_ptr = right_broadcast.template ptr<float>();
                             float* out_ptr = result.template ptr<float>();
@@ -632,18 +644,12 @@ namespace lfs::core {
                 bool needs_broadcast = (left_tensor.shape() != shape) ||
                                        (right_tensor.shape() != shape);
 
-                // See the non-bool evaluator above: broadcasting kernels need stable shape
-                // storage before any ptr() call can materialize a deferred operand.
-                if (device == Device::CUDA && needs_broadcast) {
-                    (void)left_tensor.data_ptr();
-                    (void)right_tensor.data_ptr();
-                }
-
                 // Check input dtypes to determine correct template instantiation
                 if (left_tensor.dtype() == DataType::Bool && right_tensor.dtype() == DataType::Bool) {
                     // Bool,Bool -> Bool (logical operations: logical_and, logical_or, logical_xor)
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<unsigned char>(),
                                 right_tensor.template ptr<unsigned char>(),
@@ -654,6 +660,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<unsigned char>(),
                                 right_tensor.template ptr<unsigned char>(),
@@ -663,6 +670,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const unsigned char* left_ptr = left_tensor.template ptr<unsigned char>();
                             const unsigned char* right_ptr = right_tensor.template ptr<unsigned char>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -679,6 +687,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const unsigned char* left_ptr = left_broadcast.template ptr<unsigned char>();
                             const unsigned char* right_ptr = right_broadcast.template ptr<unsigned char>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -692,6 +701,7 @@ namespace lfs::core {
                     // Float16,Float16 -> Bool (comparison operations on Float16 tensors)
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<__half>(),
                                 right_tensor.template ptr<__half>(),
@@ -702,6 +712,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<__half>(),
                                 right_tensor.template ptr<__half>(),
@@ -711,6 +722,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const __half* left_ptr = left_tensor.template ptr<__half>();
                             const __half* right_ptr = right_tensor.template ptr<__half>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -729,6 +741,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const __half* left_ptr = left_broadcast.template ptr<__half>();
                             const __half* right_ptr = right_broadcast.template ptr<__half>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -744,6 +757,7 @@ namespace lfs::core {
                     // Int64,Int64 -> Bool (comparison operations on Int64 tensors)
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<int64_t>(),
                                 right_tensor.template ptr<int64_t>(),
@@ -754,6 +768,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<int64_t>(),
                                 right_tensor.template ptr<int64_t>(),
@@ -763,6 +778,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const int64_t* left_ptr = left_tensor.template ptr<int64_t>();
                             const int64_t* right_ptr = right_tensor.template ptr<int64_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -779,6 +795,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const int64_t* left_ptr = left_broadcast.template ptr<int64_t>();
                             const int64_t* right_ptr = right_broadcast.template ptr<int64_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -792,6 +809,7 @@ namespace lfs::core {
                     // Int32,Int32 -> Bool (comparison operations on Int32 tensors)
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<int>(),
                                 right_tensor.template ptr<int>(),
@@ -802,6 +820,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<int>(),
                                 right_tensor.template ptr<int>(),
@@ -811,6 +830,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const int* left_ptr = left_tensor.template ptr<int>();
                             const int* right_ptr = right_tensor.template ptr<int>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -827,6 +847,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const int* left_ptr = left_broadcast.template ptr<int>();
                             const int* right_ptr = right_broadcast.template ptr<int>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -840,6 +861,7 @@ namespace lfs::core {
                     // UInt8,UInt8 -> Bool (comparison operations on UInt8 tensors)
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<uint8_t>(),
                                 right_tensor.template ptr<uint8_t>(),
@@ -850,6 +872,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<uint8_t>(),
                                 right_tensor.template ptr<uint8_t>(),
@@ -859,6 +882,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const uint8_t* left_ptr = left_tensor.template ptr<uint8_t>();
                             const uint8_t* right_ptr = right_tensor.template ptr<uint8_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -875,6 +899,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const uint8_t* left_ptr = left_broadcast.template ptr<uint8_t>();
                             const uint8_t* right_ptr = right_broadcast.template ptr<uint8_t>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -888,6 +913,7 @@ namespace lfs::core {
                     // Float32,Float32 -> Bool (comparison operations: eq, ne, lt, le, gt, ge)
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_broadcast_binary(
                                 left_tensor.template ptr<float>(),
                                 right_tensor.template ptr<float>(),
@@ -898,6 +924,7 @@ namespace lfs::core {
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
                                 result.numel(), op, result.stream());
                         } else {
+                            pin_operands({&left_tensor, &right_tensor});
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<float>(),
                                 right_tensor.template ptr<float>(),
@@ -907,6 +934,7 @@ namespace lfs::core {
                     } else {
                         // CPU fallback
                         if (!needs_broadcast) {
+                            pin_operands({&left_tensor, &right_tensor});
                             const float* left_ptr = left_tensor.template ptr<float>();
                             const float* right_ptr = right_tensor.template ptr<float>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -923,6 +951,7 @@ namespace lfs::core {
                             if (right_tensor.shape() != shape) {
                                 right_broadcast = right_tensor.broadcast_to(shape);
                             }
+                            pin_operands({&left_broadcast, &right_broadcast});
                             const float* left_ptr = left_broadcast.template ptr<float>();
                             const float* right_ptr = right_broadcast.template ptr<float>();
                             unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -1037,6 +1066,7 @@ namespace lfs::core {
 
         // OPTIMIZATION: Use fused gather+unary kernel!
         if (device_ == Device::CUDA) {
+            pin_operands({&flat_input, &indices_tensor});
             tensor_ops::launch_gather_fused_unary(
                 flat_input.template ptr<float>(),
                 indices_tensor.template ptr<int>(),
@@ -1047,6 +1077,7 @@ namespace lfs::core {
                 result.stream());
         } else {
             // CPU fallback: gather then apply operation
+            pin_operands({&flat_input, &indices_tensor});
             const float* src = flat_input.template ptr<float>();
             const int* idx = indices_tensor.template ptr<int>();
             float* dst = result.template ptr<float>();

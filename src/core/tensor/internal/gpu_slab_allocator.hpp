@@ -290,7 +290,7 @@ namespace lfs::core {
                         free_status, "cudaFree(GPU slab)",
                         ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, size_class={}", slab.base, slab.size,
                                                               slab.size_class),
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
             }
             slabs_.clear();

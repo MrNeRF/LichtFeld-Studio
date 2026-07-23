@@ -53,7 +53,7 @@ namespace lfs::core {
                     ensure_cuda_success(
                         destroy_status, "cudaEventDestroy(arena frame completion)",
                         "context=arena destruction", LFS_SOURCE_SITE_CURRENT(),
-                        CudaFailureDisposition::LogOnly);
+                        CudaFailureDisposition::LogOnlyNoLatch);
                 }
                 last_frame_event_ = nullptr;
                 last_frame_event_valid_ = false;
@@ -122,7 +122,7 @@ namespace lfs::core {
                     ensure_cuda_success(
                         destroy_status, "cudaEventDestroy(arena frame completion)",
                         "context=arena move assignment", LFS_SOURCE_SITE_CURRENT(),
-                        CudaFailureDisposition::LogOnly);
+                        CudaFailureDisposition::LogOnlyNoLatch);
                 }
             }
             last_frame_event_ = other.last_frame_event_;
@@ -667,7 +667,7 @@ namespace lfs::core {
         if (free_status != cudaSuccess) {
             ensure_cuda_success(
                 free_status, "cudaFree(arena cache trim probe)", {},
-                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
         }
     }
 
@@ -699,7 +699,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     free_status, "cudaFree(arena backing)",
                     detail::format_cuda_safe("capacity_bytes={}", arena.capacity),
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
             }
         }
         arena.fallback_buffer = nullptr;
@@ -1593,7 +1593,7 @@ namespace lfs::core {
                     ensure_cuda_success(
                         free_status, "cudaFree(failed arena growth buffer)",
                         detail::format_cuda_safe("ptr={}, bytes={}", new_buffer, new_capacity),
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
                 return false;
             }
@@ -1606,7 +1606,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     free_status, "cudaFree(previous arena backing)",
                     detail::format_cuda_safe("ptr={}, bytes={}", arena.fallback_buffer, old_capacity),
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
             }
         }
         arena.fallback_buffer = new_buffer;

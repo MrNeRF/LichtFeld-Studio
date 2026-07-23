@@ -138,7 +138,7 @@ namespace lfs::core {
                     return create_strided_view(shape_, strides_);
                 }
 
-                if (state_ && state_->has_deferred_expr) {
+                if (state_ && state_->lazy) {
                     std::vector<int> axes(shape_.rank());
                     std::iota(axes.begin(), axes.end(), 0);
                     std::swap(axes[dim1], axes[dim2]);
@@ -221,7 +221,7 @@ namespace lfs::core {
                     }
                 }
 
-                if (state_ && state_->has_deferred_expr) {
+                if (state_ && state_->lazy) {
                     return create_view(TensorShape(new_shape));
                 }
                 return create_strided_view(TensorShape(new_shape), std::move(new_strides));
@@ -257,7 +257,7 @@ namespace lfs::core {
                     new_strides.push_back(strides_[i]);
                 }
 
-                if (state_ && state_->has_deferred_expr) {
+                if (state_ && state_->lazy) {
                     return create_view(TensorShape(new_shape));
                 }
                 return create_strided_view(TensorShape(new_shape), std::move(new_strides));
@@ -345,6 +345,7 @@ namespace lfs::core {
                 size_t other_bytes = other.bytes();
 
                 if (device_ == Device::CUDA) {
+                    pin_operands({this, &other});
                     if (self_bytes > 0) {
                         const cudaError_t self_status =
                             cudaMemcpy(result.data_ptr(), data_ptr(), self_bytes,
@@ -367,6 +368,7 @@ namespace lfs::core {
                                         self_bytes));
                     }
                 } else {
+                    pin_operands({this, &other});
                     if (self_bytes > 0) {
                         std::memcpy(result.data_ptr(), data_ptr(), self_bytes);
                     }
@@ -403,6 +405,7 @@ namespace lfs::core {
                 auto result = zeros(TensorShape(new_shape), device_, dtype_);
 
                 if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
+                    pin_operands({this});
                     tensor_ops::launch_pad(
                         ptr<float>(), result.ptr<float>(),
                         shape_.dims().data(), strides_.data(),

@@ -97,19 +97,29 @@ namespace gsplat_lfs {
                 sort_reuse_event_recorded = true;
             }
 
-            ~IntersectBufferCache() {
+            bool release() noexcept {
                 cum_tiles.reset();
                 isect_ids_sort.reset();
                 flatten_ids_sort.reset();
-                if (sort_reuse_event) {
-                    const cudaError_t status = cudaEventDestroy(sort_reuse_event);
+                cum_tiles_capacity = 0;
+                sort_capacity = 0;
+                cudaEvent_t event = std::exchange(sort_reuse_event, nullptr);
+                sort_reuse_event_recorded = false;
+                if (event) {
+                    const cudaError_t status = cudaEventDestroy(event);
                     if (status != cudaSuccess) {
                         lfs::core::ensure_cuda_success(
                             status, "cudaEventDestroy(gsplat sort cache)", {},
                             LFS_SOURCE_SITE_CURRENT(),
-                            lfs::core::CudaFailureDisposition::LogOnly);
+                            lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
                     }
                 }
+                return !cum_tiles && !isect_ids_sort && !flatten_ids_sort &&
+                       sort_reuse_event == nullptr;
+            }
+
+            ~IntersectBufferCache() {
+                release();
             }
         };
 
@@ -118,6 +128,10 @@ namespace gsplat_lfs {
             return cache;
         }
     } // namespace
+
+    bool release_intersect_thread_local_cache() noexcept {
+        return get_cache().release();
+    }
 
     IntersectTileResult intersect_tile(
         const float* means2d,

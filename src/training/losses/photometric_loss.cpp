@@ -62,6 +62,7 @@ namespace lfs::training::losses {
                 // Ensure buffers are sized correctly
                 ensure_buffers(rendered_4d.shape().dims(), num_blocks);
 
+                core::pin_operands({&rendered_4d, &gt_4d});
                 dispatch_target_ptr(gt_4d, [&](auto* gt_ptr) {
                     lfs::training::kernels::launch_fused_l1_loss(
                         rendered_4d.ptr<float>(),

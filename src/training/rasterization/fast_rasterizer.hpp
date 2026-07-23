@@ -174,6 +174,9 @@ namespace lfs::training {
         const lfs::core::Tensor& grad_depth = {},
         const lfs::core::Tensor& grad_normal = {});
 
+    // Release per-thread renderer caches before the owning CUDA stream is torn down.
+    bool release_fast_rasterizer_thread_local_caches() noexcept;
+
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(
         lfs::core::Camera& viewpoint_camera,

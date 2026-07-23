@@ -1968,6 +1968,8 @@ namespace lfs::core::tensor_ops {
         size_t row_size,
         size_t element_size,
         cudaStream_t stream) {
+        for (const auto& tensor : tensors)
+            pin_operands({&tensor});
         size_t num_tensors = tensors.size();
 
         // FAST PATH: RGB→RGBA conversion (adding alpha channel)
@@ -2101,6 +2103,8 @@ namespace lfs::core::tensor_ops {
         int resolved_dim,
         size_t element_size,
         cudaStream_t stream) {
+        for (const auto& tensor : tensors)
+            pin_operands({&tensor});
         size_t num_tensors = tensors.size();
         size_t total_dim_size = 0;
         for (const auto& t : tensors) {
@@ -3087,26 +3091,43 @@ namespace lfs::core::tensor_ops {
                 }
             }
 
-            ~NaNCheckBuffers() {
-                if (initialized) {
-                    const cudaError_t device_status = cudaFree(d_result);
+            bool release() noexcept {
+                int* device_result = d_result;
+                int* host_result = h_result_pinned;
+                d_result = nullptr;
+                h_result_pinned = nullptr;
+                initialized = false;
+
+                if (device_result) {
+                    const cudaError_t device_status = cudaFree(device_result);
                     if (device_status != cudaSuccess) {
                         ensure_cuda_success(
                             device_status, "cudaFree(NaN-check device buffer)", {},
-                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                     }
-                    const cudaError_t host_status = cudaFreeHost(h_result_pinned);
+                }
+                if (host_result) {
+                    const cudaError_t host_status = cudaFreeHost(host_result);
                     if (host_status != cudaSuccess) {
                         ensure_cuda_success(
                             host_status, "cudaFreeHost(NaN-check pinned buffer)", {},
-                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                     }
                 }
+                return !initialized && d_result == nullptr && h_result_pinned == nullptr;
+            }
+
+            ~NaNCheckBuffers() {
+                release();
             }
         };
 
         thread_local NaNCheckBuffers g_nan_check_buffers;
     } // namespace
+
+    bool release_nan_check_thread_buffers() noexcept {
+        return g_nan_check_buffers.release();
+    }
 
     namespace {
         bool has_special_value_gpu(const float* data, size_t n, cudaStream_t stream, bool check_nan) {
