@@ -361,10 +361,10 @@ namespace lfs::training {
             // Create tensor views over arena memory for output
             auto render_colors_tensor = core::Tensor::from_blob(
                 render_colors_ptr_out, {static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W), static_cast<size_t>(channels)},
-                core::Device::CUDA, core::DataType::Float32);
+                core::Device::CUDA, core::DataType::Float32, fwd_stream);
             auto render_alphas_tensor = core::Tensor::from_blob(
                 render_alphas_ptr_out, {static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W), 1UL},
-                core::Device::CUDA, core::DataType::Float32);
+                core::Device::CUDA, core::DataType::Float32, fwd_stream);
 
             // Process based on render mode
             core::Tensor final_image, final_depth;

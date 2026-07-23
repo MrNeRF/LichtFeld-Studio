@@ -229,6 +229,8 @@ set(TEST_FILES
     test_rml_text_input_handler.cpp
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp
+    test_tensor_d4_from_blob_stream.cpp
+    tensor_hardening_cuda_utils.cu
     test_cuda_event_pool.cpp
     test_tensor_multistream.cpp
     test_tensor_discovery.cpp

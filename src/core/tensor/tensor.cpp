@@ -601,7 +601,8 @@ namespace lfs::core {
 
     // ============= Constructors & Destructor =============
 
-    Tensor::Tensor(void* data, TensorShape shape, Device device, DataType dtype)
+    Tensor::Tensor(void* data, TensorShape shape, Device device, DataType dtype,
+                   const cudaStream_t home_stream)
         : data_(data),
           data_owner_(nullptr), // Non-owning
           state_(std::make_shared<TensorState>()),
@@ -621,6 +622,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(data_ != nullptr || shape_.elements() == 0,
                        "Tensor constructor received null storage for a non-empty tensor");
 
+        state_->stream = home_stream;
         init_storage_meta();
         compute_alignment();
 
@@ -829,7 +831,7 @@ namespace lfs::core {
                        "set_stream requires a valid tensor");
         if (device_ == Device::CUDA) {
             if (!data_owner_) {
-                if (state_->stream != stream) {
+                if (!state_->lazy && state_->stream != stream) {
                     static std::atomic<bool> warned{false};
                     if (!warned.exchange(true, std::memory_order_relaxed)) {
                         LOG_WARN("set_stream cannot rehome non-owning CUDA tensor storage "
@@ -842,7 +844,9 @@ namespace lfs::core {
                 // Rehoming changes where future writes occur. Preserve prior writes
                 // from the old home before changing allocator ownership metadata.
                 bridgeStreams(state_->stream, stream);
-                CudaMemoryPool::instance().rehome_stream(data_owner_.get(), stream);
+                if (!has_external_storage()) {
+                    CudaMemoryPool::instance().rehome_stream(data_owner_.get(), stream);
+                }
             }
         }
         state_->stream = stream;
@@ -852,18 +856,21 @@ namespace lfs::core {
         LFS_ASSERT_MSG(is_valid(),
                        "record_stream requires a valid tensor");
         if (!data_owner_) {
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::CUDA && this->stream() == nullptr) {
                 static std::atomic<bool> warned{false};
                 if (!warned.exchange(true, std::memory_order_relaxed)) {
-                    LOG_WARN("record_stream ignored for non-owning CUDA tensor storage "
-                             "(data={}, stream={})",
+                    LOG_WARN("record_stream ignored for non-owning CUDA tensor with null home stream "
+                             "(data={}, stream={}); stamp from_blob(..., home_stream) or set_stream "
+                             "for use-ordering; free-time tracking still requires an owner/registry",
                              data_, static_cast<const void*>(stream));
                 }
             }
             return;
         }
         if (device_ == Device::CUDA) {
-            CudaMemoryPool::instance().record_stream(data_owner_.get(), stream);
+            if (!has_external_storage()) {
+                CudaMemoryPool::instance().record_stream(data_owner_.get(), stream);
+            }
         } else {
             PinnedMemoryAllocator::instance().record_stream(data_owner_.get(), stream);
         }

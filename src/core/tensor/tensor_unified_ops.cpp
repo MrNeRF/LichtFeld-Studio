@@ -1018,7 +1018,8 @@ namespace lfs::core {
             LFS_ASSERT_MSG(src_ptr != nullptr,
                            "FromCUDA requires a non-null source pointer");
 
-            result = Tensor(src_ptr, args.shape, Device::CUDA, args.dtype);
+            result = Tensor(src_ptr, args.shape, Device::CUDA, args.dtype,
+                            getCurrentCUDAStream());
 
             if (args.device == Device::CPU) {
                 result = result.to(Device::CPU);

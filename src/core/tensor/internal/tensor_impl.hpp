@@ -1049,7 +1049,9 @@ namespace lfs::core {
 
     public:
         Tensor() = default;
-        Tensor(void* data, TensorShape shape, Device device, DataType dtype);
+        // Non-owning CUDA storage must stamp its producer stream; lifetime remains caller-owned.
+        Tensor(void* data, TensorShape shape, Device device, DataType dtype,
+               cudaStream_t home_stream = nullptr);
 
         // Copy constructor and assignment - SHALLOW COPY (LibTorch behavior)
         Tensor(const Tensor& other);
@@ -1165,10 +1167,11 @@ namespace lfs::core {
         static Tensor eye(size_t m, size_t n, Device device = Device::CUDA);
         static Tensor diag(const Tensor& diagonal);
 
-        static Tensor from_blob(void* data, TensorShape shape, Device device, DataType dtype) {
+        static Tensor from_blob(void* data, TensorShape shape, Device device, DataType dtype,
+                                cudaStream_t home_stream = nullptr) {
             LFS_ASSERT_MSG(data != nullptr || shape.elements() == 0,
                            "from_blob received null data for a non-empty tensor");
-            return Tensor(data, shape, device, dtype);
+            return Tensor(data, shape, device, dtype, home_stream);
         }
         static Tensor from_external_owner(void* data,
                                           TensorShape shape,
