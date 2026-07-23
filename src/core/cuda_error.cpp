@@ -416,6 +416,8 @@ namespace lfs::core {
                     .stacktrace_skip_frames = 2,
                 });
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): failure reporting is best-effort and
+                // noexcept; a secondary exception must not replace the CUDA fault.
             }
         }
 
@@ -576,8 +578,8 @@ namespace lfs::core {
                 }
             }
         } catch (...) {
-            // Parsing must never turn a startup env-var read into a crash;
-            // fall back to whatever modes were resolved before the failure.
+            // LFS-CENSUS-OK(empty-catch): parsing must never turn a startup env-var
+            // read into a crash; fall back to modes resolved before the failure.
         }
         return result;
     }
@@ -602,6 +604,8 @@ namespace lfs::core {
                         parsed.unknown_tokens.c_str());
                 }
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): stderr deprecation/unknown-token notices
+                // must not fail diagnostic mode resolution.
             }
             return parsed.modes;
         }();
@@ -628,8 +632,8 @@ namespace lfs::core {
                 });
             }
         } catch (...) {
-            // Diagnostic initialization must not turn a checked CUDA call into
-            // a process termination.
+            // LFS-CENSUS-OK(empty-catch): diagnostic initialization must not turn a
+            // checked CUDA call into process termination.
         }
     }
 
@@ -665,6 +669,8 @@ namespace lfs::core {
                     "CUDA unavailable — GPU features disabled. A driver restart may be required. ({})",
                     cuda_error_text(error)));
         } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): unavailable latch is noexcept; logging the
+            // first trip must not throw away the latched state.
         }
         return true;
     }
@@ -682,6 +688,8 @@ namespace lfs::core {
             g_next_dead_cuda_address_range = 0;
             g_dead_cuda_address_range_count = 0;
         } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): test reset is best-effort; a lock or clear
+            // failure must not abort the surrounding test harness path.
         }
         reset_failure_report_dedup_for_testing();
         // Spec §0.3 / §1.6: device-fault host registry joins the testing reset.
@@ -838,7 +846,7 @@ namespace lfs::core {
                 result, state, expression_copy.c_str(), message, location,
                 cudaSuccess, cudaSuccess);
         } catch (...) {
-            // Recovery, teardown, and allocator fallback paths use LogOnly and
+            // LFS-CENSUS-OK(empty-catch): recovery/teardown/allocator LogOnly paths
             // must never acquire a new failure mode from diagnostics themselves.
         }
     }
