@@ -338,6 +338,68 @@ class ErrorDebtCensusTests(unittest.TestCase):
         )
         self.assert_rule_hits("result-in-cu", [])
 
+    def test_unpinned_multi_capture_detects_balanced_multiline_call(self) -> None:
+        self.write(
+            "core/tensor/launch.cpp",
+            "void run(Tensor& left, Tensor& right) {\n"
+            "  launch_binary(\n"
+            "      left.template ptr<float>(),\n"
+            "      right.data_ptr());\n"
+            "}\n",
+        )
+        self.assert_rule_hits(
+            "unpinned-multi-capture",
+            [("src/core/tensor/launch.cpp", 2, "core")],
+        )
+
+    def test_unpinned_multi_capture_requires_distinct_bases_and_tensor_scope(self) -> None:
+        self.write(
+            "core/tensor/same.cpp",
+            "void run(Tensor& value) { launch(value.ptr<float>(), value.data_ptr()); }\n",
+        )
+        self.write(
+            "training/outside.cpp",
+            "void run(Tensor& a, Tensor& b) { launch(a.ptr<float>(), b.ptr<float>()); }\n",
+        )
+        self.assert_rule_hits("unpinned-multi-capture", [])
+
+    def test_unpinned_multi_capture_accepts_prior_factories_and_pin(self) -> None:
+        self.write(
+            "core/tensor/safe.cpp",
+            "void factory(Tensor& input) {\n"
+            "  auto output = Tensor::empty({4});\n"
+            "  launch(input.ptr<float>(), output.ptr<float>());\n"
+            "}\n"
+            "void pinned(Tensor& left, Tensor& right) {\n"
+            "  pin_operands({&left, &right});\n"
+            "  launch(left.ptr<float>(), right.ptr<float>());\n"
+            "}\n",
+        )
+        self.assert_rule_hits("unpinned-multi-capture", [])
+
+    def test_unpinned_multi_capture_does_not_inherit_pin_from_child_block(self) -> None:
+        self.write(
+            "core/tensor/sibling.cpp",
+            "void run(Tensor& left, Tensor& right) {\n"
+            "  { pin_operands({&left, &right}); }\n"
+            "  launch(left.ptr<float>(), right.ptr<float>());\n"
+            "}\n",
+        )
+        self.assert_rule_hits(
+            "unpinned-multi-capture",
+            [("src/core/tensor/sibling.cpp", 3, "core")],
+        )
+
+    def test_unpinned_multi_capture_accepts_escape_on_previous_line(self) -> None:
+        self.write(
+            "core/tensor/reviewed.cpp",
+            "void run(Tensor& left, Tensor& right) {\n"
+            "  // LFS-CENSUS-OK(unpinned-multi-capture): reviewed ownership\n"
+            "  launch(left.ptr<float>(), right.ptr<float>());\n"
+            "}\n",
+        )
+        self.assert_rule_hits("unpinned-multi-capture", [])
+
     def test_frozen_path_exclusions_apply_except_tests_for_result_rule(self) -> None:
         self.write("external/result.cu", "using A = lfs::Result<int>;\n")
         self.write("Vendor/result.cu", "using B = std::expected<int, Error>;\n")
