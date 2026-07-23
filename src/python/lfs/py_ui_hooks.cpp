@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "py_rml.hpp"
 #include "py_ui.hpp"
+#include "python/gil.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -194,6 +195,9 @@ namespace lfs::python {
                                            const std::string& section,
                                            Rml::ElementDocument* document,
                                            PyHookPosition position) {
+        if (!can_acquire_gil())
+            return false;
+
         nb::gil_scoped_acquire gil;
         std::vector<HookEntry> callbacks;
         {
@@ -223,7 +227,7 @@ namespace lfs::python {
                 if (document) {
                     entry.callback(PyRmlDocument(document));
                 } else {
-                    PyUILayout layout;
+                    PyUILayout layout(PyUILayout::Mode::DrawHook);
                     entry.callback(layout);
                 }
             } catch (const std::exception& e) {

@@ -15,6 +15,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <cfloat>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -314,7 +315,15 @@ namespace lfs::python {
     // UI layout object passed to draw() for legacy Python plugin compatibility.
     class PyUILayout {
     public:
+        enum class Mode : uint8_t {
+            Legacy,
+            DrawHook,
+        };
+
         explicit PyUILayout(int initial_menu_depth = 0) : menu_depth_(initial_menu_depth) {}
+        explicit PyUILayout(Mode mode, int initial_menu_depth = 0)
+            : menu_depth_(initial_menu_depth),
+              mode_(mode) {}
 
         void setCollecting(vis::gui::MenuDropdownContent* target) {
             collecting_ = target != nullptr;
@@ -655,6 +664,9 @@ namespace lfs::python {
             float range = 0.5f);
 
     private:
+        void warnUnsupportedInDrawHook(const char* method) const;
+        [[nodiscard]] bool isDrawHook() const { return mode_ == Mode::DrawHook; }
+
         int menu_depth_;
         int box_id_counter_ = 0;
         int grid_id_counter_ = 0;
@@ -663,6 +675,11 @@ namespace lfs::python {
         vis::gui::MenuDropdownContent* collect_target_ = nullptr;
         int collect_callback_index_ = 0;
         int execute_at_index_ = -1;
+        Mode mode_ = Mode::Legacy;
+        std::tuple<float, float> next_window_pos_{0.0f, 0.0f};
+        std::tuple<float, float> next_window_size_{0.0f, 0.0f};
+        std::tuple<float, float> window_pos_{0.0f, 0.0f};
+        std::tuple<float, float> window_size_{0.0f, 0.0f};
     };
 
     using PollDependency = lfs::vis::op::PollDependency;

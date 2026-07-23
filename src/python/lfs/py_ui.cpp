@@ -533,15 +533,6 @@ namespace lfs::python {
         // Thread-local layout stack for hierarchical layouts
         thread_local std::stack<LayoutContext> g_layout_stack;
 
-        bool draw_prop_enum_button(nb::object data, const std::string& prop_id,
-                                   const std::string& value, const std::string& text) {
-            const std::string current = nb::cast<std::string>(data.attr(prop_id.c_str()));
-            (void)text;
-            (void)value;
-            (void)current;
-            return false;
-        }
-
         // Window flags for Python bindings
         struct PyWindowFlags {
             static constexpr int NONE = 0;
@@ -1451,7 +1442,10 @@ namespace lfs::python {
     bool PySubLayout::prop_enum(nb::object data, const std::string& prop_id,
                                 const std::string& value, const std::string& text) {
         advance_child();
-        return draw_prop_enum_button(data, prop_id, value, text);
+        apply_state();
+        const bool changed = parent_->prop_enum(data, prop_id, value, text);
+        pop_per_item_state();
+        return changed;
     }
 
     bool PySubLayout::begin_table(const std::string& id, int columns) {
@@ -1642,6 +1636,19 @@ namespace lfs::python {
         return parent_->get_content_region_avail();
     }
 
+    void PyUILayout::warnUnsupportedInDrawHook(const char* method) const {
+        if (!isDrawHook())
+            return;
+
+        static std::mutex mutex;
+        static std::unordered_set<std::string> warned_methods;
+        std::lock_guard lock(mutex);
+        if (warned_methods.emplace(method).second) {
+            LOG_WARN("UILayout::{} unsupported in draw hooks; use a panel or document hook",
+                     method);
+        }
+    }
+
     // PyUILayout layout methods
     PySubLayout PyUILayout::row() { return PySubLayout(this, LayoutType::Row); }
     PySubLayout PyUILayout::column() { return PySubLayout(this, LayoutType::Column); }
@@ -1651,13 +1658,18 @@ namespace lfs::python {
         return PySubLayout(this, LayoutType::GridFlow, 0.5f, columns);
     }
 
-    bool PyUILayout::prop_enum(nb::object data, const std::string& prop_id,
-                               const std::string& value, const std::string& text) {
-        return draw_prop_enum_button(data, prop_id, value, text);
+    bool PyUILayout::prop_enum(nb::object, const std::string&,
+                               const std::string&, const std::string&) {
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("prop_enum");
+            return false;
+        }
+        throw std::runtime_error("prop_enum requires an active RmlUILayout backend");
     }
 
     nb::object PyUILayout::operator_(const std::string& operator_id, const std::string& text,
                                      const std::string& /*icon*/) {
+        warnUnsupportedInDrawHook("operator_");
         const auto* desc = vis::op::operators().getDescriptor(operator_id);
         const std::string label = text.empty() ? (desc ? desc->label : operator_id) : text;
         const std::string btn_text = LOC(label.c_str());
@@ -1678,6 +1690,7 @@ namespace lfs::python {
     std::tuple<bool, int> PyUILayout::prop_search(nb::object /*data*/, const std::string& prop_id,
                                                   nb::object search_data, const std::string& search_prop,
                                                   const std::string& /*text*/) {
+        warnUnsupportedInDrawHook("prop_search");
         int current_idx = 0;
         try {
             if (nb::hasattr(search_data, search_prop.c_str())) {
@@ -1703,6 +1716,7 @@ namespace lfs::python {
                                                    nb::object data, const std::string& prop_id,
                                                    nb::object active_data, const std::string& active_prop,
                                                    int /*rows*/) {
+        warnUnsupportedInDrawHook("template_list");
         int active_idx = 0;
         int item_count = 0;
         try {
@@ -1724,8 +1738,12 @@ namespace lfs::python {
         return {active_idx, item_count};
     }
 
-    void PyUILayout::menu(const std::string&, const std::string&, const std::string&) {}
-    void PyUILayout::popover(const std::string&, const std::string&, const std::string&) {}
+    void PyUILayout::menu(const std::string&, const std::string&, const std::string&) {
+        warnUnsupportedInDrawHook("menu");
+    }
+    void PyUILayout::popover(const std::string&, const std::string&, const std::string&) {
+        warnUnsupportedInDrawHook("popover");
+    }
 
     void PyUILayout::draw_circle(float, float, float, nb::object, int, float) {}
     void PyUILayout::draw_circle_filled(float, float, float, nb::object, int) {}
@@ -1755,55 +1773,140 @@ namespace lfs::python {
         return {false, {red_x, red_y, green_x, green_y, blue_x, blue_y, neutral_x, neutral_y}};
     }
 
-    void PyUILayout::label(const std::string&) {}
-    void PyUILayout::label_centered(const std::string&) {}
-    void PyUILayout::heading(const std::string&) {}
-    void PyUILayout::text_colored(const std::string&, nb::object) {}
-    void PyUILayout::text_colored_centered(const std::string&, nb::object) {}
-    void PyUILayout::text_selectable(const std::string&, float) {}
-    void PyUILayout::bullet_text(const std::string&) {}
-    void PyUILayout::text_wrapped(const std::string&) {}
-    void PyUILayout::text_disabled(const std::string&) {}
+    void PyUILayout::label(const std::string&) { warnUnsupportedInDrawHook("label"); }
+    void PyUILayout::label_centered(const std::string&) {
+        warnUnsupportedInDrawHook("label_centered");
+    }
+    void PyUILayout::heading(const std::string&) { warnUnsupportedInDrawHook("heading"); }
+    void PyUILayout::text_colored(const std::string&, nb::object) {
+        warnUnsupportedInDrawHook("text_colored");
+    }
+    void PyUILayout::text_colored_centered(const std::string&, nb::object) {
+        warnUnsupportedInDrawHook("text_colored_centered");
+    }
+    void PyUILayout::text_selectable(const std::string&, float) {
+        warnUnsupportedInDrawHook("text_selectable");
+    }
+    void PyUILayout::bullet_text(const std::string&) {
+        warnUnsupportedInDrawHook("bullet_text");
+    }
+    void PyUILayout::text_wrapped(const std::string&) {
+        warnUnsupportedInDrawHook("text_wrapped");
+    }
+    void PyUILayout::text_disabled(const std::string&) {
+        warnUnsupportedInDrawHook("text_disabled");
+    }
 
-    bool PyUILayout::button(const std::string&, std::tuple<float, float>) { return false; }
-    bool PyUILayout::button_callback(const std::string&, nb::object, std::tuple<float, float>) { return false; }
-    bool PyUILayout::small_button(const std::string&) { return false; }
-    std::tuple<bool, bool> PyUILayout::checkbox(const std::string&, bool value) { return {false, value}; }
-    std::tuple<bool, int> PyUILayout::radio_button(const std::string&, int current, int) { return {false, current}; }
-    std::tuple<bool, float> PyUILayout::slider_float(const std::string&, float value, float, float) { return {false, value}; }
-    std::tuple<bool, int> PyUILayout::slider_int(const std::string&, int value, int, int) { return {false, value}; }
+    bool PyUILayout::button(const std::string&, std::tuple<float, float>) {
+        warnUnsupportedInDrawHook("button");
+        return false;
+    }
+    bool PyUILayout::button_callback(const std::string&, nb::object,
+                                     std::tuple<float, float>) {
+        warnUnsupportedInDrawHook("button_callback");
+        return false;
+    }
+    bool PyUILayout::small_button(const std::string&) {
+        warnUnsupportedInDrawHook("small_button");
+        return false;
+    }
+    std::tuple<bool, bool> PyUILayout::checkbox(const std::string&, bool value) {
+        warnUnsupportedInDrawHook("checkbox");
+        return {false, value};
+    }
+    std::tuple<bool, int> PyUILayout::radio_button(const std::string&, int current, int) {
+        warnUnsupportedInDrawHook("radio_button");
+        return {false, current};
+    }
+    std::tuple<bool, float> PyUILayout::slider_float(const std::string&, float value,
+                                                     float, float) {
+        warnUnsupportedInDrawHook("slider_float");
+        return {false, value};
+    }
+    std::tuple<bool, int> PyUILayout::slider_int(const std::string&, int value, int, int) {
+        warnUnsupportedInDrawHook("slider_int");
+        return {false, value};
+    }
     std::tuple<bool, std::tuple<float, float>> PyUILayout::slider_float2(
-        const std::string&, std::tuple<float, float> value, float, float) { return {false, value}; }
+        const std::string&, std::tuple<float, float> value, float, float) {
+        warnUnsupportedInDrawHook("slider_float2");
+        return {false, value};
+    }
     std::tuple<bool, std::tuple<float, float, float>> PyUILayout::slider_float3(
-        const std::string&, std::tuple<float, float, float> value, float, float) { return {false, value}; }
-    std::tuple<bool, float> PyUILayout::drag_float(const std::string&, float value, float, float, float) { return {false, value}; }
-    std::tuple<bool, int> PyUILayout::drag_int(const std::string&, int value, float, int, int) { return {false, value}; }
-    std::tuple<bool, std::string> PyUILayout::input_text(const std::string&, const std::string& value) { return {false, value}; }
-    std::tuple<bool, std::string> PyUILayout::input_text_with_hint(const std::string&, const std::string&, const std::string& value) {
+        const std::string&, std::tuple<float, float, float> value, float, float) {
+        warnUnsupportedInDrawHook("slider_float3");
         return {false, value};
     }
-    std::tuple<bool, float> PyUILayout::input_float(const std::string&, float value, float, float, const std::string&) {
+    std::tuple<bool, float> PyUILayout::drag_float(const std::string&, float value,
+                                                   float, float, float) {
+        warnUnsupportedInDrawHook("drag_float");
         return {false, value};
     }
-    std::tuple<bool, int> PyUILayout::input_int(const std::string&, int value, int, int) { return {false, value}; }
-    std::tuple<bool, int> PyUILayout::input_int_formatted(const std::string&, int value, int, int) { return {false, value}; }
-    std::tuple<bool, float> PyUILayout::stepper_float(const std::string&, float value, const std::vector<float>&) {
+    std::tuple<bool, int> PyUILayout::drag_int(const std::string&, int value,
+                                               float, int, int) {
+        warnUnsupportedInDrawHook("drag_int");
         return {false, value};
     }
-    std::tuple<bool, std::string> PyUILayout::path_input(const std::string&, const std::string& value, bool, const std::string&) {
+    std::tuple<bool, std::string> PyUILayout::input_text(const std::string&,
+                                                         const std::string& value) {
+        warnUnsupportedInDrawHook("input_text");
+        return {false, value};
+    }
+    std::tuple<bool, std::string> PyUILayout::input_text_with_hint(
+        const std::string&, const std::string&, const std::string& value) {
+        warnUnsupportedInDrawHook("input_text_with_hint");
+        return {false, value};
+    }
+    std::tuple<bool, float> PyUILayout::input_float(
+        const std::string&, float value, float, float, const std::string&) {
+        warnUnsupportedInDrawHook("input_float");
+        return {false, value};
+    }
+    std::tuple<bool, int> PyUILayout::input_int(const std::string&, int value, int, int) {
+        warnUnsupportedInDrawHook("input_int");
+        return {false, value};
+    }
+    std::tuple<bool, int> PyUILayout::input_int_formatted(const std::string&, int value,
+                                                          int, int) {
+        warnUnsupportedInDrawHook("input_int_formatted");
+        return {false, value};
+    }
+    std::tuple<bool, float> PyUILayout::stepper_float(
+        const std::string&, float value, const std::vector<float>&) {
+        warnUnsupportedInDrawHook("stepper_float");
+        return {false, value};
+    }
+    std::tuple<bool, std::string> PyUILayout::path_input(
+        const std::string&, const std::string& value, bool, const std::string&) {
+        warnUnsupportedInDrawHook("path_input");
         return {false, value};
     }
     std::tuple<bool, std::tuple<float, float, float>> PyUILayout::color_edit3(
-        const std::string&, std::tuple<float, float, float> color) { return {false, color}; }
+        const std::string&, std::tuple<float, float, float> color) {
+        warnUnsupportedInDrawHook("color_edit3");
+        return {false, color};
+    }
     std::tuple<bool, std::tuple<float, float, float, float>> PyUILayout::color_edit4(
-        const std::string&, std::tuple<float, float, float, float> color) { return {false, color}; }
+        const std::string&, std::tuple<float, float, float, float> color) {
+        warnUnsupportedInDrawHook("color_edit4");
+        return {false, color};
+    }
     std::tuple<bool, std::tuple<float, float, float>> PyUILayout::color_picker3(
-        const std::string&, std::tuple<float, float, float> color) { return {false, color}; }
-    bool PyUILayout::color_button(const std::string&, nb::object, std::tuple<float, float>) { return false; }
+        const std::string&, std::tuple<float, float, float> color) {
+        warnUnsupportedInDrawHook("color_picker3");
+        return {false, color};
+    }
+    bool PyUILayout::color_button(const std::string&, nb::object,
+                                  std::tuple<float, float>) {
+        warnUnsupportedInDrawHook("color_button");
+        return false;
+    }
     std::tuple<bool, int> PyUILayout::combo(const std::string&, int current_idx, const std::vector<std::string>&) {
+        warnUnsupportedInDrawHook("combo");
         return {false, current_idx};
     }
     std::tuple<bool, int> PyUILayout::listbox(const std::string&, int current_idx, const std::vector<std::string>&, int) {
+        warnUnsupportedInDrawHook("listbox");
         return {false, current_idx};
     }
 
@@ -1812,39 +1915,105 @@ namespace lfs::python {
             vis::gui::MenuItemDesc item;
             item.type = vis::gui::MenuItemDesc::Type::Separator;
             collect_target_->items.push_back(std::move(item));
+            return;
         }
+        warnUnsupportedInDrawHook("separator");
     }
-    void PyUILayout::spacing() {}
-    void PyUILayout::same_line(float, float) {}
-    void PyUILayout::new_line() {}
-    void PyUILayout::indent(float) {}
-    void PyUILayout::unindent(float) {}
-    void PyUILayout::set_next_item_width(float) {}
-    void PyUILayout::begin_group() {}
-    void PyUILayout::end_group() {}
-    bool PyUILayout::collapsing_header(const std::string&, bool) { return true; }
-    bool PyUILayout::tree_node(const std::string&) { return true; }
-    bool PyUILayout::tree_node_ex(const std::string&, const std::string&) { return true; }
-    void PyUILayout::set_next_item_open(bool) {}
-    void PyUILayout::tree_pop() {}
-    bool PyUILayout::begin_table(const std::string&, int) { return true; }
-    void PyUILayout::end_table() {}
-    void PyUILayout::table_next_row() {}
-    void PyUILayout::table_next_column() {}
-    bool PyUILayout::table_set_column_index(int) { return true; }
-    void PyUILayout::table_headers_row() {}
-    void PyUILayout::table_set_bg_color(int, nb::object) {}
-    void PyUILayout::table_setup_column(const std::string&, float) {}
-    bool PyUILayout::button_styled(const std::string&, const std::string&, std::tuple<float, float>) { return false; }
-    void PyUILayout::push_item_width(float) {}
-    void PyUILayout::pop_item_width() {}
-    void PyUILayout::plot_lines(const std::string&, const std::vector<float>&, float, float, std::tuple<float, float>) {}
-    bool PyUILayout::selectable(const std::string&, bool, float) { return false; }
-    bool PyUILayout::begin_context_menu(const std::string&) { return false; }
-    void PyUILayout::end_context_menu() {}
-    bool PyUILayout::begin_popup(const std::string&) { return false; }
-    void PyUILayout::open_popup(const std::string&) {}
-    void PyUILayout::end_popup() {}
+    void PyUILayout::spacing() { warnUnsupportedInDrawHook("spacing"); }
+    void PyUILayout::same_line(float, float) { warnUnsupportedInDrawHook("same_line"); }
+    void PyUILayout::new_line() { warnUnsupportedInDrawHook("new_line"); }
+    void PyUILayout::indent(float) { warnUnsupportedInDrawHook("indent"); }
+    void PyUILayout::unindent(float) { warnUnsupportedInDrawHook("unindent"); }
+    void PyUILayout::set_next_item_width(float) {
+        warnUnsupportedInDrawHook("set_next_item_width");
+    }
+    void PyUILayout::begin_group() { warnUnsupportedInDrawHook("begin_group"); }
+    void PyUILayout::end_group() { warnUnsupportedInDrawHook("end_group"); }
+    bool PyUILayout::collapsing_header(const std::string&, bool) {
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("collapsing_header");
+            return false;
+        }
+        return true;
+    }
+    bool PyUILayout::tree_node(const std::string&) {
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("tree_node");
+            return false;
+        }
+        return true;
+    }
+    bool PyUILayout::tree_node_ex(const std::string&, const std::string&) {
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("tree_node_ex");
+            return false;
+        }
+        return true;
+    }
+    void PyUILayout::set_next_item_open(bool) {
+        warnUnsupportedInDrawHook("set_next_item_open");
+    }
+    void PyUILayout::tree_pop() { warnUnsupportedInDrawHook("tree_pop"); }
+    bool PyUILayout::begin_table(const std::string&, int) {
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("begin_table");
+            return false;
+        }
+        return true;
+    }
+    void PyUILayout::end_table() { warnUnsupportedInDrawHook("end_table"); }
+    void PyUILayout::table_next_row() { warnUnsupportedInDrawHook("table_next_row"); }
+    void PyUILayout::table_next_column() {
+        warnUnsupportedInDrawHook("table_next_column");
+    }
+    bool PyUILayout::table_set_column_index(int) {
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("table_set_column_index");
+            return false;
+        }
+        return true;
+    }
+    void PyUILayout::table_headers_row() {
+        warnUnsupportedInDrawHook("table_headers_row");
+    }
+    void PyUILayout::table_set_bg_color(int, nb::object) {
+        warnUnsupportedInDrawHook("table_set_bg_color");
+    }
+    void PyUILayout::table_setup_column(const std::string&, float) {
+        warnUnsupportedInDrawHook("table_setup_column");
+    }
+    bool PyUILayout::button_styled(const std::string&, const std::string&,
+                                   std::tuple<float, float>) {
+        warnUnsupportedInDrawHook("button_styled");
+        return false;
+    }
+    void PyUILayout::push_item_width(float) {
+        warnUnsupportedInDrawHook("push_item_width");
+    }
+    void PyUILayout::pop_item_width() { warnUnsupportedInDrawHook("pop_item_width"); }
+    void PyUILayout::plot_lines(const std::string&, const std::vector<float>&,
+                                float, float, std::tuple<float, float>) {
+        warnUnsupportedInDrawHook("plot_lines");
+    }
+    bool PyUILayout::selectable(const std::string&, bool, float) {
+        warnUnsupportedInDrawHook("selectable");
+        return false;
+    }
+    bool PyUILayout::begin_context_menu(const std::string&) {
+        warnUnsupportedInDrawHook("begin_context_menu");
+        return false;
+    }
+    void PyUILayout::end_context_menu() {
+        warnUnsupportedInDrawHook("end_context_menu");
+    }
+    bool PyUILayout::begin_popup(const std::string&) {
+        warnUnsupportedInDrawHook("begin_popup");
+        return false;
+    }
+    void PyUILayout::open_popup(const std::string&) {
+        warnUnsupportedInDrawHook("open_popup");
+    }
+    void PyUILayout::end_popup() { warnUnsupportedInDrawHook("end_popup"); }
 
     bool PyUILayout::menu_item(const std::string& label, bool enabled, bool selected) {
         if (collecting_ && collect_target_) {
@@ -1858,6 +2027,7 @@ namespace lfs::python {
             collect_target_->items.push_back(std::move(item));
             return execute_at_index_ == idx;
         }
+        warnUnsupportedInDrawHook("menu_item");
         return false;
     }
 
@@ -1870,6 +2040,7 @@ namespace lfs::python {
             ++menu_depth_;
             return true;
         }
+        warnUnsupportedInDrawHook("begin_menu");
         return false;
     }
 
@@ -1881,16 +2052,26 @@ namespace lfs::python {
             vis::gui::MenuItemDesc item;
             item.type = vis::gui::MenuItemDesc::Type::SubMenuEnd;
             collect_target_->items.push_back(std::move(item));
+            return;
         }
+        warnUnsupportedInDrawHook("end_menu");
     }
 
-    std::tuple<bool, std::string> PyUILayout::input_text_enter(const std::string&, const std::string& value) { return {false, value}; }
-    void PyUILayout::set_keyboard_focus_here() {}
+    std::tuple<bool, std::string> PyUILayout::input_text_enter(
+        const std::string&, const std::string& value) {
+        warnUnsupportedInDrawHook("input_text_enter");
+        return {false, value};
+    }
+    void PyUILayout::set_keyboard_focus_here() {
+        warnUnsupportedInDrawHook("set_keyboard_focus_here");
+    }
     bool PyUILayout::is_window_focused() const { return false; }
     bool PyUILayout::is_window_hovered() const { return false; }
     void PyUILayout::capture_keyboard_from_app(bool capture) { vis::gui::guiFocusState().want_capture_keyboard = capture; }
     void PyUILayout::capture_mouse_from_app(bool capture) { vis::gui::guiFocusState().want_capture_mouse = capture; }
-    void PyUILayout::set_scroll_here_y(float) {}
+    void PyUILayout::set_scroll_here_y(float) {
+        warnUnsupportedInDrawHook("set_scroll_here_y");
+    }
     std::tuple<float, float> PyUILayout::get_cursor_screen_pos() const { return {0.0f, 0.0f}; }
     std::tuple<float, float> PyUILayout::get_mouse_pos() const {
         float x = 0.0f;
@@ -1898,53 +2079,121 @@ namespace lfs::python {
         SDL_GetMouseState(&x, &y);
         return {x, y};
     }
-    std::tuple<float, float> PyUILayout::get_window_pos() const { return {0.0f, 0.0f}; }
-    float PyUILayout::get_window_width() const { return 0.0f; }
+    std::tuple<float, float> PyUILayout::get_window_pos() const {
+        return isDrawHook() ? window_pos_ : std::tuple<float, float>{0.0f, 0.0f};
+    }
+    float PyUILayout::get_window_width() const {
+        return isDrawHook() ? std::get<0>(window_size_) : 0.0f;
+    }
     float PyUILayout::get_text_line_height() const { return 16.0f * python::get_shared_dpi_scale(); }
-    bool PyUILayout::begin_popup_modal(const std::string&) { return false; }
-    void PyUILayout::end_popup_modal() {}
-    void PyUILayout::close_current_popup() {}
-    void PyUILayout::set_next_window_pos_center() {}
-    void PyUILayout::set_next_window_pos_viewport_center(bool) {}
-    void PyUILayout::set_next_window_focus() {}
+    bool PyUILayout::begin_popup_modal(const std::string&) {
+        warnUnsupportedInDrawHook("begin_popup_modal");
+        return false;
+    }
+    void PyUILayout::end_popup_modal() {
+        warnUnsupportedInDrawHook("end_popup_modal");
+    }
+    void PyUILayout::close_current_popup() {
+        warnUnsupportedInDrawHook("close_current_popup");
+    }
+    void PyUILayout::set_next_window_pos_center() {
+        warnUnsupportedInDrawHook("set_next_window_pos_center");
+    }
+    void PyUILayout::set_next_window_pos_viewport_center(bool) {
+        warnUnsupportedInDrawHook("set_next_window_pos_viewport_center");
+    }
+    void PyUILayout::set_next_window_focus() {
+        warnUnsupportedInDrawHook("set_next_window_focus");
+    }
     void PyUILayout::push_modal_style() { lfs::vis::theme().pushModalStyle(); }
     void PyUILayout::pop_modal_style() { lfs::vis::theme().popModalStyle(); }
     std::tuple<float, float> PyUILayout::get_content_region_avail() { return get_viewport_size(); }
     std::tuple<float, float> PyUILayout::get_cursor_pos() { return {0.0f, 0.0f}; }
-    void PyUILayout::set_cursor_pos_x(float) {}
+    void PyUILayout::set_cursor_pos_x(float) {
+        warnUnsupportedInDrawHook("set_cursor_pos_x");
+    }
     std::tuple<float, float> PyUILayout::calc_text_size(const std::string& text) {
         const float scale = python::get_shared_dpi_scale();
         return {static_cast<float>(text.size()) * 7.0f * scale, 16.0f * scale};
     }
-    void PyUILayout::begin_disabled(bool) {}
-    void PyUILayout::end_disabled() {}
-    void PyUILayout::image(uint64_t, std::tuple<float, float>, nb::object) {}
-    void PyUILayout::image_uv(uint64_t, std::tuple<float, float>, std::tuple<float, float>, std::tuple<float, float>, nb::object) {}
-    bool PyUILayout::image_button(const std::string&, uint64_t, std::tuple<float, float>, nb::object) { return false; }
-    bool PyUILayout::toolbar_button(const std::string&, uint64_t, std::tuple<float, float>, bool, bool, const std::string&) {
+    void PyUILayout::begin_disabled(bool) {
+        warnUnsupportedInDrawHook("begin_disabled");
+    }
+    void PyUILayout::end_disabled() { warnUnsupportedInDrawHook("end_disabled"); }
+    void PyUILayout::image(uint64_t, std::tuple<float, float>, nb::object) {
+        warnUnsupportedInDrawHook("image");
+    }
+    void PyUILayout::image_uv(uint64_t, std::tuple<float, float>,
+                              std::tuple<float, float>, std::tuple<float, float>,
+                              nb::object) {
+        warnUnsupportedInDrawHook("image_uv");
+    }
+    bool PyUILayout::image_button(const std::string&, uint64_t,
+                                  std::tuple<float, float>, nb::object) {
+        warnUnsupportedInDrawHook("image_button");
         return false;
     }
-    bool PyUILayout::begin_drag_drop_source() { return false; }
-    void PyUILayout::set_drag_drop_payload(const std::string&, const std::string&) {}
-    void PyUILayout::end_drag_drop_source() {}
-    bool PyUILayout::begin_drag_drop_target() { return false; }
-    std::optional<std::string> PyUILayout::accept_drag_drop_payload(const std::string&) { return std::nullopt; }
-    void PyUILayout::end_drag_drop_target() {}
-    void PyUILayout::progress_bar(float, const std::string&, float, float) {}
-    void PyUILayout::set_tooltip(const std::string&) {}
+    bool PyUILayout::toolbar_button(const std::string&, uint64_t, std::tuple<float, float>, bool, bool, const std::string&) {
+        warnUnsupportedInDrawHook("toolbar_button");
+        return false;
+    }
+    bool PyUILayout::begin_drag_drop_source() {
+        warnUnsupportedInDrawHook("begin_drag_drop_source");
+        return false;
+    }
+    void PyUILayout::set_drag_drop_payload(const std::string&, const std::string&) {
+        warnUnsupportedInDrawHook("set_drag_drop_payload");
+    }
+    void PyUILayout::end_drag_drop_source() {
+        warnUnsupportedInDrawHook("end_drag_drop_source");
+    }
+    bool PyUILayout::begin_drag_drop_target() {
+        warnUnsupportedInDrawHook("begin_drag_drop_target");
+        return false;
+    }
+    std::optional<std::string> PyUILayout::accept_drag_drop_payload(const std::string&) {
+        warnUnsupportedInDrawHook("accept_drag_drop_payload");
+        return std::nullopt;
+    }
+    void PyUILayout::end_drag_drop_target() {
+        warnUnsupportedInDrawHook("end_drag_drop_target");
+    }
+    void PyUILayout::progress_bar(float, const std::string&, float, float) {
+        warnUnsupportedInDrawHook("progress_bar");
+    }
+    void PyUILayout::set_tooltip(const std::string&) {
+        warnUnsupportedInDrawHook("set_tooltip");
+    }
     bool PyUILayout::is_item_hovered() { return false; }
     bool PyUILayout::is_item_clicked(int) { return false; }
     bool PyUILayout::is_mouse_double_clicked(int) { return false; }
     bool PyUILayout::is_mouse_dragging(int) { return false; }
     float PyUILayout::get_mouse_wheel() { return 0.0f; }
     std::tuple<float, float> PyUILayout::get_mouse_delta() { return {0.0f, 0.0f}; }
-    bool PyUILayout::invisible_button(const std::string&, std::tuple<float, float>) { return false; }
+    bool PyUILayout::invisible_button(const std::string&, std::tuple<float, float>) {
+        warnUnsupportedInDrawHook("invisible_button");
+        return false;
+    }
     bool PyUILayout::is_item_active() { return false; }
-    void PyUILayout::set_cursor_pos(std::tuple<float, float>) {}
-    bool PyUILayout::begin_child(const std::string&, std::tuple<float, float>, bool) { return true; }
-    void PyUILayout::end_child() {}
-    bool PyUILayout::begin_menu_bar() { return true; }
-    void PyUILayout::end_menu_bar() {}
+    void PyUILayout::set_cursor_pos(std::tuple<float, float>) {
+        warnUnsupportedInDrawHook("set_cursor_pos");
+    }
+    bool PyUILayout::begin_child(const std::string&, std::tuple<float, float>, bool) {
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("begin_child");
+            return false;
+        }
+        return true;
+    }
+    void PyUILayout::end_child() { warnUnsupportedInDrawHook("end_child"); }
+    bool PyUILayout::begin_menu_bar() {
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("begin_menu_bar");
+            return false;
+        }
+        return true;
+    }
+    void PyUILayout::end_menu_bar() { warnUnsupportedInDrawHook("end_menu_bar"); }
 
     bool PyUILayout::menu_item_toggle(const std::string& label, const std::string& shortcut, bool selected) {
         if (collecting_ && collect_target_) {
@@ -1958,6 +2207,7 @@ namespace lfs::python {
             collect_target_->items.push_back(std::move(item));
             return execute_at_index_ == idx;
         }
+        warnUnsupportedInDrawHook("menu_item_toggle");
         return false;
     }
 
@@ -1973,21 +2223,51 @@ namespace lfs::python {
             collect_target_->items.push_back(std::move(item));
             return execute_at_index_ == idx;
         }
+        warnUnsupportedInDrawHook("menu_item_shortcut");
         return false;
     }
 
-    void PyUILayout::push_id(const std::string&) {}
-    void PyUILayout::push_id_int(int) {}
-    void PyUILayout::pop_id() {}
-    bool PyUILayout::begin_window(const std::string&, int) { return true; }
-    std::tuple<bool, bool> PyUILayout::begin_window_closable(const std::string&, int) { return {true, true}; }
+    void PyUILayout::push_id(const std::string&) { warnUnsupportedInDrawHook("push_id"); }
+    void PyUILayout::push_id_int(int) { warnUnsupportedInDrawHook("push_id_int"); }
+    void PyUILayout::pop_id() { warnUnsupportedInDrawHook("pop_id"); }
+    bool PyUILayout::begin_window(const std::string&, int) {
+        if (isDrawHook()) {
+            window_pos_ = next_window_pos_;
+            window_size_ = next_window_size_;
+        }
+        return true;
+    }
+    std::tuple<bool, bool> PyUILayout::begin_window_closable(const std::string&, int) {
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("begin_window_closable");
+            return {false, true};
+        }
+        return {true, true};
+    }
     void PyUILayout::end_window() {}
-    void PyUILayout::push_window_style() {}
-    void PyUILayout::pop_window_style() {}
-    void PyUILayout::set_next_window_pos(std::tuple<float, float>, bool) {}
-    void PyUILayout::set_next_window_size(std::tuple<float, float>, bool) {}
-    void PyUILayout::set_next_window_pos_centered(bool) {}
-    void PyUILayout::set_next_window_bg_alpha(float) {}
+    void PyUILayout::push_window_style() {
+        warnUnsupportedInDrawHook("push_window_style");
+    }
+    void PyUILayout::pop_window_style() {
+        warnUnsupportedInDrawHook("pop_window_style");
+    }
+    void PyUILayout::set_next_window_pos(std::tuple<float, float> pos, bool) {
+        next_window_pos_ = pos;
+    }
+    void PyUILayout::set_next_window_size(std::tuple<float, float> size, bool) {
+        next_window_size_ = size;
+    }
+    void PyUILayout::set_next_window_pos_centered(bool) {
+        const auto [viewport_x, viewport_y] = get_viewport_pos();
+        const auto [viewport_w, viewport_h] = get_viewport_size();
+        next_window_pos_ = {
+            viewport_x + (viewport_w - std::get<0>(next_window_size_)) * 0.5f,
+            viewport_y + (viewport_h - std::get<1>(next_window_size_)) * 0.5f,
+        };
+    }
+    void PyUILayout::set_next_window_bg_alpha(float) {
+        warnUnsupportedInDrawHook("set_next_window_bg_alpha");
+    }
 
     std::tuple<float, float> PyUILayout::get_viewport_pos() {
         if (has_viewport_bounds()) {
@@ -2008,16 +2288,35 @@ namespace lfs::python {
     }
 
     float PyUILayout::get_dpi_scale() { return python::get_shared_dpi_scale(); }
-    void PyUILayout::set_mouse_cursor_hand() {}
-    void PyUILayout::push_style_var_float(const std::string&, float) {}
-    void PyUILayout::push_style_var_vec2(const std::string&, std::tuple<float, float>) {}
-    void PyUILayout::pop_style_var(int) {}
-    void PyUILayout::push_style_color(const std::string&, nb::object) {}
-    void PyUILayout::pop_style_color(int) {}
+    void PyUILayout::set_mouse_cursor_hand() {
+        warnUnsupportedInDrawHook("set_mouse_cursor_hand");
+    }
+    void PyUILayout::push_style_var_float(const std::string&, float) {
+        warnUnsupportedInDrawHook("push_style_var");
+    }
+    void PyUILayout::push_style_var_vec2(const std::string&, std::tuple<float, float>) {
+        warnUnsupportedInDrawHook("push_style_var_vec2");
+    }
+    void PyUILayout::pop_style_var(int) {
+        warnUnsupportedInDrawHook("pop_style_var");
+    }
+    void PyUILayout::push_style_color(const std::string&, nb::object) {
+        warnUnsupportedInDrawHook("push_style_color");
+    }
+    void PyUILayout::pop_style_color(int) {
+        warnUnsupportedInDrawHook("pop_style_color");
+    }
 
     std::tuple<bool, nb::object> PyUILayout::prop(nb::object data,
                                                   const std::string& prop_id,
                                                   std::optional<std::string>) {
+        warnUnsupportedInDrawHook("prop");
+        if (isDrawHook()) {
+            if (nb::hasattr(data, prop_id.c_str()))
+                return {false, data.attr(prop_id.c_str())};
+            return {false, nb::none()};
+        }
+
         if (!nb::hasattr(data, "get_all_properties")) {
             throw std::runtime_error("prop() requires object with get_all_properties() method");
         }

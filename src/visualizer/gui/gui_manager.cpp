@@ -3160,13 +3160,37 @@ namespace lfs::vis::gui {
         };
         ops.draw = [](void* host, const void* ctx) {
             auto* h = static_cast<RmlPanelHost*>(host);
+            const auto& draw_ctx = *static_cast<const PanelDrawContext*>(ctx);
             PanelInputState fallback;
             if (!h->hasInput() && s_frame_input) {
                 fallback = buildPanelInputFromSDL(*s_frame_input);
                 h->setInput(&fallback);
             }
-            h->draw(*static_cast<const PanelDrawContext*>(ctx),
-                    0.0f, 0.0f, 0.0f, 0.0f);
+
+            PanelDrawBounds bounds;
+            if (draw_ctx.bounds && draw_ctx.bounds->valid()) {
+                bounds = *draw_ctx.bounds;
+            } else if (draw_ctx.viewport &&
+                       draw_ctx.viewport->size.x > 0.0f &&
+                       draw_ctx.viewport->size.y > 0.0f) {
+                bounds = {
+                    .x = draw_ctx.viewport->pos.x,
+                    .y = draw_ctx.viewport->pos.y,
+                    .width = draw_ctx.viewport->size.x,
+                    .height = draw_ctx.viewport->size.y,
+                };
+            } else if (s_frame_input && s_frame_input->window_w > 0 &&
+                       s_frame_input->window_h > 0) {
+                bounds = {
+                    .width = static_cast<float>(s_frame_input->window_w),
+                    .height = static_cast<float>(s_frame_input->window_h),
+                };
+            }
+
+            assert(bounds.valid());
+            if (bounds.valid()) {
+                h->draw(draw_ctx, bounds.width, bounds.height, bounds.x, bounds.y);
+            }
             h->setInput(nullptr);
         };
         ops.draw_direct = [](void* host, float x, float y, float w, float h) {
@@ -6095,8 +6119,16 @@ namespace lfs::vis::gui {
                                              panel_input.screen_w,
                                              panel_input.screen_h);
             }
-            if (has_status_bar_panels)
-                reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
+            if (has_status_bar_panels) {
+                auto status_draw_ctx = draw_ctx;
+                status_draw_ctx.bounds = PanelDrawBounds{
+                    .x = status_bar_x,
+                    .y = status_bar_y,
+                    .width = status_bar_w,
+                    .height = status_bar_height,
+                };
+                reg.draw_panels(PanelSpace::StatusBar, status_draw_ctx, &panel_input);
+            }
         }
 
         if (!startup_plugin_preload_blocking_python && python::has_python_modals()) {

@@ -31,6 +31,15 @@ namespace lfs::vis::gui {
     struct ViewportLayout;
     struct PanelInputState;
 
+    struct PanelDrawBounds {
+        float x = 0.0f;
+        float y = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+
+        [[nodiscard]] bool valid() const { return width > 0.0f && height > 0.0f; }
+    };
+
     enum class PanelOption : uint32_t {
         DEFAULT_CLOSED = 1 << 0,
         HIDE_HEADER = 1 << 1,
@@ -49,6 +58,7 @@ namespace lfs::vis::gui {
         bool has_selection = false;
         bool is_training = false;
         bool suppress_non_native_panels = false;
+        std::optional<PanelDrawBounds> bounds;
     };
 
     struct FloatingPanelAnchor {
