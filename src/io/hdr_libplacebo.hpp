@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "hdr_tonemap.hpp"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -20,11 +22,6 @@ namespace lfs::io {
         double rgba_to_rgb_seconds = 0.0;
     };
 
-    /// Vulkan/libplacebo SDR renderer for all HDR sources supported by FFmpeg.
-    ///
-    /// The input is deliberately the decoded AVFrame, before swscale changes
-    /// its representation. libplacebo then owns color metadata interpretation,
-    /// Dolby Vision reshaping, gamut conversion, tone mapping and 8-bit dithering.
     class HdrLibplaceboRenderer {
     public:
         HdrLibplaceboRenderer();
@@ -33,14 +30,15 @@ namespace lfs::io {
         HdrLibplaceboRenderer(const HdrLibplaceboRenderer&) = delete;
         HdrLibplaceboRenderer& operator=(const HdrLibplaceboRenderer&) = delete;
 
+        [[nodiscard]] bool isAvailable(std::string& error);
         [[nodiscard]] bool tonemapToSdr(const AVFrame* frame, const AVStream* stream,
+                                        HdrFormat source_format,
                                         int output_width, int output_height,
                                         std::vector<unsigned char>& output_rgb,
                                         std::string& error,
                                         HdrTonemapTiming* timing = nullptr);
-        // Preview consumers can keep libplacebo's native RGBA8 readback and
-        // upload it directly to a Vulkan texture, avoiding RGB/RGBA CPU copies.
         [[nodiscard]] bool tonemapToSdrRgba(const AVFrame* frame, const AVStream* stream,
+                                            HdrFormat source_format,
                                             int output_width, int output_height,
                                             int rotation_degrees,
                                             std::vector<unsigned char>& output_rgba,

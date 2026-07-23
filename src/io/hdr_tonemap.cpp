@@ -6,11 +6,17 @@
 
 namespace lfs::io {
 
-    HdrFormat detectHdrFormat(const int color_trc, int) {
+    HdrFormat detectHdrFormat(const int color_trc, const int bit_depth,
+                              const bool has_mastering_display_metadata,
+                              const bool has_content_light_metadata) {
         switch (color_trc) {
         case 18: return HdrFormat::HLG;   // ARIB STD-B67
         case 16: return HdrFormat::HDR10; // SMPTE ST 2084 / PQ
-        default: return HdrFormat::SDR;
+        default:
+            return bit_depth >= 10 &&
+                           (has_mastering_display_metadata || has_content_light_metadata)
+                       ? HdrFormat::HDR10
+                       : HdrFormat::SDR;
         }
     }
 
@@ -19,13 +25,15 @@ namespace lfs::io {
         if (dv_profile <= 0)
             return detectHdrFormat(color_trc, 0);
 
-        // Compatibility id identifies the base layer for decoders that do not
-        // apply RPU. Apple Dolby Vision 8.4 is HLG (id 4); DV 8.1/10.1 is
-        // HDR10/PQ (id 1). Native profiles remain explicitly marked as such.
-        if (compatibility_id == 4 || color_trc == 18)
-            return HdrFormat::DOLBY_VISION_HLG;
-        if (compatibility_id == 1 || color_trc == 16)
-            return HdrFormat::DOLBY_VISION_HDR10;
+        if (dv_profile == 5)
+            return HdrFormat::DOLBY_VISION_NATIVE;
+
+        if (dv_profile == 8) {
+            if (compatibility_id == 4 || color_trc == 18)
+                return HdrFormat::DOLBY_VISION_HLG;
+            if (compatibility_id == 1 || color_trc == 16)
+                return HdrFormat::DOLBY_VISION_HDR10;
+        }
         return HdrFormat::DOLBY_VISION_NATIVE;
     }
 

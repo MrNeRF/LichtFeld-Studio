@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -15,6 +16,13 @@ namespace lfs::io {
 
     // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
     [[nodiscard]] std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
+    [[nodiscard]] std::size_t calculateFpsSampleCount(double start_time, double end_time,
+                                                      double target_fps);
+    [[nodiscard]] double fpsSampleTime(double start_time, double end_time,
+                                       double target_fps, std::size_t sample_index);
+    [[nodiscard]] bool frameCoversSampleTime(double frame_time, double frame_duration,
+                                             double sample_time);
+    [[nodiscard]] bool shouldFillRetainedFpsTail(bool reached_eof, bool reached_end);
 
     enum class ExtractionMode {
         FPS,     // Extract at specific FPS
@@ -80,6 +88,15 @@ namespace lfs::io {
             bool convert_hdr_to_sdr = false;
         };
 
+        struct ValidatedLayout {
+            int width = 0;
+            int height = 0;
+            std::size_t rgb_bytes = 0;
+        };
+
+        [[nodiscard]] static bool validateParams(const Params& params, int source_width,
+                                                 int source_height, double stream_time_base,
+                                                 ValidatedLayout& layout, std::string& error);
         bool extract(const Params& params, std::string& error);
 
     private:

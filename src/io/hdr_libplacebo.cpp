@@ -17,6 +17,7 @@ extern "C" {
 
 #include <array>
 #include <chrono>
+#include <limits>
 #include <mutex>
 #include <utility>
 
@@ -55,14 +56,25 @@ namespace lfs::io {
             pl_log_destroy(&log_);
         }
 
+        bool isAvailable(std::string& error) {
+            std::lock_guard lock(mutex_);
+            return initialize(error);
+        }
+
         bool tonemap(const AVFrame* const frame, const AVStream* const stream,
+                     const HdrFormat source_format,
                      const int output_width, const int output_height,
                      const int rotation_degrees,
                      std::vector<unsigned char>& output, std::string& error,
-                     HdrTonemapTiming* const timing, const bool keep_rgba) {
+                     HdrTonemapTiming* const timing, const bool keep_rgba,
+                     const bool temporal_peak_detection) {
             std::lock_guard lock(mutex_);
             if (timing)
                 *timing = {};
+            if (!frame || output_width <= 0 || output_height <= 0) {
+                error = "Invalid HDR frame or output dimensions";
+                return false;
+            }
 
             const auto initialization_started = std::chrono::steady_clock::now();
             if (!initialize(error))
@@ -70,10 +82,6 @@ namespace lfs::io {
             if (timing) {
                 timing->initialization_seconds =
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - initialization_started).count();
-            }
-            if (!frame || output_width <= 0 || output_height <= 0) {
-                error = "Invalid HDR frame or output dimensions";
-                return false;
             }
 
             const auto render_started = std::chrono::steady_clock::now();
@@ -87,16 +95,24 @@ namespace lfs::io {
                 return false;
             }
 
-            // Preserve stream-level mastering and Dolby Vision metadata.
+            const auto unmap_source = [this, &source]() {
+                pl_unmap_avframe(gpu_, &source);
+            };
+            if (source_format == HdrFormat::DOLBY_VISION_NATIVE &&
+                source.repr.sys != PL_COLOR_SYSTEM_DOLBYVISION) {
+                unmap_source();
+                error = "Dolby Vision Profile 5 metadata was not mapped by libplacebo";
+                return false;
+            }
+
             if (stream)
                 pl_frame_copy_stream_props(&source, stream);
 
-            // Apply preview rotation during rendering to avoid CPU RGBA rotation.
             source.rotation = pl_rotation_normalize(rotation_degrees / 90);
 
             const bool texture_ready = recreateOutput(output_width, output_height, error);
             if (!texture_ready) {
-                pl_unmap_avframe(gpu_, &source);
+                unmap_source();
                 return false;
             }
 
@@ -116,8 +132,10 @@ namespace lfs::io {
             pl_render_params render_params = pl_render_default_params;
             render_params.color_map_params = &pl_color_map_default_params;
             render_params.dither_params = &pl_dither_default_params;
+            if (!temporal_peak_detection)
+                render_params.peak_detect_params = nullptr;
             const bool rendered = pl_render_image(renderer_, &source, &target, &render_params);
-            pl_unmap_avframe(gpu_, &source);
+            unmap_source();
             if (!rendered) {
                 error = "libplacebo failed to render the HDR frame";
                 return false;
@@ -171,41 +189,75 @@ namespace lfs::io {
         bool initialize(std::string& error) {
             if (renderer_)
                 return true;
+            if (initialization_attempted_) {
+                error = initialization_error_;
+                return false;
+            }
+            initialization_attempted_ = true;
 
             pl_log_params log_params{};
             log_params.log_cb = libplaceboLogCallback;
-            // Keep normal logs limited to warnings and errors.
             log_params.log_level = PL_LOG_WARN;
-            log_ = pl_log_create(PL_API_VER, &log_params);
-            vulkan_ = pl_vulkan_create(log_, nullptr);
-            if (!vulkan_) {
-                error = "libplacebo could not create its Vulkan renderer";
-                return false;
+            pl_log new_log = pl_log_create(PL_API_VER, &log_params);
+            if (!new_log)
+                return failInitialization("libplacebo could not create its logger", error,
+                                          new_log, nullptr, nullptr);
+
+            pl_vulkan new_vulkan = pl_vulkan_create(new_log, nullptr);
+            if (!new_vulkan)
+                return failInitialization("libplacebo could not create its Vulkan renderer",
+                                          error, new_log, new_vulkan, nullptr);
+
+            pl_renderer new_renderer = pl_renderer_create(new_log, new_vulkan->gpu);
+            if (!new_renderer)
+                return failInitialization("libplacebo could not create its video renderer",
+                                          error, new_log, new_vulkan, new_renderer);
+
+            const pl_fmt new_output_format = pl_find_fmt(
+                new_vulkan->gpu, PL_FMT_UNORM, 4, 8, 8,
+                static_cast<pl_fmt_caps>(PL_FMT_CAP_RENDERABLE | PL_FMT_CAP_HOST_READABLE));
+            if (!new_output_format) {
+                return failInitialization("libplacebo could not find an RGBA8 render target",
+                                          error, new_log, new_vulkan, new_renderer);
             }
-            gpu_ = vulkan_->gpu;
-            renderer_ = pl_renderer_create(log_, gpu_);
-            if (!renderer_) {
-                error = "libplacebo could not create its video renderer";
-                return false;
-            }
+
+            log_ = new_log;
+            vulkan_ = new_vulkan;
+            gpu_ = new_vulkan->gpu;
+            renderer_ = new_renderer;
+            output_format_ = new_output_format;
             return true;
         }
 
+        bool failInitialization(const std::string& message, std::string& error, pl_log log,
+                                pl_vulkan vulkan, pl_renderer renderer) {
+            pl_renderer_destroy(&renderer);
+            pl_vulkan_destroy(&vulkan);
+            pl_log_destroy(&log);
+            initialization_error_ = message;
+            error = message;
+            return false;
+        }
+
         bool recreateOutput(const int width, const int height, std::string& error) {
-            const pl_fmt format = pl_find_fmt(gpu_, PL_FMT_UNORM, 4, 8, 8,
-                                              static_cast<pl_fmt_caps>(PL_FMT_CAP_RENDERABLE |
-                                                                       PL_FMT_CAP_HOST_READABLE));
-            if (!format) {
-                error = "libplacebo could not find an RGBA8 render target";
+            if (width <= 0 || height <= 0) {
+                error = "Invalid libplacebo render target dimensions";
+                return false;
+            }
+            const size_t output_width = static_cast<size_t>(width);
+            const size_t output_height = static_cast<size_t>(height);
+            if (output_width > std::numeric_limits<size_t>::max() / output_height ||
+                output_width * output_height >
+                    std::numeric_limits<size_t>::max() / 4) {
+                error = "Invalid libplacebo render target dimensions";
                 return false;
             }
             pl_tex_params params{};
             params.w = width;
             params.h = height;
-            params.format = format;
+            params.format = output_format_;
             params.renderable = true;
             params.host_readable = true;
-            // Rendering clears the target through a blit.
             params.blit_dst = true;
             if (!pl_tex_recreate(gpu_, &output_texture_, &params)) {
                 error = "libplacebo could not allocate the SDR render target";
@@ -219,29 +271,38 @@ namespace lfs::io {
         pl_vulkan vulkan_ = nullptr;
         pl_gpu gpu_ = nullptr;
         pl_renderer renderer_ = nullptr;
+        pl_fmt output_format_ = nullptr;
         std::array<pl_tex, 4> source_textures_{};
         pl_tex output_texture_ = nullptr;
         std::vector<unsigned char> rgba_buffer_;
+        bool initialization_attempted_ = false;
+        std::string initialization_error_;
     };
 
     HdrLibplaceboRenderer::HdrLibplaceboRenderer() : impl_(std::make_unique<Impl>()) {}
     HdrLibplaceboRenderer::~HdrLibplaceboRenderer() = default;
 
+    bool HdrLibplaceboRenderer::isAvailable(std::string& error) {
+        return impl_->isAvailable(error);
+    }
+
     bool HdrLibplaceboRenderer::tonemapToSdr(const AVFrame* const frame, const AVStream* const stream,
-                                              const int output_width, const int output_height,
-                                              std::vector<unsigned char>& output_rgb,
-                                              std::string& error, HdrTonemapTiming* const timing) {
-        return impl_->tonemap(frame, stream, output_width, output_height, 0,
-                              output_rgb, error, timing, false);
+                                             const HdrFormat source_format,
+                                             const int output_width, const int output_height,
+                                             std::vector<unsigned char>& output_rgb,
+                                             std::string& error, HdrTonemapTiming* const timing) {
+        return impl_->tonemap(frame, stream, source_format, output_width, output_height, 0,
+                              output_rgb, error, timing, false, false);
     }
 
     bool HdrLibplaceboRenderer::tonemapToSdrRgba(const AVFrame* const frame, const AVStream* const stream,
-                                                  const int output_width, const int output_height,
-                                                  const int rotation_degrees,
-                                                  std::vector<unsigned char>& output_rgba,
-                                                  std::string& error) {
-        return impl_->tonemap(frame, stream, output_width, output_height, rotation_degrees,
-                              output_rgba, error, nullptr, true);
+                                                 const HdrFormat source_format,
+                                                 const int output_width, const int output_height,
+                                                 const int rotation_degrees,
+                                                 std::vector<unsigned char>& output_rgba,
+                                                 std::string& error) {
+        return impl_->tonemap(frame, stream, source_format, output_width, output_height,
+                              rotation_degrees, output_rgba, error, nullptr, true, true);
     }
 
     void HdrLibplaceboRenderer::reset() { impl_->reset(); }

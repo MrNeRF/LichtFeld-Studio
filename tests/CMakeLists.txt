@@ -154,6 +154,7 @@ set(TEST_FILES
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
+    test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
     test_panel_registry_animation_demand.cpp
     test_panel_layout_render_demand.cpp

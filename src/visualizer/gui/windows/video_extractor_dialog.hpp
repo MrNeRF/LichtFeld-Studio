@@ -119,7 +119,7 @@ namespace lfs::gui {
         void updateProgress(int current, int total, int discarded = 0);
         void setExtractionComplete();
         void setExtractionStopped();
-        void setExtractionError(const std::string& error);
+        void setExtractionError(const std::string& error, bool extraction_failure = true);
         [[nodiscard]] ExtractionStatusSnapshot getExtractionStatusSnapshot() const;
         void clearExtractionStatus();
         void clearStatusMessage();
@@ -138,6 +138,7 @@ namespace lfs::gui {
         void syncVideoPreview();
         void syncTimeline();
         void syncControls();
+        bool syncHdrControls();
         void syncExtractionStatus();
         void syncOutputPreview();
         void handleEvent(Rml::Event& event);

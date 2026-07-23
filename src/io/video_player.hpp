@@ -31,6 +31,7 @@ namespace lfs::io {
 
         void seek(double seconds);
         void seekFrame(int64_t frame_number);
+        bool rerenderCurrentFrame();
         void stepForward();
         void stepBackward();
 
@@ -60,10 +61,11 @@ namespace lfs::io {
 
         // HDR detection
         bool isHdr() const;
-        bool isHdrConversionSupported() const;
+        bool isHdrConversionSupported();
         std::string hdrInfo() const;
         void setHdrToSdr(bool enabled);
         void setPreviewRotation(int degrees);
+        std::string takeError();
 
     private:
         class Impl;

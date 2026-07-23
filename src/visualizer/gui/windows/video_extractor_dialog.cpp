@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <string_view>
 
 using namespace lichtfeld::Strings;
@@ -154,6 +155,23 @@ namespace lfs::gui {
                 el->SetAttribute("disabled", "disabled");
             else
                 el->RemoveAttribute("disabled");
+            el->SetAttribute(attr_name, value);
+            return true;
+        }
+
+        [[nodiscard]] bool setCachedChecked(Rml::Element* const el, const bool checked) {
+            if (!el)
+                return false;
+
+            const std::string attr_name = cacheAttrName("attr", "checked");
+            const char* const value = checked ? "1" : "0";
+            if (el->GetAttribute<Rml::String>(attr_name.c_str(), "") == value)
+                return false;
+
+            if (checked)
+                el->SetAttribute("checked", "checked");
+            else
+                el->RemoveAttribute("checked");
             el->SetAttribute(attr_name, value);
             return true;
         }
@@ -384,9 +402,12 @@ namespace lfs::gui {
         extraction_status_dirty_.store(true);
     }
 
-    void VideoExtractorDialog::setExtractionError(const std::string& error) {
-        extracting_.store(false);
-        stop_extraction_requested_.store(false);
+    void VideoExtractorDialog::setExtractionError(const std::string& error,
+                                                  const bool extraction_failure) {
+        if (extraction_failure) {
+            extracting_.store(false);
+            stop_extraction_requested_.store(false);
+        }
         std::lock_guard lock(extraction_status_mutex_);
         error_message_ = error;
         status_message_ = ExtractionStatusMessage::None;
@@ -422,6 +443,7 @@ namespace lfs::gui {
 
     bool VideoExtractorDialog::openVideo(const std::filesystem::path& path) {
         if (!player_->open(path)) {
+            syncHdrControls();
             setExtractionError(std::format("Failed to open {}", lfs::core::path_to_utf8(path)));
             return false;
         }
@@ -437,33 +459,10 @@ namespace lfs::gui {
         hdr_to_sdr_ = player_->isHdr() && player_->isHdrConversionSupported();
         player_->setHdrToSdr(hdr_to_sdr_);
         if (hdr_to_sdr_)
-            player_->seek(0.0);
-        if (hdr_to_sdr_el_) {
-            if (hdr_to_sdr_)
-                hdr_to_sdr_el_->SetAttribute("checked", "checked");
-            else
-                hdr_to_sdr_el_->RemoveAttribute("checked");
-        }
+            player_->rerenderCurrentFrame();
         if (rotation_value_el_)
             rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
-
-        // Update HDR/SDR badge
-        if (hdr_badge_el_ && hdr_badge_label_el_ && hdr_badge_type_el_) {
-            if (player_->isHdr()) {
-                hdr_badge_el_->SetClass("hdr-badge--hdr", true);
-                hdr_badge_el_->SetClass("hdr-badge--sdr", false);
-                hdr_badge_el_->SetProperty("display", "inline-flex");
-                hdr_badge_label_el_->SetInnerRML("HDR");
-                hdr_badge_type_el_->SetInnerRML(player_->hdrInfo());
-                hdr_badge_type_el_->SetProperty("display", "inline");
-            } else {
-                hdr_badge_el_->SetClass("hdr-badge--sdr", true);
-                hdr_badge_el_->SetClass("hdr-badge--hdr", false);
-                hdr_badge_el_->SetProperty("display", "inline-flex");
-                hdr_badge_label_el_->SetInnerRML("SDR");
-                hdr_badge_type_el_->SetProperty("display", "none");
-            }
-        }
+        syncHdrControls();
         texture_needs_update_ = true;
         preview_src_.clear();
 
@@ -488,7 +487,9 @@ namespace lfs::gui {
             return 0;
 
         if (mode_selection_ == 0)
-            return static_cast<int>(std::ceil(duration * static_cast<double>(fps_)));
+            return static_cast<int>(std::min<std::size_t>(
+                io::calculateFpsSampleCount(trim_start_, trim_start_ + duration, fps_),
+                static_cast<std::size_t>(std::numeric_limits<int>::max())));
 
         const double video_fps = std::max(player_->fps(), 0.001);
         return static_cast<int>(std::ceil((duration * video_fps) /
@@ -644,6 +645,14 @@ namespace lfs::gui {
         error_section_el_ = nullptr;
         error_text_el_ = nullptr;
         dismiss_btn_el_ = nullptr;
+        hdr_to_sdr_el_ = nullptr;
+        hdr_to_sdr_row_el_ = nullptr;
+        rotation_cw_btn_el_ = nullptr;
+        rotation_ccw_btn_el_ = nullptr;
+        rotation_value_el_ = nullptr;
+        hdr_badge_el_ = nullptr;
+        hdr_badge_type_el_ = nullptr;
+        hdr_badge_label_el_ = nullptr;
         elements_cached_ = false;
     }
 
@@ -894,6 +903,8 @@ namespace lfs::gui {
             if (texture_needs_update_)
                 updatePreviewTexture();
         }
+        if (std::string player_error = player_->takeError(); !player_error.empty())
+            setExtractionError(player_error, false);
 
         const auto shell_region = preview_shell_el_->GetBox().GetSize(Rml::BoxArea::Content);
         if (shell_region.x > 8.0f) {
@@ -958,6 +969,46 @@ namespace lfs::gui {
             markContentDirty();
     }
 
+    bool VideoExtractorDialog::syncHdrControls() {
+        const bool has_video = player_ && player_->isOpen();
+        const bool is_hdr = has_video && player_->isHdr();
+        const bool conversion_supported =
+            is_hdr && player_->isHdrConversionSupported();
+        if (!has_video || !conversion_supported)
+            hdr_to_sdr_ = false;
+
+        bool changed = false;
+        changed |= setCachedChecked(hdr_to_sdr_el_, hdr_to_sdr_);
+        changed |= setCachedProperty(hdr_to_sdr_row_el_, "display",
+                                     is_hdr ? "inline-flex" : "none");
+        changed |= setCachedDisabled(hdr_to_sdr_el_,
+                                     extracting_.load() || !conversion_supported);
+
+        if (!has_video) {
+            changed |= setCachedProperty(hdr_badge_el_, "display", "none");
+            changed |= setCachedText(hdr_badge_label_el_, "");
+            changed |= setCachedText(hdr_badge_type_el_, "");
+            changed |= setCachedProperty(hdr_badge_type_el_, "display", "none");
+            if (hdr_badge_el_) {
+                hdr_badge_el_->SetClass("hdr-badge--hdr", false);
+                hdr_badge_el_->SetClass("hdr-badge--sdr", false);
+            }
+            return changed;
+        }
+
+        changed |= setCachedProperty(hdr_badge_el_, "display", "inline-flex");
+        if (hdr_badge_el_) {
+            hdr_badge_el_->SetClass("hdr-badge--hdr", is_hdr);
+            hdr_badge_el_->SetClass("hdr-badge--sdr", !is_hdr);
+        }
+        changed |= setCachedText(hdr_badge_label_el_, is_hdr ? "HDR" : "SDR");
+        changed |= setCachedText(hdr_badge_type_el_,
+                                 is_hdr ? player_->hdrInfo() : "");
+        changed |= setCachedProperty(hdr_badge_type_el_, "display",
+                                     is_hdr ? "inline" : "none");
+        return changed;
+    }
+
     void VideoExtractorDialog::syncTimeline() {
         bool changed = false;
         const bool has_video = player_->isOpen();
@@ -998,7 +1049,7 @@ namespace lfs::gui {
                                               std::max(0.001, player_->fps());
                 for (int i = 0; i < frame_count; ++i) {
                     const double time = static_cast<double>(start) + static_cast<double>(i) * step;
-                    if (time > end)
+                    if (time >= end)
                         break;
                     const double pct = (time / duration) * 100.0;
                     markers += std::format("<span class=\"timeline-marker\" style=\"left: {:.3f}%;\"></span>", pct);
@@ -1047,12 +1098,7 @@ namespace lfs::gui {
         changed |= setCachedProperty(fps_row_el_, "display", mode_selection_ == 0 ? "flex" : "none");
         changed |= setCachedProperty(interval_row_el_, "display", mode_selection_ == 1 ? "flex" : "none");
         changed |= setCachedProperty(quality_row_el_, "display", format_selection_ == 1 ? "flex" : "none");
-        if (hdr_to_sdr_row_el_) {
-            changed |= setCachedProperty(hdr_to_sdr_row_el_, "display", player_->isHdr() ? "inline-flex" : "none");
-        }
-        if (hdr_to_sdr_el_) {
-            changed |= setCachedDisabled(hdr_to_sdr_el_, !player_->isHdrConversionSupported());
-        }
+        changed |= syncHdrControls();
         changed |= setCachedProperty(scale_row_el_, "display", resolution_mode_ == 1 ? "flex" : "none");
         changed |= setCachedProperty(custom_resolution_row_el_, "display", resolution_mode_ == 2 ? "flex" : "none");
         changed |= setCachedProperty(stop_btn_el_, "display", extracting ? "block" : "none");
@@ -1344,7 +1390,7 @@ namespace lfs::gui {
                 rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
             if (player_->isOpen() && player_->currentFrameHasGpuRotation()) {
                 LOG_INFO("HDR preview: re-rendering current frame with libplacebo GPU rotation {} deg", rotation_deg_);
-                player_->seekFrame(player_->currentFrameNumber());
+                player_->rerenderCurrentFrame();
             }
             texture_needs_update_ = true;
             markContentDirty();
@@ -1355,7 +1401,7 @@ namespace lfs::gui {
                 rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
             if (player_->isOpen() && player_->currentFrameHasGpuRotation()) {
                 LOG_INFO("HDR preview: re-rendering current frame with libplacebo GPU rotation {} deg", rotation_deg_);
-                player_->seekFrame(player_->currentFrameNumber());
+                player_->rerenderCurrentFrame();
             }
             texture_needs_update_ = true;
             markContentDirty();
@@ -1403,10 +1449,14 @@ namespace lfs::gui {
         } else if (id == "generate-metadata") {
             changed_control = generate_metadata_el_;
         } else if (id == "hdr-to-sdr") {
+            if (extracting_.load()) {
+                (void)setCachedChecked(hdr_to_sdr_el_, hdr_to_sdr_);
+                return;
+            }
             hdr_to_sdr_ = hdr_to_sdr_el_ && hdr_to_sdr_el_->HasAttribute("checked");
             player_->setHdrToSdr(hdr_to_sdr_);
             if (player_->isOpen()) {
-                player_->seekFrame(player_->currentFrameNumber());
+                player_->rerenderCurrentFrame();
                 texture_needs_update_ = true;
                 preview_src_.clear();
             }
