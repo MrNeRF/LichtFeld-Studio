@@ -10,10 +10,12 @@
 
 #include <nanobind/nanobind.h>
 
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -65,16 +67,21 @@ namespace lfs::python {
         bool bool_value = false;
         int int_value = 0;
         float float_value = 0.0f;
-        std::string items_key;
+        size_t items_hash = 0;
+        size_t items_count = 0;
+        bool items_initialized = false;
         std::string string_value;
         bool open = true;
+        bool active = true;
     };
 
     struct Slot {
         SlotType type;
         std::string key;
         Rml::Element* element = nullptr;
-        SlotEventState events;
+        std::shared_ptr<SlotEventState> events = std::make_shared<SlotEventState>();
+        std::array<std::optional<std::string>, 3> content;
+        std::deque<float> plot_values;
     };
 
     struct ContainerLevel {
@@ -96,21 +103,25 @@ namespace lfs::python {
 
     struct TableState {
         int num_columns = 0;
+        int setup_column = 0;
+        int current_row_index = -1;
         int current_column = -1;
         std::vector<float> column_widths;
+        std::string key;
         Rml::Element* table_element = nullptr;
         Rml::Element* current_row = nullptr;
         Rml::Element* current_cell = nullptr;
+        bool cell_container_open = false;
     };
 
     class SlotEventListener : public Rml::EventListener {
     public:
-        explicit SlotEventListener(SlotEventState* state) : state_(state) {}
+        explicit SlotEventListener(std::weak_ptr<SlotEventState> state) : state_(std::move(state)) {}
         void ProcessEvent(Rml::Event& event) override;
         void OnDetach(Rml::Element*) override { delete this; }
 
     private:
-        SlotEventState* state_;
+        std::weak_ptr<SlotEventState> state_;
     };
 
     class RmlSubLayout;
@@ -414,10 +425,11 @@ namespace lfs::python {
 
     private:
         Slot& ensure_slot(SlotType type, const std::string& key);
-        Rml::Element* create_element(SlotType type, const std::string& key);
         Rml::Element* ensure_line_container();
         void finish_current_line();
         void prune_excess_slots(ContainerLevel& level);
+        void finish_table_cell();
+        void finish_table_row();
         void push_persistent_container(const std::string& key, Rml::Element* container);
         void pop_persistent_container();
         bool menu_item_impl(const std::string& label, const std::string& shortcut,
@@ -426,6 +438,8 @@ namespace lfs::python {
         std::string build_slot_id(const char* prefix, const std::string* label = nullptr) const;
         std::string color_to_css(nb::object color) const;
         static std::string stable_label_token(const std::string& label);
+        static void set_slot_text(Slot& slot, size_t index, Rml::Element* element,
+                                  const std::string& content);
 
         void warn_unsupported(const char* method);
 
@@ -456,6 +470,7 @@ namespace lfs::python {
         bool tooltip_shown_ = false;
         Rml::Element* tooltip_hover_el_ = nullptr;
         std::string tooltip_text_;
+        std::string rendered_tooltip_text_;
         std::chrono::steady_clock::time_point tooltip_hover_started_at_{};
         bool tooltip_candidate_seen_ = false;
 
