@@ -14,6 +14,7 @@
 #include <nfd.h>
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -244,6 +245,15 @@ namespace lfs::vis::gui {
                        std::string_view::npos &&
                    message.find("response code 2") != std::string_view::npos;
         }
+
+#ifndef __linux__
+        void warnUnsupportedDialogTitleOnce() {
+            static std::once_flag flag;
+            std::call_once(flag, []() {
+                LOG_WARN("Custom native file-dialog titles are unavailable on this platform");
+            });
+        }
+#endif
 
         class FilterListStorage {
         public:
@@ -487,29 +497,26 @@ namespace lfs::vis::gui {
         }
 
 #ifdef __linux__
-        // Direct GTK folder picker, used instead of NFD's SELECT_FOLDER on
-        // Linux. NFD returns `gtk_file_chooser_get_filename()`, which is the
-        // highlighted child in the listing; users expect "save into the
-        // folder that's open in the picker", which is what
-        // `gtk_file_chooser_get_current_folder()` returns. We initialize
-        // GTK through NFD_Init (idempotent gtk_init_check) so SetDialog
-        // entry points all converge on the same backend init.
-        [[nodiscard]] std::filesystem::path runLinuxGtkFolderPicker(
+        [[nodiscard]] std::filesystem::path runLinuxGtkPathPicker(
             const std::filesystem::path& defaultDirectory,
-            const char* title) {
+            const char* title,
+            const GtkFileChooserAction action,
+            const bool returnCurrentFolder) {
             if (!ensureDialogBackendInitialized()) {
                 return {};
             }
 
+            const char* const acceptLabel =
+                action == GTK_FILE_CHOOSER_ACTION_OPEN ? "_Open" : "_Select";
             GtkWidget* const dialog = gtk_file_chooser_dialog_new(
                 title,
                 nullptr,
-                GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+                action,
                 "_Cancel", GTK_RESPONSE_CANCEL,
-                "_Select", GTK_RESPONSE_ACCEPT,
+                acceptLabel, GTK_RESPONSE_ACCEPT,
                 nullptr);
             if (dialog == nullptr) {
-                LOG_ERROR("Failed to construct GTK folder chooser dialog");
+                LOG_ERROR("Failed to construct GTK file chooser dialog");
                 return {};
             }
 
@@ -520,11 +527,13 @@ namespace lfs::vis::gui {
 
             std::filesystem::path result;
             if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-                if (gchar* const current =
-                        gtk_file_chooser_get_current_folder(GTK_FILE_CHOOSER(dialog));
-                    current != nullptr) {
-                    result = lfs::core::utf8_to_path(current);
-                    g_free(current);
+                gchar* selected =
+                    returnCurrentFolder
+                        ? gtk_file_chooser_get_current_folder(GTK_FILE_CHOOSER(dialog))
+                        : gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+                if (selected != nullptr) {
+                    result = lfs::core::utf8_to_path(selected);
+                    g_free(selected);
                 }
             }
 
@@ -535,6 +544,15 @@ namespace lfs::vis::gui {
                 gtk_main_iteration();
             }
             return result;
+        }
+
+        // The COLMAP export picker selects the directory currently being
+        // browsed, rather than a highlighted child inside that directory.
+        [[nodiscard]] std::filesystem::path runLinuxGtkFolderPicker(
+            const std::filesystem::path& defaultDirectory,
+            const char* title) {
+            return runLinuxGtkPathPicker(
+                defaultDirectory, title, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, true);
         }
 #endif
 
@@ -552,7 +570,35 @@ namespace lfs::vis::gui {
         return result;
     }
 
-    std::filesystem::path PickFolderDialog(const std::filesystem::path& defaultPath) {
+    std::filesystem::path OpenFileDialog(const std::filesystem::path& defaultPath,
+                                         const std::string& dialogTitle) {
+#ifdef __linux__
+        if (!dialogTitle.empty()) {
+            return runLinuxGtkPathPicker(
+                normalizeDefaultDirectory(defaultPath), dialogTitle.c_str(),
+                GTK_FILE_CHOOSER_ACTION_OPEN, false);
+        }
+#else
+        if (!dialogTitle.empty())
+            warnUnsupportedDialogTitleOnce();
+#endif
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest({}, defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path PickFolderDialog(const std::filesystem::path& defaultPath,
+                                           const std::string& dialogTitle) {
+#ifdef __linux__
+        if (!dialogTitle.empty()) {
+            return runLinuxGtkPathPicker(
+                normalizeDefaultDirectory(defaultPath), dialogTitle.c_str(),
+                GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, false);
+        }
+#else
+        if (!dialogTitle.empty())
+            warnUnsupportedDialogTitleOnce();
+#endif
         std::filesystem::path result;
         runDialog(makePickFolderRequest(defaultPath), result);
         return result;

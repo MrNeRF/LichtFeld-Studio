@@ -439,7 +439,7 @@ class RmlUILayout:
 
     def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
         """
-        Draw a path input, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.
+        Draw an editable path input with a native file or folder browser, returns (changed, path).
         """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]: ...
@@ -698,9 +698,15 @@ class RmlUILayout:
 
     def draw_window_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: object) -> None: ...
 
-    def crf_curve_preview(self, label: str, gamma: float, toe: float, shoulder: float, gamma_r: float = 0.0, gamma_g: float = 0.0, gamma_b: float = 0.0) -> None: ...
+    def crf_curve_preview(self, label: str, gamma: float, toe: float, shoulder: float, gamma_r: float = 0.0, gamma_g: float = 0.0, gamma_b: float = 0.0) -> None:
+        """
+        Unsupported in layout APIs; use the retained RmlUi <crf-curve> custom element.
+        """
 
-    def chromaticity_diagram(self, label: str, red_x: float, red_y: float, green_x: float, green_y: float, blue_x: float, blue_y: float, neutral_x: float, neutral_y: float, range: float = 0.5) -> tuple[bool, list[float]]: ...
+    def chromaticity_diagram(self, label: str, red_x: float, red_y: float, green_x: float, green_y: float, blue_x: float, blue_y: float, neutral_x: float, neutral_y: float, range: float = 0.5) -> tuple[bool, list[float]]:
+        """
+        Unsupported in layout APIs; use the retained RmlUi <chromaticity-diagram> custom element.
+        """
 
     def progress_bar(self, fraction: float, overlay: str = '', width: float = 0.0, height: float = 0.0) -> None: ...
 
@@ -828,6 +834,11 @@ class RmlSubLayout:
     def input_int_formatted(self, label: str, value: int, step: int = 0, step_fast: int = 0) -> tuple[bool, int]: ...
 
     def stepper_float(self, label: str, value: float, steps: Sequence[float] = [1.0, 0.10000000149011612, 0.009999999776482582]) -> tuple[bool, float]: ...
+
+    def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
+        """
+        Draw an editable path input with a native file or folder browser, returns (changed, path).
+        """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]: ...
 
@@ -1814,8 +1825,12 @@ class UILayout:
     def prop_search(self, data: object, prop_id: str, search_data: object, search_prop: str, text: str = '') -> tuple[bool, int]:
         """Searchable dropdown for selecting from a collection"""
 
+    @overload
     def template_list(self, list_type_id: str, list_id: str, data: object, prop_id: str, active_data: object, active_prop: str, rows: int = 5) -> tuple[int, int]:
-        """UIList template for drawing custom lists"""
+        """Unsupported on UILayout; use RmlUILayout.template_list."""
+
+    @overload
+    def template_list(self, listtype_name: str, list_id: str, data: object, propname: str, active_index: int, rows: int = 5) -> tuple[bool, int]: ...
 
     def menu(self, menu_id: str, text: str = '', icon: str = '') -> None:
         """Inline menu reference"""
@@ -1878,10 +1893,20 @@ class UILayout:
         """Draw a filled triangle on the window draw list"""
 
     def crf_curve_preview(self, label: str, gamma: float, toe: float, shoulder: float, gamma_r: float = 0.0, gamma_g: float = 0.0, gamma_b: float = 0.0) -> None:
-        """Draw CRF tone curve preview widget"""
+        """
+        Unsupported in layout APIs; use the retained RmlUi <crf-curve> custom element.
+        """
 
     def chromaticity_diagram(self, label: str, red_x: float, red_y: float, green_x: float, green_y: float, blue_x: float, blue_y: float, neutral_x: float, neutral_y: float, range: float = 0.5) -> tuple[bool, list[float]]:
-        """Draw chromaticity diagram widget for color correction"""
+        """
+        Unsupported in layout APIs; use the retained RmlUi <chromaticity-diagram> custom element.
+        """
+
+    def template_tree(self, label: str, draw_callback: object, default_open: bool = False) -> bool:
+        """Unsupported on UILayout; use RmlUILayout.tree_node/tree_pop."""
+
+    def template_id(self, label: str, items: Sequence[str], current_id: str) -> tuple[bool, str]:
+        """Unsupported on UILayout; use RmlUILayout.combo."""
 
 def open_image_dialog(start_dir: str = '') -> str:
     """

@@ -267,9 +267,10 @@ list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 # instead of silently dropping coverage from the executable.
 set(TEST_SOURCES test_main.cpp ${TEST_FILES})
 
-# PyModalRegistry data layer for lock-order regression tests.
+# PyModalRegistry and its native-modal dispatch path for regression tests.
 list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_modal_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_ui_modals.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
 )

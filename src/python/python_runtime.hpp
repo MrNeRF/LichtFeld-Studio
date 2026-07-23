@@ -317,6 +317,7 @@ namespace lfs::python {
 
         // Lifecycle
         void (*cleanup)() = nullptr;
+        void (*begin_ui_frame)() = nullptr;
         void (*prepare_ui)() = nullptr;
         void (*shutdown_ui_resources)() = nullptr;
     };

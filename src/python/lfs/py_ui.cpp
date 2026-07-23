@@ -668,6 +668,79 @@ namespace lfs::python {
             F2 = 573,
         };
 
+        struct KeyboardFrameState {
+            std::array<bool, SDL_SCANCODE_COUNT> previous{};
+            std::array<bool, SDL_SCANCODE_COUNT> current{};
+            bool initialized = false;
+        };
+
+        KeyboardFrameState g_keyboard_frame;
+
+        [[nodiscard]] SDL_Scancode to_sdl_scancode(const PyKey key) {
+            switch (key) {
+            case PyKey::ESCAPE: return SDL_SCANCODE_ESCAPE;
+            case PyKey::ENTER: return SDL_SCANCODE_RETURN;
+            case PyKey::TAB: return SDL_SCANCODE_TAB;
+            case PyKey::BACKSPACE: return SDL_SCANCODE_BACKSPACE;
+            case PyKey::DELETE_KEY: return SDL_SCANCODE_DELETE;
+            case PyKey::SPACE: return SDL_SCANCODE_SPACE;
+            case PyKey::LEFT: return SDL_SCANCODE_LEFT;
+            case PyKey::RIGHT: return SDL_SCANCODE_RIGHT;
+            case PyKey::UP: return SDL_SCANCODE_UP;
+            case PyKey::DOWN: return SDL_SCANCODE_DOWN;
+            case PyKey::HOME: return SDL_SCANCODE_HOME;
+            case PyKey::END: return SDL_SCANCODE_END;
+            case PyKey::F: return SDL_SCANCODE_F;
+            case PyKey::I: return SDL_SCANCODE_I;
+            case PyKey::M: return SDL_SCANCODE_M;
+            case PyKey::R: return SDL_SCANCODE_R;
+            case PyKey::T: return SDL_SCANCODE_T;
+            case PyKey::KEY_1: return SDL_SCANCODE_1;
+            case PyKey::MINUS: return SDL_SCANCODE_MINUS;
+            case PyKey::EQUAL: return SDL_SCANCODE_EQUALS;
+            case PyKey::F2: return SDL_SCANCODE_F2;
+            }
+            return SDL_SCANCODE_UNKNOWN;
+        }
+
+        void begin_keyboard_ui_frame() {
+            g_keyboard_frame.previous = g_keyboard_frame.current;
+            g_keyboard_frame.current.fill(false);
+
+            int key_count = 0;
+            const bool* const state = SDL_GetKeyboardState(&key_count);
+            if (state) {
+                const auto count = std::min(
+                    static_cast<size_t>(std::max(key_count, 0)),
+                    g_keyboard_frame.current.size());
+                std::copy_n(state, count, g_keyboard_frame.current.begin());
+            }
+            g_keyboard_frame.initialized = true;
+        }
+
+        [[nodiscard]] bool is_key_down(const PyKey key) {
+            const auto scancode = to_sdl_scancode(key);
+            if (scancode == SDL_SCANCODE_UNKNOWN)
+                return false;
+
+            int key_count = 0;
+            const bool* const state = SDL_GetKeyboardState(&key_count);
+            const auto index = static_cast<int>(scancode);
+            return state && index >= 0 && index < key_count && state[index];
+        }
+
+        [[nodiscard]] bool is_key_pressed(const PyKey key) {
+            if (!g_keyboard_frame.initialized)
+                begin_keyboard_ui_frame();
+
+            const auto scancode = to_sdl_scancode(key);
+            if (scancode == SDL_SCANCODE_UNKNOWN)
+                return false;
+            const auto index = static_cast<size_t>(scancode);
+            return g_keyboard_frame.current[index] &&
+                   !g_keyboard_frame.previous[index];
+        }
+
         // Image texture preload cache for Python image preview
         struct PreloadEntry {
             std::future<std::tuple<unsigned char*, int, int, int>> future;
@@ -1742,6 +1815,18 @@ namespace lfs::python {
         }
     }
 
+    namespace {
+        void warnRetainedCustomElementOnce(const char* method, const char* element) {
+            static std::mutex mutex;
+            static std::unordered_set<std::string> warned_methods;
+            std::lock_guard lock(mutex);
+            if (warned_methods.emplace(method).second) {
+                LOG_WARN("UILayout::{} is unavailable in layout APIs; use the retained RmlUi {} element",
+                         method, element);
+            }
+        }
+    } // namespace
+
     // PyUILayout layout methods
     PySubLayout PyUILayout::row() { return PySubLayout(this, LayoutType::Row); }
     PySubLayout PyUILayout::column() { return PySubLayout(this, LayoutType::Column); }
@@ -1806,29 +1891,16 @@ namespace lfs::python {
 
     std::tuple<int, int> PyUILayout::template_list(const std::string& /*list_type_id*/,
                                                    const std::string& /*list_id*/,
-                                                   nb::object data, const std::string& prop_id,
-                                                   nb::object active_data, const std::string& active_prop,
+                                                   nb::object, const std::string&,
+                                                   nb::object, const std::string&,
                                                    int /*rows*/) {
-        warnUnsupportedInDrawHook("template_list");
-        int active_idx = 0;
-        int item_count = 0;
-        try {
-            if (nb::hasattr(data, prop_id.c_str())) {
-                nb::object collection = data.attr(prop_id.c_str());
-                if (nb::hasattr(collection, "__iter__")) {
-                    for (auto item : collection) {
-                        (void)item;
-                        ++item_count;
-                    }
-                }
-            }
-            if (nb::hasattr(active_data, active_prop.c_str())) {
-                active_idx = nb::cast<int>(active_data.attr(active_prop.c_str()));
-            }
-        } catch (...) {
-            LOG_WARN("template_list: failed to inspect '{}'", prop_id);
+        if (isDrawHook()) {
+            warnUnsupportedInDrawHook("template_list");
+            return {0, 0};
         }
-        return {active_idx, item_count};
+        throw nb::type_error(
+            "UILayout.template_list is unsupported; use the live "
+            "RmlUILayout.template_list API from a Python panel draw callback");
     }
 
     void PyUILayout::menu(const std::string&, const std::string&, const std::string&) {
@@ -1969,13 +2041,17 @@ namespace lfs::python {
         const float x2, const float y2, nb::object color) {
         draw_triangle_filled(x0, y0, x1, y1, x2, y2, std::move(color), false);
     }
-    void PyUILayout::crf_curve_preview(const std::string&, float, float, float, float, float, float) {}
+    void PyUILayout::crf_curve_preview(const std::string&, float, float, float, float, float, float) {
+        warnRetainedCustomElementOnce("crf_curve_preview", "<crf-curve>");
+    }
 
     std::tuple<bool, std::vector<float>> PyUILayout::chromaticity_diagram(
         const std::string&,
         float red_x, float red_y, float green_x, float green_y,
         float blue_x, float blue_y, float neutral_x, float neutral_y,
         float) {
+        warnRetainedCustomElementOnce(
+            "chromaticity_diagram", "<chromaticity-diagram>");
         return {false, {red_x, red_y, green_x, green_y, blue_x, blue_y, neutral_x, neutral_y}};
     }
 
@@ -2865,8 +2941,8 @@ namespace lfs::python {
             .def_ro_static("NoFocusOnAppearing", &PyWindowFlags::NoFocusOnAppearing, "Disable focus when window appears")
             .def_ro_static("NoBringToFrontOnFocus", &PyWindowFlags::NoBringToFrontOnFocus, "Disable bringing window to front on focus");
 
-        nb::class_<PyUILayout>(m, "UILayout")
-            .def(nb::init<>(), "Create a UILayout for drawing UI elements")
+        auto layout_class = nb::class_<PyUILayout>(m, "UILayout");
+        layout_class.def(nb::init<>(), "Create a UILayout for drawing UI elements")
             .def_prop_ro_static(
                 "WindowFlags", [](nb::handle) { return PyWindowFlags{}; }, "Window flags constants")
             // Text
@@ -3099,7 +3175,7 @@ namespace lfs::python {
             .def("prop_enum", &PyUILayout::prop_enum, nb::arg("data"), nb::arg("prop_id"), nb::arg("value"), nb::arg("text") = "", "Draw an enum toggle button for a property value")
             .def("operator_", &PyUILayout::operator_, nb::arg("operator_id"), nb::arg("text") = "", nb::arg("icon") = "", "Draw a button that invokes a registered operator")
             .def("prop_search", &PyUILayout::prop_search, nb::arg("data"), nb::arg("prop_id"), nb::arg("search_data"), nb::arg("search_prop"), nb::arg("text") = "", "Searchable dropdown for selecting from a collection")
-            .def("template_list", &PyUILayout::template_list, nb::arg("list_type_id"), nb::arg("list_id"), nb::arg("data"), nb::arg("prop_id"), nb::arg("active_data"), nb::arg("active_prop"), nb::arg("rows") = 5, "UIList template for drawing custom lists")
+            .def("template_list", &PyUILayout::template_list, nb::arg("list_type_id"), nb::arg("list_id"), nb::arg("data"), nb::arg("prop_id"), nb::arg("active_data"), nb::arg("active_prop"), nb::arg("rows") = 5, "Unsupported on UILayout; use RmlUILayout.template_list.")
             .def("menu", &PyUILayout::menu, nb::arg("menu_id"), nb::arg("text") = "", nb::arg("icon") = "", "Inline menu reference")
             .def("popover", &PyUILayout::popover, nb::arg("panel_id"), nb::arg("text") = "", nb::arg("icon") = "", "Panel popover")
             // Drawing functions for viewport overlays
@@ -3122,8 +3198,9 @@ namespace lfs::python {
             .def("draw_window_line", &PyUILayout::draw_window_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Draw a line on the window draw list")
             .def("draw_window_text", &PyUILayout::draw_window_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"), "Draw text on the window draw list")
             .def("draw_window_triangle_filled", &PyUILayout::draw_window_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"), "Draw a filled triangle on the window draw list")
-            .def("crf_curve_preview", &PyUILayout::crf_curve_preview, nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"), nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f, "Draw CRF tone curve preview widget")
-            .def("chromaticity_diagram", &PyUILayout::chromaticity_diagram, nb::arg("label"), nb::arg("red_x"), nb::arg("red_y"), nb::arg("green_x"), nb::arg("green_y"), nb::arg("blue_x"), nb::arg("blue_y"), nb::arg("neutral_x"), nb::arg("neutral_y"), nb::arg("range") = 0.5f, "Draw chromaticity diagram widget for color correction");
+            .def("crf_curve_preview", &PyUILayout::crf_curve_preview, nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"), nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f, "Unsupported in layout APIs; use the retained RmlUi <crf-curve> custom element.")
+            .def("chromaticity_diagram", &PyUILayout::chromaticity_diagram, nb::arg("label"), nb::arg("red_x"), nb::arg("red_y"), nb::arg("green_x"), nb::arg("green_y"), nb::arg("blue_x"), nb::arg("blue_y"), nb::arg("neutral_x"), nb::arg("neutral_y"), nb::arg("range") = 0.5f, "Unsupported in layout APIs; use the retained RmlUi <chromaticity-diagram> custom element.");
+        add_template_methods_to_uilayout(layout_class);
 
         // File dialogs
         m.def(
@@ -3453,12 +3530,15 @@ namespace lfs::python {
         // Key input functions
         m.def(
             "is_key_pressed",
-            [](PyKey, bool) { return false; },
+            [](const PyKey key, bool repeat) {
+                (void)repeat;
+                return is_key_pressed(key);
+            },
             nb::arg("key"), nb::arg("repeat") = true, "Check if a key was pressed this frame");
 
         m.def(
             "is_key_down",
-            [](PyKey) { return false; },
+            [](const PyKey key) { return is_key_down(key); },
             nb::arg("key"), "Check if a key is currently held down");
 
         m.def(
@@ -4764,6 +4844,7 @@ namespace lfs::python {
 
         // Register all Python callbacks via consolidated bridge
         PyBridge bridge;
+        bridge.begin_ui_frame = []() { begin_keyboard_ui_frame(); };
         bridge.prepare_ui = []() {};
         bridge.draw_menus = [](MenuLocation loc) { PyMenuRegistry::instance().draw_menu_items(loc); };
         bridge.has_menus = [](MenuLocation loc) { return PyMenuRegistry::instance().has_items(loc); };

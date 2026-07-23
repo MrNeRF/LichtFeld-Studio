@@ -59,7 +59,7 @@ namespace lfs::python {
                  nb::arg("steps") = std::vector<float>{1.0f, 0.1f, 0.01f})
             .def("path_input", &RmlImModeLayout::path_input, nb::arg("label"), nb::arg("value"),
                  nb::arg("folder_mode") = true, nb::arg("dialog_title") = "",
-                 "Draw a path input, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.")
+                 "Draw an editable path input with a native file or folder browser, returns (changed, path).")
             // Color
             .def("color_edit3", &RmlImModeLayout::color_edit3, nb::arg("label"), nb::arg("color"))
             .def("color_edit4", &RmlImModeLayout::color_edit4, nb::arg("label"), nb::arg("color"))
@@ -224,8 +224,8 @@ namespace lfs::python {
             .def("draw_window_line", &RmlImModeLayout::draw_window_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f)
             .def("draw_window_text", &RmlImModeLayout::draw_window_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"))
             .def("draw_window_triangle_filled", &RmlImModeLayout::draw_window_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"))
-            .def("crf_curve_preview", &RmlImModeLayout::crf_curve_preview, nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"), nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f)
-            .def("chromaticity_diagram", &RmlImModeLayout::chromaticity_diagram, nb::arg("label"), nb::arg("red_x"), nb::arg("red_y"), nb::arg("green_x"), nb::arg("green_y"), nb::arg("blue_x"), nb::arg("blue_y"), nb::arg("neutral_x"), nb::arg("neutral_y"), nb::arg("range") = 0.5f)
+            .def("crf_curve_preview", &RmlImModeLayout::crf_curve_preview, nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"), nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f, "Unsupported in layout APIs; use the retained RmlUi <crf-curve> custom element.")
+            .def("chromaticity_diagram", &RmlImModeLayout::chromaticity_diagram, nb::arg("label"), nb::arg("red_x"), nb::arg("red_y"), nb::arg("green_x"), nb::arg("green_y"), nb::arg("blue_x"), nb::arg("blue_y"), nb::arg("neutral_x"), nb::arg("neutral_y"), nb::arg("range") = 0.5f, "Unsupported in layout APIs; use the retained RmlUi <chromaticity-diagram> custom element.")
             // Progress
             .def("progress_bar", &RmlImModeLayout::progress_bar, nb::arg("fraction"), nb::arg("overlay") = "", nb::arg("width") = 0.0f, nb::arg("height") = 0.0f)
             .def("set_tooltip", &RmlImModeLayout::set_tooltip, nb::arg("text"))
@@ -283,6 +283,9 @@ namespace lfs::python {
             .def("input_int", &RmlSubLayout::input_int, nb::arg("label"), nb::arg("value"), nb::arg("step") = 1, nb::arg("step_fast") = 100)
             .def("input_int_formatted", &RmlSubLayout::input_int_formatted, nb::arg("label"), nb::arg("value"), nb::arg("step") = 0, nb::arg("step_fast") = 0)
             .def("stepper_float", &RmlSubLayout::stepper_float, nb::arg("label"), nb::arg("value"), nb::arg("steps") = std::vector<float>{1.0f, 0.1f, 0.01f})
+            .def("path_input", &RmlSubLayout::path_input, nb::arg("label"), nb::arg("value"),
+                 nb::arg("folder_mode") = true, nb::arg("dialog_title") = "",
+                 "Draw an editable path input with a native file or folder browser, returns (changed, path).")
             .def("color_edit3", &RmlSubLayout::color_edit3, nb::arg("label"), nb::arg("color"))
             .def("combo", &RmlSubLayout::combo, nb::arg("label"), nb::arg("current_idx"), nb::arg("items"))
             .def("listbox", &RmlSubLayout::listbox, nb::arg("label"), nb::arg("current_idx"), nb::arg("items"), nb::arg("height_items") = -1)

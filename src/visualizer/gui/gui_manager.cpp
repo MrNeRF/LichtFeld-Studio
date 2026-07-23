@@ -5384,6 +5384,8 @@ namespace lfs::vis::gui {
             input_controller->applySplitterCursorOverride();
         rmlui_manager_.clearVulkanQueue();
         const auto& sdl_input = viewer_->getWindowManager()->frameInput();
+        if (python::bridge().begin_ui_frame)
+            python::bridge().begin_ui_frame();
         if (auto* input_controller = viewer_->getInputController()) {
             capturePressedKeysForRebinding(*input_controller, sdl_input);
         }

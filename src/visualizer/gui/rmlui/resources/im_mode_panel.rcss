@@ -314,6 +314,45 @@
     width: 100%;
 }
 
+.im-split {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 4dp;
+    width: 100%;
+}
+
+.im-split > * {
+    min-width: 0;
+    flex-grow: 0;
+    flex-shrink: 1;
+}
+
+.im-grid-flow {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    column-gap: 0;
+    row-gap: 4dp;
+    width: 100%;
+}
+
+.im-grid-flow > * {
+    min-width: 0;
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.im-box {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    border-width: 1dp;
+    border-radius: 3dp;
+    padding: 4dp;
+}
+
 /* Child containers */
 
 .im-child {

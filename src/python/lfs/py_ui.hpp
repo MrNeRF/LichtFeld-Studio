@@ -664,6 +664,8 @@ namespace lfs::python {
             float range = 0.5f);
 
     private:
+        friend class PyUILayoutTemplates;
+
         void warnUnsupportedInDrawHook(const char* method) const;
         [[nodiscard]] bool isDrawHook() const { return mode_ == Mode::DrawHook; }
 

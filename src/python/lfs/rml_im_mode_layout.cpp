@@ -5,11 +5,13 @@
 #include "rml_im_mode_layout.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "py_error.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/gui/rmlui/elements/loss_graph_element.hpp"
 #include "visualizer/gui/rmlui/rml_tooltip.hpp"
+#include "visualizer/gui/utils/native_file_dialog.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 
 #include <RmlUi/Core/Context.h>
@@ -25,7 +27,9 @@
 #include <format>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -125,6 +129,16 @@ namespace {
                 return true;
         }
         return false;
+    }
+
+    void warn_retained_custom_element_once(const char* method, const char* element) {
+        static std::mutex mutex;
+        static std::unordered_set<std::string> warned_methods;
+        std::lock_guard lock(mutex);
+        if (warned_methods.emplace(method).second) {
+            LOG_WARN("RmlImModeLayout::{} is unavailable in layout APIs; use the retained RmlUi {} element",
+                     method, element);
+        }
     }
 } // namespace
 
@@ -1314,9 +1328,29 @@ namespace lfs::python {
 
     std::tuple<bool, std::string> RmlImModeLayout::path_input(const std::string& label,
                                                               const std::string& value,
-                                                              bool /*folder_mode*/,
-                                                              const std::string& /*dialog_title*/) {
-        return input_text(label, value);
+                                                              const bool folder_mode,
+                                                              const std::string& dialog_title) {
+        push_id("path_input:" + label);
+        auto [changed, edited_value] = input_text(label, value);
+        same_line();
+        const bool browse = small_button("Browse##path_browse");
+        pop_id();
+
+        if (!browse)
+            return {changed, std::move(edited_value)};
+
+        const std::string title =
+            dialog_title.empty()
+                ? (folder_mode ? "Select Folder" : "Select File")
+                : dialog_title;
+        const auto default_path = lfs::core::utf8_to_path(edited_value);
+        const auto selected =
+            folder_mode
+                ? lfs::vis::gui::PickFolderDialog(default_path, title)
+                : lfs::vis::gui::OpenFileDialog(default_path, title);
+        if (selected.empty())
+            return {changed, std::move(edited_value)};
+        return {true, lfs::core::path_to_utf8(selected)};
     }
 
     // ── Color ───────────────────────────────────────────────
@@ -2511,13 +2545,20 @@ namespace lfs::python {
     void RmlImModeLayout::draw_window_text(float, float, const std::string&, nb::object) {}
     void RmlImModeLayout::draw_window_triangle_filled(float, float, float, float, float, float, nb::object) {}
 
-    // ── Specialized (no-op) ─────────────────────────────────
+    // ── Retained-only specialized widgets ───────────────────
 
-    void RmlImModeLayout::crf_curve_preview(const std::string& /*label*/, float, float, float, float, float, float) {}
+    void RmlImModeLayout::crf_curve_preview(const std::string& /*label*/, float, float, float, float, float, float) {
+        warn_retained_custom_element_once("crf_curve_preview", "<crf-curve>");
+    }
     std::tuple<bool, std::vector<float>> RmlImModeLayout::chromaticity_diagram(const std::string& /*label*/,
-                                                                               float, float, float, float,
-                                                                               float, float, float, float, float) {
-        return {false, {}};
+                                                                               const float red_x, const float red_y,
+                                                                               const float green_x, const float green_y,
+                                                                               const float blue_x, const float blue_y,
+                                                                               const float neutral_x, const float neutral_y,
+                                                                               float) {
+        warn_retained_custom_element_once(
+            "chromaticity_diagram", "<chromaticity-diagram>");
+        return {false, {red_x, red_y, green_x, green_y, blue_x, blue_y, neutral_x, neutral_y}};
     }
 
     // ── Plots ───────────────────────────────────────────────
@@ -2577,22 +2618,25 @@ namespace lfs::python {
         last_clicked_ = false;
     }
 
-    // ── Sub-layouts (return self as no-op context manager) ──
+    // ── Persistent sub-layout containers ────────────────────
 
     nb::object RmlImModeLayout::row() {
-        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Row));
+        return nb::cast(RmlSubLayout(this, RmlLayoutType::Row));
     }
     nb::object RmlImModeLayout::column() {
-        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Column));
+        return nb::cast(RmlSubLayout(this, RmlLayoutType::Column));
     }
-    nb::object RmlImModeLayout::split(float /*factor*/) {
-        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Row));
+    nb::object RmlImModeLayout::split(const float factor) {
+        return nb::cast(RmlSubLayout(this, RmlLayoutType::Split, factor));
     }
     nb::object RmlImModeLayout::box() {
-        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Column));
+        return nb::cast(RmlSubLayout(this, RmlLayoutType::Box));
     }
-    nb::object RmlImModeLayout::grid_flow(int /*columns*/, bool /*even_columns*/, bool /*even_rows*/) {
-        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Row));
+    nb::object RmlImModeLayout::grid_flow(const int columns,
+                                          const bool even_columns,
+                                          const bool even_rows) {
+        return nb::cast(RmlSubLayout(
+            this, RmlLayoutType::GridFlow, 0.5f, columns, even_columns, even_rows));
     }
 
     // ── Property binding ────────────────────────────────────
@@ -2951,33 +2995,73 @@ namespace lfs::python {
 
     // ── RmlSubLayout ─────────────────────────────────────────
 
-    RmlSubLayout::RmlSubLayout(RmlImModeLayout* parent, RmlLayoutDirection dir)
+    RmlSubLayout::RmlSubLayout(RmlImModeLayout* parent, const RmlLayoutType type,
+                               const float factor, const int columns,
+                               const bool even_columns, const bool even_rows)
         : parent_(parent),
-          direction_(dir) {
+          type_(type),
+          factor_(factor),
+          columns_(columns),
+          even_columns_(even_columns),
+          even_rows_(even_rows) {
         assert(parent_);
+        assert(std::isfinite(factor_));
+        assert(columns_ >= 0);
     }
 
     RmlSubLayout& RmlSubLayout::enter() {
         assert(!entered_);
+        assert(parent_->doc_);
         entered_ = true;
         parent_->finish_current_line();
         assert(!parent_->containers_.empty());
 
-        const char* cls = direction_ == RmlLayoutDirection::Row ? "im-row" : "im-column";
-        auto& slot = parent_->ensure_slot(
-            SlotType::Line,
-            parent_->build_slot_id(direction_ == RmlLayoutDirection::Row ? "row" : "col"));
+        const char* token = nullptr;
+        const char* cls = nullptr;
+        switch (type_) {
+        case RmlLayoutType::Row:
+            token = "row";
+            cls = "im-row";
+            break;
+        case RmlLayoutType::Column:
+            token = "column";
+            cls = "im-column";
+            break;
+        case RmlLayoutType::Split:
+            token = "split";
+            cls = "im-split";
+            break;
+        case RmlLayoutType::Box:
+            token = "box";
+            cls = "im-box";
+            break;
+        case RmlLayoutType::GridFlow:
+            token = "grid_flow";
+            cls = "im-grid-flow";
+            break;
+        }
+        assert(token && cls);
+
+        const int slot_index = parent_->containers_.back().cursor;
+        const std::string local_key =
+            parent_->build_id(std::format("sublayout:{}:{}", token, slot_index));
+        container_key_ =
+            parent_->child_key_stack_.empty()
+                ? local_key
+                : parent_->child_key_stack_.back() + "/" + local_key;
+        auto& slot = parent_->ensure_slot(SlotType::Line, container_key_);
 
         if (!slot.element) {
             auto el = parent_->doc_->CreateElement("div");
             el->SetClass(cls, true);
             slot.element = parent_->containers_.back().parent->AppendChild(std::move(el));
+        } else if (slot.element->GetParentNode() != parent_->containers_.back().parent) {
+            parent_->containers_.back().parent->AppendChild(
+                slot.element->GetParentNode()->RemoveChild(slot.element));
         }
 
-        while (slot.element->HasChildNodes())
-            parent_->removed_elements_.push_back(slot.element->RemoveChild(slot.element->GetFirstChild()));
-
-        parent_->containers_.push_back({slot.element, {}, 0});
+        container_element_ = slot.element;
+        parent_->push_persistent_container(container_key_, container_element_);
         return *this;
     }
 
@@ -2985,31 +3069,62 @@ namespace lfs::python {
         if (!entered_)
             return;
         entered_ = false;
-        parent_->finish_current_line();
-        if (parent_->containers_.size() > 1) {
-            parent_->prune_excess_slots(parent_->containers_.back());
-            parent_->containers_.pop_back();
+
+        parent_->pop_persistent_container();
+        assert(container_element_);
+        const int child_count = container_element_->GetNumChildren();
+
+        const auto apply_basis = [](Rml::Element* child, const Rml::String& basis) {
+            assert(child);
+            if (set_attribute_if_changed(child, "data-im-flex-basis", basis))
+                child->SetProperty("flex-basis", basis);
+        };
+
+        if (type_ == RmlLayoutType::Split) {
+            assert(child_count <= 2 && "split layouts support exactly two children");
+            const float first = std::clamp(factor_, 0.0f, 1.0f);
+            if (child_count > 0)
+                apply_basis(container_element_->GetChild(0),
+                            Rml::String(std::format("{:.4g}%", first * 100.0f)));
+            if (child_count > 1)
+                apply_basis(container_element_->GetChild(1),
+                            Rml::String(std::format("{:.4g}%", (1.0f - first) * 100.0f)));
+        } else if (type_ == RmlLayoutType::GridFlow) {
+            const Rml::String basis =
+                columns_ > 0
+                    ? Rml::String(std::format("{:.4g}%", 100.0f / static_cast<float>(columns_)))
+                    : Rml::String("100dp");
+            for (int i = 0; i < child_count; ++i)
+                apply_basis(container_element_->GetChild(i), basis);
         }
+
+        (void)even_columns_;
+        (void)even_rows_;
+        container_element_ = nullptr;
+        container_key_.clear();
     }
 
     RmlSubLayout RmlSubLayout::row() {
-        return RmlSubLayout(parent_, RmlLayoutDirection::Row);
+        return RmlSubLayout(parent_, RmlLayoutType::Row);
     }
 
     RmlSubLayout RmlSubLayout::column() {
-        return RmlSubLayout(parent_, RmlLayoutDirection::Column);
+        return RmlSubLayout(parent_, RmlLayoutType::Column);
     }
 
-    RmlSubLayout RmlSubLayout::split(float /*factor*/) {
-        return RmlSubLayout(parent_, RmlLayoutDirection::Row);
+    RmlSubLayout RmlSubLayout::split(const float factor) {
+        return RmlSubLayout(parent_, RmlLayoutType::Split, factor);
     }
 
     RmlSubLayout RmlSubLayout::box() {
-        return RmlSubLayout(parent_, RmlLayoutDirection::Column);
+        return RmlSubLayout(parent_, RmlLayoutType::Box);
     }
 
-    RmlSubLayout RmlSubLayout::grid_flow(int /*columns*/, bool /*even_columns*/, bool /*even_rows*/) {
-        return RmlSubLayout(parent_, RmlLayoutDirection::Row);
+    RmlSubLayout RmlSubLayout::grid_flow(const int columns,
+                                         const bool even_columns,
+                                         const bool even_rows) {
+        return RmlSubLayout(
+            parent_, RmlLayoutType::GridFlow, 0.5f, columns, even_columns, even_rows);
     }
 
 } // namespace lfs::python

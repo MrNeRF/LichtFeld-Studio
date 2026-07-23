@@ -487,12 +487,19 @@ namespace lfs::python {
         void apply_item_width(Rml::Element* el);
     };
 
-    enum class RmlLayoutDirection : uint8_t { Row,
-                                              Column };
+    enum class RmlLayoutType : uint8_t {
+        Row,
+        Column,
+        Split,
+        Box,
+        GridFlow,
+    };
 
     class RmlSubLayout {
     public:
-        RmlSubLayout(RmlImModeLayout* parent, RmlLayoutDirection dir);
+        RmlSubLayout(RmlImModeLayout* parent, RmlLayoutType type,
+                     float factor = 0.5f, int columns = 0,
+                     bool even_columns = true, bool even_rows = true);
         RmlSubLayout& enter();
         void exit();
 
@@ -531,6 +538,7 @@ namespace lfs::python {
         std::tuple<bool, int> input_int(const std::string& l, int v, int st = 1, int sf = 100) { return parent_->input_int(l, v, st, sf); }
         std::tuple<bool, int> input_int_formatted(const std::string& l, int v, int st = 0, int sf = 0) { return parent_->input_int_formatted(l, v, st, sf); }
         std::tuple<bool, float> stepper_float(const std::string& l, float v, const std::vector<float>& st = {1.0f, 0.1f, 0.01f}) { return parent_->stepper_float(l, v, st); }
+        std::tuple<bool, std::string> path_input(const std::string& l, const std::string& v, bool folder_mode = true, const std::string& dialog_title = "") { return parent_->path_input(l, v, folder_mode, dialog_title); }
 
         std::tuple<bool, std::tuple<float, float, float>> color_edit3(const std::string& l, std::tuple<float, float, float> c) { return parent_->color_edit3(l, c); }
         std::tuple<bool, int> combo(const std::string& l, int idx, const std::vector<std::string>& items) { return parent_->combo(l, idx, items); }
@@ -593,7 +601,13 @@ namespace lfs::python {
 
     private:
         RmlImModeLayout* parent_;
-        RmlLayoutDirection direction_;
+        RmlLayoutType type_;
+        float factor_;
+        int columns_;
+        bool even_columns_;
+        bool even_rows_;
+        std::string container_key_;
+        Rml::Element* container_element_ = nullptr;
         bool entered_ = false;
     };
 
