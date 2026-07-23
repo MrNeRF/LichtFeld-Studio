@@ -54,6 +54,7 @@ namespace lfs::vis::gui {
         static constexpr float INNER_RADIUS = 38.0f;
         static constexpr float OUTER_RADIUS = 90.0f;
         static constexpr float DEAD_ZONE_RADIUS = 25.0f;
+        static constexpr float ICON_SIZE = 20.0f;
         static constexpr float SUBMODE_GAP = 10.0f;
         static constexpr float SUBMODE_WIDTH = 28.0f;
         static constexpr float SUBMODE_MIN_ARC_DEG = 24.0f;

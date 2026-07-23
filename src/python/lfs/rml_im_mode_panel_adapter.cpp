@@ -77,6 +77,8 @@ namespace lfs::vis::gui {
 
         if (host_ && ops.set_height_mode)
             ops.set_height_mode(host_, 1);
+        if (host_ && ops.set_floating)
+            ops.set_floating(host_, floating_);
     }
 
     void RmlImModePanelAdapter::drawLayout(const PanelDrawContext* ctx) {
@@ -220,6 +222,19 @@ namespace lfs::vis::gui {
             const auto& ops = lfs::python::get_rml_panel_host_ops();
             if (ops.set_forced_height)
                 ops.set_forced_height(host_, h);
+        }
+    }
+
+    void RmlImModePanelAdapter::setPanelSpace(const PanelSpace space) {
+        const bool floating = space == PanelSpace::Floating;
+        if (floating_ == floating)
+            return;
+
+        floating_ = floating;
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            if (ops.set_floating)
+                ops.set_floating(host_, floating_);
         }
     }
 

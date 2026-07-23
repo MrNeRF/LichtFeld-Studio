@@ -9,6 +9,14 @@
     background-color: @{menu.background};
 }
 
+.left-dock-resize-indicator {
+    background-color: @{alpha(info,0.30)};
+}
+
+.left-dock-resize-indicator.active {
+    background-color: @{alpha(info,0.50)};
+}
+
 .viewport-split-divider {
     background-color: @{menu.background};
 }

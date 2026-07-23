@@ -166,6 +166,7 @@ namespace lfs::python {
 
         // Thread-local frame context for unified access
         thread_local PyContext g_frame_context;
+        thread_local OverlayDrawContext g_overlay_draw_context;
 
         // Cached state updated via signal bridge
         std::atomic<bool> g_has_selection{false};
@@ -1331,6 +1332,14 @@ namespace lfs::python {
     bool has_viewport_bounds() {
         std::lock_guard lock(g_viewport.mutex);
         return g_viewport.is_set;
+    }
+
+    void set_overlay_draw_context(const OverlayDrawContext context) {
+        g_overlay_draw_context = context;
+    }
+
+    OverlayDrawContext get_overlay_draw_context() {
+        return g_overlay_draw_context;
     }
 
     bool is_exit_popup_open() { return g_exit_popup_open.load(); }

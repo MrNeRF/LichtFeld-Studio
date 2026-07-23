@@ -37,6 +37,7 @@ namespace lfs::vis::gui {
         void setInputClipY(float y_min, float y_max) override;
         void setInput(const PanelInputState* input) override;
         void setForcedHeight(float h) override;
+        void setPanelSpace(PanelSpace space) override;
         bool needsAnimationFrame() const override;
         void reloadRmlResources() override;
 
@@ -49,6 +50,7 @@ namespace lfs::vis::gui {
         std::string rml_path_;
         nb::object panel_instance_;
         bool has_poll_;
+        bool floating_ = false;
         lfs::python::RmlImModeLayout layout_;
         uint64_t last_layout_frame_ = 0;
         std::optional<PanelInputState> current_input_;

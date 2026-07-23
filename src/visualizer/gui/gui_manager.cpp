@@ -388,6 +388,68 @@ namespace lfs::vis::gui {
             return {x * 2.0f - 1.0f, y * 2.0f - 1.0f};
         }
 
+        [[nodiscard]] bool validClipRect(
+            const lfs::rendering::OverlayClipRect& clip) {
+            return clip.max.x > clip.min.x && clip.max.y > clip.min.y;
+        }
+
+        std::vector<glm::vec2> clipPolygonToRect(
+            std::span<const glm::vec2> input,
+            const lfs::rendering::OverlayClipRect& clip) {
+            if (input.empty() || !validClipRect(clip))
+                return {};
+
+            std::vector<glm::vec2> polygon(input.begin(), input.end());
+            std::vector<glm::vec2> output;
+            output.reserve(input.size() + 4);
+
+            const auto clip_edge = [&](const auto inside,
+                                       const auto intersection) {
+                output.clear();
+                if (polygon.empty())
+                    return;
+
+                glm::vec2 previous = polygon.back();
+                bool previous_inside = inside(previous);
+                for (const glm::vec2 current : polygon) {
+                    const bool current_inside = inside(current);
+                    if (current_inside != previous_inside)
+                        output.push_back(intersection(previous, current));
+                    if (current_inside)
+                        output.push_back(current);
+                    previous = current;
+                    previous_inside = current_inside;
+                }
+                polygon.swap(output);
+            };
+
+            clip_edge(
+                [&](const glm::vec2 p) { return p.x >= clip.min.x; },
+                [&](const glm::vec2 a, const glm::vec2 b) {
+                    const float t = (clip.min.x - a.x) / (b.x - a.x);
+                    return glm::mix(a, b, t);
+                });
+            clip_edge(
+                [&](const glm::vec2 p) { return p.x <= clip.max.x; },
+                [&](const glm::vec2 a, const glm::vec2 b) {
+                    const float t = (clip.max.x - a.x) / (b.x - a.x);
+                    return glm::mix(a, b, t);
+                });
+            clip_edge(
+                [&](const glm::vec2 p) { return p.y >= clip.min.y; },
+                [&](const glm::vec2 a, const glm::vec2 b) {
+                    const float t = (clip.min.y - a.y) / (b.y - a.y);
+                    return glm::mix(a, b, t);
+                });
+            clip_edge(
+                [&](const glm::vec2 p) { return p.y <= clip.max.y; },
+                [&](const glm::vec2 a, const glm::vec2 b) {
+                    const float t = (clip.max.y - a.y) / (b.y - a.y);
+                    return glm::mix(a, b, t);
+                });
+            return polygon;
+        }
+
         void appendShapeOverlayTriangle(std::vector<VulkanViewportShapeOverlayVertex>& out,
                                         const glm::vec2& viewport_pos,
                                         const glm::vec2& viewport_size,
@@ -406,6 +468,33 @@ namespace lfs::vis::gui {
                 .params = shape_params,
                 .view_depth = view_depth,
             });
+        }
+
+        void appendShapeOverlayPolygon(
+            std::vector<VulkanViewportShapeOverlayVertex>& out,
+            const VulkanViewportPassParams& params,
+            std::span<const glm::vec2> points,
+            const glm::vec2& p0,
+            const glm::vec2& p1,
+            const glm::vec4& color,
+            const glm::vec4& shape_params) {
+            if (points.size() < 3 || color.a <= 0.0f ||
+                params.viewport_size.x <= 0.0f ||
+                params.viewport_size.y <= 0.0f) {
+                return;
+            }
+
+            for (std::size_t i = 1; i + 1 < points.size(); ++i) {
+                appendShapeOverlayTriangle(
+                    out, params.viewport_pos, params.viewport_size,
+                    points[0], p0, p1, color, shape_params);
+                appendShapeOverlayTriangle(
+                    out, params.viewport_pos, params.viewport_size,
+                    points[i], p0, p1, color, shape_params);
+                appendShapeOverlayTriangle(
+                    out, params.viewport_pos, params.viewport_size,
+                    points[i + 1], p0, p1, color, shape_params);
+            }
         }
 
         void appendShapeOverlayQuad(std::vector<VulkanViewportShapeOverlayVertex>& out,
@@ -515,6 +604,102 @@ namespace lfs::vis::gui {
                                    {2.0f, std::max(thickness, 1.0f), radius, 1.0f});
         }
 
+        void appendScreenOverlayShapeQuad(
+            std::vector<VulkanViewportShapeOverlayVertex>& out,
+            const VulkanViewportPassParams& params,
+            const std::array<glm::vec2, 4>& points,
+            const glm::vec2& p0,
+            const glm::vec2& p1,
+            const glm::vec4& color,
+            const glm::vec4& shape_params,
+            const std::optional<lfs::rendering::OverlayClipRect>& clip) {
+            if (!clip) {
+                appendShapeOverlayQuad(
+                    out, params.viewport_pos, params.viewport_size,
+                    points[0], points[1], points[2], points[3],
+                    p0, p1, color, shape_params);
+                return;
+            }
+
+            const auto clipped = clipPolygonToRect(points, *clip);
+            appendShapeOverlayPolygon(
+                out, params, clipped, p0, p1, color, shape_params);
+        }
+
+        void appendScreenOverlayLine(
+            std::vector<VulkanViewportShapeOverlayVertex>& out,
+            const VulkanViewportPassParams& params,
+            const lfs::rendering::OverlayCommand& command) {
+            const glm::vec2 delta = command.p1 - command.p0;
+            const float length = glm::length(delta);
+            if (!std::isfinite(length) || length <= 1e-4f ||
+                command.color_premul.a <= 0.0f) {
+                return;
+            }
+
+            const glm::vec2 direction = delta / length;
+            const glm::vec2 normal{-direction.y, direction.x};
+            const float thickness = std::max(command.thickness, 1.0f);
+            const float extent = thickness * 0.5f + 2.0f;
+            const std::array<glm::vec2, 4> points = {
+                command.p0 - direction * extent + normal * extent,
+                command.p1 + direction * extent + normal * extent,
+                command.p1 + direction * extent - normal * extent,
+                command.p0 - direction * extent - normal * extent,
+            };
+            appendScreenOverlayShapeQuad(
+                out, params, points, command.p0, command.p1,
+                command.color_premul, {0.0f, thickness, 0.0f, 1.0f},
+                command.clip);
+        }
+
+        void appendScreenOverlayCircle(
+            std::vector<VulkanViewportShapeOverlayVertex>& out,
+            const VulkanViewportPassParams& params,
+            const lfs::rendering::OverlayCommand& command,
+            const bool outline) {
+            if (command.radius <= 0.0f ||
+                command.color_premul.a <= 0.0f) {
+                return;
+            }
+
+            const float thickness = std::max(command.thickness, 1.0f);
+            const float extent =
+                command.radius + (outline ? thickness * 0.5f : 0.0f) + 2.0f;
+            const std::array<glm::vec2, 4> points = {
+                command.p0 + glm::vec2{-extent, -extent},
+                command.p0 + glm::vec2{extent, -extent},
+                command.p0 + glm::vec2{extent, extent},
+                command.p0 + glm::vec2{-extent, extent},
+            };
+            appendScreenOverlayShapeQuad(
+                out, params, points, command.p0, command.p0,
+                command.color_premul,
+                {outline ? 2.0f : 1.0f,
+                 outline ? thickness : 0.0f,
+                 command.radius, 1.0f},
+                command.clip);
+        }
+
+        void appendScreenOverlayFilledTriangle(
+            std::vector<VulkanViewportShapeOverlayVertex>& out,
+            const VulkanViewportPassParams& params,
+            const lfs::rendering::OverlayCommand& command) {
+            const std::array<glm::vec2, 3> triangle = {
+                command.p0, command.p1, command.p2};
+            if (command.clip) {
+                const auto clipped =
+                    clipPolygonToRect(triangle, *command.clip);
+                appendShapeOverlayPolygon(
+                    out, params, clipped, {}, {}, command.color_premul,
+                    {3.0f, 1.0f, 0.0f, 1.0f});
+                return;
+            }
+            appendShapeOverlayPolygon(
+                out, params, triangle, {}, {}, command.color_premul,
+                {3.0f, 1.0f, 0.0f, 1.0f});
+        }
+
         void appendScreenOverlayTriangle(std::vector<VulkanViewportOverlayVertex>& out,
                                          const VulkanViewportPassParams& params,
                                          const glm::vec2& p0,
@@ -596,6 +781,48 @@ namespace lfs::vis::gui {
                                        const glm::vec4& tint_opacity,
                                        const glm::vec4& effects,
                                        const std::array<float, 4>& view_depths = {0.0f, 0.0f, 0.0f, 0.0f});
+
+        void appendScreenOverlayTexturedRect(
+            const VulkanViewportPassParams& params,
+            std::vector<VulkanViewportTexturedOverlay>& out,
+            const std::uintptr_t texture_id,
+            const glm::vec2& min_point,
+            const glm::vec2& max_point,
+            const glm::vec2& uv_min,
+            const glm::vec2& uv_max,
+            const glm::vec4& tint_opacity,
+            const std::optional<lfs::rendering::OverlayClipRect>& clip) {
+            glm::vec2 clipped_min = min_point;
+            glm::vec2 clipped_max = max_point;
+            if (clip) {
+                if (!validClipRect(*clip))
+                    return;
+                clipped_min = glm::max(clipped_min, clip->min);
+                clipped_max = glm::min(clipped_max, clip->max);
+            }
+            if (clipped_max.x <= clipped_min.x ||
+                clipped_max.y <= clipped_min.y) {
+                return;
+            }
+
+            const glm::vec2 size = max_point - min_point;
+            if (size.x <= 0.0f || size.y <= 0.0f)
+                return;
+            const glm::vec2 t0 = (clipped_min - min_point) / size;
+            const glm::vec2 t1 = (clipped_max - min_point) / size;
+            const glm::vec2 clipped_uv_min = glm::mix(uv_min, uv_max, t0);
+            const glm::vec2 clipped_uv_max = glm::mix(uv_min, uv_max, t1);
+            const std::array<glm::vec2, 4> points = {
+                glm::vec2{clipped_min.x, clipped_min.y},
+                glm::vec2{clipped_max.x, clipped_min.y},
+                glm::vec2{clipped_max.x, clipped_max.y},
+                glm::vec2{clipped_min.x, clipped_max.y},
+            };
+            appendTexturedOverlayQuad(
+                params, out, texture_id, points,
+                clipped_uv_min, clipped_uv_max, tint_opacity,
+                {1.0f, 0.0f, 0.0f, 0.0f});
+        }
 
         // FreeType-baked overlay font atlas. Atlas covers ASCII
         // printable range, baked at a single reference pixel size; runtime font_size scales
@@ -757,12 +984,9 @@ namespace lfs::vis::gui {
                     const float y0 = baseline_y - g.bearing_px.y * scale;
                     const float x1 = x0 + g.size_px.x * scale;
                     const float y1 = y0 + g.size_px.y * scale;
-                    const std::array<glm::vec2, 4> pts = {
-                        glm::vec2{x0, y0}, glm::vec2{x1, y0},
-                        glm::vec2{x1, y1}, glm::vec2{x0, y1}};
-                    appendTexturedOverlayQuad(params, out, texture_id, pts,
-                                              g.uv0, g.uv1,
-                                              cmd.color_premul, {1.0f, 0.0f, 0.0f, 0.0f});
+                    appendScreenOverlayTexturedRect(
+                        params, out, texture_id, {x0, y0}, {x1, y1},
+                        g.uv0, g.uv1, cmd.color_premul, cmd.clip);
                 }
                 pen_x += g.advance_px * scale;
             }
@@ -777,51 +1001,31 @@ namespace lfs::vis::gui {
             for (const auto& command : commands) {
                 switch (command.type) {
                 case lfs::rendering::OverlayCommandType::Line:
-                    appendShapeOverlayLine(params.ui_shape_overlay_triangles,
-                                           params,
-                                           command.p0,
-                                           command.p1,
-                                           command.color_premul,
-                                           command.thickness);
+                    appendScreenOverlayLine(
+                        params.ui_shape_overlay_triangles, params, command);
                     break;
                 case lfs::rendering::OverlayCommandType::Triangle:
-                    appendScreenOverlayTriangle(params.overlay_triangles,
-                                                params,
-                                                command.p0,
-                                                command.p1,
-                                                command.p2,
-                                                command.color_premul);
+                    appendScreenOverlayFilledTriangle(
+                        params.ui_shape_overlay_triangles, params, command);
                     break;
                 case lfs::rendering::OverlayCommandType::CircleFilled:
-                    appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
-                                             params,
-                                             command.p0,
-                                             command.radius,
-                                             command.color_premul);
+                    appendScreenOverlayCircle(
+                        params.ui_shape_overlay_triangles, params, command, false);
                     break;
                 case lfs::rendering::OverlayCommandType::CircleOutline:
-                    appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles,
-                                                    params,
-                                                    command.p0,
-                                                    command.radius,
-                                                    command.color_premul,
-                                                    command.thickness);
+                    appendScreenOverlayCircle(
+                        params.ui_shape_overlay_triangles, params, command, true);
                     break;
                 case lfs::rendering::OverlayCommandType::Text:
                     appendTextOverlay(params, params.ui_textured_overlays, command);
                     break;
-                case lfs::rendering::OverlayCommandType::Image: {
-                    const std::array<glm::vec2, 4> pts = {
-                        glm::vec2{command.p0.x, command.p0.y},
-                        glm::vec2{command.p1.x, command.p0.y},
-                        glm::vec2{command.p1.x, command.p1.y},
-                        glm::vec2{command.p0.x, command.p1.y}};
-                    appendTexturedOverlayQuad(params, params.ui_textured_overlays,
-                                              command.texture_id, pts,
-                                              command.uv0, command.uv1,
-                                              command.color_premul, {1.0f, 0.0f, 0.0f, 0.0f});
+                case lfs::rendering::OverlayCommandType::Image:
+                    appendScreenOverlayTexturedRect(
+                        params, params.ui_textured_overlays,
+                        command.texture_id, command.p0, command.p1,
+                        command.uv0, command.uv1,
+                        command.color_premul, command.clip);
                     break;
-                }
                 }
             }
         }
@@ -3247,6 +3451,9 @@ namespace lfs::vis::gui {
         ops.set_foreground = [](void* host, bool fg) {
             static_cast<RmlPanelHost*>(host)->setForeground(fg);
         };
+        ops.set_floating = [](void* host, bool floating) {
+            static_cast<RmlPanelHost*>(host)->setFloating(floating);
+        };
         ops.mark_content_dirty = [](void* host) {
             static_cast<RmlPanelHost*>(host)->markContentDirty();
         };
@@ -5442,6 +5649,7 @@ namespace lfs::vis::gui {
                 .editor = &editor_ctx,
                 .sequencer_controller = &sequencer_ui_.controller(),
                 .rml_manager = &rmlui_manager_,
+                .viewport_overlay = &rml_viewport_overlay_,
                 .fonts = buildFontSet()};
         }
 
@@ -6043,30 +6251,49 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (!startup_plugin_preload_blocking_python &&
-            lfs::python::has_python_hooks("viewport_overlay", "draw")) {
-            LOG_TIMER_THRESHOLD("gui_render.viewport_overlay.python_hooks", 0.25);
-            lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
-            lfs::python::invoke_python_hooks("viewport_overlay", "draw", false);
-        }
+        const bool has_python_overlay_hooks =
+            !startup_plugin_preload_blocking_python &&
+            lfs::python::has_python_hooks("viewport_overlay", "draw");
+        const bool has_overlay_popups =
+            !startup_plugin_preload_blocking_python && python::has_python_popups();
 
         lfs::rendering::ScreenOverlayRenderer* overlay_renderer = nullptr;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             overlay_renderer = rendering->getScreenOverlayRenderer();
         }
-        if (overlay_renderer && has_viewport_overlay_panels) {
+        const bool needs_screen_overlay_frame =
+            has_viewport_overlay_panels || has_python_overlay_hooks || has_overlay_popups;
+        if (overlay_renderer && needs_screen_overlay_frame) {
             LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.beginFrame", 0.25);
             overlay_renderer->beginFrame();
         }
 
-        if (has_viewport_overlay_panels) {
-            LOG_TIMER_THRESHOLD("gui_render.draw_panels.ViewportOverlay", 0.25);
-            reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
-        }
+        const auto draw_screen_overlay_content = [&]() {
+            if (has_python_overlay_hooks) {
+                LOG_TIMER_THRESHOLD("gui_render.viewport_overlay.python_hooks", 0.25);
+                lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
+                lfs::python::invoke_python_hooks("viewport_overlay", "draw", false);
+            }
 
-        if (overlay_renderer && has_viewport_overlay_panels) {
+            if (has_viewport_overlay_panels) {
+                LOG_TIMER_THRESHOLD("gui_render.draw_panels.ViewportOverlay", 0.25);
+                reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
+            }
+
+            if (has_overlay_popups) {
+                LOG_TIMER("gui_render.python_popups");
+                python::draw_python_popups(scene);
+            }
+        };
+
+        if (overlay_renderer && needs_screen_overlay_frame) {
+            const python::ScopedOverlayDrawContext overlay_context(
+                {.renderer = overlay_renderer});
+            draw_screen_overlay_content();
             LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.endFrame", 0.25);
             overlay_renderer->endFrame();
+        } else {
+            draw_screen_overlay_content();
         }
 
         publish_vram_hud_overlay_if_due();
@@ -6132,12 +6359,8 @@ namespace lfs::vis::gui {
         }
 
         if (!startup_plugin_preload_blocking_python && python::has_python_modals()) {
-            LOG_TIMER("gui_render.python_modals_and_popups");
+            LOG_TIMER("gui_render.python_modals");
             python::draw_python_modals(scene);
-        }
-        if (!startup_plugin_preload_blocking_python && python::has_python_popups()) {
-            LOG_TIMER("gui_render.python_popups");
-            python::draw_python_popups(scene);
         }
 
         if (rml_modal_overlay_->isOpen()) {
@@ -6149,11 +6372,15 @@ namespace lfs::vis::gui {
             viewer_->getWindowManager() &&
             viewer_->getWindowManager()->manualResizeEdgeMask() != 0;
         if (!window_resize_active) {
-            applyRmlCursorRequest(rmlui_manager_.consumeCursorRequest());
-            apply_cursor(rml_right_panel_.getCursorRequest());
-            apply_cursor(panel_layout_.getCursorRequest());
-            if (auto* input_controller = viewer_->getInputController())
-                input_controller->applySplitterCursorOverride();
+            const auto rml_cursor = rmlui_manager_.consumeCursorRequest();
+            if (!has_floating_panels ||
+                !reg.apply_floating_resize_cursor()) {
+                applyRmlCursorRequest(rml_cursor);
+                apply_cursor(rml_right_panel_.getCursorRequest());
+                apply_cursor(panel_layout_.getCursorRequest());
+                if (auto* input_controller = viewer_->getInputController())
+                    input_controller->applySplitterCursorOverride();
+            }
         } else if (auto* const wm = viewer_->getWindowManager()) {
             wm->refreshResizeCursor();
         }

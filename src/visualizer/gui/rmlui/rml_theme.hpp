@@ -31,11 +31,11 @@ namespace lfs::vis::gui {
 
         template <typename T>
             requires requires(const T& v) {
-                { v.x } -> std::convertible_to<float>;
-                { v.y } -> std::convertible_to<float>;
-                { v.z } -> std::convertible_to<float>;
-                { v.w } -> std::convertible_to<float>;
-            }
+                         { v.x } -> std::convertible_to<float>;
+                         { v.y } -> std::convertible_to<float>;
+                         { v.z } -> std::convertible_to<float>;
+                         { v.w } -> std::convertible_to<float>;
+                     }
         RmlColor(const T& v) : r(v.x),
                                g(v.y),
                                b(v.z),
@@ -58,6 +58,7 @@ namespace lfs::vis::gui::rml_theme {
                                 const std::string& panel_theme_template = {});
     LFS_VIS_API std::string darkenColorToRml(const RmlColor& c, float amount);
     LFS_VIS_API std::string layeredShadow(const Theme& t, int elevation);
+    LFS_VIS_API float layeredShadowPadding(const Theme& t, int elevation);
 
     LFS_VIS_API std::string generateThemeMediaFromTemplate(const std::string& theme_template);
     LFS_VIS_API const std::string& getComponentsThemeMedia();

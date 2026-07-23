@@ -80,6 +80,11 @@ namespace lfs::vis::gui::native_panels {
             widget_->setForcedHeight(h);
     }
 
+    void VideoExtractorPanel::setPanelSpace(const PanelSpace space) {
+        if (widget_)
+            widget_->setFloating(space == PanelSpace::Floating);
+    }
+
     bool VideoExtractorPanel::wantsKeyboard() const {
         return widget_ && widget_->wantsKeyboard();
     }

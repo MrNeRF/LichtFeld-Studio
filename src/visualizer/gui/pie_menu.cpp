@@ -4,6 +4,7 @@
 
 #include "gui/pie_menu.hpp"
 #include "core/editor_context.hpp"
+#include "gui/icon_cache.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "theme/theme.hpp"
 #include "tools/tool_descriptor.hpp"
@@ -381,7 +382,15 @@ namespace lfs::vis::gui {
             const auto text_col = item.enabled ? toOverlay(t.palette.text, 1.0f)
                                                : toOverlay(t.palette.text_dim, 0.40f);
 
-            if (!item.label.empty()) {
+            const std::uintptr_t icon_texture =
+                IconCache::instance().getIcon(item.icon_name);
+            if (icon_texture != 0) {
+                const float icon_size = ICON_SIZE * scale;
+                const glm::vec2 icon_min =
+                    icon_center - glm::vec2(icon_size * 0.5f);
+                overlay.addImage(icon_texture, icon_min,
+                                 icon_min + glm::vec2(icon_size), text_col);
+            } else if (!item.label.empty()) {
                 const char initial[2] = {item.label[0], '\0'};
                 addCenteredText(overlay, icon_center, initial, text_col, 16.0f * scale);
             }
@@ -421,11 +430,26 @@ namespace lfs::vis::gui {
                                   : toOverlay(t.palette.surface, 0.70f);
             addRingSector(overlay, center_, sm_inner_radius, sm_radius, a0, a1, 12, fill);
             const float mid = (a0 + a1) * 0.5f;
-            const glm::vec2 text_pos{
+            const glm::vec2 item_center{
                 center_.x + std::cos(mid) * text_radius,
                 center_.y + std::sin(mid) * text_radius};
-            addCenteredText(overlay, text_pos, item.submodes[si].label,
-                            toOverlay(t.palette.text, 1.0f), 10.0f * scale);
+            const auto text_color = toOverlay(t.palette.text, 1.0f);
+            const auto& submode = item.submodes[si];
+            const std::uintptr_t icon_texture =
+                submode.icon_name.empty()
+                    ? 0
+                    : IconCache::instance().getIcon(submode.icon_name);
+            if (icon_texture != 0) {
+                const float icon_size =
+                    (sm_radius - sm_inner_radius) * 0.65f;
+                const glm::vec2 icon_min =
+                    item_center - glm::vec2(icon_size * 0.5f);
+                overlay.addImage(icon_texture, icon_min,
+                                 icon_min + glm::vec2(icon_size), text_color);
+            } else {
+                addCenteredText(overlay, item_center, submode.label,
+                                text_color, 10.0f * scale);
+            }
         }
 
         overlay.addCircle(center_, sm_radius, border_col, 64, 1.0f * scale);

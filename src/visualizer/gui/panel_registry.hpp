@@ -322,6 +322,7 @@ namespace lfs::vis::gui {
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);
         bool is_panel_enabled(const std::string& id) const;
+        bool apply_floating_resize_cursor() const;
         void rescale_floating_panels(float previous_scale, float new_scale);
         bool needsAnimationFrame() const;
         PanelAnimationDemand animationDemandForVisiblePanels(
@@ -352,6 +353,8 @@ namespace lfs::vis::gui {
         std::unordered_set<std::string> disabled_overrides_;
         mutable std::unordered_map<std::string, PollCacheEntry> poll_cache_;
         uint64_t next_float_stack_order_ = 1;
+        int8_t floating_cursor_dir_x_ = 0;
+        int8_t floating_cursor_dir_y_ = 0;
     };
 
 } // namespace lfs::vis::gui

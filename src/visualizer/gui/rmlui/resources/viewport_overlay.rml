@@ -4,6 +4,7 @@
 </head>
 <body id="overlay-body">
     <div id="left-frame-border" class="viewport-frame-border"></div>
+    <div id="left-dock-resize-indicator" class="left-dock-resize-indicator hidden"></div>
     <div id="split-divider-overlay" class="viewport-split-divider hidden"></div>
 
     <div id="primary-toolbar-root" class="panel-toolbar-root">

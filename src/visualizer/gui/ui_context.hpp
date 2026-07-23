@@ -17,6 +17,7 @@ namespace lfs::vis {
 
     namespace gui {
         class RmlUIManager;
+        class RmlViewportOverlay;
 
         // Font set for typography hierarchy
         struct FontSet {
@@ -58,6 +59,7 @@ namespace lfs::vis {
             EditorContext* editor = nullptr;
             SequencerController* sequencer_controller = nullptr;
             RmlUIManager* rml_manager = nullptr;
+            RmlViewportOverlay* viewport_overlay = nullptr;
             FontSet fonts;
         };
 

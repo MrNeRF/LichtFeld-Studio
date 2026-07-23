@@ -296,6 +296,12 @@ namespace lfs::gui {
             host_->setForcedHeight(h);
     }
 
+    void VideoExtractorDialog::setFloating(const bool floating) {
+        floating_ = floating;
+        if (host_)
+            host_->setFloating(floating_);
+    }
+
     bool VideoExtractorDialog::wantsKeyboard() const {
         return host_ && host_->wantsKeyboard();
     }
@@ -563,6 +569,7 @@ namespace lfs::gui {
                 manager, "video_extractor", "rmlui/video_extractor.rml");
             host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
             host_->setForeground(true);
+            host_->setFloating(floating_);
         }
 
         if (!host_->ensureDocumentLoaded())

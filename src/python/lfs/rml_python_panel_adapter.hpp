@@ -47,6 +47,7 @@ namespace lfs::vis::gui {
         bool wantsKeyboard() const override;
         bool needsAnimationFrame() const override;
         bool wantsExternalFloatingShadow() const override { return !foreground_; }
+        void setPanelSpace(PanelSpace space) override;
         void reloadRmlResources() override;
         void setForeground(bool fg);
 
@@ -88,6 +89,7 @@ namespace lfs::vis::gui {
         bool has_draw_ = false;
         int height_mode_ = 0;
         bool foreground_ = false;
+        bool floating_ = false;
         uint64_t last_scene_gen_ = 0;
         uint64_t last_prepare_frame_ = 0;
         bool content_dirty_ = false;

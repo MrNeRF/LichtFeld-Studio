@@ -201,24 +201,28 @@ namespace lfs::vis::gui::rml_theme {
 
     } // namespace
 
-    std::string layeredShadow(const Theme& t, int elevation) {
-        const float a = t.shadows.alpha;
-        const float blur = t.shadows.blur;
-
+    namespace {
         struct ElevationParams {
             float tight_y, tight_blur, tight_alpha;
             float ambient_y, ambient_blur_scale, ambient_alpha;
         };
 
-        static constexpr ElevationParams levels[] = {
+        constexpr ElevationParams ELEVATION_LEVELS[] = {
             {1.0f, 2.0f, 0.40f, 3.0f, 0.5f, 0.20f},
             {1.0f, 3.0f, 0.35f, 5.0f, 1.0f, 0.18f},
             {2.0f, 4.0f, 0.32f, 8.0f, 1.3f, 0.16f},
             {3.0f, 6.0f, 0.30f, 14.0f, 2.0f, 0.15f},
         };
 
-        const int i = std::clamp(elevation - 1, 0, 3);
-        const auto& lv = levels[i];
+        const ElevationParams& elevationParams(const int elevation) {
+            return ELEVATION_LEVELS[std::clamp(elevation - 1, 0, 3)];
+        }
+    } // namespace
+
+    std::string layeredShadow(const Theme& t, const int elevation) {
+        const float a = t.shadows.alpha;
+        const float blur = t.shadows.blur;
+        const auto& lv = elevationParams(elevation);
         const float ta = std::clamp(a * lv.tight_alpha, 0.0f, 1.0f);
         const float aa = std::clamp(a * lv.ambient_alpha, 0.0f, 1.0f);
 
@@ -226,6 +230,17 @@ namespace lfs::vis::gui::rml_theme {
                            colorToRmlAlpha({0, 0, 0, 1}, ta), lv.tight_y, lv.tight_blur,
                            colorToRmlAlpha({0, 0, 0, 1}, aa), lv.ambient_y,
                            std::max(0.0f, blur * lv.ambient_blur_scale));
+    }
+
+    float layeredShadowPadding(const Theme& t, const int elevation) {
+        if (!t.shadows.enabled)
+            return 0.0f;
+
+        const auto& lv = elevationParams(elevation);
+        const float ambient_blur =
+            std::max(0.0f, t.shadows.blur * lv.ambient_blur_scale);
+        return std::ceil(std::max(std::abs(lv.tight_y) + lv.tight_blur,
+                                  std::abs(lv.ambient_y) + ambient_blur));
     }
 
     namespace {
@@ -457,11 +472,20 @@ namespace lfs::vis::gui::rml_theme {
                                                  layeredShadow(t, 4),
                                                  colorToRmlAlpha(RmlColor{1, 1, 1, 1}, is_light ? 0.08f : 0.05f));
             }
+            const std::string no_shadow = "none";
+            const std::string layered_shadow_1 =
+                t.shadows.enabled ? layeredShadow(t, 1) : no_shadow;
+            const std::string layered_shadow_3 =
+                t.shadows.enabled ? layeredShadow(t, 3) : no_shadow;
+            const std::string layered_shadow_4 =
+                t.shadows.enabled ? layeredShadow(t, 4) : no_shadow;
+            const float window_shadow_padding = layeredShadowPadding(t, 4);
 
             std::unordered_map<std::string, std::string> tokens{
                 {"window.surface", window_surface},
                 {"window.title_decor", title_decor},
                 {"window.rounding", std::format("{}", window_rounding)},
+                {"window.shadow_padding", std::format("{:.1f}", window_shadow_padding)},
                 {"components.header_decor", header_decor},
                 {"components.header_hover_decor", header_hover_decor},
                 {"components.progress_fill_decor", progress_fill_decor},
@@ -476,9 +500,9 @@ namespace lfs::vis::gui::rml_theme {
                 {"components.scroll_hover", colorToRmlAlpha(p.primary, 0.78f)},
                 {"components.scrollbar_rounding", std::format("{}", scrollbar_rounding)},
                 {"components.title_surface", colorToRml(title_surface_col)},
-                {"layered_shadow.1", layeredShadow(t, 1)},
-                {"layered_shadow.3", layeredShadow(t, 3)},
-                {"layered_shadow.4", layeredShadow(t, 4)},
+                {"layered_shadow.1", layered_shadow_1},
+                {"layered_shadow.3", layered_shadow_3},
+                {"layered_shadow.4", layered_shadow_4},
                 {"asset.icon.check", assetToken("icon/check.png")},
                 {"asset.icon.dropdown_arrow", assetToken("icon/dropdown-arrow.png")},
                 {"panel.body_bg", surface},

@@ -35,6 +35,7 @@
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
 #include "rendering/render_constants.hpp"
+#include "rendering/screen_overlay_renderer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/gui_manager.hpp"
@@ -58,12 +59,14 @@
 #include <SDL3/SDL_mouse.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <future>
+#include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
 #include <stack>
@@ -532,6 +535,96 @@ namespace lfs::python {
 
         // Thread-local layout stack for hierarchical layouts
         thread_local std::stack<LayoutContext> g_layout_stack;
+
+        constexpr float kOverlayTextSize = 14.0f;
+        constexpr float kPi = 3.14159265358979323846f;
+
+        lfs::rendering::OverlayColor overlayColor(const nb::object& color) {
+            const auto length = nb::len(color);
+            assert(length == 3 || length == 4);
+            if (length == 3) {
+                const auto rgb =
+                    nb::cast<std::tuple<float, float, float>>(color);
+                return {
+                    std::get<0>(rgb),
+                    std::get<1>(rgb),
+                    std::get<2>(rgb),
+                    1.0f,
+                };
+            }
+            if (length != 4)
+                throw std::invalid_argument("overlay color must have 3 or 4 components");
+            const auto rgba =
+                nb::cast<std::tuple<float, float, float, float>>(color);
+            return {
+                std::get<0>(rgba),
+                std::get<1>(rgba),
+                std::get<2>(rgba),
+                std::get<3>(rgba),
+            };
+        }
+
+        lfs::rendering::ScreenOverlayRenderer* activeOverlayRenderer() {
+            auto* const renderer = get_overlay_draw_context().renderer;
+            return renderer && renderer->isFrameActive() ? renderer : nullptr;
+        }
+
+        std::vector<glm::vec2> roundedRectPoints(const float x0, const float y0,
+                                                 const float x1, const float y1,
+                                                 const float requested_radius) {
+            const glm::vec2 min = glm::min(glm::vec2{x0, y0}, glm::vec2{x1, y1});
+            const glm::vec2 max = glm::max(glm::vec2{x0, y0}, glm::vec2{x1, y1});
+            const float radius =
+                std::clamp(requested_radius, 0.0f,
+                           0.5f * std::min(max.x - min.x, max.y - min.y));
+            if (radius <= 0.0f) {
+                return {
+                    {min.x, min.y},
+                    {max.x, min.y},
+                    {max.x, max.y},
+                    {min.x, max.y},
+                };
+            }
+
+            const int segments = std::clamp(
+                static_cast<int>(std::ceil(radius * 0.35f)), 3, 12);
+            const std::array<glm::vec2, 4> centers = {
+                glm::vec2{max.x - radius, min.y + radius},
+                glm::vec2{max.x - radius, max.y - radius},
+                glm::vec2{min.x + radius, max.y - radius},
+                glm::vec2{min.x + radius, min.y + radius},
+            };
+            const std::array<float, 4> starts = {
+                -0.5f * kPi,
+                0.0f,
+                0.5f * kPi,
+                kPi,
+            };
+
+            std::vector<glm::vec2> points;
+            points.reserve(static_cast<std::size_t>(segments + 1) * centers.size());
+            for (std::size_t corner = 0; corner < centers.size(); ++corner) {
+                for (int segment = 0; segment <= segments; ++segment) {
+                    const float angle =
+                        starts[corner] +
+                        0.5f * kPi * static_cast<float>(segment) /
+                            static_cast<float>(segments);
+                    points.push_back(
+                        centers[corner] +
+                        radius * glm::vec2{std::cos(angle), std::sin(angle)});
+                }
+            }
+            return points;
+        }
+
+        std::vector<glm::vec2> overlayPoints(
+            const std::vector<std::tuple<float, float>>& points) {
+            std::vector<glm::vec2> result;
+            result.reserve(points.size());
+            for (const auto& [x, y] : points)
+                result.emplace_back(x, y);
+            return result;
+        }
 
         // Window flags for Python bindings
         struct PyWindowFlags {
@@ -1745,24 +1838,137 @@ namespace lfs::python {
         warnUnsupportedInDrawHook("popover");
     }
 
-    void PyUILayout::draw_circle(float, float, float, nb::object, int, float) {}
-    void PyUILayout::draw_circle_filled(float, float, float, nb::object, int) {}
-    void PyUILayout::draw_rect(float, float, float, float, nb::object, float) {}
-    void PyUILayout::draw_rect_filled(float, float, float, float, nb::object, bool) {}
-    void PyUILayout::draw_rect_rounded(float, float, float, float, nb::object, float, float, bool) {}
-    void PyUILayout::draw_rect_rounded_filled(float, float, float, float, nb::object, float, bool) {}
-    void PyUILayout::draw_triangle_filled(float, float, float, float, float, float, nb::object, bool) {}
-    void PyUILayout::draw_line(float, float, float, float, nb::object, float) {}
-    void PyUILayout::draw_polyline(const std::vector<std::tuple<float, float>>&, nb::object, bool, float) {}
-    void PyUILayout::draw_poly_filled(const std::vector<std::tuple<float, float>>&, nb::object) {}
-    void PyUILayout::draw_text(float, float, const std::string&, nb::object, bool) {}
-    void PyUILayout::draw_window_rect_filled(float, float, float, float, nb::object) {}
-    void PyUILayout::draw_window_rect(float, float, float, float, nb::object, float) {}
-    void PyUILayout::draw_window_rect_rounded(float, float, float, float, nb::object, float, float) {}
-    void PyUILayout::draw_window_rect_rounded_filled(float, float, float, float, nb::object, float) {}
-    void PyUILayout::draw_window_line(float, float, float, float, nb::object, float) {}
-    void PyUILayout::draw_window_text(float, float, const std::string&, nb::object) {}
-    void PyUILayout::draw_window_triangle_filled(float, float, float, float, float, float, nb::object) {}
+    void PyUILayout::draw_circle(const float x, const float y, const float radius,
+                                 nb::object color, const int segments,
+                                 const float thickness) {
+        if (auto* const renderer = activeOverlayRenderer())
+            renderer->addCircle({x, y}, radius, overlayColor(color), segments, thickness);
+    }
+
+    void PyUILayout::draw_circle_filled(const float x, const float y,
+                                        const float radius, nb::object color,
+                                        const int segments) {
+        if (auto* const renderer = activeOverlayRenderer())
+            renderer->addCircleFilled({x, y}, radius, overlayColor(color), segments);
+    }
+
+    void PyUILayout::draw_rect(const float x0, const float y0, const float x1,
+                               const float y1, nb::object color,
+                               const float thickness) {
+        if (auto* const renderer = activeOverlayRenderer())
+            renderer->addRect({x0, y0}, {x1, y1}, overlayColor(color), thickness);
+    }
+
+    void PyUILayout::draw_rect_filled(const float x0, const float y0,
+                                      const float x1, const float y1,
+                                      nb::object color, bool) {
+        if (auto* const renderer = activeOverlayRenderer())
+            renderer->addRectFilled({x0, y0}, {x1, y1}, overlayColor(color));
+    }
+
+    void PyUILayout::draw_rect_rounded(const float x0, const float y0,
+                                       const float x1, const float y1,
+                                       nb::object color, const float rounding,
+                                       const float thickness, bool) {
+        if (auto* const renderer = activeOverlayRenderer()) {
+            const auto points = roundedRectPoints(x0, y0, x1, y1, rounding);
+            renderer->addPolyline(points, overlayColor(color), true, thickness);
+        }
+    }
+
+    void PyUILayout::draw_rect_rounded_filled(
+        const float x0, const float y0, const float x1, const float y1,
+        nb::object color, const float rounding, bool) {
+        if (auto* const renderer = activeOverlayRenderer()) {
+            const auto points = roundedRectPoints(x0, y0, x1, y1, rounding);
+            renderer->addConvexPolyFilled(points, overlayColor(color));
+        }
+    }
+
+    void PyUILayout::draw_triangle_filled(
+        const float x0, const float y0, const float x1, const float y1,
+        const float x2, const float y2, nb::object color, bool) {
+        if (auto* const renderer = activeOverlayRenderer()) {
+            renderer->addTriangleFilled(
+                {x0, y0}, {x1, y1}, {x2, y2}, overlayColor(color));
+        }
+    }
+
+    void PyUILayout::draw_line(const float x0, const float y0, const float x1,
+                               const float y1, nb::object color,
+                               const float thickness) {
+        if (auto* const renderer = activeOverlayRenderer())
+            renderer->addLine({x0, y0}, {x1, y1}, overlayColor(color), thickness);
+    }
+
+    void PyUILayout::draw_polyline(
+        const std::vector<std::tuple<float, float>>& points, nb::object color,
+        const bool closed, const float thickness) {
+        if (auto* const renderer = activeOverlayRenderer()) {
+            const auto converted = overlayPoints(points);
+            renderer->addPolyline(converted, overlayColor(color), closed, thickness);
+        }
+    }
+
+    void PyUILayout::draw_poly_filled(
+        const std::vector<std::tuple<float, float>>& points, nb::object color) {
+        if (auto* const renderer = activeOverlayRenderer()) {
+            const auto converted = overlayPoints(points);
+            renderer->addConvexPolyFilled(converted, overlayColor(color));
+        }
+    }
+
+    void PyUILayout::draw_text(const float x, const float y,
+                               const std::string& text, nb::object color, bool) {
+        if (auto* const renderer = activeOverlayRenderer()) {
+            renderer->addText({x, y}, text, overlayColor(color),
+                              kOverlayTextSize * python::get_shared_dpi_scale());
+        }
+    }
+
+    void PyUILayout::draw_window_rect_filled(
+        const float x0, const float y0, const float x1, const float y1,
+        nb::object color) {
+        draw_rect_filled(x0, y0, x1, y1, std::move(color), false);
+    }
+
+    void PyUILayout::draw_window_rect(
+        const float x0, const float y0, const float x1, const float y1,
+        nb::object color, const float thickness) {
+        draw_rect(x0, y0, x1, y1, std::move(color), thickness);
+    }
+
+    void PyUILayout::draw_window_rect_rounded(
+        const float x0, const float y0, const float x1, const float y1,
+        nb::object color, const float rounding, const float thickness) {
+        draw_rect_rounded(x0, y0, x1, y1, std::move(color), rounding,
+                          thickness, false);
+    }
+
+    void PyUILayout::draw_window_rect_rounded_filled(
+        const float x0, const float y0, const float x1, const float y1,
+        nb::object color, const float rounding) {
+        draw_rect_rounded_filled(x0, y0, x1, y1, std::move(color), rounding,
+                                 false);
+    }
+
+    void PyUILayout::draw_window_line(
+        const float x0, const float y0, const float x1, const float y1,
+        nb::object color, const float thickness) {
+        draw_line(x0, y0, x1, y1, std::move(color), thickness);
+    }
+
+    void PyUILayout::draw_window_text(const float x, const float y,
+                                      const std::string& text,
+                                      nb::object color) {
+        draw_text(x, y, text, std::move(color), false);
+    }
+
+    void PyUILayout::draw_window_triangle_filled(
+        const float x0, const float y0, const float x1, const float y1,
+        const float x2, const float y2, nb::object color) {
+        draw_triangle_filled(x0, y0, x1, y1, x2, y2, std::move(color), false);
+    }
     void PyUILayout::crf_curve_preview(const std::string&, float, float, float, float, float, float) {}
 
     std::tuple<bool, std::vector<float>> PyUILayout::chromaticity_diagram(
@@ -2114,6 +2320,11 @@ namespace lfs::python {
     }
     std::tuple<float, float> PyUILayout::calc_text_size(const std::string& text) {
         const float scale = python::get_shared_dpi_scale();
+        if (auto* const renderer = activeOverlayRenderer()) {
+            const glm::vec2 measured =
+                renderer->measureText(text, kOverlayTextSize * scale);
+            return {measured.x, measured.y};
+        }
         return {static_cast<float>(text.size()) * 7.0f * scale, 16.0f * scale};
     }
     void PyUILayout::begin_disabled(bool) {

@@ -11,6 +11,7 @@
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 
+#include <SDL3/SDL_mouse.h>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -525,6 +526,18 @@ namespace lfs::vis::gui {
             }
         }
 
+        int8_t floating_cursor_dir_x = 0;
+        int8_t floating_cursor_dir_y = 0;
+        if (hovered_floating_direct >= 0) {
+            const auto& hovered =
+                floating_direct_layouts[static_cast<std::size_t>(
+                    hovered_floating_direct)];
+            if (hovered.mouse_in_resize_grip) {
+                floating_cursor_dir_x = hovered.hover_dir_x;
+                floating_cursor_dir_y = hovered.hover_dir_y;
+            }
+        }
+
         for (size_t snap_idx = 0; snap_idx < snapshots.size(); ++snap_idx) {
             auto& snap = snapshots[snap_idx];
             bool draw_succeeded = false;
@@ -610,6 +623,8 @@ namespace lfs::vis::gui {
                                     }
                                 }
                                 if (pi.float_resizing) {
+                                    floating_cursor_dir_x = pi.float_resize_dir_x;
+                                    floating_cursor_dir_y = pi.float_resize_dir_y;
                                     if (mouse_down_left) {
                                         const float dx = mouse_x - pi.float_resize_start_mx;
                                         const float dy = mouse_y - pi.float_resize_start_my;
@@ -732,6 +747,12 @@ namespace lfs::vis::gui {
                              snap.id, elapsed);
                 }
             }
+        }
+
+        if (space == PanelSpace::Floating) {
+            std::lock_guard lock(mutex_);
+            floating_cursor_dir_x_ = floating_cursor_dir_x;
+            floating_cursor_dir_y_ = floating_cursor_dir_y;
         }
     }
 
@@ -1130,6 +1151,38 @@ namespace lfs::vis::gui {
                 return p.enabled;
         }
         return false;
+    }
+
+    bool PanelRegistry::apply_floating_resize_cursor() const {
+        int8_t dir_x = 0;
+        int8_t dir_y = 0;
+        {
+            std::lock_guard lock(mutex_);
+            dir_x = floating_cursor_dir_x_;
+            dir_y = floating_cursor_dir_y_;
+        }
+
+        SDL_Cursor* cursor = nullptr;
+        if (dir_x != 0 && dir_y != 0) {
+            static SDL_Cursor* const nwse =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NWSE_RESIZE);
+            static SDL_Cursor* const nesw =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NESW_RESIZE);
+            cursor = dir_x == dir_y ? nwse : nesw;
+        } else if (dir_x != 0) {
+            static SDL_Cursor* const ew =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+            cursor = ew;
+        } else if (dir_y != 0) {
+            static SDL_Cursor* const ns =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+            cursor = ns;
+        }
+
+        if (!cursor)
+            return false;
+        SDL_SetCursor(cursor);
+        return true;
     }
 
     void PanelRegistry::rescale_floating_panels(float previous_scale, float new_scale) {

@@ -30,6 +30,15 @@ body {
     z-index: 1;
 }
 
+.left-dock-resize-indicator {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 12;
+}
+
 .panel-toolbar-root {
     position: absolute;
     top: 0;

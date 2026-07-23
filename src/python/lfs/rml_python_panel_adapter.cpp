@@ -123,6 +123,8 @@ namespace lfs::vis::gui {
             ops.set_height_mode(host_, height_mode_);
         if (foreground_ && ops.set_foreground)
             ops.set_foreground(host_, true);
+        if (ops.set_floating)
+            ops.set_floating(host_, floating_);
         return true;
     }
 
@@ -620,6 +622,19 @@ namespace lfs::vis::gui {
             const auto& ops = lfs::python::get_rml_panel_host_ops();
             if (ops.set_foreground)
                 ops.set_foreground(host_, fg);
+        }
+    }
+
+    void RmlPythonPanelAdapter::setPanelSpace(const PanelSpace space) {
+        const bool floating = space == PanelSpace::Floating;
+        if (floating_ == floating)
+            return;
+
+        floating_ = floating;
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            if (ops.set_floating)
+                ops.set_floating(host_, floating_);
         }
     }
 

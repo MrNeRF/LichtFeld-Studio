@@ -85,6 +85,7 @@ namespace lfs::gui {
         void setInputClipY(float y_min, float y_max) override;
         void setInput(const lfs::vis::gui::PanelInputState* input) override;
         void setForcedHeight(float h) override;
+        void setFloating(bool floating) override;
         [[nodiscard]] bool wantsKeyboard() const override;
         [[nodiscard]] bool needsAnimationFrame() const override;
         void reloadRmlResources() override;
@@ -203,6 +204,7 @@ namespace lfs::gui {
         std::string preview_src_;
         bool elements_cached_ = false;
         bool controls_dirty_ = true;
+        bool floating_ = false;
 
         Rml::Element* title_el_ = nullptr;
         Rml::Element* close_btn_el_ = nullptr;

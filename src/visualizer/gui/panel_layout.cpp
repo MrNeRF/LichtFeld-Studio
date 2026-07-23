@@ -5,24 +5,25 @@
 #include "gui/panel_layout.hpp"
 #include "core/logger.hpp"
 #include "gui/panels/python_console_panel.hpp"
+#include "gui/rml_viewport_overlay.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
 
 namespace lfs::vis::gui {
     namespace {
-        void drawLeftDockResizeIndicator(const PanelInputState& input,
-                                         const float edge_x,
-                                         const float top_y,
-                                         const float bottom_y,
+        void drawLeftDockResizeIndicator(const PanelDrawContext& draw_ctx,
                                          const float dpi,
+                                         const bool visible,
                                          const bool active) {
-            (void)input;
-            (void)edge_x;
-            (void)top_y;
-            (void)bottom_y;
-            (void)dpi;
-            (void)active;
+            if (!draw_ctx.ui || !draw_ctx.ui->viewport_overlay)
+                return;
+
+            const float thickness =
+                std::max(active ? 3.0f : 2.0f,
+                         (active ? 3.0f : 2.0f) * dpi);
+            draw_ctx.ui->viewport_overlay->setLeftDockResizeIndicator(
+                visible, active, thickness);
         }
     } // namespace
 
@@ -556,6 +557,7 @@ namespace lfs::vis::gui {
         auto& reg = PanelRegistry::instance();
         if (!show_main_panel || ui_hidden || screen.work_size.x <= 0 || screen.work_size.y <= 0 ||
             !reg.has_panels(PanelSpace::LeftDock)) {
+            drawLeftDockResizeIndicator(draw_ctx, 1.0f, false, false);
             left_dock_hovering_edge_ = false;
             left_dock_resizing_ = false;
             left_dock_visible_ = false;
@@ -569,6 +571,7 @@ namespace lfs::vis::gui {
         const float max_panel_w = maxLeftDockPanelWidth(show_main_panel, ui_hidden, screen);
 
         if (max_panel_w <= 0.0f) {
+            drawLeftDockResizeIndicator(draw_ctx, dpi, false, false);
             left_dock_hovering_edge_ = false;
             left_dock_resizing_ = false;
             left_dock_visible_ = false;
@@ -654,14 +657,10 @@ namespace lfs::vis::gui {
                                    &dock_input);
         }
 
-        if (left_dock_hovering_edge_ || left_dock_resizing_) {
-            drawLeftDockResizeIndicator(input,
-                                        panel_right_x,
-                                        screen.work_pos.y,
-                                        screen.work_pos.y + panel_h,
-                                        dpi,
-                                        left_dock_resizing_);
-        }
+        drawLeftDockResizeIndicator(
+            draw_ctx, dpi,
+            left_dock_hovering_edge_ || left_dock_resizing_,
+            left_dock_resizing_);
     }
 
     void PanelLayoutManager::renderLeftDockCached(const PanelDrawContext& draw_ctx,
@@ -670,6 +669,7 @@ namespace lfs::vis::gui {
                                                   const PanelInputState& input,
                                                   const ScreenState& screen) {
         LOG_TIMER("gui_render.panel_layout.renderLeftDock.cached");
+        drawLeftDockResizeIndicator(draw_ctx, 1.0f, false, false);
         auto& reg = PanelRegistry::instance();
         if (!show_main_panel || ui_hidden || screen.work_size.x <= 0 || screen.work_size.y <= 0 ||
             !reg.has_panels(PanelSpace::LeftDock)) {

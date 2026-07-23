@@ -36,6 +36,10 @@ namespace lfs::core {
     class Scene;
 } // namespace lfs::core
 
+namespace lfs::rendering {
+    class ScreenOverlayRenderer;
+}
+
 namespace lfs::vis {
     class Visualizer;
     class SceneManager;
@@ -563,6 +567,30 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void get_viewport_bounds(float& x, float& y, float& w, float& h);
     LFS_PYTHON_RUNTIME_API bool has_viewport_bounds();
 
+    struct OverlayDrawContext {
+        lfs::rendering::ScreenOverlayRenderer* renderer = nullptr;
+    };
+
+    LFS_PYTHON_RUNTIME_API void set_overlay_draw_context(OverlayDrawContext context);
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API OverlayDrawContext get_overlay_draw_context();
+
+    class ScopedOverlayDrawContext {
+    public:
+        explicit ScopedOverlayDrawContext(OverlayDrawContext context)
+            : previous_(get_overlay_draw_context()) {
+            set_overlay_draw_context(context);
+        }
+        ~ScopedOverlayDrawContext() { set_overlay_draw_context(previous_); }
+
+        ScopedOverlayDrawContext(const ScopedOverlayDrawContext&) = delete;
+        ScopedOverlayDrawContext& operator=(const ScopedOverlayDrawContext&) = delete;
+        ScopedOverlayDrawContext(ScopedOverlayDrawContext&&) = delete;
+        ScopedOverlayDrawContext& operator=(ScopedOverlayDrawContext&&) = delete;
+
+    private:
+        OverlayDrawContext previous_;
+    };
+
     // RAII guard for operation context (used for capability invocations)
     class SceneContextGuard {
     public:
@@ -673,6 +701,7 @@ namespace lfs::python {
         bool (*reload_document)(void* host);
         void* (*get_context)(void* host);
         void (*set_foreground)(void* host, bool fg);
+        void (*set_floating)(void* host, bool floating);
         void (*mark_content_dirty)(void* host);
         void (*set_input_clip_y)(void* host, float y_min, float y_max);
         void (*set_input)(void* host, const void* input);

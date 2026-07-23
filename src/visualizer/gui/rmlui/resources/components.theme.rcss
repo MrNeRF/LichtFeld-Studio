@@ -8,6 +8,18 @@
     border-radius: @{num(size.window_rounding)}dp;
 }
 
+body.floating-panel {
+    position: absolute;
+    left: @{window.shadow_padding}dp;
+    right: @{window.shadow_padding}dp;
+    top: @{window.shadow_padding}dp;
+    bottom: @{window.shadow_padding}dp;
+    width: auto;
+    height: auto;
+    box-shadow: @{layered_shadow.4};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
 #title-bar {
     @{window.title_decor};
     border-top-left-radius: @{window.rounding}dp;
@@ -391,6 +403,7 @@ progress fill {
 .color-picker-popup {
     background-color: @{surface};
     border-color: @{border};
+    box-shadow: @{layered_shadow.3};
 }
 
 .interactive-row:hover,
