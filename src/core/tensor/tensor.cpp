@@ -831,7 +831,7 @@ namespace lfs::core {
                        "set_stream requires a valid tensor");
         if (device_ == Device::CUDA) {
             if (!data_owner_) {
-                if (!state_->lazy && state_->stream != stream) {
+                if (!state_->lazy && data_ != nullptr && state_->stream != stream) {
                     static std::atomic<bool> warned{false};
                     if (!warned.exchange(true, std::memory_order_relaxed)) {
                         LOG_WARN("set_stream cannot rehome non-owning CUDA tensor storage "
@@ -856,7 +856,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(is_valid(),
                        "record_stream requires a valid tensor");
         if (!data_owner_) {
-            if (device_ == Device::CUDA && this->stream() == nullptr) {
+            if (device_ == Device::CUDA && data_ != nullptr && this->stream() == nullptr) {
                 static std::atomic<bool> warned{false};
                 if (!warned.exchange(true, std::memory_order_relaxed)) {
                     LOG_WARN("record_stream ignored for non-owning CUDA tensor with null home stream "
