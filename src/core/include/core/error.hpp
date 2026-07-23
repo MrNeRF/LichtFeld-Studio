@@ -255,8 +255,8 @@ namespace lfs {
 
         template <class>
         friend class Result;
-        friend Error make_error(ErrorInit init) noexcept;
-        friend Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
+        friend LFS_CORE_API Error make_error(ErrorInit init) noexcept;
+        friend LFS_CORE_API Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
     };
 
     static_assert(sizeof(Error) == sizeof(void*));
