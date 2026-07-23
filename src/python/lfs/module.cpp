@@ -67,6 +67,7 @@
 #include "input/input_controller.hpp"
 #include "python/runner.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
 #include "training/strategies/istrategy.hpp"
 #include "training/trainer.hpp"
 #include "training/training_state.hpp"

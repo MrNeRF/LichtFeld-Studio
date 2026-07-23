@@ -147,6 +147,7 @@ set(TEST_FILES
     test_logger.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
+    test_mcp_training_state.cpp
     test_mcp_app_utils.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp

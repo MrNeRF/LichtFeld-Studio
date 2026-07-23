@@ -3,18 +3,21 @@
 #pragma once
 
 #include "control_boundary.hpp"
-#include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "training/optimizer/adam_optimizer.hpp"
-#include "training/trainer.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <expected>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <variant>
 #include <vector>
+
+namespace lfs::core {
+    class SplatData;
+} // namespace lfs::core
 
 namespace lfs::training {
 
@@ -101,7 +104,7 @@ namespace lfs::training {
 
     class CommandCenter {
     public:
-        static CommandCenter& instance();
+        static LFS_BRIDGE_API CommandCenter& instance();
 
         void set_phase(TrainingPhase phase);
 
