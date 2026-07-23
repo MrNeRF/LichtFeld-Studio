@@ -1840,7 +1840,7 @@ TEST_F(UnicodePathTest, SaveDirectoryPopupPathDerivation) {
 
         EXPECT_FALSE(dataset_str.empty());
 
-        // Verify it can be used for text display display
+        // Verify it can be used for text display
         const char* display_str = dataset_str.c_str();
         EXPECT_NE(display_str, nullptr);
         EXPECT_GT(strlen(display_str), 0);

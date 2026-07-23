@@ -3020,7 +3020,8 @@ namespace lfs::python {
                  "Draw a float input with increment/decrement buttons, returns (changed, value)")
             .def("path_input", &PyUILayout::path_input, nb::arg("label"), nb::arg("value"),
                  nb::arg("folder_mode") = true, nb::arg("dialog_title") = "",
-                 "Draw a path input with browse button, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.")
+                 "Unsupported on compatibility UILayout. In a draw hook, warns once "
+                 "and returns (False, value); use RmlUILayout.path_input in a panel.")
             // Color
             .def("color_edit3", &PyUILayout::color_edit3, nb::arg("label"), nb::arg("color"), "Draw an RGB color editor, returns (changed, color)")
             .def("color_edit4", &PyUILayout::color_edit4, nb::arg("label"), nb::arg("color"), "Draw an RGBA color editor, returns (changed, color)")
@@ -3212,25 +3213,25 @@ namespace lfs::python {
             .def("menu", &PyUILayout::menu, nb::arg("menu_id"), nb::arg("text") = "", nb::arg("icon") = "", "Inline menu reference")
             .def("popover", &PyUILayout::popover, nb::arg("panel_id"), nb::arg("text") = "", nb::arg("icon") = "", "Panel popover")
             // Drawing functions for viewport overlays
-            .def("draw_circle", &PyUILayout::draw_circle, nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("color"), nb::arg("segments") = 32, nb::arg("thickness") = 1.0f, "Draw a circle outline at (x, y) with given radius and color")
+            .def("draw_circle", &PyUILayout::draw_circle, nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("color"), nb::arg("segments") = 32, nb::arg("thickness") = 1.0f, "Enqueue a circle in the active viewport ScreenOverlayRenderer using absolute screen coordinates. Emits nothing outside an overlay frame.")
             .def("draw_circle_filled", &PyUILayout::draw_circle_filled, nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("color"), nb::arg("segments") = 32, "Draw a filled circle at (x, y) with given radius and color")
             .def("draw_rect", &PyUILayout::draw_rect, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Draw a rectangle outline from (x0,y0) to (x1,y1)")
-            .def("draw_rect_filled", &PyUILayout::draw_rect_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("background") = false, "Draw a filled rectangle from (x0,y0) to (x1,y1)")
-            .def("draw_rect_rounded", &PyUILayout::draw_rect_rounded, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("thickness") = 1.0f, nb::arg("background") = false, "Draw a rounded rectangle outline")
-            .def("draw_rect_rounded_filled", &PyUILayout::draw_rect_rounded_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("background") = false, "Draw a filled rounded rectangle")
-            .def("draw_triangle_filled", &PyUILayout::draw_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"), nb::arg("background") = false, "Draw a filled triangle")
+            .def("draw_rect_filled", &PyUILayout::draw_rect_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("background") = false, "Enqueue a filled overlay rectangle; background is compatibility-only.")
+            .def("draw_rect_rounded", &PyUILayout::draw_rect_rounded, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("thickness") = 1.0f, nb::arg("background") = false, "Enqueue a tessellated rounded outline; background is compatibility-only.")
+            .def("draw_rect_rounded_filled", &PyUILayout::draw_rect_rounded_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("background") = false, "Enqueue a tessellated rounded fill; background is compatibility-only.")
+            .def("draw_triangle_filled", &PyUILayout::draw_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"), nb::arg("background") = false, "Enqueue a filled overlay triangle; background is compatibility-only.")
             .def("draw_line", &PyUILayout::draw_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Draw a line from (x0,y0) to (x1,y1)")
             .def("draw_polyline", &PyUILayout::draw_polyline, nb::arg("points"), nb::arg("color"), nb::arg("closed") = false, nb::arg("thickness") = 1.0f, "Draw a polyline through the given points")
             .def("draw_poly_filled", &PyUILayout::draw_poly_filled, nb::arg("points"), nb::arg("color"), "Draw a filled convex polygon")
-            .def("draw_text", &PyUILayout::draw_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"), nb::arg("background") = false, "Draw text at (x, y) with given color")
-            // Window-scoped drawing (respects z-order)
-            .def("draw_window_rect_filled", &PyUILayout::draw_window_rect_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), "Draw a filled rectangle on the window draw list")
-            .def("draw_window_rect", &PyUILayout::draw_window_rect, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Draw a rectangle outline on the window draw list")
-            .def("draw_window_rect_rounded", &PyUILayout::draw_window_rect_rounded, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("thickness") = 1.0f, "Draw a rounded rectangle outline on the window draw list")
-            .def("draw_window_rect_rounded_filled", &PyUILayout::draw_window_rect_rounded_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), "Draw a filled rounded rectangle on the window draw list")
-            .def("draw_window_line", &PyUILayout::draw_window_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Draw a line on the window draw list")
-            .def("draw_window_text", &PyUILayout::draw_window_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"), "Draw text on the window draw list")
-            .def("draw_window_triangle_filled", &PyUILayout::draw_window_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"), "Draw a filled triangle on the window draw list")
+            .def("draw_text", &PyUILayout::draw_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"), nb::arg("background") = false, "Enqueue overlay text at absolute screen coordinates; background is ignored.")
+            // Window-prefixed compatibility aliases use the same absolute screen space.
+            .def("draw_window_rect_filled", &PyUILayout::draw_window_rect_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), "Enqueue a filled rectangle in the viewport ScreenOverlayRenderer.")
+            .def("draw_window_rect", &PyUILayout::draw_window_rect, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Enqueue a rectangle outline in the viewport ScreenOverlayRenderer.")
+            .def("draw_window_rect_rounded", &PyUILayout::draw_window_rect_rounded, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("thickness") = 1.0f, "Enqueue a tessellated rounded outline in the viewport overlay.")
+            .def("draw_window_rect_rounded_filled", &PyUILayout::draw_window_rect_rounded_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), "Enqueue a tessellated rounded fill in the viewport overlay.")
+            .def("draw_window_line", &PyUILayout::draw_window_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Enqueue a line in the viewport ScreenOverlayRenderer.")
+            .def("draw_window_text", &PyUILayout::draw_window_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"), "Enqueue text in the viewport ScreenOverlayRenderer.")
+            .def("draw_window_triangle_filled", &PyUILayout::draw_window_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"), "Enqueue a filled triangle in the viewport ScreenOverlayRenderer. Like every draw_window_* alias, coordinates are absolute screen space.")
             .def("crf_curve_preview", &PyUILayout::crf_curve_preview, nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"), nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f, "Unsupported in layout APIs; use the retained RmlUi <crf-curve> custom element.")
             .def("chromaticity_diagram", &PyUILayout::chromaticity_diagram, nb::arg("label"), nb::arg("red_x"), nb::arg("red_y"), nb::arg("green_x"), nb::arg("green_y"), nb::arg("blue_x"), nb::arg("blue_y"), nb::arg("neutral_x"), nb::arg("neutral_y"), nb::arg("range") = 0.5f, "Unsupported in layout APIs; use the retained RmlUi <chromaticity-diagram> custom element.");
         add_template_methods_to_uilayout(layout_class);
@@ -3568,13 +3569,15 @@ namespace lfs::python {
                 return is_key_pressed(key);
             },
             nb::arg("key"), nb::arg("repeat") = false,
-            "Edge-triggered key press for the current UI frame. Queries must run "
-            "on the UI thread; key repeat is not emitted.");
+            "Return the SDL-backed rising edge for the current UI frame. Must be "
+            "queried on the UI thread; returns False before frame initialization. "
+            "The repeat argument is retained only for call compatibility; key "
+            "repeat is not emitted.");
 
         m.def(
             "is_key_down",
             [](const PyKey key) { return is_key_down(key); },
-            nb::arg("key"), "Check if a key is currently held down");
+            nb::arg("key"), "Return the current SDL keyboard level for the key.");
 
         m.def(
             "is_ctrl_down",

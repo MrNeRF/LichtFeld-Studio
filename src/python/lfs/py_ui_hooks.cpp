@@ -285,7 +285,8 @@ namespace lfs::python {
             },
             nb::arg("panel"), nb::arg("section"), nb::arg("callback"),
             nb::arg("position") = "append",
-            "Add a UI hook callback to a panel section");
+            "Add a UI hook callback to a panel section. Hook layouts that cannot "
+            "host interactive widgets warn once and return inert controls.");
 
         m.def(
             "remove_hook",

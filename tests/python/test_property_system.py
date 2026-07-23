@@ -486,12 +486,13 @@ class TestPropertyCallbacks:
 
 
 class TestUILayout:
-    """Tests for PyUILayout methods (without ImGui context)."""
+    """Tests for PyUILayout methods (without an active panel draw context)."""
 
     # Note: These tests cannot actually call layout methods since they
-    # require an active ImGui context. We can only test that the bindings exist.
+    # require an active im-mode / panel draw context. We can only test that
+    # the bindings exist.
 
     def test_layout_class_exists(self, lf):
         """UILayout class should exist in ui submodule."""
         assert hasattr(lf.ui, "UILayout")
-        # Can't instantiate directly without ImGui context
+        # Can't instantiate directly without an active panel draw context

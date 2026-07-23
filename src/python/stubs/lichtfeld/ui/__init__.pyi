@@ -439,7 +439,7 @@ class RmlUILayout:
 
     def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
         """
-        Draw an editable path input with a native file or folder browser, returns (changed, path).
+        Draw an editable path input with a native file or folder browser. folder_mode selects folder versus file; a non-empty dialog_title uses the custom title, while an empty title keeps the native default. Returns (changed, path).
         """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]: ...
@@ -488,7 +488,10 @@ class RmlUILayout:
 
     def end_table(self) -> None: ...
 
-    def table_next_row(self) -> None: ...
+    def table_next_row(self) -> None:
+        """
+        Advance to the next row. Use push_id()/pop_id() around each row (a ##hidden key is accepted) for stable identity across reorder/removal. Rows without an explicit key use position identity.
+        """
 
     def table_next_column(self) -> None: ...
 
@@ -646,11 +649,17 @@ class RmlUILayout:
 
     def column(self) -> object: ...
 
-    def split(self, factor: float = 0.5) -> object: ...
+    def split(self, factor: float = 0.5) -> object:
+        """
+        Create a two-child split. factor is clamped to [0, 1] and sets the first/second width ratio; excess children are hidden.
+        """
 
     def box(self) -> object: ...
 
-    def grid_flow(self, columns: int = 0, even_columns: bool = True, even_rows: bool = True) -> object: ...
+    def grid_flow(self, columns: int = 0, even_columns: bool = True, even_rows: bool = True) -> object:
+        """
+        Create a wrapping grid. With even_columns=True, columns > 0 uses equal percentage widths and columns=0 uses a 100dp wrapping basis; even_columns=False uses content widths. even_rows controls cell growth and stretching.
+        """
 
     def prop_enum(self, data: object, prop_id: str, value: str, text: str = '') -> bool: ...
 
@@ -777,11 +786,17 @@ class RmlSubLayout:
 
     def column(self) -> RmlSubLayout: ...
 
-    def split(self, factor: float = 0.5) -> RmlSubLayout: ...
+    def split(self, factor: float = 0.5) -> RmlSubLayout:
+        """
+        Create a two-child split. factor is clamped to [0, 1] and sets the first/second width ratio; excess children are hidden.
+        """
 
     def box(self) -> RmlSubLayout: ...
 
-    def grid_flow(self, columns: int = 0, even_columns: bool = True, even_rows: bool = True) -> RmlSubLayout: ...
+    def grid_flow(self, columns: int = 0, even_columns: bool = True, even_rows: bool = True) -> RmlSubLayout:
+        """
+        Create a wrapping grid. With even_columns=True, columns > 0 uses equal percentage widths and columns=0 uses a 100dp wrapping basis; even_columns=False uses content widths. even_rows controls cell growth and stretching.
+        """
 
     def label(self, text: str) -> None: ...
 
@@ -837,7 +852,7 @@ class RmlSubLayout:
 
     def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
         """
-        Draw an editable path input with a native file or folder browser, returns (changed, path).
+        Draw an editable path input with a native file or folder browser. folder_mode selects folder versus file; a non-empty dialog_title uses the custom title, while an empty title keeps the native default. Returns (changed, path).
         """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]: ...
@@ -866,7 +881,10 @@ class RmlSubLayout:
 
     def table_setup_column(self, label: str, width: float = 0.0) -> None: ...
 
-    def table_next_row(self) -> None: ...
+    def table_next_row(self) -> None:
+        """
+        Advance to the next row. Use push_id()/pop_id() around each row (a ##hidden key is accepted) for stable identity across reorder/removal. Rows without an explicit key use position identity.
+        """
 
     def table_next_column(self) -> None: ...
 
@@ -924,7 +942,9 @@ class HookPosition(enum.Enum):
     APPEND = 1
 
 def add_hook(panel: str, section: str, callback: object, position: str = 'append') -> None:
-    """Add a UI hook callback to a panel section"""
+    """
+    Add a UI hook callback to a panel section. Hook layouts that cannot host interactive widgets warn once and return inert controls.
+    """
 
 def remove_hook(panel: str, section: str, callback: object) -> None:
     """Remove a specific UI hook callback"""
@@ -1447,7 +1467,7 @@ class UILayout:
 
     def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
         """
-        Draw a path input with browse button, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.
+        Unsupported on compatibility UILayout. In a draw hook, warns once and returns (False, value); use RmlUILayout.path_input in a panel.
         """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]:
@@ -1839,7 +1859,9 @@ class UILayout:
         """Panel popover"""
 
     def draw_circle(self, x: float, y: float, radius: float, color: object, segments: int = 32, thickness: float = 1.0) -> None:
-        """Draw a circle outline at (x, y) with given radius and color"""
+        """
+        Enqueue a circle in the active viewport ScreenOverlayRenderer using absolute screen coordinates. Emits nothing outside an overlay frame.
+        """
 
     def draw_circle_filled(self, x: float, y: float, radius: float, color: object, segments: int = 32) -> None:
         """Draw a filled circle at (x, y) with given radius and color"""
@@ -1848,16 +1870,18 @@ class UILayout:
         """Draw a rectangle outline from (x0,y0) to (x1,y1)"""
 
     def draw_rect_filled(self, x0: float, y0: float, x1: float, y1: float, color: object, background: bool = False) -> None:
-        """Draw a filled rectangle from (x0,y0) to (x1,y1)"""
+        """Enqueue a filled overlay rectangle; background is compatibility-only."""
 
     def draw_rect_rounded(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float, thickness: float = 1.0, background: bool = False) -> None:
-        """Draw a rounded rectangle outline"""
+        """
+        Enqueue a tessellated rounded outline; background is compatibility-only.
+        """
 
     def draw_rect_rounded_filled(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float, background: bool = False) -> None:
-        """Draw a filled rounded rectangle"""
+        """Enqueue a tessellated rounded fill; background is compatibility-only."""
 
     def draw_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: object, background: bool = False) -> None:
-        """Draw a filled triangle"""
+        """Enqueue a filled overlay triangle; background is compatibility-only."""
 
     def draw_line(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
         """Draw a line from (x0,y0) to (x1,y1)"""
@@ -1869,28 +1893,32 @@ class UILayout:
         """Draw a filled convex polygon"""
 
     def draw_text(self, x: float, y: float, text: str, color: object, background: bool = False) -> None:
-        """Draw text at (x, y) with given color"""
+        """
+        Enqueue overlay text at absolute screen coordinates; background is ignored.
+        """
 
     def draw_window_rect_filled(self, x0: float, y0: float, x1: float, y1: float, color: object) -> None:
-        """Draw a filled rectangle on the window draw list"""
+        """Enqueue a filled rectangle in the viewport ScreenOverlayRenderer."""
 
     def draw_window_rect(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
-        """Draw a rectangle outline on the window draw list"""
+        """Enqueue a rectangle outline in the viewport ScreenOverlayRenderer."""
 
     def draw_window_rect_rounded(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float, thickness: float = 1.0) -> None:
-        """Draw a rounded rectangle outline on the window draw list"""
+        """Enqueue a tessellated rounded outline in the viewport overlay."""
 
     def draw_window_rect_rounded_filled(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float) -> None:
-        """Draw a filled rounded rectangle on the window draw list"""
+        """Enqueue a tessellated rounded fill in the viewport overlay."""
 
     def draw_window_line(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
-        """Draw a line on the window draw list"""
+        """Enqueue a line in the viewport ScreenOverlayRenderer."""
 
     def draw_window_text(self, x: float, y: float, text: str, color: object) -> None:
-        """Draw text on the window draw list"""
+        """Enqueue text in the viewport ScreenOverlayRenderer."""
 
     def draw_window_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: object) -> None:
-        """Draw a filled triangle on the window draw list"""
+        """
+        Enqueue a filled triangle in the viewport ScreenOverlayRenderer. Like every draw_window_* alias, coordinates are absolute screen space.
+        """
 
     def crf_curve_preview(self, label: str, gamma: float, toe: float, shoulder: float, gamma_r: float = 0.0, gamma_g: float = 0.0, gamma_b: float = 0.0) -> None:
         """
@@ -2089,11 +2117,13 @@ class Key(enum.Enum):
 
     F2 = 573
 
-def is_key_pressed(key: Key, repeat: bool = True) -> bool:
-    """Check if a key was pressed this frame"""
+def is_key_pressed(key: Key, repeat: bool = False) -> bool:
+    """
+    Return the SDL-backed rising edge for the current UI frame. Must be queried on the UI thread; returns False before frame initialization. The repeat argument is retained only for call compatibility; key repeat is not emitted.
+    """
 
 def is_key_down(key: Key) -> bool:
-    """Check if a key is currently held down"""
+    """Return the current SDL keyboard level for the key."""
 
 def is_ctrl_down() -> bool:
     """Check if Ctrl is currently held"""

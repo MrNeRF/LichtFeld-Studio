@@ -10,7 +10,6 @@ external/debug/libtorch/
 output*
 results
 .idea
-imgui.ini
 data
 *.pt
 *.py
