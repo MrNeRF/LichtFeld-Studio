@@ -100,6 +100,25 @@ namespace lfs::rendering::pcraster {
                     }
                     desaturate = true;
                 }
+            } else if (params.has_crop_ellipsoid) {
+                const float* T = params.crop_ellipsoid.to_local;
+                const float lx = matMulRow(T, 0, x, y, z, 1.0f);
+                const float ly = matMulRow(T, 1, x, y, z, 1.0f);
+                const float lz = matMulRow(T, 2, x, y, z, 1.0f);
+                const float rx = fmaxf(fabsf(params.crop_ellipsoid.radii[0]), 1e-8f);
+                const float ry = fmaxf(fabsf(params.crop_ellipsoid.radii[1]), 1e-8f);
+                const float rz = fmaxf(fabsf(params.crop_ellipsoid.radii[2]), 1e-8f);
+                const float norm = (lx * lx) / (rx * rx) +
+                                   (ly * ly) / (ry * ry) +
+                                   (lz * lz) / (rz * rz);
+                const bool inside = norm <= 1.0f;
+                const bool visible = params.crop_ellipsoid.inverse ? !inside : inside;
+                if (!visible) {
+                    if (!params.crop_ellipsoid.desaturate) {
+                        return;
+                    }
+                    desaturate = true;
+                }
             }
 
             const float* V = params.view;

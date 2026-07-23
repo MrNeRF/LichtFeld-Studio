@@ -296,6 +296,7 @@ namespace lfs::core {
             // Optional trained splats to append to the training model before optimizer initialization
             std::vector<std::filesystem::path> add_splat_paths;
             std::vector<bool> add_splat_freeze;
+            float freeze_lr_scale = 0.0f;
             bool exclude_frozen_add_splats_from_export = false;
 
             // Checkpoint to resume training from

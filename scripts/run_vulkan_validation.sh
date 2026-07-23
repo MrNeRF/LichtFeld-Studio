@@ -75,7 +75,11 @@ validation_environment=(
     "LFS_VK_VALIDATION=1"
 )
 if ((fatal)); then
-    validation_environment+=("LFS_VK_VALIDATION_FATAL=1")
+    if [[ -n "${LFS_CUDA_SYNC_DEBUG:-}" ]]; then
+        validation_environment+=("LFS_CUDA_SYNC_DEBUG=${LFS_CUDA_SYNC_DEBUG},vk-fatal")
+    else
+        validation_environment+=("LFS_CUDA_SYNC_DEBUG=vk-fatal")
+    fi
 fi
 
 echo "Validation layer: $layer_path" >&2

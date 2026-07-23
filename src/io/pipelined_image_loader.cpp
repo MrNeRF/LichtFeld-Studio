@@ -4,6 +4,7 @@
 #include "io/pipelined_image_loader.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/error_reporter.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -79,6 +80,11 @@ namespace lfs::io {
                     return;
                 }
             }
+        }
+
+        [[nodiscard]] std::string legacy_message_from(const lfs::Error& error) {
+            return error.user_message().empty() ? std::string(error.detail())
+                                                : std::string(error.user_message());
         }
 
         struct NvCodecLoaderCacheEntry {
@@ -294,6 +300,8 @@ namespace lfs::io {
         : config_(std::move(config)),
           output_queue_(std::max<size_t>(1, config_.output_queue_size)) {
 
+        ledger_.reserve(std::max(config_.prefetch_count, config_.output_queue_size) * 2);
+
         LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, output_queue={}, io_threads={}, cold_threads={}, 16bit_color={}",
                  config_.jpeg_batch_size,
                  config_.prefetch_count,
@@ -418,52 +426,147 @@ namespace lfs::io {
 
     void PipelinedImageLoader::prefetch(const std::vector<ImageRequest>& requests) {
         for (const auto& req : requests) {
-            prefetch_queue_.push(req);
-            in_flight_.fetch_add(1, std::memory_order_acq_rel);
+            if (!running_.load(std::memory_order_acquire)) {
+                return;
+            }
+            std::uint64_t accepted_generation = 0;
+            {
+                std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                if (!running_.load(std::memory_order_acquire)) {
+                    return;
+                }
+                auto [it, inserted] = pending_pairs_.try_emplace(req.sequence_id);
+                if (!inserted) {
+                    continue;
+                }
+                it->second.primary_path = req.path;
+                accepted_generation = loader_generation_.load(std::memory_order_relaxed);
+                it->second.loader_generation = accepted_generation;
+                it->second.mask_expected = req.mask_path.has_value() || req.extract_alpha_as_mask;
+                it->second.depth_expected = req.depth_path.has_value();
+                it->second.normal_expected = req.normal_path.has_value();
+                accepted_sequences_.fetch_add(1, std::memory_order_relaxed);
+                in_flight_.fetch_add(1, std::memory_order_acq_rel);
+            }
+            ImageRequest accepted_request = req;
+            accepted_request.loader_generation = accepted_generation;
+            (void)prefetch_queue_.push(std::move(accepted_request));
         }
     }
 
     void PipelinedImageLoader::prefetch(size_t sequence_id, const std::filesystem::path& path, const LoadParams& params) {
+        if (!running_.load(std::memory_order_acquire)) {
+            return;
+        }
         ImageRequest request;
         request.sequence_id = sequence_id;
+        request.loader_generation = loader_generation_.load(std::memory_order_relaxed);
         request.path = path;
         request.params = params;
-        prefetch_queue_.push(std::move(request));
-        in_flight_.fetch_add(1, std::memory_order_acq_rel);
+        {
+            std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+            if (!running_.load(std::memory_order_acquire)) {
+                return;
+            }
+            const auto [it, inserted] = pending_pairs_.try_emplace(sequence_id);
+            if (!inserted) {
+                return;
+            }
+            it->second.primary_path = path;
+            it->second.loader_generation = request.loader_generation;
+            accepted_sequences_.fetch_add(1, std::memory_order_relaxed);
+            in_flight_.fetch_add(1, std::memory_order_acq_rel);
+        }
+        (void)prefetch_queue_.push(std::move(request));
     }
 
     ReadyImage PipelinedImageLoader::get() {
-        auto result = output_queue_.pop();
-        release_output_ready_bytes(result);
-        in_flight_.fetch_sub(1, std::memory_order_acq_rel);
-        if (!result.error.empty()) {
-            throw std::runtime_error(std::move(result.error));
+        auto completion = get_completion();
+        if (!completion) {
+            throw std::runtime_error(legacy_message_from(completion.error()));
         }
-        return result;
+        if (!completion->outcome) {
+            throw std::runtime_error(legacy_message_from(completion->outcome.error()));
+        }
+        return std::move(*completion->outcome);
     }
 
     std::optional<ReadyImage> PipelinedImageLoader::try_get() {
-        auto result = output_queue_.try_pop();
-        if (result) {
-            release_output_ready_bytes(*result);
-            in_flight_.fetch_sub(1, std::memory_order_acq_rel);
-            if (!result->error.empty()) {
-                throw std::runtime_error(std::move(result->error));
-            }
+        auto completion = try_get_completion();
+        if (!completion) {
+            return std::nullopt;
         }
-        return result;
+        if (!completion->outcome) {
+            throw std::runtime_error(legacy_message_from(completion->outcome.error()));
+        }
+        return std::move(*completion->outcome);
     }
 
     std::optional<ReadyImage> PipelinedImageLoader::try_get_for(std::chrono::milliseconds timeout) {
-        auto result = output_queue_.try_pop_for(timeout);
-        if (result) {
-            release_output_ready_bytes(*result);
-            in_flight_.fetch_sub(1, std::memory_order_acq_rel);
-            if (!result->error.empty()) {
-                throw std::runtime_error(std::move(result->error));
-            }
+        auto completion = try_get_completion_for(timeout);
+        if (!completion) {
+            return std::nullopt;
         }
-        return result;
+        if (!completion->outcome) {
+            throw std::runtime_error(legacy_message_from(completion->outcome.error()));
+        }
+        return std::move(*completion->outcome);
+    }
+
+    std::optional<LoaderCompletion> PipelinedImageLoader::take_completion(
+        const std::uint64_t sequence_id) {
+        std::lock_guard<std::mutex> lock(ledger_mutex_);
+        const auto it = ledger_.find(sequence_id);
+        if (it == ledger_.end()) {
+            return std::nullopt;
+        }
+        LoaderCompletion completion = std::move(it->second);
+        ledger_.erase(it);
+        if (completion.outcome) {
+            release_output_ready_bytes(*completion.outcome);
+        }
+        subtract_clamped(in_flight_, 1);
+        return completion;
+    }
+
+    lfs::Result<LoaderCompletion> PipelinedImageLoader::get_completion() {
+        try {
+            const auto sequence_id = output_queue_.pop();
+            if (auto completion = take_completion(sequence_id)) {
+                return std::move(*completion);
+            }
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::IO,
+                .detail = "PipelinedImageLoader completion token had no ledger entry",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        } catch (const std::runtime_error&) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Cancelled,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Warning,
+                .detail = "PipelinedImageLoader shut down while waiting for a completion",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+    }
+
+    std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion() {
+        const auto sequence_id = output_queue_.try_pop();
+        if (!sequence_id) {
+            return std::nullopt;
+        }
+        return take_completion(*sequence_id);
+    }
+
+    std::optional<LoaderCompletion> PipelinedImageLoader::try_get_completion_for(
+        const std::chrono::milliseconds timeout) {
+        const auto sequence_id = output_queue_.try_pop_for(timeout);
+        if (!sequence_id) {
+            return std::nullopt;
+        }
+        return take_completion(*sequence_id);
     }
 
     size_t PipelinedImageLoader::ready_count() const {
@@ -475,11 +578,11 @@ namespace lfs::io {
     }
 
     void PipelinedImageLoader::clear() {
+        loader_generation_.fetch_add(1, std::memory_order_acq_rel);
         prefetch_queue_.clear();
         hot_queue_.clear();
         cold_queue_.clear();
-        clear_output_queue();
-        clear_pending_pairs();
+        reconcile_ledger_on_shutdown();
         reset_pipeline_gpu_bytes();
         in_flight_ = 0;
     }
@@ -500,6 +603,14 @@ namespace lfs::io {
             std::lock_guard<std::mutex> pairs_lock(pending_pairs_mutex_);
             s.pending_pairs_count = pending_pairs_.size();
         }
+        {
+            std::lock_guard<std::mutex> tally_lock(sidecar_tally_mutex_);
+            s.aggregate_sidecar_tally = sidecar_tally_;
+        }
+        s.accepted_sequences = accepted_sequences_.load(std::memory_order_relaxed);
+        s.succeeded_sequences = succeeded_sequences_.load(std::memory_order_relaxed);
+        s.failed_sequences = failed_sequences_.load(std::memory_order_relaxed);
+        s.cancelled_sequences = cancelled_sequences_.load(std::memory_order_relaxed);
         s.prefetch_queue_size = prefetch_queue_.size();
         s.hot_queue_size = hot_queue_.size();
         s.cold_queue_size = cold_queue_.size();
@@ -854,10 +965,10 @@ namespace lfs::io {
 
     std::string PipelinedImageLoader::make_sidecar_key(
         const PrefetchedImage& item,
-        const SidecarKind kind) const {
+        const SidecarCacheFormat kind) const {
         std::ostringstream key;
         key << lfs::core::path_to_utf8(item.path)
-            << (kind == SidecarKind::Depth ? ":depth" : ":normal")
+            << (kind == SidecarCacheFormat::Depth ? ":depth" : ":normal")
             << ":rf" << item.params.resize_factor
             << ":mw" << item.params.max_width
             << ":tw" << item.aux_target_width
@@ -878,7 +989,7 @@ namespace lfs::io {
                 key << ":d" << i << "=" << u.distortion[i];
             }
         }
-        if (kind == SidecarKind::Normal) {
+        if (kind == SidecarCacheFormat::Normal) {
             key << ":srgb" << item.normal_srgb
                 << ":flip" << item.normal_flip_yz
                 << ":w2c" << item.normal_transform_world_to_camera
@@ -895,7 +1006,7 @@ namespace lfs::io {
     void PipelinedImageLoader::write_sidecar_cache(NvCodecImageLoader& nvcodec,
                                                    const lfs::core::Tensor& tensor,
                                                    const PrefetchedImage& item,
-                                                   const SidecarKind kind,
+                                                   const SidecarCacheFormat kind,
                                                    void* cuda_stream) {
         if (!jpeg2k_cache_available_.load(std::memory_order_relaxed)) {
             return;
@@ -907,7 +1018,7 @@ namespace lfs::io {
             // transforms. Depth [H,W] is quantized as round(v*65535). Normals
             // [3,H,W] in [-1,1] are mapped to HWC [0,1] as (n+1)/2 before the same
             // u16 quantization; hot decode reverses that map with <= 1/65535 loss.
-            if (kind == SidecarKind::Depth) {
+            if (kind == SidecarCacheFormat::Depth) {
                 bytes = nvcodec.encode_grayscale_to_jpeg2k(tensor, cuda_stream);
             } else {
                 if (tensor.ndim() != 3 || tensor.shape()[0] != 3) {
@@ -1140,60 +1251,150 @@ namespace lfs::io {
         }
     }
 
-    bool PipelinedImageLoader::push_output_ready(ReadyImage ready) {
-        const size_t image_bytes = tensor_reserved_bytes(ready.tensor);
-        const size_t mask_bytes = ready.mask ? tensor_reserved_bytes(*ready.mask) : 0;
-        const size_t depth_bytes = ready.depth ? tensor_reserved_bytes(*ready.depth) : 0;
-        const size_t normal_bytes = ready.normal ? tensor_reserved_bytes(*ready.normal) : 0;
-        output_image_bytes_.fetch_add(image_bytes, std::memory_order_acq_rel);
-        if (mask_bytes > 0) {
-            output_mask_bytes_.fetch_add(mask_bytes, std::memory_order_acq_rel);
-        }
-        if (depth_bytes > 0) {
-            output_depth_bytes_.fetch_add(depth_bytes, std::memory_order_acq_rel);
-        }
-        if (normal_bytes > 0) {
-            output_normal_bytes_.fetch_add(normal_bytes, std::memory_order_acq_rel);
-        }
-        if (!output_queue_.push(std::move(ready), [this](ReadyImage& dropped) {
-                destroy_sidecar_ready_event(dropped.depth_ready_event);
-                destroy_sidecar_ready_event(dropped.normal_ready_event);
-            })) {
-            subtract_clamped(output_image_bytes_, image_bytes);
-            subtract_clamped(output_mask_bytes_, mask_bytes);
-            subtract_clamped(output_depth_bytes_, depth_bytes);
-            subtract_clamped(output_normal_bytes_, normal_bytes);
-            return false;
-        }
-        return true;
-    }
-
     void PipelinedImageLoader::publish_image_failure(
         const size_t sequence_id,
+        const std::uint64_t loader_generation,
         const std::filesystem::path& path,
-        std::string message) {
+        std::string message,
+        SidecarTally tally) {
+        bool accepted = false;
         {
             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-            if (auto it = pending_pairs_.find(sequence_id); it != pending_pairs_.end()) {
+            if (auto it = pending_pairs_.find(sequence_id);
+                it != pending_pairs_.end() &&
+                it->second.loader_generation == loader_generation) {
                 erase_pending_pair_locked(it);
+                accepted = true;
             }
         }
-
-        ReadyImage failed{
-            .sequence_id = sequence_id,
-            .tensor = {},
-            .mask = std::nullopt,
-            .stream = nullptr,
-            .depth = std::nullopt,
-            .normal = std::nullopt,
-            .depth_ready_event = nullptr,
-            .normal_ready_event = nullptr,
-            .error = "Failed to load training image '" + lfs::core::path_to_utf8(path) +
-                     "': " + std::move(message),
-        };
-        if (!push_output_ready(std::move(failed))) {
-            subtract_clamped(in_flight_, 1);
+        if (!accepted) {
+            return;
         }
+
+        std::string full_message = "Failed to load training image '" +
+                                   lfs::core::path_to_utf8(path) + "': " + std::move(message);
+        lfs::Error error = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::DataLoss,
+            .domain = lfs::ErrorDomain::IO,
+            .user_message = full_message,
+            .detail = full_message,
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = lfs::SmallFields{}.add("path", lfs::core::path_to_utf8(path)),
+        });
+
+        lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
+        settle_completion(sequence_id, loader_generation,
+                          lfs::Result<ReadyImage>(std::move(error)), tally);
+    }
+
+    void PipelinedImageLoader::fail_sidecar_locked(
+        const size_t sequence_id,
+        const std::uint64_t loader_generation,
+        const SidecarKind kind,
+        const std::filesystem::path& path,
+        std::string message,
+        std::unique_lock<std::mutex>& lock) {
+        auto it = pending_pairs_.find(sequence_id);
+        if (it == pending_pairs_.end() || it->second.loader_generation != loader_generation) {
+            return;
+        }
+
+        const SidecarPolicy policy = kind == SidecarKind::Mask    ? config_.mask_policy
+                                     : kind == SidecarKind::Depth ? config_.depth_policy
+                                                                  : config_.normal_policy;
+        auto& pair = it->second;
+        if (policy == SidecarPolicy::Required) {
+            const auto count = [](const bool requested, const bool delivered) {
+                return SidecarCount{
+                    .requested = requested ? 1u : 0u,
+                    .delivered = requested && delivered ? 1u : 0u,
+                    .failed = requested && !delivered ? 1u : 0u,
+                };
+            };
+            const SidecarTally tally{
+                .mask = count(pair.mask_expected || pair.mask_failed, pair.mask.has_value()),
+                .depth = count(pair.depth_expected || pair.depth_failed, pair.depth.has_value()),
+                .normal = count(pair.normal_expected || pair.normal_failed, pair.normal.has_value()),
+            };
+            const auto primary_path = pair.primary_path;
+            lock.unlock();
+            publish_image_failure(
+                sequence_id, loader_generation, primary_path,
+                "required sidecar '" + lfs::core::path_to_utf8(path) + "' failed: " +
+                    std::move(message),
+                tally);
+            return;
+        }
+
+        switch (kind) {
+        case SidecarKind::Mask:
+            pair.mask_failed = true;
+            pair.mask_expected = false;
+            break;
+        case SidecarKind::Depth:
+            pair.depth_failed = true;
+            pair.depth_expected = false;
+            break;
+        case SidecarKind::Normal:
+            pair.normal_failed = true;
+            pair.normal_expected = false;
+            break;
+        }
+        try_push_ready_locked(sequence_id, it, lock);
+    }
+
+    void PipelinedImageLoader::settle_completion(
+        const std::uint64_t sequence_id,
+        const std::uint64_t loader_generation,
+        lfs::Result<ReadyImage> outcome,
+        const SidecarTally tally) {
+        bool inserted = false;
+        {
+            std::lock_guard<std::mutex> lock(ledger_mutex_);
+            if (loader_generation != loader_generation_.load(std::memory_order_acquire)) {
+                if (outcome) {
+                    destroy_sidecar_ready_event(outcome->depth_ready_event);
+                    destroy_sidecar_ready_event(outcome->normal_ready_event);
+                }
+                return;
+            }
+            if (outcome) {
+                add_output_ready_bytes(*outcome);
+            }
+            const auto [it, did_insert] = ledger_.emplace(
+                sequence_id, LoaderCompletion{sequence_id, std::move(outcome), tally});
+            inserted = did_insert;
+            LFS_DEBUG_ASSERT_MSG(did_insert,
+                                 "PipelinedImageLoader settled one sequence more than once");
+            if (!did_insert) {
+                return;
+            }
+            if (it->second.outcome) {
+                succeeded_sequences_.fetch_add(1, std::memory_order_relaxed);
+            } else if (it->second.outcome.error().code() == lfs::ErrorCode::Cancelled) {
+                cancelled_sequences_.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                failed_sequences_.fetch_add(1, std::memory_order_relaxed);
+            }
+            accumulate_sidecar_tally(tally);
+        }
+        if (inserted &&
+            loader_generation == loader_generation_.load(std::memory_order_acquire)) {
+            (void)output_queue_.push(sequence_id);
+        }
+        ledger_cv_.notify_all();
+    }
+
+    void PipelinedImageLoader::accumulate_sidecar_tally(const SidecarTally& tally) {
+        const auto add = [](SidecarCount& total, const SidecarCount& delta) {
+            total.requested += delta.requested;
+            total.delivered += delta.delivered;
+            total.failed += delta.failed;
+        };
+        std::lock_guard<std::mutex> lock(sidecar_tally_mutex_);
+        add(sidecar_tally_.mask, tally.mask);
+        add(sidecar_tally_.depth, tally.depth);
+        add(sidecar_tally_.normal, tally.normal);
     }
 
     void PipelinedImageLoader::erase_pending_pair_locked(
@@ -1218,19 +1419,73 @@ namespace lfs::io {
         }
     }
 
-    void PipelinedImageLoader::clear_output_queue() {
-        while (auto ready = output_queue_.try_pop()) {
-            release_output_ready_bytes(*ready);
-            destroy_sidecar_ready_event(ready->depth_ready_event);
-            destroy_sidecar_ready_event(ready->normal_ready_event);
+    void PipelinedImageLoader::reconcile_ledger_on_shutdown() {
+        {
+            std::lock_guard<std::mutex> pairs_lock(pending_pairs_mutex_);
+            std::lock_guard<std::mutex> ledger_lock(ledger_mutex_);
+            while (!pending_pairs_.empty()) {
+                auto it = pending_pairs_.begin();
+                const auto sequence_id = it->first;
+                if (!ledger_.contains(sequence_id)) {
+                    lfs::Error cancelled = lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::Cancelled,
+                        .domain = lfs::ErrorDomain::IO,
+                        .severity = lfs::Severity::Warning,
+                        .detail = "PipelinedImageLoader shut down before this request completed",
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    });
+                    ledger_.emplace(
+                        sequence_id,
+                        LoaderCompletion{sequence_id,
+                                         lfs::Result<ReadyImage>(std::move(cancelled)),
+                                         {}});
+                }
+                erase_pending_pair_locked(it);
+            }
         }
-    }
 
-    void PipelinedImageLoader::clear_pending_pairs() {
-        std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-        while (!pending_pairs_.empty()) {
-            erase_pending_pair_locked(pending_pairs_.begin());
+        {
+            std::lock_guard<std::mutex> lock(ledger_mutex_);
+            for (auto& [sequence_id, completion] : ledger_) {
+                (void)sequence_id;
+                if (completion.outcome) {
+                    release_output_ready_bytes(*completion.outcome);
+                    destroy_sidecar_ready_event(completion.outcome->depth_ready_event);
+                    destroy_sidecar_ready_event(completion.outcome->normal_ready_event);
+                }
+            }
+            ledger_.clear();
         }
+        output_queue_.clear();
+
+        const std::uint64_t accepted = accepted_sequences_.load(std::memory_order_relaxed);
+        const std::uint64_t succeeded = succeeded_sequences_.load(std::memory_order_relaxed);
+        const std::uint64_t failed = failed_sequences_.load(std::memory_order_relaxed);
+        const std::uint64_t previously_cancelled =
+            cancelled_sequences_.load(std::memory_order_relaxed);
+        const std::uint64_t unresolved =
+            accepted > succeeded + failed + previously_cancelled
+                ? accepted - succeeded - failed - previously_cancelled
+                : 0;
+        if (unresolved > 0) {
+            cancelled_sequences_.fetch_add(unresolved, std::memory_order_relaxed);
+        }
+        const std::uint64_t cancelled =
+            cancelled_sequences_.load(std::memory_order_relaxed);
+        LFS_DEBUG_ASSERT_MSG(accepted == succeeded + failed + cancelled,
+                             "PipelinedImageLoader shutdown: accepted != succeeded+failed+cancelled");
+
+        SidecarTally sidecars;
+        {
+            std::lock_guard<std::mutex> lock(sidecar_tally_mutex_);
+            sidecars = sidecar_tally_;
+        }
+        LOG_INFO("[PipelinedImageLoader] shutdown reconciliation: accepted={} succeeded={} failed={} cancelled={} "
+                 "mask={}/{}/{} depth={}/{}/{} normal={}/{}/{}",
+                 accepted, succeeded, failed, cancelled,
+                 sidecars.mask.requested, sidecars.mask.delivered, sidecars.mask.failed,
+                 sidecars.depth.requested, sidecars.depth.delivered, sidecars.depth.failed,
+                 sidecars.normal.requested, sidecars.normal.delivered, sidecars.normal.failed);
     }
 
     void PipelinedImageLoader::reset_pipeline_gpu_bytes() {
@@ -1274,9 +1529,44 @@ namespace lfs::io {
         };
         pair.depth_ready_event = nullptr;
         pair.normal_ready_event = nullptr;
+        const auto loader_generation = pair.loader_generation;
+        const SidecarTally tally{
+            .mask = {.requested = (pair.mask_expected || pair.mask_failed) ? 1u : 0u,
+                     .delivered = mask_has_value ? 1u : 0u,
+                     .failed = pair.mask_failed ? 1u : 0u},
+            .depth = {.requested = (pair.depth_expected || pair.depth_failed) ? 1u : 0u,
+                      .delivered = depth_has_value ? 1u : 0u,
+                      .failed = pair.depth_failed ? 1u : 0u},
+            .normal = {.requested = (pair.normal_expected || pair.normal_failed) ? 1u : 0u,
+                       .delivered = normal_has_value ? 1u : 0u,
+                       .failed = pair.normal_failed ? 1u : 0u},
+        };
         erase_pending_pair_locked(it);
         pending_lock.unlock();
-        push_output_ready(std::move(ready));
+
+        const auto failed_sidecars = tally.mask.failed + tally.depth.failed + tally.normal.failed;
+        if (failed_sidecars > 0) {
+            const std::string detail =
+                "PipelinedImageLoader optional sidecar degradation: mask_failed=" +
+                std::to_string(tally.mask.failed) + " depth_failed=" +
+                std::to_string(tally.depth.failed) + " normal_failed=" +
+                std::to_string(tally.normal.failed);
+            const lfs::Error degradation = lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Warning,
+                .user_message = "Training image loaded without one or more optional sidecars",
+                .detail = detail,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = lfs::SmallFields{}.add(
+                    "sequence", static_cast<std::uint64_t>(sequence_id)),
+            });
+            lfs::core::ErrorReporter::get().report(
+                degradation, lfs::core::ReportChannel::OwnerLog);
+        }
+
+        settle_completion(sequence_id, loader_generation,
+                          lfs::Result<ReadyImage>(std::move(ready)), tally);
 
         std::lock_guard<std::mutex> stats_lock(stats_mutex_);
         ++stats_.total_images_loaded;
@@ -1293,6 +1583,7 @@ namespace lfs::io {
 
     void PipelinedImageLoader::try_complete_pair(
         size_t sequence_id,
+        const std::uint64_t loader_generation,
         std::optional<lfs::core::Tensor> image,
         std::optional<lfs::core::Tensor> mask,
         cudaStream_t stream,
@@ -1301,8 +1592,11 @@ namespace lfs::io {
         cudaEvent_t sidecar_ready_event) {
 
         std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
-        auto insert_result = pending_pairs_.try_emplace(sequence_id);
-        auto it = insert_result.first;
+        auto it = pending_pairs_.find(sequence_id);
+        if (it == pending_pairs_.end() || it->second.loader_generation != loader_generation) {
+            destroy_sidecar_ready_event(sidecar_ready_event);
+            return;
+        }
         auto& pair = it->second;
 
         if (image) {
@@ -1351,32 +1645,9 @@ namespace lfs::io {
                 break;
             }
 
-            {
-                std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                auto& pending = pending_pairs_[request.sequence_id];
-                pending.mask_expected = request.mask_path.has_value() || request.extract_alpha_as_mask;
-                pending.depth_expected = request.depth_path.has_value();
-                pending.normal_expected = request.normal_path.has_value();
-            }
-
             auto fail_image_request = [&](std::string message) {
-                publish_image_failure(request.sequence_id, request.path, std::move(message));
-            };
-
-            auto mark_mask_unavailable = [&] {
-                std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
-                if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
-                    it->second.mask_expected = false;
-                    try_push_ready_locked(request.sequence_id, it, lock);
-                }
-            };
-
-            auto mark_depth_unavailable = [&] {
-                std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
-                if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
-                    it->second.depth_expected = false;
-                    try_push_ready_locked(request.sequence_id, it, lock);
-                }
+                publish_image_failure(request.sequence_id, request.loader_generation,
+                                      request.path, std::move(message));
             };
 
             auto enqueue_depth_request = [&] {
@@ -1385,6 +1656,7 @@ namespace lfs::io {
                 }
                 PrefetchedImage depth_result;
                 depth_result.sequence_id = request.sequence_id;
+                depth_result.loader_generation = request.loader_generation;
                 depth_result.path = *request.depth_path;
                 depth_result.params = request.params;
                 depth_result.is_depth = true;
@@ -1392,7 +1664,7 @@ namespace lfs::io {
                 depth_result.undistort = request.undistort;
                 depth_result.aux_target_width = request.aux_target_width;
                 depth_result.aux_target_height = request.aux_target_height;
-                depth_result.cache_key = make_sidecar_key(depth_result, SidecarKind::Depth);
+                depth_result.cache_key = make_sidecar_key(depth_result, SidecarCacheFormat::Depth);
                 if (auto cached = load_cached_jpeg_blob(depth_result.cache_key)) {
                     depth_result.jpeg_data = std::move(cached);
                     depth_result.is_cache_hit = true;
@@ -1407,18 +1679,13 @@ namespace lfs::io {
                 }
                 if (!is_regular_file_no_throw(*request.depth_path)) {
                     LOG_DEBUG("[PipelinedImageLoader] Skipping missing depth {}", lfs::core::path_to_utf8(*request.depth_path));
-                    mark_depth_unavailable();
+                    std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
+                    fail_sidecar_locked(request.sequence_id, request.loader_generation,
+                                        SidecarKind::Depth,
+                                        *request.depth_path, "file does not exist or is not a regular file", lock);
                     return;
                 }
                 cold_queue_.push(std::move(depth_result));
-            };
-
-            auto mark_normal_unavailable = [&] {
-                std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
-                if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
-                    it->second.normal_expected = false;
-                    try_push_ready_locked(request.sequence_id, it, lock);
-                }
             };
 
             auto enqueue_normal_request = [&] {
@@ -1427,6 +1694,7 @@ namespace lfs::io {
                 }
                 PrefetchedImage normal_result;
                 normal_result.sequence_id = request.sequence_id;
+                normal_result.loader_generation = request.loader_generation;
                 normal_result.path = *request.normal_path;
                 normal_result.params = request.params;
                 normal_result.is_normal = true;
@@ -1438,7 +1706,7 @@ namespace lfs::io {
                 normal_result.undistort = request.undistort;
                 normal_result.aux_target_width = request.aux_target_width;
                 normal_result.aux_target_height = request.aux_target_height;
-                normal_result.cache_key = make_sidecar_key(normal_result, SidecarKind::Normal);
+                normal_result.cache_key = make_sidecar_key(normal_result, SidecarCacheFormat::Normal);
                 if (auto cached = load_cached_jpeg_blob(normal_result.cache_key)) {
                     normal_result.jpeg_data = std::move(cached);
                     normal_result.is_cache_hit = true;
@@ -1453,7 +1721,10 @@ namespace lfs::io {
                 }
                 if (!is_regular_file_no_throw(*request.normal_path)) {
                     LOG_DEBUG("[PipelinedImageLoader] Skipping missing normal {}", lfs::core::path_to_utf8(*request.normal_path));
-                    mark_normal_unavailable();
+                    std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
+                    fail_sidecar_locked(request.sequence_id, request.loader_generation,
+                                        SidecarKind::Normal,
+                                        *request.normal_path, "file does not exist or is not a regular file", lock);
                     return;
                 }
                 cold_queue_.push(std::move(normal_result));
@@ -1474,6 +1745,7 @@ namespace lfs::io {
                 if (cached_rgb && cached_alpha) {
                     PrefetchedImage img_item;
                     img_item.sequence_id = request.sequence_id;
+                    img_item.loader_generation = request.loader_generation;
                     img_item.path = request.path;
                     img_item.cache_key = rgb_key;
                     img_item.jpeg_data = cached_rgb;
@@ -1482,6 +1754,7 @@ namespace lfs::io {
 
                     PrefetchedImage mask_item;
                     mask_item.sequence_id = request.sequence_id;
+                    mask_item.loader_generation = request.loader_generation;
                     mask_item.path = request.path;
                     mask_item.cache_key = alpha_key;
                     mask_item.jpeg_data = cached_alpha;
@@ -1494,6 +1767,7 @@ namespace lfs::io {
                 } else {
                     PrefetchedImage result;
                     result.sequence_id = request.sequence_id;
+                    result.loader_generation = request.loader_generation;
                     result.path = request.path;
                     result.params = request.params;
                     result.cache_key = rgb_key;
@@ -1513,6 +1787,7 @@ namespace lfs::io {
 
             PrefetchedImage result;
             result.sequence_id = request.sequence_id;
+            result.loader_generation = request.loader_generation;
             result.path = request.path;
             result.params = request.params;
             result.cache_key = make_cache_key(request.path, request.params);
@@ -1564,10 +1839,14 @@ namespace lfs::io {
             if (request.mask_path) {
                 if (!is_regular_file_no_throw(*request.mask_path)) {
                     LOG_DEBUG("[PipelinedImageLoader] Skipping missing mask {}", lfs::core::path_to_utf8(*request.mask_path));
-                    mark_mask_unavailable();
+                    std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
+                    fail_sidecar_locked(request.sequence_id, request.loader_generation,
+                                        SidecarKind::Mask,
+                                        *request.mask_path, "file does not exist or is not a regular file", lock);
                 } else {
                     PrefetchedImage mask_result;
                     mask_result.sequence_id = request.sequence_id;
+                    mask_result.loader_generation = request.loader_generation;
                     mask_result.path = *request.mask_path;
                     mask_result.params = request.params;
                     mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
@@ -1631,7 +1910,10 @@ namespace lfs::io {
                     } catch (const std::exception& e) {
                         LOG_WARN("[PipelinedImageLoader] Mask prefetch error {}: {} - continuing without mask",
                                  lfs::core::path_to_utf8(*request.mask_path), e.what());
-                        mark_mask_unavailable();
+                        std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
+                        fail_sidecar_locked(request.sequence_id, request.loader_generation,
+                                            SidecarKind::Mask,
+                                            *request.mask_path, e.what(), lock);
                     }
                 }
             }
@@ -1710,6 +1992,7 @@ namespace lfs::io {
                     if (item.is_depth) {
                         try_complete_pair(
                             item.sequence_id,
+                            item.loader_generation,
                             std::nullopt,
                             std::nullopt,
                             nullptr,
@@ -1719,6 +2002,7 @@ namespace lfs::io {
                     } else {
                         try_complete_pair(
                             item.sequence_id,
+                            item.loader_generation,
                             std::nullopt,
                             std::nullopt,
                             nullptr,
@@ -1781,7 +2065,8 @@ namespace lfs::io {
                             }
 
                             mask_tensor = process_mask(std::move(mask_tensor), batch[i].mask_params.threshold > 0);
-                            try_complete_pair(batch[i].sequence_id, std::nullopt, std::move(mask_tensor), nullptr);
+                            try_complete_pair(batch[i].sequence_id, batch[i].loader_generation,
+                                              std::nullopt, std::move(mask_tensor), nullptr);
 
                         } else {
                             const bool decode_from_base_cache = batch[i].needs_processing;
@@ -1805,7 +2090,8 @@ namespace lfs::io {
                                                     batch[i].params.cuda_stream);
                             }
 
-                            try_complete_pair(batch[i].sequence_id, std::move(tensor), std::nullopt, nullptr);
+                            try_complete_pair(batch[i].sequence_id, batch[i].loader_generation,
+                                              std::move(tensor), std::nullopt, nullptr);
                         }
                     } catch (...) {
                         auto& item = batch[i];
@@ -1829,25 +2115,23 @@ namespace lfs::io {
                             try {
                                 item.raw_bytes = read_file(item.path);
                             } catch (...) {
-                                // Clean up pending_pairs_ to prevent memory leak
+                                const auto failure_message = describe_current_exception(
+                                    "failed to read sidecar for decoder fallback");
                                 std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
                                 if (item.is_mask || item.is_depth || item.is_normal) {
-                                    if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                                        if (item.is_mask) {
-                                            it->second.mask_expected = false;
-                                        } else if (item.is_depth) {
-                                            it->second.depth_expected = false;
-                                        } else {
-                                            it->second.normal_expected = false;
-                                        }
-                                        try_push_ready_locked(item.sequence_id, it, lock);
-                                    }
+                                    const auto kind = item.is_mask    ? SidecarKind::Mask
+                                                      : item.is_depth ? SidecarKind::Depth
+                                                                      : SidecarKind::Normal;
+                                    fail_sidecar_locked(item.sequence_id, item.loader_generation,
+                                                        kind, item.path,
+                                                        failure_message, lock);
                                 } else {
                                     lock.unlock();
                                     publish_image_failure(
                                         item.sequence_id,
+                                        item.loader_generation,
                                         item.path,
-                                        describe_current_exception("failed to read image for decoder fallback"));
+                                        failure_message);
                                 }
                                 continue;
                             }
@@ -1873,25 +2157,23 @@ namespace lfs::io {
                         try {
                             item.raw_bytes = read_file(item.path);
                         } catch (...) {
-                            // Clean up pending_pairs_ to prevent memory leak
+                            const auto failure_message = describe_current_exception(
+                                "failed to read sidecar for decoder fallback");
                             std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
                             if (item.is_mask || item.is_depth || item.is_normal) {
-                                if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                                    if (item.is_mask) {
-                                        it->second.mask_expected = false;
-                                    } else if (item.is_depth) {
-                                        it->second.depth_expected = false;
-                                    } else {
-                                        it->second.normal_expected = false;
-                                    }
-                                    try_push_ready_locked(item.sequence_id, it, lock);
-                                }
+                                const auto kind = item.is_mask    ? SidecarKind::Mask
+                                                  : item.is_depth ? SidecarKind::Depth
+                                                                  : SidecarKind::Normal;
+                                fail_sidecar_locked(item.sequence_id, item.loader_generation,
+                                                    kind, item.path,
+                                                    failure_message, lock);
                             } else {
                                 lock.unlock();
                                 publish_image_failure(
                                     item.sequence_id,
+                                    item.loader_generation,
                                     item.path,
-                                    describe_current_exception("failed to read image for decoder fallback"));
+                                    failure_message);
                             }
                             continue;
                         }
@@ -2004,7 +2286,8 @@ namespace lfs::io {
                         throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                     }
 
-                    try_complete_pair(item.sequence_id, std::move(rgb), std::move(alpha), nullptr);
+                    try_complete_pair(item.sequence_id, item.loader_generation,
+                                      std::move(rgb), std::move(alpha), nullptr);
 
                 } else if (item.is_mask || item.is_depth) {
                     const cudaStream_t aux_stream = item.is_depth ? sidecar_stream : nullptr;
@@ -2145,12 +2428,14 @@ namespace lfs::io {
                     }
 
                     if (item.is_mask) {
-                        try_complete_pair(item.sequence_id, std::nullopt, std::move(aux_tensor), nullptr);
+                        try_complete_pair(item.sequence_id, item.loader_generation,
+                                          std::nullopt, std::move(aux_tensor), nullptr);
                     } else {
-                        write_sidecar_cache(*nvcodec, aux_tensor, item, SidecarKind::Depth, sidecar_stream);
+                        write_sidecar_cache(*nvcodec, aux_tensor, item, SidecarCacheFormat::Depth, sidecar_stream);
                         auto ready_event = record_sidecar_ready_event(sidecar_stream);
                         try_complete_pair(
                             item.sequence_id,
+                            item.loader_generation,
                             std::nullopt,
                             std::nullopt,
                             nullptr,
@@ -2253,11 +2538,12 @@ namespace lfs::io {
                     if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
                         throw std::runtime_error("Normal preprocessing produced an invalid tensor");
                     }
-                    write_sidecar_cache(*nvcodec, normal_tensor, item, SidecarKind::Normal, sidecar_stream);
+                    write_sidecar_cache(*nvcodec, normal_tensor, item, SidecarCacheFormat::Normal, sidecar_stream);
                     auto ready_event = record_sidecar_ready_event(sidecar_stream);
 
                     try_complete_pair(
                         item.sequence_id,
+                        item.loader_generation,
                         std::nullopt,
                         std::nullopt,
                         nullptr,
@@ -2308,7 +2594,8 @@ namespace lfs::io {
                         write_derived_cache(*nvcodec, decoded, item.cache_key, nullptr);
                     }
 
-                    try_complete_pair(item.sequence_id, std::move(decoded), std::nullopt, nullptr);
+                    try_complete_pair(item.sequence_id, item.loader_generation,
+                                      std::move(decoded), std::nullopt, nullptr);
                 }
 
             } catch (...) {
@@ -2350,38 +2637,39 @@ namespace lfs::io {
 
                         {
                             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                            if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                            if (auto it = pending_pairs_.find(item.sequence_id);
+                                it != pending_pairs_.end() &&
+                                it->second.loader_generation == item.loader_generation) {
+                                it->second.mask_failed = true;
                                 it->second.mask_expected = false;
                             }
                         }
-                        try_complete_pair(item.sequence_id, std::move(decoded), std::nullopt, nullptr);
+                        try_complete_pair(item.sequence_id, item.loader_generation,
+                                          std::move(decoded), std::nullopt, nullptr);
                     } catch (...) {
                         const auto fallback_message =
                             describe_current_exception("non-standard RGB fallback exception");
                         LOG_ERROR("[PipelinedImageLoader] RGB fallback also failed {}: {}",
                                   lfs::core::path_to_utf8(item.path),
                                   fallback_message);
-                        publish_image_failure(item.sequence_id, item.path, fallback_message);
+                        publish_image_failure(item.sequence_id, item.loader_generation,
+                                              item.path, fallback_message);
                     }
                 } else if (item.is_mask || item.is_depth || item.is_normal) {
                     LOG_WARN("[PipelinedImageLoader] Cold process {} error {}: {} - continuing without it",
                              item.is_mask ? "mask" : (item.is_depth ? "depth" : "normal"),
                              lfs::core::path_to_utf8(item.path), message);
                     std::unique_lock<std::mutex> lock(pending_pairs_mutex_);
-                    if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                        if (item.is_mask) {
-                            it->second.mask_expected = false;
-                        } else if (item.is_depth) {
-                            it->second.depth_expected = false;
-                        } else {
-                            it->second.normal_expected = false;
-                        }
-                        try_push_ready_locked(item.sequence_id, it, lock);
-                    }
+                    const auto kind = item.is_mask    ? SidecarKind::Mask
+                                      : item.is_depth ? SidecarKind::Depth
+                                                      : SidecarKind::Normal;
+                    fail_sidecar_locked(item.sequence_id, item.loader_generation,
+                                        kind, item.path, message, lock);
                 } else {
                     LOG_ERROR("[PipelinedImageLoader] Cold process error {}: {}",
                               lfs::core::path_to_utf8(item.path), message);
-                    publish_image_failure(item.sequence_id, item.path, message);
+                    publish_image_failure(item.sequence_id, item.loader_generation,
+                                          item.path, message);
                 }
             }
         }

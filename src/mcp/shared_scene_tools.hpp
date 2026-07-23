@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 
@@ -29,6 +30,8 @@ namespace lfs::mcp {
             std::function<std::expected<std::string, std::string>(std::optional<int> camera_index, int width, int height)>;
         using GaussianCountHandler =
             std::function<std::expected<int64_t, std::string>()>;
+        using LastTrainingErrorHandler =
+            std::function<std::optional<lfs::Error>()>;
 
         std::string runtime = "shared";
         std::string thread_affinity = "any";
@@ -40,6 +43,7 @@ namespace lfs::mcp {
         StartTrainingHandler start_training;
         RenderCaptureHandler render_capture;
         GaussianCountHandler gaussian_count;
+        LastTrainingErrorHandler last_training_error;
     };
 
     LFS_MCP_API void register_shared_scene_tools(const SharedSceneToolBackend& backend);

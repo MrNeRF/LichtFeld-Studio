@@ -210,7 +210,7 @@ namespace lfs::mcp {
             client.set_connection_timeout(30);
             client.set_read_timeout(120);
 
-            std::string body_str = body.dump();
+            std::string body_str = body.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             auto result = client.Post(path, headers, body_str, "application/json");
 
             if (!result) {

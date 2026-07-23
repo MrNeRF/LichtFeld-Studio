@@ -6,7 +6,9 @@
 
 #include <RmlUi/Core/RenderInterface.h>
 
+#include "core/assert.hpp"
 #include "rendering/vulkan_result.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
 
 #ifdef _WIN32
@@ -35,13 +37,14 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
-#ifdef RMLUI_DEBUG
-#define RMLUI_VK_ASSERTMSG(statement, msg) RMLUI_ASSERTMSG(statement, msg)
+#ifdef DEBUG_BUILD
+#define RMLUI_VK_ASSERTMSG(statement, msg) LFS_DEBUG_ASSERT_MSG(statement, msg)
 
 // Uncomment the following line to enable additional Vulkan debugging.
 // #define RMLUI_VK_DEBUG
@@ -332,8 +335,19 @@ private:
         }
 
         [[nodiscard]] bool Wait() noexcept {
-            if (vkWaitForFences(m_p_device, 1, &m_p_fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+            lfs::rendering::WaitContext wait_ctx;
+            wait_ctx.fingerprint = "rmlui.resource.wait";
+            auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                m_p_device,
+                m_p_fence,
+                std::stop_token{},
+                lfs::rendering::VulkanWaitPolicy{},
+                wait_ctx);
+            if (!wait_outcome.has_value() ||
+                *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                // Soft-fail; retain fence (do not reset while in-flight).
                 return false;
+            }
             if (vkResetFences(m_p_device, 1, &m_p_fence) != VK_SUCCESS)
                 return false;
             return vkResetCommandPool(m_p_device, m_p_command_pool, 0) == VK_SUCCESS;
@@ -677,7 +691,9 @@ private:
     void ResetDynamicRenderState();
     void RenderFullscreenTexture(texture_data_t& texture, Rml::BlendMode blend_mode);
 
-    void Wait() noexcept;
+    // Bounded acquire + image-fence wait. Returns false on soft-fail (WSI out-of-date,
+    // quarantine, cancel, device-lost) so BeginFrame can skip the frame without aborting.
+    [[nodiscard]] bool Wait() noexcept;
 
     void Update_PendingForDeletion_Textures_By_Frame(uint32_t resource_slot) noexcept;
     void Update_PendingForDeletion_Geometries(uint32_t resource_slot) noexcept;

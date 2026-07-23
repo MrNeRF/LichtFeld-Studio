@@ -98,7 +98,7 @@ namespace lfs::core::debug {
 
 } // namespace lfs::core::debug
 
-#ifdef TENSOR_VALIDATION_ENABLED
+#ifdef DEBUG_BUILD
 #define VALIDATE_TENSOR(tensor) \
     lfs::core::debug::log_tensor_validation(tensor, #tensor, __FILE__, __LINE__)
 #define VALIDATE_TENSOR_NAMED(tensor, name) \

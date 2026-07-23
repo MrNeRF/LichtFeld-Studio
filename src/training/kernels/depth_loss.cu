@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "depth_loss.hpp"
 #include "lfs/core/warp_reduce.cuh"
@@ -657,6 +658,8 @@ namespace lfs::training::kernels {
         }
         cudaMemsetAsync(count_dev, 0, sizeof(int), stream);
 
+        const auto anchor_ticket =
+            ::lfs::core::cuda_record_range(stream, "training.depth.anchor_collect_pipeline");
         depth_anchor_collect_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
             points_xyz, num_samples, stride, w2c, fx, fy, cx, cy,
             prior, width, height, near_plane,
@@ -672,7 +675,14 @@ namespace lfs::training::kernels {
 
         int pair_count = 0;
         cudaMemcpyAsync(&pair_count, count_dev, sizeof(int), cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
+        try {
+            LFS_CUDA_AWAIT(anchor_ticket, cudaStreamSynchronize(stream), "training.depth.anchor_count_readback");
+        } catch (const std::exception& e) {
+            LOG_ERROR("depth anchor count readback failed: {}", e.what());
+            cudaFreeAsync(pairs_dev, stream);
+            cudaFreeAsync(count_dev, stream);
+            return {};
+        }
         pair_count = std::min(pair_count, pair_capacity);
         if (pair_count < kMinAnchorSamples) {
             cudaFreeAsync(pairs_dev, stream);
@@ -680,10 +690,19 @@ namespace lfs::training::kernels {
             return {};
         }
 
+        const auto pairs_ticket =
+            ::lfs::core::cuda_record_range(stream, "training.depth.anchor_pairs_pipeline");
         std::vector<float2> pairs(static_cast<size_t>(pair_count));
         cudaMemcpyAsync(pairs.data(), pairs_dev, sizeof(float2) * pair_count,
                         cudaMemcpyDeviceToHost, stream);
-        cudaStreamSynchronize(stream);
+        try {
+            LFS_CUDA_AWAIT(pairs_ticket, cudaStreamSynchronize(stream), "training.depth.anchor_pairs_readback");
+        } catch (const std::exception& e) {
+            LOG_ERROR("depth anchor pairs readback failed: {}", e.what());
+            cudaFreeAsync(pairs_dev, stream);
+            cudaFreeAsync(count_dev, stream);
+            return {};
+        }
         cudaFreeAsync(pairs_dev, stream);
         cudaFreeAsync(count_dev, stream);
         return pairs;
@@ -821,10 +840,12 @@ namespace lfs::training::kernels {
             block_partials,
             num_pixels,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.stats_primary");
         depth_loss_finalize_primary_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
             block_partials,
             finals,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.finalize_primary");
         depth_loss_stats_inverse_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
             rendered_depth_accum,
             rendered_alpha_accum,
@@ -834,6 +855,7 @@ namespace lfs::training::kernels {
             num_pixels,
             num_blocks,
             use_anchor ? anchor->floor : 0.0f);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.stats_inverse");
         depth_loss_finalize_alignment_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
             block_partials,
             finals,
@@ -842,6 +864,7 @@ namespace lfs::training::kernels {
             use_anchor ? anchor->scale : 0.0f,
             use_anchor ? anchor->shift : 0.0f,
             use_anchor ? anchor->floor : 0.0f);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.finalize_alignment");
         depth_loss_grad_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
             rendered_depth_accum,
             rendered_alpha_accum,
@@ -856,6 +879,7 @@ namespace lfs::training::kernels {
             gradient_term_weight,
             fmaxf(prior_quantization_step, 0.0f),
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.grad");
         depth_loss_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
             block_partials,
             finals,
@@ -863,6 +887,7 @@ namespace lfs::training::kernels {
             num_blocks,
             weight,
             gradient_term_weight);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.finalize_loss");
     }
 
 } // namespace lfs::training::kernels

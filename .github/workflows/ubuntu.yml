@@ -175,3 +175,25 @@ jobs:
 
       - name: Build
         run: cmake --build build -j $(nproc)
+
+  # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
+  error-debt-gate:
+    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Generate error-debt census
+        run: python3 tools/error_debt_census.py > error-debt-census.json
+
+      - name: Enforce no-new-error-debt baseline
+        run: python3 tools/error_debt_census.py --baseline tools/error_debt_baseline.json
+
+      - name: Upload error-debt census
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-debt-census
+          path: error-debt-census.json

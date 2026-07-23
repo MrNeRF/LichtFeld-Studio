@@ -4,6 +4,9 @@
 
 #include "tcp_server.hpp"
 
+#include "core/error.hpp"
+#include "core/source_site.hpp"
+
 #include <algorithm>
 #include <cstring>
 
@@ -27,30 +30,83 @@ namespace lfs::tcp {
         return endpoint_;
     }
 
-    void TCPServer::send(const nlohmann::json& data) {
-        socket_.send(toZMQ(data), zmq::send_flags::none);
+    lfs::Status TCPServer::send(const nlohmann::json& data) {
+        try {
+            if (socket_.send(toZMQ(data), zmq::send_flags::none).has_value()) {
+                return {};
+            }
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::TCP,
+                .retryability = lfs::Retryability::Retryable,
+                .user_message = "TCP send timed out",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        } catch (const zmq::error_t& e) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::TCP,
+                .user_message = "TCP send failed",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .native = lfs::NativeError{lfs::ErrorDomain::TCP, e.num(), e.what()},
+            }));
+        } catch (const std::exception& e) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Internal,
+                .domain = lfs::ErrorDomain::TCP,
+                .user_message = "TCP send failed",
+                .detail = e.what(),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
     }
 
-    bool TCPServer::receive(nlohmann::json& data) {
+    TcpReceiveStatus TCPServer::receive(nlohmann::json& data, lfs::Error* out_error) {
         zmq::message_t zqm_request;
-        auto result = socket_.recv(zqm_request, zmq::recv_flags::none);
-
-        if (!result.has_value()) {
-            return false; // Returns false on time-outs
+        std::size_t res_size = 0;
+        try {
+            const auto result = socket_.recv(zqm_request, zmq::recv_flags::none);
+            if (!result.has_value()) {
+                return TcpReceiveStatus::Timeout;
+            }
+            res_size = result.value();
+        } catch (const zmq::error_t& e) {
+            if (out_error) {
+                *out_error = lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Unavailable,
+                    .domain = lfs::ErrorDomain::TCP,
+                    .user_message = "TCP receive failed",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                    .native = lfs::NativeError{lfs::ErrorDomain::TCP, e.num(), e.what()},
+                });
+            }
+            return TcpReceiveStatus::Transport;
         }
 
-        auto res_size = result.value();
         if (res_size == 0) {
             data = nlohmann::json{};
-            return true;
+            return TcpReceiveStatus::Message;
         }
 
-        data = fromZMQ(zqm_request, res_size);
-        return true;
+        try {
+            data = fromZMQ(zqm_request, res_size);
+        } catch (const std::exception& e) {
+            if (out_error) {
+                *out_error = lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::TCP,
+                    .user_message = "Malformed JSON request",
+                    .detail = e.what(),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            return TcpReceiveStatus::MalformedJson;
+        }
+        return TcpReceiveStatus::Message;
     }
 
     zmq::message_t TCPServer::toZMQ(const nlohmann::json& data) {
-        auto msg_str = data.dump();
+        auto msg_str = data.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
         zmq::message_t req(msg_str.length());
         memcpy(req.data(), msg_str.data(), msg_str.length());
         return req;

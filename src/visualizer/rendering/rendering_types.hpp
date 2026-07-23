@@ -190,7 +190,7 @@ namespace lfs::vis {
         bool show_ellipsoid = false;
         bool use_ellipsoid = false;
         bool desaturate_unselected = false;     // Desaturate unselected PLYs when one is selected
-        bool desaturate_cropping = true;        // Desaturate outside crop box/ellipsoid instead of hiding
+        bool desaturate_cropping = false;       // Desaturate outside crop box/ellipsoid instead of hiding
         bool hide_outside_depth_box = false;    // Hide gaussians outside the selection depth box
         bool crop_filter_for_selection = false; // Use crop box/ellipsoid as selection filter
 

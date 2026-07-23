@@ -205,6 +205,39 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
+    // StatusMessageState
+
+    void StatusMessageState::post(std::string text, const ErrorNoticeLevel level) {
+        std::lock_guard lock(mutex_);
+        text_ = std::move(text);
+        level_ = level;
+        posted_at_ = std::chrono::steady_clock::now();
+        has_message_ = true;
+    }
+
+    StatusMessageState::Snapshot
+    StatusMessageState::snapshot(const std::chrono::steady_clock::time_point now) {
+        std::lock_guard lock(mutex_);
+        Snapshot snap;
+        if (!has_message_)
+            return snap;
+
+        const auto elapsed = now - posted_at_;
+        if (elapsed >= kDuration) {
+            has_message_ = false;
+            return snap;
+        }
+
+        snap.visible = true;
+        snap.text = text_;
+        snap.level = level_;
+        const auto remaining =
+            kDuration - std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
+        const float remaining_ms = static_cast<float>(remaining.count());
+        snap.alpha = remaining_ms < kFadeMs ? remaining_ms / kFadeMs : 1.0f;
+        return snap;
+    }
+
     // SpeedOverlayState
 
     void RmlStatusBar::SpeedOverlayState::showWasd(float speed) {
@@ -309,6 +342,9 @@ namespace lfs::vis::gui {
         ctor.Bind("fps_color", &model_.fps_color);
         ctor.Bind("fps_label", &model_.fps_label);
         ctor.Bind("git_commit", &model_.git_commit);
+        ctor.Bind("show_status_message", &model_.show_status_message);
+        ctor.Bind("status_message_text", &model_.status_message_text);
+        ctor.Bind("status_message_color", &model_.status_message_color);
         model_handle_ = ctor.GetModelHandle();
 
         try {
@@ -444,6 +480,10 @@ namespace lfs::vis::gui {
     void RmlStatusBar::markModelDirty() {
         model_dirty_ = true;
         next_refresh_at_ = {};
+    }
+
+    void RmlStatusBar::postStatusMessage(std::string text, const ErrorNoticeLevel level) {
+        status_message_.post(std::move(text), level);
     }
 
     bool RmlStatusBar::updateTheme() {
@@ -959,6 +999,18 @@ namespace lfs::vis::gui {
             setModelBool("show_zoom", model_.show_zoom, false);
         }
 
+        // Transient StatusOnly message (ErrorBus)
+        const auto status_msg = status_message_.snapshot(now);
+        setModelBool("show_status_message", model_.show_status_message, status_msg.visible);
+        if (status_msg.visible) {
+            setModelString("status_message_text", model_.status_message_text, status_msg.text);
+            const ImVec4& status_col = status_msg.level == ErrorNoticeLevel::Error     ? p.error
+                                       : status_msg.level == ErrorNoticeLevel::Warning ? p.warning
+                                                                                       : p.info;
+            setModelString("status_message_color", model_.status_message_color,
+                           colorToRmlAlpha(status_col, status_msg.alpha));
+        }
+
         // Right section: GPU memory
         pollGpuMemoryQuery(now);
         const auto mem = cached_gpu_mem_;
@@ -989,7 +1041,7 @@ namespace lfs::vis::gui {
                        std::format(" {}", LOC(lichtfeld::Strings::Status::FPS)));
         setModelString("git_commit", model_.git_commit, GIT_COMMIT_HASH_SHORT);
 
-        animation_active_ = wasd_visible || zoom_visible;
+        animation_active_ = wasd_visible || zoom_visible || status_msg.visible;
         next_refresh_at_ = now + (animation_active_ ? kAnimatedRefreshInterval
                                                     : (ctx.is_training ? kBusyRefreshInterval
                                                                        : kIdleRefreshInterval));

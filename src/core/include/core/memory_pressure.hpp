@@ -3,12 +3,20 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/source_site.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <stdexcept>
 #include <string>
+
+// Forward declaration only: this header must stay includable from any future
+// CUDA translation unit that references AllocationFailure, so it must never
+// include the host-C++23-only core/error.hpp. See to_error() below.
+namespace lfs {
+    class Error;
+}
 
 namespace lfs::core {
 
@@ -43,6 +51,15 @@ namespace lfs::core {
         const char* operation = nullptr; // static/interned operation name
         long long native_error = 0;      // cudaError_t or VkResult
     };
+
+    // Phase 1 error-architecture adapter: builds the typed lfs::Error for a
+    // native allocation failure, preserving domain/bytes/device/stream/label
+    // as SmallFields and the native status as NativeError. Declared here so
+    // AllocationFailure and lfs::Error stay easy to bridge at every call
+    // site; defined in core/error.cpp (which owns Error's representation)
+    // rather than in this header, so this header never has to include
+    // core/error.hpp.
+    [[nodiscard]] LFS_CORE_API Error to_error(const AllocationFailure& failure, SourceSite site);
 
     // Typed allocation failure. Carries the structured cause across expected /
     // exception boundaries so callers can distinguish OOM from an invariant

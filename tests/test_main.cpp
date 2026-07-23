@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/crash_handler.hpp"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
-#include "core/tensor.hpp"
 #include <gtest/gtest.h>
 #include <string>
 
@@ -36,9 +36,6 @@ int main(int argc, char** argv) {
 
     const int result = RUN_ALL_TESTS();
 
-    // Preserve singleton dependency order: pinned blocks return pooled events
-    // before the CUDA memory pool shuts that event pool down.
-    lfs::core::PinnedMemoryAllocator::instance().shutdown();
-    lfs::core::Tensor::shutdown_memory_pool();
+    lfs::core::teardown_gpu_before_exit();
     return result;
 }

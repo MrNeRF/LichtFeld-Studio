@@ -112,17 +112,21 @@ namespace lfs::vis {
         return module;
     }
 
-} // namespace lfs::vis
+    // Phase 7C-P5 / AMB-C4: typed bool-dialect VkResult check.
+    // Success → true. Failure → reportVkFailure (logs) → false.
+    // Call-site source_location is captured at the call site.
+    [[nodiscard]] inline bool vk_try_bool(
+        const VkResult result,
+        const std::string_view expression,
+        std::string context,
+        const std::source_location location = std::source_location::current()) {
+        if (result == VK_SUCCESS) {
+            return true;
+        }
+        return reportVkFailure(expression, result, std::move(context), location);
+    }
 
-#define LFS_VK_CHECK_MSG(expr, ...)                                     \
-    do {                                                                \
-        const VkResult lfs_vk_check_result_ = (expr);                   \
-        if (lfs_vk_check_result_ != VK_SUCCESS) {                       \
-            return ::lfs::vis::reportVkFailure(                         \
-                #expr, lfs_vk_check_result_,                            \
-                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__)); \
-        }                                                               \
-    } while (false)
+} // namespace lfs::vis
 
 #define LFS_VK_CONTEXT_CHECK_MSG(expr, ...)                              \
     do {                                                                 \

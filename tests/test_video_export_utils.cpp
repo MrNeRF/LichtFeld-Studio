@@ -9,6 +9,7 @@
 #include "io/video/video_encoder.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/gui_capabilities.hpp"
 
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
@@ -156,6 +157,67 @@ TEST(VideoExportUtilsTest, CaptureSnapshotKeepsPointCloudTransformWhenNoModelExi
     ASSERT_TRUE(snapshot.point_cloud);
     EXPECT_EQ(snapshot.point_cloud->size(), 2);
     expect_visualizer_translation_from_data(snapshot.point_cloud_transform, {3.0f, -2.0f, 5.0f});
+}
+
+
+TEST(VideoExportUtilsTest, CaptureSnapshotKeepsPointCloudCropBoxWithoutSplatParent) {
+    lfs::vis::SceneManager scene_manager;
+    auto& scene = scene_manager.getScene();
+
+    const auto parent_id = scene.addPointCloud("points", make_test_point_cloud());
+    ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+    auto cropbox_result = lfs::vis::cap::ensureCropBox(scene_manager, nullptr, parent_id);
+    ASSERT_TRUE(cropbox_result) << cropbox_result.error();
+    auto* cropbox_node = scene.getNodeById(*cropbox_result);
+    ASSERT_NE(cropbox_node, nullptr);
+    ASSERT_TRUE(cropbox_node->cropbox);
+    cropbox_node->cropbox->enabled = true;
+    cropbox_node->cropbox->inverse = true;
+    cropbox_node->cropbox->min = {-1.0f, -2.0f, -3.0f};
+    cropbox_node->cropbox->max = {1.0f, 2.0f, 3.0f};
+    scene_manager.selectNode(cropbox_node->name);
+
+    auto snapshot_result = lfs::vis::gui::captureVideoExportSceneSnapshot(scene_manager);
+    ASSERT_TRUE(snapshot_result.has_value()) << snapshot_result.error();
+
+    const auto& snapshot = *snapshot_result;
+    ASSERT_TRUE(snapshot.point_cloud);
+    ASSERT_EQ(snapshot.cropboxes.size(), 1u);
+    EXPECT_EQ(snapshot.selected_cropbox_index, 0);
+    EXPECT_LT(snapshot.cropboxes.front().parent_node_index, 0);
+    EXPECT_TRUE(snapshot.cropboxes.front().has_data);
+    EXPECT_TRUE(snapshot.cropboxes.front().data.enabled);
+    EXPECT_TRUE(snapshot.cropboxes.front().data.inverse);
+    EXPECT_EQ(snapshot.cropboxes.front().data.min, glm::vec3(-1.0f, -2.0f, -3.0f));
+    EXPECT_EQ(snapshot.cropboxes.front().data.max, glm::vec3(1.0f, 2.0f, 3.0f));
+}
+
+TEST(VideoExportUtilsTest, CaptureSnapshotKeepsPointCloudActiveEllipsoidWithoutSplatParent) {
+    lfs::vis::SceneManager scene_manager;
+    auto& scene = scene_manager.getScene();
+
+    const auto parent_id = scene.addPointCloud("points", make_test_point_cloud());
+    ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+    auto ellipsoid_result = lfs::vis::cap::ensureEllipsoid(scene_manager, nullptr, parent_id);
+    ASSERT_TRUE(ellipsoid_result) << ellipsoid_result.error();
+    auto* ellipsoid_node = scene.getNodeById(*ellipsoid_result);
+    ASSERT_NE(ellipsoid_node, nullptr);
+    ASSERT_TRUE(ellipsoid_node->ellipsoid);
+    ellipsoid_node->ellipsoid->enabled = true;
+    ellipsoid_node->ellipsoid->inverse = true;
+    ellipsoid_node->ellipsoid->radii = {2.0f, 3.0f, 4.0f};
+    scene_manager.selectNode(ellipsoid_node->name);
+
+    auto snapshot_result = lfs::vis::gui::captureVideoExportSceneSnapshot(scene_manager);
+    ASSERT_TRUE(snapshot_result.has_value()) << snapshot_result.error();
+
+    const auto& snapshot = *snapshot_result;
+    ASSERT_TRUE(snapshot.point_cloud);
+    ASSERT_TRUE(snapshot.active_ellipsoid.has_value());
+    EXPECT_LT(snapshot.active_ellipsoid->parent_node_index, 0);
+    EXPECT_TRUE(snapshot.active_ellipsoid->data.enabled);
+    EXPECT_TRUE(snapshot.active_ellipsoid->data.inverse);
+    EXPECT_EQ(snapshot.active_ellipsoid->data.radii, glm::vec3(2.0f, 3.0f, 4.0f));
 }
 
 TEST(VideoExportUtilsTest, CaptureSnapshotSupportsMeshOnlyScenes) {

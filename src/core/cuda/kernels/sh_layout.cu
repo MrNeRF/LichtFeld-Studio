@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include <cuda_runtime.h>
 
@@ -330,6 +331,7 @@ namespace lfs::core {
         reorder_sh_kernel<<<grid, BLOCK, 0, stream>>>(
             src_canonical, reinterpret_cast<float4*>(dst_swizzled),
             static_cast<std::uint32_t>(n_primitives), src_coeffs_rest, padded_n, slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.reorder");
     }
 
     void undo_reorder_sh_from_swizzled(
@@ -362,6 +364,7 @@ namespace lfs::core {
         undo_reorder_sh_kernel<<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<const float4*>(src_swizzled), dst_canonical,
             static_cast<std::uint32_t>(n_primitives), dst_coeffs_rest, slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.undo_reorder");
     }
 
     void shN_swizzled_zero_at_indices(
@@ -376,6 +379,7 @@ namespace lfs::core {
         const int grid = static_cast<int>((n_indices + BLOCK - 1) / BLOCK);
         zero_at_indices_kernel<int><<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<float4*>(buffer_swizzled), indices, static_cast<std::uint32_t>(n_indices), slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.zero_at_indices_i32");
     }
 
     void shN_swizzled_zero_at_indices_i64(
@@ -390,6 +394,7 @@ namespace lfs::core {
         const int grid = static_cast<int>((n_indices + BLOCK - 1) / BLOCK);
         zero_at_indices_kernel<std::int64_t><<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<float4*>(buffer_swizzled), indices, static_cast<std::uint32_t>(n_indices), slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.zero_at_indices_i64");
     }
 
     void shN_swizzled_gather_self(
@@ -409,6 +414,7 @@ namespace lfs::core {
             reinterpret_cast<float4*>(dst_swizzled), src_indices,
             static_cast<std::uint32_t>(n_dst),
             static_cast<std::uint32_t>(dst_offset), slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_self_i32");
     }
 
     void shN_swizzled_gather_self_u8(
@@ -428,6 +434,7 @@ namespace lfs::core {
             reinterpret_cast<uchar4*>(dst_swizzled), src_indices,
             static_cast<std::uint32_t>(n_dst),
             static_cast<std::uint32_t>(dst_offset), slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_self_i32_u8");
     }
 
     void shN_swizzled_gather_self_u8_i64(
@@ -447,6 +454,7 @@ namespace lfs::core {
             reinterpret_cast<uchar4*>(dst_swizzled), src_indices,
             static_cast<std::uint32_t>(n_dst),
             static_cast<std::uint32_t>(dst_offset), slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_self_i64_u8");
     }
 
     void shN_swizzled_gather_self_i64(
@@ -466,6 +474,7 @@ namespace lfs::core {
             reinterpret_cast<float4*>(dst_swizzled), src_indices,
             static_cast<std::uint32_t>(n_dst),
             static_cast<std::uint32_t>(dst_offset), slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_self_i64");
     }
 
     void shN_swizzled_copy_contiguous(
@@ -488,6 +497,7 @@ namespace lfs::core {
             static_cast<std::uint32_t>(dst_offset),
             src_slots,
             dst_slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.copy_contiguous");
     }
 
     void shN_swizzled_copy_range(
@@ -512,6 +522,7 @@ namespace lfs::core {
             static_cast<std::uint32_t>(dst_offset),
             src_slots,
             dst_slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.copy_range");
     }
 
     void shN_swizzled_gather_to_linear(
@@ -547,6 +558,7 @@ namespace lfs::core {
         gather_to_linear_kernel<int><<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<const float4*>(src_swizzled), src_indices, dst_linear,
             static_cast<std::uint32_t>(n_src), dst_coeffs_rest, slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_to_linear_i32");
     }
 
     void shN_swizzled_gather_to_linear_i64(
@@ -582,6 +594,7 @@ namespace lfs::core {
         gather_to_linear_kernel<std::int64_t><<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<const float4*>(src_swizzled), src_indices, dst_linear,
             static_cast<std::uint32_t>(n_src), dst_coeffs_rest, slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_to_linear_i64");
     }
 
     void shN_swizzled_gather_from_linear(
@@ -615,6 +628,7 @@ namespace lfs::core {
         gather_from_linear_kernel<<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<float4*>(dst_swizzled), static_cast<std::uint32_t>(dst_offset),
             src_linear, static_cast<std::uint32_t>(n_src), src_coeffs_rest, slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.gather_from_linear");
     }
 
     void shN_swizzled_scatter_linear(
@@ -648,6 +662,7 @@ namespace lfs::core {
         scatter_linear_kernel<<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<float4*>(dst_swizzled), dst_indices, src_linear,
             static_cast<std::uint32_t>(n_src), src_coeffs_rest, slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.scatter_linear");
     }
 
     void sh_swizzled_pack_full_from_split(
@@ -669,6 +684,7 @@ namespace lfs::core {
             static_cast<std::uint32_t>(n_primitives),
             padded_n,
             src_slots);
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.pack_full_from_split");
     }
 
 } // namespace lfs::core

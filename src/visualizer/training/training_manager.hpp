@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/error_latch.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -152,6 +153,14 @@ namespace lfs::vis {
         // Get last error message
         const std::string& getLastError() const { return last_error_; }
 
+        // Most recent training failure as a typed error (Phase 10). During an
+        // active run this may briefly differ from the legacy getLastError()
+        // string, which keeps its exact current lifecycle for the deprecation
+        // window.
+        [[nodiscard]] std::optional<lfs::Error> lastTrainingError() const {
+            return last_training_error_.get();
+        }
+
         // Camera access
         std::shared_ptr<const lfs::core::Camera> getCamById(int camId) const;
         std::vector<std::shared_ptr<lfs::core::Camera>> getCamList() const;
@@ -175,8 +184,10 @@ namespace lfs::vis {
             float elapsed_seconds = 0.0f;
             bool success = false;
             bool user_stopped = false;
+            bool resource_exhausted = false;
             FinishReason reason = FinishReason::None;
             std::optional<std::string> error;
+            std::optional<lfs::Error> typed_error;
         };
 
         // Training thread function
@@ -187,7 +198,9 @@ namespace lfs::vis {
         void dispatchTrainingCompleted(TrainingCompletionData completion);
 
         // State management
-        void handleTrainingComplete(bool success, const std::string& error = "");
+        void handleTrainingComplete(bool success, const std::string& error = "",
+                                    bool resource_exhausted = false,
+                                    const std::optional<lfs::Error>& typed_error = std::nullopt);
         void setupEventHandlers();
         void setupStateMachineCallbacks();
 
@@ -209,6 +222,7 @@ namespace lfs::vis {
         // State machine (single source of truth for state)
         TrainingStateMachine state_machine_;
         std::string last_error_;
+        core::ErrorLatch last_training_error_;
         mutable std::mutex state_mutex_;
         mutable std::mutex trainer_lifetime_mutex_;
 

@@ -197,6 +197,9 @@ namespace lfs::app {
             if (event.error) {
                 payload["error"] = *event.error;
             }
+            if (event.error_info) {
+                payload["error_info"] = *event.error_info;
+            }
             return payload;
         });
         register_handler.template operator()<core::events::state::TrainingStopped>("training.stopped", [](const auto& event) {
@@ -240,7 +243,11 @@ namespace lfs::app {
             };
         });
         register_handler.template operator()<core::events::state::ExportFailed>("export.failed", [](const auto& event) {
-            return nlohmann::json{{"error", event.error}};
+            nlohmann::json payload{{"error", event.error}};
+            if (event.error_info) {
+                payload["error_info"] = *event.error_info;
+            }
+            return payload;
         });
         register_handler.template operator()<core::events::state::VideoExportCompleted>("video_export.completed", [](const auto& event) {
             return nlohmann::json{

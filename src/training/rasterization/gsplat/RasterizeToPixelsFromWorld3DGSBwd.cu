@@ -556,6 +556,7 @@ namespace gsplat_lfs {
                 v_opacities,
                 densification_info,
                 densification_error_map);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_bwd");
     }
 
     ////////////////////////////////////////////////////////////////

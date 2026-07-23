@@ -8,16 +8,16 @@ Use this flow when the task depends on registered GUI operators rather than a de
 
 ## Sequence
 
-1. Read `lichtfeld://operators/registry` or call `operator.list`.
-2. Call `operator.describe` for the chosen id and inspect its schema and poll state.
-3. Call `operator.invoke`.
-4. If the result is modal, switch to `operator.modal_state`, `operator.modal_event`, `operator.cancel_modal`, and the normalized runtime job `operator.modal`.
+1. Read `lichtfeld://operators/registry` or call `operator_list`.
+2. Call `operator_describe` for the chosen id and inspect its schema and poll state.
+3. Call `operator_invoke`.
+4. If the result is modal, switch to `operator_modal_state`, `operator_modal_event`, `operator_cancel_modal`, and the normalized runtime job `operator.modal`.
 
 ## Discover Operators
 
 ```json
 {
-  "tool": "operator.list",
+  "tool": "operator_list",
   "arguments": {
     "include_schema": true,
     "include_poll": true
@@ -29,7 +29,7 @@ Use this flow when the task depends on registered GUI operators rather than a de
 
 ```json
 {
-  "tool": "operator.describe",
+  "tool": "operator_describe",
   "arguments": {
     "operator_id": "transform.translate",
     "include_schema": true,
@@ -40,11 +40,11 @@ Use this flow when the task depends on registered GUI operators rather than a de
 
 ## Invoke The Operator
 
-Use the schema returned by `operator.describe` instead of guessing the payload:
+Use the schema returned by `operator_describe` instead of guessing the payload:
 
 ```json
 {
-  "tool": "operator.invoke",
+  "tool": "operator_invoke",
   "arguments": {
     "operator_id": "transform.translate",
     "arguments": {
@@ -60,7 +60,7 @@ Inspect current modal state:
 
 ```json
 {
-  "tool": "operator.modal_state",
+  "tool": "operator_modal_state",
   "arguments": {}
 }
 ```
@@ -69,7 +69,7 @@ Dispatch a modal event:
 
 ```json
 {
-  "tool": "operator.modal_event",
+  "tool": "operator_modal_event",
   "arguments": {
     "type": "mouse_move",
     "x": 320,
@@ -85,13 +85,13 @@ Cancel the active modal operator:
 
 ```json
 {
-  "tool": "operator.cancel_modal",
+  "tool": "operator_cancel_modal",
   "arguments": {}
 }
 ```
 
 ## Notes
 
-- Use `operator.describe` before `operator.invoke`
-- `operator.invoke` may finish immediately or return `running_modal`
+- Use `operator_describe` before `operator_invoke`
+- `operator_invoke` may finish immediately or return `running_modal`
 - modal operator state is also normalized as runtime job `operator.modal`

@@ -4,6 +4,7 @@
 
 #include "vulkan_external_tensor.hpp"
 
+#include "core/cuda_error.hpp"
 #include "core/services.hpp"
 #include "window/window_manager.hpp"
 
@@ -36,12 +37,19 @@ namespace lfs::vis {
         VulkanContext::ExternalBuffer buffer,
         lfs::rendering::CudaVulkanBufferInterop interop,
         const std::size_t bytes,
+        std::string debug_label,
         std::shared_ptr<void> extra_owner)
         : context_(&context),
           buffer_(buffer),
           interop_(std::move(interop)),
           bytes_(bytes),
-          extra_owner_(std::move(extra_owner)) {}
+          extra_owner_(std::move(extra_owner)) {
+        registered_cuda_base_ = interop_.devicePointer();
+        if (registered_cuda_base_ != nullptr) {
+            lfs::core::register_cuda_address_range(
+                registered_cuda_base_, bytes_, std::move(debug_label));
+        }
+    }
 
     VulkanExternalTensorStorage::VulkanExternalTensorStorage(
         std::shared_ptr<VulkanExternalTensorStorage> parent,
@@ -57,6 +65,9 @@ namespace lfs::vis {
         // own shared_ptr ref drops with it.
         if (parent_) {
             return;
+        }
+        if (registered_cuda_base_ != nullptr) {
+            lfs::core::unregister_cuda_address_range(registered_cuda_base_);
         }
         interop_.reset();
         if (context_) {
@@ -214,7 +225,8 @@ namespace lfs::vis {
         }
 
         auto owner = std::make_shared<VulkanExternalTensorStorage>(
-            context, buffer, std::move(interop), bytes);
+            context, buffer, std::move(interop), bytes,
+            debug_name ? debug_name : "<unnamed>");
         auto tensor = lfs::core::Tensor::from_external_owner(
             cuda_ptr,
             std::move(shape),
@@ -262,6 +274,7 @@ namespace lfs::vis {
                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         if (!context.importExternalBuffer(storage.block->handle.native,
                                           static_cast<VkDeviceSize>(storage.block->size),
+                                          static_cast<VkDeviceSize>(storage.block->handle.size),
                                           usage,
                                           imported,
                                           "vulkan.external_tensor.alias",
@@ -284,6 +297,7 @@ namespace lfs::vis {
             imported,
             std::move(noop_interop),
             static_cast<std::size_t>(storage.block->size),
+            "exportable_splat_block",
             std::shared_ptr<void>(storage.block));
 
         // Build sub-views per region, keyed by SplatExportableStorage::Region.

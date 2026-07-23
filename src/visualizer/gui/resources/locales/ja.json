@@ -526,8 +526,6 @@
     "go_to_cam_view": "カメラビューに移動",
     "fit_to_scene": "シーンにフィット",
     "fit_to_scene_trimmed": "シーンにフィット(トリム済み)",
-    "add_crop_box": "クロップボックスを追加",
-    "add_crop_ellipsoid": "クロップ楕円体を追加",
     "reset_crop": "リセット",
     "merge_to_single_ply": "単一のPLYにマージ",
     "move_to": "移動先",
@@ -1622,6 +1620,7 @@
     "reload": "再読み込み"
   },
   "status_bar": {
+    "export_cancelled": "エクスポートをキャンセルしました",
     "gt_compare": "GT比較",
     "camera": "Cam {}",
     "ground_truth": "Ground Truth",
@@ -1690,6 +1689,39 @@
     "success": "ファイルの関連付けが正常に登録されました。",
     "menu_register": "既定のアプリケーションに設定...",
     "menu_unregister": "既定のアプリケーションから解除..."
+  },
+  "error_actions": {
+    "retry": "再試行",
+    "choose_path": "場所を選択...",
+    "open_log": "ログを開く",
+    "stop_renderer": "レンダラーを停止"
+  },
+  "error_modal": {
+    "details": "詳細",
+    "repeated": "繰り返し",
+    "training_failed": "トレーニングに失敗しました",
+    "out_of_gpu_memory": "GPUメモリ不足",
+    "dataset_load_failed": "データセットの読み込みに失敗しました",
+    "export_failed": "エクスポートに失敗しました",
+    "video_export_failed": "動画のエクスポートに失敗しました",
+    "mesh2splat_failed": "メッシュからスプラットへの変換に失敗しました",
+    "config_invalid": "無効な構成ファイル",
+    "file_open_failed": "ファイルを開けません",
+    "cuda_unavailable": "CUDAが利用できません",
+    "cuda_unsupported": "サポートされていないCUDAドライバー",
+    "save_failed": "保存に失敗しました",
+    "plugins_disabled": "プラグインが無効です",
+    "generic": "エラー",
+    "oom_heading": "GPUメモリが不足しています！",
+    "oom_suggestions": "推奨事項:\n  - 最大ガウス数を減らす (max_cap)\n  - 球面調和関数の次数を下げる (sh_degree)\n  - 画像解像度を下げる (resize_factor)\n  - 大きな画像でタイルモードを有効にする",
+    "renderer_device_lost": "グラフィックスデバイスが失われました",
+    "renderer_device_lost_body": "グラフィックスデバイスが失われ、レンダリングが停止しました。可能な限りセッションは保持されます。LichtFeld Studio を再起動してください。繰り返す場合は、GPU ドライバーを更新してください。",
+    "renderer_stalled": "レンダラーが停止しました",
+    "renderer_stalled_body": "GPU の処理が応答しなくなり、アプリケーションを使用可能に保つためにレンダリングを停止しました。LichtFeld Studio を再起動してください。",
+    "renderer_failed": "レンダラーエラー",
+    "renderer_failed_body": "ビューポートレンダラーで内部エラーが繰り返し発生し、停止しました。レンダリングを再試行するか、停止したままにして作業を保存してください。",
+    "oom_render_paused": "GPU メモリ不足が繰り返されたため、レンダリングは一時停止しています。最後に完了したフレームを表示しています。GPU メモリを解放してから再試行してください。",
+    "gpu_pressure_retrying": "GPU メモリ負荷 — 解放して再試行しています。"
   },
   "context_menu": {
     "snap_interval": "スナップ間隔",

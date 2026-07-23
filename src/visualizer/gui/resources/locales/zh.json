@@ -533,8 +533,6 @@
     "go_to_cam_view": "转到相机视图",
     "fit_to_scene": "适应场景",
     "fit_to_scene_trimmed": "适应场景（已修剪）",
-    "add_crop_box": "添加裁剪框",
-    "add_crop_ellipsoid": "添加裁剪椭球",
     "reset_crop": "重置",
     "merge_to_single_ply": "合并为单个PLY",
     "move_to": "移动到",
@@ -1579,6 +1577,7 @@
     "reload": "重新加载"
   },
   "status_bar": {
+    "export_cancelled": "已取消导出",
     "gt_compare": "真值对比",
     "camera": "相机 {}",
     "ground_truth": "真值",
@@ -1700,6 +1699,39 @@
     "success": "文件关联注册成功。",
     "menu_register": "设为默认应用程序...",
     "menu_unregister": "移除默认应用程序..."
+  },
+  "error_actions": {
+    "retry": "重试",
+    "choose_path": "选择位置...",
+    "open_log": "打开日志",
+    "stop_renderer": "停止渲染器"
+  },
+  "error_modal": {
+    "details": "详细信息",
+    "repeated": "重复",
+    "training_failed": "训练失败",
+    "out_of_gpu_memory": "GPU 内存不足",
+    "dataset_load_failed": "无法加载数据集",
+    "export_failed": "导出失败",
+    "video_export_failed": "视频导出失败",
+    "mesh2splat_failed": "网格转 splat 失败",
+    "config_invalid": "无效的配置文件",
+    "file_open_failed": "无法打开文件",
+    "cuda_unavailable": "CUDA 不可用",
+    "cuda_unsupported": "不支持的 CUDA 驱动程序",
+    "save_failed": "保存失败",
+    "plugins_disabled": "插件已禁用",
+    "generic": "错误",
+    "oom_heading": "GPU 内存不足！",
+    "oom_suggestions": "建议：\n  - 减少最大高斯数量 (max_cap)\n  - 降低球谐函数阶数 (sh_degree)\n  - 降低图像分辨率 (resize_factor)\n  - 为大图像启用平铺模式",
+    "renderer_device_lost": "图形设备丢失",
+    "renderer_device_lost_body": "图形设备已丢失，渲染已停止。将尽可能保留您的会话。请重新启动 LichtFeld Studio；如果反复出现，请更新您的 GPU 驱动程序。",
+    "renderer_stalled": "渲染器停滞",
+    "renderer_stalled_body": "GPU 工作停止响应，为保持应用程序可用，渲染已暂停。请重新启动 LichtFeld Studio。",
+    "renderer_failed": "渲染器错误",
+    "renderer_failed_body": "视口渲染器反复出现内部错误并已停止。请重试渲染，或让其保持停止并保存您的工作。",
+    "oom_render_paused": "由于反复出现 GPU 内存耗尽，渲染已暂停；显示的是最后完成的一帧。请释放 GPU 内存后重试。",
+    "gpu_pressure_retrying": "GPU 内存压力 — 正在回收并重试。"
   },
   "context_menu": {
     "snap_interval": "吸附间隔",

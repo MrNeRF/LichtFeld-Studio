@@ -9,7 +9,6 @@
 #define DEF inline constexpr
 
 namespace edge_compute::rasterization::config {
-    DEF bool debug = false;
     // rendering constants
     DEF float dilation = 0.3f;            // Standard dilation when mip_filter OFF
     DEF float dilation_mip_filter = 0.1f; // Smaller dilation when mip_filter ON

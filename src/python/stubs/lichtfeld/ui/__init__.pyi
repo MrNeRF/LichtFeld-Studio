@@ -2223,10 +2223,22 @@ def get_crop_tool_operation() -> str:
     """Get the active crop or selection-volume gizmo operation"""
 
 def apply_crop_tool() -> None:
-    """Apply the active crop tool primitive"""
+    """
+    Apply the active crop tool primitive through the node-backed crop command path
+    """
 
 def fit_crop_tool(use_percentile: bool = False) -> None:
-    """Fit the active crop tool primitive to the selected node"""
+    """
+    Fit the active crop tool primitive through the node-backed crop command path
+    """
+
+def reset_crop_tool() -> None:
+    """
+    Reset the active crop tool primitive through the node-backed crop command path
+    """
+
+def delete_crop_tool_volume() -> None:
+    """Delete the active crop tool primitive and leave the crop tool"""
 
 def fit_cropbox_to_scene(use_percentile: bool = False) -> None:
     """Fit cropbox to scene bounds"""

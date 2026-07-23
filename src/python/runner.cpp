@@ -18,10 +18,14 @@
 #include <string_view>
 #include <thread>
 
+#include <core/crash_handler.hpp>
 #include <core/environment.hpp>
+#include <core/error_bus.hpp>
 #include <core/executable_path.hpp>
 #include <core/logger.hpp>
 #include <core/path_utils.hpp>
+
+#include <optional>
 
 #include "gil.hpp"
 #include "python_compat.hpp"
@@ -39,7 +43,9 @@ namespace lfs::python {
 
     namespace {
         struct EnsureInitializedRegistrar {
-            EnsureInitializedRegistrar() { set_ensure_initialized_callback(ensure_initialized); }
+            EnsureInitializedRegistrar() {
+                set_ensure_initialized_callback([] { (void)ensure_initialized(); });
+            }
         };
         static EnsureInitializedRegistrar g_registrar;
     } // namespace
@@ -52,7 +58,15 @@ namespace lfs::python {
     static std::atomic<bool> g_builtin_ui_deferred_logged{false};
     static std::atomic<bool> g_python_bridge_failed{false};
     static std::mutex g_python_bridge_failure_mutex;
-    static std::string g_python_bridge_failure_detail;
+    static std::optional<lfs::Error> g_python_bridge_failure_error;
+
+    // Phase 9 Section 3: the latched Python-init state (pure C++, GIL-free).
+    static std::atomic<PyInitState> g_py_init_state{PyInitState::Uninitialized};
+    static std::mutex g_py_init_error_mutex;
+    static std::optional<lfs::Error> g_py_init_error;           // engaged iff Failed
+    static std::atomic<bool> g_py_init_failure_reported{false}; // one INFO line + one toast
+    static std::atomic<bool> g_py_real_init_succeeded{false};   // real once-lambda reached Ready
+    static std::atomic<bool> g_force_py_init_failure{false};    // test-only latch override
 
     enum class PluginPreloadState : std::uint8_t {
         NotStarted,
@@ -478,17 +492,47 @@ _add_dll_dirs()
             return "Python syntax error: " + consume_python_error_detailed();
         }
 
-        void remember_python_bridge_failure(const std::string& detail) {
+        // Precondition: GIL held, a Python error pending from a failed lichtfeld
+        // import. Consumes the pending error and wraps it as a typed init failure
+        // (Unavailable/Python, traceback in detail, py_type in fields). Section 3.2.
+        lfs::Error make_python_bridge_error() {
+            std::string py_type;
+            if (PyObject* type = PyErr_Occurred()) {
+                if (PyObject* name = PyObject_GetAttrString(type, "__name__")) {
+                    if (const char* text = PyUnicode_AsUTF8(name))
+                        py_type = text;
+                    Py_DECREF(name);
+                } else {
+                    PyErr_Clear();
+                }
+            }
+            std::string detail = consume_python_error_detailed();
+            lfs::SmallFields fields;
+            if (!py_type.empty())
+                fields.add("py_type", py_type);
+            return lfs::make_error({
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Error,
+                .user_message = "Python runtime failed to initialize; plugins are disabled.",
+                .detail = lfs::truncate_utf8_safe(std::move(detail), lfs::kMaxDeveloperStringBytes),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = std::move(fields),
+            });
+        }
+
+        void remember_python_bridge_failure(lfs::Error error) {
             bool expected = false;
             if (g_python_bridge_failed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
                 std::lock_guard lock(g_python_bridge_failure_mutex);
-                g_python_bridge_failure_detail = detail;
+                g_python_bridge_failure_error = std::move(error);
             }
         }
 
         std::string python_bridge_failure_detail() {
             std::lock_guard lock(g_python_bridge_failure_mutex);
-            return g_python_bridge_failure_detail;
+            return g_python_bridge_failure_error ? std::string(g_python_bridge_failure_error->detail())
+                                                 : std::string{};
         }
 
         PyObject* import_lichtfeld_module(const char* context, const bool latch_failure = false) {
@@ -500,10 +544,12 @@ _add_dll_dirs()
 
             PyObject* lf = PyImport_ImportModule("lichtfeld");
             if (!lf) {
-                const std::string detail = consume_python_error_detailed();
-                LOG_ERROR("{}: {}", context, detail);
                 if (latch_failure) {
-                    remember_python_bridge_failure(detail);
+                    lfs::Error error = make_python_bridge_error();
+                    LOG_ERROR("{}: {}", context, std::string(error.detail()));
+                    remember_python_bridge_failure(std::move(error));
+                } else {
+                    LOG_ERROR("{}: {}", context, consume_python_error_detailed());
                 }
                 return nullptr;
             }
@@ -845,8 +891,7 @@ _add_dll_dirs()
                     g_plugin_preload.owner_thread = std::this_thread::get_id();
                 }
 
-                ensure_initialized();
-                if (!can_acquire_gil()) {
+                if (!ensure_initialized() || !can_acquire_gil()) {
                     LOG_WARN("Python GIL state not ready, skipping plugin preload");
                     finish_plugin_preload(
                         PluginPreloadState::Cancelled,
@@ -1060,8 +1105,68 @@ _add_dll_dirs()
         return PackageManager::instance().site_packages_dir();
     }
 
-    void ensure_initialized() {
-        call_once_py_init([] {
+    namespace {
+        lfs::Error make_init_status_error(const PyStatus& status) {
+            return lfs::make_error({
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Error,
+                .user_message = "Python runtime failed to initialize; plugins are disabled.",
+                .detail = status.err_msg ? status.err_msg : "unknown",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
+        lfs::Error make_forced_init_failure_error() {
+            return lfs::make_error({
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Error,
+                .user_message = "Python runtime failed to initialize; plugins are disabled.",
+                .detail = "forced initialization failure (test-only)",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
+        lfs::Error python_bridge_failure_error_or_default() {
+            std::lock_guard lock(g_python_bridge_failure_mutex);
+            if (g_python_bridge_failure_error)
+                return *g_python_bridge_failure_error;
+            return lfs::make_error({
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Error,
+                .user_message = "Python runtime failed to initialize; plugins are disabled.",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
+        void latch_init_failure(lfs::Error error) {
+            const bool first = !g_py_init_failure_reported.exchange(true, std::memory_order_acq_rel);
+            {
+                std::lock_guard lock(g_py_init_error_mutex);
+                g_py_init_error = error;
+            }
+            g_py_init_state.store(PyInitState::Failed, std::memory_order_release);
+            if (first) {
+                // One INFO line the GUI-validation harness greps for.
+                LOG_INFO("python-init state=Failed: {}", std::string(error.user_message()));
+                lfs::ErrorBus::instance().publish(lfs::ErrorNotification{
+                    .error = std::move(error),
+                    .surface = lfs::ErrorSurface::Toast,
+                });
+            }
+        }
+
+        lfs::Status current_init_status() {
+            PyInitStatus status = init_state();
+            if (status.state == PyInitState::Failed && status.error) {
+                return lfs::Status::failure(std::move(*status.error));
+            }
+            return {};
+        }
+
+        void run_python_init_once() {
             if (!Py_IsInitialized()) {
                 PyImport_AppendInittab("_lfs_output", init_capture_module);
 
@@ -1076,6 +1181,7 @@ _add_dll_dirs()
                     if (PyStatus_Exception(st)) {
                         LOG_ERROR("Failed to set Python home: {}", st.err_msg ? st.err_msg : "unknown");
                         PyConfig_Clear(&config);
+                        latch_init_failure(make_init_status_error(st));
                         return;
                     }
                     LOG_INFO("Set Python home: {}", lfs::core::path_to_utf8(python_home));
@@ -1086,6 +1192,7 @@ _add_dll_dirs()
                 if (PyStatus_Exception(status)) {
                     LOG_ERROR("Failed to initialize Python: {}",
                               status.err_msg ? status.err_msg : "unknown");
+                    latch_init_failure(make_init_status_error(status));
                     return;
                 }
 
@@ -1126,19 +1233,70 @@ _add_dll_dirs()
 #endif
             }
 
+            bool bridge_ready = false;
             {
                 std::lock_guard lock(g_plugin_init_mutex);
-                ensure_python_bridge_ready_locked();
+                bridge_ready = ensure_python_bridge_ready_locked();
             }
 
             set_main_thread_state(PyEval_SaveThread());
             set_gil_state_ready(true);
             LOG_DEBUG("GIL released, external_init={}", !g_we_initialized_python);
+
+            if (!bridge_ready) {
+                latch_init_failure(python_bridge_failure_error_or_default());
+                return;
+            }
+
+            g_py_real_init_succeeded.store(true, std::memory_order_release);
+            g_py_init_state.store(PyInitState::Ready, std::memory_order_release);
+            LOG_INFO("python-init state=Ready");
+        }
+    } // namespace
+
+    PyInitStatus init_state() noexcept {
+        PyInitStatus status;
+        status.state = g_py_init_state.load(std::memory_order_acquire);
+        if (status.state == PyInitState::Failed) {
+            std::lock_guard lock(g_py_init_error_mutex);
+            status.error = g_py_init_error;
+        }
+        return status;
+    }
+
+    void force_python_init_failure_for_testing(bool should_fail) noexcept {
+        g_force_py_init_failure.store(should_fail, std::memory_order_release);
+    }
+
+    void reset_python_init_state_for_testing() noexcept {
+        g_force_py_init_failure.store(false, std::memory_order_release);
+        g_py_init_failure_reported.store(false, std::memory_order_release);
+        {
+            std::lock_guard lock(g_py_init_error_mutex);
+            g_py_init_error.reset();
+        }
+        g_py_init_state.store(g_py_real_init_succeeded.load(std::memory_order_acquire)
+                                  ? PyInitState::Ready
+                                  : PyInitState::Uninitialized,
+                              std::memory_order_release);
+    }
+
+    lfs::Status ensure_initialized() {
+        if (g_force_py_init_failure.load(std::memory_order_acquire)) {
+            latch_init_failure(make_forced_init_failure_error());
+            return current_init_status();
+        }
+        call_once_py_init([] {
+            g_py_init_state.store(PyInitState::Initializing, std::memory_order_release);
+            run_python_init_once();
         });
+        return current_init_status();
     }
 
     void ensure_builtin_ui_registered() {
-        ensure_initialized();
+        if (!ensure_initialized()) {
+            return;
+        }
         if (!can_acquire_gil()) {
             LOG_WARN("Python GIL state not ready, skipping builtin UI registration");
             return;
@@ -1153,7 +1311,9 @@ _add_dll_dirs()
     }
 
     bool ensure_plugins_loaded() {
-        ensure_initialized();
+        if (!ensure_initialized()) {
+            return false;
+        }
         if (!can_acquire_gil()) {
             LOG_WARN("Python GIL state not ready, skipping plugin load");
             return false;
@@ -1212,6 +1372,17 @@ _add_dll_dirs()
                state == PluginPreloadState::Loading;
     }
 
+    bool is_plugin_preload_blocking_python() {
+        const auto state = g_plugin_preload.state.load(std::memory_order_acquire);
+        if (state != PluginPreloadState::Discovering &&
+            state != PluginPreloadState::Loading)
+            return false;
+
+        std::lock_guard lock(g_plugin_preload.mutex);
+        return g_plugin_preload.phase != "environment" &&
+               g_plugin_preload.phase != "dependencies";
+    }
+
     void request_plugin_preload_stop() {
         if (!is_plugin_preload_running())
             return;
@@ -1225,7 +1396,7 @@ _add_dll_dirs()
     }
 
     bool start_debugpy(const int port) {
-        ensure_initialized();
+        (void)ensure_initialized();
 
         auto& pm = PackageManager::instance();
         if (!pm.is_installed("debugpy")) {
@@ -1269,16 +1440,21 @@ _add_dll_dirs()
             });
             if (!stopped) {
                 lock.unlock();
+                // The bounded panic path deliberately skips GPU
+                // teardown because an in-flight worker could make device sync hang.
                 LOG_CRITICAL(
-                    "Plugin preload did not stop within {} seconds; exiting without Python teardown",
+                    "Plugin preload did not stop within {} seconds; exiting without Python or GPU teardown",
                     SHUTDOWN_TIMEOUT.count());
-                std::_Exit(EXIT_FAILURE);
+                lfs::core::flush_and_exit(EXIT_FAILURE);
             }
 
             if (g_plugin_preload.worker.joinable()) {
                 if (g_plugin_preload.worker.get_id() == std::this_thread::get_id()) {
-                    LOG_CRITICAL("Plugin preload worker attempted to join itself");
-                    std::_Exit(EXIT_FAILURE);
+                    // The bounded panic path deliberately skips GPU
+                    // teardown because the active worker may still own CUDA work.
+                    LOG_CRITICAL(
+                        "Plugin preload worker attempted to join itself; exiting without GPU teardown");
+                    lfs::core::flush_and_exit(EXIT_FAILURE);
                 }
                 worker = std::move(g_plugin_preload.worker);
             }
@@ -1349,7 +1525,7 @@ _add_dll_dirs()
 
     void start_embedded_repl(int read_fd, int write_fd) {
         stop_embedded_repl();
-        ensure_initialized();
+        (void)ensure_initialized();
 
         auto& pm = PackageManager::instance();
         if (!pm.is_installed("ptpython")) {
@@ -1498,14 +1674,21 @@ _repl_out.close()
         }
     }
 
-    std::expected<void, std::string> run_scripts(const std::vector<std::filesystem::path>& scripts) {
+    lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts) {
         if (scripts.empty()) {
             return {};
         }
 
-        ensure_initialized();
+        if (auto status = ensure_initialized(); !status)
+            return status;
         if (!ensure_plugins_loaded())
-            return std::unexpected("Plugins are still loading");
+            return lfs::Status::failure(lfs::make_error({
+                .code = lfs::ErrorCode::Unavailable,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Error,
+                .user_message = "Plugins are still loading",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
 
         const GilAcquire gil;
 
@@ -1529,7 +1712,13 @@ _repl_out.close()
         {
             PyObject* lf_module = import_lichtfeld_module("Failed to pre-import lichtfeld module");
             if (!lf_module) {
-                return std::unexpected("Failed to import lichtfeld module - see startup log for traceback");
+                return lfs::Status::failure(lfs::make_error({
+                    .code = lfs::ErrorCode::Unavailable,
+                    .domain = lfs::ErrorDomain::Python,
+                    .severity = lfs::Severity::Error,
+                    .user_message = "Failed to import lichtfeld module - see startup log for traceback",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
             }
             Py_DECREF(lf_module);
             LOG_INFO("Successfully pre-imported lichtfeld module");
@@ -1538,7 +1727,13 @@ _repl_out.close()
         for (const auto& script : scripts) {
             const auto script_utf8 = lfs::core::path_to_utf8(script);
             if (!std::filesystem::exists(script)) {
-                return std::unexpected(std::format("Python script not found: {}", script_utf8));
+                return lfs::Status::failure(lfs::make_error({
+                    .code = lfs::ErrorCode::NotFound,
+                    .domain = lfs::ErrorDomain::IO,
+                    .severity = lfs::Severity::Error,
+                    .user_message = std::format("Python script not found: {}", script_utf8),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
             }
 
             // Ensure script directory is on sys.path
@@ -1558,13 +1753,25 @@ _repl_out.close()
             FILE* const fp = fopen(script.c_str(), "r");
 #endif
             if (!fp) {
-                return std::unexpected(std::format("Failed to open Python script: {}", script_utf8));
+                return lfs::Status::failure(lfs::make_error({
+                    .code = lfs::ErrorCode::NotFound,
+                    .domain = lfs::ErrorDomain::IO,
+                    .severity = lfs::Severity::Error,
+                    .user_message = std::format("Failed to open Python script: {}", script_utf8),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
             }
 
             LOG_INFO("Executing Python script: {}", script_utf8);
             const int rc = PyRun_SimpleFileEx(fp, script_utf8.c_str(), /*closeit=*/1);
             if (rc != 0) {
-                return std::unexpected(std::format("Python script failed: {} (rc={})", script_utf8, rc));
+                return lfs::Status::failure(lfs::make_error({
+                    .code = lfs::ErrorCode::Internal,
+                    .domain = lfs::ErrorDomain::Python,
+                    .severity = lfs::Severity::Error,
+                    .user_message = std::format("Python script failed: {} (rc={})", script_utf8, rc),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
             }
 
             LOG_INFO("Python script completed: {}", script_utf8);
@@ -1588,7 +1795,7 @@ _repl_out.close()
                 return {code, buffer_analysis.summary, false};
             }
 
-            ensure_initialized();
+            (void)ensure_initialized();
             {
                 const GilAcquire gil;
                 if (const auto compile_error = compile_python_buffer_error(code); !compile_error.empty()) {
@@ -1612,7 +1819,7 @@ _repl_out.close()
             update_python_path();
         }
 
-        ensure_initialized();
+        (void)ensure_initialized();
         const GilAcquire gil;
 
         static constexpr const char* FORMAT_CODE = R"(
@@ -1906,7 +2113,7 @@ def _lfs_format_code(code):
     }
 
     CapabilityResult invoke_capability(const std::string& name, const std::string& args_json) {
-        ensure_initialized();
+        (void)ensure_initialized();
         if (!ensure_plugins_loaded())
             return {false, "", "Plugins are still loading"};
         const GilAcquire gil;
@@ -1991,7 +2198,7 @@ def _lfs_format_code(code):
     }
 
     bool has_capability(const std::string& name) {
-        ensure_initialized();
+        (void)ensure_initialized();
         if (!ensure_plugins_loaded())
             return false;
         const GilAcquire gil;
@@ -2026,7 +2233,7 @@ def _lfs_format_code(code):
 
     std::vector<CapabilityInfo> list_capabilities() {
         std::vector<CapabilityInfo> result;
-        ensure_initialized();
+        (void)ensure_initialized();
         if (!ensure_plugins_loaded())
             return result;
         const GilAcquire gil;

@@ -3,6 +3,8 @@
 
 #include "video_encoder.hpp"
 #include "color_convert.cuh"
+#include "core/error.hpp"
+#include "core/error_reporter.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <cuda_runtime.h>
@@ -76,8 +78,25 @@ namespace lfs::io::video {
                 return std::unexpected("Frame size mismatch");
             }
 
-            return use_nvenc_ ? writeFrameNvenc(rgb_gpu_ptr, stream)
-                              : writeFrameX264Gpu(rgb_gpu_ptr, stream);
+            // Boundary for CUDA launches that now throw lfs::Exception
+            // (rgbToNv12Cuda / rgbToYuv420pCuda via LFS_CUDA_LAUNCH_CHECK).
+            // Keep the expected-based API non-throwing so the GUI export
+            // jthread is not terminate-on-exception (Phase 6B-3c-2).
+            try {
+                return use_nvenc_ ? writeFrameNvenc(rgb_gpu_ptr, stream)
+                                  : writeFrameX264Gpu(rgb_gpu_ptr, stream);
+            } catch (const lfs::Exception& e) {
+                lfs::Error error = lfs::Error(e.error())
+                                       .with_context("write video frame", LFS_SOURCE_SITE_CURRENT(),
+                                                     lfs::SmallFields{}
+                                                         .add("width", static_cast<std::int64_t>(width_))
+                                                         .add("height", static_cast<std::int64_t>(height_))
+                                                         .add("frame", frame_count_));
+                lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
+                return std::unexpected(std::string(e.what()));
+            } catch (const std::exception& e) {
+                return std::unexpected(std::string(e.what()));
+            }
         }
 
         std::expected<void, std::string> close() {

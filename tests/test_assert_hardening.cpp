@@ -167,23 +167,25 @@ namespace {
         EXPECT_FALSE(result.has_value());
     }
 
-    TEST_F(AssertHardeningExpectedFailTest, RejectsMalformedColmapTrackPairs) {
+    TEST_F(AssertHardeningExpectedFailTest, SkipsMalformedColmapTrackPairs) {
         write_text(temp_dir_ / "points3D.txt",
                    "1 0 0 0 255 255 255 0.1 malformed 0\n");
 
-        EXPECT_THROW(
-            (void)lfs::io::read_colmap_point_cloud_text_with_stats(temp_dir_),
-            std::runtime_error);
+        const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(temp_dir_);
+        ASSERT_TRUE(result.has_value());
+        EXPECT_EQ(result->value.total_points, 0u);
+        ASSERT_EQ(result->warnings.size(), 1u);
     }
 
-    TEST_F(AssertHardeningExpectedFailTest, RejectsNonNormalizedColmapQuaternion) {
+    TEST_F(AssertHardeningExpectedFailTest, RejectsSoleImageWithNonNormalizedQuaternion) {
         write_text(temp_dir_ / "cameras.txt",
                    "1 PINHOLE 640 480 500 500 320 240\n");
         write_text(temp_dir_ / "images.txt",
                    "1 2 0 0 0 0 0 0 1 frame.png\n\n");
 
-        EXPECT_THROW((void)lfs::io::read_colmap_cameras_only(temp_dir_),
-                     std::runtime_error);
+        const auto result = lfs::io::read_colmap_cameras_only(temp_dir_);
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code, lfs::io::ErrorCode::CORRUPTED_DATA);
     }
 
     TEST(AssertHardeningRegression, MaskedSelectPreservesInt64Exactly) {

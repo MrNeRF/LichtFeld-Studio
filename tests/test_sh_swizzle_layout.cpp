@@ -41,7 +41,7 @@ namespace {
         auto loaded = lfs::io::load_ply(ply_path);
         ASSERT_TRUE(loaded.has_value()) << "Failed to load PLY at " << ply_path;
 
-        SplatData splat = std::move(*loaded);
+        SplatData splat = std::move(loaded->value);
         if (splat.get_active_sh_degree() == 0) {
             GTEST_SKIP() << "PLY has SH degree 0, no shN to round-trip";
         }

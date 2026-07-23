@@ -511,7 +511,9 @@ class Scene:
         """
 
     def remove_node(self, name: str, keep_children: bool = False) -> None:
-        """Remove a node by name, optionally keeping its children"""
+        """
+        Remove a node by name, optionally keeping its children. Raises RuntimeError if the GUI scene manager rejects removal.
+        """
 
     def rename_node(self, old_name: str, new_name: str) -> bool:
         """Rename a node, returns true on success"""

@@ -19,6 +19,7 @@
 #include "visualizer/training/training_state.hpp"
 #include <algorithm>
 #include <nanobind/ndarray.h>
+#include <stdexcept>
 
 namespace lfs::python {
 
@@ -600,7 +601,9 @@ namespace lfs::python {
 
     void PyScene::remove_node(const std::string& name, bool keep_children) {
         if (auto* const scene_manager = get_scene_manager()) {
-            scene_manager->removePLY(name, keep_children);
+            if (auto result = scene_manager->removePLYWithResult(name, keep_children); !result) {
+                throw std::runtime_error(result.error());
+            }
             return;
         }
         scene_->removeNode(name, keep_children);
@@ -1282,7 +1285,7 @@ Returns:
 )doc")
             .def("remove_node", &PyScene::remove_node,
                  nb::arg("name"), nb::arg("keep_children") = false,
-                 "Remove a node by name, optionally keeping its children")
+                 "Remove a node by name, optionally keeping its children. Raises RuntimeError if the GUI scene manager rejects removal.")
             .def("rename_node", &PyScene::rename_node,
                  nb::arg("old_name"), nb::arg("new_name"),
                  "Rename a node, returns true on success")

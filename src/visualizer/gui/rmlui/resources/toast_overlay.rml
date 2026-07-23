@@ -1,0 +1,8 @@
+<rml>
+<head>
+    <link type="text/rcss" href="toast_overlay.rcss"/>
+</head>
+<body id="body">
+    <div id="toast-stack"></div>
+</body>
+</rml>

@@ -174,6 +174,24 @@ namespace lfs::rendering {
         });
     }
 
+    void ScreenOverlayRenderer::addImage(const std::uintptr_t texture_id, const glm::vec2 min_px,
+                                         const glm::vec2 max_px, const OverlayColor c,
+                                         const glm::vec2 uv0, const glm::vec2 uv1) {
+        if (texture_id == 0 || c.a <= 0.0f) {
+            return;
+        }
+        commands_.push_back({
+            .type = OverlayCommandType::Image,
+            .p0 = glm::min(min_px, max_px),
+            .p1 = glm::max(min_px, max_px),
+            .color_premul = toPremul(c),
+            .clip = currentClip(),
+            .texture_id = texture_id,
+            .uv0 = uv0,
+            .uv1 = uv1,
+        });
+    }
+
     void ScreenOverlayRenderer::addText(const glm::vec2 top_left_px, const std::string_view text,
                                         const OverlayColor c, const float size_px) {
         if (text.empty() || size_px <= 0.0f || c.a <= 0.0f) {

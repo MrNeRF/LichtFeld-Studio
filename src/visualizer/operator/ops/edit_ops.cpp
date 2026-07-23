@@ -106,10 +106,11 @@ namespace lfs::vis::op {
         }
 
         const bool keep_children = props.get_or<bool>("keep_children", false);
-        props.set("resolved_node_names", nodes);
         props.set("keep_children", keep_children);
-        for (const auto& name : nodes) {
-            ctx.scene().removePLY(name, keep_children);
+        props.set("resolved_node_names", nodes);
+        if (const auto result = ctx.scene().removeNodesWithResult(nodes, keep_children); !result) {
+            props.set("error", result.error());
+            return OperatorResult::CANCELLED;
         }
 
         return OperatorResult::FINISHED;

@@ -36,6 +36,9 @@
 #define HIGS_MACRO_T16_H ((HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT) / TILE_HEIGHT)
 #define HIGS_RASTER_WAVE_BATCHES 16384u
 #define HIGS_RASTER_MAX_WAVES 16u
+#define HIGS_DEPTH_WAVE_INSTANCES 4194304u
+#define HIGS_DEPTH_MAX_WAVES 64u
+#define HIGS_DEPTH_MAX_WAVES_FALLBACK 16u
 // Drain ring buffer: per-warp shared queue of compacted splat indices,
 // blended in dense batches of this size (reference Bd = 64).
 #define HIGS_DRAIN_BATCH 64u

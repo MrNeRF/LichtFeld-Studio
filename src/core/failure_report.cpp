@@ -189,7 +189,9 @@ namespace lfs::core {
         if (!report.contract.empty()) {
             out << "Contract: " << report.contract << '\n';
         }
-        out << "Failed expression: " << report.expression << '\n';
+        if (!report.expression.empty()) {
+            out << "Failed expression: " << report.expression << '\n';
+        }
         out << std::format("Detection site: {}:{} ({})\n",
                            report.location.file_name(), report.location.line(), report.location.function_name());
         if (!report.message.empty()) {
@@ -200,7 +202,7 @@ namespace lfs::core {
             provider(out, FailureReportSectionPosition::BeforeStackTrace, report);
         }
         out << "Host stack trace:\n"
-            << stacktrace;
+            << (stacktrace.empty() ? std::string_view("  <not captured>\n") : stacktrace);
         if (provider) {
             provider(out, FailureReportSectionPosition::AfterStackTrace, report);
         }
@@ -242,11 +244,16 @@ namespace lfs::core {
         const std::string_view deduplication_family = report.deduplication_family.empty()
                                                           ? report.family
                                                           : report.deduplication_family;
+        const std::string site = report.deduplication_site.empty()
+                                     ? detection_site(report.location)
+                                     : std::string(report.deduplication_site);
         const DedupDecision decision = decide_failure_report(
-            deduplication_family, report.deduplication_code, detection_site(report.location));
+            deduplication_family, report.deduplication_code, site);
         const LogLevel level = log_level(severity);
         if (decision.emit_full) {
-            const std::string stacktrace = capture_host_stacktrace(report.stacktrace_skip_frames);
+            const std::string stacktrace = report.capture_stack
+                                               ? capture_host_stacktrace(report.stacktrace_skip_frames)
+                                               : std::string{};
             Logger::get().log_internal(level, report.location, format_failure_report(report, stacktrace));
         } else {
             emit_failure_repeat_notice(decision, report.location, level);

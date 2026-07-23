@@ -66,7 +66,7 @@ namespace lfs::io {
      * @param images_folder Folder containing images (default: "images")
      * @return Result containing tuple of (vector of Camera, scene_center tensor [3])
      */
-    Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
+    Result<LoadOutcome<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>>
     read_colmap_cameras_and_images(
         const std::filesystem::path& base,
         const std::string& images_folder = "images",
@@ -77,10 +77,11 @@ namespace lfs::io {
      * @param filepath Base directory containing points3D.bin
      * @return PointCloud
      */
-    PointCloud read_colmap_point_cloud(const std::filesystem::path& filepath,
-                                       const LoadOptions& options = {});
+    Result<LoadOutcome<PointCloud>> read_colmap_point_cloud(
+        const std::filesystem::path& filepath,
+        const LoadOptions& options = {});
 
-    ColmapPointCloudLoadStats read_colmap_point_cloud_with_stats(
+    Result<LoadOutcome<ColmapPointCloudLoadStats>> read_colmap_point_cloud_with_stats(
         const std::filesystem::path& filepath,
         const LoadOptions& options = {});
 
@@ -90,7 +91,7 @@ namespace lfs::io {
      * @param images_folder Folder containing images (default: "images")
      * @return Result containing tuple of (vector of Camera, scene_center tensor [3])
      */
-    Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
+    Result<LoadOutcome<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>>
     read_colmap_cameras_and_images_text(
         const std::filesystem::path& base,
         const std::string& images_folder = "images",
@@ -117,10 +118,11 @@ namespace lfs::io {
      * @param filepath Base directory containing points3D.txt
      * @return PointCloud
      */
-    PointCloud read_colmap_point_cloud_text(const std::filesystem::path& filepath,
-                                            const LoadOptions& options = {});
+    Result<LoadOutcome<PointCloud>> read_colmap_point_cloud_text(
+        const std::filesystem::path& filepath,
+        const LoadOptions& options = {});
 
-    ColmapPointCloudLoadStats read_colmap_point_cloud_text_with_stats(
+    Result<LoadOutcome<ColmapPointCloudLoadStats>> read_colmap_point_cloud_text_with_stats(
         const std::filesystem::path& filepath,
         const LoadOptions& options = {});
 

@@ -5,6 +5,7 @@
 #include "rml_im_mode_layout.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "py_error.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/gui/rmlui/rml_tooltip.hpp"
@@ -237,7 +238,10 @@ namespace lfs::python {
                                    static_cast<int>(r), static_cast<int>(g),
                                    static_cast<int>(b), static_cast<int>(a));
             }
-        } catch (...) {}
+        } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): optional color parse for styling; a malformed
+            // tuple yields no color override rather than aborting the draw.
+        }
         return {};
     }
 
@@ -1098,6 +1102,8 @@ namespace lfs::python {
                 float parsed = std::stof(slot.events.string_value);
                 return {true, parsed};
             } catch (const std::exception&) {
+                // LFS-CENSUS-OK(empty-catch): pure C++ std::stof parse of widget text (no
+                // Python boundary); an unparseable entry keeps the prior value.
                 return {false, value};
             }
         }
@@ -1148,6 +1154,8 @@ namespace lfs::python {
                 int parsed = std::stoi(slot.events.string_value);
                 return {true, parsed};
             } catch (const std::exception&) {
+                // LFS-CENSUS-OK(empty-catch): pure C++ std::stoi parse of widget text (no
+                // Python boundary); an unparseable entry keeps the prior value.
                 return {false, value};
             }
         }
@@ -2243,6 +2251,8 @@ namespace lfs::python {
                     info_str = "Tensor(" + shape_str + ", " + dtype_str + ", " +
                                nb::cast<std::string>(nb::str(device)) + ")";
                 } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): read-only tensor introspection for a
+                    // display label; any failure falls back to a placeholder string.
                     info_str = "Tensor(...)";
                 }
             }
@@ -2264,8 +2274,8 @@ namespace lfs::python {
                 if (!update_cb.is_none() && PyCallable_Check(update_cb.ptr())) {
                     try {
                         update_cb(data, nb::none());
-                    } catch (const nb::python_error& e) {
-                        LOG_ERROR("Property update callback error: {}", e.what());
+                    } catch (nb::python_error& e) {
+                        (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
                     }
                 }
             }

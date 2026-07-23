@@ -5,17 +5,107 @@
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
+#include "core/guarded_task.hpp"
+#include "core/scene.hpp"
 #include "core/services.hpp"
 #include "input/input_controller.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "visualizer/core/data_loading_service.hpp"
 #include "visualizer/include/visualizer/visualizer.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
+#include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <gtest/gtest.h>
+#include <mutex>
 #include <vector>
+
+namespace {
+
+    lfs::Error posted_work_cancelled_error() {
+        return lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Cancelled,
+            .domain = lfs::ErrorDomain::Core,
+            .operation_id = lfs::OperationId::generate(),
+            .detail = "Viewer is shutting down",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+    }
+
+    lfs::core::TaskContext posted_work_context() {
+        return {
+            .name = "test.posted-work",
+            .domain = lfs::ErrorDomain::Core,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+    }
+
+    class PostedWorkTestVisualizer final : public lfs::vis::Visualizer {
+    public:
+        void run() override {}
+        void setParameters(const lfs::core::param::TrainingParameters&) override {}
+        std::expected<void, std::string> loadPLY(const std::filesystem::path&) override { return {}; }
+        std::expected<void, std::string> addSplatFile(const std::filesystem::path&) override { return {}; }
+        std::expected<void, std::string> loadDataset(const std::filesystem::path&) override { return {}; }
+        std::expected<void, std::string> loadCheckpointForTraining(const std::filesystem::path&) override { return {}; }
+        void consolidateModels() override {}
+        std::expected<void, std::string> clearScene() override { return {}; }
+        lfs::core::Scene& getScene() override { return scene_; }
+        lfs::vis::SceneManager* getSceneManager() override { return nullptr; }
+        lfs::vis::RenderingManager* getRenderingManager() override { return nullptr; }
+
+        bool postWork(WorkItem work) override {
+            if (!accepts_work_) {
+                return false;
+            }
+            {
+                std::lock_guard lock(mutex_);
+                work_.push_back(std::move(work));
+            }
+            cv_.notify_one();
+            return true;
+        }
+
+        [[nodiscard]] bool acceptsPostedWork() const override { return accepts_work_; }
+        void setShutdownRequestedCallback(std::function<void()>) override {}
+        std::expected<void, std::string> startTraining() override { return {}; }
+        std::expected<std::filesystem::path, std::string> saveCheckpoint(
+            const std::optional<std::filesystem::path>&) override {
+            return std::filesystem::path{};
+        }
+
+        void rejectPostedWork() { accepts_work_ = false; }
+
+        [[nodiscard]] bool waitForWork(const std::chrono::milliseconds timeout) {
+            std::unique_lock lock(mutex_);
+            return cv_.wait_for(lock, timeout, [this] { return !work_.empty(); });
+        }
+
+        void cancelNext() {
+            WorkItem work;
+            {
+                std::lock_guard lock(mutex_);
+                work = std::move(work_.front());
+                work_.pop_front();
+            }
+            work.cancel();
+        }
+
+    private:
+        lfs::core::Scene scene_;
+        bool accepts_work_ = true;
+        std::mutex mutex_;
+        std::condition_variable cv_;
+        std::deque<WorkItem> work_;
+    };
+
+} // namespace
 
 TEST(VisualizerPostWorkTest, QueuedWorkWakesEventLoop) {
     ASSERT_TRUE(SDL_Init(SDL_INIT_EVENTS));
@@ -38,6 +128,51 @@ TEST(VisualizerPostWorkTest, QueuedWorkWakesEventLoop) {
         EXPECT_FALSE(ran);
         EXPECT_TRUE(SDL_HasEvents(SDL_EVENT_USER, SDL_EVENT_USER));
     }
+}
+
+TEST(VisualizerPostedWorkTest, GuardedFastPathSettlesAgainstRealViewer) {
+    lfs::vis::ViewerOptions options;
+    options.show_startup_overlay = false;
+    auto viewer = lfs::vis::Visualizer::create(options);
+
+    auto result = lfs::vis::post_guarded_and_wait<int>(
+        *viewer, posted_work_context(), [] { return lfs::Result<int>(17); },
+        posted_work_cancelled_error());
+
+    ASSERT_TRUE(result);
+    EXPECT_EQ(*result, 17);
+}
+
+TEST(VisualizerPostedWorkTest, GuardedQueueRejectionReturnsCancellationWithoutWaiting) {
+    PostedWorkTestVisualizer viewer;
+    viewer.rejectPostedWork();
+
+    auto future = std::async(std::launch::async, [&viewer] {
+        return lfs::vis::post_guarded_and_wait<void>(
+            viewer, posted_work_context(), [] { return lfs::Result<void>{}; },
+            posted_work_cancelled_error());
+    });
+
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    auto result = future.get();
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), lfs::ErrorCode::Cancelled);
+}
+
+TEST(VisualizerPostedWorkTest, GuardedShutdownCancellationMakesWaitingFutureReady) {
+    PostedWorkTestVisualizer viewer;
+    auto future = std::async(std::launch::async, [&viewer] {
+        return lfs::vis::post_guarded_and_wait<void>(
+            viewer, posted_work_context(), [] { return lfs::Result<void>{}; },
+            posted_work_cancelled_error());
+    });
+
+    ASSERT_TRUE(viewer.waitForWork(std::chrono::seconds(1)));
+    viewer.cancelNext();
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    auto result = future.get();
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.error().code(), lfs::ErrorCode::Cancelled);
 }
 
 class VisualizerImplResetTest : public ::testing::Test {

@@ -10,6 +10,10 @@
 #include <vector>
 #include <imgui.h>
 
+namespace lfs::rendering {
+    class ScreenOverlayRenderer;
+}
+
 namespace lfs::vis::gui {
 
     struct PieMenuSubmode {
@@ -34,7 +38,9 @@ namespace lfs::vis::gui {
         void close();
 
         void updateItems(const EditorContext& editor);
-        void draw(ImDrawList* drawlist);
+        // Draws through the ScreenOverlayRenderer → Vulkan viewport overlay path;
+        // ImGui draw data is never presented in this app, so ImDrawList is unusable here.
+        void draw(lfs::rendering::ScreenOverlayRenderer& overlay);
 
         void onKeyRelease();
         void onMouseMove(ImVec2 pos);
@@ -62,8 +68,8 @@ namespace lfs::vis::gui {
         int submodeFromAngle(float angle, int parent_sector) const;
         float dpiScale() const;
 
-        void drawSector(ImDrawList* drawlist, int index, float a0, float a1, float scale) const;
-        void drawSubmodeRing(ImDrawList* drawlist, int sector, float scale) const;
+        void drawSector(lfs::rendering::ScreenOverlayRenderer& overlay, int index, float a0, float a1, float scale) const;
+        void drawSubmodeRing(lfs::rendering::ScreenOverlayRenderer& overlay, int sector, float scale) const;
 
         bool open_ = false;
         ImVec2 center_{0, 0};

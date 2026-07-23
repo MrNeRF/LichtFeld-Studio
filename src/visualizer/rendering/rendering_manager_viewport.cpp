@@ -16,6 +16,7 @@
 #include <cmath>
 #include <format>
 #include <shared_mutex>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -26,12 +27,12 @@ namespace lfs::vis {
         constexpr std::size_t kMaxNativePreviewPixelStateBytes =
             (std::size_t{4} << 30) - (std::size_t{64} << 20);
         constexpr float kMaxValidDepth = 1e9f;
-        // Upper bound on the synchronous capacity self-heal passes a one-shot
-        // preview/export capture will run before reading back (see
-        // renderPreviewImageToPreviewSlotWithState). Typical convergence is
-        // 2-4 passes; the cap only guards a pathological non-converging case.
-        constexpr int kMaxPreviewSettlePasses = 8;
+        constexpr int kMinPreviewSubdivisionHeight = 512;
 
+        [[nodiscard]] bool isTileInstanceOverflow(const std::string_view error) {
+            return error.find("tile-instance prefix sum overflowed signed 32-bit capacity") !=
+                   std::string_view::npos;
+        }
         [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager) {
             std::optional<std::shared_lock<std::shared_mutex>> lock;
@@ -451,7 +452,7 @@ namespace lfs::vis {
         auto rendered = renderPreviewImageToPreviewSlotWithState(
             scene_manager,
             model,
-            std::move(scene_state),
+            scene_state,
             rotation,
             position,
             focal_length_mm,
@@ -577,8 +578,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::UInt8Rgb,
-            /*settle_capacity=*/true);
+            PreviewImageReadback::UInt8Rgb);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(SceneManager* const scene_manager,
@@ -630,8 +630,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             std::nullopt,
-            PreviewImageReadback::UInt8Rgba,
-            /*settle_capacity=*/true);
+            PreviewImageReadback::UInt8Rgba);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImage(const lfs::core::SplatData& model,
@@ -851,30 +850,45 @@ namespace lfs::vis {
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
-        const PreviewImageReadback readback,
-        const bool settle_capacity) {
+        const PreviewImageReadback readback) {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
         auto rendered = renderPreviewImageToPreviewSlotWithState(
             scene_manager,
             model,
-            std::move(scene_state),
+            scene_state,
             rotation,
             position,
             focal_length_mm,
             width,
             height,
             render_lock_held,
-            std::move(intrinsics_override),
+            intrinsics_override,
             {},
             {},
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            readback_config.transparent_background_override,
-            settle_capacity);
+            readback_config.transparent_background_override);
         if (!rendered) {
+            if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
+                height > kMinPreviewSubdivisionHeight) {
+                return renderPreviewImageTiledWithState(
+                    scene_manager,
+                    model,
+                    std::move(scene_state),
+                    rotation,
+                    position,
+                    focal_length_mm,
+                    width,
+                    height,
+                    render_lock_held,
+                    background_color_override,
+                    orthographic_override,
+                    ortho_scale_override,
+                    readback);
+            }
             LOG_ERROR("Gaussian preview image render failed: {}", rendered.error());
             return {};
         }
@@ -918,8 +932,7 @@ namespace lfs::vis {
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
-        std::optional<bool> transparent_background_override,
-        const bool settle_capacity) {
+        std::optional<bool> transparent_background_override) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
@@ -989,34 +1002,17 @@ namespace lfs::vis {
             vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
         }
 
-        // One-shot preview/export captures read the image back immediately, so
-        // they cannot rely on the interactive viewport's one-frame capacity
-        // self-heal. The renderer sizes per-frame scratch (visible-primitive and
-        // tile-instance capacity) from deferred, one-frame-late high-water marks;
-        // the first render at a new viewpoint/resolution — e.g. a high-res export
-        // after the live viewport established marks at a smaller size — can clamp
-        // the depth/tile-ordered tail, dropping content along an irregular edge.
-        // Re-render the Preview slot until the renderer confirms the previous
-        // pass produced complete, unclamped content (each pass grows the marks
-        // via the deferred readback). The pass >= 1 guard ensures the settle
-        // signal reflects this exact view (critical for the tiled path, where
-        // each tile is a different sub-view); max_passes bounds a pathological
-        // case. Non-settling callers (e.g. depth capture) render exactly once.
-        const int max_passes = settle_capacity ? kMaxPreviewSettlePasses : 1;
-        for (int pass = 0; pass < max_passes; ++pass) {
-            auto render_result = vksplat_viewport_renderer_->render(
-                *last_vulkan_context_,
-                model,
-                request,
-                false,
-                VksplatViewportRenderer::OutputSlot::Preview,
-                false);
-            if (!render_result) {
-                return std::unexpected(render_result.error());
-            }
-            if (pass >= 1 && vksplat_viewport_renderer_->previewCaptureSettled()) {
-                break;
-            }
+        // Preview/export uses the renderer's exact two-batch count gate; one
+        // render is complete for this view and can be read back immediately.
+        auto render_result = vksplat_viewport_renderer_->render(
+            *last_vulkan_context_,
+            model,
+            request,
+            false,
+            VksplatViewportRenderer::OutputSlot::Preview,
+            false);
+        if (!render_result) {
+            return std::unexpected(render_result.error());
         }
         return {};
     }
@@ -1064,36 +1060,47 @@ namespace lfs::vis {
             return {};
         }
 
-        for (int tile_y = 0; tile_y < height; tile_y += tile_height_limit) {
-            const int tile_height = std::min(tile_height_limit, height - tile_y);
+        int band_height_limit = tile_height_limit;
+        for (int tile_y = 0; tile_y < height;) {
+            int tile_height = std::min(band_height_limit, height - tile_y);
             const auto intrinsics = previewTileIntrinsics(
                 width,
                 height,
                 focal_length_mm);
-            auto rendered = renderPreviewImageToPreviewSlotWithState(
-                scene_manager,
-                model,
-                scene_state,
-                rotation,
-                position,
-                focal_length_mm,
-                tile_width,
-                tile_height,
-                render_lock_held,
-                intrinsics,
-                {0, tile_y},
-                {width, height},
-                orthographic_override,
-                ortho_scale_override,
-                background_color_override,
-                readback_config.transparent_background_override,
-                /*settle_capacity=*/true);
-            if (!rendered) {
-                LOG_TRACE("Gaussian preview tiled render failed at tile y={} height={}: {}",
-                          tile_y,
-                          tile_height,
-                          rendered.error());
-                return {};
+            while (true) {
+                auto rendered = renderPreviewImageToPreviewSlotWithState(
+                    scene_manager,
+                    model,
+                    scene_state,
+                    rotation,
+                    position,
+                    focal_length_mm,
+                    tile_width,
+                    tile_height,
+                    render_lock_held,
+                    intrinsics,
+                    {0, tile_y},
+                    {width, height},
+                    orthographic_override,
+                    ortho_scale_override,
+                    background_color_override,
+                    readback_config.transparent_background_override);
+                if (rendered) {
+                    break;
+                }
+                if (!isTileInstanceOverflow(rendered.error()) ||
+                    tile_height <= kMinPreviewSubdivisionHeight) {
+                    LOG_TRACE("Gaussian preview tiled render failed at tile y={} height={}: {}",
+                              tile_y,
+                              tile_height,
+                              rendered.error());
+                    return {};
+                }
+                tile_height = std::max(kMinPreviewSubdivisionHeight, tile_height / 2);
+                band_height_limit = tile_height;
+                LOG_WARN("Gaussian preview band overflow at y={}; retrying with height={}",
+                         tile_y,
+                         tile_height);
             }
             auto copied = vksplat_viewport_renderer_->readOutputImageIntoCpuHwc(
                 *last_vulkan_context_,
@@ -1108,6 +1115,7 @@ namespace lfs::vis {
                           copied.error());
                 return {};
             }
+            tile_y += tile_height;
         }
 
         return std::make_shared<lfs::core::Tensor>(std::move(output));

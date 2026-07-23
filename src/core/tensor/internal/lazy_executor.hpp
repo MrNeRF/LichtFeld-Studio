@@ -15,6 +15,7 @@
 namespace lfs::core {
 
     class Tensor;
+    struct LazyExprState;
 
     namespace internal {
 
@@ -89,12 +90,12 @@ namespace lfs::core {
         // Register/de-register deferred-node materializers for topo-driven planner execution.
         LFS_CORE_API void lazy_executor_register_deferred_materializer(uint64_t node_id,
                                                                        std::function<Tensor()> materializer,
-                                                                       std::weak_ptr<void> owner);
+                                                                       std::weak_ptr<LazyExprState> owner);
         LFS_CORE_API void lazy_executor_register_pointwise_fusion_op(uint64_t node_id,
                                                                      uint64_t parent_node_id,
                                                                      const Tensor& source_tensor,
                                                                      LazyPointwiseOp op,
-                                                                     std::weak_ptr<void> owner);
+                                                                     std::weak_ptr<LazyExprState> owner);
         LFS_CORE_API void lazy_executor_unregister_deferred_materializer(uint64_t node_id);
         LFS_CORE_API size_t lazy_executor_registered_node_count_for_testing();
         LFS_CORE_API void lazy_executor_clear_registry_for_testing();

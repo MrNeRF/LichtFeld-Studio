@@ -25,7 +25,6 @@ import utils;
 #define LFS_RASTER_OVERLAYS 0
 #endif
 
-#define TILE_BATCH_ENTRY_COUNTS 1
 #define TILE_BATCH_ENTRY_DESCRIPTORS 2
 #define TILE_BATCH_ENTRY_RASTERIZE 3
 #define TILE_BATCH_ENTRY_COMPOSE 4
@@ -40,31 +39,7 @@ float4 update_pixel_state(float4 pixel_state_t_nm1, float4 gauss_rgba_t_n)
     return float4(color_t_n, transmittance_t_n);
 }
 
-#if TILE_BATCH_ENTRY == TILE_BATCH_ENTRY_COUNTS
-
-layout(binding=0) StructuredBuffer<int32_t> tile_ranges;
-layout(binding=1) RWStructuredBuffer<int32_t> out_tile_batch_counts;
-
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void main(uint3 dispatchThreadID : SV_DispatchThreadID,
-          uniform Uniforms uniforms)
-{
-    uint tile_idx = dispatchThreadID.x;
-    uint num_tiles = uniforms.grid_height * uniforms.grid_width;
-    if (tile_idx >= num_tiles)
-        return;
-
-    int32_t range_start = tile_ranges[tile_idx];
-    int32_t range_end = tile_ranges[tile_idx + 1u];
-    uint tile_count = uint(max(range_end - range_start, 0));
-    out_tile_batch_counts[tile_idx] =
-        tile_count > RASTER_DENSE_TILE_THRESHOLD
-            ? int32_t((tile_count + RASTER_BATCH_SIZE - 1u) / RASTER_BATCH_SIZE)
-            : 0;
-}
-
-#elif TILE_BATCH_ENTRY == TILE_BATCH_ENTRY_DESCRIPTORS
+#if TILE_BATCH_ENTRY == TILE_BATCH_ENTRY_DESCRIPTORS
 
 layout(binding=0) StructuredBuffer<int32_t> tile_ranges;
 layout(binding=1) StructuredBuffer<int32_t> tile_batch_offsets;
@@ -389,10 +364,16 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         return;
 
     float2 center_pix_coord = float2(pix_coord);
+    uint pix_id = pix_coord.y * uniforms.image_width + pix_coord.x;
     float4 curr_pixel_state = float4(0.0f, 0.0f, 0.0f, 1.0f);
     float median_depth = FAR_DEPTH;
     int32_t local_n_contrib = 0;
-    bool thread_active = true;
+    if (uniforms.depth_wave > 0u) {
+        curr_pixel_state = final_pixel_state[pix_id];
+        median_depth = final_pixel_depth[pix_id];
+        local_n_contrib = final_n_contributors[pix_id];
+    }
+    bool thread_active = curr_pixel_state.a >= 0.0001f;
 
     for (uint desc_idx = desc_begin; desc_idx < desc_end && thread_active; ++desc_idx) {
         uint partial_idx = desc_idx * TILE_SIZE + thread_rank;
@@ -439,7 +420,6 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         local_n_contrib += partial_n_contrib;
     }
 
-    uint pix_id = pix_coord.y * uniforms.image_width + pix_coord.x;
     final_n_contributors[pix_id] = local_n_contrib;
     final_pixel_state[pix_id] = curr_pixel_state;
     final_pixel_depth[pix_id] = median_depth;

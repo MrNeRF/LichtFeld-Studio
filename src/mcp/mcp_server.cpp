@@ -4,6 +4,8 @@
 #include "mcp_server.hpp"
 #include "config.h"
 #include "core/base64.hpp"
+#include "core/error.hpp"
+#include "core/error_envelope.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 
 #include <cassert>
@@ -45,7 +47,7 @@ namespace lfs::mcp {
 
             return json::array({json{
                 {"type", "text"},
-                {"text", result.dump(2)},
+                {"text", result.dump(2, ' ', false, nlohmann::json::error_handler_t::replace)},
             }});
         }
 
@@ -61,7 +63,7 @@ namespace lfs::mcp {
     McpServer::~McpServer() {
     }
 
-    JsonRpcResponse McpServer::handle_request(const JsonRpcRequest& req) {
+    JsonRpcResponse McpServer::handle_request(const JsonRpcRequest& req, lfs::OperationId operation_id) {
         if (req.method == "initialize") {
             return handle_initialize(req);
         }
@@ -83,13 +85,13 @@ namespace lfs::mcp {
             return handle_tools_list(req);
         }
         if (capabilities_.tools && req.method == "tools/call") {
-            return handle_tools_call(req);
+            return handle_tools_call(req, operation_id);
         }
         if (capabilities_.resources && req.method == "resources/list") {
             return handle_resources_list(req);
         }
         if (capabilities_.resources && req.method == "resources/read") {
-            return handle_resources_read(req);
+            return handle_resources_read(req, operation_id);
         }
 
         return make_error_response(
@@ -128,7 +130,7 @@ namespace lfs::mcp {
         return make_success_response(req.id, json{{"tools", tools_array}});
     }
 
-    JsonRpcResponse McpServer::handle_tools_call(const JsonRpcRequest& req) {
+    JsonRpcResponse McpServer::handle_tools_call(const JsonRpcRequest& req, lfs::OperationId operation_id) {
         if (!req.params) {
             return make_error_response(
                 req.id,
@@ -138,17 +140,17 @@ namespace lfs::mcp {
 
         const auto& params = *req.params;
 
-        if (!params.contains("name")) {
+        if (!params.contains("name") || !params["name"].is_string()) {
             return make_error_response(
                 req.id,
                 JsonRpcError::INVALID_PARAMS,
-                "Missing 'name' parameter");
+                "Missing or invalid 'name' parameter");
         }
 
         std::string tool_name = params["name"].get<std::string>();
         json arguments = params.value("arguments", json::object());
 
-        json result = ToolRegistry::instance().call_tool(tool_name, arguments);
+        json result = ToolRegistry::instance().call_tool(tool_name, arguments, operation_id);
         bool is_error = false;
         if (result.is_object() && result.contains("error")) {
             const auto& error = result["error"];
@@ -174,7 +176,7 @@ namespace lfs::mcp {
         return make_success_response(req.id, json{{"resources", resources_json}});
     }
 
-    JsonRpcResponse McpServer::handle_resources_read(const JsonRpcRequest& req) {
+    JsonRpcResponse McpServer::handle_resources_read(const JsonRpcRequest& req, lfs::OperationId operation_id) {
         if (!req.params || !req.params->contains("uri")) {
             return make_error_response(
                 req.id,
@@ -185,10 +187,22 @@ namespace lfs::mcp {
         std::string uri = (*req.params)["uri"].get<std::string>();
         auto contents = ResourceRegistry::instance().read_resource(uri);
         if (!contents) {
+            const std::string reason = contents.error();
+            const lfs::ErrorCode code = reason.starts_with("Unknown resource URI:")
+                                            ? lfs::ErrorCode::NotFound
+                                            : lfs::ErrorCode::FailedPrecondition;
+            lfs::Error error = lfs::make_legacy_error(reason, lfs::LegacyErrorContext{
+                                                                  .code = code,
+                                                                  .domain = lfs::ErrorDomain::MCP,
+                                                                  .operation = "mcp.resource:" + uri,
+                                                                  .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                  .operation_id = operation_id,
+                                                              });
             return make_error_response(
                 req.id,
                 JsonRpcError::INVALID_PARAMS,
-                contents.error());
+                reason,
+                lfs::core::to_wire_envelope(error));
         }
 
         json result;

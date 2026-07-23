@@ -39,7 +39,17 @@ namespace lfs::core {
         SourceSite location;
         std::string_view deduplication_family;
         long long deduplication_code = 0;
+        // Overrides the file:line key derived from `location` when non-empty.
+        // lfs::Error reports fold native status and top context-frame
+        // operation into the fingerprint (error-architecture-analysis.md
+        // Section 5.2) without changing the human-readable "Detection site"
+        // line, which stays keyed off `location`.
+        std::string_view deduplication_site;
         size_t stacktrace_skip_frames = 0;
+        // Assertions/contracts always want a trace. lfs::Error reports apply
+        // a per-code policy (Section 5.4) and set this to false when a trace
+        // is not warranted, so emit_failure_report skips capturing one.
+        bool capture_stack = true;
     };
 
     LFS_CORE_API void register_failure_report_section_provider(

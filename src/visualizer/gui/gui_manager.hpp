@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/cuda_version.hpp"
+#include "core/error_bus.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
@@ -12,6 +13,7 @@
 #include "gui/async_task_manager.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/global_context_menu.hpp"
+#include "gui/gui_error_consumer.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
@@ -20,6 +22,7 @@
 #include "gui/rml_right_panel.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
+#include "gui/rml_toast_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/sequencer_ui_manager.hpp"
@@ -88,6 +91,7 @@ namespace lfs::vis {
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
             void enqueueModal(lfs::core::ModalRequest request);
+            void enqueueToast(ToastRequest request);
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
@@ -279,6 +283,7 @@ namespace lfs::vis {
 
             // Owned components
             std::unique_ptr<RmlModalOverlay> rml_modal_overlay_;
+            std::unique_ptr<RmlToastOverlay> rml_toast_overlay_;
             std::unique_ptr<lfs::gui::IVideoExtractorWidget> video_widget_;
 
             // UI state only
@@ -445,6 +450,13 @@ namespace lfs::vis {
             };
 
             DevResourceWatchState dev_resource_watch_;
+
+            // Native ErrorBus surfacing (Phase 8). Declared last so
+            // error_subscription_ unsubscribes before any other member (the
+            // modal overlay included) is torn down; error_consumer_ outlives
+            // its subscription per the frozen lifetime rule.
+            std::unique_ptr<GuiErrorConsumer> error_consumer_;
+            lfs::Subscription error_subscription_;
         };
     } // namespace gui
 } // namespace lfs::vis

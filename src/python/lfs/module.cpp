@@ -16,6 +16,7 @@
 #include "py_animation.hpp"
 #include "py_cameras.hpp"
 #include "py_command.hpp"
+#include "py_error.hpp"
 #include "py_gizmo.hpp"
 #include "py_io.hpp"
 #include "py_mcp.hpp"
@@ -44,9 +45,11 @@
 
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
+#include "core/error.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
+#include "core/guarded_task.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
@@ -64,6 +67,7 @@
 #include "input/input_controller.hpp"
 #include "python/runner.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
 #include "training/strategies/istrategy.hpp"
 #include "training/trainer.hpp"
 #include "training/training_state.hpp"
@@ -74,6 +78,7 @@
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/training/training_manager.hpp"
@@ -146,32 +151,39 @@ namespace {
             return viewer.clearScene();
         }
 
-        auto promise = std::make_shared<std::promise<std::expected<void, std::string>>>();
-        auto future = promise->get_future();
-        auto completed = std::make_shared<std::atomic_bool>(false);
-
-        auto finish = [promise, completed](std::expected<void, std::string> result) mutable {
-            if (!completed->exchange(true)) {
-                promise->set_value(std::move(result));
-            }
+        const lfs::core::TaskContext context{
+            .name = "python.clear_scene",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id = lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
         };
 
-        const bool posted = viewer.postWork(lfs::vis::Visualizer::WorkItem{
-            .run =
-                [&viewer, finish]() mutable {
-                    finish(viewer.clearScene());
-                },
-            .cancel =
-                [finish]() mutable {
-                    finish(std::unexpected("Viewer is shutting down"));
-                },
-        });
+        lfs::Result<void> result = lfs::vis::post_guarded_and_wait<void>(
+            viewer, context,
+            [&viewer]() -> lfs::Result<void> {
+                return lfs::from_legacy_expected<void>(
+                    viewer.clearScene(),
+                    lfs::LegacyErrorContext{
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::Rendering,
+                        .operation = "clearScene",
+                        .source = LFS_SOURCE_SITE_CURRENT(),
+                    });
+            },
+            lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Cancelled,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Warning,
+                .detail = "Viewer is shutting down",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
 
-        if (!posted) {
-            return std::unexpected("Viewer is shutting down");
+        if (!result) {
+            const auto& error = result.error();
+            return std::unexpected(std::string(
+                error.user_message().empty() ? error.detail() : error.user_message()));
         }
-
-        return future.get();
+        return {};
     }
 
     std::expected<void, std::string> clear_scene_from_python() {
@@ -571,6 +583,12 @@ namespace {
 
 NB_MODULE(lichtfeld, m) {
     m.doc() = "LichtFeld Python control module for Gaussian splatting";
+
+    // Phase 9 Section 1.3: create the lichtfeld.Error hierarchy and install the
+    // single LIFO exception translator FIRST, before any binding group registers,
+    // so a throw during any m.def/method unwind maps to the typed subclass. This
+    // ordering is load-bearing.
+    lfs::python::register_errors(m);
 
     // Enums (Phase 4: typed APIs instead of magic strings)
     nb::enum_<RenderMode>(m, "RenderMode")
@@ -1845,6 +1863,9 @@ NB_MODULE(lichtfeld, m) {
     // MCP (Model Context Protocol) tool registration
     lfs::python::register_mcp(m);
 
+    // Test-only error-boundary hooks (lichtfeld._testing, unstable)
+    lfs::python::register_testing(m);
+
     // Animation submodule (multi-track property animation)
     auto anim_module = m.def_submodule("animation", "Animation system API");
     lfs::python::register_animation(anim_module);
@@ -2026,8 +2047,11 @@ NB_MODULE(lichtfeld, m) {
             lfs::python::set_frame_callback([ocb](float dt) {
                 try {
                     ocb(dt);
+                } catch (nb::python_error& e) {
+                    (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
+                    lfs::python::clear_frame_callback();
                 } catch (const std::exception& e) {
-                    LOG_ERROR("on_frame callback error: {}", e.what());
+                    (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
                     lfs::python::clear_frame_callback();
                 }
             });

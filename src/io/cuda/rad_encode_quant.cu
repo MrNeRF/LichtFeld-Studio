@@ -14,6 +14,8 @@
 
 #include "rad_encode_quant.hpp"
 
+#include "core/cuda_error.hpp"
+#include "core/logger.hpp"
 #include "io/formats/rad_dequant_math.hpp"
 
 #include <cstring>
@@ -413,17 +415,38 @@ namespace lfs::io::cuda {
             s.failed = true;
             return false;
         }
-        reduceChunkStatsKernel<<<reduce_grid, kThreads, 0, s.stream>>>(s.d_desc, s.d_in, s.d_stats);
-        quantChunkPlanesKernel<<<quant_grid, kThreads, 0, s.stream>>>(
-            s.d_desc, s.d_in, s.d_stats, s.d_out, alpha_forced_max);
-        const bool done =
-            cudaGetLastError() == cudaSuccess &&
-            cudaMemcpyAsync(s.h_out, s.d_out, out_bytes,
-                            cudaMemcpyDeviceToHost, s.stream) == cudaSuccess &&
-            cudaMemcpyAsync(s.h_stats, s.d_stats, n * sizeof(ChunkStats),
-                            cudaMemcpyDeviceToHost, s.stream) == cudaSuccess &&
-            cudaStreamSynchronize(s.stream) == cudaSuccess;
-        if (!done) {
+        // Hybrid: throw-style launch/await attribution, bool API preserved.
+        // Named catch(const lfs::Exception&) is unavailable in .cu TUs
+        // (core/error.hpp is host-C++23-only); lfs::Exception derives from
+        // std::exception so the base catch covers it.
+        try {
+            const auto rad_ticket =
+                ::lfs::core::cuda_record_range(s.stream, "io.rad.quantize_batch");
+            reduceChunkStatsKernel<<<reduce_grid, kThreads, 0, s.stream>>>(s.d_desc, s.d_in,
+                                                                           s.d_stats);
+            LFS_CUDA_LAUNCH_CHECK(s.stream, "io.rad.reduce_chunk_stats");
+            quantChunkPlanesKernel<<<quant_grid, kThreads, 0, s.stream>>>(
+                s.d_desc, s.d_in, s.d_stats, s.d_out, alpha_forced_max);
+            const bool done =
+                cudaGetLastError() == cudaSuccess &&
+                cudaMemcpyAsync(s.h_out, s.d_out, out_bytes, cudaMemcpyDeviceToHost,
+                                s.stream) == cudaSuccess &&
+                cudaMemcpyAsync(s.h_stats, s.d_stats, n * sizeof(ChunkStats),
+                                cudaMemcpyDeviceToHost, s.stream) == cudaSuccess;
+            if (!done) {
+                s.failed = true;
+                return false;
+            }
+            LFS_CUDA_AWAIT(rad_ticket, cudaStreamSynchronize(s.stream),
+                           "io.rad.quantize_batch_sync");
+        } catch (const std::exception& e) {
+            LOG_WARN(
+                "RAD GPU quantize_batch CUDA failure (CPU fallback exists): {}", e.what());
+            s.failed = true;
+            return false;
+        } catch (...) {
+            LOG_WARN(
+                "RAD GPU quantize_batch unknown failure (CPU fallback exists)");
             s.failed = true;
             return false;
         }

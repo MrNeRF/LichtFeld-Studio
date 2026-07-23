@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "core/cuda_error.hpp"
 #include "tensor_functors.hpp"
 #include <cuda_runtime.h>
 #include <type_traits>
@@ -192,6 +193,7 @@ namespace lfs::core {
 
             vectorized_unary_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, n, op);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.vectorized.unary");
         }
 
         /**
@@ -214,6 +216,7 @@ namespace lfs::core {
 
             vectorized_binary_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 a, b, output, n, op);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.vectorized.binary");
         }
 
         /**
@@ -239,6 +242,7 @@ namespace lfs::core {
 
             vectorized_comparison_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 a, b, output, n, op);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.vectorized.comparison");
         }
 
         /**
@@ -268,6 +272,7 @@ namespace lfs::core {
 
             vectorized_scalar_broadcast_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 tensor, scalar, output, n, op);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.vectorized.scalar_broadcast");
         }
 
     } // namespace tensor_ops

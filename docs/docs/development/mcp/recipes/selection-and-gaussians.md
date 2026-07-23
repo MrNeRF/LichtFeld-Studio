@@ -9,15 +9,15 @@ Use this flow when the task is to select visible Gaussians, confirm the result, 
 ## Sequence
 
 1. Read `lichtfeld://selection/current`.
-2. Use one of the `selection.*` tools.
-3. Confirm with `selection.get` or `lichtfeld://selection/current`.
-4. Use `gaussians.read`, `gaussians.write`, `transform.*`, or `operator.invoke` as the next step.
+2. Use one of the `selection_*` tools.
+3. Confirm with `selection_get` or `lichtfeld://selection/current`.
+4. Use `gaussians_read`, `gaussians_write`, `transform_*`, or `operator_invoke` as the next step.
 
 ## Rectangle Selection
 
 ```json
 {
-  "tool": "selection.rect",
+  "tool": "selection_rect",
   "arguments": {
     "x0": 100,
     "y0": 120,
@@ -31,18 +31,18 @@ Use this flow when the task is to select visible Gaussians, confirm the result, 
 
 Other supported selection entry points:
 
-- `selection.click`
-- `selection.brush`
-- `selection.lasso`
-- `selection.polygon`
-- `selection.ring`
-- `selection.by_description`
+- `selection_click`
+- `selection_brush`
+- `selection_lasso`
+- `selection_polygon`
+- `selection_ring`
+- `selection_by_description`
 
 ## Confirm The Result
 
 ```json
 {
-  "tool": "selection.get",
+  "tool": "selection_get",
   "arguments": {
     "max_indices": 1024
   }
@@ -53,7 +53,7 @@ Other supported selection entry points:
 
 ```json
 {
-  "tool": "gaussians.read",
+  "tool": "gaussians_read",
   "arguments": {
     "fields": ["means", "opacities"],
     "limit": 16
@@ -67,7 +67,7 @@ Use this only after confirming the target node, indices, and field width:
 
 ```json
 {
-  "tool": "gaussians.write",
+  "tool": "gaussians_write",
   "arguments": {
     "field": "opacities",
     "indices": [0, 1],
@@ -79,5 +79,5 @@ Use this only after confirming the target node, indices, and field width:
 ## Notes
 
 - `mode` is `replace`, `add`, `remove`, or `intersect`
-- `selection.by_description` is higher-latency because it uses an LLM vision round-trip
-- after writes, re-read `lichtfeld://selection/current` or `gaussians.read` instead of assuming the mutation landed
+- `selection_by_description` is higher-latency because it uses an LLM vision round-trip
+- after writes, re-read `lichtfeld://selection/current` or `gaussians_read` instead of assuming the mutation landed

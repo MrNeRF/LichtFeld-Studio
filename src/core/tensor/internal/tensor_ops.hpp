@@ -555,6 +555,7 @@ namespace lfs::core::tensor_ops {
 
     LFS_CORE_API bool has_nan_gpu(const float* data, size_t n, cudaStream_t stream = nullptr);
     LFS_CORE_API bool has_inf_gpu(const float* data, size_t n, cudaStream_t stream = nullptr);
+    LFS_CORE_API bool release_nan_check_thread_buffers() noexcept;
 
     // ============= Fused Affine Transform =============
     LFS_CORE_API void launch_fused_affine_transform(const float* input, float* output,

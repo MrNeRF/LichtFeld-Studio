@@ -100,6 +100,7 @@ namespace lfs::vis {
                 std::lock_guard lock(import_state_.mutex);
                 return import_state_.num_images;
             }
+            void setImportNumImages(size_t num_images);
             [[nodiscard]] size_t getImportNumPoints() const {
                 std::lock_guard lock(import_state_.mutex);
                 return import_state_.num_points;

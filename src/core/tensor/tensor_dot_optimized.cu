@@ -121,6 +121,7 @@ namespace lfs::core::tensor_ops {
         constexpr int BLOCK = 256;
         if (n < 100000) {
             dot_small<<<1, BLOCK, 0, stream>>>(a, b, result, static_cast<int>(n));
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.dot_small");
             return;
         }
 
@@ -183,6 +184,7 @@ namespace lfs::core::tensor_ops {
         constexpr int BLOCK = 256;
         if (n < 100000) {
             unary_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), identity_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.sum_scalar");
             return;
         }
 
@@ -201,6 +203,7 @@ namespace lfs::core::tensor_ops {
         }
         launch_sum_scalar(data, result, n, stream);
         div_inplace<<<1, 1, 0, stream>>>(result, 1.0f / static_cast<float>(n));
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.mean_scalar_div");
     }
 
     void launch_l1_norm(const float* data, float* result, size_t n, cudaStream_t stream) {
@@ -212,6 +215,7 @@ namespace lfs::core::tensor_ops {
         constexpr int BLOCK = 256;
         if (n < 100000) {
             unary_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), abs_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.l1_norm");
             return;
         }
 
@@ -232,7 +236,9 @@ namespace lfs::core::tensor_ops {
         constexpr int BLOCK = 256;
         if (n < 100000) {
             unary_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), square_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.l2_norm_square");
             sqrt_inplace<<<1, 1, 0, stream>>>(result);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.l2_norm_sqrt");
             return;
         }
 
@@ -308,6 +314,7 @@ namespace lfs::core::tensor_ops {
         constexpr int BLOCK = 256;
         if (n < 100000) {
             minmax_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), -FLT_MAX, max_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.max_scalar");
             return;
         }
 
@@ -329,6 +336,7 @@ namespace lfs::core::tensor_ops {
         constexpr int BLOCK = 256;
         if (n < 100000) {
             minmax_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), FLT_MAX, min_op{});
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.min_scalar");
             return;
         }
 
@@ -371,10 +379,12 @@ namespace lfs::core::tensor_ops {
 
     void launch_count_nonzero_scalar_float(const float* data, size_t* result, size_t n, cudaStream_t stream) {
         count_nonzero_float<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.count_nonzero_float");
     }
 
     void launch_count_nonzero_scalar_bool(const unsigned char* data, size_t* result, size_t n, cudaStream_t stream) {
         count_nonzero_bool<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.count_nonzero_bool");
     }
 
 } // namespace lfs::core::tensor_ops

@@ -130,6 +130,7 @@ namespace gsplat_lfs {
             cum_tiles_per_gauss,
             tile_size, tile_width, tile_height, tile_n_bits,
             tiles_per_gauss, isect_ids, flatten_ids);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.intersect_tile");
     }
 
     __global__ void intersect_offset_kernel(
@@ -194,8 +195,7 @@ namespace gsplat_lfs {
 
         intersect_offset_kernel<<<grid, threads, 0, stream>>>(
             n_isects, isect_ids, C, n_tiles, tile_n_bits, offsets);
-        LFS_CUDA_CHECK_MSG(cudaGetLastError(),
-                           "gsplat intersection-offset kernel launch");
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.intersect_offset");
     }
 
     void radix_sort_double_buffer(

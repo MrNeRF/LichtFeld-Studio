@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "lfs/core/warp_reduce.cuh"
 #include "normal_loss.hpp"
 
@@ -238,11 +239,13 @@ namespace lfs::training::kernels {
             block_partials,
             num_pixels,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.stats");
         normal_loss_finalize_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
             block_partials,
             finals,
             num_blocks,
             weight);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.finalize_stats");
         normal_loss_grad_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
             rendered_normal,
             rendered_alpha,
@@ -252,11 +255,13 @@ namespace lfs::training::kernels {
             block_partials,
             num_pixels,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.grad");
         normal_loss_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
             block_partials,
             finals,
             loss_out,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.finalize_loss");
     }
 
 } // namespace lfs::training::kernels

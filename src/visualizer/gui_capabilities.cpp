@@ -47,6 +47,12 @@ namespace lfs::vis::cap {
         };
 
         constexpr float kTransformEpsilon = 1e-6f;
+        constexpr float kCropVolumeMinExtent = 1e-4f;
+
+        enum class CropVolumeShape {
+            Box,
+            Ellipsoid,
+        };
 
         [[nodiscard]] bool is_identity_transform(const glm::mat4& transform) {
             const glm::mat4 identity(1.0f);
@@ -75,6 +81,156 @@ namespace lfs::vis::cap {
                    std::abs(q.x) > kTransformEpsilon ||
                    std::abs(q.y) > kTransformEpsilon ||
                    std::abs(q.z) > kTransformEpsilon;
+        }
+
+        [[nodiscard]] std::string crop_volume_shape_label(const CropVolumeShape shape) {
+            return shape == CropVolumeShape::Box ? "Crop Box" : "Ellipsoid";
+        }
+
+        [[nodiscard]] std::string crop_volume_conversion_label(const CropVolumeShape shape) {
+            return "Convert to " + crop_volume_shape_label(shape);
+        }
+
+        [[nodiscard]] vis::op::SceneGraphCaptureOptions crop_volume_history_options() {
+            return vis::op::SceneGraphCaptureOptions{
+                .mode = vis::op::SceneGraphCaptureMode::FULL,
+                .include_selected_nodes = true,
+                .include_scene_context = false,
+            };
+        }
+
+        void sync_crop_volume_render_settings(RenderingManager* rendering_manager,
+                                              const core::SceneNode& node,
+                                              const CropVolumeShape shape) {
+            if (!rendering_manager)
+                return;
+
+            auto settings = rendering_manager->getSettings();
+            if (shape == CropVolumeShape::Box) {
+                settings.show_crop_box = node.visible.get();
+                settings.use_crop_box = node.cropbox ? node.cropbox->enabled : false;
+                settings.show_ellipsoid = false;
+                settings.use_ellipsoid = false;
+            } else {
+                settings.show_ellipsoid = node.visible.get();
+                settings.use_ellipsoid = node.ellipsoid ? node.ellipsoid->enabled : false;
+                settings.show_crop_box = false;
+                settings.use_crop_box = false;
+            }
+            rendering_manager->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        }
+
+        std::expected<core::NodeId, std::string> convert_crop_volume_in_place(
+            SceneManager& scene_manager,
+            RenderingManager* rendering_manager,
+            const core::NodeId node_id,
+            const CropVolumeShape target_shape) {
+            auto& scene = scene_manager.getScene();
+            auto* node = scene.getNodeById(node_id);
+            if (!node)
+                return std::unexpected("Crop volume node not found");
+
+            if (target_shape == CropVolumeShape::Box && node->type == core::NodeType::CROPBOX && node->cropbox) {
+                sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
+                return node_id;
+            }
+            if (target_shape == CropVolumeShape::Ellipsoid && node->type == core::NodeType::ELLIPSOID && node->ellipsoid) {
+                sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
+                return node_id;
+            }
+
+            if (target_shape == CropVolumeShape::Box && (!node->ellipsoid || node->type != core::NodeType::ELLIPSOID))
+                return std::unexpected("Invalid ellipsoid target");
+            if (target_shape == CropVolumeShape::Ellipsoid && (!node->cropbox || node->type != core::NodeType::CROPBOX))
+                return std::unexpected("Invalid crop box target");
+
+            const auto node_name = node->name;
+            const auto history_options = crop_volume_history_options();
+            auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, {node_name}, history_options);
+
+            if (target_shape == CropVolumeShape::Box) {
+                const auto source = *node->ellipsoid;
+                auto data = std::make_unique<core::CropBoxData>();
+                const glm::vec3 radii = glm::max(source.radii, glm::vec3(kCropVolumeMinExtent));
+                data->min = -radii;
+                data->max = radii;
+                data->inverse = source.inverse;
+                data->enabled = source.enabled;
+                data->color = source.color;
+                data->line_width = source.line_width;
+                data->flash_intensity = source.flash_intensity;
+                node->type = core::NodeType::CROPBOX;
+                node->ellipsoid.reset();
+                node->cropbox = std::move(data);
+            } else {
+                const auto source = *node->cropbox;
+                auto data = std::make_unique<core::EllipsoidData>();
+                const glm::vec3 local_center = (source.min + source.max) * 0.5f;
+                const glm::vec3 half_extents = glm::max((source.max - source.min) * 0.5f, glm::vec3(kCropVolumeMinExtent));
+                if (glm::length(local_center) > kCropVolumeMinExtent) {
+                    scene.setNodeTransform(node_name, scene.getNodeTransform(node_name) * glm::translate(glm::mat4(1.0f), local_center));
+                    node = scene.getNodeById(node_id);
+                    if (!node)
+                        return std::unexpected("Crop volume node not found after normalization");
+                }
+                data->radii = half_extents;
+                data->inverse = source.inverse;
+                data->enabled = source.enabled;
+                data->color = source.color;
+                data->line_width = source.line_width;
+                data->flash_intensity = source.flash_intensity;
+                node->type = core::NodeType::ELLIPSOID;
+                node->cropbox.reset();
+                node->ellipsoid = std::move(data);
+            }
+
+            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            if (rendering_manager)
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
+
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                scene_manager,
+                crop_volume_conversion_label(target_shape),
+                std::move(history_before),
+                vis::op::SceneGraphPatchEntry::captureState(scene_manager, {node_name}, history_options)));
+
+            return node_id;
+        }
+
+        void remove_opposite_crop_volume_if_present(SceneManager& scene_manager,
+                                                    RenderingManager* rendering_manager,
+                                                    const core::NodeId keep_id,
+                                                    const core::NodeId remove_id,
+                                                    const CropVolumeShape keep_shape) {
+            if (remove_id == core::NULL_NODE || remove_id == keep_id)
+                return;
+
+            auto& scene = scene_manager.getScene();
+            const auto* const keep_node = scene.getNodeById(keep_id);
+            const auto* const remove_node = scene.getNodeById(remove_id);
+            if (!keep_node || !remove_node)
+                return;
+
+            const auto keep_name = keep_node->name;
+            const auto remove_name = remove_node->name;
+            const auto history_options = crop_volume_history_options();
+            auto history_before =
+                vis::op::SceneGraphPatchEntry::captureState(scene_manager, {keep_name, remove_name}, history_options);
+
+            scene.removeNode(remove_name, false);
+            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            if (rendering_manager)
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+
+            if (const auto* const updated_keep = scene.getNodeById(keep_id))
+                sync_crop_volume_render_settings(rendering_manager, *updated_keep, keep_shape);
+
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                scene_manager,
+                "Remove Duplicate Crop Volume",
+                std::move(history_before),
+                vis::op::SceneGraphPatchEntry::captureState(scene_manager, {keep_name}, history_options)));
         }
 
         [[nodiscard]] bool is_float_nx3(const core::Tensor& tensor) {
@@ -960,7 +1116,7 @@ namespace lfs::vis::cap {
         const auto resolve = [&scene, &find_child_target](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
             if (!node)
                 return std::unexpected("Node not found");
-            if (node->type == core::NodeType::CROPBOX)
+            if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID)
                 return node->parent_id;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
@@ -1025,12 +1181,24 @@ namespace lfs::vis::cap {
             return std::unexpected("Crop boxes can only be attached to splat or pointcloud nodes");
 
         if (const core::NodeId existing = scene.getCropBoxForSplat(parent_id); existing != core::NULL_NODE) {
+            remove_opposite_crop_volume_if_present(
+                scene_manager, rendering_manager, existing, scene.getEllipsoidForSplat(parent_id), CropVolumeShape::Box);
             if (rendering_manager) {
                 auto settings = rendering_manager->getSettings();
-                settings.show_crop_box = true;
+                if (const auto* node = scene.getNodeById(existing)) {
+                    settings.show_crop_box = node->visible.get();
+                    settings.use_crop_box = node->cropbox ? node->cropbox->enabled : false;
+                    settings.show_ellipsoid = false;
+                    settings.use_ellipsoid = false;
+                }
                 rendering_manager->updateSettings(settings);
             }
             return existing;
+        }
+
+        if (const core::NodeId existing_ellipsoid = scene.getEllipsoidForSplat(parent_id);
+            existing_ellipsoid != core::NULL_NODE) {
+            return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_ellipsoid, CropVolumeShape::Box);
         }
 
         const vis::op::SceneGraphCaptureOptions history_options{
@@ -1047,10 +1215,8 @@ namespace lfs::vis::cap {
         const std::string created_cropbox_name = cropbox_node ? cropbox_node->name : cropbox_name;
 
         core::CropBoxData data;
-        glm::vec3 min_bounds, max_bounds;
-        if (scene.getNodeBounds(parent_id, min_bounds, max_bounds)) {
-            data.min = min_bounds;
-            data.max = max_bounds;
+        if (const auto* current_data = scene.getCropBoxData(cropbox_id)) {
+            data = *current_data;
         }
         data.enabled = true;
         scene.setCropBoxData(cropbox_id, data);
@@ -1070,6 +1236,9 @@ namespace lfs::vis::cap {
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
             settings.show_crop_box = true;
+            settings.use_crop_box = data.enabled;
+            settings.show_ellipsoid = false;
+            settings.use_ellipsoid = false;
             rendering_manager->updateSettings(settings);
         }
 
@@ -1093,13 +1262,8 @@ namespace lfs::vis::cap {
 
         const auto before_data = *cropbox_node->cropbox;
         const auto before_transform = scene_manager.getNodeTransform(cropbox_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_crop_box;
-            use_before = settings.use_crop_box;
-        }
+        bool show_before = cropbox_node->visible;
+        bool use_before = cropbox_node->cropbox->enabled;
 
         auto updated_data = before_data;
         auto updated_components = decomposeTransform(before_transform);
@@ -1123,6 +1287,10 @@ namespace lfs::vis::cap {
             updated_data.enabled = update.enabled;
             cropbox_changed = true;
         }
+        if (update.has_use) {
+            updated_data.enabled = update.use;
+            cropbox_changed = true;
+        }
         if (update.translation) {
             updated_components.translation = *update.translation;
             transform_changed = true;
@@ -1144,6 +1312,12 @@ namespace lfs::vis::cap {
         if (rendering_manager && (cropbox_changed || transform_changed))
             rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
 
+        bool visibility_changed = false;
+        if (update.has_show && cropbox_node->visible != update.show) {
+            scene_manager.setNodeVisibility(cropbox_id, update.show);
+            visibility_changed = true;
+        }
+
         if (rendering_manager && (update.has_show || update.has_use)) {
             auto settings = rendering_manager->getSettings();
             if (update.has_show)
@@ -1153,7 +1327,7 @@ namespace lfs::vis::cap {
             rendering_manager->updateSettings(settings);
         }
 
-        if (cropbox_changed || transform_changed) {
+        if (cropbox_changed || transform_changed || visibility_changed) {
             auto entry = std::make_unique<vis::op::CropBoxUndoEntry>(
                 scene_manager, rendering_manager, cropbox_node->name, before_data, before_transform,
                 show_before, use_before);
@@ -1190,13 +1364,8 @@ namespace lfs::vis::cap {
 
         const auto before_data = *cropbox_node->cropbox;
         const auto before_transform = scene_manager.getNodeTransform(cropbox_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_crop_box;
-            use_before = settings.use_crop_box;
-        }
+        bool show_before = cropbox_node->visible;
+        bool use_before = cropbox_node->cropbox->enabled;
 
         const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
         const glm::vec3 half_size = (max_bounds - min_bounds) * 0.5f;
@@ -1207,8 +1376,11 @@ namespace lfs::vis::cap {
         scene.setCropBoxData(cropbox_id, updated_data);
         scene.setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), center));
 
-        if (rendering_manager)
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+        if (rendering_manager) {
+            auto settings = rendering_manager->getSettings();
+            settings.use_crop_box = updated_data.enabled;
+            rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+        }
 
         auto entry = std::make_unique<vis::op::CropBoxUndoEntry>(
             scene_manager, rendering_manager, cropbox_node->name, before_data, before_transform,
@@ -1229,26 +1401,21 @@ namespace lfs::vis::cap {
 
         const auto before_data = *cropbox_node->cropbox;
         const auto before_transform = scene_manager.getNodeTransform(cropbox_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_crop_box;
-            use_before = settings.use_crop_box;
-        }
+        bool show_before = cropbox_node->visible;
+        bool use_before = cropbox_node->cropbox->enabled;
 
         auto reset_data = before_data;
         reset_data.min = glm::vec3(-1.0f);
         reset_data.max = glm::vec3(1.0f);
         reset_data.inverse = false;
+        reset_data.enabled = before_data.enabled;
         scene.setCropBoxData(cropbox_id, reset_data);
         scene.setNodeTransform(cropbox_node->name, glm::mat4(1.0f));
 
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
-            settings.use_crop_box = false;
-            rendering_manager->updateSettings(settings);
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+            settings.use_crop_box = reset_data.enabled;
+            rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
         }
 
         auto entry = std::make_unique<vis::op::CropBoxUndoEntry>(
@@ -1263,14 +1430,37 @@ namespace lfs::vis::cap {
     std::expected<core::NodeId, std::string> resolveEllipsoidParentId(const SceneManager& scene_manager,
                                                                       const std::optional<std::string>& requested_node) {
         const auto& scene = scene_manager.getScene();
-        const auto resolve = [&scene](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
+        const auto find_child_target = [&scene](const core::SceneNode& node,
+                                                const auto& self) -> core::NodeId {
+            for (const core::NodeId child_id : node.children) {
+                const auto* child = scene.getNodeById(child_id);
+                if (!child) {
+                    continue;
+                }
+                if (child->type == core::NodeType::SPLAT || child->type == core::NodeType::POINTCLOUD) {
+                    return child->id;
+                }
+                if (const core::NodeId nested = self(*child, self); nested != core::NULL_NODE) {
+                    return nested;
+                }
+            }
+            return core::NULL_NODE;
+        };
+
+        const auto resolve = [&find_child_target](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
             if (!node)
                 return std::unexpected("Node not found");
-            if (node->type == core::NodeType::ELLIPSOID)
+            if (node->type == core::NodeType::ELLIPSOID || node->type == core::NodeType::CROPBOX)
                 return node->parent_id;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
-            return std::unexpected("Ellipsoids can only target splat or pointcloud nodes");
+            if (node->type == core::NodeType::DATASET) {
+                if (const core::NodeId child_target = find_child_target(*node, find_child_target);
+                    child_target != core::NULL_NODE) {
+                    return child_target;
+                }
+            }
+            return std::unexpected("Ellipsoids can only target splat, pointcloud, or dataset nodes with a model");
         };
 
         if (requested_node)
@@ -1328,12 +1518,24 @@ namespace lfs::vis::cap {
             return std::unexpected("Ellipsoids can only be attached to splat or pointcloud nodes");
 
         if (const core::NodeId existing = scene.getEllipsoidForSplat(parent_id); existing != core::NULL_NODE) {
+            remove_opposite_crop_volume_if_present(
+                scene_manager, rendering_manager, existing, scene.getCropBoxForSplat(parent_id), CropVolumeShape::Ellipsoid);
             if (rendering_manager) {
                 auto settings = rendering_manager->getSettings();
-                settings.show_ellipsoid = true;
+                if (const auto* node = scene.getNodeById(existing)) {
+                    settings.show_ellipsoid = node->visible.get();
+                    settings.use_ellipsoid = node->ellipsoid ? node->ellipsoid->enabled : false;
+                    settings.show_crop_box = false;
+                    settings.use_crop_box = false;
+                }
                 rendering_manager->updateSettings(settings);
             }
             return existing;
+        }
+
+        if (const core::NodeId existing_cropbox = scene.getCropBoxForSplat(parent_id);
+            existing_cropbox != core::NULL_NODE) {
+            return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_cropbox, CropVolumeShape::Ellipsoid);
         }
 
         const vis::op::SceneGraphCaptureOptions history_options{
@@ -1375,6 +1577,9 @@ namespace lfs::vis::cap {
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
             settings.show_ellipsoid = true;
+            settings.use_ellipsoid = data.enabled;
+            settings.show_crop_box = false;
+            settings.use_crop_box = false;
             rendering_manager->updateSettings(settings);
         }
 
@@ -1398,13 +1603,8 @@ namespace lfs::vis::cap {
 
         const auto before_data = *ellipsoid_node->ellipsoid;
         const auto before_transform = scene_manager.getNodeTransform(ellipsoid_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_ellipsoid;
-            use_before = settings.use_ellipsoid;
-        }
+        bool show_before = ellipsoid_node->visible;
+        bool use_before = ellipsoid_node->ellipsoid->enabled;
 
         auto updated_data = before_data;
         auto updated_components = decomposeTransform(before_transform);
@@ -1422,6 +1622,10 @@ namespace lfs::vis::cap {
         }
         if (update.has_enabled) {
             updated_data.enabled = update.enabled;
+            ellipsoid_changed = true;
+        }
+        if (update.has_use) {
+            updated_data.enabled = update.use;
             ellipsoid_changed = true;
         }
         if (update.translation) {
@@ -1445,6 +1649,12 @@ namespace lfs::vis::cap {
         if (rendering_manager && (ellipsoid_changed || transform_changed))
             rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
 
+        bool visibility_changed = false;
+        if (update.has_show && ellipsoid_node->visible != update.show) {
+            scene_manager.setNodeVisibility(ellipsoid_id, update.show);
+            visibility_changed = true;
+        }
+
         if (rendering_manager && (update.has_show || update.has_use)) {
             auto settings = rendering_manager->getSettings();
             if (update.has_show)
@@ -1457,7 +1667,7 @@ namespace lfs::vis::cap {
         if (ellipsoid_changed)
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
 
-        if (ellipsoid_changed || transform_changed) {
+        if (ellipsoid_changed || transform_changed || visibility_changed) {
             auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
                 scene_manager, rendering_manager, ellipsoid_node->name, before_data, before_transform,
                 show_before, use_before);
@@ -1496,13 +1706,8 @@ namespace lfs::vis::cap {
 
         const auto before_data = *ellipsoid_node->ellipsoid;
         const auto before_transform = scene_manager.getNodeTransform(ellipsoid_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_ellipsoid;
-            use_before = settings.use_ellipsoid;
-        }
+        bool show_before = ellipsoid_node->visible;
+        bool use_before = ellipsoid_node->ellipsoid->enabled;
 
         auto updated_data = before_data;
         updated_data.radii = glm::max((max_bounds - min_bounds) * 0.5f * CIRCUMSCRIBE_FACTOR, glm::vec3(1e-4f));
@@ -1511,8 +1716,11 @@ namespace lfs::vis::cap {
             ellipsoid_node->name,
             glm::translate(glm::mat4(1.0f), (min_bounds + max_bounds) * 0.5f));
 
-        if (rendering_manager)
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+        if (rendering_manager) {
+            auto settings = rendering_manager->getSettings();
+            settings.use_ellipsoid = updated_data.enabled;
+            rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+        }
 
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
 
@@ -1535,25 +1743,20 @@ namespace lfs::vis::cap {
 
         const auto before_data = *ellipsoid_node->ellipsoid;
         const auto before_transform = scene_manager.getNodeTransform(ellipsoid_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_ellipsoid;
-            use_before = settings.use_ellipsoid;
-        }
+        bool show_before = ellipsoid_node->visible;
+        bool use_before = ellipsoid_node->ellipsoid->enabled;
 
         auto reset_data = before_data;
         reset_data.radii = glm::vec3(1.0f);
         reset_data.inverse = false;
+        reset_data.enabled = before_data.enabled;
         scene.setEllipsoidData(ellipsoid_id, reset_data);
         scene_manager.setNodeTransform(ellipsoid_node->name, glm::mat4(1.0f));
 
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
-            settings.use_ellipsoid = false;
-            rendering_manager->updateSettings(settings);
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+            settings.use_ellipsoid = reset_data.enabled;
+            rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
         }
 
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);

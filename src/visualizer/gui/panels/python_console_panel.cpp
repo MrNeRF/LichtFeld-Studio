@@ -1629,7 +1629,7 @@ namespace lfs::vis::gui::panels {
 
     void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h,
                                  const PanelInputState* input) {
-        lfs::python::ensure_initialized();
+        (void)lfs::python::ensure_initialized();
         lfs::python::install_output_redirect();
         setup_sys_path();
         setup_console_output_capture();

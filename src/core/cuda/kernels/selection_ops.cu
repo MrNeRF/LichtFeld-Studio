@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda/selection_ops.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include <cassert>
 #include <cfloat>
@@ -311,16 +312,21 @@ namespace lfs::core::cuda {
             auto aabb_buf = Tensor::empty({6}, Device::CUDA, DataType::Float32);
             {
                 float init[6] = {FLT_MAX, FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX};
-                auto err = cudaMemcpyAsync(aabb_buf.ptr<float>(), init, 6 * sizeof(float), cudaMemcpyHostToDevice, stream);
-                assert(err == cudaSuccess && "AABB init memcpy failed");
+                LFS_CUDA_CHECK_MSG(
+                    cudaMemcpyAsync(aabb_buf.ptr<float>(), init, 6 * sizeof(float), cudaMemcpyHostToDevice, stream),
+                    "build_grid: AABB init upload");
             }
 
             int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            const auto aabb_ticket = ::lfs::core::cuda_record_range(stream, "core.selection.build_grid.aabb_pipeline");
             compute_aabb_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(pos_ptr, aabb_buf.ptr<float>(), N);
+            LFS_CUDA_LAUNCH_CHECK(stream, "core.selection.build_grid.compute_aabb");
 
             float aabb_host[6];
-            cudaMemcpyAsync(aabb_host, aabb_buf.ptr<float>(), 6 * sizeof(float), cudaMemcpyDeviceToHost, stream);
-            cudaStreamSynchronize(stream);
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpyAsync(aabb_host, aabb_buf.ptr<float>(), 6 * sizeof(float), cudaMemcpyDeviceToHost, stream),
+                "build_grid: AABB readback");
+            LFS_CUDA_AWAIT(aabb_ticket, cudaStreamSynchronize(stream), "core.selection.build_grid.aabb_readback");
 
             float3 grid_min = make_float3(aabb_host[0] - cell_size, aabb_host[1] - cell_size, aabb_host[2] - cell_size);
             float3 grid_max = make_float3(aabb_host[3] + cell_size, aabb_host[4] + cell_size, aabb_host[5] + cell_size);
@@ -348,6 +354,7 @@ namespace lfs::core::cuda {
             compute_cell_ids<<<blocks, BLOCK_SIZE, 0, stream>>>(
                 pos_ptr, cell_ids.ptr<int>(),
                 grid_min, inv_cell_size, grid_dims, N);
+            LFS_CUDA_LAUNCH_CHECK(stream, "core.selection.build_grid.compute_cell_ids");
 
             // Initialize sorted indices
             thrust::device_ptr<int> si_ptr(sorted_indices.ptr<int>());
@@ -369,6 +376,7 @@ namespace lfs::core::cuda {
 
             find_cell_starts<<<blocks, BLOCK_SIZE, 0, stream>>>(
                 cell_ids.ptr<int>(), cell_start.ptr<int>(), cell_end.ptr<int>(), N);
+            LFS_CUDA_LAUNCH_CHECK(stream, "core.selection.build_grid.find_cell_starts");
 
             return SpatialGrid{
                 std::move(sorted_indices),
@@ -410,9 +418,7 @@ namespace lfs::core::cuda {
             grid.sorted_indices.ptr<int>(), grid.cell_start.ptr<int>(), grid.cell_end.ptr<int>(),
             grid.grid_min, grid.inv_cell_size, grid.grid_dims,
             radius * radius, group_id, N);
-
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "selection_grow kernel launch failed");
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.selection.grow");
 
         nvtxRangePop();
         return out_mask;
@@ -446,9 +452,7 @@ namespace lfs::core::cuda {
             grid.sorted_indices.ptr<int>(), grid.cell_start.ptr<int>(), grid.cell_end.ptr<int>(),
             grid.grid_min, grid.inv_cell_size, grid.grid_dims,
             radius * radius, N);
-
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "selection_shrink kernel launch failed");
+        LFS_CUDA_LAUNCH_CHECK(stream, "core.selection.shrink");
 
         nvtxRangePop();
         return out_mask;
@@ -472,9 +476,7 @@ namespace lfs::core::cuda {
         opacity_threshold_kernel<<<blocks, BLOCK_SIZE, 0, opacity_raw.stream()>>>(
             opacity_raw.ptr<float>(), out_mask.ptr<uint8_t>(),
             min_opacity, max_opacity, group_id, N);
-
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "select_by_opacity kernel launch failed");
+        LFS_CUDA_LAUNCH_CHECK(opacity_raw.stream(), "core.selection.opacity_threshold");
 
         nvtxRangePop();
         return out_mask;
@@ -499,9 +501,7 @@ namespace lfs::core::cuda {
         scale_threshold_kernel<<<blocks, BLOCK_SIZE, 0, scale_raw.stream()>>>(
             scale_raw.ptr<float>(), out_mask.ptr<uint8_t>(),
             max_scale, group_id, N);
-
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "select_by_scale kernel launch failed");
+        LFS_CUDA_LAUNCH_CHECK(scale_raw.stream(), "core.selection.scale_threshold");
 
         nvtxRangePop();
         return out_mask;
@@ -528,9 +528,7 @@ namespace lfs::core::cuda {
         color_threshold_kernel<<<blocks, BLOCK_SIZE, 0, sh0.stream()>>>(
             sh0.ptr<float>(), out_mask.ptr<uint8_t>(),
             ref_r, ref_g, ref_b, threshold, group_id, N);
-
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "select_by_color kernel launch failed");
+        LFS_CUDA_LAUNCH_CHECK(sh0.stream(), "core.selection.color_threshold");
 
         nvtxRangePop();
         return out_mask;

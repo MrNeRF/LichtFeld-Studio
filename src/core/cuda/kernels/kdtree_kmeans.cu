@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include <algorithm>
@@ -316,6 +317,7 @@ namespace lfs::core::cuda {
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_data, perm.ptr<int>(), d_centroids, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.gather_centroids");
             }
 
             // Allocate labels
@@ -335,9 +337,11 @@ namespace lfs::core::cuda {
                 if constexpr (N_DIMS == 3) {
                     assign_nearest_bruteforce_3d_kernel<<<grid_size_points, BLOCK_SIZE>>>(
                         d_data, d_centroids, d_labels, n, k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.assign_nearest_3d");
                 } else {
                     assign_nearest_bruteforce_kernel<N_DIMS><<<grid_size_points, BLOCK_SIZE>>>(
                         d_data, d_centroids, d_labels, n, k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.assign_nearest");
                 }
 
                 // Step 2: Reset accumulation buffers
@@ -347,12 +351,14 @@ namespace lfs::core::cuda {
                 // Step 3: Accumulate points
                 accumulate_centroids_kernel<N_DIMS><<<grid_size_points, BLOCK_SIZE>>>(
                     d_data, d_labels, centroid_sums.ptr<float>(), counts.ptr<int>(), n);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.accumulate_centroids");
 
                 // Step 4: Finalize centroids
                 unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_centroids_kernel<N_DIMS><<<grid_size_centroids, BLOCK_SIZE>>>(
                     d_centroids, centroid_sums.ptr<float>(), counts.ptr<int>(),
                     d_data, k, n, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.finalize_centroids");
             }
 
             cudaDeviceSynchronize();
@@ -687,6 +693,7 @@ namespace lfs::core::cuda {
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_data, perm.ptr<int>(), d_centroids, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.gather_centroids");
             }
 
             // Step 1: Build super-clusters by clustering the k centroids into NUM_SUPER_CLUSTERS groups
@@ -703,6 +710,7 @@ namespace lfs::core::cuda {
                 const int grid_super = (NUM_SUPER_CLUSTERS + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                     d_centroids, perm.ptr<int>(), super_centroids.ptr<float>(), NUM_SUPER_CLUSTERS);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.gather_centroids");
             }
 
             // Run a few iterations of k-means to cluster centroids into super-clusters
@@ -718,6 +726,7 @@ namespace lfs::core::cuda {
                 // Assign each centroid to nearest super-cluster
                 assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.assign_nearest");
 
                 // Update super-centroids
                 super_sums.zero_();
@@ -725,16 +734,19 @@ namespace lfs::core::cuda {
 
                 accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.accumulate_centroids");
 
                 unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                     super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
                     d_centroids, NUM_SUPER_CLUSTERS, k, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.finalize_centroids");
             }
 
             // Final assignment of centroids to super-clusters
             assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                 d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.assign_nearest");
 
             // Build CSR-style index using GPU-accelerated sort
             auto super_offsets = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
@@ -759,15 +771,18 @@ namespace lfs::core::cuda {
                     // Re-assign centroids to super-clusters
                     assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                         d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.assign_nearest");
 
                     // Update super-centroids
                     super_sums.zero_();
                     super_counts.zero_();
                     accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                         d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.accumulate_centroids");
                     finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                         super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
                         d_centroids, NUM_SUPER_CLUSTERS, k, iter * 111);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.finalize_centroids");
 
                     // Rebuild CSR index using GPU-accelerated sort
                     build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
@@ -781,15 +796,18 @@ namespace lfs::core::cuda {
                     // Final iteration: use exact brute-force for best quality
                     assign_nearest_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                         d_data, d_centroids, labels.ptr<int>(), n, k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.assign_nearest");
                 } else {
                     // Early iterations: use fast hierarchical search
                     find_nearest_super_clusters_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                         d_data, super_centroids.ptr<float>(), nearest_supers.ptr<int>(), n);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.find_nearest_super");
 
                     hierarchical_search_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                         d_data, d_centroids, nearest_supers.ptr<int>(),
                         super_membership.ptr<int>(), super_offsets.ptr<int>(), super_indices.ptr<int>(),
                         labels.ptr<int>(), n, k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.hierarchical_search");
                 }
 
                 // Step 4: Update centroids
@@ -798,11 +816,13 @@ namespace lfs::core::cuda {
 
                 accumulate_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_data, labels.ptr<int>(), centroid_sums.ptr<float>(), centroid_counts.ptr<int>(), n);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.accumulate_centroids");
 
                 unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, centroid_sums.ptr<float>(), centroid_counts.ptr<int>(),
                     d_data, k, n, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.kdtree.finalize_centroids");
             }
 
             cudaDeviceSynchronize();
@@ -919,6 +939,7 @@ namespace lfs::core::cuda {
                 sorted_centroids.ptr<float>(),
                 labels.ptr<int>(),
                 n, k);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.1d_binary.assign");
 
             centroid_sums.zero_();
             counts.zero_();
@@ -929,6 +950,7 @@ namespace lfs::core::cuda {
                 centroid_sums.ptr<float>(),
                 counts.ptr<int>(),
                 n);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "core.kmeans.1d_binary.update_centroids");
 
             auto counts_cpu = counts.cpu();
             auto sums_cpu = centroid_sums.cpu();

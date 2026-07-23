@@ -17,8 +17,8 @@ struct Uniforms {
 static const uint32_t CUMSUM_BLOCK = 1024u;
 
 layout(binding=0) StructuredBuffer<uint32_t> emit_count;
-// [0] = clamped visible count; [1] = raw emit total (unclamped, drives the
-// visible-capacity high-water mark after a clamped frame).
+// [0] = bounded visible count; [1] = raw emit total for the host-side loud
+// overflow check.
 layout(binding=1) RWStructuredBuffer<uint32_t> out_visible_count;
 // Layout is defined by LFS_VK_VISIBLE_CHAIN_DISPATCH_* in indirect_layout.inc.
 layout(binding=2) RWStructuredBuffer<uint32_t> out_dispatch;

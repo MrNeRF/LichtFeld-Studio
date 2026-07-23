@@ -70,7 +70,7 @@ namespace lfs::python {
                 for (const auto& p : paths) {
                     fs_paths.emplace_back(lfs::core::utf8_to_path(p));
                 }
-                std::expected<void, std::string> result;
+                lfs::Result<void> result;
                 {
                     nb::gil_scoped_release release;
                     result = lfs::python::run_scripts(fs_paths);
@@ -81,7 +81,7 @@ namespace lfs::python {
                     ret["error"] = "";
                 } else {
                     ret["success"] = false;
-                    ret["error"] = result.error();
+                    ret["error"] = lfs::format_for_developer(result.error());
                 }
                 return ret;
             },

@@ -22,6 +22,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "py_command.hpp"
+#include "py_error.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
 #include "py_params.hpp"
@@ -2083,8 +2084,8 @@ namespace lfs::python {
         if (clicked && !callback.is_none()) {
             try {
                 callback();
-            } catch (const nb::python_error& e) {
-                LOG_ERROR("Button callback error: {}", e.what());
+            } catch (nb::python_error& e) {
+                (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
             }
         }
         return clicked;
@@ -3251,6 +3252,8 @@ namespace lfs::python {
                     info_str = "Tensor(" + shape_str + ", " + dtype_str + ", " +
                                nb::cast<std::string>(nb::str(device)) + ") " + size_buf;
                 } catch (...) {
+                    // LFS-CENSUS-OK(empty-catch): read-only tensor introspection for a
+                    // display label; any failure falls back to a placeholder string.
                     info_str = "Tensor(...)";
                 }
             }
@@ -3274,8 +3277,8 @@ namespace lfs::python {
                 if (!update_cb.is_none() && PyCallable_Check(update_cb.ptr())) {
                     try {
                         update_cb(data, nb::none());
-                    } catch (const nb::python_error& e) {
-                        LOG_ERROR("Property update callback error: {}", e.what());
+                    } catch (nb::python_error& e) {
+                        (void)contain_python_callback(e, PyCallbackPolicy::WarnAndContinue);
                     }
                 }
             }
@@ -4723,20 +4726,50 @@ namespace lfs::python {
             "apply_crop_tool",
             []() {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
-                    gui->gizmo().applyActiveCropTool();
+                    if (gui->gizmo().cropToolShape() == "ellipsoid") {
+                        lfs::core::events::cmd::ApplyEllipsoid{}.emit();
+                    } else {
+                        lfs::core::events::cmd::ApplyCropBox{}.emit();
+                    }
                 }
             },
-            "Apply the active crop tool primitive");
+            "Apply the active crop tool primitive through the node-backed crop command path");
 
         m.def(
             "fit_crop_tool",
             [](bool use_percentile) {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
-                    gui->gizmo().fitActiveCropTool(use_percentile);
+                    if (gui->gizmo().cropToolShape() == "ellipsoid") {
+                        lfs::core::events::cmd::FitEllipsoidToScene{.use_percentile = use_percentile}.emit();
+                    } else {
+                        lfs::core::events::cmd::FitCropBoxToScene{.use_percentile = use_percentile}.emit();
+                    }
                 }
             },
             nb::arg("use_percentile") = false,
-            "Fit the active crop tool primitive to the selected node");
+            "Fit the active crop tool primitive through the node-backed crop command path");
+
+        m.def(
+            "reset_crop_tool",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    if (gui->gizmo().cropToolShape() == "ellipsoid") {
+                        lfs::core::events::cmd::ResetEllipsoid{}.emit();
+                    } else {
+                        lfs::core::events::cmd::ResetCropBox{}.emit();
+                    }
+                }
+            },
+            "Reset the active crop tool primitive through the node-backed crop command path");
+
+        m.def(
+            "delete_crop_tool_volume",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    gui->gizmo().deleteActiveCropToolVolume();
+                }
+            },
+            "Delete the active crop tool primitive and leave the crop tool");
 
         m.def(
             "fit_cropbox_to_scene",

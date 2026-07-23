@@ -81,6 +81,7 @@ namespace lfs::vis {
             [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
             LFS_VIS_API void fitActiveCropTool(bool use_percentile);
             LFS_VIS_API void applyActiveCropTool();
+            LFS_VIS_API void deleteActiveCropToolVolume();
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
             [[nodiscard]] bool isPositionInViewportGizmo(double x, double y) const;
             [[nodiscard]] ToolType getCurrentToolMode() const;
@@ -105,12 +106,15 @@ namespace lfs::vis {
                 const void* rendering_manager = nullptr;
                 std::string active_tool_id;
                 std::string gizmo_type;
+                std::string selected_node_name;
                 SelectionSubMode selection_mode = SelectionSubMode::Centers;
 
                 bool operator==(const ToolStateStamp&) const = default;
             };
 
             VisualizerImpl* viewer_;
+            [[nodiscard]] std::optional<core::NodeId> selectedCropVolumeNodeId(core::NodeId target_id) const;
+            [[nodiscard]] bool ensureCropVolumeForCurrentSelection();
 
             // Transform gizmo settings
             GizmoOperation current_operation_ = GizmoOperation::Translate;
@@ -150,6 +154,9 @@ namespace lfs::vis {
             CropToolShape crop_tool_shape_ = CropToolShape::Box;
             bool crop_tool_initialized_ = false;
             core::NodeId crop_tool_target_node_id_ = core::NULL_NODE;
+            core::NodeId crop_tool_volume_node_id_ = core::NULL_NODE;
+            bool crop_tool_drag_active_ = false;
+            bool crop_tool_drag_changed_ = false;
             glm::vec3 crop_tool_box_min_{-0.5f};
             glm::vec3 crop_tool_box_max_{0.5f};
             glm::vec3 crop_tool_ellipsoid_radii_{1.0f};
@@ -221,8 +228,12 @@ namespace lfs::vis {
             void setCropToolBounds(core::NodeId target_id,
                                    const glm::vec3& bounds_min,
                                    const glm::vec3& bounds_max);
+            [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
+            [[nodiscard]] bool persistActiveCropToolToNode(bool enable);
             void updateCropToolOverlayState();
             void clearCropToolOverlayState();
+            void leaveCropTool(bool hide_volume, bool select_parent, bool clear_active_tool);
+            void deleteCropVolumeAfterApply(core::NodeId volume_node_id);
             void clearSelectionVolumeState();
             void captureSelectionVolumeBase(uint64_t source_generation);
             [[nodiscard]] bool applySelectionVolumeFromGizmo(bool push_undo);

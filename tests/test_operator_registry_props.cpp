@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/services.hpp"
@@ -19,6 +20,8 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "training/trainer.hpp"
+#include "training/training_manager.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
@@ -199,6 +202,61 @@ TEST_F(OperatorRegistryPropsTest, DeleteOperatorCanDeleteNamedNodeWithoutSelecti
     ASSERT_TRUE(resolved.has_value());
     ASSERT_EQ(resolved->size(), 1u);
     EXPECT_EQ(resolved->front(), "delete_me");
+}
+
+TEST_F(OperatorRegistryPropsTest, DeleteOperatorDeletesMultipleSelectedNodes) {
+    add_node("delete_a");
+    add_node("delete_b");
+    scene_manager_->selectNodes({"delete_a", "delete_b"});
+
+    lfs::vis::op::OperatorProperties props;
+    props.set("keep_children", false);
+
+    const auto result = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::Delete, &props);
+    ASSERT_TRUE(result.is_finished());
+    EXPECT_EQ(scene_manager_->getScene().getNode("delete_a"), nullptr);
+    EXPECT_EQ(scene_manager_->getScene().getNode("delete_b"), nullptr);
+
+    const auto resolved = props.get<std::vector<std::string>>("resolved_node_names");
+    ASSERT_TRUE(resolved.has_value());
+    ASSERT_EQ(resolved->size(), 2u);
+    std::vector<std::string> sorted = *resolved;
+    std::sort(sorted.begin(), sorted.end());
+    EXPECT_EQ(sorted, (std::vector<std::string>{"delete_a", "delete_b"}));
+}
+
+TEST_F(OperatorRegistryPropsTest, DeleteOperatorRejectsMixedTrainingBatchWithoutPartialRemoval) {
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(trainer_manager.get());
+
+    auto& scene = scene_manager_->getScene();
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto unrelated_id = scene.addSplat("unrelated", make_test_splat({1.0f, 0.0f, 0.0f}));
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
+    const auto val_group_id = scene.addCameraGroup("Validation", cameras_id, 1);
+    scene.addCamera("train.png", train_group_id, std::make_shared<lfs::core::Camera>());
+    const auto val_camera_id = scene.addCamera("val.png", val_group_id, std::make_shared<lfs::core::Camera>());
+    scene.setCameraTrainingEnabled(val_camera_id, false);
+    scene.setTrainingModelNode("Model");
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+    scene_manager_->selectNodes({"unrelated", "Model"});
+    lfs::vis::op::OperatorProperties props;
+    props.set("keep_children", false);
+
+    const auto result = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::Delete, &props);
+    ASSERT_TRUE(result.is_cancelled());
+    EXPECT_NE(scene.getNodeById(model_id), nullptr);
+    EXPECT_NE(scene.getNodeById(unrelated_id), nullptr);
+
+    const auto error = props.get<std::string>("error");
+    ASSERT_TRUE(error.has_value());
+    EXPECT_NE(error->find("Cannot delete 'Model'"), std::string::npos);
 }
 
 TEST_F(OperatorRegistryPropsTest, TransformTranslateOperatorUsesVisualizerWorldCoordinates) {

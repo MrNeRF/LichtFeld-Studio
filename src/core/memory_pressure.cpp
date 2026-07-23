@@ -113,7 +113,7 @@ namespace lfs::core {
                 if (cleanup_status != cudaSuccess) {
                     ensure_cuda_success(
                         cleanup_status, "cudaFree(failed direct tensor storage allocation)", {},
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
             }
             return nullptr;

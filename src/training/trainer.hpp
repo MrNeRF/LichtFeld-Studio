@@ -10,6 +10,7 @@
 #include "components/ppisp_controller_pool.hpp"
 #include "components/sparsity_optimizer.hpp"
 #include "core/camera.hpp"
+#include "core/error.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "dataset.hpp"
@@ -39,6 +40,7 @@ namespace lfs::core {
 
 namespace lfs::training {
     class AdamOptimizer;
+    struct TrainerRetryTestAccess;
     struct PPISPFileMetadata;
 
     struct PPISPViewportOverrides {
@@ -129,7 +131,7 @@ namespace lfs::training {
         bool isInitialized() const { return initialized_.load(); }
 
         // Main training method with stop token support
-        std::expected<void, std::string> train(std::stop_token stop_token = {});
+        [[nodiscard]] lfs::Status train(std::stop_token stop_token = {});
 
         // Control methods for GUI interaction
         void request_pause() { pause_requested_ = true; }
@@ -246,6 +248,8 @@ namespace lfs::training {
         void shutdown();
 
     private:
+        friend struct TrainerRetryTestAccess;
+
         // Helper for deferred event emission to prevent deadlocks
         struct DeferredEvents {
             std::vector<std::function<void()>> events;
@@ -261,11 +265,30 @@ namespace lfs::training {
             }
         };
 
-        // Training step result
-        enum class StepResult {
-            Continue,
-            Stop,
-            RetryAfterOom
+        // Frozen: .codex_tmp/error-architecture-analysis.md Section 7.3.
+        enum class StepDisposition : std::uint8_t { Continue,
+                                                    Stop };
+        enum class StepPhase : std::uint8_t {
+            AcquireData,
+            Forward,
+            Loss,
+            Backward,
+            OptimizerCommit,
+            RefinementCommit,
+            Publish,
+            TerminalCleanup
+        };
+        enum class RetryDecision : std::uint8_t { DoNotRetry,
+                                                  RetryForwardOnce };
+
+        // epoch here is a trainer-lifetime persistent-commit counter
+        // (mutation_epoch_), NOT a dataset/sampler epoch. The main training
+        // loop uses InfiniteRandomSampler, which has no finite epoch concept.
+        struct MutationStamp {
+            std::uint64_t iteration;
+            std::uint64_t epoch;
+            StepPhase phase;
+            bool persistent_commit;
         };
 
         // Returns the background color to use at a given iteration
@@ -279,12 +302,16 @@ namespace lfs::training {
         lfs::core::Tensor get_random_background_for_camera(int width, int height, int iteration);
 
         // Protected method for processing a single training step
-        std::expected<StepResult, std::string> train_step(
+        [[nodiscard]] lfs::Result<StepDisposition> train_step(
             int iter,
             lfs::core::Camera* cam,
             lfs::core::Tensor gt_image,
             RenderMode render_mode,
             std::stop_token stop_token = {});
+
+        [[nodiscard]] static RetryDecision classify_forward_retry(
+            const lfs::Error& forward_error, MutationStamp stamp, unsigned attempts) noexcept;
+        [[nodiscard]] lfs::Status recover_forward_oom(const lfs::Error& cause);
 
         void setActiveImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader);
         int get_regular_iterations() const;
@@ -543,6 +570,10 @@ namespace lfs::training {
         std::atomic<int> current_iteration_{0};
         std::atomic<float> current_loss_{0.0f};
 
+        // Monotonic, never rolls back. Incremented at the frozen persistent
+        // commit boundaries and embedded in terminal MutationStamp context.
+        std::uint64_t mutation_epoch_ = 0;
+
         // Async callback system
         std::function<void()> callback_;
         std::atomic<bool> callback_busy_{false};
@@ -576,6 +607,14 @@ namespace lfs::training {
         uint64_t viewer_borrow_waited_ = 0;
         mutable std::mutex stream_sync_mutex_;
 
+        // Sidecar (depth/normal) ready-events whose training-stream wait was
+        // rejected: ownership moves here instead of destroying at the failure
+        // site, since the stream may not be quiescent at that point. Reaped in
+        // destroySyncPrimitives(), after shutdown() has synchronized
+        // training_stream_. Only ever touched from the training thread (push)
+        // and after it has joined (drain) — no lock needed.
+        std::vector<cudaEvent_t> orphaned_sidecar_events_;
+
         void createCudaResources();
         void createSyncPrimitives();
         void destroySyncPrimitives();
@@ -596,6 +635,11 @@ namespace lfs::training {
         };
         std::array<LossReadbackSlot, LOSS_RING> loss_slots_{};
         size_t loss_slot_head_ = 0;
+
+        // Always-compiled fault-injection seam used only by the Phase 5 OOM
+        // recovery tests. Empty in production, where cudaDeviceSynchronize is
+        // called directly.
+        std::function<cudaError_t()> recovery_sync_for_testing_;
 
         void submitLossReadback(const lfs::core::Tensor& total_loss, int iter);
         std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);

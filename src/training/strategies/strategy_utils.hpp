@@ -53,9 +53,16 @@ namespace lfs::training {
 
     size_t frozen_row_count(const lfs::core::SplatData& splat_data, size_t n);
 
+    // Refresh the topology-derived mask without changing the configured LR scale.
     void apply_frozen_ranges_to_optimizer(
         const lfs::core::SplatData& splat_data,
         AdamOptimizer& optimizer);
+
+    // Configure the LR scale and refresh the topology-derived mask.
+    void apply_frozen_ranges_to_optimizer(
+        const lfs::core::SplatData& splat_data,
+        AdamOptimizer& optimizer,
+        float freeze_lr_scale);
 
     void remap_frozen_ranges_after_compaction(
         lfs::core::SplatData& splat_data,

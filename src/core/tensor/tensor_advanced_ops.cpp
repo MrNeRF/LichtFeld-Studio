@@ -37,12 +37,14 @@ namespace lfs::core {
         auto result = empty({N, M}, device_, dtype_);
 
         if (device_ == Device::CUDA) {
+            pin_operands({&lhs, &rhs});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&lhs, &rhs}, result.stream());
             tensor_ops::launch_cdist(lhs.ptr<float>(), rhs.ptr<float>(),
                                      result.ptr<float>(), N, M, D, p, execution_stream);
             // No sync - returns tensor
         } else {
+            pin_operands({&lhs, &rhs});
             const float* a_data = lhs.ptr<float>();
             const float* b_data = rhs.ptr<float>();
             float* out_data = result.ptr<float>();

@@ -65,6 +65,8 @@ namespace lfs::python {
             try {
                 return nb::cast<std::string>(obj);
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): best-effort string coercion of an optional
+                // menu field; an incompatible value uses the caller's fallback.
                 return fallback;
             }
         }
@@ -75,6 +77,8 @@ namespace lfs::python {
             try {
                 return nb::cast<bool>(obj);
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): best-effort bool coercion of an optional
+                // menu field; an incompatible value uses the caller's fallback.
                 return fallback;
             }
         }
@@ -126,6 +130,8 @@ namespace lfs::python {
 
                 return !info.menu_class.attr("menu_items").is(base_menu.attr("menu_items"));
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): schema-capability probe; if the types module
+                // or attribute lookup fails, assume the menu declares items.
                 return true;
             }
         }

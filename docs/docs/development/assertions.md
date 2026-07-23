@@ -71,7 +71,7 @@ Host stack trace:
 CUDA breadcrumbs (most recent first):
   #8841 arena.grow at .../memory_arena.cu:1350 thread=... stream=0x0
   #8840 tensor.pool.allocate at .../memory_pool.hpp:69 thread=... stream=0x...
-Hint: CUDA reports async errors at the next sync point. Set LFS_CUDA_SYNC_DEBUG=1 ...
+Hint: CUDA reports async errors at the next sync point. Set LFS_CUDA_SYNC_DEBUG=cuda-sync ...
 ========================================
 ```
 
@@ -127,16 +127,18 @@ symbolization remains a postmortem debugger step.
 The Vulkan call sites retain their local error-handling idioms while sharing
 the central debug primitive.
 
-- Rasterizer `_THROW_ERROR`, `_THROW_ERROR_ALWAYS`, and `_CHECK_FATAL` remain
-  always-on failures. `LFS_VK_DEBUG_ASSERT(condition, fmt, ...)` is the
+- Rasterizer runtime and contract failures use typed throw helpers
+  (`throw_vk_result`, `throw_renderer_contract`, `throw_vk_setup` in
+  `rendering/vulkan_result.hpp`) → `lfs::Exception`. `LFS_VK_DEBUG_ASSERT(condition, fmt, ...)` is the
   rasterizer spelling of `LFS_DEBUG_ASSERT_MSG`; use it only for redundant hot
   invariants. Its format arguments have zero release cost.
-- Visualizer `LFS_VK_CHECK_MSG(expr, fmt, ...)` evaluates a `VkResult`
-  expression exactly once. On failure it includes the expression,
+- Visualizer `lfs::vis::vk_try_bool(result, expression, context, location)` checks a
+  `VkResult` exactly once. On failure it includes the expression,
   `vkResultToString(result)`, the numeric result, caller context, and source
-  location, then follows the call site's existing `false`/`lastError()` path.
-  It is always-on because Vulkan API failures are runtime failures, not
-  debug-only invariants.
+  location via `reportVkFailure`, then returns `false` for the call site's
+  existing bool path. It is always-on because Vulkan API failures are runtime
+  failures, not debug-only invariants. `LFS_VK_CONTEXT_CHECK_MSG` remains for
+  context-object failure paths that set `lastError()`.
 - Handles in messages use hexadecimal form. Include the actual range, sizes,
   counts, enum names, frame/slot/image indices, semaphore values, and expected
   state whenever they determine why the call failed.

@@ -130,6 +130,7 @@ namespace lfs::training::mcmc {
             new_opacities,
             new_scales,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.relocation");
     }
 
     // Helper: Quaternion to rotation matrix
@@ -234,6 +235,7 @@ namespace lfs::training::mcmc {
             frozen_mask_size,
             current_lr,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.add_noise");
     }
 
     // Fused gather kernel - collects all parameters at once
@@ -349,6 +351,7 @@ namespace lfs::training::mcmc {
             sh_rest,
             opacity_dim,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.gather_params");
     }
 
     // Fused kernel: Compute raw opacity and scaling values (ZERO intermediate allocations)
@@ -444,6 +447,7 @@ namespace lfs::training::mcmc {
             n,
             min_opacity,
             opacity_dim);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.compute_raw_values");
     }
 
     void launch_update_scaling_opacity(
@@ -475,6 +479,7 @@ namespace lfs::training::mcmc {
             n_indices,
             opacity_dim,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.update_scaling_opacity");
     }
 
     // Fused copy kernel - copies all parameters from src_indices to dst_indices
@@ -576,6 +581,7 @@ namespace lfs::training::mcmc {
             sh_rest,
             opacity_dim,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.copy_params");
     }
 
     // Histogram kernel using atomics - counts occurrences of each index
@@ -615,6 +621,7 @@ namespace lfs::training::mcmc {
 
         histogram_kernel<<<grid, threads, 0, cuda_stream>>>(
             indices, counts, n_samples, N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.histogram");
     }
 
     // Smarter histogram: Use hash map-style approach with sorting
@@ -828,6 +835,7 @@ namespace lfs::training::mcmc {
             dim_a,
             dim_b,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.gather_2tensors");
     }
 
     // ============================================================================
@@ -1108,6 +1116,7 @@ namespace lfs::training::mcmc {
             rotations,
             mag_sq,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.rotation_mag_sq");
     }
 
     __global__ void elementwise_max_inplace_kernel(
@@ -1137,6 +1146,7 @@ namespace lfs::training::mcmc {
         cudaStream_t cuda_stream = resolve_stream(stream);
 
         elementwise_max_inplace_kernel<<<grid, threads, 0, cuda_stream>>>(a, b, N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.elementwise_max");
     }
 
 } // namespace lfs::training::mcmc

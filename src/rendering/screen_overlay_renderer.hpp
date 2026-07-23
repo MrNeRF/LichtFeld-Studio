@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <glm/glm.hpp>
 #include <optional>
@@ -24,6 +25,7 @@ namespace lfs::rendering {
         CircleFilled,
         CircleOutline,
         Text,
+        Image,
     };
 
     struct OverlayClipRect {
@@ -43,6 +45,9 @@ namespace lfs::rendering {
         std::optional<OverlayClipRect> clip;
         std::string text;
         float font_size = 0.0f;
+        std::uintptr_t texture_id = 0;
+        glm::vec2 uv0{0.0f};
+        glm::vec2 uv1{1.0f};
     };
 
     using TextMeasureFn = std::function<glm::vec2(std::string_view, float)>;
@@ -66,6 +71,10 @@ namespace lfs::rendering {
         void addRect(glm::vec2 a, glm::vec2 b, OverlayColor c, float thickness = 1.0f);
         void addRectFilled(glm::vec2 a, glm::vec2 b, OverlayColor c);
         void addTriangleFilled(glm::vec2 p0, glm::vec2 p1, glm::vec2 p2, OverlayColor c);
+
+        // Textured quad tinted with `c` (glyph-style: texture alpha, flat tint color).
+        void addImage(std::uintptr_t texture_id, glm::vec2 min_px, glm::vec2 max_px,
+                      OverlayColor c, glm::vec2 uv0 = {0.0f, 0.0f}, glm::vec2 uv1 = {1.0f, 1.0f});
 
         void addText(glm::vec2 top_left_px, std::string_view text, OverlayColor c, float size_px);
         void addTextWithShadow(glm::vec2 top_left_px, std::string_view text,

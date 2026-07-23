@@ -6,6 +6,7 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/render_output.hpp"
@@ -147,7 +148,7 @@ namespace lfs::training {
     // Explicit forward pass - returns render output and context for backward
     // Optional tile parameters for memory-efficient training (tile_width/height=0 means full image)
     // bg_image is optional - if provided, uses per-pixel background blending instead of solid color
-    std::expected<std::pair<RenderOutput, FastRasterizeContext>, std::string> fast_rasterize_forward(
+    std::expected<std::pair<RenderOutput, FastRasterizeContext>, lfs::Error> fast_rasterize_forward(
         lfs::core::Camera& viewpoint_camera,
         lfs::core::SplatData& gaussian_model,
         lfs::core::Tensor& bg_color,
@@ -173,6 +174,9 @@ namespace lfs::training {
         const lfs::core::Tensor& grad_depth = {},
         const lfs::core::Tensor& grad_normal = {});
 
+    // Release per-thread renderer caches before the owning CUDA stream is torn down.
+    bool release_fast_rasterizer_thread_local_caches() noexcept;
+
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(
         lfs::core::Camera& viewpoint_camera,
@@ -182,7 +186,7 @@ namespace lfs::training {
         const lfs::core::Tensor& bg_image = {}) {
         auto result = fast_rasterize_forward(viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0, mip_filter, bg_image);
         if (!result) {
-            throw std::runtime_error(result.error());
+            throw lfs::Exception(std::move(result.error()));
         }
         RenderOutput output = std::move(result->first);
         result->second.release_forward_context();

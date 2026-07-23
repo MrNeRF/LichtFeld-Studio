@@ -44,7 +44,7 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     // Explicit padding: dist_coeffs is a float4 on the shader side and must
     // sit on a 16-byte boundary; both layouts pad here by hand so C++ and
     // Slang can never silently disagree.
-    uint32_t uniforms_pad0;
+    uint32_t depth_wave;
     uint32_t uniforms_pad1;
     uint32_t uniforms_pad2;
     float dist_coeffs[4];
@@ -143,8 +143,13 @@ public:
         size_t num_splats = 0;
     };
     struct TileInstanceStats {
-        size_t instance_count = 0; // clamped to the frame's capacity
-        size_t raw_count = 0;      // unclamped; > capacity means the frame clamped
+        size_t raw_count = 0;
+        size_t waves_needed = 0;
+        size_t waves_armed = 0;
+        bool count_overflow = false;
+    };
+    struct TileInstanceGate {
+        size_t raw_count = 0;
         bool count_overflow = false;
     };
     struct LodSelectionStats {
@@ -170,7 +175,10 @@ public:
                             VkQueue external_queue,
                             uint32_t external_queue_family_index,
                             VmaAllocator external_allocator,
-                            VkPipelineCache external_pipeline_cache = VK_NULL_HANDLE);
+                            VkPipelineCache external_pipeline_cache = VK_NULL_HANDLE,
+                            bool supports_conditional_rendering = false,
+                            PFN_vkCmdBeginConditionalRenderingEXT begin_conditional_rendering = nullptr,
+                            PFN_vkCmdEndConditionalRenderingEXT end_conditional_rendering = nullptr);
     void cleanup();
 
     void tagDeferredVisibleCountReadback(VkSemaphore semaphore, std::uint64_t value);
@@ -179,9 +187,11 @@ public:
     [[nodiscard]] std::optional<PrimitiveVisibilityStats> pollDeferredPrimitiveVisibilityStats();
     [[nodiscard]] std::optional<LodSelectionStats> pollDeferredLodSelectionStats();
     [[nodiscard]] std::optional<TileInstanceStats> pollDeferredTileInstanceStats();
-    [[nodiscard]] bool shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buffers,
-                                                    size_t target_capacity,
-                                                    size_t visible_capacity);
+    // Export-only exact gate. Records the raw count/sentinel, submits
+    // and fence-waits batch A, invalidates the mapped allocation, then starts
+    // batch B before returning the raw count/sentinel result.
+    [[nodiscard]] TileInstanceGate synchronizeTileInstanceGate(
+        VulkanGSPipelineBuffers& buffers);
 
     void executeProjectionForward(const VulkanGSRendererUniforms& uniforms,
                                   VulkanGSPipelineBuffers& buffers,
@@ -232,32 +242,29 @@ public:
     void executeMacroCoverage(const VulkanGSRendererUniforms& uniforms,
                               VulkanGSPipelineBuffers& buffers,
                               size_t visible_capacity);
-    void executeGenerateMacroKeys(const VulkanGSRendererUniforms& uniforms,
-                                  VulkanGSPipelineBuffers& buffers,
-                                  size_t visible_capacity,
-                                  size_t instance_capacity);
-    void executeComputeMacroRanges(const VulkanGSRendererUniforms& uniforms,
-                                   VulkanGSPipelineBuffers& buffers,
-                                   size_t instance_capacity);
-    // Batch counts/offsets per macro tile + wave-chunked indirect args.
-    void executeMacroBatches(const VulkanGSRendererUniforms& uniforms,
-                             VulkanGSPipelineBuffers& buffers);
-    // Wave loop: raster partials + compose per HIGS_RASTER_WAVE_BATCHES batches.
-    void executeMacroRasterCompose(const VulkanGSRendererUniforms& uniforms,
-                                   VulkanGSPipelineBuffers& buffers,
-                                   size_t instance_capacity,
-                                   const _VulkanBuffer& selection_mask,
-                                   const _VulkanBuffer& preview_mask,
-                                   const _VulkanBuffer& selection_colors,
-                                   const _VulkanBuffer& overlay_params,
-                                   bool overlays_active);
+    void executeMacroDepthWaves(const VulkanGSRendererUniforms& uniforms,
+                                VulkanGSPipelineBuffers& buffers,
+                                size_t armed,
+                                int sort_bits,
+                                const _VulkanBuffer& selection_mask,
+                                const _VulkanBuffer& preview_mask,
+                                const _VulkanBuffer& selection_colors,
+                                const _VulkanBuffer& overlay_params,
+                                bool overlays_active,
+                                bool predicate_waves = true);
     [[nodiscard]] bool supportsFloat16Storage() const { return supports_float16_storage_; }
+    [[nodiscard]] bool supportsConditionalRendering() const {
+        return supports_conditional_rendering_;
+    }
     // Indirect visible-bounded cumsum of tiles_touched_depth_ordered followed
     // by GPU count/dispatch preparation and deferred count readback.
     void executeCalculateIndexBufferOffsetVisible(const VulkanGSRendererUniforms& uniforms,
                                                   VulkanGSPipelineBuffers& buffers,
-                                                  size_t visible_capacity,
-                                                  size_t instance_capacity);
+                                                  size_t visible_capacity);
+    void executeWavePartition(const VulkanGSRendererUniforms& uniforms,
+                              VulkanGSPipelineBuffers& buffers,
+                              size_t armed,
+                              bool visible_bounded);
 
     void executeMapLodIndices(std::uint32_t lod_count,
                               std::uint32_t chunk_splats,
@@ -272,14 +279,10 @@ public:
                                    const _VulkanBuffer& page_age,
                                    const _VulkanBuffer& page_frames,
                                    const _VulkanBuffer& page_to_chunk);
-    void executeGenerateKeys(const VulkanGSRendererUniforms& uniforms,
-                             VulkanGSPipelineBuffers& buffers,
-                             size_t instance_capacity);
-    void executeComputeTileRanges(const VulkanGSRendererUniforms& uniforms,
-                                  VulkanGSPipelineBuffers& buffers,
-                                  size_t instance_capacity);
-    void executeRasterizeForward(const VulkanGSRendererUniforms& uniforms,
+    void executeLegacyDepthWaves(const VulkanGSRendererUniforms& uniforms,
                                  VulkanGSPipelineBuffers& buffers,
+                                 size_t armed,
+                                 int sort_bits,
                                  const _VulkanBuffer& selection_mask,
                                  const _VulkanBuffer& preview_mask,
                                  const _VulkanBuffer& selection_colors,
@@ -288,7 +291,8 @@ public:
                                  const _VulkanBuffer& transform_indices,
                                  const _VulkanBuffer& model_transforms,
                                  bool use_gut_rasterization = false,
-                                 bool overlays_active = true);
+                                 bool overlays_active = true,
+                                 bool predicate_waves = true);
     // When set, forward forces the non-batched per-pixel rasterizer: the
     // load-balanced batched compose only covers a subset of pixels, leaving the
     // rest with shared-buffer residue, which corrupts a one-shot depth readback.
@@ -310,12 +314,7 @@ public:
                                           const _VulkanBuffer& polygon_mask);
 
     void executeCalculateIndexBufferOffset(const VulkanGSRendererUniforms& uniforms,
-                                           VulkanGSPipelineBuffers& buffers,
-                                           size_t instance_capacity);
-    void executeSortTileInstances(const VulkanGSRendererUniforms& uniforms,
-                                  VulkanGSPipelineBuffers& buffers,
-                                  int num_bits,
-                                  size_t capacity);
+                                           VulkanGSPipelineBuffers& buffers);
 
     // Two-stage sort stage 1: sort the N primitives by depth (radial distance
     // squared, written into buffers.primitive_depth_keys by projection_forward).
@@ -330,10 +329,15 @@ public:
                                    VulkanGSPipelineBuffers& buffers);
 
 protected:
+    // Export W_rec can exceed the interactive wave budget. Callers disable
+    // timestamps after W_MAX so fixed-size query rings remain bounded while all
+    // scan work is still recorded and executed.
     void executeCumsum(
         VulkanGSPipelineBuffers& buffers,
         Buffer<int32_t>& input_buffer,
-        Buffer<int32_t>& output_buffer);
+        Buffer<int32_t>& output_buffer,
+        const std::vector<BufferBarrier>& additional_begin_barriers = {},
+        bool record_timestamps = true);
 
     void executeSortIndirectCount(const VulkanGSRendererUniforms& uniforms,
                                   VulkanGSPipelineBuffers& buffers,
@@ -351,18 +355,10 @@ protected:
                                       size_t capacity,
                                       const lfs::rendering::vulkan::indirect_layout::Layout& dispatch_layout,
                                       size_t radix_word_offset,
-                                      const char* cpu_timer_prefix);
+                                      const char* cpu_timer_prefix,
+                                      bool wave_barriers_hoisted);
     void executePrepareTileSort(const VulkanGSRendererUniforms& uniforms,
-                                VulkanGSPipelineBuffers& buffers,
-                                size_t instance_capacity);
-    void executeBatchedRasterizeForward(const VulkanGSRendererUniforms& uniforms,
-                                        VulkanGSPipelineBuffers& buffers,
-                                        const _VulkanBuffer& selection_mask,
-                                        const _VulkanBuffer& preview_mask,
-                                        const _VulkanBuffer& selection_colors,
-                                        const _VulkanBuffer& overlay_flags,
-                                        const _VulkanBuffer& overlay_params,
-                                        bool overlays_active);
+                                VulkanGSPipelineBuffers& buffers);
 
     _ComputePipeline pipeline_projection_forward = _ComputePipeline(24);
     _ComputePipeline pipeline_projection_forward_3dgut = _ComputePipeline(24);
@@ -372,12 +368,12 @@ protected:
     _ComputePipeline pipeline_projection_forward_quant_3dgut = _ComputePipeline(25);
     _ComputePipeline pipeline_selection_mask = _ComputePipeline(11);
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
-    _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);
+    _ComputePipeline pipeline_generate_keys_wave = _ComputePipeline(8);
     _ComputePipeline pipeline_seed_primitive_indices = _ComputePipeline(1);
     _ComputePipeline pipeline_apply_depth_ordering = _ComputePipeline(4);
     _ComputePipeline pipeline_visible_flags = _ComputePipeline(2);
     _ComputePipeline pipeline_prepare_visible_sort = _ComputePipeline(3);
-    _ComputePipeline pipeline_prepare_tile_sort = _ComputePipeline(3);
+    _ComputePipeline pipeline_prepare_tile_sort = _ComputePipeline(2);
     _ComputePipeline pipeline_compact_visible_primitives = _ComputePipeline(5);
     _ComputePipeline pipeline_lod_map_indices = _ComputePipeline(3);
     _ComputePipeline pipeline_lod_select_threshold = _ComputePipeline(12);
@@ -398,37 +394,45 @@ protected:
         _ComputePipeline scan_block_sums = _ComputePipeline(4);
         _ComputePipeline add_block_offsets = _ComputePipeline(4);
     } pipeline_cumsum_indirect;
-    _ComputePipeline pipeline_prepare_tile_sort_visible = _ComputePipeline(4);
+    _ComputePipeline pipeline_prepare_tile_sort_visible = _ComputePipeline(3);
+    _ComputePipeline pipeline_wave_partition = _ComputePipeline(4);
+    _ComputePipeline pipeline_wave_partition_visible = _ComputePipeline(5);
     // HiGS macro chain
     _ComputePipeline pipeline_macro_coverage = _ComputePipeline(6);
-    _ComputePipeline pipeline_generate_macro_keys = _ComputePipeline(8);
+    _ComputePipeline pipeline_generate_macro_keys_wave = _ComputePipeline(9);
     _ComputePipeline pipeline_compute_macro_ranges[2] = {
-        _ComputePipeline(3),
-        _ComputePipeline(3)};
-    _ComputePipeline pipeline_macro_batch_counts = _ComputePipeline(2);
+        _ComputePipeline(4),
+        _ComputePipeline(4)};
     _ComputePipeline pipeline_macro_batch_prepare = _ComputePipeline(2);
+    _ComputePipeline pipeline_radix_histogram_clear = _ComputePipeline(2);
     _ComputePipelinePair pipeline_macro_raster = _ComputePipelinePair(8);
     _ComputePipelinePair pipeline_macro_raster_fp32 = _ComputePipelinePair(8);
     _ComputePipelinePair pipeline_macro_raster_overlays = _ComputePipelinePair(14);
     _ComputePipelinePair pipeline_macro_compose = _ComputePipelinePair(12);
     _ComputePipelinePair pipeline_macro_compose_overlays = _ComputePipelinePair(18);
     bool supports_float16_storage_ = false;
+    bool supports_conditional_rendering_ = false;
+    PFN_vkCmdBeginConditionalRenderingEXT vk_cmd_begin_conditional_rendering_ = nullptr;
+    PFN_vkCmdEndConditionalRenderingEXT vk_cmd_end_conditional_rendering_ = nullptr;
     // 3 bindings: sorted_keys, out_tile_ranges, GPU tile-instance count.
     _ComputePipeline pipeline_compute_tile_ranges[2] = {
         _ComputePipeline(3),
         _ComputePipeline(3)};
-    _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(14);
-    _ComputePipelinePair pipeline_rasterize_forward_3dgut = _ComputePipelinePair(20);
-    _ComputePipelinePair pipeline_rasterize_forward_plain = _ComputePipelinePair(14);
-    _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(20);
-    _ComputePipelinePair pipeline_rasterize_forward_light = _ComputePipelinePair(14);
-    _ComputePipelinePair pipeline_rasterize_forward_light_plain = _ComputePipelinePair(14);
-    _ComputePipeline pipeline_tile_batch_counts = _ComputePipeline(2);
+    _ComputePipeline pipeline_compute_tile_ranges_and_batch_counts[2] = {
+        _ComputePipeline(4),
+        _ComputePipeline(4)};
+    _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(15);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut = _ComputePipelinePair(21);
+    _ComputePipelinePair pipeline_rasterize_forward_plain = _ComputePipelinePair(15);
+    _ComputePipelinePair pipeline_rasterize_forward_3dgut_plain = _ComputePipelinePair(21);
+    _ComputePipelinePair pipeline_rasterize_forward_light = _ComputePipelinePair(15);
+    _ComputePipelinePair pipeline_rasterize_forward_light_plain = _ComputePipelinePair(15);
     _ComputePipeline pipeline_tile_batch_descriptors = _ComputePipeline(4);
     _ComputePipelinePair pipeline_rasterize_forward_batches = _ComputePipelinePair(12);
     _ComputePipelinePair pipeline_rasterize_forward_batches_plain = _ComputePipelinePair(7);
     _ComputePipeline pipeline_compose_tile_batches = _ComputePipeline(17);
     _ComputePipeline pipeline_compose_tile_batches_plain = _ComputePipeline(12);
+    _ComputePipeline pipeline_expected_depth_finalize = _ComputePipeline(2);
     bool depth_capture_ = false;
     struct _CumsumComputePipeline {
         _ComputePipeline single_pass = _ComputePipeline(2);
@@ -463,6 +467,10 @@ protected:
     VkSemaphore instance_count_readback_signal_ = VK_NULL_HANDLE;
     std::uint64_t instance_count_readback_value_ = 0;
 
+    _VulkanBuffer instance_gate_readback_buffer_{};
+    uint32_t* instance_gate_readback_mapped_ = nullptr;
+    bool instance_gate_readback_initialized_ = false;
+
     _VulkanBuffer lod_selection_readback_buffer_{};
     uint32_t* lod_selection_readback_mapped_ = nullptr;
     bool lod_selection_readback_initialized_ = false;
@@ -477,7 +485,9 @@ protected:
     void recordVisibleCountReadback(VulkanGSPipelineBuffers& buffers, size_t num_splats);
     void ensureInstanceCountReadback();
     void destroyInstanceCountReadback();
-    void recordInstanceCountReadback(VulkanGSPipelineBuffers& buffers);
+    void recordInstanceCountReadback(VulkanGSPipelineBuffers& buffers, size_t armed);
+    void ensureInstanceGateReadback();
+    void destroyInstanceGateReadback();
     void ensureLodSelectionReadback(size_t chunk_capacity);
     void destroyLodSelectionReadback();
     void recordLodSelectionReadback(VulkanGSPipelineBuffers& buffers,

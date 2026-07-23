@@ -63,11 +63,13 @@ add_library(lfs_io_rad_quant_cuda STATIC
 target_include_directories(lfs_io_rad_quant_cuda
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/core/include
         ${CMAKE_SOURCE_DIR}/src
 )
 
 target_link_libraries(lfs_io_rad_quant_cuda
         PRIVATE
+        lfs_diagnostics
         CUDA::cudart
 )
 

@@ -524,7 +524,7 @@ namespace lfs::training {
                 const auto cameras_group_id = scene.addGroup("Cameras", dataset_id);
 
                 const auto train_cameras_id = scene.addCameraGroup(
-                    std::format("Training ({})", train_count),
+                    "Training",
                     cameras_group_id,
                     train_count);
 
@@ -536,7 +536,7 @@ namespace lfs::training {
 
                 if (enable_eval && val_count > 0) {
                     const auto val_cameras_id = scene.addCameraGroup(
-                        std::format("Validation ({})", val_count),
+                        "Validation",
                         cameras_group_id,
                         val_count);
 
@@ -885,7 +885,7 @@ namespace lfs::training {
 
                 const auto cameras_group_id = scene.addGroup("Cameras", dataset_id);
                 const auto train_cameras_id = scene.addCameraGroup(
-                    std::format("Training ({})", train_count), cameras_group_id, train_count);
+                    "Training", cameras_group_id, train_count);
 
                 for (size_t i = 0; i < cameras.size(); ++i) {
                     if (!enable_eval || (i % test_every) != 0) {
@@ -895,7 +895,7 @@ namespace lfs::training {
 
                 if (enable_eval && val_count > 0) {
                     const auto val_cameras_id = scene.addCameraGroup(
-                        std::format("Validation ({})", val_count), cameras_group_id, val_count);
+                        "Validation", cameras_group_id, val_count);
                     for (size_t i = 0; i < cameras.size(); ++i) {
                         if ((i % test_every) == 0) {
                             scene.addCamera(cameras[i]->image_name(), val_cameras_id, cameras[i]);

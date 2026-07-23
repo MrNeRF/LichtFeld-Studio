@@ -169,6 +169,75 @@ struct SplatActiveState {
     uint model_transform_base;
     bool model_transform_enabled;
 };
+[ForceInline]
+void apply_crop_box_filter(
+    StructuredBuffer<float4> overlay_params,
+    uint flags_idx,
+    bool node_data_enabled,
+    int node_idx,
+    float3 mean_ws,
+    inout bool active,
+    inout uint overlay_flags)
+{
+    if (!active) return;
+    float4 crop_flags = overlay_params[flags_idx];
+    if (!overlay_enabled(crop_flags.x)) return;
+
+    int parent_node_idx = overlay_int(crop_flags.w);
+    bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+    if (!applies) return;
+
+    float3 local = transform_point_rows(overlay_params, flags_idx + 3u, mean_ws);
+    float3 bmin = overlay_params[flags_idx + 1u].xyz;
+    float3 bmax = overlay_params[flags_idx + 2u].xyz;
+    bool inside = local.x >= bmin.x && local.x <= bmax.x &&
+                  local.y >= bmin.y && local.y <= bmax.y &&
+                  local.z >= bmin.z && local.z <= bmax.z;
+    bool outside = inside == overlay_enabled(crop_flags.y);
+    if (outside) {
+        overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+        if (overlay_enabled(crop_flags.z)) {
+            overlay_flags |= OVERLAY_FLAG_DIM;
+        } else {
+            active = false;
+        }
+    }
+}
+
+[ForceInline]
+void apply_ellipsoid_filter(
+    StructuredBuffer<float4> overlay_params,
+    uint flags_idx,
+    bool node_data_enabled,
+    int node_idx,
+    float3 mean_ws,
+    inout bool active,
+    inout uint overlay_flags)
+{
+    if (!active) return;
+    float4 ellipsoid_flags = overlay_params[flags_idx];
+    if (!overlay_enabled(ellipsoid_flags.x)) return;
+
+    int parent_node_idx = overlay_int(ellipsoid_flags.w);
+    bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+    if (!applies) return;
+
+    float3 local = transform_point_rows(overlay_params, flags_idx + 2u, mean_ws);
+    float3 radii = max(abs(overlay_params[flags_idx + 1u].xyz), float3(1e-8f));
+    float norm = (local.x * local.x) / (radii.x * radii.x) +
+                 (local.y * local.y) / (radii.y * radii.y) +
+                 (local.z * local.z) / (radii.z * radii.z);
+    bool inside = norm <= 1.0f;
+    bool outside = inside == overlay_enabled(ellipsoid_flags.y);
+    if (outside) {
+        overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+        if (overlay_enabled(ellipsoid_flags.z)) {
+            overlay_flags |= OVERLAY_FLAG_DIM;
+        } else {
+            active = false;
+        }
+    }
+}
 
 SplatActiveState compute_splat_active_state(
     uint logical_idx,
@@ -193,50 +262,24 @@ SplatActiveState compute_splat_active_state(
                          ? transform_point_rows(model_transforms, model_transform_base, xyz_ws_in)
                          : xyz_ws_in;
 
-    float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
-    if (overlay_enabled(crop_flags.x)) {
-        int parent_node_idx = overlay_int(crop_flags.w);
-        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
-        if (applies) {
-            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_CROP_TRANSFORM, mean_ws);
-            float3 bmin = overlay_params[OVERLAY_PARAM_CROP_MIN].xyz;
-            float3 bmax = overlay_params[OVERLAY_PARAM_CROP_MAX].xyz;
-            bool inside = local.x >= bmin.x && local.x <= bmax.x &&
-                          local.y >= bmin.y && local.y <= bmax.y &&
-                          local.z >= bmin.z && local.z <= bmax.z;
-            bool outside = inside == overlay_enabled(crop_flags.y);
-            if (outside) {
-                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
-                if (overlay_enabled(crop_flags.z)) {
-                    overlay_flags |= OVERLAY_FLAG_DIM;
-                } else {
-                    active = false;
-                }
-            }
-        }
+    apply_crop_box_filter(overlay_params, OVERLAY_PARAM_CROP_FLAGS,
+                          node_data_enabled, node_idx, mean_ws,
+                          active, overlay_flags);
+    for (uint crop_i = 0u; crop_i < OVERLAY_PARAM_CROP_EXTRA_COUNT; ++crop_i) {
+        apply_crop_box_filter(overlay_params,
+                              OVERLAY_PARAM_CROP_EXTRA_BASE + crop_i * OVERLAY_PARAM_CROP_STRIDE,
+                              node_data_enabled, node_idx, mean_ws,
+                              active, overlay_flags);
     }
 
-    float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
-    if (active && overlay_enabled(ellipsoid_flags.x)) {
-        int parent_node_idx = overlay_int(ellipsoid_flags.w);
-        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
-        if (applies) {
-            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_ELLIPSOID_TRANSFORM, mean_ws);
-            float3 radii = overlay_params[OVERLAY_PARAM_ELLIPSOID_RADII].xyz;
-            float norm = (local.x * local.x) / (radii.x * radii.x) +
-                         (local.y * local.y) / (radii.y * radii.y) +
-                         (local.z * local.z) / (radii.z * radii.z);
-            bool inside = norm <= 1.0f;
-            bool outside = inside == overlay_enabled(ellipsoid_flags.y);
-            if (outside) {
-                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
-                if (overlay_enabled(ellipsoid_flags.z)) {
-                    overlay_flags |= OVERLAY_FLAG_DIM;
-                } else {
-                    active = false;
-                }
-            }
-        }
+    apply_ellipsoid_filter(overlay_params, OVERLAY_PARAM_ELLIPSOID_FLAGS,
+                           node_data_enabled, node_idx, mean_ws,
+                           active, overlay_flags);
+    for (uint ellipsoid_i = 0u; ellipsoid_i < OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT; ++ellipsoid_i) {
+        apply_ellipsoid_filter(overlay_params,
+                               OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + ellipsoid_i * OVERLAY_PARAM_ELLIPSOID_STRIDE,
+                               node_data_enabled, node_idx, mean_ws,
+                               active, overlay_flags);
     }
 
     float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];

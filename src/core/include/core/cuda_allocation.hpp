@@ -31,7 +31,7 @@ namespace lfs::core {
             if (status != cudaSuccess) {
                 ensure_cuda_success(
                     status, "direct CUDA allocation free", {},
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 cudaGetLastError();
             }
         }
@@ -61,7 +61,7 @@ namespace lfs::core {
             if (status != cudaSuccess) {
                 ensure_cuda_success(
                     status, "stream-ordered CUDA allocation free", {},
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 cudaGetLastError();
             }
         }

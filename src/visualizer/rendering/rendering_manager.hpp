@@ -521,12 +521,14 @@ namespace lfs::vis {
 
         // Gizmo state for wireframe sync during manipulation
         void setCropboxGizmoState(bool active, const glm::vec3& min, const glm::vec3& max,
-                                  const glm::mat4& world_transform, bool affects_render = true) {
-            viewport_overlay_service_.setCropbox(active, min, max, world_transform, affects_render);
+                                  const glm::mat4& world_transform, bool affects_render,
+                                  int parent_node_index) {
+            viewport_overlay_service_.setCropbox(active, min, max, world_transform, affects_render, parent_node_index);
         }
         void setEllipsoidGizmoState(bool active, const glm::vec3& radii,
-                                    const glm::mat4& world_transform, bool affects_render = true) {
-            viewport_overlay_service_.setEllipsoid(active, radii, world_transform, affects_render);
+                                    const glm::mat4& world_transform, bool affects_render,
+                                    int parent_node_index) {
+            viewport_overlay_service_.setEllipsoid(active, radii, world_transform, affects_render, parent_node_index);
         }
         void setCropboxGizmoActive(bool active) { viewport_overlay_service_.setCropboxActive(active); }
         void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
@@ -585,8 +587,7 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
-            PreviewImageReadback readback,
-            bool settle_capacity = false);
+            PreviewImageReadback readback);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -603,8 +604,7 @@ namespace lfs::vis {
             std::optional<bool> orthographic_override,
             std::optional<float> ortho_scale_override,
             std::optional<glm::vec3> background_color_override,
-            std::optional<bool> transparent_background_override,
-            bool settle_capacity = false);
+            std::optional<bool> transparent_background_override);
         [[nodiscard]] std::expected<void, std::string> renderDepthCaptureToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -692,7 +692,6 @@ namespace lfs::vis {
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
         bool lod_controller_needs_sync_traversal_ = false;
         std::uint64_t lod_controller_page_map_generation_ = 0;
-        int vksplat_camera_settle_passes_remaining_ = 0;
         // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
         // only when the source sh0_raw() pointer/size changes so the Vulkan
         // renderer's per-tensor upload cache stays warm across frames.
@@ -724,7 +723,6 @@ namespace lfs::vis {
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
-        std::atomic_bool camera_pose_dirty_{false};
 
         RenderAnimationState animation_state_;
         ViewportArtifactService viewport_artifact_service_;

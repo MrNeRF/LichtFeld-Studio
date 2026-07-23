@@ -19,6 +19,7 @@
 #include "core/tensor.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
+#include "gui/error_event_bridge.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/line_renderer.hpp"
 #include "gui/native_panels.hpp"
@@ -590,7 +591,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        void appendTexturedOverlayQuad(VulkanViewportPassParams& params,
+        void appendTexturedOverlayQuad(const VulkanViewportPassParams& params,
+                                       std::vector<VulkanViewportTexturedOverlay>& out,
                                        std::uintptr_t texture_id,
                                        const std::array<glm::vec2, 4>& screen_points,
                                        const glm::vec2& uv_min,
@@ -734,7 +736,8 @@ namespace lfs::vis::gui {
             return {width * scale, size_px};
         }
 
-        void appendTextOverlay(VulkanViewportPassParams& params,
+        void appendTextOverlay(const VulkanViewportPassParams& params,
+                               std::vector<VulkanViewportTexturedOverlay>& out,
                                const lfs::rendering::OverlayCommand& cmd) {
             if (!g_overlay_atlas.valid || cmd.text.empty() || cmd.font_size <= 0.0f ||
                 cmd.color_premul.a <= 0.0f) {
@@ -762,7 +765,7 @@ namespace lfs::vis::gui {
                     const std::array<glm::vec2, 4> pts = {
                         glm::vec2{x0, y0}, glm::vec2{x1, y0},
                         glm::vec2{x1, y1}, glm::vec2{x0, y1}};
-                    appendTexturedOverlayQuad(params, texture_id, pts,
+                    appendTexturedOverlayQuad(params, out, texture_id, pts,
                                               g.uv0, g.uv1,
                                               cmd.color_premul, {1.0f, 0.0f, 0.0f, 0.0f});
                 }
@@ -810,8 +813,20 @@ namespace lfs::vis::gui {
                                                     command.thickness);
                     break;
                 case lfs::rendering::OverlayCommandType::Text:
-                    appendTextOverlay(params, command);
+                    appendTextOverlay(params, params.ui_textured_overlays, command);
                     break;
+                case lfs::rendering::OverlayCommandType::Image: {
+                    const std::array<glm::vec2, 4> pts = {
+                        glm::vec2{command.p0.x, command.p0.y},
+                        glm::vec2{command.p1.x, command.p0.y},
+                        glm::vec2{command.p1.x, command.p1.y},
+                        glm::vec2{command.p0.x, command.p1.y}};
+                    appendTexturedOverlayQuad(params, params.ui_textured_overlays,
+                                              command.texture_id, pts,
+                                              command.uv0, command.uv1,
+                                              command.color_premul, {1.0f, 0.0f, 0.0f, 0.0f});
+                    break;
+                }
                 }
             }
         }
@@ -1011,7 +1026,8 @@ namespace lfs::vis::gui {
                    extent.y <= panel_limit;
         }
 
-        void appendTexturedOverlayQuad(VulkanViewportPassParams& params,
+        void appendTexturedOverlayQuad(const VulkanViewportPassParams& params,
+                                       std::vector<VulkanViewportTexturedOverlay>& out,
                                        const std::uintptr_t texture_id,
                                        const std::array<glm::vec2, 4>& screen_points,
                                        const glm::vec2& uv_min,
@@ -1040,7 +1056,7 @@ namespace lfs::vis::gui {
                 {.position = ndc(screen_points[2]), .uv = {uv_max.x, uv_max.y}, .view_depth = view_depths[2]},
                 {.position = ndc(screen_points[3]), .uv = {uv_min.x, uv_max.y}, .view_depth = view_depths[3]},
             }};
-            params.textured_overlays.push_back(overlay);
+            out.push_back(overlay);
         }
 
         struct VulkanViewportGizmoMarker {
@@ -2265,6 +2281,7 @@ namespace lfs::vis::gui {
                         const float disabled_mix = disabled ? 0.5f : 0.0f;
                         const float emphasis_mix = emphasized_uids.count(camera->uid()) > 0 ? 0.18f : 0.0f;
                         appendTexturedOverlayQuad(params,
+                                                  params.textured_overlays,
                                                   placement->texture_id,
                                                   screen_points,
                                                   placement->uv_min,
@@ -2373,7 +2390,32 @@ namespace lfs::vis::gui {
                                    4.5f);
             }
 
-            if (gizmo.cropbox_active) {
+            const auto selected_cropbox_is_visible = [&]() {
+                if (!scene_state || !scene_manager)
+                    return true;
+                const core::NodeId selected_id = scene_manager->getSelectedNodeCropBoxId();
+                if (selected_id == core::NULL_NODE)
+                    return !gizmo.cropbox_affects_render;
+                for (const auto& cb : scene_state->cropboxes) {
+                    if (cb.node_id == selected_id)
+                        return cb.effectively_visible;
+                }
+                return false;
+            };
+            const auto selected_ellipsoid_is_visible = [&]() {
+                if (!scene_state || !scene_manager)
+                    return true;
+                const core::NodeId selected_id = scene_manager->getSelectedNodeEllipsoidId();
+                if (selected_id == core::NULL_NODE)
+                    return !gizmo.ellipsoid_affects_render;
+                for (const auto& el : scene_state->ellipsoids) {
+                    if (el.node_id == selected_id)
+                        return el.effectively_visible;
+                }
+                return false;
+            };
+
+            if (gizmo.cropbox_active && selected_cropbox_is_visible()) {
                 appendProjectedBox(params, panel, settings,
                                    gizmo.cropbox_min,
                                    gizmo.cropbox_max,
@@ -2382,7 +2424,7 @@ namespace lfs::vis::gui {
                                    2.0f);
             }
 
-            if (gizmo.ellipsoid_active) {
+            if (gizmo.ellipsoid_active && selected_ellipsoid_is_visible()) {
                 appendProjectedEllipsoid(params, panel, settings,
                                          gizmo.ellipsoid_radii,
                                          gizmo.ellipsoid_transform,
@@ -2394,44 +2436,38 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            if (settings.show_crop_box) {
-                const core::NodeId selected_id = scene_manager->getSelectedNodeCropBoxId();
-                for (const auto& cb : scene_state->cropboxes) {
-                    if (!cb.data) {
-                        continue;
-                    }
-                    const bool selected = cb.node_id == selected_id;
-                    const bool use_pending = selected && gizmo.cropbox_active;
-                    const glm::vec3 box_min = use_pending ? gizmo.cropbox_min : cb.data->min;
-                    const glm::vec3 box_max = use_pending ? gizmo.cropbox_max : cb.data->max;
-                    const glm::mat4 world_transform = use_pending ? gizmo.cropbox_transform : cb.world_transform;
-                    const float flash = selected ? std::clamp(cb.data->flash_intensity, 0.0f, 1.0f) : 0.0f;
-                    appendProjectedBox(params, panel, settings,
-                                       box_min,
-                                       box_max,
-                                       world_transform,
-                                       cropGuideColor(cb.data->color, cb.data->inverse, flash),
-                                       cb.data->line_width + flash * 4.0f);
+            const core::NodeId selected_cropbox_id = scene_manager->getSelectedNodeCropBoxId();
+            for (const auto& cb : scene_state->cropboxes) {
+                if (!cb.data || !cb.effectively_visible || cb.node_id != selected_cropbox_id) {
+                    continue;
                 }
+                const bool use_pending = gizmo.cropbox_active;
+                const glm::vec3 box_min = use_pending ? gizmo.cropbox_min : cb.data->min;
+                const glm::vec3 box_max = use_pending ? gizmo.cropbox_max : cb.data->max;
+                const glm::mat4 world_transform = use_pending ? gizmo.cropbox_transform : cb.world_transform;
+                const float flash = std::clamp(cb.data->flash_intensity, 0.0f, 1.0f);
+                appendProjectedBox(params, panel, settings,
+                                   box_min,
+                                   box_max,
+                                   world_transform,
+                                   cropGuideColor(cb.data->color, cb.data->inverse, flash),
+                                   cb.data->line_width + flash * 4.0f);
             }
 
-            if (settings.show_ellipsoid) {
-                const core::NodeId selected_id = scene_manager->getSelectedNodeEllipsoidId();
-                for (const auto& el : scene_state->ellipsoids) {
-                    if (!el.data) {
-                        continue;
-                    }
-                    const bool selected = el.node_id == selected_id;
-                    const bool use_pending = selected && gizmo.ellipsoid_active;
-                    const glm::vec3 radii = use_pending ? gizmo.ellipsoid_radii : el.data->radii;
-                    const glm::mat4 world_transform = use_pending ? gizmo.ellipsoid_transform : el.world_transform;
-                    const float flash = selected ? std::clamp(el.data->flash_intensity, 0.0f, 1.0f) : 0.0f;
-                    appendProjectedEllipsoid(params, panel, settings,
-                                             radii,
-                                             world_transform,
-                                             cropGuideColor(el.data->color, el.data->inverse, flash),
-                                             el.data->line_width + flash * 4.0f);
+            const core::NodeId selected_ellipsoid_id = scene_manager->getSelectedNodeEllipsoidId();
+            for (const auto& el : scene_state->ellipsoids) {
+                if (!el.data || !el.effectively_visible || el.node_id != selected_ellipsoid_id) {
+                    continue;
                 }
+                const bool use_pending = gizmo.ellipsoid_active;
+                const glm::vec3 radii = use_pending ? gizmo.ellipsoid_radii : el.data->radii;
+                const glm::mat4 world_transform = use_pending ? gizmo.ellipsoid_transform : el.world_transform;
+                const float flash = std::clamp(el.data->flash_intensity, 0.0f, 1.0f);
+                appendProjectedEllipsoid(params, panel, settings,
+                                         radii,
+                                         world_transform,
+                                         cropGuideColor(el.data->color, el.data->inverse, flash),
+                                         el.data->line_width + flash * 4.0f);
             }
         }
 
@@ -2785,6 +2821,7 @@ namespace lfs::vis::gui {
         // Create components
         menu_bar_ = std::make_unique<MenuBar>();
         rml_modal_overlay_ = std::make_unique<RmlModalOverlay>(&rmlui_manager_);
+        rml_toast_overlay_ = std::make_unique<RmlToastOverlay>(&rmlui_manager_);
         global_context_menu_ = std::make_unique<GlobalContextMenu>(&rmlui_manager_);
         lfs::python::set_global_context_menu(global_context_menu_.get());
         video_widget_ = lfs::gui::createVideoWidget();
@@ -3669,6 +3706,8 @@ namespace lfs::vis::gui {
 
         if (rml_modal_overlay_)
             rml_modal_overlay_->reloadResources();
+        if (rml_toast_overlay_)
+            rml_toast_overlay_->reloadResources();
         if (global_context_menu_)
             global_context_menu_->reloadResources();
 
@@ -3762,6 +3801,7 @@ namespace lfs::vis::gui {
         lfs::python::set_global_context_menu(nullptr);
 
         rml_modal_overlay_.reset();
+        rml_toast_overlay_.reset();
         global_context_menu_.reset();
         panels::ShutdownPythonConsoleRml();
         rml_status_bar_.shutdown();
@@ -5472,12 +5512,12 @@ namespace lfs::vis::gui {
             focus.want_capture_keyboard = io.WantCaptureKeyboard || rmlui_manager_.wantsCaptureKeyboard();
             focus.want_text_input = io.WantTextInput || rmlui_manager_.wantsTextInput();
         }
-        const bool startup_plugin_preload_running = python::is_plugin_preload_running();
+        const bool startup_plugin_preload_blocking_python = python::is_plugin_preload_blocking_python();
 
         // Run queued Python/UI mutations before panel registries take draw snapshots.
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.python_flush_callbacks", 0.25);
-            if (!startup_plugin_preload_running && python::has_pending_graphics_callbacks())
+            if (!startup_plugin_preload_blocking_python && python::has_pending_graphics_callbacks())
                 python::flush_graphics_callbacks();
         }
 
@@ -5744,7 +5784,7 @@ namespace lfs::vis::gui {
         draw_ctx.ui_hidden = ui_hidden_;
         draw_ctx.frame_serial = ++panel_frame_serial_;
         draw_ctx.scene_generation = python::get_scene_generation();
-        draw_ctx.suppress_non_native_panels = startup_plugin_preload_running;
+        draw_ctx.suppress_non_native_panels = startup_plugin_preload_blocking_python;
         if (auto* sm = ctx.viewer->getSceneManager())
             draw_ctx.has_selection = sm->hasSelectedNode();
         if (auto* cc = lfs::event::command_center())
@@ -6319,7 +6359,7 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (!startup_plugin_preload_running &&
+        if (!startup_plugin_preload_blocking_python &&
             lfs::python::has_python_hooks("viewport_overlay", "draw")) {
             LOG_TIMER_THRESHOLD("gui_render.viewport_overlay.python_hooks", 0.25);
             lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
@@ -6400,11 +6440,11 @@ namespace lfs::vis::gui {
                 reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
         }
 
-        if (!startup_plugin_preload_running && python::has_python_modals()) {
+        if (!startup_plugin_preload_blocking_python && python::has_python_modals()) {
             LOG_TIMER("gui_render.python_modals_and_popups");
             python::draw_python_modals(scene);
         }
-        if (!startup_plugin_preload_running && python::has_python_popups()) {
+        if (!startup_plugin_preload_blocking_python && python::has_python_popups()) {
             LOG_TIMER("gui_render.python_popups");
             python::draw_python_popups(scene);
         }
@@ -6443,6 +6483,17 @@ namespace lfs::vis::gui {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.context_menu", 0.25);
                 global_context_menu_->render(panel_input.screen_w, panel_input.screen_h,
                                              panel_input.screen_x, panel_input.screen_y);
+            }
+            if (rml_toast_overlay_ && rml_toast_overlay_->hasPendingRenderWork()) {
+                LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.toast_overlay", 0.25);
+                rml_toast_overlay_->render(panel_input.screen_w,
+                                           panel_input.screen_h,
+                                           panel_input.screen_x,
+                                           panel_input.screen_y,
+                                           viewport_layout_.pos.x,
+                                           viewport_layout_.pos.y,
+                                           viewport_layout_.size.x,
+                                           viewport_layout_.size.y);
             }
             if (rml_modal_overlay_->hasPendingRenderWork()) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.modal_overlay", 0.25);
@@ -7109,9 +7160,19 @@ namespace lfs::vis::gui {
     void GuiManager::setupEventHandlers() {
         using namespace lfs::core::events;
 
+        error_consumer_ = std::make_unique<GuiErrorConsumer>(GuiErrorConsumer::Sinks{
+            .modal = [this](lfs::core::ModalRequest req) { enqueueModal(std::move(req)); },
+            .toast = [this](ToastRequest req) { enqueueToast(std::move(req)); },
+            .status = [this](std::string text, ErrorNoticeLevel level) {
+                rml_status_bar_.postStatusMessage(std::move(text), level);
+                if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr)
+                    window_manager->wakeEventLoop(); },
+        });
+        error_subscription_ = lfs::ErrorBus::instance().subscribe(*error_consumer_);
+        registerErrorEventBridge();
+
         ui::FileDropReceived::when([this](const auto&) {
-            if (startup_overlay_.isPluginLoadComplete())
-                startup_overlay_.dismiss();
+            startup_overlay_.dismiss();
             drag_drop_.resetHovering();
         });
 
@@ -7409,6 +7470,15 @@ namespace lfs::vis::gui {
             window_manager->wakeEventLoop();
     }
 
+    void GuiManager::enqueueToast(ToastRequest request) {
+        if (!rml_toast_overlay_)
+            return;
+
+        rml_toast_overlay_->enqueue(std::move(request));
+        if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr)
+            window_manager->wakeEventLoop();
+    }
+
     bool GuiManager::isVramHudOverlayVisible() const {
         return show_vram_hud_ && lfs::diagnostics::VramProfiler::instance().enabled();
     }
@@ -7470,7 +7540,7 @@ namespace lfs::vis::gui {
         draw_ctx.scene = scene;
         draw_ctx.ui_hidden = ui_hidden_;
         draw_ctx.scene_generation = python::get_scene_generation();
-        draw_ctx.suppress_non_native_panels = python::is_plugin_preload_running();
+        draw_ctx.suppress_non_native_panels = python::is_plugin_preload_blocking_python();
         if (scene_manager)
             draw_ctx.has_selection = scene_manager->hasSelectedNode();
         if (auto* cc = lfs::event::command_center())
@@ -7532,6 +7602,8 @@ namespace lfs::vis::gui {
             return true;
         if (rml_modal_overlay_ && rml_modal_overlay_->needsAnimationFrame())
             return true;
+        if (rml_toast_overlay_ && rml_toast_overlay_->needsAnimationFrame())
+            return true;
         if (global_context_menu_ && global_context_menu_->needsAnimationFrame())
             return true;
         if (video_widget_ && video_widget_->isVideoPlaying())
@@ -7562,8 +7634,7 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::dismissStartupOverlay() {
-        if (startup_overlay_.isPluginLoadComplete())
-            startup_overlay_.dismiss();
+        startup_overlay_.dismiss();
     }
 
     void GuiManager::setStartupPluginLoadState(const bool started,

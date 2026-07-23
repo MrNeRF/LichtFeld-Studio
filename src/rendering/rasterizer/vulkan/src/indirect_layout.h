@@ -29,22 +29,21 @@ namespace lfs::rendering::vulkan::indirect_layout {
         return layout.word_count * sizeof(std::uint32_t);
     }
 
+    [[nodiscard]] constexpr std::size_t depthWaveRecordUpperBound(
+        const std::size_t raw_instances,
+        const std::size_t max_rank_emission,
+        const std::size_t wave_capacity = HIGS_DEPTH_WAVE_INSTANCES) {
+        return wave_capacity > max_rank_emission
+                   ? 1u + raw_instances / (wave_capacity - max_rank_emission)
+                   : 0u;
+    }
+
     struct VisibleSortDispatch {
         inline static constexpr Layout kLayout{
             "LFS_VK_VISIBLE_SORT_DISPATCH_WORD_COUNT",
             LFS_VK_VISIBLE_SORT_DISPATCH_WORD_COUNT};
         inline static constexpr std::size_t kRadixWordOffset =
             LFS_VK_VISIBLE_SORT_DISPATCH_RADIX_WORD_OFFSET;
-    };
-
-    struct TileSortDispatch {
-        inline static constexpr Layout kLayout{
-            "LFS_VK_TILE_SORT_DISPATCH_WORD_COUNT",
-            LFS_VK_TILE_SORT_DISPATCH_WORD_COUNT};
-        inline static constexpr std::size_t kRadixWordOffset =
-            LFS_VK_TILE_SORT_DISPATCH_RADIX_WORD_OFFSET;
-        inline static constexpr std::size_t kRangeWordOffset =
-            LFS_VK_TILE_SORT_DISPATCH_RANGE_WORD_OFFSET;
     };
 
     struct TileBatchDispatch {
@@ -79,6 +78,57 @@ namespace lfs::rendering::vulkan::indirect_layout {
             LFS_VK_SURVIVOR_STATE_PROJECTION_WORD_OFFSET;
     };
 
+    struct DepthWave {
+        inline static constexpr Layout kRecordLayout{
+            "LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS",
+            LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS};
+        inline static constexpr std::size_t kRecordStrideWords =
+            LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS;
+        inline static constexpr std::size_t kHeaderNeededWord =
+            LFS_VK_DEPTH_WAVE_HEADER_NEEDED_WORD;
+        inline static constexpr std::size_t kCountWordOffset =
+            LFS_VK_DEPTH_WAVE_COUNT_WORD_OFFSET;
+        inline static constexpr std::size_t kKeygenWordOffset =
+            LFS_VK_DEPTH_WAVE_KEYGEN_WORD_OFFSET;
+        inline static constexpr std::size_t kRadixWordOffset =
+            LFS_VK_DEPTH_WAVE_RADIX_WORD_OFFSET;
+        inline static constexpr std::size_t kRangeWordOffset =
+            LFS_VK_DEPTH_WAVE_RANGE_WORD_OFFSET;
+        inline static constexpr std::size_t kPerTileWordOffset =
+            LFS_VK_DEPTH_WAVE_PER_TILE_WORD_OFFSET;
+        inline static constexpr std::size_t kFullscreenWordOffset =
+            LFS_VK_DEPTH_WAVE_FULLSCREEN_WORD_OFFSET;
+        inline static constexpr std::size_t kRankBaseWord =
+            LFS_VK_DEPTH_WAVE_RANK_BASE_WORD;
+        inline static constexpr std::size_t kRankCountWord =
+            LFS_VK_DEPTH_WAVE_RANK_COUNT_WORD;
+        inline static constexpr std::size_t kInstanceBaseWord =
+            LFS_VK_DEPTH_WAVE_INSTANCE_BASE_WORD;
+
+        [[nodiscard]] static constexpr Layout layout(const std::size_t armed) {
+            return {"DepthWave", (1u + armed) * kRecordStrideWords};
+        }
+
+        [[nodiscard]] static constexpr std::size_t recordWordOffset(const std::size_t wave) {
+            return (1u + wave) * kRecordStrideWords;
+        }
+
+#define LFS_DEPTH_WAVE_ACCESSOR(name, member)                                 \
+    [[nodiscard]] static constexpr std::size_t name(const std::size_t wave) { \
+        return recordWordOffset(wave) + member;                               \
+    }
+        LFS_DEPTH_WAVE_ACCESSOR(countWordOffset, kCountWordOffset)
+        LFS_DEPTH_WAVE_ACCESSOR(keygenWordOffset, kKeygenWordOffset)
+        LFS_DEPTH_WAVE_ACCESSOR(radixWordOffset, kRadixWordOffset)
+        LFS_DEPTH_WAVE_ACCESSOR(rangeWordOffset, kRangeWordOffset)
+        LFS_DEPTH_WAVE_ACCESSOR(perTileWordOffset, kPerTileWordOffset)
+        LFS_DEPTH_WAVE_ACCESSOR(fullscreenWordOffset, kFullscreenWordOffset)
+        LFS_DEPTH_WAVE_ACCESSOR(rankBaseWord, kRankBaseWord)
+        LFS_DEPTH_WAVE_ACCESSOR(rankCountWord, kRankCountWord)
+        LFS_DEPTH_WAVE_ACCESSOR(instanceBaseWord, kInstanceBaseWord)
+#undef LFS_DEPTH_WAVE_ACCESSOR
+    };
+
     struct MacroWaveDispatch {
         inline static constexpr Layout kLayout{
             "LFS_VK_MACRO_WAVE_DISPATCH_WORD_COUNT",
@@ -105,10 +155,6 @@ namespace lfs::rendering::vulkan::indirect_layout {
     static_assert(kCommandZWordOffset == kCommandYWordOffset + 1);
     static_assert(VisibleSortDispatch::kRadixWordOffset + kCommandWordCount ==
                   VisibleSortDispatch::kLayout.word_count);
-    static_assert(TileSortDispatch::kRadixWordOffset + kCommandWordCount ==
-                  TileSortDispatch::kRangeWordOffset);
-    static_assert(TileSortDispatch::kRangeWordOffset + kCommandWordCount ==
-                  TileSortDispatch::kLayout.word_count);
     static_assert(TileBatchDispatch::kRasterWordOffset + kCommandWordCount ==
                   TileBatchDispatch::kLayout.word_count);
     static_assert(VisibleChainDispatch::kRadixWordOffset + kCommandWordCount ==
@@ -124,6 +170,18 @@ namespace lfs::rendering::vulkan::indirect_layout {
                   SurvivorState::kCountWordOffset + 1);
     static_assert(SurvivorState::kProjectionWordOffset + kCommandWordCount ==
                   SurvivorState::kLayout.word_count);
+    static_assert(DepthWave::kRecordStrideWords * sizeof(std::uint32_t) == 256u);
+    static_assert(DepthWave::kHeaderNeededWord == 0u);
+    static_assert(DepthWave::kCountWordOffset + 2u <= DepthWave::kKeygenWordOffset);
+    static_assert(DepthWave::kKeygenWordOffset + kCommandWordCount ==
+                  DepthWave::kRadixWordOffset);
+    static_assert(DepthWave::kRadixWordOffset + kCommandWordCount ==
+                  DepthWave::kRangeWordOffset);
+    static_assert(DepthWave::kRangeWordOffset + kCommandWordCount ==
+                  DepthWave::kPerTileWordOffset);
+    static_assert(DepthWave::kPerTileWordOffset + kCommandWordCount ==
+                  DepthWave::kFullscreenWordOffset);
+    static_assert(DepthWave::kInstanceBaseWord < DepthWave::kRecordStrideWords);
     static_assert(MacroWaveDispatch::kComposeBaseWordOffset ==
                   HIGS_RASTER_MAX_WAVES * MacroWaveDispatch::kWaveStrideWords);
     static_assert(MacroWaveDispatch::kComposeBaseWordOffset +

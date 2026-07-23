@@ -5,6 +5,7 @@
 #pragma once
 
 // Re-export public API
+#include "core/error.hpp"
 #include "core/point_cloud.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -23,9 +24,11 @@ namespace lfs::io {
     // Check if PLY contains Gaussian splat properties (opacity, scaling, rotation)
     bool is_gaussian_splat_ply(const std::filesystem::path& filepath);
 
-    // Load PLY as Gaussian splat (with opacity, scaling, rotation, SH)
-    std::expected<SplatData, std::string> load_ply(const std::filesystem::path& filepath,
-                                                   const LoadOptions& options = {});
+    // Load PLY as Gaussian splat (with opacity, scaling, rotation, SH). Internal
+    // Result end to end (Section 5.4); PLYLoader adapts to the legacy io::Result
+    // surface at the loader boundary.
+    lfs::Result<LoadOutcome<SplatData>> load_ply(const std::filesystem::path& filepath,
+                                                 const LoadOptions& options = {});
 
     // Load PLY as simple point cloud (xyz + optional colors and normals)
     std::expected<lfs::core::PointCloud, std::string> load_ply_point_cloud(const std::filesystem::path& filepath,

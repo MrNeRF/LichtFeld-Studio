@@ -4,10 +4,12 @@
 
 #include "vulkan_context.hpp"
 
+#include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "vulkan_result.hpp"
 
 #include <algorithm>
@@ -20,6 +22,7 @@
 #include <fstream>
 #include <limits>
 #include <set>
+#include <stop_token>
 #include <utility>
 
 #include <SDL3/SDL_vulkan.h>
@@ -283,7 +286,8 @@ namespace lfs::vis {
                 LOG_ERROR("Vulkan validation: {}", message);
                 const bool fatal = user_data != nullptr && *static_cast<const bool*>(user_data);
                 if (fatal) {
-                    LOG_CRITICAL("Vulkan validation error is fatal because LFS_VK_VALIDATION_FATAL=1: {}",
+                    LOG_CRITICAL("Vulkan validation error is fatal because LFS_CUDA_SYNC_DEBUG includes "
+                                 "vk-fatal: {}",
                                  message);
                     std::abort();
                 }
@@ -366,8 +370,6 @@ namespace lfs::vis {
             }
             return nullptr;
         }
-
-        constexpr std::uint64_t kWaitForeverNs = std::numeric_limits<std::uint64_t>::max();
 
         [[nodiscard]] const char* vkFormatToString(const VkFormat format) noexcept {
             switch (format) {
@@ -485,6 +487,73 @@ namespace lfs::vis {
         return false;
     }
 
+    lfs::rendering::WaitContext VulkanContext::makeWaitContext(const std::string_view fingerprint) {
+        lfs::rendering::WaitContext ctx;
+        ctx.fingerprint = fingerprint;
+        ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
+        ctx.shutdown_latched = [this]() {
+            return context_shutdown_started_.load(std::memory_order_acquire);
+        };
+        ctx.is_quarantined = [this]() {
+            return gpu_wait_quarantined_.load(std::memory_order_acquire);
+        };
+        return ctx;
+    }
+
+    bool VulkanContext::mapWaitOutcome(lfs::Result<lfs::rendering::WaitOutcome> result,
+                                       const std::string_view op,
+                                       const bool set_framebuffer_resized_on_hard_error) {
+        using lfs::rendering::WaitOutcome;
+        if (result.has_value()) {
+            switch (*result) {
+            case WaitOutcome::Ready:
+                return true;
+            case WaitOutcome::Cancelled:
+            case WaitOutcome::Shutdown:
+                // Soft skip-frame / soft interop fail — no last_error_ (gui_manager
+                // only LOG_WARNs beginFrame failure when lastError() is non-empty).
+                last_error_.clear();
+                return false;
+            case WaitOutcome::Quarantined:
+                return fail(std::format(
+                    "GPU wait quarantined ({}): retain in-flight objects; skip frame",
+                    op));
+            }
+            return fail(std::format("GPU wait returned unknown WaitOutcome ({})", op));
+        }
+        const auto& err = result.error();
+        if (err.code() == lfs::ErrorCode::DeviceLost) {
+            gpu_wait_quarantined_.store(true, std::memory_order_release);
+            gpu_device_lost_.store(true, std::memory_order_release);
+        }
+        if (set_framebuffer_resized_on_hard_error) {
+            framebuffer_resized_ = true;
+        }
+        return fail(std::format("{} failed: {}", op, err.detail()));
+    }
+
+    bool VulkanContext::mapValidationWaitOutcome(lfs::Result<lfs::rendering::WaitOutcome> result,
+                                                 const std::string_view detail_on_fail) {
+        using lfs::rendering::WaitOutcome;
+        if (result.has_value() && *result == WaitOutcome::Ready) {
+            return true;
+        }
+        if (result.has_value()) {
+            if (*result == WaitOutcome::Quarantined) {
+                // Primitive already latched owner_quarantine_flag when applicable.
+                return fail(std::string(detail_on_fail));
+            }
+            // Cancelled / Shutdown on validation observe path: still fail so interop
+            // disable/throw paths stay consistent with a hard wait failure.
+            return fail(std::string(detail_on_fail));
+        }
+        if (result.error().code() == lfs::ErrorCode::DeviceLost) {
+            gpu_wait_quarantined_.store(true, std::memory_order_release);
+            gpu_device_lost_.store(true, std::memory_order_release);
+        }
+        return fail(std::format("{}: {}", detail_on_fail, result.error().detail()));
+    }
+
     bool VulkanContext::init(SDL_Window* window, const int framebuffer_width, const int framebuffer_height) {
         framebuffer_width_ = framebuffer_width;
         framebuffer_height_ = framebuffer_height;
@@ -515,6 +584,8 @@ namespace lfs::vis {
     }
 
     void VulkanContext::shutdown() {
+        // AMB-B3: latch before any device wait so concurrent UI waits observe Shutdown.
+        context_shutdown_started_.store(true, std::memory_order_release);
         if (device_ != VK_NULL_HANDLE) {
             // Shutdown is the one place where a whole-device wait is intentional:
             // all swapchain, UI, and external interop resources are about to be destroyed.
@@ -922,29 +993,32 @@ namespace lfs::vis {
                 vkHandleValue(frame_fence),
                 frame_submit_serials_[current_frame]));
         }
-        VkResult result = VK_SUCCESS;
         {
             LOG_TIMER_THRESHOLD("frame_pacing.vulkan_beginFrame.wait_frame_fence", 0.25);
             const auto wait_start = std::chrono::steady_clock::now();
-            result = vkWaitForFences(device_, 1, &frame_fence, VK_TRUE, kWaitForeverNs);
-            if (result != VK_SUCCESS) {
-                return fail(std::format("vkWaitForFences(frame slot {}) failed after {:.1f} ms: {} (frame_index={}, last_submit_id={}, framebuffer={}x{}, swapchain_extent={}x{}, active_image={}, active_frame={}, framebuffer_resized={})",
-                                        current_frame,
-                                        elapsedMs(wait_start),
-                                        vkResultToString(result),
-                                        frame_index_,
-                                        frame_submit_serials_[current_frame],
-                                        framebuffer_width_,
-                                        framebuffer_height_,
-                                        swapchain_extent_.width,
-                                        swapchain_extent_.height,
-                                        active_image_index_,
-                                        active_frame_index_,
-                                        framebuffer_resized_));
+            auto outcome = lfs::rendering::wait_fence_bounded(
+                device_, frame_fence, std::stop_token{}, lfs::rendering::VulkanWaitPolicy{},
+                makeWaitContext("vulkan.context.frame_fence"));
+            if (!mapWaitOutcome(
+                    std::move(outcome),
+                    std::format(
+                        "frame fence (slot {}, elapsed {:.1f} ms, last_submit_id={}, framebuffer={}x{}, swapchain_extent={}x{}, active_image={}, active_frame={}, framebuffer_resized={})",
+                        current_frame,
+                        elapsedMs(wait_start),
+                        frame_submit_serials_[current_frame],
+                        framebuffer_width_,
+                        framebuffer_height_,
+                        swapchain_extent_.width,
+                        swapchain_extent_.height,
+                        active_image_index_,
+                        active_frame_index_,
+                        framebuffer_resized_))) {
+                return false;
             }
         }
 
         uint32_t image_index = 0;
+        bool acquire_suboptimal = false;
         if (image_available_.empty()) {
             return fail(std::format(
                 "beginFrame requires at least one acquire semaphore (acquire_semaphore_count={}, swapchain_image_count={}, next_acquire_index={})",
@@ -966,23 +1040,44 @@ namespace lfs::vis {
         }
         {
             LOG_TIMER_THRESHOLD("frame_pacing.vulkan_beginFrame.acquire_next_image", 0.25);
-            result = vkAcquireNextImageKHR(device_, swapchain_, kWaitForeverNs,
-                                           image_available_[acquire_index],
-                                           VK_NULL_HANDLE, &image_index);
-        }
-        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-            LOG_DEBUG("vkAcquireNextImageKHR returned OUT_OF_DATE: acquire_index={}, framebuffer={}x{}, swapchain_extent={}x{}",
-                      acquire_index,
-                      framebuffer_width_,
-                      framebuffer_height_,
-                      swapchain_extent_.width,
-                      swapchain_extent_.height);
-            framebuffer_resize_exact_after_interactive_ = false;
-            deferSwapchainResizeRecreate(true, false);
-            return false;
-        }
-        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-            return fail(std::format("vkAcquireNextImageKHR failed: {}", vkResultToString(result)));
+            auto acquire = lfs::rendering::acquire_next_image_bounded(
+                device_,
+                swapchain_,
+                image_available_[acquire_index],
+                VK_NULL_HANDLE,
+                std::stop_token{},
+                lfs::rendering::VulkanWaitPolicy{},
+                makeWaitContext("vulkan.context.acquire"),
+                &acquire_suboptimal);
+            if (!acquire.has_value()) {
+                const auto& err = acquire.error();
+                // BYTE-PRESERVE OUT_OF_DATE recovery: silent false + defer recreate.
+                if (err.code() == lfs::ErrorCode::Unavailable &&
+                    err.native().has_value() &&
+                    static_cast<VkResult>(err.native()->code) == VK_ERROR_OUT_OF_DATE_KHR) {
+                    LOG_DEBUG("vkAcquireNextImageKHR returned OUT_OF_DATE: acquire_index={}, framebuffer={}x{}, swapchain_extent={}x{}",
+                              acquire_index,
+                              framebuffer_width_,
+                              framebuffer_height_,
+                              swapchain_extent_.width,
+                              swapchain_extent_.height);
+                    framebuffer_resize_exact_after_interactive_ = false;
+                    deferSwapchainResizeRecreate(true, false);
+                    return false;
+                }
+                // Stop/shutdown on acquire: soft skip-frame, no recreate.
+                if (err.code() == lfs::ErrorCode::Cancelled) {
+                    last_error_.clear();
+                    return false;
+                }
+                if (err.code() == lfs::ErrorCode::DeviceLost) {
+                    gpu_wait_quarantined_.store(true, std::memory_order_release);
+                    gpu_device_lost_.store(true, std::memory_order_release);
+                }
+                // Quarantine Unavailable and all other hard errors: fail, no recreate.
+                return fail(std::format("vkAcquireNextImageKHR failed: {}", err.detail()));
+            }
+            image_index = *acquire;
         }
         if (image_index >= swapchain_images_.size() ||
             image_index >= swapchain_image_views_.size() ||
@@ -1003,24 +1098,29 @@ namespace lfs::vis {
             {
                 LOG_TIMER_THRESHOLD("frame_pacing.vulkan_beginFrame.wait_image_fence", 0.25);
                 const auto wait_start = std::chrono::steady_clock::now();
-                result = vkWaitForFences(device_, 1, &image_fence, VK_TRUE, kWaitForeverNs);
-                if (result != VK_SUCCESS) {
-                    framebuffer_resized_ = true;
-                    return fail(std::format("vkWaitForFences(swapchain image {}) failed after {:.1f} ms: {} (frame_slot={}, acquire_index={}, framebuffer={}x{}, swapchain_extent={}x{})",
-                                            image_index,
-                                            elapsedMs(wait_start),
-                                            vkResultToString(result),
-                                            current_frame,
-                                            acquire_index,
-                                            framebuffer_width_,
-                                            framebuffer_height_,
-                                            swapchain_extent_.width,
-                                            swapchain_extent_.height));
+                auto outcome = lfs::rendering::wait_fence_bounded(
+                    device_, image_fence, std::stop_token{}, lfs::rendering::VulkanWaitPolicy{},
+                    makeWaitContext("vulkan.context.image_fence"));
+                if (!mapWaitOutcome(
+                        std::move(outcome),
+                        std::format(
+                            "swapchain image fence (image {}, elapsed {:.1f} ms, frame_slot={}, acquire_index={}, framebuffer={}x{}, swapchain_extent={}x{})",
+                            image_index,
+                            elapsedMs(wait_start),
+                            current_frame,
+                            acquire_index,
+                            framebuffer_width_,
+                            framebuffer_height_,
+                            swapchain_extent_.width,
+                            swapchain_extent_.height),
+                        /*set_framebuffer_resized_on_hard_error=*/true)) {
+                    return false;
                 }
             }
         }
 
-        frame_suboptimal_ = (result == VK_SUBOPTIMAL_KHR);
+        // AMB-B1: acquire SUBOPTIMAL bit (no longer collapsed into image-fence result).
+        frame_suboptimal_ = acquire_suboptimal;
         active_image_index_ = image_index;
         active_frame_index_ = current_frame;
         active_acquire_index_ = acquire_index;
@@ -1035,7 +1135,7 @@ namespace lfs::vis {
                 vkHandleValue(command_pools_[current_frame]),
                 vkHandleValue(command_buffers_[current_frame])));
         }
-        result = vkResetCommandPool(device_, command_pools_[current_frame], 0);
+        VkResult result = vkResetCommandPool(device_, command_pools_[current_frame], 0);
         if (result != VK_SUCCESS) {
             framebuffer_resized_ = true;
             return fail(std::format(
@@ -1626,12 +1726,15 @@ namespace lfs::vis {
                 vkHandleValue(frame_fence),
                 frame_submit_serials_[current_frame]));
         }
-        const VkResult result = vkWaitForFences(device_, 1, &frame_fence, VK_TRUE, kWaitForeverNs);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkWaitForFences(frame slot {}) failed: {} (last_submit_id={})",
-                                    current_frame,
-                                    vkResultToString(result),
-                                    frame_submit_serials_[current_frame]));
+        auto outcome = lfs::rendering::wait_fence_bounded(
+            device_, frame_fence, std::stop_token{}, lfs::rendering::VulkanWaitPolicy{},
+            makeWaitContext("vulkan.context.current_slot"));
+        if (!mapWaitOutcome(
+                std::move(outcome),
+                std::format("current frame slot fence (slot {}, last_submit_id={})",
+                            current_frame,
+                            frame_submit_serials_[current_frame]))) {
+            return false;
         }
         last_error_.clear();
         return true;
@@ -1791,7 +1894,7 @@ namespace lfs::vis {
 
         std::vector<const char*> layers;
         const bool validation_requested = validationRequestedByBuild();
-        validation_errors_fatal_ = lfs::core::environment::flag("LFS_VK_VALIDATION_FATAL");
+        validation_errors_fatal_ = lfs::core::diagnostic_mode_enabled(lfs::core::DiagnosticMode::VkFatal);
         const bool validation_layer_available = layerAvailable(available_layers, "VK_LAYER_KHRONOS_validation");
         validation_enabled_ = validation_requested && validation_layer_available && debug_utils_enabled_;
         if (validation_enabled_) {
@@ -2225,6 +2328,8 @@ namespace lfs::vis {
         const bool swapchain_maintenance1_available =
             instance_surface_maintenance_enabled_ &&
             extensionAvailable(available_extensions, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+        const bool conditional_rendering_available =
+            extensionAvailable(available_extensions, VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
 
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT supported_atomic_float_features{};
         supported_atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
@@ -2243,6 +2348,9 @@ namespace lfs::vis {
         VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT supported_swapchain_maintenance1{};
         supported_swapchain_maintenance1.sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+        VkPhysicalDeviceConditionalRenderingFeaturesEXT supported_conditional_rendering{};
+        supported_conditional_rendering.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT;
 
         void* opt_supported_head = nullptr;
         if (swapchain_maintenance1_available) {
@@ -2252,6 +2360,10 @@ namespace lfs::vis {
         if (enable_host_image_copy) {
             supported_host_image_copy.pNext = opt_supported_head;
             opt_supported_head = &supported_host_image_copy;
+        }
+        if (conditional_rendering_available) {
+            supported_conditional_rendering.pNext = opt_supported_head;
+            opt_supported_head = &supported_conditional_rendering;
         }
 
         VkPhysicalDeviceVulkan11Features supported_features11{};
@@ -2325,6 +2437,19 @@ namespace lfs::vis {
             enabled_chain_head = &swapchain_maintenance1_features;
         }
 
+        const bool enable_conditional_rendering =
+            conditional_rendering_available &&
+            supported_conditional_rendering.conditionalRendering == VK_TRUE;
+        VkPhysicalDeviceConditionalRenderingFeaturesEXT conditional_rendering_features{};
+        conditional_rendering_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CONDITIONAL_RENDERING_FEATURES_EXT;
+        if (enable_conditional_rendering) {
+            appendUniqueExtension(extensions, VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
+            conditional_rendering_features.conditionalRendering = VK_TRUE;
+            conditional_rendering_features.pNext = enabled_chain_head;
+            enabled_chain_head = &conditional_rendering_features;
+        }
+
         // 16-bit storage for the fp16 splat raster path (half4 partials,
         // half-packed staging). Mirrors device support; consumers must check
         // hasFloat16Storage() and fall back to fp32 shader variants.
@@ -2370,6 +2495,18 @@ namespace lfs::vis {
                 return fail("VK_KHR_push_descriptor is enabled but vkCmdPushDescriptorSetKHR could not be loaded");
             }
         }
+        if (enable_conditional_rendering) {
+            vk_cmd_begin_conditional_rendering_ =
+                reinterpret_cast<PFN_vkCmdBeginConditionalRenderingEXT>(
+                    vkGetDeviceProcAddr(device_, "vkCmdBeginConditionalRenderingEXT"));
+            vk_cmd_end_conditional_rendering_ =
+                reinterpret_cast<PFN_vkCmdEndConditionalRenderingEXT>(
+                    vkGetDeviceProcAddr(device_, "vkCmdEndConditionalRenderingEXT"));
+            if (vk_cmd_begin_conditional_rendering_ == nullptr ||
+                vk_cmd_end_conditional_rendering_ == nullptr) {
+                return fail("VK_EXT_conditional_rendering is enabled but its commands could not be loaded");
+            }
+        }
 
         vkGetDeviceQueue(device_, graphics_queue_family_, 0, &graphics_queue_);
         vkGetDeviceQueue(device_, present_queue_family_, 0, &present_queue_);
@@ -2397,6 +2534,7 @@ namespace lfs::vis {
         has_push_descriptor_ = enable_push_descriptor;
         has_float16_storage_ = features12.shaderFloat16 == VK_TRUE &&
                                features11.storageBuffer16BitAccess == VK_TRUE;
+        has_conditional_rendering_ = enable_conditional_rendering;
         has_host_image_copy_ = enable_host_image_copy_feature;
         has_fill_mode_non_solid_ = features2.features.fillModeNonSolid == VK_TRUE;
         has_wide_lines_ = features2.features.wideLines == VK_TRUE;
@@ -3033,7 +3171,8 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::importExternalBuffer(ExternalNativeHandle handle,
-                                             const VkDeviceSize size,
+                                             const VkDeviceSize buffer_size,
+                                             const VkDeviceSize exported_allocation_size,
                                              const VkBufferUsageFlags usage,
                                              ExternalBuffer& out,
                                              const std::string_view diagnostic_scope,
@@ -3043,8 +3182,14 @@ namespace lfs::vis {
         if (!device_ || !physical_device_) {
             return fail("Cannot import external Vulkan buffer before device initialization");
         }
-        if (size == 0) {
-            return fail("Imported external Vulkan buffer requires a non-zero size");
+        if (buffer_size == 0 || exported_allocation_size == 0) {
+            return fail("Imported external Vulkan buffer requires non-zero buffer and allocation sizes");
+        }
+        if (buffer_size > exported_allocation_size) {
+            return fail(std::format(
+                "Imported external Vulkan buffer exceeds its exported allocation (buffer_bytes={}, allocation_bytes={})",
+                buffer_size,
+                exported_allocation_size));
         }
         if (!externalNativeHandleValid(handle)) {
             return fail("Imported external Vulkan buffer requires a valid native handle");
@@ -3057,7 +3202,7 @@ namespace lfs::vis {
         VkBufferCreateInfo buffer_info{};
         buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         buffer_info.pNext = &external_buffer_info;
-        buffer_info.size = size;
+        buffer_info.size = buffer_size;
         buffer_info.usage = usage |
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
@@ -3082,21 +3227,38 @@ namespace lfs::vis {
         setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
                             out.buffer,
                             "interop.imported.buffer[{}]",
-                            size);
+                            buffer_size);
 
         VkMemoryRequirements memory_requirements{};
         vkGetBufferMemoryRequirements(device_, out.buffer, &memory_requirements);
-        out.size = size;
-        out.allocation_size = memory_requirements.size;
+        out.size = buffer_size;
+        out.allocation_size = exported_allocation_size;
         out.diagnostic_scope = diagnostic_scope.empty() ? "vulkan.external.imported_buffer" : std::string(diagnostic_scope);
         out.diagnostic_label = makeAllocationDiagnosticLabel(diagnostic_label);
+        if (memory_requirements.size > exported_allocation_size) {
+            destroyExternalBuffer(out);
+            return fail(std::format(
+                "Imported external allocation is smaller than the Vulkan buffer requirements (buffer_bytes={}, allocation_bytes={}, required_bytes={})",
+                buffer_size,
+                exported_allocation_size,
+                memory_requirements.size));
+        }
+
+        uint32_t compatible_memory_type_bits = memory_requirements.memoryTypeBits;
 
 #ifdef _WIN32
+        // vkGetMemoryWin32HandlePropertiesKHR rejects OPAQUE_WIN32 (VUID 00666).
+        // The buffer requirements are the only legal Vulkan memory-type mask.
+
         VkImportMemoryWin32HandleInfoKHR import_info{};
         import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
         import_info.handleType = kExternalMemoryHandleType;
         import_info.handle = handle;
 #else
+        // vkGetMemoryFdPropertiesKHR explicitly rejects OPAQUE_FD (VUID 00674).
+        // For CUDA's opaque POSIX handle, the buffer requirements are therefore
+        // the only legal Vulkan memory-type mask; the NVIDIA driver validates the
+        // foreign payload when vkAllocateMemory consumes the duplicated fd.
         // NVIDIA's driver takes ownership of the fd we pass to vkAllocateMemory and
         // will close it on vkFreeMemory. Dup so the original exporter (CUDA) can
         // still own its copy; both close their fd independently on teardown.
@@ -3114,19 +3276,20 @@ namespace lfs::vis {
         VkMemoryAllocateInfo allocate_info{};
         allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocate_info.pNext = &import_info;
-        // The exporter created exactly `size` bytes; the importer must allocate the
-        // SAME size, not memory_requirements.size which can be larger (e.g. when
-        // Vulkan would round up for its own alignment). vkAllocateMemory with import
-        // requires the original allocation size.
-        allocate_info.allocationSize = size;
+        // Import the exact physical payload size recorded by the exporter, not
+        // either the logical buffer view or Vulkan's memory-requirements size.
+        allocate_info.allocationSize = exported_allocation_size;
         allocate_info.memoryTypeIndex =
-            findMemoryType(memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            findMemoryType(compatible_memory_type_bits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
 #ifndef _WIN32
             ::close(dup_fd);
 #endif
             destroyExternalBuffer(out);
-            return fail("Could not find Vulkan device-local memory type for imported buffer");
+            return fail(std::format(
+                "Could not find a compatible Vulkan device-local memory type for imported buffer (buffer_type_bits={:#x}, compatible_type_bits={:#x})",
+                memory_requirements.memoryTypeBits,
+                compatible_memory_type_bits));
         }
 
         result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
@@ -3141,7 +3304,7 @@ namespace lfs::vis {
         setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
                             out.memory,
                             "interop.imported.buffer[{}].memory",
-                            size);
+                            exported_allocation_size);
 
         result = vkBindBufferMemory(device_, out.buffer, out.memory, 0);
         if (result != VK_SUCCESS) {
@@ -3151,6 +3314,14 @@ namespace lfs::vis {
 
         // We do NOT own the handle; the exporter retains it. Leave native_handle invalid.
         out.native_handle = kInvalidExternalNativeHandle;
+        LOG_DEBUG(
+            "Imported foreign external buffer: buffer={} bytes, payload={} bytes, requirements={} bytes, buffer_type_bits={:#x}, compatible_type_bits={:#x}, memory_type={}",
+            buffer_size,
+            exported_allocation_size,
+            memory_requirements.size,
+            memory_requirements.memoryTypeBits,
+            compatible_memory_type_bits,
+            allocate_info.memoryTypeIndex);
         return true;
     }
 
@@ -3408,15 +3579,17 @@ namespace lfs::vis {
             wait_info.semaphoreCount = 1;
             wait_info.pSemaphores = &options.wait->semaphore;
             wait_info.pValues = &options.wait->value;
-            const VkResult wait_result = vkWaitSemaphores(device_, &wait_info, UINT64_MAX);
-            if (wait_result != VK_SUCCESS) {
-                return fail(std::format(
-                    "vkWaitSemaphores failed while observing an external timeline for validation (semaphore={:#x}, value={}, image={:#x}, result={}({}))",
-                    vkHandleValue(options.wait->semaphore),
-                    options.wait->value,
-                    vkHandleValue(image),
-                    vkResultToString(wait_result),
-                    static_cast<int>(wait_result)));
+            auto outcome = lfs::rendering::wait_semaphores_bounded(
+                device_, wait_info, std::stop_token{}, lfs::rendering::VulkanWaitPolicy{},
+                makeWaitContext("vulkan.context.validation.wait_observe"));
+            if (!mapValidationWaitOutcome(
+                    std::move(outcome),
+                    std::format(
+                        "vkWaitSemaphores failed while observing an external timeline for validation (semaphore={:#x}, value={}, image={:#x})",
+                        vkHandleValue(options.wait->semaphore),
+                        options.wait->value,
+                        vkHandleValue(image)))) {
+                return false;
             }
         }
         // Reap any prior fire-and-forget submits that have completed. Bound
@@ -3551,21 +3724,24 @@ namespace lfs::vis {
             // imported timeline. Without this observation, validation may see
             // CUDA's later value while the preceding Vulkan signal is still
             // pending and diagnose a false non-monotonic signal. The production
-            // path remains fire-and-forget.
+            // path remains fire-and-forget. Site 6 is post-push_back: retain
+            // pending submit on quarantine (do not free cmd/fence here).
             VkSemaphoreWaitInfo wait_info{};
             wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
             wait_info.semaphoreCount = 1;
             wait_info.pSemaphores = &options.signal->semaphore;
             wait_info.pValues = &options.signal->value;
-            const VkResult wait_result = vkWaitSemaphores(device_, &wait_info, UINT64_MAX);
-            if (wait_result != VK_SUCCESS) {
-                return fail(std::format(
-                    "vkWaitSemaphores failed while publishing a Vulkan timeline signal for validation (semaphore={:#x}, value={}, image={:#x}, result={}({}))",
-                    vkHandleValue(options.signal->semaphore),
-                    options.signal->value,
-                    vkHandleValue(image),
-                    vkResultToString(wait_result),
-                    static_cast<int>(wait_result)));
+            auto outcome = lfs::rendering::wait_semaphores_bounded(
+                device_, wait_info, std::stop_token{}, lfs::rendering::VulkanWaitPolicy{},
+                makeWaitContext("vulkan.context.validation.signal_publish"));
+            if (!mapValidationWaitOutcome(
+                    std::move(outcome),
+                    std::format(
+                        "vkWaitSemaphores failed while publishing a Vulkan timeline signal for validation (semaphore={:#x}, value={}, image={:#x})",
+                        vkHandleValue(options.signal->semaphore),
+                        options.signal->value,
+                        vkHandleValue(image)))) {
+                return false;
             }
         }
         last_error_.clear();

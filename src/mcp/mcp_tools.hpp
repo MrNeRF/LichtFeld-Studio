@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "mcp_protocol.hpp"
 #include "training/control/command_api.hpp"
@@ -27,7 +28,8 @@ namespace lfs::mcp {
         void unregister_tool(const std::string& name);
 
         std::vector<McpTool> list_tools() const;
-        json call_tool(const std::string& name, const json& arguments);
+        json call_tool(const std::string& name, const json& arguments,
+                       lfs::OperationId operation_id = {});
 
         void generate_from_command_center();
 

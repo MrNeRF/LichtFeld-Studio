@@ -17,7 +17,7 @@ namespace lfs::core::events::state {
     ENABLE_TO_JSON(TrainingProgress, iteration, loss, num_gaussians, is_refining);
     ENABLE_TO_JSON(TrainingPaused, iteration);
     ENABLE_TO_JSON(TrainingResumed, iteration);
-    ENABLE_TO_JSON(TrainingCompleted, iteration, final_loss, elapsed_seconds, success, user_stopped, error);
+    ENABLE_TO_JSON(TrainingCompleted, iteration, final_loss, elapsed_seconds, success, user_stopped, error, error_info);
     ENABLE_TO_JSON(TrainingStopped, iteration, user_requested);
 
     ENABLE_TO_JSON(ModelUpdated, iteration, num_gaussians);
@@ -44,7 +44,7 @@ namespace lfs::core::events::state {
     ENABLE_TO_JSON(FrameRendered, render_ms, fps, num_gaussians);
     ENABLE_TO_JSON(KeyframeListChanged, count);
     ENABLE_TO_JSON(ExportCompleted, path, format);
-    ENABLE_TO_JSON(ExportFailed, error);
+    ENABLE_TO_JSON(ExportFailed, error, error_info);
     ENABLE_TO_JSON(VideoExportCompleted, path, total_frames);
     ENABLE_TO_JSON(VideoExportFailed, error);
 
@@ -308,12 +308,15 @@ namespace lfs::tcp {
                 state->queued_bytes -= event.estimated_bytes;
             }
 
-            try {
-                send(event.message);
-            } catch (const std::exception& e) {
-                failure = e.what();
-            } catch (...) {
-                failure = "unknown ZeroMQ error";
+            if (const lfs::Status send_status = send(event.message); !send_status) {
+                // A retryable send failure is transient back-pressure (HWM /
+                // sndtimeo): count the drop and keep publishing. Anything else
+                // is terminal for the socket, so stop and clear the queue.
+                if (send_status.error().retryability() == lfs::Retryability::NotRetryable) {
+                    failure = std::string(send_status.error().user_message());
+                } else {
+                    state->dropped.fetch_add(1, std::memory_order_relaxed);
+                }
             }
             if (!failure.empty()) {
                 state->accepting.store(false, std::memory_order_release);
@@ -335,6 +338,10 @@ namespace lfs::tcp {
             {"command", "event"},
             {"event_type", event_type},
             {"data", data}};
+    }
+
+    nlohmann::json PublisherServer::wireMessageFor(const core::events::state::TrainingCompleted& event) {
+        return makeEventMessage(nlohmann::json(event), "TrainingCompleted");
     }
 } // namespace lfs::tcp
 

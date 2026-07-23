@@ -148,6 +148,8 @@ namespace lfs::python {
                             item_label = nb::cast<std::string>(nb::repr(item));
                         }
                     } catch (const std::exception&) {
+                        // LFS-CENSUS-OK(empty-catch): read-only label lookup for display;
+                        // an unreadable item name falls back to an ordinal label.
                         item_label = "Item " + std::to_string(i);
                     }
                     if (ImGui::Selectable(item_label.c_str(), is_selected)) {

@@ -969,8 +969,8 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"menu_id", json{{"type", "string"}, {"description", "Registered top-level menu id"}}},
-                        {"action_index", json{{"type", "integer"}, {"description", "Deterministic action index from ui.menu.describe"}}},
-                        {"callback_index", json{{"type", "integer"}, {"description", "Callback index from ui.menu.describe for callback-backed items"}}},
+                        {"action_index", json{{"type", "integer"}, {"description", "Deterministic action index from ui_menu_describe"}}},
+                        {"callback_index", json{{"type", "integer"}, {"description", "Callback index from ui_menu_describe for callback-backed items"}}},
                         {"operator_id", json{{"type", "string"}, {"description", "Operator id present in this menu"}}},
                         {"path", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Full raw or display label path, for example ['View', 'Theme', 'Nord']"}}}},
                     .required = {"menu_id"}},

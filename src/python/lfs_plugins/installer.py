@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 import json
 import logging
 import os
+import platform
 from pathlib import Path
 from pathlib import PurePosixPath
 import queue
@@ -41,6 +42,10 @@ HTTP_USER_AGENT = "LichtFeld-PluginInstaller/1.0"
 PROCESS_POLL_SECONDS = 0.05
 PROCESS_TERMINATE_GRACE_SECONDS = 0.5
 PROCESS_OUTPUT_TAIL_LINES = 100
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
 
 
 def _cancel_requested(should_cancel: Optional[Callable[[], bool]]) -> bool:
@@ -582,6 +587,8 @@ class PluginInstaller:
             normalize_str(bundled_python.parent.parent),
         }
 
+        config_matches = False
+        home_matches = False
         for line in cfg.splitlines():
             if "=" not in line:
                 continue
@@ -594,8 +601,115 @@ class PluginInstaller:
                 continue
             candidate_path = os.path.normcase(str(self._normalize_path(Path(candidate))))
             if candidate_path in expected:
-                return True
-        return False
+                config_matches = True
+                if key == "home":
+                    home_matches = True
+        if _is_windows():
+            return home_matches
+        if not config_matches:
+            return False
+
+        venv_python = venv_path / "bin" / "python"
+        if venv_python.is_symlink():
+            return normalize_str(venv_python) == normalize_str(bundled_python)
+        return True
+
+    @staticmethod
+    def _current_python_version() -> tuple[int, int]:
+        if platform.python_implementation() != "CPython":
+            raise RuntimeError("plugin venv repair requires CPython")
+        return sys.version_info.major, sys.version_info.minor
+
+    @staticmethod
+    def _venv_python_version(venv_path: Path) -> tuple[int, int]:
+        cfg_path = venv_path / "pyvenv.cfg"
+        cfg = cfg_path.read_text(encoding="utf-8")
+        versions: dict[str, str] = {}
+        for line in cfg.splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip().lower()
+            if key in {"version_info", "version"}:
+                versions[key] = value.strip()
+
+        version = versions.get("version_info", versions.get("version"))
+        if version is None:
+            raise ValueError("pyvenv.cfg has no version_info or version")
+
+        parts = version.split(".")
+        if len(parts) < 2:
+            raise ValueError(f"invalid pyvenv.cfg version: {version}")
+        try:
+            major_minor = int(parts[0]), int(parts[1])
+        except ValueError as exc:
+            raise ValueError(f"invalid pyvenv.cfg version: {version}") from exc
+        if major_minor[0] < 0 or major_minor[1] < 0:
+            raise ValueError(f"invalid pyvenv.cfg version: {version}")
+        return major_minor
+
+    def _repair_venv_interpreter(self, venv_path: Path, bundled_python: Path) -> None:
+        current_version = self._current_python_version()
+        venv_version = self._venv_python_version(venv_path)
+        if venv_version != current_version:
+            raise RuntimeError(
+                f"plugin venv Python {venv_version[0]}.{venv_version[1]} is incompatible with "
+                f"CPython {current_version[0]}.{current_version[1]}"
+            )
+
+        cfg_path = venv_path / "pyvenv.cfg"
+        cfg = cfg_path.read_text(encoding="utf-8")
+        bundled_python = self._normalize_path(bundled_python)
+        new_home = bundled_python.parent
+        old_home: Optional[str] = None
+        found_home = False
+        rewritten: list[str] = []
+        for line in cfg.splitlines():
+            if "=" not in line:
+                rewritten.append(line)
+                continue
+            key_text, value = line.split("=", 1)
+            key = key_text.strip().lower()
+            if key == "home":
+                if old_home is None:
+                    old_home = value.strip()
+                found_home = True
+                rewritten.append(f"{key_text.rstrip()} = {new_home}")
+            elif key in {"executable", "base-executable"}:
+                rewritten.append(f"{key_text.rstrip()} = {bundled_python}")
+            else:
+                rewritten.append(line)
+        if not found_home:
+            rewritten.append(f"home = {new_home}")
+
+        if not _is_windows():
+            bin_path = venv_path / "bin"
+            names = ("python", "python3", f"python{current_version[0]}.{current_version[1]}")
+            links = [bin_path / name for name in names if os.path.lexists(bin_path / name)]
+            if not links:
+                bin_path.mkdir(parents=True, exist_ok=True)
+                links = [bin_path / name for name in names]
+            for link in links:
+                if os.path.lexists(link) and not link.is_symlink():
+                    raise RuntimeError(f"plugin venv interpreter is not a symlink: {link}")
+            for link in links:
+                if link.is_symlink():
+                    link.unlink()
+                link.symlink_to(bundled_python)
+
+        trailing_newline = "\n" if cfg.endswith("\n") else ""
+        cfg_path.write_text("\n".join(rewritten) + trailing_newline, encoding="utf-8")
+
+        if not self._get_venv_python().exists():
+            raise RuntimeError("repaired plugin venv has no Python interpreter")
+        if not self._venv_uses_bundled_python(venv_path, bundled_python):
+            raise RuntimeError("repaired plugin venv does not use bundled Python")
+
+        logger.info(
+            "Repaired plugin venv interpreter: %s -> %s",
+            old_home or "<missing>",
+            new_home,
+        )
 
     def ensure_venv(
         self,
@@ -611,24 +725,34 @@ class PluginInstaller:
         bundled_python = self._require_bundled_python()
 
         venv_python = self._get_venv_python()
-        if venv_python.exists():
-            if not self._venv_uses_bundled_python(venv_path, bundled_python):
+        venv_python_exists = venv_python.exists()
+        if venv_path.exists():
+            if venv_python_exists and self._venv_uses_bundled_python(
+                venv_path, bundled_python
+            ):
+                logger.info("Plugin venv ready: %s", venv_python)
+                return True
+
+            if _cancel_requested(should_cancel):
+                raise PluginLoadCancelled("Plugin loading cancelled before environment repair")
+
+            try:
+                if self._venv_python_version(venv_path) == self._current_python_version():
+                    self._repair_venv_interpreter(venv_path, bundled_python)
+                    logger.info("Plugin venv ready: %s", self._get_venv_python())
+                    return True
+            except Exception as exc:
+                logger.warning("Failed to repair plugin venv interpreter at %s: %s", venv_path, exc)
+
+            if venv_python_exists:
                 logger.warning(
                     "Existing plugin venv was not created from bundled Python, recreating: %s",
                     venv_path,
                 )
-                if _cancel_requested(should_cancel):
-                    raise PluginLoadCancelled("Plugin loading cancelled before environment repair")
                 shutil.rmtree(venv_path, ignore_errors=True)
             else:
-                logger.info("Plugin venv ready: %s", venv_python)
-                return True
-
-        if venv_path.exists():
-            logger.warning("Broken venv (missing python), removing: %s", venv_path)
-            if _cancel_requested(should_cancel):
-                raise PluginLoadCancelled("Plugin loading cancelled before environment repair")
-            shutil.rmtree(venv_path)
+                logger.warning("Broken venv (missing python), removing: %s", venv_path)
+                shutil.rmtree(venv_path)
 
         uv = self._find_uv()
         if not uv:
@@ -776,14 +900,9 @@ class PluginInstaller:
         assert self.plugin.venv_path is not None
         venv = self.plugin.venv_path
 
-        # Linux/macOS
-        python = venv / "bin" / "python"
-        if python.exists():
-            return python
-
-        # Windows
-        python = venv / "Scripts" / "python.exe"
-        return python
+        if _is_windows():
+            return venv / "Scripts" / "python.exe"
+        return venv / "bin" / "python"
 
 
 def parse_github_url(url: str) -> Tuple[str, str, Optional[str]]:

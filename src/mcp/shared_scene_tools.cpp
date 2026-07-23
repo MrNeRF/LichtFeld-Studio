@@ -3,6 +3,7 @@
 
 #include "shared_scene_tools.hpp"
 
+#include "core/error_envelope.hpp"
 #include "core/path_utils.hpp"
 #include "mcp_tools.hpp"
 
@@ -234,6 +235,29 @@ namespace lfs::mcp {
                     {"data", *result},
                 };
             });
+
+        if (backend.last_training_error) {
+            registry.register_tool(
+                McpTool{
+                    .name = "training.get_last_error",
+                    .description = "Get the most recent training failure as a structured error "
+                                   "envelope, or null if none. During an active run this may briefly "
+                                   "differ from the legacy 'last_error' string surface.",
+                    .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                    .metadata = query_metadata(backend, "training")},
+                [backend](const json&) -> json {
+                    auto latched = backend.last_training_error();
+                    if (!latched) {
+                        return json{{"success", true}, {"last_error", nullptr}, {"last_error_message", nullptr}};
+                    }
+                    json envelope = core::to_wire_envelope(*latched);
+                    std::string message = envelope.value("message", std::string{});
+                    return json{
+                        {"success", true},
+                        {"last_error", std::move(envelope)},
+                        {"last_error_message", std::move(message)}};
+                });
+        }
     }
 
 } // namespace lfs::mcp

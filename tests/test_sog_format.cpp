@@ -277,9 +277,10 @@ TEST_F(SogFormatTest, CompareWithOriginalPly) {
 
     std::cout << "Loading original PLY..." << std::endl;
     auto ply_result = lfs::io::load_ply(original_ply);
-    ASSERT_TRUE(ply_result.has_value()) << "Failed to load PLY: " << ply_result.error();
+    ASSERT_TRUE(ply_result.has_value())
+        << "Failed to load PLY: " << lfs::format_for_developer(ply_result.error());
 
-    ASSERT_EQ(sog_result->size(), ply_result->size()) << "Splat count mismatch";
+    ASSERT_EQ(sog_result->size(), ply_result->value.size()) << "Splat count mismatch";
     const size_t N = sog_result->size();
 
     std::cout << "Comparing statistics for " << N << " splats..." << std::endl;
@@ -298,7 +299,7 @@ TEST_F(SogFormatTest, CompareWithOriginalPly) {
 
     // Compare positions
     auto sog_means = sog_result->means().cpu();
-    auto orig_means = ply_result->means().cpu();
+    auto orig_means = ply_result->value.means().cpu();
     auto [sog_pos_min, sog_pos_max, sog_pos_avg] = compute_stats(sog_means.ptr<float>(), N * 3);
     auto [orig_pos_min, orig_pos_max, orig_pos_avg] = compute_stats(orig_means.ptr<float>(), N * 3);
 
@@ -308,7 +309,7 @@ TEST_F(SogFormatTest, CompareWithOriginalPly) {
 
     // Compare SH0 colors
     auto sog_sh0 = sog_result->sh0().cpu();
-    auto orig_sh0 = ply_result->sh0().cpu();
+    auto orig_sh0 = ply_result->value.sh0().cpu();
     auto [sog_sh0_min, sog_sh0_max, sog_sh0_avg] = compute_stats(sog_sh0.ptr<float>(), N * 3);
     auto [orig_sh0_min, orig_sh0_max, orig_sh0_avg] = compute_stats(orig_sh0.ptr<float>(), N * 3);
 
@@ -326,7 +327,7 @@ TEST_F(SogFormatTest, CompareWithOriginalPly) {
 
     // Compare scales
     auto sog_scales = sog_result->get_scaling().cpu();
-    auto orig_scales = ply_result->get_scaling().cpu();
+    auto orig_scales = ply_result->value.get_scaling().cpu();
     auto [sog_scale_min, sog_scale_max, sog_scale_avg] = compute_stats(sog_scales.ptr<float>(), N * 3);
     auto [orig_scale_min, orig_scale_max, orig_scale_avg] = compute_stats(orig_scales.ptr<float>(), N * 3);
 
@@ -452,14 +453,15 @@ TEST_F(SogFormatTest, CompareWithSplatTransformDecompression) {
 
     std::cout << "Loading splat-transform decompressed PLY..." << std::endl;
     auto ref_result = lfs::io::load_ply(sog_decompressed);
-    ASSERT_TRUE(ref_result.has_value()) << "Failed to load reference: " << ref_result.error();
+    ASSERT_TRUE(ref_result.has_value())
+        << "Failed to load reference: " << lfs::format_for_developer(ref_result.error());
 
-    ASSERT_EQ(our_result->size(), ref_result->size()) << "Splat count mismatch";
+    ASSERT_EQ(our_result->size(), ref_result->value.size()) << "Splat count mismatch";
     const size_t N = our_result->size();
 
     // Compare SH0 values
     auto our_sh0 = our_result->sh0().cpu();
-    auto ref_sh0 = ref_result->sh0().cpu();
+    auto ref_sh0 = ref_result->value.sh0().cpu();
     const float* our_data = our_sh0.ptr<float>();
     const float* ref_data = ref_sh0.ptr<float>();
 
@@ -488,8 +490,9 @@ TEST_F(SogFormatTest, ExportRoundtrip) {
     // Load original PLY
     std::cout << "Loading original PLY..." << std::endl;
     auto orig_result = lfs::io::load_ply(original_ply);
-    ASSERT_TRUE(orig_result.has_value()) << "Failed to load PLY: " << orig_result.error();
-    std::cout << "Loaded " << orig_result->size() << " splats" << std::endl;
+    ASSERT_TRUE(orig_result.has_value())
+        << "Failed to load PLY: " << lfs::format_for_developer(orig_result.error());
+    std::cout << "Loaded " << orig_result->value.size() << " splats" << std::endl;
 
     // Export as SOG
     fs::path export_path = test_dir / "export_test.sog";
@@ -499,7 +502,7 @@ TEST_F(SogFormatTest, ExportRoundtrip) {
         .output_path = export_path,
         .kmeans_iterations = 10};
 
-    auto write_result = lfs::io::save_sog(*orig_result, options);
+    auto write_result = lfs::io::save_sog(orig_result->value, options);
     ASSERT_TRUE(write_result.has_value()) << "Failed to write SOG: " << write_result.error().format();
     std::cout << "SOG export complete" << std::endl;
 
@@ -508,12 +511,12 @@ TEST_F(SogFormatTest, ExportRoundtrip) {
     auto reimport_result = lfs::io::load_sog(export_path);
     ASSERT_TRUE(reimport_result.has_value()) << "Failed to reimport SOG: " << reimport_result.error();
 
-    EXPECT_EQ(reimport_result->size(), orig_result->size())
+    EXPECT_EQ(reimport_result->size(), orig_result->value.size())
         << "Reimported splat count differs from original";
 
     // Compare SH0 colors
-    size_t N = orig_result->size();
-    auto orig_sh0 = orig_result->sh0().cpu();
+    size_t N = orig_result->value.size();
+    auto orig_sh0 = orig_result->value.sh0().cpu();
     auto reimp_sh0 = reimport_result->sh0().cpu();
     const float* orig_sh0_ptr = orig_sh0.ptr<float>();
     const float* reimp_sh0_ptr = reimp_sh0.ptr<float>();

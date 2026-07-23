@@ -153,6 +153,7 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float* param_grad,
         const bool* frozen_mask,
         const int frozen_mask_size,
+        const float frozen_lr_scale,
         const int n_rows,
         const int row_size,
         const float lr,
@@ -164,15 +165,19 @@ namespace fast_lfs::optimizer::kernels::adam {
         const int row = blockIdx.x * blockDim.x + threadIdx.x;
         if (row >= n_rows || row_size <= 0)
             return;
-        if (frozen_mask != nullptr && row < frozen_mask_size && frozen_mask[row])
-            return;
+        float row_lr = lr;
+        if (frozen_mask != nullptr && row < frozen_mask_size && frozen_mask[row]) {
+            if (frozen_lr_scale == 0.0f)
+                return;
+            row_lr *= frozen_lr_scale;
+        }
 
         const int base = row * row_size;
         const float old_m_scale = exp_avg_scale[row];
         const float old_v_scale = exp_avg_sq_scale[row];
         const float beta1_comp = 1.0f - beta1;
         const float beta2_comp = 1.0f - beta2;
-        const float step_size = lr * bias_correction1_rcp;
+        const float step_size = row_lr * bias_correction1_rcp;
 
         float max_abs_m = 0.0f;
         float max_v = 0.0f;
@@ -263,6 +268,7 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float* param_grad,
         const bool* frozen_mask,
         const int frozen_mask_size,
+        const float frozen_lr_scale,
         const int n_primitives,
         const int slots_per_primitive,
         const float lr,
@@ -274,8 +280,12 @@ namespace fast_lfs::optimizer::kernels::adam {
         const int p = blockIdx.x * blockDim.x + threadIdx.x;
         if (p >= n_primitives || slots_per_primitive <= 0)
             return;
-        if (frozen_mask != nullptr && p < frozen_mask_size && frozen_mask[p])
-            return;
+        float row_lr = lr;
+        if (frozen_mask != nullptr && p < frozen_mask_size && frozen_mask[p]) {
+            if (frozen_lr_scale == 0.0f)
+                return;
+            row_lr *= frozen_lr_scale;
+        }
 
         float4* param4 = reinterpret_cast<float4*>(param);
         const float4* grad4 = reinterpret_cast<const float4*>(param_grad);
@@ -286,7 +296,7 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float old_v_scale = exp_avg_sq_scale[p];
         const float beta1_comp = 1.0f - beta1;
         const float beta2_comp = 1.0f - beta2;
-        const float step_size = lr * bias_correction1_rcp;
+        const float step_size = row_lr * bias_correction1_rcp;
 
         float max_abs_m = 0.0f;
         float max_v = 0.0f;

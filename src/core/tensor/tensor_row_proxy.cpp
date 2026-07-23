@@ -13,15 +13,24 @@ namespace lfs::core {
     namespace {
         void cuda_copy_async_sync(void* dst, const void* src, size_t bytes, cudaMemcpyKind kind,
                                   cudaStream_t stream, const char* context) {
-            LFS_CUDA_CHECK_MSG(
+            LFS_CUDA_CHECK_MSG_STREAM_ARGS(
                 cudaMemcpyAsync(dst, src, bytes, kind, stream),
-                "{} copy (bytes={}, copy_kind={}, source_pointer={}, "
-                "destination_pointer={}, stream={})",
-                context, bytes, static_cast<int>(kind), src, dst,
+                stream,
+                reinterpret_cast<uintptr_t>(dst),
+                reinterpret_cast<uintptr_t>(src),
+                bytes,
+                "{} copy (bytes={}, copy_kind={}, destination_pointer={}, "
+                "source_pointer={}, stream={})",
+                context, bytes, static_cast<int>(kind), dst, src,
                 static_cast<const void*>(stream));
-            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
-                               "{} synchronization (stream={})", context,
-                               static_cast<const void*>(stream));
+            LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+                cudaStreamSynchronize(stream),
+                stream,
+                reinterpret_cast<uintptr_t>(dst),
+                reinterpret_cast<uintptr_t>(src),
+                bytes,
+                "{} synchronization (bytes={}, destination_pointer={}, source_pointer={}, stream={})",
+                context, bytes, dst, src, static_cast<const void*>(stream));
         }
 
         void assert_proxy_tensor(const Tensor* tensor,
