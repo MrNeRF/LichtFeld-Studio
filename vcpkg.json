@@ -10,6 +10,7 @@
       "name": "ffmpeg",
       "features": [
         "avcodec",
+        "avfilter",
         "avformat",
         "nvcodec",
         "swscale",
@@ -28,6 +29,7 @@
       ]
     },
     "libdeflate",
+    "libplacebo",
     "libwebp",
     "nanobind",
     {

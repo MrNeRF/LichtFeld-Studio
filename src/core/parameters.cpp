@@ -352,6 +352,9 @@ namespace lfs::core {
                 if (render_path->crf < 0 || render_path->crf > 51)
                     return std::format("render crf must be within [0, 51] (got {})", render_path->crf);
             }
+            if (!std::isfinite(freeze_lr_scale) || freeze_lr_scale < 0.0f || freeze_lr_scale > 1.0f) {
+                return std::format("freeze_lr_scale must be within [0, 1] (got {})", freeze_lr_scale);
+            }
             if (!add_splat_paths.empty()) {
                 if (resume_checkpoint.has_value()) {
                     return "--add-splat cannot be used together with --resume";

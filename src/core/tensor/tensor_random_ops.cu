@@ -164,6 +164,7 @@ namespace lfs::core::tensor_ops {
         int block_size = 256;
         int grid_size = (n + block_size - 1) / block_size;
         uniform_kernel<<<grid_size, block_size, 0, stream>>>(data, n, low, high, seed);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.random.uniform");
     }
 
     void launch_normal(float* data, size_t n, float mean, float std,
@@ -174,6 +175,7 @@ namespace lfs::core::tensor_ops {
         int block_size = 256;
         int grid_size = (n + block_size - 1) / block_size;
         normal_kernel<<<grid_size, block_size, 0, stream>>>(data, n, mean, std, seed);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.random.normal");
     }
 
     void launch_bernoulli(float* data, size_t n, float p,
@@ -184,6 +186,7 @@ namespace lfs::core::tensor_ops {
         int block_size = 256;
         int grid_size = (n + block_size - 1) / block_size;
         bernoulli_kernel<<<grid_size, block_size, 0, stream>>>(data, n, p, seed);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.random.bernoulli");
     }
 
     void launch_randint(int* data, size_t n, int low, int high,
@@ -194,6 +197,7 @@ namespace lfs::core::tensor_ops {
         int block_size = 256;
         int grid_size = (n + block_size - 1) / block_size;
         randint_kernel<<<grid_size, block_size, 0, stream>>>(data, n, low, high, seed);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.random.randint");
     }
 
     void launch_multinomial(const float* weights, int64_t* samples,
@@ -230,6 +234,7 @@ namespace lfs::core::tensor_ops {
             int grid_size = (num_samples + block_size - 1) / block_size;
             multinomial_with_replacement_kernel<<<grid_size, block_size, 0, stream>>>(
                 weights, samples, n, num_samples, sum, seed);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.random.multinomial_with_replacement");
         } else {
             thrust::device_vector<float> keys(n);
             thrust::device_vector<int64_t> indices(n);
@@ -238,6 +243,7 @@ namespace lfs::core::tensor_ops {
             int grid_size = (n + block_size - 1) / block_size;
             generate_gumbel_keys_kernel<<<grid_size, block_size, 0, stream>>>(
                 weights, thrust::raw_pointer_cast(keys.data()), n, seed);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.random.multinomial_gumbel_keys");
 
             run_with_thrust_policy(stream, [&](auto policy) {
                 thrust::sequence(

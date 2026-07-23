@@ -3,6 +3,8 @@
 
 #include "color_convert.cuh"
 
+#include "core/cuda_error.hpp"
+
 namespace lfs::io::video {
 
     namespace {
@@ -180,6 +182,7 @@ namespace lfs::io::video {
 
         rgbToNv12Kernel<<<grid, block, 0, stream>>>(
             rgb_src, y_dst, uv_dst, width, height, effective_y_pitch, effective_uv_pitch);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgb_to_nv12");
     }
 
     void rgbToYuv420pCuda(
@@ -196,6 +199,7 @@ namespace lfs::io::video {
                         (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
         rgbToYuv420pKernel<<<grid, block, 0, stream>>>(rgb_src, y_dst, u_dst, v_dst, width, height);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgb_to_yuv420p");
     }
 
     __global__ void nv12ToRgbKernel(
@@ -258,6 +262,7 @@ namespace lfs::io::video {
 
         nv12ToRgbKernel<<<grid, block, 0, stream>>>(
             y_src, uv_src, rgb_dst, width, height, effective_y_pitch, effective_uv_pitch);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.nv12_to_rgb");
     }
 
     __global__ void rotateRgbKernel(
@@ -323,6 +328,7 @@ namespace lfs::io::video {
             const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE,
                             (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
             rotateRgbKernel<<<grid, block, 0, stream>>>(src, dst, width, height, angle);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rotate_rgb");
         } else {
             // 90/270: swapped dimensions for output
             const int h = width;
@@ -331,6 +337,7 @@ namespace lfs::io::video {
             const dim3 grid((w + BLOCK_SIZE - 1) / BLOCK_SIZE,
                             (h + BLOCK_SIZE - 1) / BLOCK_SIZE);
             rotateRgbKernel<<<grid, block, 0, stream>>>(src, dst, width, height, angle);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rotate_rgb");
         }
     }
 

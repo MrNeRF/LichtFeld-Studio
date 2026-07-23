@@ -138,6 +138,9 @@ namespace lfs::vis {
         std::uint32_t post_ui_overlay_vertex_count = 0;
         std::vector<VulkanViewportPivotOverlay> pivot_overlays;
         std::vector<VulkanViewportTexturedOverlay> textured_overlays;
+        // Textured overlays drawn in the UI phase (after ui_shape_overlay): screen-space
+        // text and icons that must layer above overlay fills and gizmo shapes.
+        std::vector<VulkanViewportTexturedOverlay> ui_textured_overlays;
         std::vector<VulkanViewportFrustumInstance> frustum_instances;
         std::vector<VulkanViewportFrustumBatch> frustum_batches;
 

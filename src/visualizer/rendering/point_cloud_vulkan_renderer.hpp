@@ -50,6 +50,13 @@ namespace lfs::vis {
             bool desaturate = false;
         };
 
+        struct CropEllipsoid {
+            glm::mat4 to_local{1.0f};
+            glm::vec3 radii{1.0f};
+            bool inverse = false;
+            bool desaturate = false;
+        };
+
         struct RenderRequest {
             // Positions/colors are float [N, 3] tensors. Either CUDA or CPU; we
             // copy to Vulkan device-local on first use and cache by pointer plus
@@ -80,9 +87,10 @@ namespace lfs::vis {
             std::uint64_t selection_revision = 0;
             std::uint64_t preview_selection_revision = 0;
 
-            // Optional crop. When set, points outside the local box are either
-            // dropped (default) or rendered desaturated (crop.desaturate).
+            // Optional crop. When set, points outside the active crop volume are
+            // dropped (default) or rendered desaturated.
             std::optional<CropBox> crop;
+            std::optional<CropEllipsoid> crop_ellipsoid;
 
             glm::mat4 view{1.0f};
             glm::mat4 view_projection{1.0f};

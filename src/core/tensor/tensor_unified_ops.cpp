@@ -1018,7 +1018,8 @@ namespace lfs::core {
             LFS_ASSERT_MSG(src_ptr != nullptr,
                            "FromCUDA requires a non-null source pointer");
 
-            result = Tensor(src_ptr, args.shape, Device::CUDA, args.dtype);
+            result = Tensor(src_ptr, args.shape, Device::CUDA, args.dtype,
+                            getCurrentCUDAStream());
 
             if (args.device == Device::CPU) {
                 result = result.to(Device::CPU);
@@ -1293,7 +1294,7 @@ namespace lfs::core {
         // data_ptr() triggers materialization which std::moves internal state; if shape pointers
         // were captured before that move, they dangle. Materializing up front is safe and cheap
         // (no-op for already-materialized tensors).
-        const_cast<Tensor*>(this)->materialize_if_deferred();
+        pin_operands({this});
 
         // FAST PATH: 2D dim=0 reduction (column sums) - use specialized kernel
         // This is faster than transpose+contiguous+reduce because it avoids the copy
@@ -1455,6 +1456,7 @@ namespace lfs::core {
         auto result = Tensor::empty(TensorShape(out_shape), input->device_, out_dtype);
 
         if (input->device_ == Device::CUDA) {
+            pin_operands({input});
             tensor_ops::launch_reduce_op(
                 input->data_ptr(), result.data_ptr(),
                 input->shape_.dims().data(), input->shape_.rank(),
@@ -1886,6 +1888,7 @@ namespace lfs::core {
                                    dtype_name(out_dtype)));
 
         if (device_ == Device::CUDA && out_dtype == DataType::Float32) {
+            pin_operands({&a_broadcast, &b_cast, &c_cast});
             auto result = Tensor::empty(shape_abc, device_, out_dtype);
             prepare_inputs_for_stream(
                 {&a_broadcast, &b_cast, &c_cast}, result.stream());
@@ -1915,6 +1918,7 @@ namespace lfs::core {
                        std::format("where failed to materialize host tensors for dtype {}",
                                    dtype_name(out_dtype)));
 
+        pin_operands({&cond_cpu, &x_cpu, &y_cpu});
         Tensor result_cpu = Tensor::empty(shape_abc, Device::CPU, out_dtype);
         const unsigned char* cond = cond_cpu.ptr<unsigned char>();
         const char* x = static_cast<const char*>(x_cpu.data_ptr());
@@ -2309,6 +2313,8 @@ namespace lfs::core {
             }
 
             if (first_device == Device::CUDA) {
+                for (const auto& tensor : tensors)
+                    pin_operands({&tensor});
                 tensor_ops::launch_cat_last_dim(
                     result.data_ptr(),
                     tensors,
@@ -2351,6 +2357,8 @@ namespace lfs::core {
         }
 
         if (first_device == Device::CUDA) {
+            for (const auto& tensor : tensors)
+                pin_operands({&tensor});
             tensor_ops::launch_cat_middle_dim(
                 result.data_ptr(),
                 tensors,

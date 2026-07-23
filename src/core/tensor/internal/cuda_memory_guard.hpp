@@ -42,7 +42,7 @@ namespace lfs::core {
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(CudaDeviceMemory destruction)", {},
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
             }
         }
@@ -67,7 +67,7 @@ namespace lfs::core {
                     if (status != cudaSuccess) {
                         ensure_cuda_success(
                             status, "cudaFree(CudaDeviceMemory move assignment)", {},
-                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                     }
                 }
                 ptr_ = other.ptr_;
@@ -96,7 +96,7 @@ namespace lfs::core {
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(CudaDeviceMemory reset)", {},
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
             }
             ptr_ = ptr;

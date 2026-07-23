@@ -6,7 +6,9 @@
 #include "diagnostics/vram_profiler.hpp"
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
+#include <filesystem>
 #include <format>
 #include <mutex>
 #include <optional>
@@ -16,15 +18,20 @@
 #define FMT_UNICODE 0
 #endif
 #include <spdlog/sinks/base_sink.h>
-#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/spdlog.h>
 
 namespace lfs::core {
 
     namespace {
+        namespace fs = std::filesystem;
+
         constexpr const char* ANSI_RESET = "\033[0m";
         constexpr const char* ANSI_PERF = "\033[95m";
         constexpr size_t MAX_BUFFERED_LOG_ENTRIES = 5000;
+        constexpr size_t DEFAULT_LOG_ROTATION_MAX_BYTES = 10 * 1024 * 1024;
+        constexpr size_t DEFAULT_LOG_ROTATION_MAX_FILES = 4;
+        constexpr const char* DEFAULT_LOG_FILE_PATTERN = "[%Y-%m-%d %H:%M:%S.%e] [%l] %s:%# %v";
 
         // Convert glob pattern to regex: * -> .*, ? -> .
         std::string glob_to_regex(const std::string& glob) {
@@ -400,6 +407,72 @@ namespace lfs::core {
             default: return spdlog::level::info;
             }
         }
+
+        // Mirrors preprocessing/preprocess.cpp's private home_directory() helper.
+        // Not shared via core/path_utils.hpp: lfs_logger is a leaf library with
+        // deliberately zero upstream includes (see src/core/logger/CMakeLists.txt),
+        // and path_utils.hpp sits outside its include root.
+        fs::path lichtfeld_home_directory() {
+#ifdef _WIN32
+            if (const char* profile = std::getenv("USERPROFILE"); profile && profile[0])
+                return fs::path(profile);
+            const char* drive = std::getenv("HOMEDRIVE");
+            const char* homepath = std::getenv("HOMEPATH");
+            if (drive && drive[0] && homepath && homepath[0])
+                return fs::path(std::string(drive) + homepath);
+#else
+            if (const char* home = std::getenv("HOME"); home && home[0])
+                return fs::path(home);
+#endif
+            return fs::temp_directory_path();
+        }
+
+        fs::path resolve_default_log_directory(const std::string& user_dir_override) {
+            return user_dir_override.empty()
+                       ? lichtfeld_home_directory() / ".lichtfeld"
+                       : fs::path(user_dir_override);
+        }
+
+        fs::path resolve_default_log_path(const std::string& user_dir_override) {
+            return resolve_default_log_directory(user_dir_override) / "logs" / "lichtfeld.log";
+        }
+
+        std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> make_rotating_file_sink(const fs::path& path) {
+            auto sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+                path.string(), DEFAULT_LOG_ROTATION_MAX_BYTES, DEFAULT_LOG_ROTATION_MAX_FILES);
+            sink->set_level(spdlog::level::trace);
+            sink->set_pattern(DEFAULT_LOG_FILE_PATTERN);
+            return sink;
+        }
+
+        // Never throws: startup must not fail because the durable log couldn't be
+        // set up. On failure, prints one warning and returns nullptr so init() falls
+        // back to console/memory sinks only.
+        std::shared_ptr<spdlog::sinks::rotating_file_sink_mt> make_default_file_sink(const fs::path& path) {
+            std::error_code ec;
+            fs::create_directories(path.parent_path(), ec);
+            if (ec) {
+                std::fprintf(stderr, "lichtfeld: could not create log directory '%s': %s\n",
+                             path.parent_path().string().c_str(), ec.message().c_str());
+                return nullptr;
+            }
+            try {
+                return make_rotating_file_sink(path);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "lichtfeld: could not open default log file '%s': %s\n",
+                             path.string().c_str(), e.what());
+                return nullptr;
+            }
+        }
+
+        bool same_log_target(const fs::path& a, const fs::path& b) {
+            std::error_code ec_a, ec_b;
+            const fs::path resolved_a = fs::weakly_canonical(a, ec_a);
+            const fs::path resolved_b = fs::weakly_canonical(b, ec_b);
+            if (!ec_a && !ec_b)
+                return resolved_a == resolved_b;
+            return a.lexically_normal() == b.lexically_normal();
+        }
     } // anonymous namespace
 
     struct Logger::Impl {
@@ -460,6 +533,12 @@ namespace lfs::core {
 
     void Logger::init(const LogLevel console_level, const std::string& log_file,
                       const std::string& filter_pattern, const bool use_stderr) {
+        init(console_level, log_file, filter_pattern, use_stderr, std::string{});
+    }
+
+    void Logger::init(const LogLevel console_level, const std::string& log_file,
+                      const std::string& filter_pattern, const bool use_stderr,
+                      const std::string& default_log_dir_override) {
         std::lock_guard lock(impl_->mutex);
 
         std::vector<spdlog::sink_ptr> sinks;
@@ -476,19 +555,44 @@ namespace lfs::core {
         impl_->memory_sink->set_level(spdlog::level::trace);
         sinks.push_back(impl_->memory_sink);
 
+        const fs::path default_log_path = resolve_default_log_path(default_log_dir_override);
+        bool default_sink_added = false;
+        if (auto default_sink = make_default_file_sink(default_log_path)) {
+            sinks.push_back(default_sink);
+            default_sink_added = true;
+        }
+
         if (!log_file.empty()) {
-            auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_file, true);
-            file_sink->set_level(spdlog::level::trace);
-            file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %s:%# %v");
-            sinks.push_back(file_sink);
+            const fs::path explicit_path(log_file);
+            if (!default_sink_added || !same_log_target(default_log_path, explicit_path)) {
+                sinks.push_back(make_rotating_file_sink(explicit_path));
+            }
         }
 
         impl_->logger = std::make_shared<spdlog::logger>("lfs", sinks.begin(), sinks.end());
         impl_->logger->set_level(spdlog::level::trace);
+        impl_->logger->flush_on(spdlog::level::err);
         spdlog::set_default_logger(impl_->logger);
+        spdlog::flush_every(std::chrono::seconds(2));
 
         global_level_ = static_cast<uint8_t>(console_level);
         capture_all_to_file_ = !log_file.empty();
+    }
+
+    std::string Logger::default_log_file_path(const std::string& user_dir_override) {
+        return resolve_default_log_path(user_dir_override).string();
+    }
+
+    bool Logger::is_ready() const noexcept {
+        std::lock_guard lock(impl_->mutex);
+        return static_cast<bool>(impl_->logger);
+    }
+
+    void Logger::reset_for_testing() noexcept {
+        std::lock_guard lock(impl_->mutex);
+        impl_->logger.reset();
+        impl_->console_sink.reset();
+        impl_->memory_sink.reset();
     }
 
     LogHandlerToken Logger::add_log_handler(LogHandler handler) {
@@ -539,8 +643,29 @@ namespace lfs::core {
             std::lock_guard lock(impl_->handler_mutex);
             handlers_snapshot = impl_->log_handlers_;
         }
+        // Contain each handler: a throwing handler must not interrupt the
+        // caller of log()/log_internal() or stop later handlers from
+        // running. The faulty handler is disabled so it cannot repeat the
+        // failure on every subsequent log call.
+        std::vector<LogHandlerToken> faulty_tokens;
         for (const auto& [token, handler] : handlers_snapshot) {
-            handler(level, loc, final_msg);
+            try {
+                handler(level, loc, final_msg);
+            } catch (const std::exception& e) {
+                // LFS-CENSUS-OK(empty-catch): handler containment reports directly to
+                // stderr, not LOG_*, because the failure is Logger's own handler misbehaving.
+                std::fprintf(stderr, "lichtfeld: log handler %u threw '%s'; disabling it\n",
+                             static_cast<unsigned>(token), e.what());
+                faulty_tokens.push_back(token);
+            } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): same rationale as the std::exception branch above.
+                std::fprintf(stderr, "lichtfeld: log handler %u threw a non-std exception; disabling it\n",
+                             static_cast<unsigned>(token));
+                faulty_tokens.push_back(token);
+            }
+        }
+        for (const LogHandlerToken token : faulty_tokens) {
+            remove_log_handler(token);
         }
     }
 

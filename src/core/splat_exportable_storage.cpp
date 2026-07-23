@@ -6,6 +6,7 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_impl.hpp"
 
 #include <cstring>
@@ -121,7 +122,7 @@ namespace lfs::core {
                                                dtype,
                                                std::move(owner),
                                                capacity,
-                                               /*stream=*/nullptr,
+                                               /*stream=*/getCurrentCUDAStream(),
                                                "splat.exportable");
         };
     }

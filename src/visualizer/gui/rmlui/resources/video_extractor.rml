@@ -34,6 +34,10 @@
           <button id="btn-rotation-cw" class="transport-btn" type="button" title="@tr:video_extractor.rotate_cw">
             <img src="../icon/sequencer/rotate-cw.png" />
           </button>
+          <span id="hdr-badge" class="hdr-badge" style="display:none">
+            <span id="hdr-badge-type"></span>
+            <span id="hdr-badge-label"></span>
+          </span>
         </div>
 
         <div id="timeline">
@@ -113,7 +117,7 @@
               <span>@tr:video_extractor.sharpness_filter</span>
             </label>
           </div>
-          <div id="sharpness-options" class="sharpness-options">
+            <div id="sharpness-options" class="sharpness-options">
             <div class="settings-row">
               <span class="field-label">@tr:video_extractor.sharpness_algorithm</span>
               <select id="sharpness-algorithm-select" class="wide-select">
@@ -147,9 +151,9 @@
                 <option value="0">@tr:video_extractor.candidates_all</option>
               </select>
               <span id="window-candidates-readout" class="inline-note">10 / ~25 frames</span>
+              </div>
             </div>
           </div>
-        </div>
 
         <div class="section">
           <div class="section-rule">
@@ -171,6 +175,10 @@
             <label class="toggle-label metadata-check">
               <input id="generate-metadata" type="checkbox" />
               <span>@tr:video_extractor.generate_metadata</span>
+            </label>
+            <label id="hdr-to-sdr-row" class="toggle-label metadata-check" style="display:none">
+              <input id="hdr-to-sdr" type="checkbox" />
+              <span>@tr:video_extractor.convert_hdr_to_sdr</span>
             </label>
           </div>
         </div>

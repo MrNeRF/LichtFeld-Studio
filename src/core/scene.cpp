@@ -2223,8 +2223,11 @@ namespace lfs::core {
 
         glm::vec3 bounds_min, bounds_max;
         if (getNodeBounds(parent_id, bounds_min, bounds_max)) {
-            node->cropbox->min = bounds_min;
-            node->cropbox->max = bounds_max;
+            const glm::vec3 center = (bounds_min + bounds_max) * 0.5f;
+            const glm::vec3 half_size = glm::max((bounds_max - bounds_min) * 0.5f, glm::vec3(1e-4f));
+            node->cropbox->min = -half_size;
+            node->cropbox->max = half_size;
+            node->local_transform = glm::translate(glm::mat4(1.0f), center);
         }
 
         const NodeId id = insertNode(std::move(node));
@@ -3232,15 +3235,17 @@ namespace lfs::core {
         *node->cropbox = data;
     }
 
-    std::vector<Scene::RenderableCropBox> Scene::getVisibleCropBoxes() const {
+    std::vector<Scene::RenderableCropBox> Scene::getRenderableCropBoxes() const {
         std::vector<RenderableCropBox> result;
 
         for (const auto& node : nodes_) {
             if (node->type != NodeType::CROPBOX)
                 continue;
-            if (!isNodeEffectivelyVisible(node->id))
-                continue;
             if (!node->cropbox)
+                continue;
+            const bool effectively_visible = isNodeEffectivelyVisible(node->id);
+            const bool parent_effectively_visible = isNodeEffectivelyVisible(node->parent_id);
+            if (!effectively_visible && !node->cropbox->enabled)
                 continue;
 
             RenderableCropBox rcb;
@@ -3250,9 +3255,20 @@ namespace lfs::core {
             rcb.data = node->cropbox.get();
             rcb.world_transform = getWorldTransform(node->id);
             rcb.local_transform = node->local_transform.get();
+            rcb.effectively_visible = effectively_visible;
+            rcb.parent_effectively_visible = parent_effectively_visible;
             result.push_back(rcb);
         }
 
+        return result;
+    }
+
+    std::vector<Scene::RenderableCropBox> Scene::getVisibleCropBoxes() const {
+        std::vector<RenderableCropBox> result;
+        for (auto cropbox : getRenderableCropBoxes()) {
+            if (cropbox.effectively_visible)
+                result.push_back(cropbox);
+        }
         return result;
     }
 
@@ -3314,15 +3330,17 @@ namespace lfs::core {
         *node->ellipsoid = data;
     }
 
-    std::vector<Scene::RenderableEllipsoid> Scene::getVisibleEllipsoids() const {
+    std::vector<Scene::RenderableEllipsoid> Scene::getRenderableEllipsoids() const {
         std::vector<RenderableEllipsoid> result;
 
         for (const auto& node : nodes_) {
             if (node->type != NodeType::ELLIPSOID)
                 continue;
-            if (!isNodeEffectivelyVisible(node->id))
-                continue;
             if (!node->ellipsoid)
+                continue;
+            const bool effectively_visible = isNodeEffectivelyVisible(node->id);
+            const bool parent_effectively_visible = isNodeEffectivelyVisible(node->parent_id);
+            if (!effectively_visible && !node->ellipsoid->enabled)
                 continue;
 
             RenderableEllipsoid rel;
@@ -3332,9 +3350,20 @@ namespace lfs::core {
             rel.data = node->ellipsoid.get();
             rel.world_transform = getWorldTransform(node->id);
             rel.local_transform = node->local_transform.get();
+            rel.effectively_visible = effectively_visible;
+            rel.parent_effectively_visible = parent_effectively_visible;
             result.push_back(rel);
         }
 
+        return result;
+    }
+
+    std::vector<Scene::RenderableEllipsoid> Scene::getVisibleEllipsoids() const {
+        std::vector<RenderableEllipsoid> result;
+        for (auto ellipsoid : getRenderableEllipsoids()) {
+            if (ellipsoid.effectively_visible)
+                result.push_back(ellipsoid);
+        }
         return result;
     }
 

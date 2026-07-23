@@ -244,8 +244,11 @@ namespace lfs::core {
             const CropBoxData* data = nullptr;
             glm::mat4 world_transform{1.0f};
             glm::mat4 local_transform{1.0f};
+            bool effectively_visible = false;
+            bool parent_effectively_visible = false;
         };
         [[nodiscard]] std::vector<RenderableCropBox> getVisibleCropBoxes() const;
+        [[nodiscard]] std::vector<RenderableCropBox> getRenderableCropBoxes() const;
 
         [[nodiscard]] NodeId getEllipsoidForSplat(NodeId splat_id) const;
         [[nodiscard]] NodeId getOrCreateEllipsoidForSplat(NodeId splat_id);
@@ -260,8 +263,11 @@ namespace lfs::core {
             const EllipsoidData* data = nullptr;
             glm::mat4 world_transform{1.0f};
             glm::mat4 local_transform{1.0f};
+            bool effectively_visible = false;
+            bool parent_effectively_visible = false;
         };
         [[nodiscard]] std::vector<RenderableEllipsoid> getVisibleEllipsoids() const;
+        [[nodiscard]] std::vector<RenderableEllipsoid> getRenderableEllipsoids() const;
 
         const lfs::core::SplatData* getCombinedModel() const;
 

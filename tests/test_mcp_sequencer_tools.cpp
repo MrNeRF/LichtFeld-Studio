@@ -305,7 +305,9 @@ TEST_F(McpSequencerToolsTest, RegisteredSchemasAreIdOnly) {
         "sequencer.select_keyframe",
         json{{"keyframe_index", 0}});
     ASSERT_TRUE(result.contains("error"));
-    EXPECT_EQ(result["error"], "Missing required parameter: keyframe_id");
+    EXPECT_EQ(result["error"]["code"], "InvalidArgument");
+    EXPECT_EQ(result["error"]["details"]["parameter"], "keyframe_id");
+    EXPECT_EQ(result["error_message"], "Missing required parameter: keyframe_id");
 }
 
 TEST_F(McpSequencerToolsTest, GetUsesStableIdsAndSkipsLoopPoint) {

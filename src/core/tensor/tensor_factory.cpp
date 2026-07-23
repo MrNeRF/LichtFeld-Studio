@@ -11,7 +11,8 @@ namespace lfs::core {
                                        const DataType dtype,
                                        std::shared_ptr<void> owner) {
         return from_external_owner(
-            data, std::move(shape), device, dtype, std::move(owner), 0, nullptr, {});
+            data, std::move(shape), device, dtype, std::move(owner), 0, nullptr,
+            "external.unlabeled");
     }
 
     Tensor Tensor::from_external_owner(void* data,
@@ -21,7 +22,8 @@ namespace lfs::core {
                                        std::shared_ptr<void> owner,
                                        const size_t capacity) {
         return from_external_owner(
-            data, std::move(shape), device, dtype, std::move(owner), capacity, nullptr, {});
+            data, std::move(shape), device, dtype, std::move(owner), capacity, nullptr,
+            "external.unlabeled");
     }
 
     Tensor Tensor::from_external_owner(void* data,
@@ -32,7 +34,8 @@ namespace lfs::core {
                                        const size_t capacity,
                                        const cudaStream_t stream) {
         return from_external_owner(
-            data, std::move(shape), device, dtype, std::move(owner), capacity, stream, {});
+            data, std::move(shape), device, dtype, std::move(owner), capacity, stream,
+            "external.unlabeled");
     }
 
     Tensor Tensor::from_external_owner(void* data,

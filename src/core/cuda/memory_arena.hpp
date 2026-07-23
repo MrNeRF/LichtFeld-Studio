@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -18,6 +20,10 @@
 #include <vector>
 
 namespace lfs::core {
+
+    class GlobalArenaManager;
+    LFS_CORE_API GlobalArenaManager& global_arena_manager();
+    LFS_CORE_API void shutdown_global_arena_manager();
 
     class RasterizerMemoryArena {
     public:
@@ -147,7 +153,7 @@ namespace lfs::core {
         // Completion event of the most recent stream-aware frame. Invalid when
         // the last frame was legacy (no stream) — the next begin then falls back
         // to a device sync. Guarded by last_frame_event_mutex_.
-        std::mutex last_frame_event_mutex_;
+        mutable std::mutex last_frame_event_mutex_;
         cudaEvent_t last_frame_event_ = nullptr;
         bool last_frame_event_valid_ = false;
 
@@ -243,6 +249,7 @@ namespace lfs::core {
         MemoryInfo get_memory_info() const;
         void dump_statistics() const;
         void log_memory_status(uint64_t frame_id, bool force = false);
+        [[nodiscard]] bool has_last_frame_event_for_testing() const;
 
         bool is_under_memory_pressure() const;
         float get_memory_pressure() const;
@@ -274,7 +281,7 @@ namespace lfs::core {
 
     class GlobalArenaManager {
     public:
-        static GlobalArenaManager& instance();
+        static GlobalArenaManager& instance() { return global_arena_manager(); }
         RasterizerMemoryArena& get_arena();
         RasterizerMemoryArena* try_get_arena();
         bool install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
@@ -283,12 +290,19 @@ namespace lfs::core {
                                    const std::function<bool(size_t)>& commit);
         void clear_external_backing(const void* device_ptr = nullptr);
         void reset();
+        void shutdown() { shutdown_global_arena_manager(); }
+        /// Reconstructs the arena with a caller-supplied capacity for deterministic OOM tests.
+        void reconfigure_for_testing(RasterizerMemoryArena::Config config);
 
     private:
+        friend GlobalArenaManager& global_arena_manager();
+        friend void shutdown_global_arena_manager();
+
         GlobalArenaManager() = default;
         ~GlobalArenaManager() = default;
         std::unique_ptr<RasterizerMemoryArena> arena_;
         std::mutex init_mutex_;
+        bool shutdown_ = false;
     };
 
 } // namespace lfs::core

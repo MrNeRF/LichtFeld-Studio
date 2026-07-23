@@ -8,16 +8,16 @@ Use this flow when the task is to execute Python inside the integrated editor an
 
 ## Sequence
 
-1. Optionally call `editor.set_code`.
-2. Call `editor.run`.
-3. If the script is still running, watch `editor.python` through `runtime.job.wait`.
-4. Read output with `editor.get_output` or `lichtfeld://editor/output`.
+1. Optionally call `editor_set_code`.
+2. Call `editor_run`.
+3. If the script is still running, watch `editor.python` through `runtime_job_wait`.
+4. Read output with `editor_get_output` or `lichtfeld://editor/output`.
 
 ## Set Code
 
 ```json
 {
-  "tool": "editor.set_code",
+  "tool": "editor_set_code",
   "arguments": {
     "code": "print('hello from MCP')",
     "show_console": true
@@ -29,7 +29,7 @@ Use this flow when the task is to execute Python inside the integrated editor an
 
 ```json
 {
-  "tool": "editor.run",
+  "tool": "editor_run",
   "arguments": {
     "wait_for_completion": true,
     "wait_for_output": true,
@@ -42,7 +42,7 @@ Or set and run in one call:
 
 ```json
 {
-  "tool": "editor.run",
+  "tool": "editor_run",
   "arguments": {
     "code": "print('hello from MCP')",
     "wait_for_completion": true,
@@ -56,7 +56,7 @@ Or set and run in one call:
 
 ```json
 {
-  "tool": "runtime.job.wait",
+  "tool": "runtime_job_wait",
   "arguments": {
     "job_id": "editor.python",
     "until": "inactive",
@@ -69,7 +69,7 @@ Or set and run in one call:
 
 ```json
 {
-  "tool": "editor.get_output",
+  "tool": "editor_get_output",
   "arguments": {
     "max_chars": 20000,
     "tail": true
@@ -79,6 +79,6 @@ Or set and run in one call:
 
 ## Notes
 
-- `editor.run` can place code into the editor and execute it in one step
-- use `editor.is_running` for a cheap status check
-- use `editor.interrupt` if the script must be stopped
+- `editor_run` can place code into the editor and execute it in one step
+- use `editor_is_running` for a cheap status check
+- use `editor_interrupt` if the script must be stopped

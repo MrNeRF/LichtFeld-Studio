@@ -119,10 +119,17 @@ namespace lfs::vis {
                                           bool select_new_node = true);
         size_t consolidateNodeModels();
 
+        [[nodiscard]] std::expected<void, std::string> canRemoveNode(core::NodeId id) const;
+        [[nodiscard]] std::expected<void, std::string> removePLYWithResult(const std::string& name, bool keep_children = false);
+        [[nodiscard]] std::expected<void, std::string> removeNodesWithResult(const std::vector<std::string>& names,
+                                                                             bool keep_children = false);
+        size_t publishLiveCameraCount();
         void removePLY(const std::string& name, bool keep_children = false);
         void setPLYVisibility(const std::string& name, bool visible);
+        [[nodiscard]] std::expected<void, std::string> removeNodeWithResult(core::NodeId id, bool keep_children = false);
         void removeNode(core::NodeId id, bool keep_children = false);
         void setNodeVisibility(core::NodeId id, bool visible);
+        void setNodeVisibilityTransient(core::NodeId id, bool visible);
 
         // Node selection
         void selectNode(const std::string& name);
@@ -346,8 +353,8 @@ namespace lfs::vis {
         void syncDatasetCameraFrustumsToRenderSettings();
         void syncCropToolRenderSettings(const core::SceneNode* node);
         void loadPPISPCompanion(const std::filesystem::path& ppisp_path);
-        void handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, bool inverse);
-        void handleCropByEllipsoid(const glm::mat4& world_transform, const glm::vec3& radii, bool inverse);
+        void handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, bool inverse, core::NodeId target_node_id = core::NULL_NODE);
+        void handleCropByEllipsoid(const glm::mat4& world_transform, const glm::vec3& radii, bool inverse, core::NodeId target_node_id = core::NULL_NODE);
         void handleRenamePly(const lfs::core::events::cmd::RenamePLY& event);
         void handleAddCropBox(const std::string& node_name);
         void handleAddCropBox(core::NodeId node_id);

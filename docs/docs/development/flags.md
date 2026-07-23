@@ -48,10 +48,9 @@ and RmlUI imports are controlled by `LFS_DEV_IMPORT_SOURCE_PYTHON` and
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `LFS_LOG_LEVEL` | `info` | Startup log level. `--verbose`, `--quiet`, and `--log-level` override it. |
-| `LFS_CUDA_SYNC_DEBUG` | `OFF` | Synchronizes before and after central CUDA checks to attribute asynchronous failures. This is intentionally slow. |
+| `LFS_CUDA_SYNC_DEBUG` | unset (no modes) | The single runtime diagnostics control. Comma-separated mode list: `cuda-sync`, `device-trap`, `vk-fatal`. See below. |
 | `LFS_NO_CRASH_HANDLER` | `OFF` | Leaves fatal signals and unhandled exceptions to an attached debugger or sanitizer. |
 | `LFS_VK_VALIDATION` | CMake default | Requests Vulkan validation at startup. Set `0` to override a validation-enabled developer build. |
-| `LFS_VK_VALIDATION_FATAL` | `OFF` | Aborts through the fatal path on the first error-severity validation callback. It does not enable validation. |
 | `LFS_VRAM_RESERVE_MB` | `512` | Memory-pressure headroom, clamped to 128 MiB through one quarter of device VRAM. |
 | `LFS_PINNED_CACHE_LIMIT_MB` | `1024` | Pinned-host cache byte budget. |
 | `LFS_NVCODEC_DIAGNOSTICS` | `OFF` | Logs nvImageCodec and dependent-library discovery details. |
@@ -67,6 +66,30 @@ The VRAM and pinned-cache values are startup-time hardware policy, so they must
 remain runtime-selectable across GPUs. Endpoint and path overrides support
 isolated development and automation. Render, training, overlay, LOD, and plugin
 enablement choices remain in their existing settings or parameter owners.
+
+### LFS_CUDA_SYNC_DEBUG modes
+
+`LFS_CUDA_SYNC_DEBUG` is the single runtime diagnostics control. Its value is a
+comma-separated list of modes, parsed once at startup into a cached bitmask:
+
+| Mode | Effect |
+| --- | --- |
+| `cuda-sync` | Synchronizes before and after every checked CUDA operation to attribute asynchronous failures to their true origin. Intentionally slow. |
+| `device-trap` | Reserved: will record the `DeviceFaultRecord` and trap in a diagnostic subprocess once a consumer lands. Parsed today but has no effect. |
+| `vk-fatal` | Makes an error-severity Vulkan validation callback terminal (aborts on the first validation error) instead of only logging it. |
+
+```sh
+LFS_CUDA_SYNC_DEBUG=cuda-sync,vk-fatal ./build/LichtFeld-Studio ...
+```
+
+An absent, empty, or `0`/`false`/`off` value enables no modes. For backward
+compatibility, a bare legacy boolean value (`1`, `true`, `on`) is read as
+`cuda-sync`. The previously separate `LFS_VK_VALIDATION_FATAL` variable is a
+deprecated alias for `vk-fatal`: setting it still works and its modes are
+unioned with `LFS_CUDA_SYNC_DEBUG`, but it logs one startup deprecation
+warning naming the canonical `LFS_CUDA_SYNC_DEBUG=vk-fatal` spelling, and will
+be removed in a future release. Unknown tokens in the mode list log one
+startup warning and are otherwise ignored.
 
 ## MCP bridge variables
 

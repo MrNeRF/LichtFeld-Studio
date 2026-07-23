@@ -716,12 +716,13 @@ TEST_F(PythonIOTest, PlyLoadMapsExternalChannelMajorShOrderToInternalLayout) {
     write_external_sh_layout_test_ply(input_path);
 
     auto loaded = load_ply(input_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load test PLY: " << loaded.error();
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load test PLY: " << lfs::format_for_developer(loaded.error());
 
-    EXPECT_EQ(loaded->size(), 1UL);
-    EXPECT_EQ(loaded->get_max_sh_degree(), 1);
+    EXPECT_EQ(loaded->value.size(), 1UL);
+    EXPECT_EQ(loaded->value.get_max_sh_degree(), 1);
 
-    const auto sh0 = loaded->sh0().cpu().contiguous();
+    const auto sh0 = loaded->value.sh0().cpu().contiguous();
     ASSERT_EQ(sh0.ndim(), 3);
     ASSERT_EQ(sh0.size(0), 1);
     ASSERT_EQ(sh0.size(1), 1);
@@ -732,7 +733,7 @@ TEST_F(PythonIOTest, PlyLoadMapsExternalChannelMajorShOrderToInternalLayout) {
     EXPECT_FLOAT_EQ(sh0_ptr[1], 20.0f);
     EXPECT_FLOAT_EQ(sh0_ptr[2], 30.0f);
 
-    const auto shN = loaded->shN_canonical_cpu().contiguous();
+    const auto shN = loaded->value.shN_canonical_cpu().contiguous();
     ASSERT_TRUE(shN.is_valid());
     ASSERT_EQ(shN.ndim(), 3);
     ASSERT_EQ(shN.size(0), 1);
@@ -761,17 +762,18 @@ TEST_F(PythonIOTest, PlyLoadDiscardsInvalidGaussianRowsBeforeImport) {
         });
 
     auto loaded = load_ply(input_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load test PLY: " << loaded.error();
-    EXPECT_EQ(loaded->size(), 1UL);
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load test PLY: " << lfs::format_for_developer(loaded.error());
+    EXPECT_EQ(loaded->value.size(), 1UL);
 
-    const auto means = loaded->means().cpu().contiguous();
+    const auto means = loaded->value.means().cpu().contiguous();
     ASSERT_EQ(means.numel(), 3);
     const auto* means_ptr = means.ptr<float>();
     EXPECT_FLOAT_EQ(means_ptr[0], 1.0f);
     EXPECT_FLOAT_EQ(means_ptr[1], 2.0f);
     EXPECT_FLOAT_EQ(means_ptr[2], 3.0f);
 
-    const auto rotation = loaded->rotation_raw().cpu().contiguous();
+    const auto rotation = loaded->value.rotation_raw().cpu().contiguous();
     ASSERT_EQ(rotation.numel(), 4);
     const auto* rotation_ptr = rotation.ptr<float>();
     EXPECT_FLOAT_EQ(rotation_ptr[0], 1.0f);
@@ -786,7 +788,7 @@ TEST_F(PythonIOTest, PlyLoadRejectsPartialRotationSchema) {
 
     const auto loaded = load_ply(input_path);
     ASSERT_FALSE(loaded.has_value());
-    EXPECT_NE(loaded.error().find("rotation properties must include rot_0, rot_1, rot_2, and rot_3"),
+    EXPECT_NE(loaded.error().detail().find("rotation properties must include rot_0, rot_1, rot_2, and rot_3"),
               std::string::npos);
 }
 
@@ -822,7 +824,7 @@ TEST_F(PythonIOTest, PlyLoadRejectsNonemptyElementsBeforeVertices) {
 
     const auto result = load_ply(input_path);
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().find("before vertex"), std::string::npos);
+    EXPECT_NE(result.error().detail().find("before vertex"), std::string::npos);
 }
 
 TEST_F(PythonIOTest, PlyClassifiersRequireBoundedCompleteHeaders) {
@@ -846,10 +848,11 @@ TEST_F(PythonIOTest, PlyLoadAccountsForNonFloatVertexProperties) {
     write_gaussian_ply_with_extra_uchar_property(input_path);
 
     auto loaded = load_ply(input_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load test PLY: " << loaded.error();
-    EXPECT_EQ(loaded->size(), 1UL);
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load test PLY: " << lfs::format_for_developer(loaded.error());
+    EXPECT_EQ(loaded->value.size(), 1UL);
 
-    const auto means = loaded->means().cpu().contiguous();
+    const auto means = loaded->value.means().cpu().contiguous();
     ASSERT_EQ(means.numel(), 3);
     const auto* means_ptr = means.ptr<float>();
     EXPECT_FLOAT_EQ(means_ptr[0], 1.0f);

@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/modal_request.hpp"
+#include "core/source_site.hpp"
 #include "core/splat_simplify_types.hpp"
 #include "visualizer/gui/panel_height_mode.hpp"
 #include "visualizer/gui/panel_space.hpp"
@@ -146,6 +148,23 @@ namespace lfs::python {
 
     // Safe Python error extraction - avoids nanobind::python_error::what() crash on Windows
     LFS_PYTHON_RUNTIME_API std::string extract_python_error();
+
+    // Typed Python-error extraction (Phase 9 Section 2.1). Precondition: GIL held
+    // AND PyErr_Occurred(). Consumes and clears the pending Python error. Never
+    // throws; never leaves a Python error pending. The returned Error owns a
+    // formatted traceback string only (in detail()); no PyObject is retained, so
+    // it is safe to outlive interpreter finalization. The raised Python type maps
+    // to an ErrorCode via a closed table; a re-raised lichtfeld.Error round-trips
+    // its own .code/.domain. Formats via CPython calls directly (never
+    // nb::python_error::what(), per the Windows-crash history above).
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::Error
+    error_from_python(lfs::core::SourceSite site, lfs::OperationId op = {}) noexcept;
+
+    // Reverse of lfs::to_string(ErrorCode/ErrorDomain). Unknown tokens map to
+    // ErrorCode::Internal / ErrorDomain::Python. Used by error_from_python's
+    // lichtfeld.Error round-trip and by the _testing bindings.
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::ErrorCode error_code_from_string(std::string_view token) noexcept;
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::ErrorDomain error_domain_from_string(std::string_view token) noexcept;
 
     LFS_PYTHON_RUNTIME_API void invoke_python_cleanup();
     LFS_PYTHON_RUNTIME_API void shutdown_python_ui_resources();

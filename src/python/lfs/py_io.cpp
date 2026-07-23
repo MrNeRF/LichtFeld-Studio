@@ -4,6 +4,7 @@
 
 #include "py_io.hpp"
 #include "py_cameras.hpp"
+#include "py_error.hpp"
 #include "py_scene.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
@@ -29,6 +30,85 @@
 namespace lfs::python {
 
     namespace {
+
+        // Phase 9 Section 1.5: py_io is the one reference binding group converted
+        // to typed errors. Each throw carries a correct ErrorCode + ErrorDomain::IO
+        // so the LIFO translator maps it to the right lichtfeld.* subclass.
+        // NOTE: deliberate fork of io/error.hpp's to_lfs_error_code: this map biases
+        // filesystem-shaped codes toward NotFound and header/JSON damage toward
+        // InvalidArgument (Python exception ergonomics), and throw_io_error emits the
+        // Phase 9 pinned attr name `requested_bytes` where io::to_lfs_error emits
+        // `required_bytes`. When io::ErrorCode gains a value, update BOTH maps.
+        lfs::ErrorCode map_io_code(const io::ErrorCode code) noexcept {
+            switch (code) {
+            case io::ErrorCode::PATH_NOT_FOUND:
+            case io::ErrorCode::NOT_A_DIRECTORY:
+            case io::ErrorCode::NOT_A_FILE:
+            case io::ErrorCode::MISSING_REQUIRED_FILES:
+                return lfs::ErrorCode::NotFound;
+            case io::ErrorCode::PERMISSION_DENIED:
+            case io::ErrorCode::PATH_NOT_WRITABLE:
+                return lfs::ErrorCode::PermissionDenied;
+            case io::ErrorCode::INSUFFICIENT_DISK_SPACE:
+            case io::ErrorCode::RESOURCE_EXHAUSTED:
+                return lfs::ErrorCode::ResourceExhausted;
+            case io::ErrorCode::INVALID_DATASET:
+            case io::ErrorCode::EMPTY_DATASET:
+            case io::ErrorCode::INVALID_HEADER:
+            case io::ErrorCode::MALFORMED_JSON:
+            case io::ErrorCode::MASK_SIZE_MISMATCH:
+            case io::ErrorCode::DEPTH_SIZE_MISMATCH:
+            case io::ErrorCode::NORMAL_SIZE_MISMATCH:
+                return lfs::ErrorCode::InvalidArgument;
+            case io::ErrorCode::UNSUPPORTED_FORMAT:
+                return lfs::ErrorCode::Unsupported;
+            case io::ErrorCode::CORRUPTED_DATA:
+            case io::ErrorCode::DECODING_FAILED:
+                return lfs::ErrorCode::DataLoss;
+            case io::ErrorCode::CANCELLED:
+                return lfs::ErrorCode::Cancelled;
+            case io::ErrorCode::WRITE_FAILURE:
+            case io::ErrorCode::ENCODING_FAILED:
+            case io::ErrorCode::ARCHIVE_CREATION_FAILED:
+            case io::ErrorCode::READ_FAILURE:
+            case io::ErrorCode::INTERNAL_ERROR:
+            case io::ErrorCode::SUCCESS:
+                return lfs::ErrorCode::Internal;
+            }
+            return lfs::ErrorCode::Internal;
+        }
+
+        [[noreturn]] void throw_io_error(const io::Error& error, const std::string& context,
+                                         const lfs::core::SourceSite site = LFS_SOURCE_SITE_CURRENT()) {
+            lfs::SmallFields fields;
+            if (!error.path.empty())
+                fields.add("path", lfs::core::path_to_utf8(error.path));
+            if (error.required_bytes != 0)
+                fields.add("requested_bytes", static_cast<std::uint64_t>(error.required_bytes));
+            if (error.available_bytes != 0)
+                fields.add("available_bytes", static_cast<std::uint64_t>(error.available_bytes));
+            const std::string formatted = error.format();
+            throw lfs::Exception(lfs::make_error({
+                .code = map_io_code(error.code),
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .user_message = context.empty() ? formatted : std::format("{}: {}", context, formatted),
+                .detail = formatted,
+                .detection = site,
+                .fields = std::move(fields),
+            }));
+        }
+
+        [[noreturn]] void throw_invalid_io_argument(std::string message,
+                                                    const lfs::core::SourceSite site = LFS_SOURCE_SITE_CURRENT()) {
+            throw lfs::Exception(lfs::make_error({
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .user_message = std::move(message),
+                .detection = site,
+            }));
+        }
 
         struct PyProgressCallback {
             nb::object callback;
@@ -106,7 +186,7 @@ namespace lfs::python {
                 return PyTensor::from_numpy(nb::cast<nb::ndarray<>>(value)).tensor();
             }
 
-            throw std::runtime_error(
+            throw_invalid_io_argument(
                 "extra_attributes values must be lichtfeld.Tensor or numpy.ndarray");
         }
 
@@ -117,7 +197,7 @@ namespace lfs::python {
             }
 
             if (!nb::isinstance<nb::dict>(extra_attributes)) {
-                throw std::runtime_error(
+                throw_invalid_io_argument(
                     "extra_attributes must be a dict[str, lichtfeld.Tensor | numpy.ndarray]");
             }
 
@@ -128,29 +208,29 @@ namespace lfs::python {
             for (const auto& item : attributes) {
                 const std::string name = nb::cast<std::string>(item.first);
                 if (name.empty()) {
-                    throw std::runtime_error("extra_attributes keys must not be empty");
+                    throw_invalid_io_argument("extra_attributes keys must not be empty");
                 }
 
                 auto values = tensor_from_python_attribute(item.second);
                 if (!values.is_valid() || values.numel() == 0) {
-                    throw std::runtime_error(std::format(
+                    throw_invalid_io_argument(std::format(
                         "extra_attributes['{}'] must not be empty", name));
                 }
 
                 if (values.ndim() != 1 && values.ndim() != 2) {
-                    throw std::runtime_error(std::format(
+                    throw_invalid_io_argument(std::format(
                         "extra_attributes['{}'] must be shaped [N] or [N,C]", name));
                 }
 
                 const size_t cols = values.ndim() == 1 ? 1 : static_cast<size_t>(values.size(1));
                 if (cols == 0) {
-                    throw std::runtime_error(std::format(
+                    throw_invalid_io_argument(std::format(
                         "extra_attributes['{}'] must have at least one column", name));
                 }
 
                 auto names = io::make_ply_extra_attribute_names(name, cols);
                 if (auto result = io::validate_reserved_ply_extra_attribute_names(names, output_path); !result) {
-                    throw std::runtime_error(result.error().format());
+                    throw_io_error(result.error(), "Invalid extra PLY attribute name");
                 }
 
                 blocks.push_back(io::PlyAttributeBlock{
@@ -206,8 +286,8 @@ namespace lfs::python {
 
                 auto result = loader->load(path, options);
                 if (!result) {
-                    throw std::runtime_error(
-                        std::format("Failed to load '{}': {}", lfs::core::path_to_utf8(path), result.error().format()));
+                    throw_io_error(result.error(),
+                                   std::format("Failed to load '{}'", lfs::core::path_to_utf8(path)));
                 }
 
                 PyLoadResult py_result;
@@ -237,7 +317,13 @@ namespace lfs::python {
             [](const std::filesystem::path& path) -> nb::tuple {
                 const auto result = io::load_ply_point_cloud(path);
                 if (!result)
-                    throw std::runtime_error(std::format("Failed to load point cloud: {}", result.error()));
+                    throw lfs::Exception(lfs::make_error({
+                        .code = lfs::ErrorCode::Internal,
+                        .domain = lfs::ErrorDomain::IO,
+                        .severity = lfs::Severity::Error,
+                        .user_message = std::format("Failed to load point cloud: {}", result.error()),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    }));
                 return nb::make_tuple(PyTensor(result->means, true), PyTensor(result->colors, true));
             },
             nb::arg("path"),
@@ -261,7 +347,7 @@ namespace lfs::python {
 
                 auto result = io::save_ply(*data.data(), options);
                 if (!result)
-                    throw std::runtime_error(std::format("Failed to save PLY: {}", result.error().format()));
+                    throw_io_error(result.error(), "Failed to save PLY");
             },
             nb::arg("data"), nb::arg("path"), nb::arg("binary") = true, nb::arg("progress") = nb::none(),
             nb::arg("extra_attributes") = nb::none(),
@@ -271,14 +357,14 @@ namespace lfs::python {
             "save_point_cloud_ply",
             [](const PyPointCloud& pc, const std::filesystem::path& path, nb::object extra_attributes) {
                 if (!pc.data())
-                    throw std::runtime_error("Point cloud data must not be null");
+                    throw_invalid_io_argument("Point cloud data must not be null");
                 io::PlySaveOptions options;
                 options.output_path = path;
                 options.binary = true;
                 options.extra_attributes = parse_extra_ply_attributes(extra_attributes, path);
                 auto result = io::save_ply(*pc.data(), options);
                 if (!result)
-                    throw std::runtime_error(std::format("Failed to save point cloud PLY: {}", result.error().format()));
+                    throw_io_error(result.error(), "Failed to save point cloud PLY");
             },
             nb::arg("point_cloud"), nb::arg("path"), nb::arg("extra_attributes") = nb::none(),
             "Save a point cloud as PLY file (xyz + colors) with optional extra per-vertex float attributes");
@@ -301,7 +387,7 @@ namespace lfs::python {
 
                 auto result = io::save_sog(*data.data(), options);
                 if (!result)
-                    throw std::runtime_error(std::format("Failed to save SOG: {}", result.error().format()));
+                    throw_io_error(result.error(), "Failed to save SOG");
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("use_gpu") = true,
             nb::arg("progress") = nb::none(),
@@ -315,7 +401,7 @@ namespace lfs::python {
 
                 auto result = io::save_spz(*data.data(), options);
                 if (!result)
-                    throw std::runtime_error(std::format("Failed to save SPZ: {}", result.error().format()));
+                    throw_io_error(result.error(), "Failed to save SPZ");
             },
             nb::arg("data"), nb::arg("path"),
             "Save splat data as SPZ compressed file");
@@ -328,7 +414,7 @@ namespace lfs::python {
 
                 auto result = io::save_usd(*data.data(), options);
                 if (!result)
-                    throw std::runtime_error(std::format("Failed to save USD: {}", result.error().format()));
+                    throw_io_error(result.error(), "Failed to save USD");
             },
             nb::arg("data"), nb::arg("path"),
             "Save splat data as OpenUSD gaussian file");
@@ -341,7 +427,7 @@ namespace lfs::python {
 
                 auto result = io::save_nurec_usdz(*data.data(), options);
                 if (!result)
-                    throw std::runtime_error(std::format("Failed to save NuRec USDZ: {}", result.error().format()));
+                    throw_io_error(result.error(), "Failed to save NuRec USDZ");
             },
             nb::arg("data"), nb::arg("path"),
             "Save splat data as NuRec USDZ compatible with PLY_to_USD / Omniverse");
@@ -362,7 +448,7 @@ namespace lfs::python {
 
                 auto result = io::export_html(*data.data(), options);
                 if (!result)
-                    throw std::runtime_error(std::format("Failed to export HTML: {}", result.error().format()));
+                    throw_io_error(result.error(), "Failed to export HTML");
             },
             nb::arg("data"), nb::arg("path"), nb::arg("kmeans_iterations") = 10, nb::arg("progress") = nb::none(),
             "Export splat data as self-contained HTML viewer");

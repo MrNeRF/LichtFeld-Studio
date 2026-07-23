@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "kmeans.hpp"
 #include <algorithm>
@@ -468,6 +469,7 @@ namespace lfs::io {
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_data, perm.ptr<int>(), d_centroids, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_centroids");
             }
 
             auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
@@ -480,13 +482,17 @@ namespace lfs::io {
             const int grid_size_points = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             const int grid_size_centroids = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
+            const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                /*stream=*/nullptr, "io.kmeans.bruteforce_iteration");
             for (int iter = 0; iter < iterations; ++iter) {
                 if constexpr (N_DIMS == 3) {
                     assign_nearest_bruteforce_3d_kernel<<<grid_size_points, BLOCK_SIZE>>>(
                         d_data, d_centroids, d_labels, n, k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest_3d");
                 } else {
                     assign_nearest_bruteforce_kernel<N_DIMS><<<grid_size_points, BLOCK_SIZE>>>(
                         d_data, d_centroids, d_labels, n, k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
                 }
 
                 centroid_sums.zero_();
@@ -494,14 +500,16 @@ namespace lfs::io {
 
                 accumulate_centroids_kernel<N_DIMS><<<grid_size_points, BLOCK_SIZE>>>(
                     d_data, d_labels, centroid_sums.ptr<float>(), counts.ptr<int>(), n);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_centroids");
 
                 unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_centroids_kernel<N_DIMS><<<grid_size_centroids, BLOCK_SIZE>>>(
                     d_centroids, centroid_sums.ptr<float>(), counts.ptr<int>(),
                     d_data, k, n, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_centroids");
             }
 
-            cudaDeviceSynchronize();
+            LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.bruteforce_iteration_sync");
             return {centroids, labels};
         }
 
@@ -519,9 +527,12 @@ namespace lfs::io {
                                                Device::CUDA, DataType::Float32);
                 auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
                 const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+                const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                    /*stream=*/nullptr, "io.kmeans.swizzled_gather_points");
                 gather_swizzled_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_shN, labels.ptr<int>(), centroids.ptr<float>(), n);
-                cudaDeviceSynchronize();
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_swizzled_centroids");
+                LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_gather_points_sync");
                 return {centroids, labels};
             }
 
@@ -536,6 +547,7 @@ namespace lfs::io {
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_swizzled_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_shN, perm.ptr<int>(), d_centroids, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_swizzled_centroids");
             }
 
             auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
@@ -546,23 +558,28 @@ namespace lfs::io {
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
+            const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                /*stream=*/nullptr, "io.kmeans.swizzled_bruteforce_iteration");
             for (int iter = 0; iter < iterations; ++iter) {
                 assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_shN, d_centroids, labels.ptr<int>(), n, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest_swizzled");
 
                 centroid_sums.zero_();
                 counts.zero_();
 
                 accumulate_swizzled_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_shN, labels.ptr<int>(), centroid_sums.ptr<float>(), counts.ptr<int>(), n);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_swizzled_centroids");
 
                 const unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_swizzled_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, centroid_sums.ptr<float>(), counts.ptr<int>(),
                     d_shN, k, n, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_swizzled_centroids");
             }
 
-            cudaDeviceSynchronize();
+            LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_bruteforce_iteration_sync");
             return {centroids, labels};
         }
 
@@ -855,6 +872,7 @@ namespace lfs::io {
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_data, perm.ptr<int>(), d_centroids, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_centroids");
             }
 
             auto super_centroids = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
@@ -868,6 +886,7 @@ namespace lfs::io {
                 const int grid_super = (NUM_SUPER_CLUSTERS + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                     d_centroids, perm.ptr<int>(), super_centroids.ptr<float>(), NUM_SUPER_CLUSTERS);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_centroids");
             }
 
             auto super_sums = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
@@ -880,21 +899,25 @@ namespace lfs::io {
             for (int iter = 0; iter < 5; ++iter) {
                 assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
                 super_sums.zero_();
                 super_counts.zero_();
 
                 accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_centroids");
 
                 unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                     super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
                     d_centroids, NUM_SUPER_CLUSTERS, k, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_centroids");
             }
 
             assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                 d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
             auto super_offsets = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
             auto super_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
@@ -908,18 +931,23 @@ namespace lfs::io {
 
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
+            const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                /*stream=*/nullptr, "io.kmeans.hierarchical_iteration");
             for (int iter = 0; iter < iterations; ++iter) {
                 if (iter > 0) {
                     assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                         d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
                     super_sums.zero_();
                     super_counts.zero_();
                     accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                         d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_centroids");
                     finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                         super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
                         d_centroids, NUM_SUPER_CLUSTERS, k, iter * 111);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_centroids");
 
                     build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
                                           super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
@@ -930,11 +958,13 @@ namespace lfs::io {
                 if (use_exact) {
                     assign_nearest_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                         d_data, d_centroids, labels.ptr<int>(), n, k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
                 } else {
                     hierarchical_search_fused_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                         d_data, d_centroids, super_centroids.ptr<float>(),
                         super_offsets.ptr<int>(), super_indices.ptr<int>(),
                         labels.ptr<int>(), n);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.hierarchical_search_fused");
                 }
 
                 centroid_sums.zero_();
@@ -942,14 +972,16 @@ namespace lfs::io {
 
                 accumulate_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_data, labels.ptr<int>(), centroid_sums.ptr<float>(), centroid_counts.ptr<int>(), n);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_centroids");
 
                 unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, centroid_sums.ptr<float>(), centroid_counts.ptr<int>(),
                     d_data, k, n, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_centroids");
             }
 
-            cudaDeviceSynchronize();
+            LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.hierarchical_iteration_sync");
             return {centroids, labels};
         }
 
@@ -967,9 +999,12 @@ namespace lfs::io {
                                                Device::CUDA, DataType::Float32);
                 auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
                 const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+                const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                    /*stream=*/nullptr, "io.kmeans.swizzled_hierarchical_gather");
                 gather_swizzled_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_shN, labels.ptr<int>(), centroids.ptr<float>(), n);
-                cudaDeviceSynchronize();
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_swizzled_centroids");
+                LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_hierarchical_gather_sync");
                 return {centroids, labels};
             }
 
@@ -984,6 +1019,7 @@ namespace lfs::io {
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_swizzled_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_shN, perm.ptr<int>(), d_centroids, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_swizzled_centroids");
             }
 
             auto super_centroids = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
@@ -997,6 +1033,7 @@ namespace lfs::io {
                 const int grid_super = (NUM_SUPER_CLUSTERS + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                     d_centroids, perm.ptr<int>(), super_centroids.ptr<float>(), NUM_SUPER_CLUSTERS);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_centroids");
             }
 
             auto super_sums = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
@@ -1009,21 +1046,25 @@ namespace lfs::io {
             for (int iter = 0; iter < 5; ++iter) {
                 assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
                 super_sums.zero_();
                 super_counts.zero_();
 
                 accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_centroids");
 
                 const unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                     super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
                     d_centroids, NUM_SUPER_CLUSTERS, k, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_centroids");
             }
 
             assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                 d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
             auto super_offsets = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
             auto super_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
@@ -1037,18 +1078,23 @@ namespace lfs::io {
 
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
+            const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                /*stream=*/nullptr, "io.kmeans.swizzled_hierarchical_iteration");
             for (int iter = 0; iter < iterations; ++iter) {
                 if (iter > 0) {
                     assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                         d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
                     super_sums.zero_();
                     super_counts.zero_();
                     accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                         d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_centroids");
                     finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                         super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
                         d_centroids, NUM_SUPER_CLUSTERS, k, iter * 111);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_centroids");
 
                     build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
                                           super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
@@ -1059,11 +1105,13 @@ namespace lfs::io {
                 if (use_exact) {
                     assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                         d_shN, d_centroids, labels.ptr<int>(), n, k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest_swizzled");
                 } else {
                     hierarchical_search_swizzled_fused_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                         d_shN, d_centroids, super_centroids.ptr<float>(),
                         super_offsets.ptr<int>(), super_indices.ptr<int>(),
                         labels.ptr<int>(), n);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.hierarchical_search_swizzled_fused");
                 }
 
                 centroid_sums.zero_();
@@ -1071,14 +1119,16 @@ namespace lfs::io {
 
                 accumulate_swizzled_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_shN, labels.ptr<int>(), centroid_sums.ptr<float>(), centroid_counts.ptr<int>(), n);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_swizzled_centroids");
 
                 const unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_swizzled_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, centroid_sums.ptr<float>(), centroid_counts.ptr<int>(),
                     d_shN, k, n, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_swizzled_centroids");
             }
 
-            cudaDeviceSynchronize();
+            LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_hierarchical_iteration_sync");
             return {centroids, labels};
         }
 
@@ -1218,6 +1268,8 @@ namespace lfs::io {
 
         const int grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
+        const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+            /*stream=*/nullptr, "io.kmeans.1d_iteration");
         for (int iter = 0; iter < iterations; ++iter) {
             auto centroids_1d = centroids.squeeze();
             auto sorted_result = centroids_1d.sort(0);
@@ -1228,6 +1280,7 @@ namespace lfs::io {
                 sorted_centroids.ptr<float>(),
                 labels.ptr<int>(),
                 n, k);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.1d_binary_search");
 
             centroid_sums.zero_();
             counts.zero_();
@@ -1238,6 +1291,7 @@ namespace lfs::io {
                 centroid_sums.ptr<float>(),
                 counts.ptr<int>(),
                 n);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.1d_update_centroids");
 
             auto counts_cpu = counts.cpu();
             auto sums_cpu = centroid_sums.cpu();
@@ -1253,7 +1307,7 @@ namespace lfs::io {
             centroids = Tensor::from_vector(centroid_vals, {static_cast<size_t>(k), 1}, Device::CUDA);
         }
 
-        cudaDeviceSynchronize();
+        LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.1d_iteration_sync");
 
         auto centroids_1d = centroids.squeeze();
         auto final_sort_result = centroids_1d.sort(0);

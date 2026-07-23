@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/tensor_debug.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
@@ -161,6 +162,7 @@ namespace lfs::core::debug {
         // Launch kernel
         const int num_blocks = std::min(256, static_cast<int>((n + BLOCK_SIZE - 1) / BLOCK_SIZE));
         validate_tensor_kernel<<<num_blocks, BLOCK_SIZE>>>(data, n, d_result);
+        LFS_CUDA_LAUNCH_CHECK(nullptr, "core.tensor_debug.validate");
 
         // Copy result back
         ValidationResult h_result;

@@ -50,6 +50,7 @@ namespace fast_lfs::rasterization {
         void* primitive_normals = nullptr;
         // Error handling for OOM
         bool success = false;
+        bool resource_exhausted = false;
         const char* error_message = nullptr;
     };
 

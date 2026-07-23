@@ -4,7 +4,25 @@
 
 #include "tcp_responder.hpp"
 
+#include "core/error.hpp"
+#include "core/error_envelope.hpp"
+#include "core/error_reporter.hpp"
+#include "core/guarded_task.hpp"
+
 namespace lfs::tcp {
+
+    namespace {
+
+        nlohmann::json failure_response(const lfs::Error& error) {
+            nlohmann::json envelope = lfs::core::to_wire_envelope(error);
+            std::string message = envelope.value("message", std::string{});
+            return nlohmann::json{
+                {"success", false},
+                {"error", std::move(envelope)},
+                {"error_message", std::move(message)}};
+        }
+
+    } // namespace
 
     ResponderServer::ResponderServer(int port, std::shared_ptr<lfs::vis::TrainerManager> trainer_manager_)
         : TCPServer(port, std::move(trainer_manager_), zmq::socket_type::rep),
@@ -19,7 +37,24 @@ namespace lfs::tcp {
 
     void ResponderServer::start() {
         running_ = true;
-        response_thread_ = std::thread(&ResponderServer::run, this);
+        response_thread_ = std::thread([this] {
+            lfs::core::run_guarded<void>(
+                lfs::core::TaskContext{
+                    .name = "tcp.responder-thread",
+                    .domain = lfs::ErrorDomain::TCP,
+                    .operation_id = lfs::OperationId::generate(),
+                    .site = LFS_SOURCE_SITE_CURRENT(),
+                },
+                [this]() -> lfs::Result<void> {
+                    run();
+                    return {};
+                },
+                [](lfs::Result<void>&& result) {
+                    if (!result) {
+                        lfs::core::ErrorReporter::get().report(result.error(), lfs::core::ReportChannel::OwnerLog);
+                    }
+                });
+        });
     }
 
     void ResponderServer::stop() {
@@ -37,34 +72,48 @@ namespace lfs::tcp {
 
     void ResponderServer::run() {
         nlohmann::json request;
+        // Placeholder seed: lfs::Error has no public default constructor, and
+        // receive() overwrites this only on the MalformedJson/Transport
+        // branches — the only ones that read it back.
+        lfs::Error receive_error = lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Internal,
+            .domain = lfs::ErrorDomain::TCP,
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
         while (running_) {
-            bool received = false;
-            try {
-                received = receive(request); // Returns false on timeout
-            } catch (const std::exception& e) {
-                // Malformed / unreadable message
-                nlohmann::json error_response{{"success", false}, {"error", e.what()}};
-                try {
-                    send(error_response);
-                } catch (...) {}
+            switch (receive(request, &receive_error)) {
+            case TcpReceiveStatus::Timeout:
                 continue;
-            }
-
-            if (!received) {
+            case TcpReceiveStatus::Transport:
+                lfs::core::ErrorReporter::get().report(receive_error, lfs::core::ReportChannel::OwnerLog);
                 continue;
+            case TcpReceiveStatus::MalformedJson:
+                if (const lfs::Status sent = send(failure_response(receive_error)); !sent) {
+                    lfs::core::ErrorReporter::get().report(sent.error(), lfs::core::ReportChannel::OwnerLog);
+                    running_ = false;
+                }
+                continue;
+            case TcpReceiveStatus::Message:
+                break;
             }
 
             nlohmann::json response;
             try {
                 response = generateResponse(request);
-            } catch (const std::exception& e) {
-                response = {{"success", false}, {"error", e.what()}};
+            } catch (...) {
+                const lfs::Error error = lfs::core::detail::normalize_current_exception(lfs::core::TaskContext{
+                    .name = "tcp.request",
+                    .domain = lfs::ErrorDomain::TCP,
+                    .operation_id = lfs::OperationId::generate(),
+                    .site = LFS_SOURCE_SITE_CURRENT(),
+                });
+                lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
+                response = failure_response(error);
             }
-            try {
-                send(response);
-            } catch (const std::exception&) {
-                // Send failure leaves a REP socket unable to continue its
-                // receive/send transaction, so stop the server explicitly.
+            if (const lfs::Status sent = send(response); !sent) {
+                // A REP socket cannot continue its receive/send transaction
+                // after a failed send, so report and stop the server.
+                lfs::core::ErrorReporter::get().report(sent.error(), lfs::core::ReportChannel::OwnerLog);
                 running_ = false;
             }
         }
@@ -72,7 +121,12 @@ namespace lfs::tcp {
 
     nlohmann::json ResponderServer::generateResponse(const nlohmann::json& request) {
         if (!request.is_object()) {
-            return {{"success", false}, {"error", "Request must be a JSON object"}};
+            return failure_response(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::TCP,
+                .user_message = "Request must be a JSON object",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
         auto command = request.value("command", "");
         nlohmann::json response;
@@ -80,10 +134,25 @@ namespace lfs::tcp {
 
         if (command == "get") {
             auto parameter = request.value("parameter", "");
-            bool success = false;
             response["parameter"] = parameter;
-            response["value"] = getValue(parameter, success);
-            response["success"] = success;
+            bool success = false;
+            nlohmann::json value = getValue(parameter, success);
+            if (success) {
+                response["value"] = std::move(value);
+                response["success"] = true;
+            } else {
+                lfs::Error error = lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::NotFound,
+                    .domain = lfs::ErrorDomain::TCP,
+                    .user_message = "Unknown parameter: " + parameter,
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                    .fields = lfs::SmallFields{}.add("parameter", parameter),
+                });
+                response["error"] = lfs::core::to_wire_envelope(error);
+                response["error_message"] = "Unknown parameter: " + parameter;
+                response["value"] = "";
+                response["success"] = false;
+            }
         } else if (command == "start") {
             response["success"] = trainer_manager_->startTraining();
         } else if (command == "pause") {
@@ -99,6 +168,15 @@ namespace lfs::tcp {
             trainer_manager_->requestSaveCheckpoint();
             response["success"] = true;
         } else {
+            lfs::Error error = lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::NotFound,
+                .domain = lfs::ErrorDomain::TCP,
+                .user_message = "Unknown command: " + command,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = lfs::SmallFields{}.add("command", command),
+            });
+            response["error"] = lfs::core::to_wire_envelope(error);
+            response["error_message"] = "Unknown command: " + command;
             response["success"] = false;
         }
         return response;
@@ -165,6 +243,12 @@ namespace lfs::tcp {
         }
         if (parameter == "last_error") {
             return std::string(trainer_manager_->getLastError());
+        }
+        if (parameter == "last_training_error") {
+            if (auto latched = trainer_manager_->lastTrainingError()) {
+                return lfs::core::to_wire_envelope(*latched);
+            }
+            return nullptr;
         }
         success = false;
         return "";

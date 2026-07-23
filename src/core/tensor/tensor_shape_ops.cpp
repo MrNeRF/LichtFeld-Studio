@@ -86,7 +86,7 @@ namespace lfs::core {
             new_strides[i] = strides_[resolved_axes[i]];
         }
 
-        if (state_ && state_->has_deferred_expr) {
+        if (state_ && state_->lazy) {
             std::vector<int> deferred_axes(rank);
             for (size_t i = 0; i < rank; ++i) {
                 deferred_axes[i] = resolved_axes[i];
@@ -208,7 +208,7 @@ namespace lfs::core {
             new_shape.push_back(ends[i] - starts[i]);
         }
 
-        if (state_ && state_->has_deferred_expr) {
+        if (state_ && state_->lazy) {
             std::vector<std::pair<int, int>> deferred_ranges(ranges.begin(), ranges.end());
             const uint64_t source_id = lazy_expr_id();
             Tensor source = *this;
@@ -267,7 +267,7 @@ namespace lfs::core {
         std::vector<size_t> new_dims = shape_.dims();
         new_dims[dim] = end - start;
 
-        if (state_ && state_->has_deferred_expr) {
+        if (state_ && state_->lazy) {
             const uint64_t source_id = lazy_expr_id();
             Tensor source = *this;
             const cudaStream_t source_stream = source.stream();

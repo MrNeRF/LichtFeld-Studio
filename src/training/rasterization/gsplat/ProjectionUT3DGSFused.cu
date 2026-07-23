@@ -316,6 +316,7 @@ namespace gsplat_lfs {
                 depths,
                 conics,
                 compensations);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.projection_ut_3dgs_fused");
     }
 
 } // namespace gsplat_lfs

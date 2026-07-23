@@ -32,16 +32,17 @@
 #define HIGS_RASTER_WAVE_BATCHES 16384
 #define HIGS_RASTER_MAX_WAVES    16
 
+// Fixed per-depth-wave tile-instance budget. Interactive recording arms the
+// capability-selected number of slots; exports record an exact upper bound.
+#define HIGS_DEPTH_WAVE_INSTANCES     4194304
+#define HIGS_DEPTH_MAX_WAVES          64
+#define HIGS_DEPTH_MAX_WAVES_FALLBACK 16
+
 // reordering for better memory colaescing
 // see config.slang for details
 #define SH_REORDER_SIZE SUBGROUP_SIZE
 
 typedef int32_t sortingKey_t;
-
-#define _THROW_ERROR(message)                                              \
-    do {                                                                   \
-        ::lfs::rendering::throwVulkanError((message), __FILE__, __LINE__); \
-    } while (0)
 
 // Vulkan keeps its call-site idiom while sharing the core debug primitive.
 // In Release, neither the condition nor the formatting arguments are evaluated.

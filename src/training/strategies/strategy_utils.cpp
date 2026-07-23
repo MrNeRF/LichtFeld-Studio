@@ -182,19 +182,46 @@ namespace lfs::training {
         return frozen_count;
     }
 
+    namespace {
+        void apply_frozen_ranges_to_optimizer_impl(
+            const lfs::core::SplatData& splat_data,
+            AdamOptimizer& optimizer,
+            const float* freeze_lr_scale) {
+            if (freeze_lr_scale != nullptr) {
+                optimizer.set_frozen_lr_scale(*freeze_lr_scale);
+            }
+
+            const size_t n = static_cast<size_t>(splat_data.size());
+            auto mask = make_frozen_mask(splat_data, n, lfs::core::Device::CUDA);
+            if (!mask.is_valid()) {
+                optimizer.set_frozen_mask({});
+                return;
+            }
+
+            const size_t frozen_count = frozen_row_count(splat_data, n);
+            optimizer.set_frozen_mask(std::move(mask));
+            if (freeze_lr_scale != nullptr && *freeze_lr_scale > 0.0f) {
+                LOG_INFO("Frozen training mask: {} / {} Gaussians frozen (LR scale: {})",
+                         frozen_count,
+                         n,
+                         *freeze_lr_scale);
+            } else {
+                LOG_INFO("Frozen training mask: {} / {} Gaussians frozen", frozen_count, n);
+            }
+        }
+    } // namespace
+
     void apply_frozen_ranges_to_optimizer(
         const lfs::core::SplatData& splat_data,
         AdamOptimizer& optimizer) {
-        const size_t n = static_cast<size_t>(splat_data.size());
-        auto mask = make_frozen_mask(splat_data, n, lfs::core::Device::CUDA);
-        if (!mask.is_valid()) {
-            optimizer.set_frozen_mask({});
-            return;
-        }
+        apply_frozen_ranges_to_optimizer_impl(splat_data, optimizer, nullptr);
+    }
 
-        const size_t frozen_count = frozen_row_count(splat_data, n);
-        optimizer.set_frozen_mask(std::move(mask));
-        LOG_INFO("Frozen training mask: {} / {} Gaussians frozen", frozen_count, n);
+    void apply_frozen_ranges_to_optimizer(
+        const lfs::core::SplatData& splat_data,
+        AdamOptimizer& optimizer,
+        const float freeze_lr_scale) {
+        apply_frozen_ranges_to_optimizer_impl(splat_data, optimizer, &freeze_lr_scale);
     }
 
     void remap_frozen_ranges_after_compaction(

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/cuda_safe_format.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "lfs/kernels/loss_tensor_contract.hpp"
@@ -1486,6 +1487,7 @@ namespace lfs::training::kernels {
                 dm_dmu1.ptr<float>(),
                 dm_dsigma1_sq.ptr<float>(),
                 dm_dsigma12.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.forward");
         });
 
         // Store original dimensions
@@ -1549,6 +1551,7 @@ namespace lfs::training::kernels {
                 img1.ptr<float>(), img2_ptr,
                 ssim_map.ptr<float>(), dm_dmu1.ptr<float>(),
                 dm_dsigma1_sq.ptr<float>(), dm_dsigma12.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.forward_map");
         });
 
         lfs::core::Tensor ssim_map_for_mean = ssim_map;
@@ -1604,6 +1607,7 @@ namespace lfs::training::kernels {
                 img1.ptr<float>(), img2_ptr,
                 workspace.ssim_map.ptr<float>(),
                 nullptr, nullptr, nullptr);
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.error_map_forward");
         });
 
         if (!error_map.is_valid() ||
@@ -1680,6 +1684,7 @@ namespace lfs::training::kernels {
                 ctx.dm_dmu1.ptr<float>(),
                 ctx.dm_dsigma1_sq.ptr<float>(),
                 ctx.dm_dsigma12.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.backward");
         });
 
         return dL_dimg1;
@@ -1713,6 +1718,7 @@ namespace lfs::training::kernels {
                 ctx.img1.ptr<float>(), img2_ptr, gradient_map.ptr<float>(),
                 dL_dimg1.ptr<float>(), ctx.dm_dmu1.ptr<float>(),
                 ctx.dm_dsigma1_sq.ptr<float>(), ctx.dm_dsigma12.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.backward_grad_map");
         });
 
         return dL_dimg1;
@@ -1762,6 +1768,7 @@ namespace lfs::training::kernels {
                 workspace.dm_dmu1.ptr<float>(),
                 workspace.dm_dsigma1_sq.ptr<float>(),
                 workspace.dm_dsigma12.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.forward");
         });
 
         // Store original dimensions
@@ -1849,6 +1856,7 @@ namespace lfs::training::kernels {
                 ctx.dm_dmu1.ptr<float>(),
                 ctx.dm_dsigma1_sq.ptr<float>(),
                 ctx.dm_dsigma12.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.backward");
         });
 
         return workspace.dL_dimg1;
@@ -1892,6 +1900,7 @@ namespace lfs::training::kernels {
                 workspace.dm_dsigma1_sq.ptr<__half>(),
                 workspace.dm_dsigma12.ptr<__half>(),
                 workspace.ssim_map.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.fused_l1_forward");
 
             launch_fused_l1_ssim_mean_device(
                 img1.ptr<float>(),
@@ -1958,6 +1967,7 @@ namespace lfs::training::kernels {
                 workspace.grad_img.ptr<float>(),
                 ctx.dm_dmu1.ptr<__half>(), ctx.dm_dsigma1_sq.ptr<__half>(),
                 ctx.dm_dsigma12.ptr<__half>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.fused_l1_backward");
         });
 
         return workspace.grad_img;
@@ -2007,6 +2017,7 @@ namespace lfs::training::kernels {
                 workspace.raw_dm_dsigma1_sq.ptr<float>(),
                 workspace.raw_dm_dsigma12.ptr<float>(),
                 workspace.ssim_map.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_fused_l1_forward");
 
             launch_fused_l1_ssim_mean_device(
                 corrected.ptr<float>(),
@@ -2075,6 +2086,7 @@ namespace lfs::training::kernels {
                 ctx.app_dm_dmu1.ptr<float>(),
                 workspace.zero_terms.ptr<float>(),
                 workspace.zero_terms.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_fused_l1_backward");
 
             workspace.grad_raw.zero_();
             fusedL1SSIMBackwardCUDA<TargetT, float><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
@@ -2085,6 +2097,7 @@ namespace lfs::training::kernels {
                 ctx.raw_dm_dmu1.ptr<float>(),
                 ctx.raw_dm_dsigma1_sq.ptr<float>(),
                 ctx.raw_dm_dsigma12.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_fused_l1_backward");
         });
 
         return DecoupledGradients{
@@ -2132,6 +2145,7 @@ namespace lfs::training::kernels {
                 workspace.dm_dsigma1_sq.ptr<float>(),
                 workspace.dm_dsigma12.ptr<float>(),
                 workspace.ssim_map.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_fused_l1_forward");
 
             dispatch_mask_ptr(mask_2d, [&](auto* mask_ptr) {
                 launch_masked_fused_l1_ssim_mean_device(
@@ -2199,6 +2213,7 @@ namespace lfs::training::kernels {
                     workspace.grad_img.ptr<float>(),
                     ctx.dm_dmu1.ptr<float>(), ctx.dm_dsigma1_sq.ptr<float>(),
                     ctx.dm_dsigma12.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_fused_l1_backward");
             });
         });
 
@@ -2248,6 +2263,7 @@ namespace lfs::training::kernels {
                 workspace.raw_dm_dsigma1_sq.ptr<float>(),
                 workspace.raw_dm_dsigma12.ptr<float>(),
                 workspace.ssim_map.ptr<float>());
+            LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_forward");
 
             dispatch_mask_ptr(mask_2d, [&](auto* mask_ptr) {
                 launch_masked_fused_l1_ssim_mean_device(
@@ -2318,6 +2334,7 @@ namespace lfs::training::kernels {
                     ctx.app_dm_dmu1.ptr<float>(),
                     workspace.zero_terms.ptr<float>(),
                     workspace.zero_terms.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_backward");
 
                 workspace.grad_raw.zero_();
                 maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
@@ -2327,6 +2344,7 @@ namespace lfs::training::kernels {
                     ctx.raw_dm_dmu1.ptr<float>(),
                     ctx.raw_dm_dsigma1_sq.ptr<float>(),
                     ctx.raw_dm_dsigma12.ptr<float>());
+                LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_backward");
             });
         });
 
@@ -2394,6 +2412,7 @@ namespace lfs::training::kernels {
             ssim_map.ptr<float>(),
             error_map.ptr<float>(),
             C, H, W);
+        LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.to_error_map");
     }
 
 } // namespace lfs::training::kernels

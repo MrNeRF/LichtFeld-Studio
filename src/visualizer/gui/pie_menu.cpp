@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <glm/glm.hpp>
 
 namespace lfs::vis::gui {
 

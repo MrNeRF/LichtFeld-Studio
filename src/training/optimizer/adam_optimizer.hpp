@@ -69,6 +69,7 @@ namespace lfs::training {
         float* exp_avg_sq_scale = nullptr;
         const bool* frozen_mask = nullptr;
         int frozen_mask_size = 0;
+        float frozen_lr_scale = 0.0f;
         int n_elements = 0;
         int n_attributes = 0;
         float step_size = 0.0f;
@@ -105,6 +106,7 @@ namespace lfs::training {
         FastGSFusedAdamState prepare_fastgs_fused_adam(int iteration);
         void commit_fastgs_fused_adam(int iteration);
         void set_frozen_mask(lfs::core::Tensor mask);
+        void set_frozen_lr_scale(float scale);
 
         // Gradient management
         void allocate_gradients();
@@ -163,6 +165,7 @@ namespace lfs::training {
         lfs::core::SplatData& splat_data_;
         std::unordered_map<std::string, AdamParamState> states_;
         lfs::core::Tensor frozen_mask_;
+        float frozen_lr_scale_ = 0.0f;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
 

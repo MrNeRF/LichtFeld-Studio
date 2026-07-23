@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "io/cache_image_loader.hpp"
@@ -45,6 +46,27 @@ namespace lfs::io {
         constexpr int DEFAULT_OUTPUT_TIMEOUT_MS = 50;
     } // namespace config
 
+    // Sidecar completion policy and tallying — see .codex_tmp/error-architecture-analysis.md
+    // Section 7.3 (frozen) and .codex_tmp/phase-4b-loader-ledger-spec.md Section 0 for the
+    // reasoning behind every choice not shown in that pseudocode.
+    enum class SidecarPolicy : std::uint8_t { Required,
+                                              WarnAndContinue };
+    enum class SidecarKind : std::uint8_t { Mask,
+                                            Depth,
+                                            Normal };
+
+    struct SidecarCount {
+        std::uint64_t requested = 0;
+        std::uint64_t delivered = 0;
+        std::uint64_t failed = 0;
+    };
+
+    struct SidecarTally {
+        SidecarCount mask;
+        SidecarCount depth;
+        SidecarCount normal;
+    };
+
     struct PipelinedLoaderConfig {
         size_t jpeg_batch_size = config::DEFAULT_BATCH_SIZE;
         size_t prefetch_count = config::DEFAULT_PREFETCH_COUNT;
@@ -59,6 +81,13 @@ namespace lfs::io {
         std::chrono::milliseconds batch_collect_timeout{config::DEFAULT_BATCH_TIMEOUT_MS};
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
         bool use_16bit_color = false;
+
+        // Default preserves today's unconditional "skip and continue" behavior
+        // for every optional sidecar. Required fails the whole camera
+        // completion instead of delivering a degraded ReadyImage.
+        SidecarPolicy mask_policy = SidecarPolicy::WarnAndContinue;
+        SidecarPolicy depth_policy = SidecarPolicy::WarnAndContinue;
+        SidecarPolicy normal_policy = SidecarPolicy::WarnAndContinue;
     };
 
     /**
@@ -71,6 +100,7 @@ namespace lfs::io {
 
     struct ImageRequest {
         size_t sequence_id;
+        std::uint64_t loader_generation = 0; // internal reset-generation tag
         std::filesystem::path path;
         LoadParams params;
         // Optional mask to load alongside the image
@@ -106,6 +136,15 @@ namespace lfs::io {
         CUevent_st* depth_ready_event = nullptr;
         CUevent_st* normal_ready_event = nullptr;
         std::string error; // Non-empty for a failed primary image request
+    };
+
+    // Terminal, exactly-once outcome for one accepted prefetch() sequence.
+    // `outcome` owns the real ReadyImage on success and this sequence's typed
+    // failure (including shutdown cancellation) otherwise.
+    struct LoaderCompletion {
+        std::uint64_t sequence;
+        lfs::Result<ReadyImage> outcome;
+        SidecarTally sidecars;
     };
 
     class LFS_IO_API PipelinedImageLoader {
@@ -160,6 +199,11 @@ namespace lfs::io {
             size_t pending_mask_bytes = 0;
             size_t pending_depth_bytes = 0;
             size_t pending_normal_bytes = 0;
+            SidecarTally aggregate_sidecar_tally;
+            std::uint64_t accepted_sequences = 0;
+            std::uint64_t succeeded_sequences = 0;
+            std::uint64_t failed_sequences = 0;
+            std::uint64_t cancelled_sequences = 0;
         };
 
         explicit PipelinedImageLoader(PipelinedLoaderConfig config = {});
@@ -175,6 +219,11 @@ namespace lfs::io {
         std::optional<ReadyImage> try_get();
         std::optional<ReadyImage> try_get_for(std::chrono::milliseconds timeout);
 
+        [[nodiscard]] lfs::Result<LoaderCompletion> get_completion();
+        [[nodiscard]] std::optional<LoaderCompletion> try_get_completion();
+        [[nodiscard]] std::optional<LoaderCompletion> try_get_completion_for(
+            std::chrono::milliseconds timeout);
+
         lfs::core::Tensor load_image_immediate(
             const std::filesystem::path& path, const LoadParams& params);
 
@@ -189,6 +238,7 @@ namespace lfs::io {
     private:
         struct PrefetchedImage {
             size_t sequence_id;
+            std::uint64_t loader_generation = 0;
             std::filesystem::path path;
             LoadParams params;
             std::string cache_key;
@@ -220,6 +270,8 @@ namespace lfs::io {
 
         // Pairing buffer: wait for the image and requested auxiliary images before output
         struct PendingPair {
+            std::uint64_t loader_generation = 0;
+            std::filesystem::path primary_path;
             std::optional<lfs::core::Tensor> image;
             std::optional<lfs::core::Tensor> mask;
             std::optional<lfs::core::Tensor> depth;
@@ -230,6 +282,9 @@ namespace lfs::io {
             bool mask_expected = false; // True if a mask was requested for this sequence_id
             bool depth_expected = false;
             bool normal_expected = false;
+            bool mask_failed = false;
+            bool depth_failed = false;
+            bool normal_failed = false;
             size_t image_bytes = 0;
             size_t mask_bytes = 0;
             size_t depth_bytes = 0;
@@ -360,16 +415,16 @@ namespace lfs::io {
                                  const std::string& cache_key,
                                  void* cuda_stream);
 
-        enum class SidecarKind : uint8_t {
+        enum class SidecarCacheFormat : uint8_t {
             Depth,
             Normal
         };
 
-        std::string make_sidecar_key(const PrefetchedImage& item, SidecarKind kind) const;
+        std::string make_sidecar_key(const PrefetchedImage& item, SidecarCacheFormat kind) const;
         void write_sidecar_cache(NvCodecImageLoader& nvcodec,
                                  const lfs::core::Tensor& tensor,
                                  const PrefetchedImage& item,
-                                 SidecarKind kind,
+                                 SidecarCacheFormat kind,
                                  void* cuda_stream);
         lfs::core::Tensor decode_cached_sidecar(NvCodecImageLoader& nvcodec,
                                                 const PrefetchedImage& item,
@@ -389,6 +444,7 @@ namespace lfs::io {
             const LoadParams& params) const;
         void try_complete_pair(
             size_t sequence_id,
+            std::uint64_t loader_generation,
             std::optional<lfs::core::Tensor> image,
             std::optional<lfs::core::Tensor> mask,
             cudaStream_t stream,
@@ -400,14 +456,26 @@ namespace lfs::io {
                                    std::unique_lock<std::mutex>& pending_lock);
         void add_output_ready_bytes(const ReadyImage& ready);
         void release_output_ready_bytes(const ReadyImage& ready);
-        bool push_output_ready(ReadyImage ready);
         void publish_image_failure(size_t sequence_id,
+                                   std::uint64_t loader_generation,
                                    const std::filesystem::path& path,
-                                   std::string message);
+                                   std::string message,
+                                   SidecarTally tally = {});
+        void fail_sidecar_locked(size_t sequence_id,
+                                 std::uint64_t loader_generation,
+                                 SidecarKind kind,
+                                 const std::filesystem::path& path,
+                                 std::string message,
+                                 std::unique_lock<std::mutex>& lock);
+        void settle_completion(std::uint64_t sequence_id,
+                               std::uint64_t loader_generation,
+                               lfs::Result<ReadyImage> outcome,
+                               SidecarTally tally);
+        void accumulate_sidecar_tally(const SidecarTally& tally);
+        void reconcile_ledger_on_shutdown();
+        [[nodiscard]] std::optional<LoaderCompletion> take_completion(std::uint64_t sequence_id);
         void erase_pending_pair_locked(PendingPairIterator it);
         void destroy_sidecar_ready_event(CUevent_st*& event);
-        void clear_output_queue();
-        void clear_pending_pairs();
         void reset_pipeline_gpu_bytes();
 
         PipelinedLoaderConfig config_;
@@ -425,7 +493,7 @@ namespace lfs::io {
         ThreadSafeQueue<ImageRequest> prefetch_queue_;
         ThreadSafeQueue<PrefetchedImage> hot_queue_;
         ThreadSafeQueue<PrefetchedImage> cold_queue_;
-        ThreadSafeQueue<ReadyImage> output_queue_;
+        ThreadSafeQueue<std::uint64_t> output_queue_;
 
         struct JpegCacheEntry {
             std::shared_ptr<std::vector<uint8_t>> data;
@@ -459,6 +527,23 @@ namespace lfs::io {
         // Pairing buffer for image and auxiliary image delivery
         PendingPairMap pending_pairs_;
         mutable std::mutex pending_pairs_mutex_;
+
+        // Sequence-keyed terminal ledger. The ledger is the sole owner of
+        // settled ReadyImage payloads; output_queue_ carries only bounded
+        // delivery-order tokens and therefore remains the VRAM backpressure
+        // edge without being able to erase terminal metadata on shutdown.
+        std::unordered_map<std::uint64_t, LoaderCompletion> ledger_;
+        mutable std::mutex ledger_mutex_;
+        std::condition_variable ledger_cv_;
+
+        SidecarTally sidecar_tally_;
+        mutable std::mutex sidecar_tally_mutex_;
+
+        std::atomic<std::uint64_t> accepted_sequences_{0};
+        std::atomic<std::uint64_t> succeeded_sequences_{0};
+        std::atomic<std::uint64_t> failed_sequences_{0};
+        std::atomic<std::uint64_t> cancelled_sequences_{0};
+        std::atomic<std::uint64_t> loader_generation_{0};
     };
 
 } // namespace lfs::io

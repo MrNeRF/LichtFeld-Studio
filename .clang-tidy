@@ -1,0 +1,11 @@
+# Phase 0 static-analysis config (see .codex_tmp/error-architecture-analysis.md section 5.12).
+# Reporting-only for now: not yet wired into CI (needs compile_commands.json — a later phase).
+# Intended for local/IDE use today.
+Checks: >
+  -*,
+  bugprone-unused-return-value,
+  bugprone-exception-escape,
+  cert-err33-c
+WarningsAsErrors: ''
+HeaderFilterRegex: '^src/'
+FormatStyle: file

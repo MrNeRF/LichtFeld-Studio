@@ -137,6 +137,7 @@ namespace lfs::core {
                     strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                         static_cast<const T*>(input), static_cast<T*>(output),
                         shape[0], shape[1], strides[0], strides[1], n);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.scatter_rank2");
                 } else {
                     strided_scatter_kernel<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                         static_cast<const T*>(input), static_cast<T*>(output),
@@ -168,11 +169,13 @@ namespace lfs::core {
                     strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                         static_cast<const T*>(input), static_cast<T*>(output),
                         shape[0], shape[1], strides[0], strides[1], n);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.scatter_rank2");
                 } else if (rank == 3) {
                     strided_scatter_kernel_rank3<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                         static_cast<const T*>(input), static_cast<T*>(output),
                         shape[0], shape[1], shape[2],
                         strides[0], strides[1], strides[2], n);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.scatter_rank3");
                 } else {
                     strided_scatter_kernel_rank4<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                         static_cast<const T*>(input), static_cast<T*>(output),
@@ -271,11 +274,13 @@ namespace lfs::core {
                     strided_copy_kernel_rank2<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                         static_cast<const T*>(input), static_cast<T*>(output),
                         shape[0], shape[1], strides[0], strides[1], n);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.copy_rank2");
                 } else if (rank == 3) {
                     strided_copy_kernel_rank3<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                         static_cast<const T*>(input), static_cast<T*>(output),
                         shape[0], shape[1], shape[2],
                         strides[0], strides[1], strides[2], n);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.copy_rank3");
                 } else {
                     strided_copy_kernel_rank4<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                         static_cast<const T*>(input), static_cast<T*>(output),
@@ -484,6 +489,7 @@ namespace lfs::core {
                             static_cast<const T*>(host_input),
                             static_cast<T*>(gpu_output),
                             H, W, C);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.upload_hwc_to_chw");
                     });
                     return;
                 }
@@ -540,6 +546,7 @@ namespace lfs::core {
                             d_shape[0], d_shape[1], d_shape[2],
                             d_strides[0], d_strides[1], d_strides[2],
                             total_elements);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.upload_rank3_gather");
                     } else if (order == IterOrder::ORDER_120) {
                         strided_upload_kernel_rank3_gather_order_120<<<num_blocks, block_size, 0, stream>>>(
                             static_cast<const T*>(host_input),
@@ -547,6 +554,7 @@ namespace lfs::core {
                             d_shape[0], d_shape[1], d_shape[2],
                             d_strides[0], d_strides[1], d_strides[2],
                             total_elements);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.upload_rank3_gather_120");
                     } else {
                         strided_upload_kernel_rank3_gather_order_012<<<num_blocks, block_size, 0, stream>>>(
                             static_cast<const T*>(host_input),
@@ -554,6 +562,7 @@ namespace lfs::core {
                             d_shape[0], d_shape[1], d_shape[2],
                             d_strides[0], d_strides[1], d_strides[2],
                             total_elements);
+                        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.upload_rank3_gather_012");
                     }
                 });
                 return;
@@ -565,6 +574,7 @@ namespace lfs::core {
                     static_cast<const T*>(host_input),
                     static_cast<T*>(gpu_output),
                     d_shape, d_strides, rank, total_elements);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.strided.upload_generic");
             });
         }
 

@@ -163,7 +163,7 @@ namespace lfs::core {
                             free_status, "cudaFreeAsync(size-bucket probationary block)",
                             ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, stream={}", ptr, bucket_size,
                                                                   static_cast<void*>(stream)),
-                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                     }
                     publish_cache_bytes();
                     return true;
@@ -175,13 +175,17 @@ namespace lfs::core {
                     bucket.cache.erase(bucket.cache.begin());
                     bucket.cached_bytes -= bucket_size;
                     stats_.bytes_cached.fetch_sub(bucket_size, std::memory_order_relaxed);
+                    LFS_CUDA_BREADCRUMB_STREAM_ARGS(
+                        "tensor.bucket.evict", old.stream,
+                        reinterpret_cast<uintptr_t>(old.ptr), bucket_size,
+                        reinterpret_cast<uintptr_t>(old.stream));
                     const cudaError_t free_status = cudaFreeAsync(old.ptr, old.stream);
                     if (free_status != cudaSuccess) {
                         ensure_cuda_success(
                             free_status, "cudaFreeAsync(size-bucket entry eviction)",
                             ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, stream={}", old.ptr, bucket_size,
                                                                   static_cast<void*>(old.stream)),
-                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                     }
                 }
 
@@ -231,7 +235,7 @@ namespace lfs::core {
                         free_status, "cudaFreeAsync(size-bucket uncached block)",
                         ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, stream={}", ptr, bytes,
                                                               static_cast<void*>(stream)),
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
             }
         }
@@ -267,6 +271,10 @@ namespace lfs::core {
                     // Stream-ordered free: these were cudaMallocAsync'd and a block
                     // last used on a non-default stream may still have pending work,
                     // which a plain cudaFree would not be ordered against.
+                    LFS_CUDA_BREADCRUMB_STREAM_ARGS(
+                        "tensor.bucket.trim", block.stream,
+                        reinterpret_cast<uintptr_t>(block.ptr), buckets_[i].bucket_size,
+                        reinterpret_cast<uintptr_t>(block.stream));
                     const cudaError_t free_status = cudaFreeAsync(block.ptr, block.stream);
                     if (free_status != cudaSuccess) {
                         ensure_cuda_success(
@@ -274,7 +282,7 @@ namespace lfs::core {
                             ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, stream={}", block.ptr,
                                                                   buckets_[i].bucket_size,
                                                                   static_cast<void*>(block.stream)),
-                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                     }
                 }
                 buckets_[i].cache.clear();
@@ -397,13 +405,17 @@ namespace lfs::core {
                     stats_.bytes_cached.fetch_sub(victim_size, std::memory_order_relaxed);
                 }
 
+                LFS_CUDA_BREADCRUMB_STREAM_ARGS(
+                    "tensor.bucket.budget_evict", victim.stream,
+                    reinterpret_cast<uintptr_t>(victim.ptr), victim_size,
+                    reinterpret_cast<uintptr_t>(victim.stream));
                 const cudaError_t free_status = cudaFreeAsync(victim.ptr, victim.stream);
                 if (free_status != cudaSuccess) {
                     ensure_cuda_success(
                         free_status, "cudaFreeAsync(size-bucket budget eviction)",
                         ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, stream={}", victim.ptr, victim_size,
                                                               static_cast<void*>(victim.stream)),
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
             }
         }

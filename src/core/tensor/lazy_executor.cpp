@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cassert>
 #include <cmath>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -31,7 +32,7 @@ namespace lfs::core::internal {
         struct DeferredMaterializerRegistry {
             struct Entry {
                 std::function<Tensor()> materializer;
-                std::weak_ptr<void> owner;
+                std::weak_ptr<LazyExprState> owner;
             };
 
             std::mutex mutex;
@@ -43,7 +44,7 @@ namespace lfs::core::internal {
                 uint64_t parent_node_id = 0;
                 std::shared_ptr<Tensor> source;
                 std::vector<LazyPointwiseOp> ops;
-                std::weak_ptr<void> owner;
+                std::weak_ptr<LazyExprState> owner;
             };
 
             std::mutex mutex;
@@ -108,6 +109,7 @@ namespace lfs::core::internal {
         };
 
         constexpr size_t kDefaultLazySizeThreshold = 4096;
+        constexpr size_t kRegistryPruneThreshold = 16;
 
         LazyExecutorMemoryPlannerState& lazy_executor_memory_planner_state() {
             static LazyExecutorMemoryPlannerState state;
@@ -165,24 +167,32 @@ namespace lfs::core::internal {
             return true;
         }
 
-        void prune_expired_materializers_locked(DeferredMaterializerRegistry& registry) {
+        std::vector<DeferredMaterializerRegistry::Entry>
+        prune_expired_materializers_locked(DeferredMaterializerRegistry& registry) {
+            std::vector<DeferredMaterializerRegistry::Entry> retired;
             for (auto it = registry.by_node_id.begin(); it != registry.by_node_id.end();) {
                 if (it->second.owner.expired()) {
+                    retired.push_back(std::move(it->second));
                     it = registry.by_node_id.erase(it);
                     continue;
                 }
                 ++it;
             }
+            return retired;
         }
 
-        void prune_expired_pointwise_fusions_locked(PointwiseFusionRegistry& registry) {
+        std::vector<PointwiseFusionRegistry::Entry>
+        prune_expired_pointwise_fusions_locked(PointwiseFusionRegistry& registry) {
+            std::vector<PointwiseFusionRegistry::Entry> retired;
             for (auto it = registry.by_node_id.begin(); it != registry.by_node_id.end();) {
                 if (it->second.owner.expired()) {
+                    retired.push_back(std::move(it->second));
                     it = registry.by_node_id.erase(it);
                     continue;
                 }
                 ++it;
             }
+            return retired;
         }
 
         bool lookup_registered_materializer(uint64_t node_id, std::function<Tensor()>& materializer) {
@@ -191,7 +201,6 @@ namespace lfs::core::internal {
             }
             auto& registry = deferred_materializer_registry();
             std::lock_guard<std::mutex> lock(registry.mutex);
-            prune_expired_materializers_locked(registry);
             const auto it = registry.by_node_id.find(node_id);
             if (it == registry.by_node_id.end()) {
                 return false;
@@ -317,7 +326,6 @@ namespace lfs::core::internal {
 
             auto& registry = pointwise_fusion_registry();
             std::lock_guard<std::mutex> lock(registry.mutex);
-            prune_expired_pointwise_fusions_locked(registry);
 
             recipes.reserve(plan.topo_nodes.size());
             for (const auto& node : plan.topo_nodes) {
@@ -538,18 +546,28 @@ namespace lfs::core::internal {
 
     void lazy_executor_register_deferred_materializer(uint64_t node_id,
                                                       std::function<Tensor()> materializer,
-                                                      std::weak_ptr<void> owner) {
+                                                      std::weak_ptr<LazyExprState> owner) {
         if (node_id == 0 || !materializer || owner.expired()) {
             return;
         }
         auto& registry = deferred_materializer_registry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
-        prune_expired_materializers_locked(registry);
-        registry.by_node_id[node_id] = DeferredMaterializerRegistry::Entry{
-            std::move(materializer),
-            std::move(owner)};
-        record_relaxed_max(lazy_executor_diagnostics_counters().max_registry_entries,
-                           static_cast<uint64_t>(registry.by_node_id.size()));
+        std::vector<DeferredMaterializerRegistry::Entry> retired;
+        {
+            std::lock_guard<std::mutex> lock(registry.mutex);
+            auto& slot = registry.by_node_id[node_id];
+            if (slot.materializer) {
+                retired.push_back(std::move(slot));
+            }
+            slot = DeferredMaterializerRegistry::Entry{
+                std::move(materializer),
+                std::move(owner)};
+            record_relaxed_max(lazy_executor_diagnostics_counters().max_registry_entries,
+                               static_cast<uint64_t>(registry.by_node_id.size()));
+            if (registry.by_node_id.size() >= kRegistryPruneThreshold) {
+                auto expired = prune_expired_materializers_locked(registry);
+                std::move(expired.begin(), expired.end(), std::back_inserter(retired));
+            }
+        }
     }
 
     std::shared_ptr<Tensor> lazy_executor_snapshot_operand(const Tensor& source) {
@@ -560,7 +578,7 @@ namespace lfs::core::internal {
                                                     uint64_t parent_node_id,
                                                     const Tensor& source_tensor,
                                                     LazyPointwiseOp op,
-                                                    std::weak_ptr<void> owner) {
+                                                    std::weak_ptr<LazyExprState> owner) {
         if (!lazy_executor_pointwise_fusion_enabled() ||
             node_id == 0 ||
             owner.expired()) {
@@ -568,55 +586,96 @@ namespace lfs::core::internal {
         }
 
         auto& registry = pointwise_fusion_registry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
-        prune_expired_pointwise_fusions_locked(registry);
+        std::vector<PointwiseFusionRegistry::Entry> retired;
+        {
+            std::lock_guard<std::mutex> lock(registry.mutex);
 
-        PointwiseFusionRegistry::Entry entry;
-        entry.parent_node_id = parent_node_id;
-        entry.owner = std::move(owner);
+            PointwiseFusionRegistry::Entry entry;
+            entry.parent_node_id = parent_node_id;
+            entry.owner = std::move(owner);
 
-        if (parent_node_id != 0) {
-            const auto parent_it = registry.by_node_id.find(parent_node_id);
-            if (parent_it != registry.by_node_id.end()) {
-                entry.source = parent_it->second.source;
-                entry.ops = parent_it->second.ops;
+            if (parent_node_id != 0) {
+                const auto parent_it = registry.by_node_id.find(parent_node_id);
+                if (parent_it != registry.by_node_id.end()) {
+                    entry.source = parent_it->second.source;
+                    entry.ops = parent_it->second.ops;
+                }
+            }
+            if (!entry.source || !entry.source->is_valid()) {
+                entry.source = lazy_executor_snapshot_operand(source_tensor);
+            }
+            entry.ops.push_back(op);
+            auto& slot = registry.by_node_id[node_id];
+            if (slot.source || !slot.ops.empty()) {
+                retired.push_back(std::move(slot));
+            }
+            slot = std::move(entry);
+            if (registry.by_node_id.size() >= kRegistryPruneThreshold) {
+                auto expired = prune_expired_pointwise_fusions_locked(registry);
+                std::move(expired.begin(), expired.end(), std::back_inserter(retired));
             }
         }
-        if (!entry.source || !entry.source->is_valid()) {
-            entry.source = lazy_executor_snapshot_operand(source_tensor);
-        }
-        entry.ops.push_back(op);
-        registry.by_node_id[node_id] = std::move(entry);
     }
 
     void lazy_executor_unregister_deferred_materializer(uint64_t node_id) {
         if (node_id == 0) {
             return;
         }
+        std::vector<DeferredMaterializerRegistry::Entry> retired_materializers;
         auto& registry = deferred_materializer_registry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
-        registry.by_node_id.erase(node_id);
+        {
+            std::lock_guard<std::mutex> lock(registry.mutex);
+            const auto it = registry.by_node_id.find(node_id);
+            if (it != registry.by_node_id.end()) {
+                retired_materializers.push_back(std::move(it->second));
+                registry.by_node_id.erase(it);
+            }
+            auto expired = prune_expired_materializers_locked(registry);
+            std::move(expired.begin(), expired.end(),
+                      std::back_inserter(retired_materializers));
+        }
 
+        std::vector<PointwiseFusionRegistry::Entry> retired_fusions;
         auto& fusion_registry = pointwise_fusion_registry();
-        std::lock_guard<std::mutex> fusion_lock(fusion_registry.mutex);
-        fusion_registry.by_node_id.erase(node_id);
+        {
+            std::lock_guard<std::mutex> fusion_lock(fusion_registry.mutex);
+            const auto it = fusion_registry.by_node_id.find(node_id);
+            if (it != fusion_registry.by_node_id.end()) {
+                retired_fusions.push_back(std::move(it->second));
+                fusion_registry.by_node_id.erase(it);
+            }
+            auto expired = prune_expired_pointwise_fusions_locked(fusion_registry);
+            std::move(expired.begin(), expired.end(),
+                      std::back_inserter(retired_fusions));
+        }
     }
 
     size_t lazy_executor_registered_node_count_for_testing() {
         auto& registry = deferred_materializer_registry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
-        prune_expired_materializers_locked(registry);
-        return registry.by_node_id.size();
+        std::vector<DeferredMaterializerRegistry::Entry> retired;
+        size_t count = 0;
+        {
+            std::lock_guard<std::mutex> lock(registry.mutex);
+            retired = prune_expired_materializers_locked(registry);
+            count = registry.by_node_id.size();
+        }
+        return count;
     }
 
     void lazy_executor_clear_registry_for_testing() {
+        decltype(DeferredMaterializerRegistry::by_node_id) retired_materializers;
         auto& registry = deferred_materializer_registry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
-        registry.by_node_id.clear();
+        {
+            std::lock_guard<std::mutex> lock(registry.mutex);
+            retired_materializers.swap(registry.by_node_id);
+        }
 
+        decltype(PointwiseFusionRegistry::by_node_id) retired_fusions;
         auto& fusion_registry = pointwise_fusion_registry();
-        std::lock_guard<std::mutex> fusion_lock(fusion_registry.mutex);
-        fusion_registry.by_node_id.clear();
+        {
+            std::lock_guard<std::mutex> fusion_lock(fusion_registry.mutex);
+            retired_fusions.swap(fusion_registry.by_node_id);
+        }
     }
 
     bool lazy_executor_context_active() {
@@ -641,7 +700,7 @@ namespace lfs::core::internal {
         if (node_id == 0 || active_context == nullptr || !materialized.is_valid()) {
             return;
         }
-        active_context->cached_materializations.emplace(node_id, materialized);
+        active_context->cached_materializations.insert_or_assign(node_id, materialized);
         record_relaxed_max(
             lazy_executor_diagnostics_counters().max_context_cache_entries,
             static_cast<uint64_t>(active_context->cached_materializations.size()));
@@ -885,21 +944,22 @@ namespace lfs::core::internal {
         }
 
         auto& registry = pointwise_fusion_registry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
-        prune_expired_pointwise_fusions_locked(registry);
-
-        const auto it = registry.by_node_id.find(node_id);
-        if (it == registry.by_node_id.end()) {
-            return false;
-        }
-
-        if (!it->second.source) {
+        PointwiseFusionRegistry::Entry consumed;
+        {
+            std::lock_guard<std::mutex> lock(registry.mutex);
+            const auto it = registry.by_node_id.find(node_id);
+            if (it == registry.by_node_id.end()) {
+                return false;
+            }
+            consumed = std::move(it->second);
             registry.by_node_id.erase(it);
+        }
+
+        if (!consumed.source) {
             return false;
         }
-        *out_source = *it->second.source;
-        *out_ops = std::move(it->second.ops);
-        registry.by_node_id.erase(it);
+        *out_source = *consumed.source;
+        *out_ops = std::move(consumed.ops);
         return true;
     }
 

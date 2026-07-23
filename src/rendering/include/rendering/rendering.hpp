@@ -93,6 +93,8 @@ namespace lfs::rendering {
     struct GaussianFilterState {
         std::optional<GaussianScopedBoxFilter> crop_region;
         std::optional<GaussianScopedEllipsoidFilter> ellipsoid_region;
+        std::vector<GaussianScopedBoxFilter> crop_regions;
+        std::vector<GaussianScopedEllipsoidFilter> ellipsoid_regions;
         std::optional<BoundingBox> view_volume;
         bool cull_outside_view_volume = false;
     };
@@ -220,6 +222,7 @@ namespace lfs::rendering {
 
     struct PointCloudFilterState {
         std::optional<BoundingBox> crop_box;
+        std::optional<Ellipsoid> crop_ellipsoid;
         bool crop_inverse = false;
         bool crop_desaturate = false;
     };

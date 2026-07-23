@@ -11,6 +11,10 @@ from __future__ import annotations
 from .definition import ToolDef, SubmodeDef, PivotModeDef
 
 
+_CROP_VOLUME_TYPES = {"CROPBOX", "ELLIPSOID"}
+_CROPBOX_TARGET_TYPES = {"SPLAT", "POINTCLOUD"} | _CROP_VOLUME_TYPES
+
+
 def _poll_builtin_tool_available(tool_id: str) -> bool:
     try:
         import lichtfeld as lf
@@ -29,14 +33,36 @@ def _node_type_name(node) -> str:
         return ""
 
 
+def _current_scene():
+    try:
+        import lichtfeld as lf
+
+        get_scene = getattr(lf, "get_scene", None)
+        return get_scene() if callable(get_scene) else None
+    except Exception:
+        return None
+
+
 def _node_contains_cropbox_target(scene, node) -> bool:
     if node is None:
         return False
-    if _node_type_name(node) in {"SPLAT", "POINTCLOUD", "DATASET"}:
+    if _node_type_name(node) in _CROPBOX_TARGET_TYPES:
         return True
+    if _node_type_name(node) != "DATASET":
+        return False
+
+    def contains_model_target(candidate) -> bool:
+        if candidate is None:
+            return False
+        if _node_type_name(candidate) in {"SPLAT", "POINTCLOUD"}:
+            return True
+        for nested_id in getattr(candidate, "children", []) or []:
+            if contains_model_target(scene.get_node_by_id(nested_id)):
+                return True
+        return False
+
     for child_id in getattr(node, "children", []) or []:
-        child = scene.get_node_by_id(child_id)
-        if _node_contains_cropbox_target(scene, child):
+        if contains_model_target(scene.get_node_by_id(child_id)):
             return True
     return False
 
@@ -45,12 +71,14 @@ def _selected_node_types() -> tuple[str, ...]:
     try:
         import lichtfeld as lf
 
-        scene = lf.scene.current()
+        scene = _current_scene()
+        if scene is None:
+            return ()
         selected_names = lf.get_selected_node_names() or []
         node_types: list[str] = []
         for name in selected_names:
             node = scene.get_node(name)
-            node_type = getattr(getattr(node, "type", None), "name", "")
+            node_type = _node_type_name(node)
             if node_type:
                 node_types.append(node_type)
         return tuple(node_types)
@@ -58,11 +86,17 @@ def _selected_node_types() -> tuple[str, ...]:
         return ()
 
 
+def _selection_is_crop_volume() -> bool:
+    return any(node_type in _CROP_VOLUME_TYPES for node_type in _selected_node_types())
+
+
 def _selection_has_cropbox_target() -> bool:
     try:
         import lichtfeld as lf
 
-        scene = lf.scene.current()
+        scene = _current_scene()
+        if scene is None:
+            return False
         selected_names = lf.get_selected_node_names() or []
         return any(
             _node_contains_cropbox_target(scene, scene.get_node(name))
@@ -83,23 +117,30 @@ def _poll_has_gaussians(context) -> bool:
     )
 
 
+def _poll_can_select(context) -> bool:
+    return _poll_has_gaussians(context) and not _selection_is_crop_volume()
+
+
 def _poll_can_transform(context) -> bool:
-    return bool(getattr(context, "can_transform", False))
+    return bool(getattr(context, "can_transform", False)) and not _selection_is_crop_volume()
 
 
 def _poll_can_mirror(_context) -> bool:
-    return _poll_builtin_tool_available("builtin.mirror")
+    return _poll_builtin_tool_available("builtin.mirror") and not _selection_is_crop_volume()
 
 
 def _poll_can_align(_context) -> bool:
-    return _poll_builtin_tool_available("builtin.align")
+    return _poll_builtin_tool_available("builtin.align") and not _selection_is_crop_volume()
 
 
 def _poll_can_cropbox(context) -> bool:
-    import lichtfeld as lf
-    return (lf.ui.get_content_type() == "splat_files" and
-            _poll_has_scene(context) and
-            lf.can_transform_selection())
+    if not _poll_has_scene(context):
+        return False
+    if _selection_is_crop_volume():
+        return True
+    if _poll_can_transform(context):
+        return True
+    return _selection_has_cropbox_target()
 
 
 BUILTIN_TOOLS: tuple[ToolDef, ...] = (
@@ -121,7 +162,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
             SubmodeDef("box", "Box", "box"),
             SubmodeDef("sphere", "Sphere", "sphere"),
         ),
-        poll=_poll_has_gaussians,
+        poll=_poll_can_select,
     ),
     ToolDef(
         id="builtin.translate",

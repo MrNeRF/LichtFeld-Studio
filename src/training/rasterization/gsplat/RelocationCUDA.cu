@@ -80,6 +80,7 @@ namespace gsplat_lfs {
                 binoms,
                 n_max,
                 min_opacity);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.relocation");
     }
 
     inline __device__ mat3 raw_quat_to_rotmat(const vec4 raw_quat) {
@@ -168,6 +169,7 @@ namespace gsplat_lfs {
                 noise,
                 means,
                 current_lr);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.add_noise");
     }
 
 } // namespace gsplat_lfs

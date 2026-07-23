@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "core/tensor_fwd.hpp"
 #include <algorithm>
 #include <cuda_runtime.h>
@@ -858,6 +859,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_row_comparison_kernel<<<grid, block_size, 0, stream>>>(
                     a, b, c, M, N, a_is_row, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.row_comparison");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -892,6 +894,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_scalar_kernel_float<<<grid_size, block_size, 0, stream>>>(
                     a, b, c, a_size, b_size, c_elements, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.scalar");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -924,6 +927,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_row_kernel_float<<<grid, block_size, 0, stream>>>(
                     a, b, c, M, N, a_is_row, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.row");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -955,6 +959,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_column_kernel_float<<<grid, block_size, 0, stream>>>(
                     a, b, c, M, N, a_is_col, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.column");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -994,6 +999,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_channel3d_kernel_float<<<grid, block_size, 0, stream>>>(
                     a, b, c, H, W, C, a_is_broadcast, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.channel3d");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -1028,6 +1034,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_batch3d_kernel_float<<<grid, block_size, 0, stream>>>(
                     a, b, c, B, H, W, a_is_broadcast, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.batch3d");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -1059,6 +1066,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
         broadcast_binary_kernel<<<grid_size, block_size, 0, stream>>>(
             a, b, c, params, op);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.binary");
 #else
         static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif

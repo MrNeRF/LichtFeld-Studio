@@ -31,6 +31,7 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float* param_grad,
         const bool* frozen_mask,
         const int frozen_mask_size,
+        const float frozen_lr_scale,
         const int n_rows,
         const int row_size,
         const float lr,
@@ -49,6 +50,7 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float* param_grad,
         const bool* frozen_mask,
         const int frozen_mask_size,
+        const float frozen_lr_scale,
         const int n_primitives,
         const int slots_per_primitive,
         const float lr,
@@ -89,7 +91,7 @@ void fast_lfs::optimizer::adam_step(
         bias_correction1_rcp,
         bias_correction2_sqrt_rcp);
 
-    LFS_FASTGS_PHASE_CHECK(config::debug, "adam step");
+    LFS_CUDA_LAUNCH_CHECK(stream, "adam step");
 }
 
 void fast_lfs::optimizer::adam_step_quantized(
@@ -101,6 +103,7 @@ void fast_lfs::optimizer::adam_step_quantized(
     const float* param_grad,
     const bool* frozen_mask,
     const int frozen_mask_size,
+    const float frozen_lr_scale,
     const int n_rows,
     const int row_size,
     const float lr,
@@ -114,9 +117,10 @@ void fast_lfs::optimizer::adam_step_quantized(
     kernels::adam::adam_step_quantized_cu<<<
         div_round_up(n_rows, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
         param, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, param_grad,
-        frozen_mask, frozen_mask_size, n_rows, row_size, lr, beta1, beta2, eps, bias_correction1_rcp, bias_correction2_sqrt_rcp);
+        frozen_mask, frozen_mask_size, frozen_lr_scale, n_rows, row_size, lr, beta1, beta2, eps,
+        bias_correction1_rcp, bias_correction2_sqrt_rcp);
 
-    LFS_FASTGS_PHASE_CHECK(config::debug, "quantized adam step");
+    LFS_CUDA_LAUNCH_CHECK(stream, "quantized adam step");
 }
 
 void fast_lfs::optimizer::adam_step_quantized_swizzled(
@@ -128,6 +132,7 @@ void fast_lfs::optimizer::adam_step_quantized_swizzled(
     const float* param_grad,
     const bool* frozen_mask,
     const int frozen_mask_size,
+    const float frozen_lr_scale,
     const int n_primitives,
     const int slots_per_primitive,
     const float lr,
@@ -141,7 +146,8 @@ void fast_lfs::optimizer::adam_step_quantized_swizzled(
     kernels::adam::adam_step_quantized_swizzled_cu<<<
         div_round_up(n_primitives, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
         param, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, param_grad,
-        frozen_mask, frozen_mask_size, n_primitives, slots_per_primitive, lr, beta1, beta2, eps, bias_correction1_rcp, bias_correction2_sqrt_rcp);
+        frozen_mask, frozen_mask_size, frozen_lr_scale, n_primitives, slots_per_primitive, lr,
+        beta1, beta2, eps, bias_correction1_rcp, bias_correction2_sqrt_rcp);
 
-    LFS_FASTGS_PHASE_CHECK(config::debug, "quantized adam step (swizzled)");
+    LFS_CUDA_LAUNCH_CHECK(stream, "quantized adam step (swizzled)");
 }

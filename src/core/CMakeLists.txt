@@ -50,14 +50,22 @@ set(CORE_SOURCES
         abi.cpp
         crash_handler.cpp
         cuda_error.cpp
+        cuda_error_typed.cpp
+        device_fault.cpp
+        error.cpp
+        error_bus.cpp
+        error_envelope.cpp
+        error_latch.cpp
+        error_reporter.cpp
+        guarded_task.cpp
         failure_report.cpp
+        cuda/memory_arena_owner.cpp
         memory_pressure.cpp
         operator_callbacks.cpp
         animatable_property.cpp
         argument_parser.cpp
         camera.cpp
         checkpoint_format.cpp
-        cuda_alloc_tracker.cpp
         image_loader.cpp
         cuda_version.cpp
         image_io.cpp

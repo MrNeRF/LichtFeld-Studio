@@ -31,12 +31,12 @@ Pull narrower resources only when needed:
 
 - Prefer the bridge-backed `.mcp.json` entry when you want Codex to start LichtFeld for you. Use the raw HTTP endpoint only if LichtFeld is already running.
 - Prefer resources for discovery and current state; use tools for mutations.
-- Check tool metadata before invoking: `category`, `kind`, `runtime`, `thread_affinity`, `destructive`, `long_running`, `user_visible`.
-- For long-running operations, pair the mutating call with `runtime.job.describe`, `runtime.job.wait`, or `runtime.events.tail` instead of sleeping.
+- Check tool metadata before invoking. `annotations` contains only the standard MCP hints `readOnlyHint`, `destructiveHint`, and `idempotentHint`. LichtFeld metadata is under `_meta`, using keys such as `app.lichtfeld/category`, `app.lichtfeld/kind`, `app.lichtfeld/runtime`, `app.lichtfeld/thread_affinity`, `app.lichtfeld/long_running`, and `app.lichtfeld/user_visible`.
+- For long-running operations, pair the mutating call with `runtime_job_describe`, `runtime_job_wait`, or `runtime_events_tail` instead of sleeping.
 - Do not guess operator ids, menu paths, panel ids, or UI tool ids. Read `operators/registry`, `ui/tools`, or `ui/menus` first.
-- After selection writes, confirm with `selection.get` or `lichtfeld://selection/current`.
-- Scene exports are synchronous in the current GUI implementation. `scene.export_status` reports idle semantics and `scene.export_cancel` cannot stop an export once started.
-- `editor.run` can wait inline. For longer scripts, use `editor.is_running`, `editor.wait`, and `editor.get_output`.
+- After selection writes, confirm with `selection_get` or `lichtfeld://selection/current`.
+- Scene exports are synchronous in the current GUI implementation. `scene_export_status` reports idle semantics and `scene_export_cancel` cannot stop an export once started.
+- `editor_run` can wait inline. For longer scripts, use `editor_is_running`, `editor_wait`, and `editor_get_output`.
 
 ## Important Runtime Job IDs
 
@@ -51,23 +51,23 @@ Pull narrower resources only when needed:
 
 ### Load Dataset And Train
 
-- `scene.load_dataset` or `scene.load_checkpoint`
+- `scene_load_dataset` or `scene_load_checkpoint`
 - read `lichtfeld://scene/state`
-- `training.start`
-- watch `training.main` through `runtime.job.*` or `runtime.events.tail`
+- `training_start`
+- watch `training.main` through `runtime_job_*` or `runtime_events_tail`
 
 ### Manipulate UI Or Operators
 
 - read `lichtfeld://ui/state`
 - inspect `lichtfeld://ui/tools`, `lichtfeld://ui/menus`, or `lichtfeld://operators/registry`
-- call `ui.*` or `operator.*`
+- call `ui_*` or `operator_*`
 - if the tool goes modal, watch `operator.modal` and `lichtfeld://operators/modal_state`
 
 ### Work On Gaussian Selection
 
-- use `selection.rect`, `selection.click`, `selection.brush`, `selection.lasso`, or `selection.by_description`
-- verify via `selection.get` or `lichtfeld://selection/current`
-- then call `gaussians.read`, `gaussians.write`, `transform.*`, `scene.*`, or `operator.invoke`
+- use `selection_rect`, `selection_click`, `selection_brush`, `selection_lasso`, or `selection_by_description`
+- verify via `selection_get` or `lichtfeld://selection/current`
+- then call `gaussians_read`, `gaussians_write`, `transform_*`, `scene_*`, or `operator_invoke`
 
 ## Docs
 

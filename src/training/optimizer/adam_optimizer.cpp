@@ -98,6 +98,13 @@ namespace lfs::training {
         frozen_mask_ = std::move(mask);
     }
 
+    void AdamOptimizer::set_frozen_lr_scale(const float scale) {
+        if (!std::isfinite(scale) || scale < 0.0f || scale > 1.0f) {
+            throw std::runtime_error("AdamOptimizer frozen LR scale must be within [0, 1]");
+        }
+        frozen_lr_scale_ = scale;
+    }
+
     void AdamOptimizer::step(const int iteration) {
         LFS_TRACE("kernel.adam.step");
         if (fused_step_iteration_ == iteration) {
@@ -467,6 +474,7 @@ namespace lfs::training {
                 state.grad.ptr<float>(),
                 frozen_mask_ptr(),
                 frozen_mask_size(),
+                frozen_lr_scale_,
                 static_cast<int>(scale_row_count(type)),
                 slots,
                 param_lr,
@@ -495,6 +503,7 @@ namespace lfs::training {
             state.grad.ptr<float>(),
             frozen_mask_ptr(),
             frozen_mask_size(),
+            frozen_lr_scale_,
             static_cast<int>(state.size),
             static_cast<int>(feature_dim),
             param_lr,
@@ -555,6 +564,7 @@ namespace lfs::training {
             out.exp_avg_sq_scale = state.exp_avg_sq_scale.ptr<float>();
             out.frozen_mask = frozen_mask_ptr();
             out.frozen_mask_size = frozen_mask_size();
+            out.frozen_lr_scale = frozen_lr_scale_;
             out.n_elements = static_cast<int>(param.numel());
             out.n_attributes = n_attributes;
             out.step_size = static_cast<float>(get_param_lr(type) * bias_correction1_rcp);
@@ -1386,6 +1396,7 @@ namespace lfs::training {
         static_assert(std::is_nothrow_move_assignable_v<decltype(states_)>);
         config_ = std::move(loaded.config_);
         states_ = std::move(loaded.states_);
+        frozen_lr_scale_ = loaded.frozen_lr_scale_;
     }
 
     void AdamOptimizer::reserve_capacity(const size_t capacity) {

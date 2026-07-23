@@ -444,6 +444,7 @@ namespace gsplat_lfs {
                 renders,
                 alphas,
                 last_ids);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.rasterize_to_pixels_fwd");
     }
 
     ////////////////////////////////////////////////////////////////

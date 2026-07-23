@@ -4,7 +4,11 @@
 #include "mcp_tools.hpp"
 #include "mcp_training_context.hpp"
 
+#include "core/error.hpp"
+#include "core/error_envelope.hpp"
+#include "core/error_reporter.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "core/guarded_task.hpp"
 #include "core/logger.hpp"
 
 #include <algorithm>
@@ -13,6 +17,18 @@
 namespace lfs::mcp {
 
     namespace {
+
+        bool is_valid_tool_name(const std::string& name) {
+            if (name.empty() || name.size() > 64) {
+                return false;
+            }
+            return std::all_of(name.begin(), name.end(), [](const unsigned char ch) {
+                return (ch >= 'a' && ch <= 'z') ||
+                       (ch >= 'A' && ch <= 'Z') ||
+                       (ch >= '0' && ch <= '9') ||
+                       ch == '_' || ch == '-';
+            });
+        }
 
         std::string target_to_string(training::CommandTarget target) {
             switch (target) {
@@ -36,6 +52,77 @@ namespace lfs::mcp {
             return training::CommandTarget::Session;
         }
 
+        json parameter_error_envelope(const lfs::ErrorCode code, const std::string& message,
+                                      const std::string& parameter, const lfs::OperationId operation_id) {
+            lfs::Error error = lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::MCP,
+                .operation_id = operation_id,
+                .user_message = message,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = lfs::SmallFields{}.add("parameter", parameter),
+            });
+            return json{{"error", lfs::core::to_wire_envelope(error)}, {"error_message", message}};
+        }
+
+        json invoke_handler_guarded(const std::string& name, const ToolRegistry::ToolHandler& handler,
+                                    const json& arguments, const lfs::OperationId operation_id) {
+            try {
+                return handler(arguments);
+            } catch (...) {
+                const lfs::Error error = lfs::core::detail::normalize_current_exception(lfs::core::TaskContext{
+                    .name = "mcp.tool:" + name,
+                    .domain = lfs::ErrorDomain::MCP,
+                    .operation_id = operation_id,
+                    .site = LFS_SOURCE_SITE_CURRENT(),
+                });
+                lfs::core::ErrorReporter::get().report(error, lfs::core::ReportChannel::OwnerLog);
+                json envelope = lfs::core::to_wire_envelope(error);
+                std::string message = envelope.value("message", std::string{});
+                return json{{"error", std::move(envelope)}, {"error_message", std::move(message)}};
+            }
+        }
+
+        bool is_wire_envelope(const json& error) {
+            return error.is_object() &&
+                   error.contains("code") && error.at("code").is_string() &&
+                   error.contains("domain") && error.at("domain").is_string();
+        }
+
+        json bridge_tool_result(json result, const std::string& name, const lfs::OperationId operation_id) {
+            if (!result.is_object() || !result.contains("error")) {
+                return result;
+            }
+            const json& error = result.at("error");
+            if (error.is_string()) {
+                std::string message = error.get<std::string>();
+                if (message.empty()) {
+                    return result;
+                }
+                // BF-10: a handful of successful job-status payloads
+                // (mcp_runtime_tools.cpp) carry an informational top-level
+                // "error" string; those get rewrapped as a FailedPrecondition
+                // envelope here. error_message preserves the text so no data is
+                // lost; Phase 11 refines the semantics per site.
+                lfs::Error typed = lfs::make_legacy_error(message, lfs::LegacyErrorContext{
+                                                                       .code = lfs::ErrorCode::FailedPrecondition,
+                                                                       .domain = lfs::ErrorDomain::MCP,
+                                                                       .operation = "mcp.tool:" + name,
+                                                                       .source = LFS_SOURCE_SITE_CURRENT(),
+                                                                       .operation_id = operation_id,
+                                                                   });
+                result["error"] = lfs::core::to_wire_envelope(typed);
+                result["error_message"] = result.at("error").value("message", std::string{});
+                return result;
+            }
+            if (is_wire_envelope(error) && !result.contains("error_message") &&
+                error.contains("message") && error.at("message").is_string()) {
+                std::string mirror = error.at("message").get<std::string>();
+                result["error_message"] = std::move(mirror);
+            }
+            return result;
+        }
+
     } // namespace
 
     ToolRegistry& ToolRegistry::instance() {
@@ -49,14 +136,33 @@ namespace lfs::mcp {
     }
 
     void ToolRegistry::register_tool(McpTool tool, ToolHandler handler) {
+        const std::string normalized_name = normalize_tool_name(tool.name);
+        if (!is_valid_tool_name(normalized_name)) {
+            LOG_ERROR(
+                "Cannot register MCP tool '{}': normalized name '{}' does not match "
+                "^[a-zA-Z0-9_-]{{1,64}}$",
+                tool.name,
+                normalized_name);
+            return;
+        }
+
         std::lock_guard lock(mutex_);
-        std::string name = tool.name;
-        tools_[name] = RegisteredTool{std::move(tool), std::move(handler)};
+        const auto existing = tools_.find(normalized_name);
+        if (existing != tools_.end() && existing->second.tool.name != tool.name) {
+            LOG_ERROR(
+                "Cannot register MCP tool '{}': existing tool '{}' already uses normalized name '{}'",
+                tool.name,
+                existing->second.tool.name,
+                normalized_name);
+            return;
+        }
+
+        tools_[normalized_name] = RegisteredTool{std::move(tool), std::move(handler)};
     }
 
     void ToolRegistry::unregister_tool(const std::string& name) {
         std::lock_guard lock(mutex_);
-        tools_.erase(name);
+        tools_.erase(normalize_tool_name(name));
     }
 
     std::vector<McpTool> ToolRegistry::list_tools() const {
@@ -72,24 +178,30 @@ namespace lfs::mcp {
         return result;
     }
 
-    json ToolRegistry::call_tool(const std::string& name, const json& arguments) {
+    json ToolRegistry::call_tool(const std::string& name, const json& arguments,
+                                 lfs::OperationId operation_id) {
         ToolHandler handler;
         std::vector<std::string> required;
         {
             std::lock_guard lock(mutex_);
-            auto it = tools_.find(name);
+            const std::string normalized_name = normalize_tool_name(name);
+            auto it = tools_.find(normalized_name);
             if (it == tools_.end())
-                return json{{"error", "Tool not found: " + name}};
+                return parameter_error_envelope(lfs::ErrorCode::NotFound, "Tool not found: " + name,
+                                                name, operation_id);
             handler = it->second.handler;
             required = it->second.tool.input_schema.required;
         }
 
         for (const auto& field : required) {
             if (!arguments.contains(field))
-                return json{{"error", "Missing required parameter: " + field}};
+                return parameter_error_envelope(lfs::ErrorCode::InvalidArgument,
+                                                "Missing required parameter: " + field, field,
+                                                operation_id);
         }
 
-        return handler(arguments);
+        return bridge_tool_result(invoke_handler_guarded(name, handler, arguments, operation_id),
+                                  name, operation_id);
     }
 
     void ResourceRegistry::register_resource(McpResource resource, ResourceHandler handler) {
@@ -195,7 +307,7 @@ namespace lfs::mcp {
         tool.metadata.category = target_str;
         tool.metadata.kind = "command";
 
-        json properties;
+        json properties = json::object();
         std::vector<std::string> required;
 
         for (const auto& arg : op.args) {

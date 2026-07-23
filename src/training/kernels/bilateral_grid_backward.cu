@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "lfs/core/memory_ops.cuh"
 #include "lfs/kernels/bilateral_grid.cuh"
 #include <cuda_runtime.h>
@@ -115,6 +116,7 @@ namespace lfs::training::kernels {
         const dim3 grid_dim((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
         bilateral_grid_slice_backward_kernel<<<grid_dim, block, 0, stream>>>(
             grid, rgb, grad_output, grad_grid, grad_rgb, L, H, W, h, w);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward");
     }
 
     // CHW layout backward kernel
@@ -228,6 +230,7 @@ namespace lfs::training::kernels {
         const int blocks = (h * w + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bilateral_grid_slice_backward_chw_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
             grid, rgb, grad_output, grad_grid, grad_rgb, L, H, W, h, w);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.slice_backward_chw");
     }
 
     // Adam update kernel
@@ -271,6 +274,7 @@ namespace lfs::training::kernels {
         bilateral_grid_adam_update_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
             grid, exp_avg, exp_avg_sq, grad_grid, num_elements,
             lr, beta1, beta2, bias_corr1_rcp, bias_corr2_sqrt_rcp, eps);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.adam_update");
     }
 
     // Gradient accumulation kernel
@@ -293,6 +297,7 @@ namespace lfs::training::kernels {
         const int blocks = (num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bilateral_grid_accumulate_grad_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
             dst, src, num_elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.accumulate_grad");
     }
 
     // Initialize 3x4 affine identity: channels 0,5,10 = 1.0 (diagonal)
@@ -322,6 +327,7 @@ namespace lfs::training::kernels {
 
         bilateral_grid_init_identity_kernel<<<blocks, threads, 0, stream>>>(
             grids, num_cells, num_elements);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.bilateral.init_identity");
     }
 
 } // namespace lfs::training::kernels

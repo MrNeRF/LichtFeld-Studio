@@ -188,9 +188,10 @@ TEST_F(RotatedShCorrectnessTest, ExportedPlyPreservesRotatedShAppearance) {
     }
 
     auto loaded = lfs::io::load_ply(bike_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load bike PLY: " << lfs::format_for_developer(loaded.error());
 
-    lfs::core::SplatData original = std::move(loaded.value());
+    lfs::core::SplatData original = std::move(loaded->value);
     ASSERT_GT(original.size(), 0UL);
     ASSERT_TRUE(original.shN().is_valid());
     ASSERT_GE(original.get_max_sh_degree(), 1);
@@ -216,8 +217,9 @@ TEST_F(RotatedShCorrectnessTest, ExportedPlyPreservesRotatedShAppearance) {
     ASSERT_TRUE(save_result.has_value()) << save_result.error().message;
 
     auto exported_load = lfs::io::load_ply(out_path);
-    ASSERT_TRUE(exported_load.has_value()) << "Failed to reload exported PLY: " << exported_load.error();
-    lfs::core::SplatData exported = std::move(exported_load.value());
+    ASSERT_TRUE(exported_load.has_value())
+        << "Failed to reload exported PLY: " << lfs::format_for_developer(exported_load.error());
+    lfs::core::SplatData exported = std::move(exported_load->value);
     ASSERT_EQ(exported.size(), original.size());
 
     const CpuShData original_sh = to_cpu_sh(original);
@@ -276,9 +278,10 @@ TEST_F(RotatedShCorrectnessTest, ViewportParityWithExportUnderRotationAndNonUnif
     }
 
     auto loaded = lfs::io::load_ply(bike_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load bike PLY: " << lfs::format_for_developer(loaded.error());
 
-    lfs::core::SplatData original = std::move(loaded.value());
+    lfs::core::SplatData original = std::move(loaded->value);
     ASSERT_GT(original.size(), 0UL);
     ASSERT_TRUE(original.shN().is_valid());
     ASSERT_GE(original.get_max_sh_degree(), 1);
@@ -359,9 +362,10 @@ TEST_F(RotatedShCorrectnessTest, IdentityTransformPreservesShCoefficients) {
     }
 
     auto loaded = lfs::io::load_ply(bike_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load bike PLY: " << lfs::format_for_developer(loaded.error());
 
-    lfs::core::SplatData original = std::move(loaded.value());
+    lfs::core::SplatData original = std::move(loaded->value);
     ASSERT_TRUE(original.shN().is_valid());
 
     auto transformed = clone_splat_data(original);
@@ -384,9 +388,10 @@ TEST_F(RotatedShCorrectnessTest, PureTranslationPreservesShCoefficients) {
     }
 
     auto loaded = lfs::io::load_ply(bike_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load bike PLY: " << lfs::format_for_developer(loaded.error());
 
-    lfs::core::SplatData original = std::move(loaded.value());
+    lfs::core::SplatData original = std::move(loaded->value);
     ASSERT_TRUE(original.shN().is_valid());
 
     const glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, -3.0f, 7.0f));
@@ -410,9 +415,10 @@ TEST_F(RotatedShCorrectnessTest, DcComponentInvariantUnderRotation) {
     }
 
     auto loaded = lfs::io::load_ply(bike_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load bike PLY: " << lfs::format_for_developer(loaded.error());
 
-    lfs::core::SplatData original = std::move(loaded.value());
+    lfs::core::SplatData original = std::move(loaded->value);
     ASSERT_GT(original.size(), 0UL);
 
     const glm::mat4 rotation = glm::rotate(
@@ -442,9 +448,10 @@ TEST_F(RotatedShCorrectnessTest, RoundtripRotationRecoversSh) {
     }
 
     auto loaded = lfs::io::load_ply(bike_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load bike PLY: " << lfs::format_for_developer(loaded.error());
 
-    lfs::core::SplatData original = std::move(loaded.value());
+    lfs::core::SplatData original = std::move(loaded->value);
     ASSERT_TRUE(original.shN().is_valid());
 
     const glm::mat4 rotation = glm::rotate(
@@ -473,9 +480,10 @@ TEST_F(RotatedShCorrectnessTest, NinetyDegreeAxisAlignedRotation) {
     }
 
     auto loaded = lfs::io::load_ply(bike_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load bike PLY: " << lfs::format_for_developer(loaded.error());
 
-    lfs::core::SplatData original = std::move(loaded.value());
+    lfs::core::SplatData original = std::move(loaded->value);
     ASSERT_TRUE(original.shN().is_valid());
     ASSERT_GE(original.get_max_sh_degree(), 1);
 
@@ -538,9 +546,10 @@ TEST_F(RotatedShCorrectnessTest, SequentialRotationsMatchComposed) {
     }
 
     auto loaded = lfs::io::load_ply(bike_path);
-    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load bike PLY: " << lfs::format_for_developer(loaded.error());
 
-    lfs::core::SplatData original = std::move(loaded.value());
+    lfs::core::SplatData original = std::move(loaded->value);
     ASSERT_TRUE(original.shN().is_valid());
 
     const glm::mat4 r1 = glm::rotate(

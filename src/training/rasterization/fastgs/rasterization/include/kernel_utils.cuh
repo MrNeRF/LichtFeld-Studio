@@ -179,10 +179,14 @@ namespace fast_lfs::rasterization::kernels {
         const float eps) {
         if (!param.enabled || param.n_attributes <= 0)
             return;
+        float row_step_size = param.step_size;
         if (param.frozen_mask != nullptr &&
             primitive_idx < static_cast<uint>(param.frozen_mask_size) &&
-            param.frozen_mask[primitive_idx])
-            return;
+            param.frozen_mask[primitive_idx]) {
+            if (param.frozen_lr_scale == 0.0f)
+                return;
+            row_step_size *= param.frozen_lr_scale;
+        }
         const uint n_attr = static_cast<uint>(param.n_attributes);
         const uint base = primitive_idx * n_attr;
         if (base >= static_cast<uint>(param.n_elements))
@@ -218,7 +222,7 @@ namespace fast_lfs::rasterization::kernels {
             const float v = beta2 * old_v + (1.0f - beta2) * grad * grad;
             if (i < active) {
                 const float denom = sqrtf(v) * param.bias_correction2_sqrt_rcp + eps;
-                param.param[base + i] -= param.step_size * m / denom;
+                param.param[base + i] -= row_step_size * m / denom;
             }
             param.exp_avg_q[base + i] = quantize_m(m, new_m_scale);
             param.exp_avg_sq_q[base + i] = quantize_sqrt_v(v, new_v_scale);
@@ -321,10 +325,14 @@ namespace fast_lfs::rasterization::kernels {
         const FusedAdamParam& p = fused_adam.shN;
         if (!p.enabled || n_slots_to_update == 0u || sh_layout_slots == 0u)
             return;
+        float row_step_size = p.step_size;
         if (p.frozen_mask != nullptr &&
             primitive_idx < static_cast<uint>(p.frozen_mask_size) &&
-            p.frozen_mask[primitive_idx])
-            return;
+            p.frozen_mask[primitive_idx]) {
+            if (p.frozen_lr_scale == 0.0f)
+                return;
+            row_step_size *= p.frozen_lr_scale;
+        }
 
         float4* param4 = reinterpret_cast<float4*>(p.param);
         uchar4* m4 = reinterpret_cast<uchar4*>(p.exp_avg_q);
@@ -382,7 +390,7 @@ namespace fast_lfs::rasterization::kernels {
                 const float m = beta1 * dequant_m(mc[c], old_m_scale) + (1.0f - beta1) * gc[c];
                 const float v = beta2 * old_v + (1.0f - beta2) * gc[c] * gc[c];
                 const float denom = sqrtf(v) * p.bias_correction2_sqrt_rcp + eps;
-                pc[c] -= p.step_size * m / denom;
+                pc[c] -= row_step_size * m / denom;
                 nm[c] = quantize_m(m, new_m_scale);
                 nv[c] = quantize_sqrt_v(v, new_v_scale);
             }

@@ -17,10 +17,10 @@
         LFS_CUDA_CHECK_MSG((call), "FastGS operation: {}", name); \
     } while (0)
 
-#define LFS_FASTGS_PHASE_CHECK(debug, name)                                      \
+#define LFS_FASTGS_PHASE_CHECK(name)                                             \
     do {                                                                         \
         LFS_CUDA_CHECK_MSG(cudaGetLastError(), "FastGS phase launch: {}", name); \
-        if constexpr (debug) {                                                   \
+        if (::lfs::core::cuda_sync_debug_enabled()) {                            \
             LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),                          \
                                "FastGS phase synchronization: {}", name);        \
         }                                                                        \

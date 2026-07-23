@@ -44,6 +44,10 @@
             <span class="separator zoom-sep" data-style-color="zoom_sep_color">|</span>
             <span id="zoom-text" data-style-color="zoom_color">{{ zoom_text }}</span>
         </div>
+        <div id="status-message-section" class="hidden" data-class-hidden="!show_status_message">
+            <span class="separator">|</span>
+            <span id="status-message" data-style-color="status_message_color">{{ status_message_text }}</span>
+        </div>
     </div>
     <div id="status-right">
         <span id="gpu-model" class="dim hidden" data-class-hidden="!show_gpu_model">{{ gpu_model_text }}</span>

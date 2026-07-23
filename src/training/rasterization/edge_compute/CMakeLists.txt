@@ -30,7 +30,7 @@ target_include_directories(edge_compute_backend
         PRIVATE
 )
 
-# Pure CUDA libraries only
+# The arena singleton resolves from lfs_core when this static backend reaches its final link.
 target_link_libraries(edge_compute_backend
         PUBLIC
         CUDA::cudart

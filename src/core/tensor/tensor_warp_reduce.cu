@@ -1088,23 +1088,28 @@ namespace lfs::core::tensor_ops {
             // Stage 1: Each block reduces to a partial sum (no atomics!)
             warp_reduce_sum_stage1_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, partial, n, is_aligned);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.sum_stage1");
 
             // Stage 2: Single block aggregates partial sums (deterministic!)
             warp_reduce_sum_stage2_kernel<<<1, BLOCK_SIZE, 0, stream>>>(
                 partial, output, grid_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.sum_stage2");
             break;
 
         case ReduceOp::Max:
             warp_reduce_max_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, n, is_aligned);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.max");
             break;
         case ReduceOp::Min:
             warp_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, n, is_aligned);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.min");
             break;
         case ReduceOp::Prod:
             warp_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, n, is_aligned);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.prod");
             break;
         default:
             LFS_ASSERT_MSG(false,
@@ -1150,18 +1155,22 @@ namespace lfs::core::tensor_ops {
         case ReduceOp::Mean:
             warp_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, n, is_aligned);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.sum_single_stage");
             break;
         case ReduceOp::Max:
             warp_reduce_max_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, n, is_aligned);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.max");
             break;
         case ReduceOp::Min:
             warp_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, n, is_aligned);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.min");
             break;
         case ReduceOp::Prod:
             warp_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, n, is_aligned);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.prod");
             break;
         default:
             LFS_ASSERT_MSG(false,
@@ -1206,23 +1215,28 @@ namespace lfs::core::tensor_ops {
             case ReduceOp::Sum:
                 warp_tiny_segment_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.tiny_segment_sum");
                 break;
             case ReduceOp::Mean:
                 // FUSED: Division happens in kernel, no separate transform needed
                 warp_tiny_segment_reduce_mean_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.tiny_segment_mean");
                 break;
             case ReduceOp::Max:
                 warp_tiny_segment_reduce_max_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.tiny_segment_max");
                 break;
             case ReduceOp::Min:
                 warp_tiny_segment_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.tiny_segment_min");
                 break;
             case ReduceOp::Prod:
                 warp_tiny_segment_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.tiny_segment_prod");
                 break;
             default:
                 LFS_ASSERT_MSG(false,
@@ -1246,22 +1260,27 @@ namespace lfs::core::tensor_ops {
             case ReduceOp::Sum:
                 warp_medium_segment_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.medium_segment_sum");
                 break;
             case ReduceOp::Mean:
                 warp_medium_segment_reduce_mean_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.medium_segment_mean");
                 break;
             case ReduceOp::Max:
                 warp_medium_segment_reduce_max_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.medium_segment_max");
                 break;
             case ReduceOp::Min:
                 warp_medium_segment_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.medium_segment_min");
                 break;
             case ReduceOp::Prod:
                 warp_medium_segment_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.medium_segment_prod");
                 break;
             default:
                 LFS_ASSERT_MSG(false,
@@ -1279,23 +1298,28 @@ namespace lfs::core::tensor_ops {
         case ReduceOp::Sum:
             warp_segmented_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, num_segments, segment_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.segmented_sum");
             break;
         case ReduceOp::Mean:
             // FUSED: Division happens in kernel, no separate transform needed
             warp_segmented_reduce_mean_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, num_segments, segment_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.segmented_mean");
             break;
         case ReduceOp::Max:
             warp_segmented_reduce_max_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, num_segments, segment_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.segmented_max");
             break;
         case ReduceOp::Min:
             warp_segmented_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, num_segments, segment_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.segmented_min");
             break;
         case ReduceOp::Prod:
             warp_segmented_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, num_segments, segment_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.segmented_prod");
             break;
         default:
             LFS_ASSERT_MSG(false,
@@ -1339,23 +1363,28 @@ namespace lfs::core::tensor_ops {
         case ReduceOp::Sum:
             warp_strided_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, outer_size, reduce_size, inner_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.strided_sum");
             break;
         case ReduceOp::Mean:
             // FUSED: Division happens in kernel, no separate transform needed
             warp_strided_reduce_mean_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, outer_size, reduce_size, inner_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.strided_mean");
             break;
         case ReduceOp::Max:
             warp_strided_reduce_max_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, outer_size, reduce_size, inner_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.strided_max");
             break;
         case ReduceOp::Min:
             warp_strided_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, outer_size, reduce_size, inner_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.strided_min");
             break;
         case ReduceOp::Prod:
             warp_strided_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, outer_size, reduce_size, inner_size);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.strided_prod");
             break;
         default:
             LFS_ASSERT_MSG(false,
@@ -1490,6 +1519,7 @@ namespace lfs::core::tensor_ops {
                 LFS_CUDA_CHECK_MSG(cudaMemsetAsync(output, 0, N * sizeof(float), stream),
                                    "column-reduce accumulator (columns={})", N);
             column_reduce_sum_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.column_sum");
             if (op == ReduceOp::Mean) {
                 float inv_M = 1.0f / static_cast<float>(M);
                 thrust::transform(thrust::cuda::par.on(stream),
@@ -1503,6 +1533,7 @@ namespace lfs::core::tensor_ops {
                              thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), -FLT_MAX);
             }
             column_reduce_max_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.column_min_max");
             break;
         case ReduceOp::Min:
             if (grid_y > 1) {
@@ -1510,6 +1541,7 @@ namespace lfs::core::tensor_ops {
                              thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), FLT_MAX);
             }
             column_reduce_min_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.column_min_max");
             break;
         default:
             LFS_ASSERT_MSG(false,

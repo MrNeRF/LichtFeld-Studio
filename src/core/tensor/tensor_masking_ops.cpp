@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/device_fault.hpp"
 #include "core/logger.hpp"
 #include "internal/cuda_stream_context.hpp"
 #include "internal/tensor_impl.hpp"
@@ -60,11 +61,11 @@ namespace lfs::core {
             return dtype == DataType::Int32 || dtype == DataType::Int64;
         }
 
-        void assert_index_tensor(const Tensor& indices,
-                                 const size_t upper_bound,
-                                 const std::string_view operation,
-                                 const bool check_bounds,
-                                 const bool allow_negative = false) {
+        // Host-only dtype/empty/upper-bound checks (tensor_masking_ops.cpp:68-78
+        // region per phase-6c §9 sign-off 4). No D2H value scan.
+        void assert_index_tensor_host_only(const Tensor& indices,
+                                           const size_t upper_bound,
+                                           const std::string_view operation) {
             LFS_ASSERT_MSG(indices.is_valid(),
                            std::string(operation) + ": invalid index tensor");
             LFS_ASSERT_MSG(is_integer_index_dtype(indices.dtype()),
@@ -76,7 +77,22 @@ namespace lfs::core {
                            std::string(operation) + ": cannot index an empty dimension");
             LFS_ASSERT_MSG(upper_bound <= static_cast<size_t>(std::numeric_limits<int>::max()),
                            std::string(operation) + ": indexed dimension exceeds Int32 kernel range");
+        }
 
+        void assert_index_tensor(const Tensor& indices,
+                                 const size_t upper_bound,
+                                 const std::string_view operation,
+                                 const bool check_bounds,
+                                 const bool allow_negative = false) {
+            assert_index_tensor_host_only(indices, upper_bound, operation);
+            if (indices.numel() == 0) {
+                return;
+            }
+
+            // D2H value scan — retained for gather/scatter/etc. Removed ONLY on
+            // the converted index_select Assert CUDA path (sign-off 4); that path
+            // calls assert_index_tensor_host_only and relies on the device fault
+            // record for release safety.
             const Tensor cpu_indices = indices.device() == Device::CPU
                                            ? indices.contiguous()
                                            : indices.cpu().contiguous();
@@ -104,6 +120,15 @@ namespace lfs::core {
                 for (size_t i = 0; i < cpu_indices.numel(); ++i) {
                     assert_value(values[i], i);
                 }
+            }
+        }
+
+        // §1.9 host entry: reject graph capture before checked index_select launch.
+        void reject_index_select_graph_capture(const cudaStream_t stream) {
+            cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+            const cudaError_t query = cudaStreamIsCapturing(stream, &capture_status);
+            if (query != cudaSuccess || capture_status != cudaStreamCaptureStatusNone) {
+                throw_device_fault_graph_capture_error(stream, LFS_SOURCE_SITE_CURRENT());
             }
         }
     } // namespace
@@ -151,6 +176,7 @@ namespace lfs::core {
         auto result = empty({output_size}, device_, dtype_);
 
         if (device_ == Device::CUDA) {
+            pin_operands({this, &mask});
             result.set_stream(stream());
             switch (dtype_) {
             case DataType::Float32:
@@ -183,6 +209,7 @@ namespace lfs::core {
                 mask.shape().str(), output_size, static_cast<const void*>(stream()));
             // No sync - tensor operation
         } else {
+            pin_operands({this, &mask});
             switch (dtype_) {
             case DataType::Float32:
                 masked_select_cpu(ptr<float>(), mask.ptr<unsigned char>(), result.ptr<float>(), numel());
@@ -239,6 +266,7 @@ namespace lfs::core {
         const Tensor& dense_mask = logical_mask->contiguous_read(mask_materialized);
 
         if (device_ == Device::CUDA) {
+            pin_operands({this, &dense_mask});
             switch (dtype_) {
             case DataType::Float32:
                 tensor_ops::launch_masked_fill(ptr<float>(), dense_mask.ptr<unsigned char>(),
@@ -266,6 +294,7 @@ namespace lfs::core {
             }
             // No sync - tensor operation
         } else {
+            pin_operands({this, &dense_mask});
             const unsigned char* mask_data = dense_mask.ptr<unsigned char>();
 
             switch (dtype_) {
@@ -406,8 +435,18 @@ namespace lfs::core {
             input.index_select_into(out, dim, dense_indices, mode);
             return;
         }
-        assert_index_tensor(indices, shape_[dim], "index_select_into",
-                            mode == BoundaryMode::Assert);
+        // Phase 6C-P3 sign-off 4: on the converted index_select Assert CUDA path,
+        // keep host-only dtype/empty/upper-bound checks and drop the D2H value
+        // scan. Release safety transfers to the device fault record. All other
+        // modes/devices retain the full assert_index_tensor scan.
+        const bool device_fault_assert_path =
+            device_ == Device::CUDA && mode == BoundaryMode::Assert;
+        if (device_fault_assert_path) {
+            assert_index_tensor_host_only(indices, shape_[dim], "index_select_into");
+        } else {
+            assert_index_tensor(indices, shape_[dim], "index_select_into",
+                                mode == BoundaryMode::Assert);
+        }
 
         auto indices_same_device = ensure_same_device(indices);
 
@@ -418,12 +457,25 @@ namespace lfs::core {
             // Only convert for the kernel call, not in-place
             indices_int32 = indices_same_device.to(DataType::Int32);
         }
+        const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
         if (device_ == Device::CUDA) {
-            const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
-            const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
+            pin_operands({this, &kernel_index});
+            const int* idx_ptr = kernel_index.ptr<int>();
+
+            // §1.9: host rejects graph capture at the checked-launch entry BEFORE
+            // prepare_inputs_for_stream can enqueue dependency edges into a capture.
+            if (device_fault_assert_path) {
+                reject_index_select_graph_capture(out.stream());
+            }
+
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&out, this, &kernel_index}, out.stream());
+
+            // Re-check after stream resolution (requested stream may differ).
+            if (device_fault_assert_path) {
+                reject_index_select_graph_capture(execution_stream);
+            }
 
             // Dispatch based on source tensor dtype
             if (dtype_ == DataType::Float32) {
@@ -454,16 +506,26 @@ namespace lfs::core {
                 "index_select kernel launch (input_shape={}, output_shape={}, "
                 "index_count={}, dimension={})",
                 shape_.str(), out.shape().str(), indices.numel(), dim);
-            // No sync - tensor operation
+            // Assert mode drains inline: the pre-6C Assert path was already
+            // synchronous (full index D2H + host scan), so a 32-byte record
+            // readback here REPLACES a sync rather than adding one, and keeps
+            // Assert's throw guarantee — enqueue_reset would otherwise drop an
+            // unconsumed fault at the next op. Clamp/Wrap stay sync-free.
+            if (device_fault_assert_path) {
+                lfs::core::device_fault_await_and_consume_or_throw(
+                    execution_stream, "tensor.masking.index_select.assert",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
         } else {
             // CPU implementation
+            pin_operands({this, &kernel_index});
             size_t outer = 1, inner = 1;
             for (int i = 0; i < dim; ++i)
                 outer *= shape_[i];
             for (size_t i = dim + 1; i < shape_.rank(); ++i)
                 inner *= shape_[i];
 
-            const int* const idx = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
+            const int* const idx = kernel_index.ptr<int>();
             const size_t n_indices = indices.numel();
             const size_t dim_size = shape_[dim];
 
@@ -562,10 +624,11 @@ namespace lfs::core {
         if (is_int64) {
             indices_int32 = indices_same_device.to(DataType::Int32);
         }
-        const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
+        const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
         if (device_ == Device::CUDA) {
-            const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
+            pin_operands({this, &kernel_index});
+            const int* idx_ptr = kernel_index.ptr<int>();
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&result, this, &kernel_index}, result.stream());
             if (dtype_ == DataType::Float32) {
@@ -587,7 +650,8 @@ namespace lfs::core {
                 static_cast<int>(mode), static_cast<const void*>(execution_stream));
             // No sync - tensor operation
         } else {
-            const int* idx_data = idx_ptr;
+            pin_operands({this, &kernel_index});
+            const int* idx_data = kernel_index.ptr<int>();
 
             size_t total_elements = indices.numel();
 
@@ -654,6 +718,7 @@ namespace lfs::core {
 
         // DEBUG: Log device and CUDA state
         if (device_ == Device::CUDA) {
+            pin_operands({&flat, &indices_int32});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &indices_int32});
             CUDAStreamGuard guard(execution_stream);
@@ -662,6 +727,7 @@ namespace lfs::core {
                                     result.ptr<float>(), flat.numel(), indices_int32.numel(), result.stream());
             // No sync - tensor operation
         } else {
+            pin_operands({&flat, &indices_int32});
             result = empty(indices.shape(), device_, dtype_);
             const float* src = flat.ptr<float>();
             float* dst = result.ptr<float>();
@@ -742,11 +808,11 @@ namespace lfs::core {
             if (is_int64) {
                 indices_int32 = indices_same_device.to(DataType::Int32);
             }
-
-            const int* indices = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
+            const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
             if (device_ == Device::CUDA) {
-                const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
+                pin_operands({this, &kernel_index, &src_same_device});
+                const int* indices = kernel_index.ptr<int>();
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
                 if (dtype_ == DataType::Float32) {
@@ -769,6 +835,8 @@ namespace lfs::core {
                                    "scatter_ encountered an unsupported CUDA dtype");
                 }
             } else {
+                pin_operands({this, &kernel_index, &src_same_device});
+                const int* indices = kernel_index.ptr<int>();
                 const auto scatter_1d = [&](auto* dst, const auto* src_data) {
                     for (size_t i = 0; i < idx.numel(); ++i) {
                         int pos = indices[i];
@@ -823,10 +891,11 @@ namespace lfs::core {
         if (is_int64) {
             idx_int32 = idx_same_device.to(DataType::Int32);
         }
-        const int* idx_ptr = is_int64 ? idx_int32.ptr<int>() : idx_same_device.ptr<int>();
+        const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
 
         if (device_ == Device::CUDA) {
-            const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
+            pin_operands({this, &kernel_index, &src_same_device});
+            const int* idx_ptr = kernel_index.ptr<int>();
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
             if (dtype_ == DataType::Float32) {
@@ -852,6 +921,7 @@ namespace lfs::core {
                                "scatter_ encountered an unsupported CUDA dtype");
             }
         } else {
+            pin_operands({this, &kernel_index, &src_same_device});
             size_t outer = 1;
             for (int i = 0; i < dim; ++i) {
                 outer *= shape_[i];
@@ -862,7 +932,7 @@ namespace lfs::core {
                 inner *= shape_[i];
             }
 
-            const int* indices = idx_ptr;
+            const int* indices = kernel_index.ptr<int>();
 
             const auto scatter_nd = [&](auto* dst, const auto* src_data) {
                 for (size_t o = 0; o < outer; ++o) {
@@ -996,10 +1066,11 @@ namespace lfs::core {
         if (is_int64) {
             idx_int32 = idx_same_device.to(DataType::Int32);
         }
-        const int* idx_ptr = is_int64 ? idx_int32.ptr<int>() : idx_same_device.ptr<int>();
+        const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
 
         if (device_ == Device::CUDA) {
-            const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
+            pin_operands({this, &kernel_index, &src_same_device});
+            const int* idx_ptr = kernel_index.ptr<int>();
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
             if (dtype_ == DataType::Float32) {
@@ -1019,13 +1090,14 @@ namespace lfs::core {
                                "index_copy_ encountered an unsupported CUDA dtype");
             }
         } else {
+            pin_operands({this, &kernel_index, &src_same_device});
             size_t outer = 1, inner = 1;
             for (int i = 0; i < dim; ++i)
                 outer *= shape_[i];
             for (size_t i = dim + 1; i < shape_.rank(); ++i)
                 inner *= shape_[i];
 
-            const int* indices = idx_ptr;
+            const int* indices = kernel_index.ptr<int>();
             const auto index_copy = [&](auto* dst, const auto* src_data) {
                 for (size_t o = 0; o < outer; ++o) {
                     for (size_t i = 0; i < idx.numel(); ++i) {
@@ -1109,6 +1181,7 @@ namespace lfs::core {
                 auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
                                      ? idx_same_device.to(DataType::Int32)
                                      : idx_same_device;
+                pin_operands({this, &idx_int32, &src_same_device});
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &idx_int32, &src_same_device}, stream());
 
@@ -1128,6 +1201,7 @@ namespace lfs::core {
                 // No sync - tensor operation
             } else {
                 // CPU path - dispatch based on data type
+                pin_operands({this, &idx_same_device, &src_same_device});
                 if (dtype_ == DataType::Float32) {
                     float* data = ptr<float>();
                     const float* src_data = src_same_device.ptr<float>();
@@ -1203,6 +1277,7 @@ namespace lfs::core {
             auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
                                  ? idx_same_device.to(DataType::Int32)
                                  : idx_same_device;
+            pin_operands({this, &idx_int32, &src_same_device});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &idx_int32, &src_same_device}, stream());
 
@@ -1221,6 +1296,7 @@ namespace lfs::core {
             }
             // No sync - tensor operation
         } else {
+            pin_operands({this, &idx_same_device, &src_same_device});
             size_t outer = 1;
             for (int i = 0; i < dim; ++i) {
                 outer *= shape_[i];
@@ -1400,6 +1476,7 @@ namespace lfs::core {
                 Tensor idx_int32 = (idx_same_device.dtype() == DataType::Int32)
                                        ? idx_same_device
                                        : idx_same_device.to(DataType::Int32);
+                pin_operands({this, &idx_int32, &vals_same_device});
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream(
                         {this, &idx_int32, &vals_same_device}, stream());
@@ -1418,6 +1495,7 @@ namespace lfs::core {
                 auto cpu_idx = idx_same_device.to(Device::CPU);
                 auto cpu_vals = vals_same_device.to(Device::CPU);
 
+                pin_operands({&cpu_tensor, &cpu_idx, &cpu_vals});
                 DataT* data = cpu_tensor.ptr<DataT>();
                 const IndexT* indices = cpu_idx.ptr<IndexT>();
                 const DataT* values = cpu_vals.ptr<DataT>();
@@ -1461,6 +1539,7 @@ namespace lfs::core {
                 LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
             } else {
                 // CPU implementation
+                pin_operands({this, &idx_same_device, &vals_same_device});
                 DataT* data = ptr<DataT>();
                 const IndexT* indices = idx_same_device.ptr<IndexT>();
                 const DataT* values = vals_same_device.ptr<DataT>();
@@ -1612,6 +1691,7 @@ namespace lfs::core {
             if (device_ == Device::CUDA) {
                 Tensor row_idx_cpu = row_idx.to(Device::CPU);
                 Tensor col_idx_cpu = col_idx.to(Device::CPU);
+                pin_operands({this, &row_idx_cpu, &col_idx_cpu, &vals_same_device});
                 const int64_t* row_ptr = row_idx_cpu.ptr<int64_t>();
                 const int64_t* col_ptr = col_idx_cpu.ptr<int64_t>();
                 const float* val_ptr = vals_same_device.ptr<float>();
@@ -1639,6 +1719,7 @@ namespace lfs::core {
                     }
                 }
             } else {
+                pin_operands({this, &row_idx, &col_idx, &vals_same_device});
                 const int64_t* row_ptr = row_idx.ptr<int64_t>();
                 const int64_t* col_ptr = col_idx.ptr<int64_t>();
                 const float* val_ptr = vals_same_device.ptr<float>();
@@ -2169,6 +2250,7 @@ namespace lfs::core {
                        "masked assignment value count must equal selected element count");
 
         if (tensor_->device() == Device::CUDA) {
+            pin_operands({tensor_, &mask_, &other});
             switch (tensor_->dtype()) {
             case DataType::Float32:
                 tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<float>(),
@@ -2199,6 +2281,7 @@ namespace lfs::core {
             }
             LFS_CUDA_CHECK(cudaGetLastError());
         } else {
+            pin_operands({tensor_, &mask_, &other});
             const unsigned char* mask = mask_.ptr<unsigned char>();
             switch (tensor_->dtype()) {
             case DataType::Float32:
@@ -2335,11 +2418,12 @@ namespace lfs::core {
         if (is_int64) {
             indices_int32 = indices_same_device.to(DataType::Int32);
         }
-        const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
+        const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
+        pin_operands({this, &kernel_index});
+        const int* idx_ptr = kernel_index.ptr<int>();
 
         // Launch kernel to append gathered rows directly to the end
         if (device_ == Device::CUDA) {
-            const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index}, stream());
             LOG_DEBUG("  Launching index_select kernel: write_offset_elements={}, output_offset_bytes={}, n_gather={}",

@@ -128,6 +128,9 @@ namespace lfs::training {
         AdamOptimizer& optimizer,
         const lfs::core::Tensor& pixel_error_map = {});
 
+    // Release per-thread renderer caches before the owning CUDA stream is torn down.
+    bool release_gsplat_rasterizer_thread_local_caches() noexcept;
+
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput gsplat_rasterize(
         lfs::core::Camera& viewpoint_camera,

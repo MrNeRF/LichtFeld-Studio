@@ -2,6 +2,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "densification_kernels.hpp"
 #include <cub/cub.cuh>
 
@@ -433,6 +434,7 @@ namespace lfs::training::kernels {
                 positions_in, rotations_in, scales_in, sh0_in, shN_in, opacities_in,
                 positions_out, rotations_out, scales_out, sh0_out, shN_out, opacities_out,
                 selected_indices, N, num_selected, shN_dim);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.duplicate_gather");
         }
     }
 
@@ -468,6 +470,7 @@ namespace lfs::training::kernels {
                 positions_in, rotations_in, scales_in, sh0_in, shN_in, opacities_in,
                 positions_out, rotations_out, scales_out, sh0_out, shN_out, opacities_out,
                 keep_indices, num_keep, shN_dim);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.split_keep");
         }
 
         // Kernel 2: Split selected Gaussians
@@ -478,6 +481,7 @@ namespace lfs::training::kernels {
                 positions_out, rotations_out, scales_out, sh0_out, shN_out, opacities_out,
                 split_indices, random_noise,
                 num_keep, num_split, shN_dim, revised_opacity);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.split_split");
         }
     }
 
@@ -650,6 +654,7 @@ namespace lfs::training::kernels {
             second_sh0, second_shN, second_opacities,
             split_indices, random_noise,
             num_split, shN_dim, revised_opacity);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.split_inplace");
     }
 
     // ============================================================================
@@ -803,6 +808,7 @@ namespace lfs::training::kernels {
             second_positions, second_rotations, second_scales,
             second_sh0, second_shN, second_opacities,
             split_indices, num_split, shN_dim);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.densify.long_axis_split_inplace");
     }
 
 } // namespace lfs::training::kernels

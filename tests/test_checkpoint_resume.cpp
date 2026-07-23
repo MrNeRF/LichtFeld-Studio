@@ -12,19 +12,192 @@
 
 #include "core/camera.hpp"
 #include "core/checkpoint_format.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "io/loader.hpp"
+#include "io/loaders/checkpoint_loader.hpp"
 #include "training/checkpoint.hpp"
+#include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 #include "training/strategies/mcmc.hpp"
 #include "training/strategies/strategy_factory.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 
+namespace lfs::training {
+    struct TrainerRetryTestAccess {
+        static bool should_retry(const lfs::Error& error, const unsigned attempts) {
+            const Trainer::MutationStamp stamp{
+                .iteration = 1,
+                .epoch = 0,
+                .phase = Trainer::StepPhase::Forward,
+                .persistent_commit = false,
+            };
+            return Trainer::classify_forward_retry(error, stamp, attempts) ==
+                   Trainer::RetryDecision::RetryForwardOnce;
+        }
+
+        static lfs::Status recover_with_sync_status(
+            Trainer& trainer, const lfs::Error& cause, const cudaError_t sync_status) {
+            trainer.recovery_sync_for_testing_ = [sync_status] { return sync_status; };
+            auto result = trainer.recover_forward_oom(cause);
+            trainer.recovery_sync_for_testing_ = {};
+            return result;
+        }
+    };
+} // namespace lfs::training
+
 namespace {
+
+    lfs::Error make_retry_test_error(const lfs::ErrorCode code) {
+        return lfs::make_error(lfs::ErrorInit{
+            .code = code,
+            .domain = lfs::ErrorDomain::CUDA,
+            .user_message = "retry test",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
+    }
+
+    const lfs::SmallFields::Entry* find_field(
+        const lfs::ErrorFrame& frame, const std::string_view key) {
+        for (const auto& entry : frame.fields.entries()) {
+            if (entry.key == key) {
+                return &entry;
+            }
+        }
+        return nullptr;
+    }
+
+    TEST(TrainerRetrySemantics, ClassificationIsTypedAndBoundedToOneRetry) {
+        const auto exhausted = make_retry_test_error(lfs::ErrorCode::ResourceExhausted);
+        EXPECT_TRUE(lfs::training::TrainerRetryTestAccess::should_retry(exhausted, 1));
+        EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(exhausted, 2));
+
+        const auto invalid = make_retry_test_error(lfs::ErrorCode::InvalidArgument);
+        EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(invalid, 1));
+    }
+
+    TEST(TrainerRetrySemantics, InvalidDimensionsAreNotResourceExhaustion) {
+        const auto context = fast_lfs::rasterization::forward_raw(
+            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, nullptr, nullptr,
+            0, 1, 1, 1, 1,
+            1.0f, 1.0f, 0.5f, 0.5f, 0.01f, 100.0f, false, nullptr);
+        EXPECT_FALSE(context.success);
+        EXPECT_FALSE(context.resource_exhausted);
+
+        const auto typed = make_retry_test_error(lfs::ErrorCode::InvalidArgument);
+        EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(typed, 1));
+    }
+
+    TEST(TrainerRetrySemantics, UninitializedTrainErrorCarriesCompleteMutationStamp) {
+        lfs::core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        auto camera = std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor(), lfs::core::Tensor(),
+            lfs::core::CameraModelType::PINHOLE,
+            "camera.png", std::filesystem::path{}, std::filesystem::path{},
+            64, 64, 0);
+        scene.addCamera("camera.png", cameras, std::move(camera));
+        lfs::training::Trainer trainer(scene);
+        auto result = trainer.train();
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code(), lfs::ErrorCode::FailedPrecondition);
+        ASSERT_GE(result.error().frames().size(), 2u);
+
+        const auto& frame = result.error().frames().back();
+        EXPECT_EQ(frame.operation, "train");
+        ASSERT_NE(find_field(frame, "iteration"), nullptr);
+        ASSERT_NE(find_field(frame, "mutation_epoch"), nullptr);
+        ASSERT_NE(find_field(frame, "step_phase"), nullptr);
+        ASSERT_NE(find_field(frame, "persistent_commit"), nullptr);
+        EXPECT_EQ(std::get<std::string>(find_field(frame, "step_phase")->value),
+                  "AcquireData");
+        EXPECT_FALSE(std::get<bool>(find_field(frame, "persistent_commit")->value));
+    }
+
+    TEST(TrainerRetrySemantics, GlobalArenaCanBeReconfiguredForCapacityInjection) {
+        lfs::core::RasterizerMemoryArena::Config config;
+        config.virtual_size = 128ULL << 20;
+        config.initial_commit = 64ULL << 20;
+        config.max_physical = 64ULL << 20;
+        config.granularity = 64ULL << 20;
+        config.enable_vmm = false;
+
+        auto& manager = lfs::core::GlobalArenaManager::instance();
+        manager.reconfigure_for_testing(config);
+        EXPECT_NE(manager.try_get_arena(), nullptr);
+        manager.reset();
+    }
+
+    TEST(TrainerRetrySemantics, CapacityFailureIsRetryableOnlyOnFirstAttempt) {
+        void* storage = nullptr;
+        ASSERT_EQ(cudaMalloc(&storage, 4096), cudaSuccess);
+
+        lfs::core::RasterizerMemoryArena::Config config;
+        config.virtual_size = 128ULL << 20;
+        config.initial_commit = 64ULL << 20;
+        config.max_physical = 64ULL << 20;
+        config.granularity = 64ULL << 20;
+        config.enable_vmm = false;
+        auto& manager = lfs::core::GlobalArenaManager::instance();
+        manager.reconfigure_for_testing(config);
+
+        const auto attempt = [storage] {
+            auto* ptr = static_cast<float*>(storage);
+            return fast_lfs::rasterization::forward_raw(
+                ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr,
+                ptr, ptr, ptr, nullptr,
+                10'000'000, 1, 1, 1, 1,
+                1.0f, 1.0f, 0.5f, 0.5f, 0.01f, 100.0f, false, nullptr);
+        };
+
+        const auto first = attempt();
+        EXPECT_FALSE(first.success);
+        EXPECT_TRUE(first.resource_exhausted)
+            << (first.error_message ? first.error_message : "no error message");
+        const auto exhausted = make_retry_test_error(lfs::ErrorCode::ResourceExhausted);
+        EXPECT_TRUE(lfs::training::TrainerRetryTestAccess::should_retry(exhausted, 1));
+
+        const auto second = attempt();
+        EXPECT_FALSE(second.success);
+        EXPECT_TRUE(second.resource_exhausted)
+            << (second.error_message ? second.error_message : "no error message");
+        EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(exhausted, 2));
+
+        manager.reset();
+        EXPECT_EQ(cudaFree(storage), cudaSuccess);
+    }
+
+    TEST(TrainerRetrySemantics, RecoveryAsyncFailureKeepsExactlyOneSuppressedOom) {
+        lfs::core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        auto camera = std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU),
+            100.0f, 100.0f, 32.0f, 32.0f,
+            lfs::core::Tensor(), lfs::core::Tensor(),
+            lfs::core::CameraModelType::PINHOLE,
+            "camera.png", std::filesystem::path{}, std::filesystem::path{},
+            64, 64, 0);
+        scene.addCamera("camera.png", cameras, std::move(camera));
+        lfs::training::Trainer trainer(scene);
+        const auto cause = make_retry_test_error(lfs::ErrorCode::ResourceExhausted);
+
+        auto result = lfs::training::TrainerRetryTestAccess::recover_with_sync_status(
+            trainer, cause, cudaErrorIllegalAddress);
+        ASSERT_FALSE(result.has_value());
+        EXPECT_NE(result.error().code(), lfs::ErrorCode::ResourceExhausted);
+        ASSERT_EQ(result.error().suppressed().size(), 1u);
+        EXPECT_EQ(result.error().suppressed().front().code(),
+                  lfs::ErrorCode::ResourceExhausted);
+    }
 
     constexpr const char* TEST_IMAGES = "images_4";
     std::unique_ptr<lfs::core::SplatData> make_checkpoint_test_splat(
@@ -71,6 +244,16 @@ namespace {
             return false;
         file.seekp(offset);
         file.write(reinterpret_cast<const char*>(&value), sizeof(value));
+        file.flush();
+        return file.good();
+    }
+
+    bool write_probe_fixture(const std::filesystem::path& path, const void* data, const size_t size) {
+        std::ofstream file(path, std::ios::binary);
+        if (!file)
+            return false;
+        if (size > 0)
+            file.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
         file.flush();
         return file.good();
     }
@@ -319,6 +502,61 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    class CheckpointLoaderShortProbeTest : public ::testing::TestWithParam<size_t> {};
+
+    TEST_P(CheckpointLoaderShortProbeTest, RejectsTruncatedMagicDeterministically) {
+        const auto short_bytes = GetParam();
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_loader_short_probe";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+
+        const auto probe_path = temp_dir / std::format("truncated_{}.resume", short_bytes);
+        ASSERT_TRUE(write_probe_fixture(probe_path, &lfs::core::CHECKPOINT_MAGIC, short_bytes));
+
+        lfs::io::CheckpointLoader loader;
+        EXPECT_FALSE(loader.canLoad(probe_path));
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    INSTANTIATE_TEST_SUITE_P(
+        ByteLength,
+        CheckpointLoaderShortProbeTest,
+        ::testing::Values(size_t{0}, size_t{1}, size_t{2}, size_t{3}));
+
+    TEST(CheckpointLoaderProbeTest, AcceptsValidFourByteMagicPrefix) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_loader_valid_probe";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+
+        const auto probe_path = temp_dir / "valid_magic.resume";
+        ASSERT_TRUE(write_probe_fixture(
+            probe_path, &lfs::core::CHECKPOINT_MAGIC, sizeof(lfs::core::CHECKPOINT_MAGIC)));
+
+        lfs::io::CheckpointLoader loader;
+        EXPECT_TRUE(loader.canLoad(probe_path));
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointLoaderProbeTest, RejectsWrongFourByteMagic) {
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_loader_wrong_probe";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+
+        const auto probe_path = temp_dir / "wrong_magic.resume";
+        constexpr uint32_t wrong_magic = ~lfs::core::CHECKPOINT_MAGIC;
+        ASSERT_TRUE(write_probe_fixture(probe_path, &wrong_magic, sizeof(wrong_magic)));
+
+        lfs::io::CheckpointLoader loader;
+        EXPECT_FALSE(loader.canLoad(probe_path));
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
     class CheckpointStrategyStateRoundTripTest : public ::testing::TestWithParam<std::string> {};
 
     TEST_P(CheckpointStrategyStateRoundTripTest, ModelOptimizerAndStrategyState) {
@@ -452,7 +690,8 @@ namespace {
             ASSERT_TRUE(init_result.has_value()) << "Failed to init trainer: " << init_result.error();
 
             auto train_result = trainer->train();
-            ASSERT_TRUE(train_result.has_value()) << "Training failed: " << train_result.error();
+            ASSERT_TRUE(train_result.has_value())
+                << "Training failed: " << lfs::format_for_developer(train_result.error());
 
             EXPECT_EQ(trainer->get_current_iteration(), phase_one_iterations);
 
@@ -511,7 +750,8 @@ namespace {
             EXPECT_TRUE(trainer->getParams().optimization.headless);
 
             auto train_result = trainer->train();
-            ASSERT_TRUE(train_result.has_value()) << "Resume training failed: " << train_result.error();
+            ASSERT_TRUE(train_result.has_value())
+                << "Resume training failed: " << lfs::format_for_developer(train_result.error());
 
             EXPECT_EQ(trainer->get_current_iteration(), total_iter);
 

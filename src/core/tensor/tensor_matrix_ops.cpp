@@ -54,6 +54,7 @@ namespace lfs::core {
 
         // GPU: use tiled CUDA sgemm kernel
         if (device_ == Device::CUDA) {
+            pin_operands({&a, &b});
             auto result = empty({m, n}, Device::CUDA, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_sgemm(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
@@ -61,6 +62,7 @@ namespace lfs::core {
             return result;
         }
 
+        pin_operands({&a, &b});
         auto result = empty({m, n}, Device::CPU, dtype_);
         cpu_matmul(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(), m, k, n);
         return result;
@@ -95,6 +97,7 @@ namespace lfs::core {
 
         // GPU: use tiled CUDA batched sgemm kernel
         if (device_ == Device::CUDA) {
+            pin_operands({&a, &b});
             auto result = empty({batch_size, m, n}, Device::CUDA, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_sgemm_batched(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
@@ -102,6 +105,7 @@ namespace lfs::core {
             return result;
         }
 
+        pin_operands({&a, &b});
         auto result = empty({batch_size, m, n}, Device::CPU, dtype_);
 
         const float* a_data = a.ptr<float>();
@@ -240,6 +244,7 @@ namespace lfs::core {
 
         // GPU: Use optimized CUDA kernel
         if (device_ == Device::CUDA) {
+            pin_operands({&a, &b});
             auto result = empty({}, Device::CUDA, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_dot_product(
@@ -252,6 +257,7 @@ namespace lfs::core {
         }
 
         // CPU: Simple loop
+        pin_operands({&a, &b});
         float sum = 0.0f;
         for (size_t i = 0; i < n; ++i) {
             sum += a.ptr<float>()[i] * b.ptr<float>()[i];

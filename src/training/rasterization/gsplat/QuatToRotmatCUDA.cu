@@ -61,6 +61,7 @@ namespace gsplat_lfs {
                 static_cast<uint32_t>(N),
                 quats,
                 rotmats);
+        LFS_CUDA_LAUNCH_CHECK(stream, "gsplat.quats_to_rotmats");
     }
 
 } // namespace gsplat_lfs

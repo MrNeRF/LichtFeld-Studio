@@ -160,7 +160,6 @@ namespace lfs::vis {
     }
 
     void RenderingManager::markCameraPoseChanged() {
-        camera_pose_dirty_.store(true, std::memory_order_release);
         markDirty(DirtyFlag::CAMERA);
     }
 

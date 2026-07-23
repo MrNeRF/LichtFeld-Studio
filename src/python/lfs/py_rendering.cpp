@@ -771,7 +771,7 @@ namespace lfs::python {
         add_bool(&Proxy::desaturate_unselected, "desaturate_unselected", "Desaturate Unselected",
                  "Desaturate unselected PLYs when one is selected", false);
         add_bool(&Proxy::desaturate_cropping, "desaturate_cropping", "Desaturate Cropping",
-                 "Dim outside crop area instead of hiding", true);
+                 "Dim outside crop area instead of hiding", false);
         add_bool(&Proxy::hide_outside_depth_box, "hide_outside_depth_box", "Hide Outside Depth Box",
                  "Hide Gaussians outside the selection depth box", false);
 

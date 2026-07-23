@@ -270,8 +270,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* GO_TO_CAM_VIEW = "scene.go_to_cam_view";
         inline constexpr const char* FIT_TO_SCENE = "scene.fit_to_scene";
         inline constexpr const char* FIT_TO_SCENE_TRIMMED = "scene.fit_to_scene_trimmed";
-        inline constexpr const char* ADD_CROP_BOX = "scene.add_crop_box";
-        inline constexpr const char* ADD_CROP_ELLIPSOID = "scene.add_crop_ellipsoid";
         inline constexpr const char* RESET_CROP = "scene.reset_crop";
         inline constexpr const char* MERGE_TO_SINGLE_PLY = "scene.merge_to_single_ply";
         inline constexpr const char* MOVE_TO = "scene.move_to";
@@ -411,6 +409,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SECONDARY_VIEW = "status_bar.secondary_view";
         inline constexpr const char* GPU = "status_bar.gpu";
         inline constexpr const char* STRATEGY_DEFAULT = "status_bar.strategy_default";
+        inline constexpr const char* EXPORT_CANCELLED = "status_bar.export_cancelled";
     } // namespace StatusBar
 
     namespace Preferences {
@@ -949,5 +948,40 @@ namespace lichtfeld::Strings {
         inline constexpr const char* MENU_REGISTER = "file_association.menu_register";
         inline constexpr const char* MENU_UNREGISTER = "file_association.menu_unregister";
     } // namespace FileAssociation
+
+    namespace ErrorModal {
+        inline constexpr const char* TRAINING_FAILED = "error_modal.training_failed";
+        inline constexpr const char* OUT_OF_GPU_MEMORY = "error_modal.out_of_gpu_memory";
+        inline constexpr const char* DATASET_LOAD_FAILED = "error_modal.dataset_load_failed";
+        inline constexpr const char* EXPORT_FAILED = "error_modal.export_failed";
+        inline constexpr const char* VIDEO_EXPORT_FAILED = "error_modal.video_export_failed";
+        inline constexpr const char* MESH2SPLAT_FAILED = "error_modal.mesh2splat_failed";
+        inline constexpr const char* CONFIG_INVALID = "error_modal.config_invalid";
+        inline constexpr const char* FILE_OPEN_FAILED = "error_modal.file_open_failed";
+        inline constexpr const char* CUDA_UNAVAILABLE = "error_modal.cuda_unavailable";
+        inline constexpr const char* CUDA_UNSUPPORTED = "error_modal.cuda_unsupported";
+        inline constexpr const char* SAVE_FAILED = "error_modal.save_failed";
+        inline constexpr const char* PLUGINS_DISABLED = "error_modal.plugins_disabled";
+        inline constexpr const char* GENERIC = "error_modal.generic";
+        inline constexpr const char* OOM_HEADING = "error_modal.oom_heading";
+        inline constexpr const char* OOM_SUGGESTIONS = "error_modal.oom_suggestions";
+        inline constexpr const char* DETAILS = "error_modal.details";
+        inline constexpr const char* REPEATED = "error_modal.repeated";
+        inline constexpr const char* RENDERER_DEVICE_LOST = "error_modal.renderer_device_lost";
+        inline constexpr const char* RENDERER_DEVICE_LOST_BODY = "error_modal.renderer_device_lost_body";
+        inline constexpr const char* RENDERER_STALLED = "error_modal.renderer_stalled";
+        inline constexpr const char* RENDERER_STALLED_BODY = "error_modal.renderer_stalled_body";
+        inline constexpr const char* RENDERER_FAILED = "error_modal.renderer_failed";
+        inline constexpr const char* RENDERER_FAILED_BODY = "error_modal.renderer_failed_body";
+        inline constexpr const char* OOM_RENDER_PAUSED = "error_modal.oom_render_paused";
+        inline constexpr const char* GPU_PRESSURE_RETRYING = "error_modal.gpu_pressure_retrying";
+    } // namespace ErrorModal
+
+    namespace ErrorActions {
+        inline constexpr const char* RETRY = "error_actions.retry";
+        inline constexpr const char* CHOOSE_PATH = "error_actions.choose_path";
+        inline constexpr const char* OPEN_LOG = "error_actions.open_log";
+        inline constexpr const char* STOP_RENDERER = "error_actions.stop_renderer";
+    } // namespace ErrorActions
 
 } // namespace lichtfeld::Strings

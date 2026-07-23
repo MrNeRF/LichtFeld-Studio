@@ -9,16 +9,16 @@ Use this flow when the goal is to load a COLMAP dataset or checkpoint and then m
 ## Sequence
 
 1. Read `lichtfeld://runtime/catalog` to confirm the runtime job ids.
-2. Call `scene.load_dataset` or `scene.load_checkpoint`.
+2. Call `scene_load_dataset` or `scene_load_checkpoint`.
 3. Read `lichtfeld://scene/state` to confirm the training snapshot.
-4. Call `training.start`.
-5. Observe `training.main` through `runtime.job.wait`, `runtime.job.describe`, or `runtime.events.tail`.
+4. Call `training_start`.
+5. Observe `training.main` through `runtime_job_wait`, `runtime_job_describe`, or `runtime_events_tail`.
 
 ## Load A Dataset
 
 ```json
 {
-  "tool": "scene.load_dataset",
+  "tool": "scene_load_dataset",
   "arguments": {
     "path": "/data/colmap/room",
     "images_folder": "images",
@@ -38,7 +38,7 @@ Notes:
 
 ```json
 {
-  "tool": "training.start",
+  "tool": "training_start",
   "arguments": {}
 }
 ```
@@ -49,7 +49,7 @@ Wait for a change in the normalized training job:
 
 ```json
 {
-  "tool": "runtime.job.wait",
+  "tool": "runtime_job_wait",
   "arguments": {
     "job_id": "training.main",
     "until": "changed",
@@ -62,7 +62,7 @@ Read recent training events without creating a subscription:
 
 ```json
 {
-  "tool": "runtime.events.tail",
+  "tool": "runtime_events_tail",
   "arguments": {
     "types": [
       "training.progress",
@@ -77,5 +77,5 @@ Read recent training events without creating a subscription:
 ## State Checks
 
 - `lichtfeld://scene/state` gives the normalized training snapshot
-- `training.get_loss_history` or `lichtfeld://training/loss_curve` gives the loss curve
+- `training_get_loss_history` or `lichtfeld://training/loss_curve` gives the loss curve
 - `lichtfeld://runtime/state` gives a broader runtime summary

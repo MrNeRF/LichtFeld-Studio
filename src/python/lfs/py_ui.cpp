@@ -2510,7 +2510,8 @@ namespace lfs::python {
                     self.image_uv(tex.texture_id(), size, {0.0f, 0.0f}, tex.uv1(), std::move(tint));
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -3477,20 +3478,50 @@ namespace lfs::python {
             "apply_crop_tool",
             []() {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
-                    gui->gizmo().applyActiveCropTool();
+                    if (gui->gizmo().cropToolShape() == "ellipsoid") {
+                        lfs::core::events::cmd::ApplyEllipsoid{}.emit();
+                    } else {
+                        lfs::core::events::cmd::ApplyCropBox{}.emit();
+                    }
                 }
             },
-            "Apply the active crop tool primitive");
+            "Apply the active crop tool primitive through the node-backed crop command path");
 
         m.def(
             "fit_crop_tool",
             [](bool use_percentile) {
                 if (auto* const gui = lfs::python::get_gui_manager()) {
-                    gui->gizmo().fitActiveCropTool(use_percentile);
+                    if (gui->gizmo().cropToolShape() == "ellipsoid") {
+                        lfs::core::events::cmd::FitEllipsoidToScene{.use_percentile = use_percentile}.emit();
+                    } else {
+                        lfs::core::events::cmd::FitCropBoxToScene{.use_percentile = use_percentile}.emit();
+                    }
                 }
             },
             nb::arg("use_percentile") = false,
-            "Fit the active crop tool primitive to the selected node");
+            "Fit the active crop tool primitive through the node-backed crop command path");
+
+        m.def(
+            "reset_crop_tool",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    if (gui->gizmo().cropToolShape() == "ellipsoid") {
+                        lfs::core::events::cmd::ResetEllipsoid{}.emit();
+                    } else {
+                        lfs::core::events::cmd::ResetCropBox{}.emit();
+                    }
+                }
+            },
+            "Reset the active crop tool primitive through the node-backed crop command path");
+
+        m.def(
+            "delete_crop_tool_volume",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    gui->gizmo().deleteActiveCropToolVolume();
+                }
+            },
+            "Delete the active crop tool primitive and leave the crop tool");
 
         m.def(
             "fit_cropbox_to_scene",

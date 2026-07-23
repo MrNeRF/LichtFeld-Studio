@@ -63,11 +63,13 @@ add_library(lfs_io_rad_quant_cuda STATIC
 target_include_directories(lfs_io_rad_quant_cuda
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/core/include
         ${CMAKE_SOURCE_DIR}/src
 )
 
 target_link_libraries(lfs_io_rad_quant_cuda
         PRIVATE
+        lfs_diagnostics
         CUDA::cudart
 )
 
@@ -104,6 +106,7 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
         libswscale
         libavutil
 )
+pkg_check_modules(LIBPLACEBO REQUIRED IMPORTED_TARGET libplacebo)
 
 add_library(lfs_video STATIC
         include/io/video/video_encoder_interface.hpp
@@ -115,6 +118,11 @@ add_library(lfs_video STATIC
         video/color_convert.cu
         video_frame_extractor.hpp
         video_frame_extractor.cpp
+        hdr_tonemap.hpp
+        hdr_tonemap.cpp
+        hdr_libplacebo.hpp
+        hdr_libplacebo.cpp
+        hdr_libplacebo_av.c
         video_player.hpp
         video_player.cpp
 )
@@ -138,6 +146,19 @@ target_link_libraries(lfs_video
         spdlog::spdlog
         CUDA::cudart
 )
+
+# libplacebo's static pkg-config dependency chain includes shaderc and
+# SPIR-V Tools. GNU ld resolves static archives left-to-right, so rescan the
+# complete chain on ELF platforms.
+if(UNIX AND NOT APPLE)
+    target_link_libraries(lfs_video PRIVATE
+            "-Wl,--start-group"
+            PkgConfig::LIBPLACEBO
+            "-Wl,--end-group"
+    )
+else()
+    target_link_libraries(lfs_video PRIVATE PkgConfig::LIBPLACEBO)
+endif()
 
 target_compile_features(lfs_video PUBLIC cxx_std_23)
 
@@ -309,7 +330,7 @@ endif()
 if(TARGET nvimgcodec_imgproc_static)
     target_compile_options(nvimgcodec_imgproc_static PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=860,3004>
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-Xcompiler "/wd4834">
+        "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-Xcompiler=/wd4834>"
     )
 endif()
 

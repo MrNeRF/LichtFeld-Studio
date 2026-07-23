@@ -13,6 +13,13 @@ endif()
 
 cmake_minimum_required(VERSION 3.30)
 
+# Manifest-mode vcpkg runs only while CMake configures. Track overlay-port
+# contents explicitly so the usual `cmake --build` regeneration also reruns
+# vcpkg when a portfile, patch or overlay manifest changes.
+file(GLOB_RECURSE LFS_VCPKG_OVERLAY_FILES CONFIGURE_DEPENDS LIST_DIRECTORIES FALSE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.github/overlays/*")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LFS_VCPKG_OVERLAY_FILES})
+
 # Keep test-only packages out of the application dependency graph. Command-line
 # cache values are visible before project(), when the vcpkg toolchain resolves
 # manifest features.

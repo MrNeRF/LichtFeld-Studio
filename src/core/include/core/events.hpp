@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/error_envelope.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "geometry/bounding_box.hpp"
 #include <cstdint>
@@ -94,16 +95,14 @@ namespace lfs::core {
             EVENT(MergeGroup, std::string name;);                                        // Merge group children into single PLY
             EVENT(MergeGroupById, int32_t node_id;);                                     // Merge group children into single PLY
             EVENT(SetNodeLocked, std::string name; bool locked;);                        // Lock/unlock node for editing
-            EVENT(CropPLY, lfs::geometry::BoundingBox crop_box; bool inverse;);
-            EVENT(CropPLYEllipsoid, glm::mat4 world_transform; glm::vec3 radii; bool inverse;);
+            EVENT(CropPLY, lfs::geometry::BoundingBox crop_box; bool inverse; int32_t target_node_id = -1;);
+            EVENT(CropPLYEllipsoid, glm::mat4 world_transform; glm::vec3 radii; bool inverse; int32_t target_node_id = -1;);
             EVENT(ApplyCropBox, );
             EVENT(ApplyEllipsoid, );
             EVENT(AddCropBox, std::string node_name;);       // Add cropbox to splat node
             EVENT(AddCropEllipsoid, std::string node_name;); // Add ellipsoid to splat node
-            EVENT(AddCropBoxById, int32_t node_id;);
-            EVENT(AddCropEllipsoidById, int32_t node_id;);
-            EVENT(ResetCropBox, );   // Reset selected cropbox
-            EVENT(ResetEllipsoid, ); // Reset selected ellipsoid
+            EVENT(ResetCropBox, );                           // Reset selected cropbox
+            EVENT(ResetEllipsoid, );                         // Reset selected ellipsoid
             EVENT(FitCropBoxToScene, bool use_percentile;);
             EVENT(FitEllipsoidToScene, bool use_percentile;);
             EVENT(ToggleCropInverse, );
@@ -167,7 +166,7 @@ namespace lfs::core {
             EVENT(TrainingProgress, int iteration; float loss; int num_gaussians; bool is_refining = false;);
             EVENT(TrainingPaused, int iteration;);
             EVENT(TrainingResumed, int iteration;);
-            EVENT(TrainingCompleted, int iteration; float final_loss; float elapsed_seconds; bool success; bool user_stopped; std::optional<std::string> error;);
+            EVENT(TrainingCompleted, int iteration; float final_loss; float elapsed_seconds; bool success; bool user_stopped; std::optional<std::string> error; bool resource_exhausted = false; std::optional<core::WireError> error_info;);
             EVENT(TrainingStopped, int iteration; bool user_requested;);
 
             // Scene state
@@ -243,7 +242,7 @@ namespace lfs::core {
                   size_t freed_bytes;
                   bool recovered;);
 
-            EVENT(ExportFailed, std::string error;);
+            EVENT(ExportFailed, std::string error; bool cancelled = false; std::optional<core::WireError> error_info;);
             EVENT(VideoExportCompleted, std::filesystem::path path; int total_frames;);
             EVENT(VideoExportFailed, std::string error;);
             EVENT(Mesh2SplatCompleted, std::string source_name; std::string node_name; size_t num_gaussians;);

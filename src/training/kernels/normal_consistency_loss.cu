@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "lfs/core/warp_reduce.cuh"
 #include "normal_consistency_loss.hpp"
 #include "normal_loss.hpp"
@@ -561,11 +562,13 @@ namespace lfs::training::kernels {
             width,
             height,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.stats");
         consistency_finalize_stats_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
             block_partials,
             finals,
             num_blocks,
             weight);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.finalize_stats");
         consistency_grad_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
             rendered_normal,
             rendered_depth_accum,
@@ -579,11 +582,13 @@ namespace lfs::training::kernels {
             width,
             height,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.grad");
         consistency_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
             block_partials,
             finals,
             loss_out,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.finalize_loss");
     }
 
     void launch_normal_prior_depth_loss(
@@ -619,11 +624,13 @@ namespace lfs::training::kernels {
             width,
             height,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.stats");
         prior_depth_finalize_stats_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
             block_partials,
             finals,
             num_blocks,
             weight);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.finalize_stats");
         prior_depth_grad_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
             prior_normal,
             rendered_depth_accum,
@@ -636,11 +643,13 @@ namespace lfs::training::kernels {
             width,
             height,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.grad");
         consistency_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
             block_partials,
             finals,
             loss_out,
             num_blocks);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.finalize_loss");
     }
 
 } // namespace lfs::training::kernels
