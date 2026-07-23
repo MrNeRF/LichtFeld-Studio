@@ -3400,6 +3400,9 @@ namespace lfs::core {
             });
         }
         auto new_storage_meta = std::make_shared<StorageMeta>();
+        if (device_ == Device::CUDA) {
+            new_storage_meta->external_kind = "cuda.direct";
+        }
 
         // Copy existing data
         if (old_data && numel() > 0) {
@@ -3483,6 +3486,7 @@ namespace lfs::core {
             t.state_->logical_size = current_size;
             t.id_ = next_id_++;
             t.init_storage_meta();
+            t.storage_meta_->external_kind = "cuda.direct";
             return t;
         }
 
@@ -3527,6 +3531,7 @@ namespace lfs::core {
         t.state_->logical_size = current_size;
         t.id_ = next_id_++;
         t.init_storage_meta();
+        t.storage_meta_->external_kind = "cuda.direct";
 
         return t;
     }
