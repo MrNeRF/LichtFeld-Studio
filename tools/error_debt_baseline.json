@@ -80,12 +80,7 @@
       "src/io/video/video_encoder.cpp:519",
       "src/io/video/video_encoder.cpp:524",
       "src/io/video/video_encoder.cpp:528",
-      "src/io/video/video_encoder.cpp:532",
-      "src/io/video_frame_extractor.cpp:722",
-      "src/io/video_frame_extractor.cpp:800",
-      "src/io/video_frame_extractor.cpp:893",
-      "src/io/video_frame_extractor.cpp:1004",
-      "src/io/video_frame_extractor.cpp:1168"
+      "src/io/video/video_encoder.cpp:532"
     ],
     "python": [
       "src/python/lfs/py_tensor.cpp:259",
@@ -216,7 +211,7 @@
       "src/io/pipelined_image_loader.cpp:2280",
       "src/io/pipelined_image_loader.cpp:2311",
       "src/io/pipelined_image_loader.cpp:2565",
-      "src/io/video_frame_extractor.cpp:1275"
+      "src/io/video_frame_extractor.cpp:2284"
     ],
     "mcp": [
       "src/mcp/llm_client.cpp:143",
