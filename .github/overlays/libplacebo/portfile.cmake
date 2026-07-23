@@ -28,15 +28,31 @@ file(COPY "${MARKUPSAFE_SOURCE}/src/"
 
 # libplacebo uses GNU C extensions; use clang-cl only for this Windows port.
 if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW)
-    # VSINSTALLDIR is supplied by the x64 Native Tools Command Prompt.
-    file(TO_CMAKE_PATH "$ENV{VSINSTALLDIR}" _lfs_vs_installation)
-    set(_lfs_clang_cl "${_lfs_vs_installation}/VC/Tools/Llvm/x64/bin/clang-cl.exe")
-    if(NOT EXISTS "${_lfs_clang_cl}")
+    set(_lfs_clang_cl "")
+    find_program(_lfs_clang_cl_found NAMES clang-cl clang-cl.exe)
+    if(_lfs_clang_cl_found)
+        set(_lfs_clang_cl "${_lfs_clang_cl_found}")
+    endif()
+    if(NOT _lfs_clang_cl AND DEFINED ENV{VCINSTALLDIR} AND NOT "$ENV{VCINSTALLDIR}" STREQUAL "")
+        file(TO_CMAKE_PATH "$ENV{VCINSTALLDIR}" _lfs_vc_installation)
+        set(_lfs_clang_cl_candidate "${_lfs_vc_installation}/Tools/Llvm/x64/bin/clang-cl.exe")
+        if(EXISTS "${_lfs_clang_cl_candidate}")
+            set(_lfs_clang_cl "${_lfs_clang_cl_candidate}")
+        endif()
+    endif()
+    if(NOT _lfs_clang_cl AND DEFINED ENV{VSINSTALLDIR} AND NOT "$ENV{VSINSTALLDIR}" STREQUAL "")
+        file(TO_CMAKE_PATH "$ENV{VSINSTALLDIR}" _lfs_vs_installation)
+        set(_lfs_clang_cl_candidate "${_lfs_vs_installation}/VC/Tools/Llvm/x64/bin/clang-cl.exe")
+        if(EXISTS "${_lfs_clang_cl_candidate}")
+            set(_lfs_clang_cl "${_lfs_clang_cl_candidate}")
+        endif()
+    endif()
+    if(NOT _lfs_clang_cl)
         message(FATAL_ERROR
-            "libplacebo on Windows requires clang-cl from Visual Studio. Run CMake "
-            "from the x64 Native Tools Command Prompt and install the 'C++ Clang "
-            "Compiler for Windows' and 'MSBuild support for LLVM (clang-cl) toolset' "
-            "individual components.")
+            "libplacebo on Windows requires clang-cl from Visual Studio. Install the "
+            "'C++ Clang Compiler for Windows' individual component and ensure "
+            "clang-cl is on PATH, or run CMake from the x64 Native Tools Command "
+            "Prompt so VSINSTALLDIR/VCINSTALLDIR can locate it.")
     endif()
 
     # Override only Meson's C/C++ compiler; keep vcpkg's MSVC settings.
@@ -49,7 +65,7 @@ if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW)
     set(VCPKG_MESON_NATIVE_FILE_RELEASE "${_lfs_clang_native_file}")
 endif()
 
-# Use the overlay's newer Meson helper without changing other ports.
+# Use the installed host vcpkg-tool-meson port config (not overlay files).
 include("${CURRENT_HOST_INSTALLED_DIR}/share/vcpkg-tool-meson/vcpkg-port-config.cmake")
 
 # Build only the Vulkan renderer and built-in Dolby Vision support used here.
@@ -65,6 +81,8 @@ set(LIBPLACEBO_MESON_OPTIONS
     -Dd3d11=disabled
     -Dlcms=disabled
     -Dxxhash=disabled
+    # Avoid Requires: libunwind in the generated .pc (undeclared system dep).
+    -Dunwind=disabled
     -Ddemos=false
     -Dtests=false
     -Dbench=false
@@ -72,10 +90,14 @@ set(LIBPLACEBO_MESON_OPTIONS
 )
 
 set(_lfs_vulkan_registry "${CURRENT_INSTALLED_DIR}/share/vulkan/registry/vk.xml")
-if(EXISTS "${_lfs_vulkan_registry}")
-    list(APPEND LIBPLACEBO_MESON_OPTIONS
-        "-Dvulkan-registry=${_lfs_vulkan_registry}")
+if(NOT EXISTS "${_lfs_vulkan_registry}")
+    message(FATAL_ERROR
+        "libplacebo requires the Vulkan registry at '${_lfs_vulkan_registry}', "
+        "but it was not found. Ensure the 'vulkan' dependency installed the "
+        "registry before building this port.")
 endif()
+list(APPEND LIBPLACEBO_MESON_OPTIONS
+    "-Dvulkan-registry=${_lfs_vulkan_registry}")
 
 vcpkg_configure_meson(
     SOURCE_PATH "${SOURCE_PATH}"
