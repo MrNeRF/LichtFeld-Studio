@@ -2423,7 +2423,8 @@ namespace lfs::python {
         if (auto* const renderer = activeOverlayRenderer()) {
             const glm::vec2 measured =
                 renderer->measureText(text, kOverlayTextSize * scale);
-            return {measured.x, measured.y};
+            if (measured.x > 0.0f && measured.y > 0.0f)
+                return {measured.x, measured.y};
         }
         return {static_cast<float>(text.size()) * 7.0f * scale, 16.0f * scale};
     }

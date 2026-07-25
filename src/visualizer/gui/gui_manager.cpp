@@ -7521,6 +7521,13 @@ namespace lfs::vis::gui {
             return true;
         if (startup_overlay_.needsAnimationFrame())
             return true;
+        if (!ui_hidden_ && !drag_drop_hovering_ && !startup_overlay_.isVisible() &&
+            !async_tasks_.isImporting() && !async_tasks_.isImportCompletionShowing()) {
+            if (auto* const scene_manager = viewer_ ? viewer_->getSceneManager() : nullptr;
+                scene_manager && scene_manager->isEmpty()) {
+                return true;
+            }
+        }
         if (rml_modal_overlay_ && rml_modal_overlay_->needsAnimationFrame())
             return true;
         if (rml_toast_overlay_ && rml_toast_overlay_->needsAnimationFrame())
