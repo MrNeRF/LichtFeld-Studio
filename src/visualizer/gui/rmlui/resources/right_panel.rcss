@@ -7,16 +7,6 @@ body {
     nav: auto;
 }
 
-#resize-handle {
-    position: absolute;
-    left: -4dp;
-    top: 0;
-    width: 8dp;
-    height: 100%;
-    z-index: 10;
-    cursor: resize-horizontal;
-}
-
 #left-border {
     display: none;
 }

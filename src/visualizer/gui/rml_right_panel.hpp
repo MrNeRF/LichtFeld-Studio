@@ -80,7 +80,6 @@ namespace lfs::vis::gui {
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
 
-        Rml::Element* resize_handle_el_ = nullptr;
         Rml::Element* left_border_el_ = nullptr;
         Rml::Element* splitter_el_ = nullptr;
         Rml::Element* tab_bar_el_ = nullptr;
@@ -116,6 +115,7 @@ namespace lfs::vis::gui {
         float last_splitter_h_ = -1.0f;
         bool input_dirty_ = false;
         bool last_over_interactive_ = false;
+        bool rml_pointer_inside_ = false;
         CachedVulkanContextRender direct_cache_;
     };
 

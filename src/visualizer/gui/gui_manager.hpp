@@ -419,6 +419,7 @@ namespace lfs::vis {
             bool right_panel_pointer_live_capture_ = false;
             RightPanelPointerRegion right_panel_pointer_capture_region_ =
                 RightPanelPointerRegion::None;
+            bool right_panel_resize_cursor_active_ = false;
             bool bottom_dock_pointer_live_capture_ = false;
             bool left_dock_pointer_live_capture_ = false;
             bool dock_resize_interaction_active_ = false;

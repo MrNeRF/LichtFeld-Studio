@@ -5774,6 +5774,7 @@ namespace lfs::vis::gui {
         bool right_panel_active_tab_live = false;
         bool right_panel_pointer_over_scene_header = false;
         bool right_panel_pointer_over_active_tab = false;
+        bool right_panel_resize_hovering = false;
         if (show_main_panel_ && !ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.rml_right_panel", 0.25);
             const float rpw = panel_layout_.getRightPanelWidth();
@@ -5801,6 +5802,15 @@ namespace lfs::vis::gui {
                 panel_input.mouse_x <= rp_layout.pos.x + right_panel_edge_grab_w &&
                 panel_input.mouse_y >= rp_layout.pos.y &&
                 panel_input.mouse_y < rp_layout.pos.y + rp_layout.size.y;
+            const bool float_blocks_rp = has_floating_panels &&
+                                         reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y);
+            const float resize_strip_half_w = 4.0f * current_ui_scale_;
+            right_panel_resize_hovering =
+                !float_blocks_rp &&
+                panel_input.mouse_x >= rp_layout.pos.x - resize_strip_half_w &&
+                panel_input.mouse_x <= rp_layout.pos.x + resize_strip_half_w &&
+                panel_input.mouse_y >= rp_layout.pos.y &&
+                panel_input.mouse_y < rp_layout.pos.y + rp_layout.size.y;
             constexpr float RIGHT_PANEL_PAD = 8.0f;
             const float content_x = rp_layout.pos.x + RIGHT_PANEL_PAD;
             const float content_top = screen.work_pos.y + RIGHT_PANEL_PAD;
@@ -5818,8 +5828,6 @@ namespace lfs::vis::gui {
                             glm::vec2{content_x, tab_content_y},
                             glm::vec2{content_w, tab_content_h});
 
-            const bool float_blocks_rp = has_floating_panels &&
-                                         reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y);
             if (float_blocks_rp) {
                 PanelInputState masked_input = panel_input;
                 masked_input.mouse_x = -1.0e9f;
@@ -5914,6 +5922,7 @@ namespace lfs::vis::gui {
         } else {
             right_panel_pointer_live_capture_ = false;
             right_panel_pointer_capture_region_ = RightPanelPointerRegion::None;
+            right_panel_resize_hovering = false;
         }
         if (!hasMouseButtonDown(sdl_input)) {
             right_panel_pointer_live_capture_ = false;
@@ -6399,6 +6408,18 @@ namespace lfs::vis::gui {
                 apply_cursor(panel_layout_.getCursorRequest());
                 if (auto* input_controller = viewer_->getInputController())
                     input_controller->applySplitterCursorOverride();
+                if (right_panel_resize_hovering) {
+                    static SDL_Cursor* const resize_cursor =
+                        SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+                    if (resize_cursor)
+                        SDL_SetCursor(resize_cursor);
+                    right_panel_resize_cursor_active_ = true;
+                } else if (right_panel_resize_cursor_active_) {
+                    // This transition can only be from the outer edge into
+                    // the viewport. It must override any stale RmlUi cursor.
+                    SDL_SetCursor(SDL_GetDefaultCursor());
+                    right_panel_resize_cursor_active_ = false;
+                }
             }
         } else if (auto* const wm = viewer_->getWindowManager()) {
             wm->refreshResizeCursor();
@@ -7261,6 +7282,22 @@ namespace lfs::vis::gui {
         const bool ui_popup_open = global_context_menu_ && global_context_menu_->isOpen();
         if (isCapturingInput() || ui_popup_open || startup_overlay_.blocksUnderlayInput() || drag_drop_hovering_) {
             return true;
+        }
+
+        // The external right-panel resize edge is native (not an RmlUi
+        // element). Wake a frame both while entering its strip and once more
+        // after leaving it, so its cursor cannot remain stale while the GUI is
+        // otherwise idle.
+        if (right_panel_resize_cursor_active_)
+            return true;
+        if (show_main_panel_ && !ui_hidden_) {
+            const float edge_x = viewport_layout_.pos.x + viewport_layout_.size.x;
+            const float strip_half_w = 4.0f * current_ui_scale_;
+            if (mouse_x >= edge_x - strip_half_w && mouse_x <= edge_x + strip_half_w &&
+                mouse_y >= viewport_layout_.pos.y &&
+                mouse_y < viewport_layout_.pos.y + viewport_layout_.size.y) {
+                return true;
+            }
         }
 
         if (!guiFocusState().want_capture_mouse && isPositionInViewport(mouse_x, mouse_y)) {
