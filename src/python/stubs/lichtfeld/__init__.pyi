@@ -1899,6 +1899,22 @@ class OptimizationParams:
     def rotation_lr(self, arg: float, /) -> None: ...
 
     @property
+    def cropbox_lr_scale(self) -> float:
+        """
+        Scales Adam steps and refinement signals for rejected splats; strategy noise, decay, and resets remain active
+        """
+
+    @cropbox_lr_scale.setter
+    def cropbox_lr_scale(self, arg: float, /) -> None: ...
+
+    @property
+    def cropbox_loss_weight(self) -> float:
+        """Scales pixel losses for camera rays outside the active crop box"""
+
+    @cropbox_loss_weight.setter
+    def cropbox_loss_weight(self, arg: float, /) -> None: ...
+
+    @property
     def lambda_dssim(self) -> float:
         """Weight for structural similarity loss"""
 
