@@ -7034,6 +7034,20 @@ namespace lfs::vis::gui {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
 
+        // The right-panel edge is a native resize target rather than an RmlUi
+        // element. Treat the same strip used for its cursor as GUI before the
+        // press is routed, otherwise a resize started a few pixels inside the
+        // viewport can also start a viewport selection.
+        if (show_main_panel_ && !ui_hidden_) {
+            const float edge_x = viewport_layout_.pos.x + viewport_layout_.size.x;
+            const float strip_half_w = 4.0f * current_ui_scale_;
+            if (x >= edge_x - strip_half_w && x <= edge_x + strip_half_w &&
+                y >= viewport_layout_.pos.y &&
+                y < viewport_layout_.pos.y + viewport_layout_.size.y) {
+                return {.blocks_pointer = true, .takes_keyboard_focus = true};
+            }
+        }
+
         if (sequencer_ui_.blocksPointer(x, y) || rml_viewport_overlay_.blocksPointer(x, y)) {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
