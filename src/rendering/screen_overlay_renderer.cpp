@@ -218,7 +218,10 @@ namespace lfs::rendering {
         if (const auto& fn = textMeasureFn(); fn) {
             return fn(text, size_px);
         }
-        return {0.0f, 0.0f};
+        if (text.empty() || size_px <= 0.0f)
+            return {0.0f, 0.0f};
+        constexpr float kFallbackCharacterWidth = 7.0f / 16.0f;
+        return {static_cast<float>(text.size()) * size_px * kFallbackCharacterWidth, size_px};
     }
 
     std::vector<OverlayCommand> ScreenOverlayRenderer::consumeCommands() {

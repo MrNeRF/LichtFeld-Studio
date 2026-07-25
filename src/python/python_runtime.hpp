@@ -96,6 +96,7 @@ namespace lfs::python {
 
     // UI redraw request mechanism
     LFS_PYTHON_RUNTIME_API void request_redraw();
+    LFS_PYTHON_RUNTIME_API bool has_redraw_request();
     LFS_PYTHON_RUNTIME_API bool consume_redraw_request();
     LFS_PYTHON_RUNTIME_API uint64_t redraw_request_generation();
     LFS_PYTHON_RUNTIME_API void request_pre_scene_panel_sync();

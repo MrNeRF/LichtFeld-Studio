@@ -5774,7 +5774,6 @@ namespace lfs::vis::gui {
         bool right_panel_active_tab_live = false;
         bool right_panel_pointer_over_scene_header = false;
         bool right_panel_pointer_over_active_tab = false;
-        bool right_panel_resize_hovering = false;
         if (show_main_panel_ && !ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.rml_right_panel", 0.25);
             const float rpw = panel_layout_.getRightPanelWidth();
@@ -5792,8 +5791,7 @@ namespace lfs::vis::gui {
             rp_layout.splitter_h = splitter_h;
             right_panel_was_dirty = rml_right_panel_.needsAnimationFrame();
             const float right_panel_edge_grab_w =
-                std::max(PanelLayoutManager::SPLITTER_H * current_ui_scale_,
-                         8.0f * current_ui_scale_);
+                PanelLayoutManager::RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH * current_ui_scale_;
             const bool pointer_over_right_panel =
                 pointInRect(panel_input.mouse_x, panel_input.mouse_y,
                             rp_layout.pos, rp_layout.size);
@@ -5804,13 +5802,8 @@ namespace lfs::vis::gui {
                 panel_input.mouse_y < rp_layout.pos.y + rp_layout.size.y;
             const bool float_blocks_rp = has_floating_panels &&
                                          reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y);
-            const float resize_strip_half_w = 4.0f * current_ui_scale_;
-            right_panel_resize_hovering =
-                !float_blocks_rp &&
-                panel_input.mouse_x >= rp_layout.pos.x - resize_strip_half_w &&
-                panel_input.mouse_x <= rp_layout.pos.x + resize_strip_half_w &&
-                panel_input.mouse_y >= rp_layout.pos.y &&
-                panel_input.mouse_y < rp_layout.pos.y + rp_layout.size.y;
+            right_panel_resize_edge_was_hovered_ = !float_blocks_rp &&
+                                                   pointer_over_right_panel_edge;
             constexpr float RIGHT_PANEL_PAD = 8.0f;
             const float content_x = rp_layout.pos.x + RIGHT_PANEL_PAD;
             const float content_top = screen.work_pos.y + RIGHT_PANEL_PAD;
@@ -5922,7 +5915,7 @@ namespace lfs::vis::gui {
         } else {
             right_panel_pointer_live_capture_ = false;
             right_panel_pointer_capture_region_ = RightPanelPointerRegion::None;
-            right_panel_resize_hovering = false;
+            right_panel_resize_edge_was_hovered_ = false;
         }
         if (!hasMouseButtonDown(sdl_input)) {
             right_panel_pointer_live_capture_ = false;
@@ -6408,18 +6401,6 @@ namespace lfs::vis::gui {
                 apply_cursor(panel_layout_.getCursorRequest());
                 if (auto* input_controller = viewer_->getInputController())
                     input_controller->applySplitterCursorOverride();
-                if (right_panel_resize_hovering) {
-                    static SDL_Cursor* const resize_cursor =
-                        SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
-                    if (resize_cursor)
-                        SDL_SetCursor(resize_cursor);
-                    right_panel_resize_cursor_active_ = true;
-                } else if (right_panel_resize_cursor_active_) {
-                    // This transition can only be from the outer edge into
-                    // the viewport. It must override any stale RmlUi cursor.
-                    SDL_SetCursor(SDL_GetDefaultCursor());
-                    right_panel_resize_cursor_active_ = false;
-                }
             }
         } else if (auto* const wm = viewer_->getWindowManager()) {
             wm->refreshResizeCursor();
@@ -7011,6 +6992,21 @@ namespace lfs::vis::gui {
         return PanelRegistry::instance().isPositionOverFloatingPanel(x, y);
     }
 
+    bool GuiManager::isPositionOverRightPanelResizeEdge(const double x, const double y) const {
+        if (!show_main_panel_ || ui_hidden_ ||
+            last_ui_layout_work_size_.x <= 0.0f || last_ui_layout_work_size_.y <= 0.0f) {
+            return false;
+        }
+
+        const float panel_x = last_ui_layout_work_pos_.x + last_ui_layout_work_size_.x -
+                              panel_layout_.getRightPanelWidth();
+        const float strip_half_w =
+            PanelLayoutManager::RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH * current_ui_scale_;
+        return x >= panel_x - strip_half_w && x <= panel_x + strip_half_w &&
+               y >= last_ui_layout_work_pos_.y &&
+               y < last_ui_layout_work_pos_.y + last_ui_layout_work_size_.y;
+    }
+
     GuiHitTestResult GuiManager::hitTestPointer(const double x, const double y) const {
         if (isCapturingInput() || isModalWindowOpen() || startup_overlay_.blocksUnderlayInput() ||
             (global_context_menu_ && global_context_menu_->isOpen())) {
@@ -7034,19 +7030,10 @@ namespace lfs::vis::gui {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
 
-        // The right-panel edge is a native resize target rather than an RmlUi
-        // element. Treat the same strip used for its cursor as GUI before the
-        // press is routed, otherwise a resize started a few pixels inside the
-        // viewport can also start a viewport selection.
-        if (show_main_panel_ && !ui_hidden_) {
-            const float edge_x = viewport_layout_.pos.x + viewport_layout_.size.x;
-            const float strip_half_w = 4.0f * current_ui_scale_;
-            if (x >= edge_x - strip_half_w && x <= edge_x + strip_half_w &&
-                y >= viewport_layout_.pos.y &&
-                y < viewport_layout_.pos.y + viewport_layout_.size.y) {
-                return {.blocks_pointer = true, .takes_keyboard_focus = true};
-            }
-        }
+        // Match the resize edge geometry used by the panel before routing a
+        // press, without treating hover or wheel input as panel interaction.
+        if (isPositionOverRightPanelResizeEdge(x, y))
+            return {.blocks_mouse_button = true};
 
         if (sequencer_ui_.blocksPointer(x, y) || rml_viewport_overlay_.blocksPointer(x, y)) {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
@@ -7298,20 +7285,11 @@ namespace lfs::vis::gui {
             return true;
         }
 
-        // The external right-panel resize edge is native (not an RmlUi
-        // element). Wake a frame both while entering its strip and once more
-        // after leaving it, so its cursor cannot remain stale while the GUI is
-        // otherwise idle.
-        if (right_panel_resize_cursor_active_)
+        // Wake a frame while the pointer is over the resize edge so the panel
+        // can update its cursor request even while the GUI is otherwise idle.
+        if (right_panel_resize_edge_was_hovered_ ||
+            isPositionOverRightPanelResizeEdge(mouse_x, mouse_y)) {
             return true;
-        if (show_main_panel_ && !ui_hidden_) {
-            const float edge_x = viewport_layout_.pos.x + viewport_layout_.size.x;
-            const float strip_half_w = 4.0f * current_ui_scale_;
-            if (mouse_x >= edge_x - strip_half_w && mouse_x <= edge_x + strip_half_w &&
-                mouse_y >= viewport_layout_.pos.y &&
-                mouse_y < viewport_layout_.pos.y + viewport_layout_.size.y) {
-                return true;
-            }
         }
 
         if (!guiFocusState().want_capture_mouse && isPositionInViewport(mouse_x, mouse_y)) {
@@ -7535,13 +7513,6 @@ namespace lfs::vis::gui {
             return true;
         if (startup_overlay_.needsAnimationFrame())
             return true;
-        if (!ui_hidden_ && !drag_drop_hovering_ && !startup_overlay_.isVisible() &&
-            !async_tasks_.isImporting() && !async_tasks_.isImportCompletionShowing()) {
-            if (auto* const scene_manager = viewer_ ? viewer_->getSceneManager() : nullptr;
-                scene_manager && scene_manager->isEmpty()) {
-                return true;
-            }
-        }
         if (rml_modal_overlay_ && rml_modal_overlay_->needsAnimationFrame())
             return true;
         if (rml_toast_overlay_ && rml_toast_overlay_->needsAnimationFrame())

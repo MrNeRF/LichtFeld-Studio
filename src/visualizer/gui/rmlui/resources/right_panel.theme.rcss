@@ -67,3 +67,12 @@
 #tab-separator {
     background-color: @{right_panel.separator};
 }
+
+#resize-handle:hover,
+#resize-handle.hover {
+    background-color: @{right_panel.resize_hover};
+}
+
+#resize-handle.dragging {
+    background-color: @{right_panel.resize_active};
+}

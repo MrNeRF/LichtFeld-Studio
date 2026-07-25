@@ -80,6 +80,7 @@ namespace lfs::vis::gui {
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
 
+        Rml::Element* resize_handle_el_ = nullptr;
         Rml::Element* left_border_el_ = nullptr;
         Rml::Element* splitter_el_ = nullptr;
         Rml::Element* tab_bar_el_ = nullptr;

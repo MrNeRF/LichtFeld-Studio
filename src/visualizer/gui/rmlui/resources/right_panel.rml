@@ -3,6 +3,7 @@
     <link type="text/rcss" href="right_panel.rcss"/>
 </head>
 <body id="rp-body" data-model="right_panel_tabs">
+    <div id="resize-handle"></div>
     <div id="left-border"></div>
     <div id="splitter"></div>
     <div id="tab-bar" data-class-with-scroll="tabs_overflow">

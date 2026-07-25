@@ -90,6 +90,7 @@ namespace lfs::vis::gui {
             return;
         }
 
+        resize_handle_el_ = document_->GetElementById("resize-handle");
         left_border_el_ = document_->GetElementById("left-border");
         splitter_el_ = document_->GetElementById("splitter");
         tab_bar_el_ = document_->GetElementById("tab-bar");
@@ -109,6 +110,7 @@ namespace lfs::vis::gui {
             rml_manager_->destroyContext("right_panel");
         rml_context_ = nullptr;
         document_ = nullptr;
+        resize_handle_el_ = nullptr;
         left_border_el_ = nullptr;
         splitter_el_ = nullptr;
         tab_bar_el_ = nullptr;
@@ -133,6 +135,7 @@ namespace lfs::vis::gui {
         }
 
         document_ = nullptr;
+        resize_handle_el_ = nullptr;
         left_border_el_ = nullptr;
         splitter_el_ = nullptr;
         tab_bar_el_ = nullptr;
@@ -166,6 +169,7 @@ namespace lfs::vis::gui {
             return;
         }
 
+        resize_handle_el_ = document_->GetElementById("resize-handle");
         left_border_el_ = document_->GetElementById("left-border");
         splitter_el_ = document_->GetElementById("splitter");
         tab_bar_el_ = document_->GetElementById("tab-bar");
@@ -412,7 +416,8 @@ namespace lfs::vis::gui {
             !resize_dragging_ && !splitter_dragging_ && !viewport_focus_blurs_panel &&
             !layout_changed) {
             wants_keyboard_ = rml_input::hasFocusedKeyboardTarget(focused_before);
-            wants_input_ = wants_keyboard_ || last_over_interactive_;
+            wants_input_ = wants_keyboard_ || last_over_interactive_ ||
+                           previous_cursor_request != CursorRequest::None;
             cursor_request_ = previous_cursor_request;
             return;
         }
@@ -420,7 +425,8 @@ namespace lfs::vis::gui {
         const float mx = input.mouse_x - layout.pos.x;
         const float my = input.mouse_y - layout.pos.y;
         const float dp_ratio = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
-        const float resize_handle_half_w = 4.0f * dp_ratio;
+        const float resize_handle_half_w =
+            PanelLayoutManager::RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH * dp_ratio;
 
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
@@ -446,15 +452,17 @@ namespace lfs::vis::gui {
             mx <= resize_handle_half_w &&
             my >= 0.0f &&
             my <= layout.size.y;
-        // The handle straddles the left edge of this context. Do not rely on
-        // RmlUi hover state here: it can remain stale after the pointer leaves
-        // the context into the viewport.
-        const bool over_resize_handle = over_resize_handle_geom;
+        // Use geometry for the resize edge so stale RmlUi hover state cannot
+        // keep the cursor active after the pointer leaves the panel.
+        const bool over_resize_handle =
+            over_resize_handle_geom || (hover && isOrHasAncestor(hover, "resize-handle"));
+        if (resize_handle_el_ && !resize_dragging_)
+            resize_handle_el_->SetAttribute("class", over_resize_handle ? "hover" : "");
         const bool over_splitter = hover && isOrHasAncestor(hover, "splitter");
         const bool over_interactive = hover && hover->GetTagName() != "body" &&
-                                       hover->GetId() != "rp-body" &&
-                                       hover->GetId() != "left-border" &&
-                                       hover->GetId() != "tab-separator";
+                                      hover->GetId() != "rp-body" &&
+                                      hover->GetId() != "left-border" &&
+                                      hover->GetId() != "tab-separator";
 
         if (over_interactive != last_over_interactive_) {
             input_dirty_ = true;
@@ -473,6 +481,8 @@ namespace lfs::vis::gui {
                 cursor_request_ = CursorRequest::ResizeEW;
             } else {
                 resize_dragging_ = false;
+                if (resize_handle_el_)
+                    resize_handle_el_->SetAttribute("class", "");
                 if (on_resize_end)
                     on_resize_end();
             }
@@ -497,30 +507,32 @@ namespace lfs::vis::gui {
             return;
         }
 
-        if (over_resize_handle) {
-            cursor_request_ = CursorRequest::ResizeEW;
-            if (input.mouse_clicked[0]) {
-                wants_input_ = true;
-                resize_dragging_ = true;
-                input_dirty_ = true;
-            }
-        } else if (over_splitter) {
+        if (over_interactive || over_resize_handle || over_splitter) {
             wants_input_ = true;
-            cursor_request_ = CursorRequest::ResizeNS;
-            if (input.mouse_clicked[0]) {
-                splitter_dragging_ = true;
-                input_dirty_ = true;
-                if (splitter_el_)
-                    splitter_el_->SetAttribute("class", "dragging");
+            if (over_resize_handle) {
+                cursor_request_ = CursorRequest::ResizeEW;
+                if (input.mouse_clicked[0]) {
+                    resize_dragging_ = true;
+                    input_dirty_ = true;
+                    if (resize_handle_el_)
+                        resize_handle_el_->SetAttribute("class", "dragging");
+                }
+            } else if (over_splitter) {
+                cursor_request_ = CursorRequest::ResizeNS;
+                if (input.mouse_clicked[0]) {
+                    splitter_dragging_ = true;
+                    input_dirty_ = true;
+                    if (splitter_el_)
+                        splitter_el_->SetAttribute("class", "dragging");
+                }
+            } else {
+                if (input.mouse_clicked[0]) {
+                    input_dirty_ = true;
+                    rml_context_->ProcessMouseButtonDown(0, mods);
+                }
+                if (input.mouse_released[0])
+                    rml_context_->ProcessMouseButtonUp(0, mods);
             }
-        } else if (over_interactive) {
-            wants_input_ = true;
-            if (input.mouse_clicked[0]) {
-                input_dirty_ = true;
-                rml_context_->ProcessMouseButtonDown(0, mods);
-            }
-            if (input.mouse_released[0])
-                rml_context_->ProcessMouseButtonUp(0, mods);
         } else if (input.mouse_clicked[0]) {
             if (auto* focused = rml_context_->GetFocusElement())
                 focused->Blur();
@@ -591,6 +603,10 @@ namespace lfs::vis::gui {
             const float dp_ratio = rml_manager_->getDpRatio();
             const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dp_ratio;
 
+            if (resize_handle_el_) {
+                resize_handle_el_->SetProperty("top", "0px");
+                resize_handle_el_->SetProperty("height", std::format("{:.0f}px", layout.size.y));
+            }
             if (left_border_el_) {
                 left_border_el_->SetProperty("top", "0px");
                 left_border_el_->SetProperty("height", std::format("{:.0f}px", layout.size.y));

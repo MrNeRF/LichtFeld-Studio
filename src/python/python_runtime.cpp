@@ -222,6 +222,10 @@ namespace lfs::python {
             g_main_loop_wake_callback();
     }
 
+    bool has_redraw_request() {
+        return g_redraw_requested.load(std::memory_order_acquire);
+    }
+
     bool consume_redraw_request() {
         return g_redraw_requested.exchange(false, std::memory_order_acq_rel);
     }

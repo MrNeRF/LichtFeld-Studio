@@ -1561,7 +1561,8 @@ namespace lfs::vis {
     }
 
     VisualizerImpl::FrameDemand VisualizerImpl::collectFrameDemand(const bool viewport_export_locked,
-                                                                   const bool drained_store_dirty) {
+                                                                   const bool drained_store_dirty,
+                                                                   const bool consume_python_redraw) {
         FrameDemand demand;
         demand.viewport_export_locked = viewport_export_locked;
         demand.scene_dirty = rendering_manager_ && rendering_manager_->pollDirtyState();
@@ -1569,7 +1570,8 @@ namespace lfs::vis {
         const bool plugin_preload_running = python::is_plugin_preload_running();
         demand.python_animation = !plugin_preload_running && python::has_frame_callback();
         demand.python_overlay = !plugin_preload_running && python::has_viewport_draw_handlers();
-        demand.python_redraw = python::consume_redraw_request();
+        demand.python_redraw = consume_python_redraw ? python::consume_redraw_request()
+                                                     : python::has_redraw_request();
         demand.gui_animation = (gui_manager_ && gui_manager_->needsAnimationFrame()) || plugin_preload_running;
         demand.input_event = inputFrameRequestsRender();
         demand.posted_work = update_work_processed_;
@@ -1812,7 +1814,7 @@ namespace lfs::vis {
         update_work_processed_ = false;
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
-        const FrameDemand next_demand = collectFrameDemand(viewport_export_locked);
+        const FrameDemand next_demand = collectFrameDemand(viewport_export_locked, false, false);
 
         LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
                  next_demand.scene_dirty,

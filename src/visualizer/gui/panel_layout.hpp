@@ -142,6 +142,7 @@ namespace lfs::vis::gui {
         static constexpr float TAB_BAR_H = 28.0f;
         static constexpr float STATUS_BAR_HEIGHT = 22.0f;
         static constexpr float PANEL_GAP = 2.0f;
+        static constexpr float RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH = 4.0f;
 
     private:
         void renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h,

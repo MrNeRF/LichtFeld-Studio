@@ -240,7 +240,8 @@ namespace lfs::vis {
         };
 
         [[nodiscard]] FrameDemand collectFrameDemand(bool viewport_export_locked,
-                                                     bool drained_store_dirty = false);
+                                                     bool drained_store_dirty = false,
+                                                     bool consume_python_redraw = true);
         void waitForNextEvent(bool is_training);
 
         class CallbackCleanup {
