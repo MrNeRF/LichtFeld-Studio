@@ -51,6 +51,7 @@
 #include "visualizer/training/training_manager.hpp"
 
 #include "config.h"
+#include "git_version.h"
 
 #include "visualizer/input/key_codes.hpp"
 

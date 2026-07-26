@@ -64,6 +64,7 @@
 
 #include "config.h"
 #include "core/checkpoint_format.hpp"
+#include "git_version.h"
 #include "input/input_controller.hpp"
 #include "python/runner.hpp"
 #include "rendering/rendering_manager.hpp"

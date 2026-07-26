@@ -7,6 +7,7 @@
 #include "core/error.hpp"
 #include "core/error_envelope.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "git_version.h"
 
 #include <cassert>
 

@@ -9,6 +9,7 @@
 
 #include "config.h"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "git_version.h"
 #include "mcp/mcp_http_server.hpp"
 #include "mcp/mcp_protocol.hpp"
 #include "mcp/mcp_server.hpp"
