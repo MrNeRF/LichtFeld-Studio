@@ -44,6 +44,7 @@
 #include "gui/icon_cache.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
+#include "input/input_router.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "tools/align_tool.hpp"
@@ -5802,7 +5803,12 @@ namespace lfs::vis::gui {
                 panel_input.mouse_y < rp_layout.pos.y + rp_layout.size.y;
             const bool float_blocks_rp = has_floating_panels &&
                                          reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y);
-            right_panel_resize_edge_was_hovered_ = !float_blocks_rp &&
+            // Keep a viewport drag captured by the viewport when it crosses
+            // the resize edge, rather than starting panel hover or resize UI.
+            const bool viewport_pointer_captured =
+                hasMouseButtonDown(sdl_input) &&
+                viewer_->getWindowManager()->inputRouter().state().pointer_capture == input::InputTarget::Viewport;
+            right_panel_resize_edge_was_hovered_ = !float_blocks_rp && !viewport_pointer_captured &&
                                                    pointer_over_right_panel_edge;
             constexpr float RIGHT_PANEL_PAD = 8.0f;
             const float content_x = rp_layout.pos.x + RIGHT_PANEL_PAD;
@@ -5821,7 +5827,7 @@ namespace lfs::vis::gui {
                             glm::vec2{content_x, tab_content_y},
                             glm::vec2{content_w, tab_content_h});
 
-            if (float_blocks_rp) {
+            if (float_blocks_rp || viewport_pointer_captured) {
                 PanelInputState masked_input = panel_input;
                 masked_input.mouse_x = -1.0e9f;
                 masked_input.mouse_y = -1.0e9f;
@@ -5837,7 +5843,7 @@ namespace lfs::vis::gui {
                 rml_right_panel_.processInput(rp_layout, panel_input);
             }
 
-            if (rml_right_panel_.wantsInput() && !float_blocks_rp)
+            if (rml_right_panel_.wantsInput() && !float_blocks_rp && !viewport_pointer_captured)
                 guiFocusState().want_capture_mouse = true;
             if (rml_right_panel_.wantsKeyboard())
                 guiFocusState().want_capture_keyboard = true;
@@ -5857,7 +5863,8 @@ namespace lfs::vis::gui {
             }
 
             const bool pointer_targets_right_panel =
-                !float_blocks_rp && (pointer_over_right_panel || pointer_over_right_panel_edge);
+                !float_blocks_rp && !viewport_pointer_captured &&
+                (pointer_over_right_panel || pointer_over_right_panel_edge);
             right_panel_pointer_targets_panel = pointer_targets_right_panel;
             if (pointer_targets_right_panel &&
                 (hasMouseButtonClicked(sdl_input) || hasMouseButtonDown(sdl_input))) {
@@ -7030,14 +7037,14 @@ namespace lfs::vis::gui {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
 
+        if (sequencer_ui_.blocksPointer(x, y) || rml_viewport_overlay_.blocksPointer(x, y)) {
+            return {.blocks_pointer = true, .takes_keyboard_focus = true};
+        }
+
         // Match the resize edge geometry used by the panel before routing a
         // press, without treating hover or wheel input as panel interaction.
         if (isPositionOverRightPanelResizeEdge(x, y))
             return {.blocks_mouse_button = true};
-
-        if (sequencer_ui_.blocksPointer(x, y) || rml_viewport_overlay_.blocksPointer(x, y)) {
-            return {.blocks_pointer = true, .takes_keyboard_focus = true};
-        }
 
         return {};
     }

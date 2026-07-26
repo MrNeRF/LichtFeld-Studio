@@ -104,6 +104,7 @@ namespace lfs::vis::gui {
         bool splitter_dragging_ = false;
 
         bool resize_dragging_ = false;
+        bool last_over_resize_handle_ = false;
 
         CursorRequest cursor_request_{};
         float prev_mouse_x_ = 0;

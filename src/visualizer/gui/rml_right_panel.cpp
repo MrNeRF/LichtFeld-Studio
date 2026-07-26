@@ -451,13 +451,17 @@ namespace lfs::vis::gui {
             mx >= -resize_handle_half_w &&
             mx <= resize_handle_half_w &&
             my >= 0.0f &&
-            my <= layout.size.y;
+            my < layout.size.y;
         // Use geometry for the resize edge so stale RmlUi hover state cannot
         // keep the cursor active after the pointer leaves the panel.
         const bool over_resize_handle =
             over_resize_handle_geom || (hover && isOrHasAncestor(hover, "resize-handle"));
-        if (resize_handle_el_ && !resize_dragging_)
+        if (resize_handle_el_ && !resize_dragging_ &&
+            over_resize_handle != last_over_resize_handle_) {
             resize_handle_el_->SetAttribute("class", over_resize_handle ? "hover" : "");
+            last_over_resize_handle_ = over_resize_handle;
+            input_dirty_ = true;
+        }
         const bool over_splitter = hover && isOrHasAncestor(hover, "splitter");
         const bool over_interactive = hover && hover->GetTagName() != "body" &&
                                       hover->GetId() != "rp-body" &&
@@ -481,8 +485,10 @@ namespace lfs::vis::gui {
                 cursor_request_ = CursorRequest::ResizeEW;
             } else {
                 resize_dragging_ = false;
-                if (resize_handle_el_)
+                if (resize_handle_el_) {
                     resize_handle_el_->SetAttribute("class", "");
+                    last_over_resize_handle_ = false;
+                }
                 if (on_resize_end)
                     on_resize_end();
             }
