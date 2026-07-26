@@ -1310,7 +1310,7 @@ _add_dll_dirs()
         ensure_builtin_ui_ready_locked();
     }
 
-    bool ensure_plugins_loaded() {
+    bool ensure_plugins_loaded(const bool wait_for_completion) {
         if (!ensure_initialized()) {
             return false;
         }
@@ -1323,7 +1323,7 @@ _add_dll_dirs()
 
         if (g_plugin_preload.state.load(std::memory_order_acquire) ==
             PluginPreloadState::NotStarted) {
-            if (on_graphics_thread()) {
+            if (on_graphics_thread() && !wait_for_completion) {
                 start_plugin_preload_worker();
                 return are_plugins_loaded();
             }
@@ -1343,7 +1343,7 @@ _add_dll_dirs()
                 return true;
         }
 
-        if (on_graphics_thread()) {
+        if (on_graphics_thread() && !wait_for_completion) {
             LOG_ERROR("Synchronous plugin load requested on the graphics thread while startup loading is active");
             return false;
         }
