@@ -291,6 +291,7 @@ namespace lfs::vis::gui {
         model_.lfs_mem_color = colorToRml(palette.info);
         model_.gpu_mem_color = colorToRml(palette.text);
         model_.fps_color = colorToRml(palette.success);
+        model_.status_message_color = colorToRml(palette.info);
 
         rml_context_ = rml_manager_->createContext("status_bar", 800, 22);
         if (!rml_context_) {
