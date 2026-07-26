@@ -3234,10 +3234,6 @@ namespace lfs::training {
         LFS_CUDA_LOG_TEARDOWN(cudaDeviceSynchronize(), nullptr, "shutdown: device sync");
 
         const bool exiting_headless = params_.optimization.headless;
-        if (exiting_headless) {
-            lfs::core::CudaMemoryPool::instance().suspend_deallocations_for_process_exit();
-        }
-
         if (callback_stream_) {
             lfs::core::CudaMemoryPool::instance().release_stream(callback_stream_);
         }
