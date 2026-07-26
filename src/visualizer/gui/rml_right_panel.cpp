@@ -154,6 +154,7 @@ namespace lfs::vis::gui {
         last_scene_h_ = -1.0f;
         last_splitter_h_ = -1.0f;
         last_over_interactive_ = false;
+        last_over_resize_handle_ = false;
         rml_pointer_inside_ = false;
 
         try {

@@ -5806,8 +5806,8 @@ namespace lfs::vis::gui {
             // Keep a viewport drag captured by the viewport when it crosses
             // the resize edge, rather than starting panel hover or resize UI.
             const bool viewport_pointer_captured =
-                hasMouseButtonDown(sdl_input) &&
-                viewer_->getWindowManager()->inputRouter().state().pointer_capture == input::InputTarget::Viewport;
+                hasMouseButtonDown(sdl_input) && window_manager &&
+                window_manager->inputRouter().state().pointer_capture == input::InputTarget::Viewport;
             right_panel_resize_edge_was_hovered_ = !float_blocks_rp && !viewport_pointer_captured &&
                                                    pointer_over_right_panel_edge;
             constexpr float RIGHT_PANEL_PAD = 8.0f;
