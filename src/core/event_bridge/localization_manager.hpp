@@ -45,6 +45,7 @@ namespace lfs::event {
         std::string locales_dir_;
         std::string current_language_;
         std::unordered_map<std::string, std::string> current_strings_;
+        std::unordered_map<std::string, std::string> fallback_strings_;
         std::vector<std::string> available_languages_;
         std::unordered_map<std::string, std::string> language_names_;
         mutable std::unordered_map<std::string, std::string> overrides_;

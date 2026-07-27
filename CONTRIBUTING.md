@@ -23,6 +23,25 @@ Thanks for your interest in contributing!
    - Link related issues
    - Describe what you changed and why
 
+## Localization
+
+`src/visualizer/gui/resources/locales/en.json` is the canonical locale bundle.
+Every key added there must also be present in every shipped locale file, even when
+the translation is temporarily the English fallback. The runtime fallback keeps
+the UI readable, but CI still rejects missing keys.
+
+Before submitting localization changes, run:
+
+```bash
+python tools/check_locale_completeness.py
+```
+
+To audit values that are still identical to English without failing the check:
+
+```bash
+python tools/check_locale_completeness.py --report-identical
+```
+
 ## Code Style
 
 - Use `clang-format` for formatting

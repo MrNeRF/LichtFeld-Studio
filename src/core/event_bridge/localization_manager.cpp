@@ -35,6 +35,7 @@ namespace lfs::event {
 
         available_languages_.clear();
         language_names_.clear();
+        fallback_strings_.clear();
 
         for (fs::directory_iterator it(locales_dir_, fs::directory_options::skip_permission_denied, ec), end;
              !ec && it != end; it.increment(ec)) {
@@ -69,6 +70,10 @@ namespace lfs::event {
         const bool has_default = std::find(available_languages_.begin(),
                                            available_languages_.end(),
                                            DEFAULT_LANGUAGE) != available_languages_.end();
+        if (has_default &&
+            !parseLocaleFile(locales_dir_ + "/" + DEFAULT_LANGUAGE + ".json", fallback_strings_)) {
+            return false;
+        }
         return setLanguage(has_default ? DEFAULT_LANGUAGE : available_languages_[0]);
     }
 
@@ -84,6 +89,14 @@ namespace lfs::event {
         if (it != current_strings_.end()) {
             return it->second.c_str();
         }
+
+        const auto fallback_it = fallback_strings_.find(key_str);
+        if (fallback_it != fallback_strings_.end()) {
+            LOG_WARN("Missing localization key '{}' in '{}'; using English fallback",
+                     key_str, current_language_);
+            return fallback_it->second.c_str();
+        }
+
         LOG_WARN("Missing localization key: {}", key_str);
         return key.data();
     }
