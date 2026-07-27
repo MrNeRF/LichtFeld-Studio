@@ -18,6 +18,7 @@
 #include "vksplat_viewport_renderer.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <stdexcept>
 
@@ -109,6 +110,7 @@ namespace lfs::vis {
 
     // RenderingManager Implementation
     RenderingManager::RenderingManager() {
+        viewport_interop_ = std::make_unique<ViewportInteropService>();
         camera_metrics_worker_ = std::jthread([this](std::stop_token stop_token) {
             cameraMetricsWorkerLoop(stop_token);
         });
@@ -116,12 +118,40 @@ namespace lfs::vis {
     }
 
     RenderingManager::~RenderingManager() {
+        shutdownViewportInterop();
         if (lod_controller_) {
             lod_controller_->setReadyCallback(nullptr);
         }
         camera_metrics_worker_.request_stop();
         camera_metrics_cv_.notify_all();
         lfs::rendering::releaseEnvironmentMapCaches();
+    }
+
+    ViewportInteropService& RenderingManager::viewportInterop() {
+        assert(viewport_interop_ && "ViewportInteropService not initialized");
+        return *viewport_interop_;
+    }
+
+    const ViewportInteropService& RenderingManager::viewportInterop() const {
+        assert(viewport_interop_ && "ViewportInteropService not initialized");
+        return *viewport_interop_;
+    }
+
+    void RenderingManager::prepareViewportInterop(VulkanContext& context) {
+        viewportInterop().prepareFrame(context, isViewportResizeDeferring());
+    }
+
+    void RenderingManager::bindViewportInteropParams(VulkanViewportPassParams& params,
+                                                     const std::size_t frame_slot,
+                                                     const bool export_locked) {
+        viewportInterop().bindViewportParams(params, frame_slot, export_locked,
+                                             isViewportResizeDeferring());
+    }
+
+    void RenderingManager::shutdownViewportInterop(VulkanContext* context) {
+        if (viewport_interop_) {
+            viewport_interop_->shutdown(context);
+        }
     }
 
     void RenderingManager::setWakeCallback(std::function<void()> callback) {

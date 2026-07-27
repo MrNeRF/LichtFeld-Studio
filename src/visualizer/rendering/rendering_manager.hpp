@@ -25,6 +25,7 @@
 #include "viewport_artifact_service.hpp"
 #include "viewport_frame_lifecycle_service.hpp"
 #include "viewport_interaction_context.hpp"
+#include "viewport_interop_service.hpp"
 #include "viewport_overlay_service.hpp"
 #include <atomic>
 #include <chrono>
@@ -63,6 +64,7 @@ namespace lfs::vis {
     class VulkanContext;
     class VksplatViewportRenderer;
     class PointCloudVulkanRenderer;
+    struct VulkanViewportPassParams;
 
     class SceneManager;
     struct SceneRenderState;
@@ -538,6 +540,14 @@ namespace lfs::vis {
         [[nodiscard]] bool isViewportResizeDeferring() const {
             return frame_lifecycle_service_.isResizeDeferring();
         }
+
+        [[nodiscard]] ViewportInteropService& viewportInterop();
+        [[nodiscard]] const ViewportInteropService& viewportInterop() const;
+        void prepareViewportInterop(VulkanContext& context);
+        void bindViewportInteropParams(VulkanViewportPassParams& params,
+                                       std::size_t frame_slot,
+                                       bool export_locked);
+        void shutdownViewportInterop(VulkanContext* context = nullptr);
         [[nodiscard]] bool hasPendingViewportResizeSettle() const {
             return frame_lifecycle_service_.hasPendingResizeSettle();
         }
@@ -726,6 +736,7 @@ namespace lfs::vis {
 
         RenderAnimationState animation_state_;
         ViewportArtifactService viewport_artifact_service_;
+        std::unique_ptr<ViewportInteropService> viewport_interop_;
 
         CameraInteractionService camera_interaction_service_;
         SplitViewService split_view_service_;

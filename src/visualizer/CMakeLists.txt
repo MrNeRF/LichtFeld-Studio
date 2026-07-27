@@ -45,6 +45,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/split_view_service.cpp
         rendering/viewport_artifact_service.cpp
         rendering/viewport_frame_lifecycle_service.cpp
+        rendering/viewport_interop_service.cpp
         rendering/viewport_appearance_correction.cpp
         rendering/viewport_request_builder.cpp
         rendering/passes/vulkan_scene_image_uploader.cpp

@@ -279,6 +279,16 @@ namespace lfs::vis {
         if (gui_manager_) {
             gui_manager_->shutdown();
         }
+        // Tear down viewport interop after the viewport pass is reset above, while
+        // the window/Vulkan context is still alive. Belt-and-braces again in
+        // ~RenderingManager once already shut down.
+        if (rendering_manager_) {
+            VulkanContext* context = nullptr;
+            if (window_manager_) {
+                context = window_manager_->getVulkanContext();
+            }
+            rendering_manager_->shutdownViewportInterop(context);
+        }
         LOG_DEBUG("Visualizer destroyed");
     }
 
@@ -1747,18 +1757,19 @@ namespace lfs::vis {
                 gui_manager_->syncVisiblePanelsBeforeSceneRender();
 
             const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
-            if (gui_manager_) {
+            {
+                auto& interop = rendering_manager_->viewportInterop();
                 if (vulkan_frame.external_image != VK_NULL_HANDLE) {
-                    gui_manager_->setVulkanExternalSceneImage(vulkan_frame.external_image,
-                                                              vulkan_frame.external_image_view,
-                                                              vulkan_frame.external_image_layout,
-                                                              vulkan_frame.size,
-                                                              vulkan_frame.flip_y,
-                                                              vulkan_frame.external_image_generation,
-                                                              vulkan_frame.completion_semaphore,
-                                                              vulkan_frame.completion_value);
+                    interop.setExternalSceneImage(vulkan_frame.external_image,
+                                                  vulkan_frame.external_image_view,
+                                                  vulkan_frame.external_image_layout,
+                                                  vulkan_frame.size,
+                                                  vulkan_frame.flip_y,
+                                                  vulkan_frame.external_image_generation,
+                                                  vulkan_frame.completion_semaphore,
+                                                  vulkan_frame.completion_value);
                 } else {
-                    gui_manager_->setVulkanSceneImage(
+                    interop.setSceneImage(
                         vulkan_frame.image,
                         vulkan_frame.size,
                         vulkan_frame.flip_y,
@@ -1767,13 +1778,13 @@ namespace lfs::vis {
                         vulkan_frame.completion_value);
                 }
                 if (vulkan_frame.split_right_image) {
-                    gui_manager_->setVulkanSplitRightImage(
+                    interop.setSplitRightImage(
                         vulkan_frame.split_right_image,
                         vulkan_frame.split_right_size,
                         vulkan_frame.split_right_flip_y,
                         vulkan_frame.image_generation);
                 } else {
-                    gui_manager_->clearVulkanSplitRightImage();
+                    interop.clearSplitRightImage();
                 }
 
                 // Splat depth -> R32_SFLOAT interop slot for the depth-blit pass.
@@ -1782,12 +1793,12 @@ namespace lfs::vis {
                     mesh_frame.depth_blit.depth->ndim() == 3 &&
                     mesh_frame.depth_blit.depth->size(0) == 1) {
                     const auto& d = *mesh_frame.depth_blit.depth;
-                    gui_manager_->setVulkanDepthBlitImage(
+                    interop.setDepthBlitImage(
                         mesh_frame.depth_blit.depth,
                         glm::ivec2(static_cast<int>(d.size(2)), static_cast<int>(d.size(1))),
                         vulkan_frame.image_generation);
                 } else {
-                    gui_manager_->clearVulkanDepthBlitImage();
+                    interop.clearDepthBlitImage();
                 }
             }
         } else if (interactive_transition_settling) {
