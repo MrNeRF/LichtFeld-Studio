@@ -201,6 +201,24 @@ The panel API is strict in v1: use the enum values above, not string literals.
 
 Panel definitions are validated eagerly. Invalid enum values, removed legacy fields, retained-only settings in `VIEWPORT_OVERLAY`, and conflicting fields such as `parent` plus explicit `space` raise `ValueError`, `TypeError`, or `AttributeError` during `lf.register_class()`.
 
+### Context boundaries for plugins
+
+Use `lf.ui.Panel`, its `PanelSpace`, and the `ui` object passed to `draw()`;
+plugins do not create or route RmlUI contexts directly. A retained plugin panel
+has its own panel-local RmlUI context, so its ordinary `set_tooltip()`, popup,
+context-menu, and popover calls belong to that panel. Do not assume they can
+cross another panel, a modal, or an application menu.
+
+Use `lf.ui.PanelSpace.FLOATING` when a plugin needs its own movable window.
+Do not reimplement window stacking, hit testing, pointer capture, or global
+keyboard routing in plugin code. There is no public API for a plugin-owned
+window-wide popup context. If a feature needs a dropdown, tooltip, or menu that
+must cross panel boundaries, request a core UI capability instead of accessing
+`RmlUIManager`, `RmlPanelHost`, or a raw RmlUI context.
+
+For the architectural reason and the core ownership rules, see
+[`RmlUI Context Model`](../docs/development/rmlui-context-model.md).
+
 ### Step 2: add shell and retained behavior without rewriting `draw(ui)`
 
 The unified API is designed for progressive disclosure. You can keep `draw(ui)` as your content source and opt into advanced features on the same class:

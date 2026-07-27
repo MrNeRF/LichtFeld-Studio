@@ -8,4 +8,5 @@ Development docs in this section are organized around execution workflows rather
 - [MCP Guide](mcp/)
 - [Components](components/)
 - [RmlUI Styling](rmlui-styling)
+- [RmlUI context model](rmlui-context-model)
 - [Developer flags and diagnostics](flags)
