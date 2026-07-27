@@ -131,6 +131,66 @@ that affects rendering or cache invalidation must also compare the existing
 `gui_render.panel_layout.*`, `gui_render.rmlui_record`, and
 `gui_render.cpu_ui_before_vulkan_begin` measurements.
 
+## Panel rendering orchestration
+
+`PanelRegistry` is the owner of panel selection and floating-panel interaction;
+the layout code decides where a selected panel is placed. This separation is
+important because the registry must serve the same panel through several
+rendering paths without giving the panel a second lifecycle.
+
+There are three semantic selection targets:
+
+- all eligible top-level panels in one `PanelSpace`;
+- one panel identified by id; and
+- the direct children of one panel.
+
+Each target can use the ordinary panel draw path or a direct path. The direct
+path has three phases with distinct contracts:
+
+| Phase | Purpose | Required behavior |
+| --- | --- | --- |
+| Preload | prepare content before a later direct draw | must not emit the panel's visible draw |
+| Direct draw | render a panel at layout-provided bounds | must report or preserve the consumed height |
+| Cached direct draw | reuse a previously recorded panel texture | a cache hit must avoid a full redraw; a miss must fall back to direct draw |
+
+The current public registry API represents the cross-product of those targets
+and phases with separate methods. That naming is an implementation detail, not
+a contract for new panels or plugins. A future consolidation must preserve the
+three target scopes, the phase ordering, and the cached-draw fallback before
+removing individual entry points.
+
+Direct rendering may also require input, a vertical input clip, panel space,
+and a layout-forced height. Treat these as properties of one render invocation.
+They must not leak into the next invocation of the same panel, including when
+the panel changes layout location or its cached texture is reused.
+
+The pre-scene path is especially sensitive: `GuiManager` can preload an active
+tab and its child panels before scene rendering, while `PanelLayoutManager`
+performs the later placement and direct draw. Do not reorder or merge those
+calls merely because they address the same panel; doing so can move layout work
+onto a latency-sensitive point in the frame.
+
+### Floating-panel state
+
+Floating interaction is not generic panel registration metadata. Its stable
+responsibilities are position, auto-centering, stack order, drag and resize
+state, user-selected height, and the last window-space bounds used for hit
+testing. Only a panel in `PanelSpace::FLOATING` needs this state.
+
+When changing registry storage, preserve these lifecycle rules:
+
+- replacing a registered floating panel with the same id retains its placement
+  and stack order where the current registry does so;
+- entering or leaving the floating space creates or discards its interaction
+  state deliberately;
+- UI-scale changes and explicit size resets cancel transient drag/resize state;
+  and
+- stack promotion and pointer hit testing read the same last-known bounds.
+
+This keeps registration data (identity, label, parent, space, ordering and
+options) independent from live mouse interaction, while retaining the present
+input and z-order semantics.
+
 ## Decision
 
 Keep the one-context-per-panel model. Do not replace it with one global RmlUI
