@@ -295,8 +295,8 @@ namespace lfs::core {
         void reconfigure_for_testing(RasterizerMemoryArena::Config config);
 
     private:
-        friend GlobalArenaManager& global_arena_manager();
-        friend void shutdown_global_arena_manager();
+        friend LFS_CORE_API GlobalArenaManager& global_arena_manager();
+        friend LFS_CORE_API void shutdown_global_arena_manager();
 
         GlobalArenaManager() = default;
         ~GlobalArenaManager() = default;
