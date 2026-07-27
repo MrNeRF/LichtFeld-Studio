@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Fail when a shipped locale omits a string key from en.json."""
+"""Validate shipped locale keys and std::format placeholders against en.json."""
 
 from __future__ import annotations
 
@@ -46,21 +46,45 @@ def placeholders(value: str) -> tuple[str, ...]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description="""Validate shipped locale keys and std::format placeholders against en.json.
+
+en.json is the canonical locale. The default check validates every shipped
+locale and exits with status 1 when a locale:
+  - omits a key from en.json;
+  - contains an unexpected or obsolete key; or
+  - has malformed or mismatched std::format placeholders.
+
+Named placeholders may be reordered to suit the target language. Identical
+non-empty values are allowed as temporary English fallbacks by default; use an
+audit option below to report or reject them explicitly.""",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  # Required CI-equivalent validation.\n"
+            "  python tools/check_locale_completeness.py\n\n"
+            "  # Count non-empty values still equal to English. Does not fail.\n"
+            "  python tools/check_locale_completeness.py --report-identical\n\n"
+            "  # Print every value counted by the identical-value audit. Does not fail.\n"
+            "  python tools/check_locale_completeness.py --list-identical\n\n"
+            "  # Translation audit: fail if a non-empty value still equals English.\n"
+            "  python tools/check_locale_completeness.py --fail-on-identical"
+        ),
+    )
     parser.add_argument(
         "--report-identical",
         action="store_true",
-        help="report the number of non-empty values that still match en.json",
+        help="report non-empty values that still match en.json without failing",
     )
     parser.add_argument(
         "--list-identical",
         action="store_true",
-        help="list the keys counted by --report-identical",
+        help="list the keys counted by --report-identical without failing",
     )
     parser.add_argument(
         "--fail-on-identical",
         action="store_true",
-        help="treat identical values as failures (intended for manual audits)",
+        help="treat non-empty values matching en.json as failures for a manual translation audit",
     )
     args = parser.parse_args()
     if args.list_identical or args.fail_on_identical:

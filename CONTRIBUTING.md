@@ -26,9 +26,11 @@ Thanks for your interest in contributing!
 ## Localization
 
 `src/visualizer/gui/resources/locales/en.json` is the canonical locale bundle.
-Every key added there must also be present in every shipped locale file, even when
-the translation is temporarily the English fallback. The runtime fallback keeps
-the UI readable, but CI still rejects missing keys.
+Every shipped locale must have exactly the same keys as `en.json`, even when a
+translation is temporarily the English fallback. The runtime fallback keeps the
+UI readable, but CI rejects missing and obsolete keys. Translated strings must
+also preserve the `std::format` placeholders from English; named placeholders
+may be reordered to suit the target language.
 
 Before submitting localization changes, run:
 
@@ -41,6 +43,16 @@ To audit values that are still identical to English without failing the check:
 ```bash
 python tools/check_locale_completeness.py --report-identical
 ```
+
+To print those keys, use `--list-identical`. For a deliberate translation audit
+that fails when non-empty values still match English, use:
+
+```bash
+python tools/check_locale_completeness.py --fail-on-identical
+```
+
+The Locale Completeness GitHub Actions workflow runs the default check for pull
+requests and pushes to `master`; the identical-value audit remains opt-in.
 
 ## Code Style
 
