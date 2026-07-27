@@ -178,14 +178,12 @@ namespace lfs::vis {
         void setupEventHandlers();
         void setupComponentConnections();
         void handleTrainingCompleted(const lfs::core::events::state::TrainingCompleted& event);
-        void handleLoadFileCommand(const lfs::core::events::cmd::LoadFile& cmd);
         void handleLoadConfigFile(const std::filesystem::path& path);
         void handleNewProject();
         void performNewProject();
         void schedulePendingTrainingAction();
         void performPendingTrainingAction();
         void requestApplicationClose();
-        void handleSwitchToLatestCheckpoint();
         void performReset();
         void resetProjectState();
 

@@ -1192,10 +1192,6 @@ namespace lfs::vis {
         });
 
         // File loading commands
-        cmd::LoadFile::when([this](const auto& cmd) {
-            handleLoadFileCommand(cmd);
-        });
-
         cmd::LoadConfigFile::when([this](const auto& cmd) {
             handleLoadConfigFile(cmd.path);
         });
@@ -1209,10 +1205,6 @@ namespace lfs::vis {
             if (window_manager_) {
                 window_manager_->requestClose();
             }
-        });
-
-        cmd::SwitchToLatestCheckpoint::when([this](const auto&) {
-            handleSwitchToLatestCheckpoint();
         });
 
         // Signal bridge event handlers
@@ -1614,11 +1606,7 @@ namespace lfs::vis {
                                         std::max(kTooltipRevealMinWaitSeconds, *tooltip_wait));
         }
 
-        if (is_training) {
-            window_manager_->waitEvents(wait_seconds); // Training tick is capped at ~10 Hz when no resize settle is due.
-        } else {
-            window_manager_->waitEvents(wait_seconds);
-        }
+        window_manager_->waitEvents(wait_seconds);
     }
 
     void VisualizerImpl::render() {
@@ -2210,10 +2198,6 @@ namespace lfs::vis {
         restore_camera();
     }
 
-    void VisualizerImpl::handleLoadFileCommand([[maybe_unused]] const lfs::core::events::cmd::LoadFile& cmd) {
-        // File loading is handled by the data_loader_ service
-    }
-
     void VisualizerImpl::handleLoadConfigFile(const std::filesystem::path& path) {
         auto result = lfs::core::param::read_optim_params_from_json(path);
         if (!result) {
@@ -2285,11 +2269,6 @@ namespace lfs::vis {
             window_manager_->requestClose();
         }
         wakeMainLoop();
-    }
-
-    void VisualizerImpl::handleSwitchToLatestCheckpoint() {
-        // This event is emitted by the training flow even when no project/checkpoint manager is active.
-        // In the plain dataset workflow there is nothing to switch, so treat it as a no-op.
     }
 
 } // namespace lfs::vis
