@@ -852,12 +852,10 @@ namespace lfs::vis::gui {
             lichtfeld::Strings::Scene::LOG_INFO, lichtfeld::Strings::Scene::LOG_PERFORMANCE,
             lichtfeld::Strings::Scene::LOG_WARN, lichtfeld::Strings::Scene::LOG_ERROR,
             lichtfeld::Strings::Scene::LOG_CRITICAL, lichtfeld::Strings::Scene::LOG_OFF};
-        const std::array log_option_ids{"logging-level-trace", "logging-level-debug",
-                                        "logging-level-info", "logging-level-performance",
-                                        "logging-level-warn", "logging-level-error",
-                                        "logging-level-critical", "logging-level-off"};
         for (size_t i = 0; i < log_option_keys.size(); ++i)
-            changed |= setCachedText(document_->GetElementById(log_option_ids[i]), LOC(log_option_keys[i]));
+            if (auto* const option = logging_level_select_el_->GetOption(static_cast<int>(i)))
+                changed |= setCachedText(option, LOC(log_option_keys[i]));
+        logging_level_select_el_->SetSelection(logging_level_select_el_->GetSelection());
         last_history_generation_ = std::numeric_limits<uint64_t>::max();
         last_log_generation_ = std::numeric_limits<uint64_t>::max();
         return changed;

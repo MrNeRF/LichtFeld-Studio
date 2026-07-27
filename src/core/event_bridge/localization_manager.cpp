@@ -36,6 +36,7 @@ namespace lfs::event {
         available_languages_.clear();
         language_names_.clear();
         fallback_strings_.clear();
+        warned_missing_keys_.clear();
 
         for (fs::directory_iterator it(locales_dir_, fs::directory_options::skip_permission_denied, ec), end;
              !ec && it != end; it.increment(ec)) {
@@ -54,6 +55,8 @@ namespace lfs::event {
 
             const auto name_it = test_strings.find(LANGUAGE_NAME_KEY);
             language_names_[lang_code] = (name_it != test_strings.end()) ? name_it->second : lang_code;
+            if (lang_code == DEFAULT_LANGUAGE)
+                fallback_strings_ = std::move(test_strings);
         }
         if (ec) {
             LOG_ERROR("Failed to scan locales directory '{}': {}", locales_dir_, ec.message());
@@ -70,10 +73,6 @@ namespace lfs::event {
         const bool has_default = std::find(available_languages_.begin(),
                                            available_languages_.end(),
                                            DEFAULT_LANGUAGE) != available_languages_.end();
-        if (has_default &&
-            !parseLocaleFile(locales_dir_ + "/" + DEFAULT_LANGUAGE + ".json", fallback_strings_)) {
-            return false;
-        }
         return setLanguage(has_default ? DEFAULT_LANGUAGE : available_languages_[0]);
     }
 
@@ -92,12 +91,14 @@ namespace lfs::event {
 
         const auto fallback_it = fallback_strings_.find(key_str);
         if (fallback_it != fallback_strings_.end()) {
-            LOG_WARN("Missing localization key '{}' in '{}'; using English fallback",
-                     key_str, current_language_);
+            if (current_language_ != DEFAULT_LANGUAGE && warned_missing_keys_.insert(key_str).second)
+                LOG_WARN("Missing localization key '{}' in '{}'; using English fallback",
+                         key_str, current_language_);
             return fallback_it->second.c_str();
         }
 
-        LOG_WARN("Missing localization key: {}", key_str);
+        if (warned_missing_keys_.insert(key_str).second)
+            LOG_WARN("Missing localization key: {}", key_str);
         return key.data();
     }
 
@@ -158,6 +159,12 @@ namespace lfs::event {
     }
 
     bool LocalizationManager::loadLanguage(const std::string& language_code) {
+        if (language_code == DEFAULT_LANGUAGE && !fallback_strings_.empty()) {
+            current_strings_.clear();
+            LOG_INFO("Loaded {} strings for language: {}", fallback_strings_.size(), language_code);
+            return true;
+        }
+
         const std::string filepath = locales_dir_ + "/" + language_code + ".json";
 
         std::error_code ec;

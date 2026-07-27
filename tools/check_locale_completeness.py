@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import string
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,15 @@ def load_locale(path: Path) -> dict[str, str]:
     if not isinstance(data, dict):
         raise ValueError(f"{path.name} must contain a JSON object")
     return flatten_strings(data)
+
+
+def placeholders(value: str) -> tuple[str, ...]:
+    """Return normalized format placeholders, raising ValueError for malformed braces."""
+    return tuple(sorted(
+        f"{{{field_name}{f'!{conversion}' if conversion else ''}{f':{format_spec}' if format_spec else ''}}}"
+        for _, field_name, format_spec, conversion in string.Formatter().parse(value)
+        if field_name is not None
+    ))
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,9 +81,25 @@ def main() -> int:
             continue
         locale = load_locale(locale_path)
         missing = sorted(english_keys - set(locale))
+        extra = sorted(set(locale) - english_keys)
         if missing:
             failures.append(f"{locale_path.name} is missing {len(missing)} key(s):")
             failures.extend(f"  {key}" for key in missing)
+        if extra:
+            failures.append(f"{locale_path.name} has {len(extra)} unexpected key(s):")
+            failures.extend(f"  {key}" for key in extra)
+        for key in sorted(english_keys & set(locale)):
+            try:
+                english_placeholders = placeholders(english[key])
+                locale_placeholders = placeholders(locale[key])
+            except ValueError as error:
+                failures.append(f"{locale_path.name} has an invalid format string for {key}: {error}")
+                continue
+            if locale_placeholders != english_placeholders:
+                failures.append(
+                    f"{locale_path.name} has mismatched placeholders for {key}: "
+                    f"expected {english_placeholders}, got {locale_placeholders}"
+                )
         if args.report_identical:
             identical = sorted(
                 key

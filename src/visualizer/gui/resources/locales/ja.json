@@ -383,8 +383,6 @@
     "tooltip.ppisp_freeze_gaussians": "コントローラートレーニング中にガウシアンパラメータを固定",
     "tooltip.strategy_gut_conflict": "GUTが有効な場合、igs+戦略は使用できません",
     "tooltip.gut_strategy_conflict": "igs+戦略ではGUTは使用できません。先にMCMCに切り替えてください。",
-    "tooltip.opt.depth_loss_mode.pearson": "位置合わせされた有効な深度ピクセルに対するスケール不変のピアソン相関損失",
-    "tooltip.opt.depth_loss_mode.adaptive_warped_l1": "不透明度の重み付けをデタッチした、LOD-3DGS方式の正規化逆深度L1損失",
     "error.strategy_gut_title": "互換性のない設定",
     "conflict.strategy_gut_start_message": "GUTはigs+戦略と同時に使用できません。トレーニングを開始するアクションを選択してください。",
     "conflict.strategy_gut_strategy_message": "この戦略はGUTと互換性がありません。切り替えるためにGUTを無効にしますか？",
@@ -440,8 +438,6 @@
     "options.mask.ignore": "無視",
     "options.mask.segment_and_ignore": "セグメント + 無視",
     "options.mask.alpha_consistent": "アルファ整合",
-    "options.depth_loss.pearson": "ピアソン相関",
-    "options.depth_loss.adaptive_warped_l1": "Adaptive Warped L1",
     "options.depth_loss.ssi": "SSI（自動）",
     "options.depth_loss.ssi_disparity": "SSI（視差事前分布）",
     "options.depth_loss.ssi_depth": "SSI（深度事前分布）",
@@ -666,7 +662,7 @@
     "dataset_ready": "データセット (準備完了)",
     "training_paused": "トレーニング (一時停止)",
     "training_finished": "トレーニング終了",
-    "ply_models_count": "PLYモデル: %zu"
+    "ply_models_count": "PLYモデル: {}"
   },
   "mode": {
     "empty": "空",
