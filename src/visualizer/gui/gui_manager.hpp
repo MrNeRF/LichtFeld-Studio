@@ -86,6 +86,7 @@ namespace lfs::vis {
             [[nodiscard]] bool isInteractiveTransitionSettling() const;
             void syncVisiblePanelsBeforeSceneRender();
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
+            void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
             // Sub-manager access
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }

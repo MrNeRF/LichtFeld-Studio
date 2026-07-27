@@ -271,6 +271,8 @@ namespace lfs::vis::gui {
             }
         }
         cjk_fonts_loaded_ = any_loaded;
+        if (any_loaded)
+            Rml::ReleaseFontResources();
     }
 
     void RmlUIManager::shutdown() {
