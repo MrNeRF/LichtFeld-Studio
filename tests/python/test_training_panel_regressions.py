@@ -114,6 +114,9 @@ class _ParamsStub:
         self.stop_refine = int(self.stop_refine * scale)
         self.grow_until_iter = int(self.grow_until_iter * scale)
 
+    def auto_scale_steps(self, _camera_count):
+        pass
+
     def set(self, prop, value):
         setattr(self, prop, value)
 
@@ -126,6 +129,7 @@ class _ParamsStub:
 
 class _DatasetStub:
     def __init__(self):
+        self.data_path = "/data/scene_a"
         self.max_width = 2048
         self.test_every = 8
 
@@ -139,6 +143,32 @@ class _ModelStub:
 
     def bind(self, name, getter, setter):
         self.bindings[name] = (getter, setter)
+
+
+def test_auto_scale_marker_survives_reset_but_not_dataset_change(
+    training_panel_module, monkeypatch
+):
+    dataset = _DatasetStub()
+    scene = SimpleNamespace(active_camera_count=600)
+    monkeypatch.setattr(
+        training_panel_module,
+        "RuntimeState",
+        SimpleNamespace(scene_generation=_make_signal(0)),
+    )
+    monkeypatch.setattr(training_panel_module.lf, "dataset_params", lambda: dataset)
+    monkeypatch.setattr(training_panel_module.lf, "get_scene", lambda: scene)
+    panel = training_panel_module.TrainingPanel()
+    params = _ParamsStub()
+
+    assert panel._try_auto_scale_steps(params) is True
+
+    # Reset re-loads the same dataset and bumps the scene generation.
+    training_panel_module.RuntimeState.scene_generation.value = 1
+    assert panel._try_auto_scale_steps(params) is False
+
+    dataset.data_path = "/data/scene_b"
+    training_panel_module.RuntimeState.scene_generation.value = 2
+    assert panel._try_auto_scale_steps(params) is True
 
 
 def test_training_panel_progress_updates_bound_value(training_panel_module, monkeypatch):
