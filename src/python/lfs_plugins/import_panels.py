@@ -1909,6 +1909,11 @@ class WatchDirsDialogPanel(Panel):
             return
 
         model.bind_func("panel_label", self._panel_label)
+        model.bind_func("subtitle", lambda: lf.ui.tr("watch_dirs.subtitle"))
+        model.bind_func("add_directory_label", lambda: lf.ui.tr("watch_dirs.add_directory"))
+        model.bind_func("remove_label", lambda: lf.ui.tr("common.remove"))
+        model.bind_func("no_watch_dirs_label", lambda: lf.ui.tr("watch_dirs.empty"))
+        model.bind_func("cancel_label", lambda: lf.ui.tr("common.cancel"))
         model.bind_record_list("watch_dirs_list")
         model.bind_record_list("scan_log_list")
         model.bind_func("no_watch_dirs", lambda: len(self._watch_dirs) == 0)
@@ -2002,7 +2007,7 @@ class WatchDirsDialogPanel(Panel):
             return False
 
     def _panel_label(self) -> str:
-        return f"Watched Directories — {self._folder_name}"
+        return f"{lf.ui.tr('watch_dirs.title')} — {self._folder_name}"
 
     def _get_scan_active(self) -> bool:
         with self._scan_state_lock:
@@ -2031,10 +2036,10 @@ class WatchDirsDialogPanel(Panel):
     def _get_scan_save_label(self) -> str:
         with self._scan_state_lock:
             if self._scan_active:
-                return "Scanning..."
+                return lf.ui.tr("watch_dirs.scanning")
             if self._scan_terminal:
-                return "Done"
-            return "Save & Scan"
+                return lf.ui.tr("watch_dirs.done")
+            return lf.ui.tr("watch_dirs.save_scan")
 
     def _get_scan_terminal(self) -> bool:
         with self._scan_state_lock:

@@ -342,6 +342,8 @@ namespace lfs::vis::gui {
 
         set_text("supported-text", lichtfeld::Strings::Startup::SUPPORTED_BY);
         set_text("lang-label", lichtfeld::Strings::Preferences::LANGUAGE);
+        set_text("discord-link", lichtfeld::Strings::Startup::DISCORD);
+        set_text("donate-link", lichtfeld::Strings::Startup::DONATE);
         has_applied_plugin_load_state_ = false;
         updateClickHintUI();
     }

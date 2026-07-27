@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/panels/python_console_panel.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
@@ -13,6 +14,7 @@
 #include "gui/rmlui/elements/terminal_element.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/terminal/terminal_widget.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 
@@ -1115,6 +1117,37 @@ namespace {
     void sync_console_dom(RmlPythonConsolePane& pane,
                           lfs::vis::gui::panels::PythonConsoleState& state,
                           const float panel_h) {
+        if (pane.document) {
+            const auto set_label = [&](const char* id, const char* key) {
+                set_text(pane, pane.document->GetElementById(id), LOC(key));
+            };
+            set_label("new-button", lichtfeld::Strings::PythonConsole::NEW);
+            set_label("load-button", lichtfeld::Strings::PythonConsole::LOAD);
+            set_label("reload-button", lichtfeld::Strings::PythonConsole::RELOAD);
+            set_label("save-button", lichtfeld::Strings::PythonConsole::SAVE);
+            set_label("save-as-button", lichtfeld::Strings::PythonConsole::SAVE_AS);
+            set_label("format-button", lichtfeld::Strings::PythonConsole::FORMAT);
+            set_label("vim-button", lichtfeld::Strings::PythonConsole::VIM);
+            set_label("run-button", lichtfeld::Strings::PythonConsole::RUN);
+            set_label("stop-button", lichtfeld::Strings::PythonConsole::STOP);
+            set_label("reset-button", lichtfeld::Strings::Common::RESET);
+            set_label("clear-button", lichtfeld::Strings::Training::Button::CLEAR);
+            set_label("syntax-status", lichtfeld::Strings::PythonConsole::SYNTAX);
+            set_label("outline-button", lichtfeld::Strings::PythonConsole::OUTLINE);
+            set_label("breadcrumb-button", lichtfeld::Strings::PythonConsole::SCOPE);
+            set_label("fold-button", lichtfeld::Strings::PythonConsole::BLOCKS);
+            set_label("script-label", lichtfeld::Strings::PythonConsole::UNTITLED);
+            set_label("tab-output", lichtfeld::Strings::PythonConsole::OUTPUT);
+            set_label("tab-terminal", lichtfeld::Strings::PythonConsole::TERMINAL);
+            set_label("tab-packages", lichtfeld::Strings::PythonConsole::PACKAGES);
+            set_label("packages-refresh", lichtfeld::Strings::PythonConsole::REFRESH);
+            set_label("packages-name", lichtfeld::Strings::PythonConsole::NAME);
+            set_label("packages-version", lichtfeld::Strings::PythonConsole::VERSION);
+            set_label("packages-path", lichtfeld::Strings::PythonConsole::PATH);
+            if (auto* const search = pane.document->GetElementById("packages-search"))
+                search->SetAttribute("placeholder", LOC(lichtfeld::Strings::PythonConsole::SEARCH_PACKAGES));
+            set_label("packages-empty", lichtfeld::Strings::PythonConsole::NO_PACKAGES);
+        }
         auto* editor = state.getEditor();
         const bool has_script = !state.getScriptPath().empty();
         const bool can_stop = can_stop_python_work(state);
@@ -1122,7 +1155,9 @@ namespace {
 
         set_disabled(pane, pane.reload_button_el, !has_script);
         set_disabled(pane, pane.stop_button_el, !can_stop);
-        set_text(pane, pane.run_status_el, can_stop ? "Running..." : "Python");
+        set_text(pane, pane.run_status_el,
+                 can_stop ? LOC(lichtfeld::Strings::PythonConsole::RUNNING)
+                          : LOC(lichtfeld::Strings::PythonConsole::PYTHON));
         set_class(pane, pane.run_status_el, "running", can_stop);
 
         const bool vim_enabled = editor && editor->isVimModeEnabled();
