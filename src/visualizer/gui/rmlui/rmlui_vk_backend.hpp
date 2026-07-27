@@ -11,16 +11,6 @@
 #include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef VK_USE_PLATFORM_WIN32_KHR
-#define VK_USE_PLATFORM_WIN32_KHR
-#endif
-#include <windows.h>
-#endif
-
 #ifndef VMA_STATIC_VULKAN_FUNCTIONS
 #define VMA_STATIC_VULKAN_FUNCTIONS 1
 #endif
@@ -64,8 +54,6 @@ public:
     RenderInterface_VK();
     ~RenderInterface_VK();
 
-    using CreateSurfaceCallback = bool (*)(VkInstance instance, VkSurfaceKHR* out_surface);
-
     struct ExternalContext {
         VkInstance instance = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -78,9 +66,6 @@ public:
         VkExtent2D extent{};
         bool host_image_copy = false;
     };
-
-    bool Initialize(Rml::Vector<const char*> required_extensions, CreateSurfaceCallback create_surface_callback);
-    void Shutdown();
 
     bool InitializeExternal(const ExternalContext& context);
     void ShutdownExternal();
@@ -95,13 +80,6 @@ public:
     void SetContextOffset(float offset_x, float offset_y);
     void SetContextClipRect(float x1, float y1, float x2, float y2);
     void RenderTextureQuad(Rml::TextureHandle texture, float x, float y, float w, float h);
-
-    void BeginFrame();
-    void EndFrame();
-
-    void SetViewport(int width, int height);
-    bool IsSwapchainValid();
-    void RecreateSwapchain();
 
     // Build a Rml::Image src URL referencing an externally-owned VkImageView/VkSampler.
     // The view+sampler must remain alive while any element references this URL. The
@@ -414,37 +392,6 @@ private:
         VmaVirtualBlock m_p_block;
     };
 
-    // If we need additional command buffers, we can add them to this list and retrieve them from the ring.
-    enum class CommandBufferName { Primary,
-                                   Count };
-
-    // The command buffer ring stores a unique set of named command buffers for each bufferd frame.
-    // Explanation of how to use Vulkan efficiently: https://vkguide.dev/docs/chapter-4/double_buffering/
-    class CommandBufferRing {
-    public:
-        static constexpr uint32_t kNumFramesToBuffer = kSwapchainBackBufferCount;
-        static constexpr uint32_t kNumCommandBuffersPerFrame = static_cast<uint32_t>(CommandBufferName::Count);
-
-        CommandBufferRing();
-
-        void Initialize(VkDevice p_device, uint32_t queue_index_graphics) noexcept;
-        void Shutdown();
-
-        void OnBeginFrame();
-        VkCommandBuffer GetCommandBufferForActiveFrame(CommandBufferName named_command_buffer);
-
-    private:
-        struct CommandBuffersPerFrame {
-            Rml::Array<VkCommandPool, kNumCommandBuffersPerFrame> m_command_pools;
-            Rml::Array<VkCommandBuffer, kNumCommandBuffersPerFrame> m_command_buffers;
-        };
-
-        VkDevice m_p_device;
-        uint32_t m_frame_index;
-        CommandBuffersPerFrame* m_p_current_frame;
-        Rml::Array<CommandBuffersPerFrame, kNumFramesToBuffer> m_frames;
-    };
-
     // Grows on demand: when a pool is exhausted (VK_ERROR_OUT_OF_POOL_MEMORY / VK_ERROR_FRAGMENTED_POOL)
     // a new identically-sized pool is created and the allocation retried. Each set remembers its owning
     // pool so Free_Descriptors returns it to the correct pool.
@@ -571,15 +518,6 @@ private:
         std::unordered_map<VkDescriptorSet, VkDescriptorPool> m_set_to_pool;
     };
 
-    struct PhysicalDeviceWrapper {
-        VkPhysicalDevice m_p_physical_device;
-        VkPhysicalDeviceProperties m_physical_device_properties;
-    };
-
-    using PhysicalDeviceWrapperList = Rml::Vector<PhysicalDeviceWrapper>;
-    using LayerPropertiesList = Rml::Vector<VkLayerProperties>;
-    using ExtensionPropertiesList = Rml::Vector<VkExtensionProperties>;
-
 private:
     Rml::TextureHandle CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions,
                                      const Rml::String& name, VkSampler sampler = VK_NULL_HANDLE);
@@ -589,57 +527,11 @@ private:
     void QueueTextureForDeferredDeletion(texture_data_t* texture);
     static async_preview_result_t DecodePreviewTexture(std::filesystem::path path, int max_size);
 
-    void Initialize_Instance(Rml::Vector<const char*> required_extensions) noexcept;
-    void Initialize_Device() noexcept;
-    void Initialize_PhysicalDevice(VkPhysicalDeviceProperties& out_physical_device_properties) noexcept;
-    void Initialize_Swapchain(VkExtent2D window_extent) noexcept;
-    void Initialize_Surface(CreateSurfaceCallback create_surface_callback) noexcept;
-    void Initialize_QueueIndecies() noexcept;
-    void Initialize_Queues() noexcept;
-    void Initialize_SyncPrimitives() noexcept;
     void Initialize_Resources(const VkPhysicalDeviceProperties& physical_device_properties) noexcept;
     void Initialize_Allocator() noexcept;
 
-    void Destroy_Instance() noexcept;
-    void Destroy_Device() noexcept;
-    void Destroy_Swapchain() noexcept;
-    void Destroy_Surface() noexcept;
-    void Destroy_SyncPrimitives() noexcept;
     void Destroy_Resources() noexcept;
     void Destroy_Allocator() noexcept;
-
-    void QueryInstanceLayers(LayerPropertiesList& result) noexcept;
-    void QueryInstanceExtensions(ExtensionPropertiesList& result, const LayerPropertiesList& instance_layer_properties) noexcept;
-    bool AddLayerToInstance(Rml::Vector<const char*>& result, const LayerPropertiesList& instance_layer_properties,
-                            const char* p_instance_layer_name) noexcept;
-    bool AddExtensionToInstance(Rml::Vector<const char*>& result, const ExtensionPropertiesList& instance_extension_properties,
-                                const char* p_instance_extension_name) noexcept;
-    void CreatePropertiesFor_Instance(Rml::Vector<const char*>& instance_layer_names, Rml::Vector<const char*>& instance_extension_names) noexcept;
-
-    bool IsLayerPresent(const LayerPropertiesList& properties, const char* p_layer_name) noexcept;
-    bool IsExtensionPresent(const ExtensionPropertiesList& properties, const char* p_extension_name) noexcept;
-
-    bool AddExtensionToDevice(Rml::Vector<const char*>& result, const ExtensionPropertiesList& device_extension_properties,
-                              const char* p_device_extension_name) noexcept;
-    void CreatePropertiesFor_Device(ExtensionPropertiesList& result) noexcept;
-
-    void CreateReportDebugCallback() noexcept;
-    void Destroy_ReportDebugCallback() noexcept;
-
-    uint32_t GetUserAPIVersion() const noexcept;
-    uint32_t GetRequiredVersionAndValidateMachine() noexcept;
-
-    void CollectPhysicalDevices(PhysicalDeviceWrapperList& out_physical_devices) noexcept;
-    const PhysicalDeviceWrapper* ChoosePhysicalDevice(const PhysicalDeviceWrapperList& physical_devices, VkPhysicalDeviceType device_type) noexcept;
-
-    VkSurfaceFormatKHR ChooseSwapchainFormat() noexcept;
-    VkSurfaceTransformFlagBitsKHR CreatePretransformSwapchain() noexcept;
-    VkCompositeAlphaFlagBitsKHR ChooseSwapchainCompositeAlpha() noexcept;
-    int Choose_SwapchainImageCount(uint32_t user_swapchain_count_for_creation = kSwapchainBackBufferCount, bool if_failed_choose_min = true) noexcept;
-    VkPresentModeKHR GetPresentMode(VkPresentModeKHR type = VkPresentModeKHR::VK_PRESENT_MODE_FIFO_KHR) noexcept;
-    VkSurfaceCapabilitiesKHR GetSurfaceCapabilities() noexcept;
-
-    VkExtent2D GetValidSurfaceExtent() noexcept;
 
     void CreateShaders() noexcept;
     void CreateDescriptorSetLayout() noexcept;
@@ -648,15 +540,7 @@ private:
     void CreateSamplers() noexcept;
     void Create_Pipelines() noexcept;
 
-    // This method is called in Views, so don't call it manually
-    void CreateSwapchainImages() noexcept;
-    void CreateSwapchainImageViews() noexcept;
-
-    void Create_DepthStencilImage() noexcept;
-    void Create_DepthStencilImageViews() noexcept;
-
     void UpdateViewportState(const VkExtent2D& real_render_image_size) noexcept;
-    void CreateResourcesDependentOnSize(const VkExtent2D& real_render_image_size) noexcept;
 
     buffer_data_t CreateResource_StagingBuffer(VkDeviceSize size, VkBufferUsageFlags flags) noexcept;
     void DestroyResource_StagingBuffer(const buffer_data_t& data) noexcept;
@@ -669,13 +553,9 @@ private:
     void RegisterLiveTexture(texture_data_t* texture);
     void UnregisterLiveTexture(texture_data_t* texture);
 
-    void DestroyResourcesDependentOnSize() noexcept;
-    void DestroySwapchainImageViews() noexcept;
     void DestroyRenderLayers() noexcept;
     void DestroyRenderLayer(render_layer_t& layer) noexcept;
     void Destroy_Pipelines() noexcept;
-    void DestroyDescriptorSets() noexcept;
-    void DestroyPipelineLayout() noexcept;
     void DestroySamplers() noexcept;
     void FreeTransientShaderAllocations(uint32_t resource_slot) noexcept;
     void FreeAllTransientShaderAllocations() noexcept;
@@ -695,19 +575,9 @@ private:
     void ResetDynamicRenderState();
     void RenderFullscreenTexture(texture_data_t& texture, Rml::BlendMode blend_mode);
 
-    // Bounded acquire + image-fence wait. Returns false on soft-fail (WSI out-of-date,
-    // quarantine, cancel, device-lost) so BeginFrame can skip the frame without aborting.
-    [[nodiscard]] bool Wait() noexcept;
-
     void Update_PendingForDeletion_Textures_By_Frame(uint32_t resource_slot) noexcept;
     void Update_PendingForDeletion_Geometries(uint32_t resource_slot) noexcept;
     uint32_t ActiveResourceSlot() const noexcept;
-    void WaitForSubmittedFrames() noexcept;
-
-    void Submit() noexcept;
-    void Present() noexcept;
-
-    VkFormat Get_SupportedDepthFormat();
 
 private:
     bool m_is_transform_enabled;
@@ -721,21 +591,14 @@ private:
     int m_width;
     int m_height;
 
-    uint32_t m_queue_index_present;
     uint32_t m_queue_index_graphics;
-    uint32_t m_queue_index_compute;
-    uint32_t m_semaphore_index;
-    uint32_t m_semaphore_index_previous;
     uint32_t m_resource_slot = 0;
     uint32_t m_reclaim_resource_slot = 0;
-    uint32_t m_image_index;
 
     VkInstance m_p_instance;
     VkDevice m_p_device;
     lfs::rendering::VulkanDebugNameWriter m_debug_name_writer;
     VkPhysicalDevice m_p_physical_device;
-    VkSurfaceKHR m_p_surface;
-    VkSwapchainKHR m_p_swapchain;
     VkPipelineCache m_p_pipeline_cache;
     VmaAllocator m_p_allocator;
     // VK_EXT_host_image_copy: when both pointers load (extension + feature
@@ -763,13 +626,7 @@ private:
     VkRect2D m_scissor_original;
     VkViewport m_viewport;
 
-    VkQueue m_p_queue_present;
     VkQueue m_p_queue_graphics;
-    VkQueue m_p_queue_compute;
-
-#ifdef RMLUI_VK_DEBUG
-    VkDebugUtilsMessengerEXT m_debug_messenger;
-#endif
 
     VkSurfaceFormatKHR m_swapchain_format;
     VkFormat m_depth_stencil_format = VK_FORMAT_UNDEFINED;
@@ -780,15 +637,8 @@ private:
     VkRect2D m_context_clip_scissor{};
     bool m_context_clip_enabled = false;
     bool m_current_context_used_preview_texture = false;
-    texture_data_t m_texture_depthstencil;
 
     Rml::Matrix4f m_projection;
-    Rml::Vector<VkFence> m_executed_fences;
-    Rml::Vector<VkSemaphore> m_semaphores_image_available;
-    Rml::Vector<VkSemaphore> m_semaphores_finished_render;
-    Rml::Vector<VkImage> m_swapchain_images;
-    Rml::Vector<VkImageView> m_swapchain_image_views;
-    Rml::Vector<VkImageLayout> m_swapchain_image_layouts;
     Rml::Vector<VkShaderModule> m_shaders;
     Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
     std::unordered_set<texture_data_t*> m_live_textures;
@@ -805,7 +655,6 @@ private:
     VkImageView m_external_swapchain_image_view = VK_NULL_HANDLE;
     VkImageView m_external_depth_stencil_image_view = VK_NULL_HANDLE;
     VkImageLayout m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     lfs::vis::VulkanImageBarrierTracker m_image_barriers;
     active_render_target_t m_active_render_target = active_render_target_t::None;
     Rml::LayerHandle m_active_layer = 0;
@@ -814,7 +663,6 @@ private:
     // vma handles that thing, so there's no need for frame splitting
     Rml::Array<Rml::Vector<geometry_handle_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_geometries_by_frame;
 
-    CommandBufferRing m_command_buffer_ring;
     MemoryPool m_memory_pool;
     UploadResourceManager m_upload_manager;
     DescriptorPoolManager m_manager_descriptors;
