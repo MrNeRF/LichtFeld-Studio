@@ -411,6 +411,7 @@ class TrainingPanel(Panel):
         self._new_save_step = 7000
         self._auto_scaled_for_cameras = 0
         self._auto_scale_steps_locked = True
+        self._auto_scale_user_override = False
         self._auto_scale_dataset_path = ""
         self._last_state = ""
         self._last_save_steps = None
@@ -1327,6 +1328,7 @@ class TrainingPanel(Panel):
         if dataset_path != self._auto_scale_dataset_path:
             self._auto_scale_dataset_path = dataset_path
             self._auto_scaled_for_cameras = 0
+            self._auto_scale_user_override = False
 
     def _unsubscribe_reactive_state(self):
         self._reactive_binding.close()
@@ -1784,7 +1786,10 @@ class TrainingPanel(Panel):
 
         try:
             if prop == "steps_scaler":
+                current_scaler = float(getattr(params, "steps_scaler", 1.0))
                 params.apply_step_scaling(val)
+                if abs(val - current_scaler) > 0.005:
+                    self._auto_scale_user_override = True
                 if self._handle:
                     self._sync_text_bufs()
                     self._handle.dirty_all()
@@ -1816,6 +1821,7 @@ class TrainingPanel(Panel):
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
+        self._auto_scale_user_override = True
         return True
 
     def _set_ppisp_activation_step(self, val_str):
@@ -2353,7 +2359,7 @@ class TrainingPanel(Panel):
 
     def _try_auto_scale_steps(self, params):
         self._sync_auto_scale_markers()
-        if not self._auto_scale_steps_locked:
+        if not self._auto_scale_steps_locked or self._auto_scale_user_override:
             return False
         scene = lf.get_scene()
         if scene is None:
@@ -2373,6 +2379,7 @@ class TrainingPanel(Panel):
 
         if locked:
             self._auto_scaled_for_cameras = 0
+            self._auto_scale_user_override = False
             params = lf.optimization_params()
             if params and params.has_params() and self._try_auto_scale_steps(params):
                 self._sync_text_bufs()
