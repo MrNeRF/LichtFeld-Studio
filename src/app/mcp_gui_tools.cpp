@@ -2739,18 +2739,11 @@ namespace lfs::app {
                     if (group->type != core::NodeType::GROUP)
                         return json{{"error", "Node is not a group: " + name}};
 
-                    std::unordered_set<std::string> before;
-                    for (const auto* const node : scene.getNodes()) {
-                        if (node)
-                            before.insert(node->name);
-                    }
-
                     core::events::cmd::MergeGroupById{.node_id = group->id}.emit();
 
-                    for (const auto* const node : scene.getNodes()) {
-                        if (node && !before.contains(node->name))
-                            return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
-                    }
+                    if (const auto* const merged = scene.getNode(name);
+                        merged && merged->type == core::NodeType::SPLAT)
+                        return json{{"success", true}, {"node", node_summary_json(scene, *merged)}};
 
                     return json{{"error", "Group merge did not create a merged node"}};
                 });
