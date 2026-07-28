@@ -248,11 +248,9 @@ namespace lfs::core {
             bool effectively_visible = false;
             bool parent_effectively_visible = false;
         };
-        [[nodiscard]] std::vector<RenderableCropBox> getVisibleCropBoxes() const;
         [[nodiscard]] std::vector<RenderableCropBox> getRenderableCropBoxes() const;
 
         [[nodiscard]] NodeId getEllipsoidForSplat(NodeId splat_id) const;
-        [[nodiscard]] NodeId getOrCreateEllipsoidForSplat(NodeId splat_id);
         [[nodiscard]] EllipsoidData* getEllipsoidData(NodeId ellipsoid_id);
         [[nodiscard]] const EllipsoidData* getEllipsoidData(NodeId ellipsoid_id) const;
         void setEllipsoidData(NodeId ellipsoid_id, const EllipsoidData& data);
@@ -267,7 +265,6 @@ namespace lfs::core {
             bool effectively_visible = false;
             bool parent_effectively_visible = false;
         };
-        [[nodiscard]] std::vector<RenderableEllipsoid> getVisibleEllipsoids() const;
         [[nodiscard]] std::vector<RenderableEllipsoid> getRenderableEllipsoids() const;
 
         const lfs::core::SplatData* getCombinedModel() const;
@@ -307,8 +304,6 @@ namespace lfs::core {
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionIndices() const;
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionMask() const;
 
-        [[nodiscard]] std::unique_ptr<lfs::core::SplatData> createMergedModelWithTransforms() const;
-
         enum class MergeStorageMode {
             Clone,
             BorrowSingleIdentity,
@@ -318,9 +313,6 @@ namespace lfs::core {
             const std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>>& splats,
             MergeStorageMode storage_mode = MergeStorageMode::Clone);
 
-        [[nodiscard]] const lfs::core::PointCloud* getVisiblePointCloud() const;
-        [[nodiscard]] std::optional<glm::mat4> getVisiblePointCloudTransform() const;
-
         struct VisibleMesh {
             const lfs::core::MeshData* mesh;
             glm::mat4 transform;
@@ -328,7 +320,6 @@ namespace lfs::core {
             bool is_selected = false;
         };
         [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
-        [[nodiscard]] bool hasVisibleMeshes() const;
 
         std::vector<glm::mat4> getVisibleNodeTransforms() const;
         std::shared_ptr<lfs::core::Tensor> getTransformIndices() const;
@@ -414,12 +405,6 @@ namespace lfs::core {
         [[nodiscard]] std::vector<glm::mat4> getVisibleCameraSceneTransforms() const;
         [[nodiscard]] std::optional<glm::mat4> getCameraSceneTransformByUid(int uid) const;
 
-        void pinForExport() const { ++export_pin_count_; }
-        void unpinForExport() const {
-            assert(export_pin_count_.load(std::memory_order_acquire) > 0);
-            --export_pin_count_;
-        }
-
         void invalidateCache() {
             model_cache_valid_.store(false, std::memory_order_release);
             transform_cache_valid_.store(false, std::memory_order_release);
@@ -444,7 +429,6 @@ namespace lfs::core {
         void removeConsolidatedNodeData(NodeId id);
         void rebuildConsolidatedTransformIndices() const;
         [[nodiscard]] NodeId insertNode(std::unique_ptr<SceneNode> node);
-        mutable std::atomic<int> export_pin_count_{0};
         mutable std::shared_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_visible_selection_indices_;

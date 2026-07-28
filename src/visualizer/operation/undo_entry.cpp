@@ -183,6 +183,19 @@ namespace lfs::vis::op {
             }
         }
 
+        void clearPlyPathsForSubtree(SceneManager& scene_manager, const lfs::core::NodeId root_id) {
+            const auto* node = scene_manager.getScene().getNodeById(root_id);
+            if (!node) {
+                return;
+            }
+
+            const auto children = node->children;
+            for (const lfs::core::NodeId child_id : children) {
+                clearPlyPathsForSubtree(scene_manager, child_id);
+            }
+            scene_manager.clearPlyPath(root_id);
+        }
+
         [[nodiscard]] std::string resolveExistingNodeName(const lfs::core::Scene& scene,
                                                           const std::vector<std::string>& candidates) {
             std::set<std::string> seen;
@@ -212,7 +225,6 @@ namespace lfs::vis::op {
                 if (!scene.renameNode(current_name, target.name)) {
                     throw std::runtime_error("Failed to rename node '" + current_name + "' to '" + target.name + "'");
                 }
-                scene_manager.movePlyPath(current_name, target.name);
                 current_name = target.name;
                 node = scene.getMutableNode(current_name);
                 if (!node) {
@@ -2209,7 +2221,8 @@ namespace lfs::vis::op {
                 names_to_remove.insert(name);
 
             for (const auto& name : names_to_remove) {
-                if (scene.getNode(name)) {
+                if (const auto* node = scene.getNode(name)) {
+                    clearPlyPathsForSubtree(scene_, node->id);
                     scene.removeNode(name, false);
                 }
             }

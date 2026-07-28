@@ -656,35 +656,50 @@ namespace lfs::vis {
         content_type_ = type;
     }
 
-    std::optional<std::filesystem::path> SceneManager::getPlyPath(const std::string& name) const {
+    std::optional<std::filesystem::path> SceneManager::getPlyPath(const core::NodeId id) const {
+        if (id == core::NULL_NODE) {
+            return std::nullopt;
+        }
+
         std::lock_guard<std::mutex> lock(state_mutex_);
-        const auto it = splat_paths_.find(name);
+        const auto it = splat_paths_.find(id);
         if (it == splat_paths_.end()) {
             return std::nullopt;
         }
         return it->second;
     }
 
-    void SceneManager::setPlyPath(const std::string& name, const std::filesystem::path& path) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        splat_paths_[name] = path;
+    std::optional<std::filesystem::path> SceneManager::getPlyPath(std::string name) const {
+        const core::NodeId id = scene_.getNodeIdByName(name);
+        return getPlyPath(id);
     }
 
-    void SceneManager::clearPlyPath(const std::string& name) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        splat_paths_.erase(name);
-    }
-
-    void SceneManager::movePlyPath(const std::string& old_name, const std::string& new_name) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        auto it = splat_paths_.find(old_name);
-        if (it == splat_paths_.end()) {
-            splat_paths_.erase(new_name);
+    void SceneManager::setPlyPath(const core::NodeId id, const std::filesystem::path& path) {
+        if (id == core::NULL_NODE) {
             return;
         }
-        const auto path = it->second;
-        splat_paths_.erase(it);
-        splat_paths_[new_name] = path;
+
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        splat_paths_[id] = path;
+    }
+
+    void SceneManager::setPlyPath(std::string name, const std::filesystem::path& path) {
+        const core::NodeId id = scene_.getNodeIdByName(name);
+        setPlyPath(id, path);
+    }
+
+    void SceneManager::clearPlyPath(const core::NodeId id) {
+        if (id == core::NULL_NODE) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        splat_paths_.erase(id);
+    }
+
+    void SceneManager::clearPlyPath(std::string name) {
+        const core::NodeId id = scene_.getNodeIdByName(name);
+        clearPlyPath(id);
     }
 
     void SceneManager::setDatasetPath(const std::filesystem::path& path) {
@@ -752,7 +767,7 @@ namespace lfs::vis {
                     std::lock_guard<std::mutex> lock(state_mutex_);
                     content_type_ = ContentType::SplatFiles;
                     splat_paths_.clear();
-                    splat_paths_[added_name] = path;
+                    splat_paths_[node_id] = path;
                 }
 
                 state::SceneLoaded{
@@ -800,7 +815,7 @@ namespace lfs::vis {
                     std::lock_guard<std::mutex> lock(state_mutex_);
                     content_type_ = ContentType::SplatFiles;
                     splat_paths_.clear();
-                    splat_paths_[added_name] = path;
+                    splat_paths_[node_id] = path;
                 }
 
                 state::SceneLoaded{
@@ -977,7 +992,7 @@ namespace lfs::vis {
                 const std::string added_name = added ? added->name : name;
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
-                    splat_paths_[added_name] = path;
+                    splat_paths_[node_id] = path;
                 }
 
                 state::PLYAdded{
@@ -1016,7 +1031,7 @@ namespace lfs::vis {
 
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
-                splat_paths_[added_name] = path;
+                splat_paths_[node_id] = path;
             }
 
             // RAD assets always enter LOD mode; availability still reflects tree presence.
@@ -1405,13 +1420,11 @@ namespace lfs::vis {
             selection_.isNodeSelected(id);
         bool removes_camera_nodes = false;
         std::vector<core::NodeId> ids_to_deselect;
-        std::vector<std::string> names_to_remove;
         if (!keep_children) {
             std::function<void(core::NodeId)> collect = [&](core::NodeId id) {
                 ids_to_deselect.push_back(id);
                 if (const auto* node = scene_.getNodeById(id)) {
                     removes_camera_nodes = removes_camera_nodes || node->type == core::NodeType::CAMERA;
-                    names_to_remove.push_back(node->name);
                     for (const core::NodeId child_id : node->children) {
                         collect(child_id);
                     }
@@ -1420,7 +1433,6 @@ namespace lfs::vis {
             collect(id);
         } else {
             ids_to_deselect.push_back(id);
-            names_to_remove.push_back(node_name);
             removes_camera_nodes = node_to_remove->type == core::NodeType::CAMERA;
         }
 
@@ -1434,8 +1446,8 @@ namespace lfs::vis {
         scheduleConsolidatedCompaction();
         {
             std::lock_guard lock(state_mutex_);
-            for (const auto& node_name : names_to_remove) {
-                splat_paths_.erase(node_name);
+            for (const core::NodeId removed_id : ids_to_deselect) {
+                splat_paths_.erase(removed_id);
             }
         }
         for (const core::NodeId id : ids_to_deselect) {
@@ -1747,14 +1759,6 @@ namespace lfs::vis {
             return core::NodeType::SPLAT;
         const auto* node = scene_.getNodeById(*ids.begin());
         return node ? node->type : core::NodeType::SPLAT;
-    }
-
-    int SceneManager::getSelectedNodeIndex() const {
-        std::shared_lock lock(selection_.mutex());
-        const auto& ids = selection_.selectedNodeIds();
-        if (ids.empty())
-            return -1;
-        return scene_.getVisibleNodeIndex(*ids.begin());
     }
 
     std::vector<bool> SceneManager::getSelectedNodeMask() const {
@@ -2275,81 +2279,6 @@ namespace lfs::vis {
         return scene_.getNodeTransform(name);
     }
 
-    void SceneManager::setSelectedNodeTranslation(const glm::vec3& translation) {
-        std::string node_name;
-        {
-            std::shared_lock slock(selection_.mutex());
-            const auto& ids = selection_.selectedNodeIds();
-            if (ids.empty()) {
-                LOG_TRACE("No node selected for translation");
-                return;
-            }
-            const auto* node = scene_.getNodeById(*ids.begin());
-            if (!node)
-                return;
-            node_name = node->name;
-        }
-
-        if (node_name.empty()) {
-            LOG_TRACE("No node selected for translation");
-            return;
-        }
-
-        // Create translation matrix
-        glm::mat4 transform = glm::mat4(1.0f);
-        transform[3][0] = translation.x;
-        transform[3][1] = translation.y;
-        transform[3][2] = translation.z;
-
-        setNodeTransform(node_name, transform);
-    }
-
-    glm::vec3 SceneManager::getSelectedNodeTranslation() const {
-        std::string node_name;
-        {
-            std::shared_lock slock(selection_.mutex());
-            const auto& ids = selection_.selectedNodeIds();
-            if (ids.empty())
-                return glm::vec3(0.0f);
-            const auto* node = scene_.getNodeById(*ids.begin());
-            if (!node)
-                return glm::vec3(0.0f);
-            node_name = node->name;
-        }
-
-        if (node_name.empty()) {
-            return glm::vec3(0.0f);
-        }
-
-        glm::mat4 transform = scene_.getNodeTransform(node_name);
-        return glm::vec3(transform[3][0], transform[3][1], transform[3][2]);
-    }
-
-    glm::vec3 SceneManager::getSelectedNodeCentroid() const {
-        std::shared_lock slock(selection_.mutex());
-        const auto& ids = selection_.selectedNodeIds();
-        if (ids.empty())
-            return glm::vec3(0.0f);
-
-        const auto* node = scene_.getNodeById(*ids.begin());
-        if (!node || !node->model)
-            return glm::vec3(0.0f);
-        return node->centroid;
-    }
-
-    glm::vec3 SceneManager::getSelectedNodeCenter() const {
-        std::shared_lock slock(selection_.mutex());
-        const auto& ids = selection_.selectedNodeIds();
-        if (ids.empty())
-            return glm::vec3(0.0f);
-
-        const auto* node = scene_.getNodeById(*ids.begin());
-        if (!node)
-            return glm::vec3(0.0f);
-
-        return scene_.getNodeBoundsCenter(node->id);
-    }
-
     void SceneManager::setSelectedNodeTransform(const glm::mat4& transform) {
         std::string node_name;
         {
@@ -2668,12 +2597,6 @@ namespace lfs::vis {
         }
 
         return single_id;
-    }
-
-    void SceneManager::syncEllipsoidToRenderSettings() {
-        if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
-        }
     }
 
     void SceneManager::syncDatasetCameraFrustumsToRenderSettings() {
@@ -3380,7 +3303,7 @@ namespace lfs::vis {
             info.num_nodes = scene_.getNodeCount();
             info.source_type = "Splat";
             if (!splat_paths_.empty()) {
-                info.source_path = splat_paths_.rbegin()->second; // get the "last" element of the splat_paths_
+                info.source_path = splat_paths_.rbegin()->second;
                 // Determine specific type from extension
                 auto ext = info.source_path.extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -3770,10 +3693,6 @@ namespace lfs::vis {
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
     }
 
-    void SceneManager::updatePlyPath(const std::string& ply_name, const std::filesystem::path& ply_path) {
-        setPlyPath(ply_name, ply_path);
-    }
-
     size_t SceneManager::applyDeleted() {
         const size_t removed = scene_.applyDeleted();
         if (removed > 0 && services().renderingOrNull()) {
@@ -3814,8 +3733,6 @@ namespace lfs::vis {
         const bool success = scene_.renameNode(id, new_name);
 
         if (success && old_name != new_name) {
-            movePlyPath(old_name, new_name);
-
             LOG_INFO("Successfully renamed '{}' to '{}'", old_name, new_name);
             pushSceneGraphMetadataHistoryEntry(
                 *this,
@@ -4205,8 +4122,10 @@ namespace lfs::vis {
 
         // Collect children to emit PLYRemoved events
         std::vector<std::string> children_to_remove;
+        std::vector<core::NodeId> ids_to_remove{group_id};
         std::function<void(const core::SceneNode*)> collect_children = [&](const core::SceneNode* n) {
             for (const core::NodeId cid : n->children) {
+                ids_to_remove.push_back(cid);
                 if (const auto* c = scene_.getNodeById(cid)) {
                     children_to_remove.push_back(c->name);
                     collect_children(c);
@@ -4245,6 +4164,12 @@ namespace lfs::vis {
         }
 
         core::NodeId merged_id = core::NULL_NODE;
+        {
+            std::lock_guard lock(state_mutex_);
+            for (const core::NodeId id : ids_to_remove) {
+                splat_paths_.erase(id);
+            }
+        }
         {
             core::Scene::Transaction txn(scene_);
             scene_.removeNode(group_name, false);

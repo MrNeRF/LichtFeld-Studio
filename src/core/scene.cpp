@@ -525,9 +525,6 @@ namespace lfs::core {
         if (loaded_splat_count < 2) {
             return 0;
         }
-        if (export_pin_count_.load(std::memory_order_acquire) > 0) {
-            return 0;
-        }
 
         model_cache_valid_.store(false, std::memory_order_release);
         cached_combined_.reset();
@@ -847,24 +844,6 @@ namespace lfs::core {
         return mask;
     }
 
-    const lfs::core::PointCloud* Scene::getVisiblePointCloud() const {
-        for (const auto& node : nodes_) {
-            if (node->type == NodeType::POINTCLOUD && isNodeEffectivelyVisible(node->id) && node->point_cloud) {
-                return node->point_cloud.get();
-            }
-        }
-        return nullptr;
-    }
-
-    std::optional<glm::mat4> Scene::getVisiblePointCloudTransform() const {
-        for (const auto& node : nodes_) {
-            if (node->type == NodeType::POINTCLOUD && isNodeEffectivelyVisible(node->id) && node->point_cloud) {
-                return getWorldTransform(node->id);
-            }
-        }
-        return std::nullopt;
-    }
-
     std::vector<Scene::VisibleMesh> Scene::getVisibleMeshes() const {
         std::vector<VisibleMesh> result;
         for (const auto& node : nodes_) {
@@ -873,14 +852,6 @@ namespace lfs::core {
             }
         }
         return result;
-    }
-
-    bool Scene::hasVisibleMeshes() const {
-        for (const auto& node : nodes_) {
-            if (node->type == NodeType::MESH && node->mesh && isNodeEffectivelyVisible(node->id))
-                return true;
-        }
-        return false;
     }
 
     size_t Scene::getTotalGaussianCount() const {
@@ -1150,9 +1121,6 @@ namespace lfs::core {
 
         std::lock_guard<std::mutex> lock(combined_model_mutex_);
         if (!include_hidden_splats && model_cache_valid_.load(std::memory_order_acquire))
-            return;
-
-        if (export_pin_count_.load(std::memory_order_acquire) > 0)
             return;
 
         if (!include_hidden_splats && consolidated_ && cached_combined_) {
@@ -2524,16 +2492,6 @@ namespace lfs::core {
         return mergeGroup(group_id);
     }
 
-    std::unique_ptr<lfs::core::SplatData> Scene::createMergedModelWithTransforms() const {
-        std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> splats;
-        for (const auto& node : nodes_) {
-            if (node->type == NodeType::SPLAT && node->model && isNodeEffectivelyVisible(node->id)) {
-                splats.emplace_back(node->model.get(), getWorldTransform(node->id));
-            }
-        }
-        return mergeSplatsWithTransforms(splats);
-    }
-
     std::unique_ptr<lfs::core::SplatData> Scene::mergeSplatsWithTransforms(
         const std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>>& splats,
         const MergeStorageMode storage_mode) {
@@ -3289,15 +3247,6 @@ namespace lfs::core {
         return result;
     }
 
-    std::vector<Scene::RenderableCropBox> Scene::getVisibleCropBoxes() const {
-        std::vector<RenderableCropBox> result;
-        for (auto cropbox : getRenderableCropBoxes()) {
-            if (cropbox.effectively_visible)
-                result.push_back(cropbox);
-        }
-        return result;
-    }
-
     NodeId Scene::getEllipsoidForSplat(const NodeId splat_id) const {
         if (splat_id == NULL_NODE) {
             return NULL_NODE;
@@ -3315,21 +3264,6 @@ namespace lfs::core {
             }
         }
         return NULL_NODE;
-    }
-
-    NodeId Scene::getOrCreateEllipsoidForSplat(const NodeId splat_id) {
-        const NodeId existing = getEllipsoidForSplat(splat_id);
-        if (existing != NULL_NODE) {
-            return existing;
-        }
-
-        const auto* node = getNodeById(splat_id);
-        if (!node || (node->type != NodeType::SPLAT && node->type != NodeType::POINTCLOUD)) {
-            return NULL_NODE;
-        }
-
-        const std::string ellipsoid_name = node->name + "_ellipsoid";
-        return addEllipsoid(ellipsoid_name, splat_id);
     }
 
     EllipsoidData* Scene::getEllipsoidData(const NodeId ellipsoid_id) {
@@ -3381,15 +3315,6 @@ namespace lfs::core {
             result.push_back(rel);
         }
 
-        return result;
-    }
-
-    std::vector<Scene::RenderableEllipsoid> Scene::getVisibleEllipsoids() const {
-        std::vector<RenderableEllipsoid> result;
-        for (auto ellipsoid : getRenderableEllipsoids()) {
-            if (ellipsoid.effectively_visible)
-                result.push_back(ellipsoid);
-        }
         return result;
     }
 

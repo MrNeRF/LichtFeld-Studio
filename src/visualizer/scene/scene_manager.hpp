@@ -59,44 +59,22 @@ namespace lfs::vis {
             return content_type_ == ContentType::Empty && !scene_.hasNodes();
         }
 
-        bool hasSplatFiles() const {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            return content_type_ == ContentType::SplatFiles;
-        }
-
-        // Legacy compatibility
-        bool hasPLYFiles() const { return hasSplatFiles(); }
-
         bool hasDataset() const {
             std::lock_guard<std::mutex> lock(state_mutex_);
             return content_type_ == ContentType::Dataset;
         }
 
         // Path accessors
-        std::vector<std::filesystem::path> getSplatPaths() const {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-
-            std::vector<std::filesystem::path> values;
-            values.reserve(splat_paths_.size());
-
-            for (const auto& [key, value] : splat_paths_) {
-                values.push_back(value);
-            }
-
-            return values;
-        }
-
-        // Legacy compatibility
-        std::vector<std::filesystem::path> getPLYPaths() const { return getSplatPaths(); }
-
         std::filesystem::path getDatasetPath() const {
             std::lock_guard<std::mutex> lock(state_mutex_);
             return dataset_path_;
         }
-        [[nodiscard]] std::optional<std::filesystem::path> getPlyPath(const std::string& name) const;
-        void setPlyPath(const std::string& name, const std::filesystem::path& path);
-        void clearPlyPath(const std::string& name);
-        void movePlyPath(const std::string& old_name, const std::string& new_name);
+        [[nodiscard]] std::optional<std::filesystem::path> getPlyPath(core::NodeId id) const;
+        [[nodiscard]] std::optional<std::filesystem::path> getPlyPath(std::string name) const;
+        void setPlyPath(core::NodeId id, const std::filesystem::path& path);
+        void setPlyPath(std::string name, const std::filesystem::path& path);
+        void clearPlyPath(core::NodeId id);
+        void clearPlyPath(std::string name);
         void setDatasetPath(const std::filesystem::path& path);
 
         // Scene access
@@ -145,7 +123,6 @@ namespace lfs::vis {
         [[nodiscard]] std::vector<std::string> getSelectedNodeNames() const;
         [[nodiscard]] bool hasSelectedNode() const;
         [[nodiscard]] core::NodeType getSelectedNodeType() const;
-        [[nodiscard]] int getSelectedNodeIndex() const;
         [[nodiscard]] std::vector<bool> getSelectedNodeMask() const;
         [[nodiscard]] int getSelectedCameraUid() const;
         [[nodiscard]] const SelectionState& selectionState() const { return selection_; }
@@ -161,10 +138,6 @@ namespace lfs::vis {
         // Node transforms
         void setNodeTransform(const std::string& name, const glm::mat4& transform);
         glm::mat4 getNodeTransform(const std::string& name) const;
-        void setSelectedNodeTranslation(const glm::vec3& translation);
-        glm::vec3 getSelectedNodeTranslation() const;
-        glm::vec3 getSelectedNodeCentroid() const;
-        glm::vec3 getSelectedNodeCenter() const;
 
         // Full transform for selected node (includes rotation and scale)
         void setSelectedNodeTransform(const glm::mat4& transform);
@@ -188,7 +161,6 @@ namespace lfs::vis {
         core::EllipsoidData* getSelectedNodeEllipsoid();
         const core::EllipsoidData* getSelectedNodeEllipsoid() const;
         core::NodeId getActiveSelectionEllipsoidId() const;
-        void syncEllipsoidToRenderSettings();
 
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path,
                                                      const lfs::core::param::TrainingParameters& params);
@@ -231,7 +203,6 @@ namespace lfs::vis {
 
         bool renamePLY(std::string old_name, const std::string& new_name);
         bool renameNode(core::NodeId id, const std::string& new_name);
-        void updatePlyPath(const std::string& ply_name, const std::filesystem::path& ply_path);
         bool reparentNode(std::string node_name, std::string new_parent_name);
         bool reparentNode(core::NodeId node_id, core::NodeId new_parent_id);
         bool moveNode(core::NodeId node_id, core::NodeId new_parent_id, int index);
@@ -378,8 +349,7 @@ namespace lfs::vis {
         mutable std::mutex state_mutex_;
 
         ContentType content_type_ = ContentType::Empty;
-        // splat name to splat path
-        std::map<std::string, std::filesystem::path> splat_paths_;
+        std::map<core::NodeId, std::filesystem::path> splat_paths_;
         std::filesystem::path dataset_path_;
 
         // Cache for parameters

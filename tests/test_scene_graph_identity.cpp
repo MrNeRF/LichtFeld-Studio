@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <filesystem>
 #include <gtest/gtest.h>
 #include <memory>
 #include <string>
@@ -258,4 +259,86 @@ TEST_F(SceneGraphIdentityTest, StaleNodeIdOperationsAreNoOps) {
     ASSERT_NE(child_b, nullptr);
     EXPECT_EQ(group->children, (std::vector<lfs::core::NodeId>{child_b_id}));
     EXPECT_EQ(child_b->parent_id, group_id);
+}
+
+// Catches path metadata being stranded under a node's old mutable label after rename.
+TEST_F(SceneGraphIdentityTest, PlyPathSurvivesRename) {
+    auto& scene = scene_manager_->getScene();
+    const auto node_id = scene.addSplat("node", make_test_splat({0.0f, 0.0f, 0.0f}));
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+    const std::filesystem::path source_path{"/tmp/a.ply"};
+    scene_manager_->setPlyPath("node", source_path);
+
+    ASSERT_TRUE(scene_manager_->renameNode(node_id, "renamed"));
+
+    const auto renamed_path = scene_manager_->getPlyPath("renamed");
+    ASSERT_TRUE(renamed_path.has_value());
+    EXPECT_EQ(*renamed_path, source_path);
+}
+
+// Catches movePlyPath erasing another node's path when the renamed source has no path.
+TEST_F(SceneGraphIdentityTest, RenameOntoForeignNameDoesNotDropItsPath) {
+    auto& scene = scene_manager_->getScene();
+    const auto source_id = scene.addSplat("source", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto owner_id = scene.addSplat("foreign", make_test_splat({1.0f, 0.0f, 0.0f}));
+    ASSERT_NE(source_id, lfs::core::NULL_NODE);
+    ASSERT_NE(owner_id, lfs::core::NULL_NODE);
+    const std::filesystem::path foreign_path{"/tmp/foreign.ply"};
+    scene_manager_->setPlyPath("foreign", foreign_path);
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    ASSERT_TRUE(scene.renameNode(owner_id, "owner"));
+    ASSERT_EQ(scene_manager_->getSceneInfo().source_path, foreign_path);
+    ASSERT_TRUE(scene_manager_->renameNode(source_id, "foreign"));
+
+    EXPECT_EQ(scene_manager_->getSceneInfo().source_path, foreign_path);
+    const auto owner_path = scene_manager_->getPlyPath("owner");
+    ASSERT_TRUE(owner_path.has_value());
+    EXPECT_EQ(*owner_path, foreign_path);
+}
+
+// Catches removal leaving path metadata reachable through the deleted node's stale ID.
+TEST_F(SceneGraphIdentityTest, PlyPathClearedWhenNodeRemoved) {
+    auto& scene = scene_manager_->getScene();
+    const auto anchor_id = scene.addGroup("anchor");
+    const auto removed_id = scene.addSplat("node", make_test_splat({0.0f, 0.0f, 0.0f}));
+    ASSERT_NE(anchor_id, lfs::core::NULL_NODE);
+    ASSERT_NE(removed_id, lfs::core::NULL_NODE);
+    scene_manager_->setPlyPath("node", std::filesystem::path{"/tmp/a.ply"});
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    scene_manager_->removeNode(removed_id, false);
+
+    ASSERT_EQ(scene.getNodeById(removed_id), nullptr);
+    EXPECT_FALSE(scene_manager_->getPlyPath(removed_id).has_value());
+    const auto replacement_id = scene.addSplat("node", make_test_splat({1.0f, 0.0f, 0.0f}));
+    ASSERT_NE(replacement_id, lfs::core::NULL_NODE);
+    EXPECT_NE(replacement_id, removed_id);
+    EXPECT_FALSE(scene_manager_->getPlyPath("node").has_value());
+}
+
+// Catches topology undo restoring a path to a fresh node ID while retaining the destroyed ID's entry.
+TEST_F(SceneGraphIdentityTest, PlyPathRestoredToFreshIdByTopologyUndo) {
+    auto& scene = scene_manager_->getScene();
+    const auto anchor_id = scene.addGroup("anchor");
+    const auto removed_id = scene.addSplat("node", make_test_splat({0.0f, 0.0f, 0.0f}));
+    ASSERT_NE(anchor_id, lfs::core::NULL_NODE);
+    ASSERT_NE(removed_id, lfs::core::NULL_NODE);
+    const std::filesystem::path source_path{"/tmp/a.ply"};
+    scene_manager_->setPlyPath(removed_id, source_path);
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    scene_manager_->removeNode(removed_id, false);
+    ASSERT_EQ(scene.getNodeById(removed_id), nullptr);
+
+    const auto undo_result = lfs::vis::op::undoHistory().undo();
+
+    ASSERT_TRUE(undo_result.success);
+    const auto* restored = scene.getNode("node");
+    ASSERT_NE(restored, nullptr);
+    EXPECT_NE(restored->id, removed_id);
+    EXPECT_FALSE(scene_manager_->getPlyPath(removed_id).has_value());
+    const auto restored_path = scene_manager_->getPlyPath(restored->id);
+    ASSERT_TRUE(restored_path.has_value());
+    EXPECT_EQ(*restored_path, source_path);
 }
