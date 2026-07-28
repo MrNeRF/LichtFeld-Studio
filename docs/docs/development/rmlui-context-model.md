@@ -285,6 +285,22 @@ example, a modal that deliberately blocks viewport tools still needs an
 application-level decision. The target is to remove duplicated UI mechanics,
 not to make RmlUI responsible for unrelated editor policy.
 
+### Screened manual paths
+
+Not every manual path is an accidental reimplementation of RmlUI. Two nearby
+paths have been checked against both the current code and history:
+
+| Path | Result | Consequence |
+| --- | --- | --- |
+| `GuiManager::hitTestPointer()` | The chain is the application-level precedence policy between modals, viewport tools, panel resizing, and floating panels. | Keep it as a small explicit policy layer; document and test changes to its order rather than moving it into a generic RML surface. |
+| `RmlMenuBar::dropdownElementAtPoint()` and submenu routing | Commit `916e9420` replaced `Context::GetElementAtPoint()` with its local recursive geometry traversal to fix submenu hover activation. The current Python regression explicitly protects that replacement. | Do not remove this traversal as a shared-context cleanup. Any future migration must first reproduce the submenu interaction matrix with native RmlUI events and prove it fixes the historical failure. |
+| `RmlPanelHost` select-box bridge | It exists because the native select box is constrained by a panel-local context and cached texture; the code owns out-of-panel hover, wheel, capture, and option activation. | This remains the primary simplification candidate, but only after an overlay/shared-document design can preserve popup input and cache boundaries. It is not safe to delete in a per-panel context. |
+
+This screening narrows the useful next experiment: do not rewrite the menu bar
+or top-level policy merely because they are manual. Instead, find a popup path
+whose owner and popup can remain in one tested shared document or overlay while
+the source panel continues to use its local cache.
+
 ### Experiments and decision criteria
 
 Work in small, reversible experiments. Do not migrate all UI surfaces at once.
