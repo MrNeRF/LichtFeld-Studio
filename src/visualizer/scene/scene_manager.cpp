@@ -1363,7 +1363,7 @@ namespace lfs::vis {
         if (!node_to_remove) {
             return {};
         }
-        const std::string node_name = node_to_remove->name;
+        std::string node_name = node_to_remove->name;
         assert(!node_name.empty());
 
         if (const auto result = validateNodeRemoval(id, training_removal_impact); !result) {
@@ -1389,6 +1389,8 @@ namespace lfs::vis {
         if (!node_to_remove) {
             return {};
         }
+        node_name = node_to_remove->name;
+        assert(!node_name.empty());
 
         std::vector<std::string> promoted_children;
         if (record_history && keep_children) {

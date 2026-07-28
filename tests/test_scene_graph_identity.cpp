@@ -25,6 +25,27 @@ using lfs::core::Tensor;
 
 namespace {
 
+    class ScopedPlyRemovedSubscription {
+    public:
+        explicit ScopedPlyRemovedSubscription(const lfs::event::HandlerId id) : id_(id) {}
+        ~ScopedPlyRemovedSubscription() { reset(); }
+
+        ScopedPlyRemovedSubscription(const ScopedPlyRemovedSubscription&) = delete;
+        ScopedPlyRemovedSubscription& operator=(const ScopedPlyRemovedSubscription&) = delete;
+
+        void reset() {
+            if (id_ == 0) {
+                return;
+            }
+            lfs::event::EventBridge::instance().unsubscribe(
+                typeid(lfs::core::events::state::PLYRemoved), id_);
+            id_ = 0;
+        }
+
+    private:
+        lfs::event::HandlerId id_;
+    };
+
     std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz) {
         const size_t count = xyz.size() / 3;
         auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::CUDA).to(DataType::Float32);
@@ -91,10 +112,12 @@ TEST_F(SceneGraphIdentityTest, DeleteGroupByIdEmitsRemovedEventsWithCorrectNames
     scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
 
     std::vector<std::string> removed_names;
-    lfs::core::events::state::PLYRemoved::when(
-        [&removed_names](const auto& event) { removed_names.push_back(event.name); });
+    ScopedPlyRemovedSubscription subscription{
+        lfs::core::events::state::PLYRemoved::when(
+            [&removed_names](const auto& event) { removed_names.push_back(event.name); })};
 
     scene_manager_->removeNode(group_id, false);
+    subscription.reset();
 
     EXPECT_EQ(removed_names, (std::vector<std::string>{"group"}));
     EXPECT_TRUE(std::none_of(
@@ -118,10 +141,12 @@ TEST_F(SceneGraphIdentityTest, DeleteGroupByIdKeepChildrenEmitsCorrectName) {
     scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
 
     std::vector<std::string> removed_names;
-    lfs::core::events::state::PLYRemoved::when(
-        [&removed_names](const auto& event) { removed_names.push_back(event.name); });
+    ScopedPlyRemovedSubscription subscription{
+        lfs::core::events::state::PLYRemoved::when(
+            [&removed_names](const auto& event) { removed_names.push_back(event.name); })};
 
     scene_manager_->removeNode(group_id, true);
+    subscription.reset();
 
     EXPECT_EQ(removed_names, (std::vector<std::string>{"group"}));
     EXPECT_EQ(scene.getNodeById(group_id), nullptr);
