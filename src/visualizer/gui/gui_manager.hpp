@@ -292,6 +292,7 @@ namespace lfs::vis {
             StartupOverlay startup_overlay_;
             RmlShellFrame rml_shell_frame_;
             RmlRightPanel rml_right_panel_;
+            bool rml_shared_right_panel_spike_ = false;
             RmlViewportOverlay rml_viewport_overlay_;
             RmlMenuBar rml_menu_bar_;
             RmlStatusBar rml_status_bar_;

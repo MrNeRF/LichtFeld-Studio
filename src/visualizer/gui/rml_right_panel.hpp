@@ -45,7 +45,7 @@ namespace lfs::vis::gui {
 
     class RmlRightPanel {
     public:
-        void init(RmlUIManager* mgr);
+        void init(RmlUIManager* mgr, Rml::Context* shared_context = nullptr);
         void shutdown();
 
         void processInput(const RightPanelLayout& layout, const PanelInputState& input);
@@ -60,6 +60,8 @@ namespace lfs::vis::gui {
         bool wantsInput() const { return wants_input_; }
         bool wantsKeyboard() const { return wants_keyboard_; }
         bool needsAnimationFrame() const;
+        bool consumeSharedContextContentDirty();
+        [[nodiscard]] bool usesSharedContext() const { return shared_context_; }
         CursorRequest getCursorRequest() const;
 
         std::function<void(const std::string&)> on_tab_changed;
@@ -79,6 +81,7 @@ namespace lfs::vis::gui {
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        bool shared_context_ = false;
 
         Rml::Element* resize_handle_el_ = nullptr;
         Rml::Element* left_border_el_ = nullptr;
@@ -111,8 +114,11 @@ namespace lfs::vis::gui {
         float prev_mouse_y_ = 0;
 
         bool render_needed_ = true;
+        bool shared_context_content_dirty_ = false;
         int last_fbo_w_ = 0;
         int last_fbo_h_ = 0;
+        int last_context_w_ = 0;
+        int last_context_h_ = 0;
         float last_scene_h_ = -1.0f;
         float last_splitter_h_ = -1.0f;
         bool input_dirty_ = false;

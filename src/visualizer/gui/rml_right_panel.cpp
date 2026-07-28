@@ -18,14 +18,17 @@
 #include <algorithm>
 #include <cassert>
 #include <format>
+#include <utility>
 
 namespace lfs::vis::gui {
 
-    void RmlRightPanel::init(RmlUIManager* mgr) {
+    void RmlRightPanel::init(RmlUIManager* mgr, Rml::Context* shared_context) {
         assert(mgr);
         rml_manager_ = mgr;
+        shared_context_ = shared_context != nullptr;
 
-        rml_context_ = rml_manager_->createContext("right_panel", 400, 600);
+        rml_context_ = shared_context ? shared_context
+                                      : rml_manager_->createContext("right_panel", 400, 600);
         if (!rml_context_) {
             LOG_ERROR("RmlRightPanel: failed to create RML context");
             return;
@@ -106,10 +109,11 @@ namespace lfs::vis::gui {
         active_tab_.clear();
         if (rml_manager_)
             rml_manager_->releaseCachedVulkanContext(direct_cache_);
-        if (rml_context_ && rml_manager_)
+        if (!shared_context_ && rml_context_ && rml_manager_)
             rml_manager_->destroyContext("right_panel");
         rml_context_ = nullptr;
         document_ = nullptr;
+        shared_context_ = false;
         resize_handle_el_ = nullptr;
         left_border_el_ = nullptr;
         splitter_el_ = nullptr;
@@ -120,6 +124,7 @@ namespace lfs::vis::gui {
         tabs_overflow_ = false;
         can_scroll_tabs_left_ = false;
         can_scroll_tabs_right_ = false;
+        shared_context_content_dirty_ = false;
     }
 
     void RmlRightPanel::reloadResources() {
@@ -151,6 +156,8 @@ namespace lfs::vis::gui {
         input_dirty_ = true;
         last_fbo_w_ = 0;
         last_fbo_h_ = 0;
+        last_context_w_ = 0;
+        last_context_h_ = 0;
         last_scene_h_ = -1.0f;
         last_splitter_h_ = -1.0f;
         last_over_interactive_ = false;
@@ -353,6 +360,16 @@ namespace lfs::vis::gui {
         return false;
     }
 
+    static bool belongsToDocument(Rml::Element* element,
+                                  Rml::ElementDocument* const document) {
+        while (element) {
+            if (element == document)
+                return true;
+            element = element->GetParentNode();
+        }
+        return false;
+    }
+
     CursorRequest RmlRightPanel::getCursorRequest() const {
         return cursor_request_;
     }
@@ -362,7 +379,7 @@ namespace lfs::vis::gui {
             return;
 
         auto* const focused = rml_context_->GetFocusElement();
-        if (!focused)
+        if (!belongsToDocument(focused, document_))
             return;
 
         focused->Blur();
@@ -372,6 +389,10 @@ namespace lfs::vis::gui {
 
     bool RmlRightPanel::needsAnimationFrame() const {
         return render_needed_ || input_dirty_ || splitter_dragging_ || resize_dragging_;
+    }
+
+    bool RmlRightPanel::consumeSharedContextContentDirty() {
+        return std::exchange(shared_context_content_dirty_, false);
     }
 
     void RmlRightPanel::processInput(const RightPanelLayout& layout, const PanelInputState& input) {
@@ -392,8 +413,10 @@ namespace lfs::vis::gui {
             return;
         if (rml_manager_) {
             rml_manager_->trackContextFrame(rml_context_,
-                                            static_cast<int>(layout.pos.x - input.screen_x),
-                                            static_cast<int>(layout.pos.y - input.screen_y));
+                                            shared_context_ ? 0
+                                                            : static_cast<int>(layout.pos.x - input.screen_x),
+                                            shared_context_ ? 0
+                                                            : static_cast<int>(layout.pos.y - input.screen_y));
         }
 
         const bool pointer_event =
@@ -407,7 +430,9 @@ namespace lfs::vis::gui {
             !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
             !input.text_inputs.empty() || input.has_text_editing;
         auto* const focused_before = rml_context_->GetFocusElement();
-        const bool viewport_focus_blurs_panel = input.viewport_keyboard_focus && focused_before;
+        const bool focused_before_in_document = belongsToDocument(focused_before, document_);
+        const bool viewport_focus_blurs_panel =
+            input.viewport_keyboard_focus && focused_before_in_document;
         const bool layout_changed =
             static_cast<int>(layout.size.x) != last_fbo_w_ ||
             static_cast<int>(layout.size.y) != last_fbo_h_ ||
@@ -416,7 +441,8 @@ namespace lfs::vis::gui {
         if (!mouse_moved && !pointer_event && !pointer_down && !keyboard_event &&
             !resize_dragging_ && !splitter_dragging_ && !viewport_focus_blurs_panel &&
             !layout_changed) {
-            wants_keyboard_ = rml_input::hasFocusedKeyboardTarget(focused_before);
+            wants_keyboard_ = focused_before_in_document &&
+                              rml_input::hasFocusedKeyboardTarget(focused_before);
             wants_input_ = wants_keyboard_ || last_over_interactive_ ||
                            previous_cursor_request != CursorRequest::None;
             cursor_request_ = previous_cursor_request;
@@ -425,6 +451,8 @@ namespace lfs::vis::gui {
 
         const float mx = input.mouse_x - layout.pos.x;
         const float my = input.mouse_y - layout.pos.y;
+        const float rml_mx = shared_context_ ? input.mouse_x - input.screen_x : mx;
+        const float rml_my = shared_context_ ? input.mouse_y - input.screen_y : my;
         const float dp_ratio = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
         const float resize_handle_half_w =
             PanelLayoutManager::RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH * dp_ratio;
@@ -434,10 +462,10 @@ namespace lfs::vis::gui {
 
         const bool pointer_in_context =
             mx >= 0.0f && mx < layout.size.x && my >= 0.0f && my < layout.size.y;
-        if (pointer_in_context) {
+        if (pointer_in_context || shared_context_) {
             if (mouse_moved)
-                rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), mods);
-            rml_pointer_inside_ = true;
+                rml_context_->ProcessMouseMove(static_cast<int>(rml_mx), static_cast<int>(rml_my), mods);
+            rml_pointer_inside_ = pointer_in_context;
         } else if (rml_pointer_inside_) {
             // RmlUi does not clear hover merely because it receives an
             // out-of-bounds position. Explicitly leave so it cannot retain a
@@ -448,6 +476,8 @@ namespace lfs::vis::gui {
             input_dirty_ = true;
         }
         auto* hover = pointer_in_context ? rml_context_->GetHoverElement() : nullptr;
+        if (!belongsToDocument(hover, document_))
+            hover = nullptr;
         const bool over_resize_handle_geom =
             mx >= -resize_handle_half_w &&
             mx <= resize_handle_half_w &&
@@ -541,16 +571,22 @@ namespace lfs::vis::gui {
                     rml_context_->ProcessMouseButtonUp(0, mods);
             }
         } else if (input.mouse_clicked[0]) {
-            if (auto* focused = rml_context_->GetFocusElement())
+            if (auto* focused = rml_context_->GetFocusElement();
+                belongsToDocument(focused, document_)) {
                 focused->Blur();
+            }
         }
 
         if (input.viewport_keyboard_focus) {
-            if (auto* focused = rml_context_->GetFocusElement())
+            if (auto* focused = rml_context_->GetFocusElement();
+                belongsToDocument(focused, document_)) {
                 focused->Blur();
+            }
         }
 
-        if (rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
+        auto* const focused_for_input = rml_context_->GetFocusElement();
+        if (belongsToDocument(focused_for_input, document_) &&
+            rml_input::hasFocusedKeyboardTarget(focused_for_input) &&
             !input.viewport_keyboard_focus) {
             for (const int sc : input.keys_pressed) {
                 const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
@@ -569,25 +605,26 @@ namespace lfs::vis::gui {
         }
 
         auto* focused = rml_context_->GetFocusElement();
-        wants_keyboard_ = rml_input::hasFocusedKeyboardTarget(focused);
+        wants_keyboard_ = belongsToDocument(focused, document_) &&
+                          rml_input::hasFocusedKeyboardTarget(focused);
         wants_input_ = wants_input_ || wants_keyboard_;
     }
 
     void RmlRightPanel::render(const RightPanelLayout& layout,
                                const std::vector<TabSnapshot>& tabs,
-                               const std::string& active_tab,
-                               float screen_x, float screen_y,
-                               int screen_w, int screen_h) {
-        (void)screen_w;
-        (void)screen_h;
+                                const std::string& active_tab,
+                                float screen_x, float screen_y,
+                                int screen_w, int screen_h) {
         if (!rml_context_ || !document_)
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
         if (rml_manager_) {
             rml_manager_->trackContextFrame(rml_context_,
-                                            static_cast<int>(layout.pos.x - screen_x),
-                                            static_cast<int>(layout.pos.y - screen_y));
+                                            shared_context_ ? 0
+                                                            : static_cast<int>(layout.pos.x - screen_x),
+                                            shared_context_ ? 0
+                                                            : static_cast<int>(layout.pos.y - screen_y));
         }
 
         const bool theme_changed = updateTheme();
@@ -598,13 +635,17 @@ namespace lfs::vis::gui {
         if (w <= 0 || h <= 0)
             return;
 
+        const int context_w = shared_context_ ? screen_w : w;
+        const int context_h = shared_context_ ? screen_h : h;
         const bool dims_changed = (w != last_fbo_w_ || h != last_fbo_h_);
+        const bool context_dims_changed = (context_w != last_context_w_ ||
+                                           context_h != last_context_h_);
         const bool layout_changed = (layout.scene_h != last_scene_h_ ||
-                                     layout.splitter_h != last_splitter_h_);
+                                      layout.splitter_h != last_splitter_h_);
         const bool tabs_changed = syncTabData(tabs, active_tab);
 
         const bool needs_render = render_needed_ || theme_changed || layout_changed ||
-                                  tabs_changed || dims_changed || input_dirty_;
+                                  tabs_changed || dims_changed || context_dims_changed || input_dirty_;
 
         if (needs_render) {
             const float dp_ratio = rml_manager_->getDpRatio();
@@ -632,7 +673,15 @@ namespace lfs::vis::gui {
                 tab_separator_el_->SetProperty("top", std::format("{:.0f}px", sep_top));
             }
 
-            rml_context_->SetDimensions(Rml::Vector2i(w, h));
+            if (shared_context_) {
+                document_->SetProperty("position", "absolute");
+                document_->SetProperty("left", std::format("{:.0f}px", layout.pos.x - screen_x));
+                document_->SetProperty("top", std::format("{:.0f}px", layout.pos.y - screen_y));
+                document_->SetProperty("width", std::format("{}px", w));
+                document_->SetProperty("height", std::format("{}px", h));
+            }
+
+            rml_context_->SetDimensions(Rml::Vector2i(context_w, context_h));
             for (int pass = 0; pass < 3; ++pass) {
                 rml_context_->Update();
                 syncTabNavigation();
@@ -643,11 +692,17 @@ namespace lfs::vis::gui {
 
             last_fbo_w_ = w;
             last_fbo_h_ = h;
+            last_context_w_ = context_w;
+            last_context_h_ = context_h;
             last_scene_h_ = layout.scene_h;
             last_splitter_h_ = layout.splitter_h;
             render_needed_ = false;
             input_dirty_ = false;
+            shared_context_content_dirty_ = shared_context_;
         }
+
+        if (shared_context_)
+            return;
 
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;

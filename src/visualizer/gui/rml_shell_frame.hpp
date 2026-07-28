@@ -40,6 +40,8 @@ namespace lfs::vis::gui {
         void shutdown();
         void reloadResources();
         void render(const ShellRegions& regions);
+        void markContentDirty() { render_needed_ = true; }
+        [[nodiscard]] Rml::Context* getContext() const { return rml_context_; }
 
     private:
         struct LayoutSignature {

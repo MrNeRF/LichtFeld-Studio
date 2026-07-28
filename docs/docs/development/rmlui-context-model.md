@@ -440,6 +440,55 @@ therefore answer whether a change in one tab invalidates or records unrelated
 right-panel content, and whether the removed manual routing compensates for
 any broader render work.
 
+### Opt-in shell/right-panel prototype
+
+The first application-level spike is enabled only by setting
+`LFS_RML_SHARED_RIGHT_PANEL_SPIKE=1` before starting the application. It makes
+`RmlRightPanel` borrow the full-window `shell_frame` context instead of
+creating `right_panel`. The right-panel document receives explicit
+window-space bounds; its input is sent in window coordinates and restricted to
+elements owned by that document. The shell frame records the shared context
+once, after the right-panel document has updated. Without the environment
+variable, the two components retain their separate contexts and existing cache
+paths.
+
+This is deliberately a pessimistic cache experiment: changing right-panel
+chrome refreshes the shell's full-window cache. That makes any cost visible and
+avoids claiming an artificial cache win. It also means this prototype is not a
+candidate final architecture. It does not include a dynamic `RmlPanelHost`,
+does not remove `GuiManager`'s editor-level precedence policy, and does not
+yet remove dropdown or tooltip bridging code.
+
+Validate the spike manually before interpreting timings:
+
+1. open, change, close, and scroll tabs; drag the panel-width edge and scene
+   splitter; resize the application window;
+2. move the pointer from the right panel into the viewport and back, checking
+   cursor and hover clearing;
+3. open a floating panel above the right panel and verify it still blocks
+   underlying interaction; and
+4. capture the same idle and interaction workloads with and without the
+   variable, using the existing CPU timers and an external GPU profiler when
+   available.
+
+#### First diagnostic capture
+
+Two local performance-log captures on 2026-07-28 verified the topology change.
+The baseline emitted a `right_panel` context-demand record; the spike emitted
+its startup marker and no `right_panel` context record, while `shell_frame`
+remained the shared context. Neither capture contained an RmlUI or right-panel
+error. The one common unrelated error was a failed MCP HTTP-server start.
+
+The captures are **not** a performance comparison: the baseline ran about
+44.7 seconds and logged 710 UI frames, while the spike ran about 39.5 seconds
+and logged 1,154 UI frames with a different interaction sequence. They do,
+however, confirm the intended invalidation trade-off. The baseline refreshed
+the shell cache once; the spike refreshed it 63 times as the right-panel
+document changed. Those shared-cache refreshes had a median CPU time of about
+0.46 ms (maximum 1.90 ms in this run). This is expected for the deliberately
+full-window cache and is evidence to improve cache scope, not a reason to
+claim a performance win or loss.
+
 Before either stage loads multiple documents, verify that their RmlUI data-model
 names and element ids do not collide. The current documents generally use named
 data models such as `asset_manager`, `rendering`, and `training`, but that is a

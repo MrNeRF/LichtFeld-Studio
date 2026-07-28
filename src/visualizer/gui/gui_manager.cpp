@@ -3280,7 +3280,14 @@ namespace lfs::vis::gui {
             startup_overlay_.dismiss();
         }
         rml_shell_frame_.init(&rmlui_manager_);
-        rml_right_panel_.init(&rmlui_manager_);
+        rml_shared_right_panel_spike_ =
+            lfs::core::environment::flag("LFS_RML_SHARED_RIGHT_PANEL_SPIKE");
+        rml_right_panel_.init(&rmlui_manager_,
+                              rml_shared_right_panel_spike_ ? rml_shell_frame_.getContext()
+                                                            : nullptr);
+        if (rml_shared_right_panel_spike_) {
+            LOG_INFO("RmlUI shared-context spike enabled for shell frame and right panel");
+        }
         rml_right_panel_.on_tab_changed = [this](const std::string& id) {
             panel_layout_.setActiveTab(id);
         };
@@ -4652,6 +4659,8 @@ namespace lfs::vis::gui {
         const bool right_panel_registry_needs_animation = panel_animation_demand.rightPanel();
         const bool bottom_dock_registry_needs_animation = panel_animation_demand.bottom_dock;
 
+        ShellRegions deferred_shell_regions;
+        bool defer_shell_frame_render = false;
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.shell_frame", 0.25);
             const float status_bar_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
@@ -4688,7 +4697,12 @@ namespace lfs::vis::gui {
                 status_bar_h,
             };
 
-            rml_shell_frame_.render(shell_regions);
+            if (rml_shared_right_panel_spike_) {
+                deferred_shell_regions = shell_regions;
+                defer_shell_frame_render = true;
+            } else {
+                rml_shell_frame_.render(shell_regions);
+            }
         }
 
         // Update editor context state for this frame
@@ -4987,6 +5001,11 @@ namespace lfs::vis::gui {
             right_panel_pointer_live_capture_ = false;
             right_panel_pointer_capture_region_ = RightPanelPointerRegion::None;
             right_panel_resize_edge_was_hovered_ = false;
+        }
+        if (defer_shell_frame_render) {
+            if (rml_right_panel_.consumeSharedContextContentDirty())
+                rml_shell_frame_.markContentDirty();
+            rml_shell_frame_.render(deferred_shell_regions);
         }
         if (!hasMouseButtonDown(sdl_input)) {
             right_panel_pointer_live_capture_ = false;
