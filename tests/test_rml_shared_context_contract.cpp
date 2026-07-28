@@ -13,6 +13,8 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include <visualizer/gui/rmlui/rml_context_owner.hpp>
 
 namespace {
@@ -50,6 +52,16 @@ namespace {
 
         int count = 0;
     };
+
+    bool belongsToDocument(Rml::Element* element,
+                           Rml::ElementDocument* const document) {
+        while (element) {
+            if (element == document)
+                return true;
+            element = element->GetParentNode();
+        }
+        return false;
+    }
 
     class RmlSharedContextContractTest : public ::testing::Test {
     protected:
@@ -92,6 +104,30 @@ namespace {
         auto* const document_handle = context->LoadDocumentFromMemory(document, id);
         if (document_handle)
             document_handle->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+        return document_handle;
+    }
+
+    Rml::ElementDocument* loadSurfaceAt(Rml::Context* const context,
+                                         const char* const id,
+                                         const char* const colour,
+                                         const int left, const int top,
+                                         const int width, const int height) {
+        const Rml::String document = Rml::String("<rml><head><style>"
+                                                 "body { margin: 0px; width: 100%; height: 100%; }"
+                                                 "#") +
+                                     id +
+                                     " { width: 100%; height: 100%; background-color: " +
+                                     colour + "; }</style></head><body><div id='" +
+                                     id + "'></div></body></rml>";
+        auto* const document_handle = context->LoadDocumentFromMemory(document, id);
+        if (document_handle) {
+            document_handle->SetProperty("position", "absolute");
+            document_handle->SetProperty("left", std::to_string(left) + "px");
+            document_handle->SetProperty("top", std::to_string(top) + "px");
+            document_handle->SetProperty("width", std::to_string(width) + "px");
+            document_handle->SetProperty("height", std::to_string(height) + "px");
+            document_handle->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+        }
         return document_handle;
     }
 
@@ -142,6 +178,32 @@ namespace {
         EXPECT_EQ(context_->GetDocument(0), first);
         EXPECT_EQ(context_->GetElementAtPoint(Rml::Vector2f(40.0f, 40.0f)),
                   first->GetElementById("first-surface"));
+    }
+
+    TEST_F(RmlSharedContextContractTest, DocumentsUseWindowSpaceBoundsForNativeHitTesting) {
+        auto* const back = loadSurfaceAt(context_, "back-surface", "#1b5e20",
+                                         40, 50, 180, 100);
+        auto* const front = loadSurfaceAt(context_, "front-surface", "#b71c1c",
+                                          80, 85, 160, 80);
+        ASSERT_NE(back, nullptr);
+        ASSERT_NE(front, nullptr);
+        ASSERT_TRUE(context_->Update());
+
+        auto* const back_target =
+            context_->GetElementAtPoint(Rml::Vector2f(50.0f, 60.0f));
+        auto* const front_target =
+            context_->GetElementAtPoint(Rml::Vector2f(100.0f, 100.0f));
+        ASSERT_NE(back_target, nullptr);
+        ASSERT_NE(front_target, nullptr);
+        EXPECT_TRUE(belongsToDocument(back_target, back));
+        EXPECT_TRUE(belongsToDocument(front_target, front));
+
+        front->SetProperty("left", "220px");
+        ASSERT_TRUE(context_->Update());
+        EXPECT_TRUE(belongsToDocument(
+            context_->GetElementAtPoint(Rml::Vector2f(100.0f, 100.0f)), back));
+        EXPECT_TRUE(belongsToDocument(
+            context_->GetElementAtPoint(Rml::Vector2f(230.0f, 100.0f)), front));
     }
 
     TEST_F(RmlSharedContextContractTest, BorrowedContextOwnerDoesNotDestroySharedContext) {

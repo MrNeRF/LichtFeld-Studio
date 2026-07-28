@@ -210,7 +210,7 @@ cross-context checks described below.
 | Panel selection and direct rendering | `test_panel_registry_render_paths.cpp` | space, single-panel, and child selection; preload; cache hit and miss fallback; invocation-local input and clip state; consumed height |
 | Panel visibility and floating stack | `test_panel_registry_animation_demand.cpp` | visible animation demand by panel space; floating-panel stack promotion; disabled floating-panel behavior |
 | Right-panel layout policy | `test_panel_layout_render_demand.cpp` | scene-header and active-tab live/cached combinations, including the required preload before a live direct draw |
-| Shared-context framework contract | `test_rml_shared_context_contract.cpp` | two documents in one real RmlUI context; native document ordering, hit testing, click delivery, and unloading one document while another remains live |
+| Shared-context framework contract | `test_rml_shared_context_contract.cpp` | two documents in one real RmlUI context; native ordering, same-bounds click delivery, window-space document bounds and hit testing, and unloading one document while another remains live |
 | RmlUI text and key translation | `test_rml_text_input_handler.cpp`, `test_sdl_rml_key_mapping.cpp` | text selection shortcuts, SDL-to-RmlUI keys and modifiers, and frame input filtering by window |
 | RmlUI document/resource boundaries | `test_rml_path_utils.cpp`, `test_rml_static_style_boundaries.cpp`, `tests/python/test_rmlui_image_sources.py` | file/image source encoding and rewriting, stylesheet ownership, dirty-update policies, and update requests from dynamic image content |
 | Fixed-surface routing and tooltips | `tests/python/test_menubar_resources.py` | menu popup layering and retained submenu bounds; menu pointer/keyboard blocking; tooltip wake-up demand; viewport-overlay positioning |
@@ -422,11 +422,12 @@ useful native behavior.
 Use two stages instead:
 
 1. **Framework spike outside the current host path.** This now exists as
-   `test_rml_shared_context_contract.cpp`. It creates one real RmlUI context
-   with two controlled documents and verifies native document ordering, hit
-   testing, click delivery, and independent document unloading. It is
-   deliberately headless: it establishes framework semantics, not rendering
-   cost or full-window application behavior.
+    `test_rml_shared_context_contract.cpp`. It creates one real RmlUI context
+    with two controlled documents and verifies native document ordering, hit
+    testing, click delivery for same-bounds documents, window-space document
+    bounds, and independent document unloading. It is deliberately headless:
+    it establishes framework semantics, not rendering cost or full-window
+    application behavior.
 2. **Narrow application prototype after an ownership split.** Separate context
    ownership, document bounds, input dispatch, and cache ownership in
    `RmlPanelHost` or a successor. Only then place the right-panel chrome and
@@ -439,6 +440,17 @@ current path can capture and reuse each panel's layer independently. It must
 therefore answer whether a change in one tab invalidates or records unrelated
 right-panel content, and whether the removed manual routing compensates for
 any broader render work.
+
+The framework spike also establishes a current limitation. With two documents
+given distinct window-space bounds, `Context::GetElementAtPoint()` identifies
+the document under each point and follows a document move after `Update()`.
+However, sending those same points through `Context::ProcessMouse...()`
+delivered both clicks to the document loaded first, including when the listener
+was attached directly to each hit-test target. Therefore a shared context cannot
+yet be assumed to remove application-level document input filtering. Any
+dynamic-host spike must retain the present explicit document ownership check
+while investigating whether a different RmlUI document structure or input entry
+point can make the dispatch native.
 
 ### Opt-in shell/right-panel prototype
 
