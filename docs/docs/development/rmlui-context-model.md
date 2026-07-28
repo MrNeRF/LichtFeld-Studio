@@ -4,19 +4,25 @@ sidebar_position: 5
 
 # RmlUI Context Model
 
-LichtFeld Studio intentionally uses more than one RmlUI context. The normal
-panel path is one `RmlPanelHost` context per panel, rendered into a panel-sized
+LichtFeld Studio currently uses more than one RmlUI context. The normal panel
+path is one `RmlPanelHost` context per panel, rendered into a panel-sized
 texture and then composited into the window. The fixed UI also has independent
 contexts for the shell frame, menu bar, status bar, right panel, toast overlay,
 modal overlay, startup overlay, viewport overlay, sequencer, sequencer overlay,
 and global context menu.
 
-This is not an accidental duplication. A panel that did not change can reuse
-its cached texture instead of recording its RmlUI document again. The
-`performance.log` baseline for this model reports cached right-panel layout at
-roughly 0.08--0.11 ms, RmlUI recording at roughly 0.08--0.40 ms, and CPU UI
-work before Vulkan frame recording at roughly 0.6--0.9 ms. Keeping that
-property matters more than reducing the context count.
+This document records the current implementation and the investigation needed
+to simplify it. The desired direction is to let RmlUI own as much of stacking,
+hit testing, focus, popup, and tooltip behavior as it can. The current
+multi-context model is a performance-oriented workaround, not proof that a
+global or shared RmlUI context is inherently too expensive.
+
+A panel that did not change can reuse its cached texture instead of recording
+its RmlUI document again. The available `performance.log` baseline for this
+model reports cached right-panel layout at roughly 0.08--0.11 ms, RmlUI
+recording at roughly 0.08--0.40 ms, and CPU UI work before Vulkan frame
+recording at roughly 0.6--0.9 ms. These measurements establish a baseline to
+preserve or improve; they do not decide the architecture.
 
 ## Context inventory
 
@@ -191,78 +197,324 @@ This keeps registration data (identity, label, parent, space, ordering and
 options) independent from live mouse interaction, while retaining the present
 input and z-order semantics.
 
-## Decision
+## Regression coverage
 
-Keep the one-context-per-panel model. Do not replace it with one global RmlUI
-context, and do not introduce a shared transient popup context as part of this
-work.
+The context model is covered by focused tests at more than one level. C++ tests
+exercise executable registry, layout, and input behavior. Python regressions
+inspect resource and integration contracts that are difficult to construct in a
+headless RmlUI session. Neither group is a substitute for the manual
+cross-context checks described below.
 
-The alternatives considered are:
+| Area | Tests | What they protect |
+| --- | --- | --- |
+| Panel selection and direct rendering | `test_panel_registry_render_paths.cpp` | space, single-panel, and child selection; preload; cache hit and miss fallback; invocation-local input and clip state; consumed height |
+| Panel visibility and floating stack | `test_panel_registry_animation_demand.cpp` | visible animation demand by panel space; floating-panel stack promotion; disabled floating-panel behavior |
+| Right-panel layout policy | `test_panel_layout_render_demand.cpp` | scene-header and active-tab live/cached combinations, including the required preload before a live direct draw |
+| RmlUI text and key translation | `test_rml_text_input_handler.cpp`, `test_sdl_rml_key_mapping.cpp` | text selection shortcuts, SDL-to-RmlUI keys and modifiers, and frame input filtering by window |
+| RmlUI document/resource boundaries | `test_rml_path_utils.cpp`, `test_rml_static_style_boundaries.cpp`, `tests/python/test_rmlui_image_sources.py` | file/image source encoding and rewriting, stylesheet ownership, dirty-update policies, and update requests from dynamic image content |
+| Fixed-surface routing and tooltips | `tests/python/test_menubar_resources.py` | menu popup layering and retained submenu bounds; menu pointer/keyboard blocking; tooltip wake-up demand; viewport-overlay positioning |
+| Plugin panel contract | `tests/python/test_plugin_api_surface.py`, `tests/python/test_plugin_docs.py`, `tests/python/test_layout_composition.py` | public panel and layout API surface, typed floating panel spaces, documented plugin lifecycle, and nested layout behavior |
 
-1. **One context for all UI.** Rejected: it would discard the panel-sized cache
-   boundary that makes unchanged panels inexpensive to render.
-2. **Keep the current model.** Accepted: it preserves the measured cache path
-   and contains the present routing behavior in its existing owners.
-3. **One shared transient popup context.** Technically feasible, but deferred:
-   `GlobalContextMenu` already demonstrates a full-window, independently
-   cached context. Moving a panel dropdown or tooltip is not a reparenting
-   operation, however. Native select state and document-local tooltip elements
-   belong to their source context. A shared context would need a popup model,
-   window-space anchor, callbacks for selection/dismissal, and an explicit
-   focus and capture handoff. It needs that design and a cache-cost measurement
-   before it is safer than the current code.
+The Python resource tests are source-level regressions: they confirm that the
+required RML, RCSS, and integration calls remain present, but do not execute a
+live multi-context window. Treat their failures as a contract change requiring
+review, and do not interpret their success as proof of end-to-end pointer or
+rendering behavior.
 
-## Popup direction
+### Choosing a test target
 
-The current model remains the default: panels stay independent and cacheable.
-This document does not introduce a shared popup context or change existing
-input handling.
+For panel-registry, layout, and context-model changes, enable
+`BUILD_GUI_TESTS`. It builds `lichtfeld_gui_tests`, which contains the focused
+PanelRegistry and right-panel layout tests and does not require LibTorch.
+`BUILD_TESTS` remains the full historical suite: many tensor tests use LibTorch
+as a correctness oracle, so that option intentionally requires the external
+Torch SDK. Use the lightweight target for UI work unless the change also
+affects the tensor implementation.
 
-If manual popup code becomes the limiting factor, the next step is a scoped
-proposal for one shared transient overlay context. It should host only
-cross-panel popup primitives such as dropdowns, context menus, and tooltips;
-it must not absorb ordinary panels or modal ownership. Before that change can
-land, the proposal must specify:
+### What remains manual
 
-1. how an anchor in a panel-local context becomes a window-space rectangle;
-2. where the transient overlay sits relative to modal and menu contexts;
-3. pointer capture, dismissal, wheel routing, and keyboard focus rules; and
-4. cache invalidation and rendering cost compared with the current panel cache.
+No automated test currently drives a full window containing modal, menu,
+floating panel, viewport overlay, and panel-local dropdown simultaneously.
+Before merging a change to cross-context routing, cache invalidation, or popup
+behavior, run that interaction matrix manually and compare the documented
+`gui_render` timings. This is also the required validation for an input-order
+change that cannot be represented by the focused registry tests.
 
-The proposed shared context would render a new popup document from data owned
-by the source panel. It would not move the source panel's existing RmlUI
-elements between contexts. `GlobalContextMenu` is the closest existing example
-of the required full-window rendering and input shape, but it is not a generic
-popup host yet.
+## Architectural investigation
 
-Until those rules and measurements exist, retain the existing manual routing
-instead of replacing it with a partial overlay abstraction.
+The current model should not be treated as the target architecture. Its
+panel-sized caches solve a measured problem, but they also require the
+application to reproduce behavior that RmlUI normally provides inside one
+context. The investigation is therefore: can a correct use of one global
+context, or a smaller number of shared contexts, retain the useful cache and
+frame-time properties while deleting or materially reducing that application
+code?
 
-Reopen the shared-overlay option only when at least one of these conditions is
-true:
+The repository history provides two important facts, and one important gap:
 
-- a new popup must cross a panel boundary and would otherwise duplicate the
-  current dropdown routing;
-- two existing popup implementations need the same window-space anchor,
-  capture, dismissal, and focus behavior; or
-- profiling shows that the manual routing or popup redraw, rather than the
-  panel cache, is a material UI cost.
+| Evidence | What it establishes | What it does not establish |
+| --- | --- | --- |
+| The first RmlUI implementation in commit `2a79f343` already created separate fixed and panel contexts. | Multi-context ownership predates the current cache work. | It does not contain a directly comparable global-context implementation. |
+| Commit `e281a8e9` added cached direct draws, passive-mouse-move suppression, per-context frame tracking, and per-context `rmlui_record` timers. | The present performance work is deliberately granular and can be measured per context. | It does not prove that the same work could not be expressed efficiently with shared RmlUI documents. |
+| The current tree contains the cache and routing implementation described above. | It identifies the code that a successful simplification should remove or minimize. | It does not explain a historical global-context slowdown. |
 
-The follow-up must preserve the current panel cache and compare the relevant
-`gui_render.panel_layout.*` and `gui_render.rmlui_record` timings before and
-after the change. It should also cover the following interaction cases:
+Do not assign a cause to a previous global-context performance problem until a
+reproducible revision, workload, and trace are available. Possible causes to
+test include invalidating too much of one document, rendering all documents
+every frame, update scheduling caused by hover or animation state, excessive
+full-window texture work, and backend cache behavior. They are hypotheses, not
+findings.
 
-- a popup extending over another panel;
-- modal and menu precedence over a popup;
-- click, release, and wheel input after leaving the popup bounds; and
-- keyboard focus and dismissal while a popup is open.
+### Code to minimize
 
-## Scope boundary
+Success is not measured by reducing the raw number of contexts alone. It is
+measured by allowing RmlUI to own behavior that currently crosses an
+application-defined context boundary. The primary candidates are:
 
-This document is the source of truth for the context model and its ownership
-rules. It does not introduce a popup migration. Any shared transient overlay
-implementation is a separate behavior-changing change with its own design and
-validation plan.
+| Current code | RmlUI behavior being reconstructed | Question for a shared model |
+| --- | --- | --- |
+| `GuiManager::hitTestPointer()` | window-wide surface precedence | Can normal document ordering and native RmlUI hit testing replace part of this chain? |
+| `PanelRegistry` floating stack order and capture state | window stacking and pointer targeting | Can ordinary document z-order replace it for RML-backed floating surfaces? |
+| `RmlPanelHost` dropdown bounds, manual hover, coordinate conversion, and forwarding | popup placement and input routing | Can a native popup remain in the same context as its owner without an application handoff? |
+| `RmlPanelHost` tooltip and focus forwarding | hover, focus, capture, and keyboard ownership | Can document-local RmlUI behavior remove the per-host coordination? |
+| `RmlUIManager` tracked frames, overlay occlusion, cursor, and tooltip wake-ups | cross-context ordering and invalidation | Which parts disappear when the relevant surfaces share a context, and which are still required by application policy? |
+
+Some policy will remain application-owned even in the best outcome. For
+example, a modal that deliberately blocks viewport tools still needs an
+application-level decision. The target is to remove duplicated UI mechanics,
+not to make RmlUI responsible for unrelated editor policy.
+
+### Experiments and decision criteria
+
+Work in small, reversible experiments. Do not migrate all UI surfaces at once.
+Each experiment must keep the current path available for an A/B comparison and
+must use the same scene, window size, visible panels, idle time, and scripted
+interaction sequence.
+
+1. **Baseline the current path.** Capture context count, per-context
+   `gui_render.rmlui_record.*`, `gui_render.panel_layout.*`,
+   `gui_render.cpu_ui_before_vulkan_begin`, frame time, and GPU UI cost for an
+   idle session and an interaction-heavy session.
+2. **Trace invalidation.** Identify which context or document causes `Update()`
+   and `Render()` in each workload, and whether hover, tooltip, animation,
+   resize, theme, or model updates caused it.
+3. **Create one bounded shared-context prototype.** Start with one family of
+   ordinary RML-backed panels or one popup path. Do not begin with modal,
+   startup, or viewport-tool ownership. Preserve its behavior through the
+   existing path so results are comparable and reversible.
+4. **Compare native behavior and cost.** Verify z-order, hit testing, wheel,
+   capture, focus, keyboard dismissal, and tooltip/popup behavior. Compare the
+   metrics in step 1, including GPU cost; lower C++ routing complexity is not a
+   win if it regresses frame time or invalidates the whole UI on ordinary edits.
+5. **Choose the next scope from evidence.** Expand the shared model only if it
+   removes a meaningful custom path without a material regression. Otherwise
+   retain the cache boundary and record the measured reason.
+
+### Existing instrumentation and first prototype
+
+The existing RmlUI timing is CPU timing. `RmlUIManager` emits a per-context
+`gui_render.rmlui_record.*` timer for a direct render, a `.cache_refresh` timer
+when it records a layer into a texture, and a `.cached_context.*` timer when it
+only blits that texture. `PanelLayoutManager` and `GuiManager` add the
+`gui_render.panel_layout.*` and `gui_render.cpu_ui_before_vulkan_begin`
+measurements. This is enough to locate CPU invalidation and distinguish cache
+refresh from cache reuse.
+
+The RmlUI Vulkan path does not currently expose equivalent GPU timestamps. A
+GPU comparison therefore needs an external Vulkan/GPU profiler, or a separate
+and validated timestamp-query addition. Do not infer GPU cost from the CPU
+timers alone.
+
+The project pins RmlUI 6.2. That version explicitly supports on-demand
+rendering: after an update, `GetNextUpdateDelay()` reports zero for an
+immediate frame, a finite delay for a scheduled internal update, or infinity
+when no redraw is needed. The current integration uses that API in panel,
+status-bar, and viewport-overlay owners only to detect the zero-delay case and
+set an `animation_active_` flag. The application wait loop separately tracks
+tooltip reveal deadlines, but does not currently aggregate finite RmlUI update
+delays across contexts.
+
+This is a candidate integration gap to measure, not a diagnosed performance
+bug. A shared-context experiment must record the next-update delay after each
+`Update()` and compare two policies: the current immediate-animation behavior
+and a scheduler that wakes at the earliest finite RmlUI delay. If the latter
+changes idle CPU use or perceived responsiveness, it may explain part of a
+historical global-context result without requiring a context-count change.
+
+For a runtime trace, set `LFS_RML_CONTEXT_DEMAND_TRACE=1`. The integration
+then emits `gui_render.rmlui_context_demand` only when a queued context changes
+between immediate, delayed, or idle update demand. It is diagnostic-only and
+off by default; use it to identify the context that keeps the render loop
+awake without adding one log line per frame.
+
+### Initial baseline observation
+
+An initial 1280x720 performance-log capture on 2026-07-28 produced 5,225 GUI
+frames over about 44 seconds. Its two log files were consecutive rotation
+segments of one run, not independent samples. The trace is useful for locating
+work, but it is not a clean performance result: verbose performance logging
+itself writes enough data to rotate the log, and the run includes application
+and Python redraw activity.
+
+The meaningful observation is distribution, not the largest wall-clock sample:
+the scene header's `scene_panel_native` context refreshed its cached Vulkan
+layer 386 times, with a median refresh time of about 6.6 ms. The rendering-tab
+context refreshed 41 times with a median of about 0.4 ms. The trace also
+contains an input-free interval in which `gui_anim=true` kept frames running at
+roughly 20 Hz. At the time, it did not identify which RmlUI context requested
+the immediate update, so it could not be attributed to context count or to the
+shared-context question.
+
+### Context-demand follow-up
+
+A second capture on the same machine on 2026-07-28 enabled
+`LFS_RML_CONTEXT_DEMAND_TRACE=1`. Its three rotated files are consecutive
+segments of one approximately 18-second run (13:48:15--13:48:33), with 7,264
+`loop_end` records. The trace reports only state changes, rather than adding a
+line for every frame.
+
+At startup, `scene_panel_native`, `lfs.rendering`, and `startup_overlay`
+briefly requested an immediate update. The scene and rendering contexts became
+idle within about 0.2 seconds; the startup overlay became idle after its
+approximately three-second transition. The shell frame, right panel, viewport
+overlay, status bar, and menu bar initially reported `idle`. Later state
+changes were short interaction-sized bursts in `scene_panel_native`,
+`lfs.rendering`, `menu_bar`, and `modal_overlay`; every completed burst resolved
+to `idle` or, twice, to a finite delay of 0.578 seconds. The final menu-bar
+transition occurred about one second before the application stopped, so it does
+not establish a sustained state.
+
+Most importantly, from 13:48:19.653 until 13:48:26.108 none of the queued
+contexts changed from `idle` to immediate demand. Nevertheless, the loop
+recorded 2,965 frames from 13:48:20 through 13:48:25; 2,960 of those had
+`py_redraw=true`. This rules out the queued RmlUI contexts as the explanation
+for that dense period. The transition into that period follows dismissal of the
+startup overlay. The now-visible Python empty-state overlay called
+`lf.ui.request_redraw()` unconditionally from its draw hook, so every draw
+requested the next frame. That call was removed: the overlay is static, and
+its visibility and content changes already enter through ordinary input or
+state invalidation. This was a render-on-demand feedback loop, not an RmlUI
+context cost. A follow-up trace after the removal closed the startup overlay
+at 13:58:30.726, observed one `py_redraw=true` frame at 13:58:30.809, and then
+returned to `py_redraw=false` while idle. Its later dense sections carried
+`input_event=true` and mouse-move records, which is expected interaction work
+rather than an idle redraw loop.
+
+The finding still does **not** prove that a shared context is cheap. It does
+establish that the historical global-context concern cannot be validated by
+attributing this capture's high frame count to the current RmlUI contexts.
+
+The finite-delay observations also make the scheduler experiment concrete:
+measure whether aggregating the earliest `GetNextUpdateDelay()` improves
+responsiveness or idle wake-ups before changing the context topology. The
+trace is a diagnostic run with performance logging enabled, not a benchmark;
+repeatable A/B timings and a small shared-context spike remain required.
+
+The first shared-context prototype should be deliberately small, but it cannot
+reuse two current `RmlPanelHost` instances unchanged. A host currently owns and
+destroys its context, resizes that context to its panel bounds (including
+multi-pass content-height measurement), owns a per-host layer cache, and
+forwards local input and capture. Sharing its `Rml::Context` would therefore
+make one panel's size or lifecycle change affect the other before it tests any
+useful native behavior.
+
+Use two stages instead:
+
+1. **Framework spike outside the current host path.** Create a small,
+   full-window shared context with two controlled RML documents positioned by
+   document properties. It establishes native document ordering, hit testing,
+   focus, and the cost of updating/rendering one changed document beside an
+   unchanged one. It must be disposable and does not migrate a production
+   panel.
+2. **Narrow application prototype after an ownership split.** Separate context
+   ownership, document bounds, input dispatch, and cache ownership in
+   `RmlPanelHost` or a successor. Only then place the right-panel chrome and
+   one known RML-backed active tab in a full-window shared context, leaving
+   every other panel type on the existing path and retaining a runtime fallback.
+
+The second stage is still a measurement prototype, not a proposed migration.
+`Context::Render()` renders the visible documents of that context, whereas the
+current path can capture and reuse each panel's layer independently. It must
+therefore answer whether a change in one tab invalidates or records unrelated
+right-panel content, and whether the removed manual routing compensates for
+any broader render work.
+
+Before either stage loads multiple documents, verify that their RmlUI data-model
+names and element ids do not collide. The current documents generally use named
+data models such as `asset_manager`, `rendering`, and `training`, but that is a
+precondition to check, not a namespace guarantee for plugins.
+
+The ownership split must preserve these explicit contracts:
+
+| Responsibility today | Required future boundary |
+| --- | --- |
+| `RmlPanelHost` creates and destroys `context_name_` | a shared-context owner alone creates and destroys the context; documents release only themselves |
+| `RmlPanelHost::updateContextLayout()` calls `SetDimensions()` | shared contexts have window dimensions; each document receives its own bounds and local layout contract |
+| per-host `direct_cache_` captures one context layer | cache scope is selected deliberately: whole shared context, safe document region, or no cache for the spike |
+| `RmlPanelHost::forwardInput()` translates/captures per panel | one shared owner sends window-space input to RmlUI once, with application policy only at external boundaries |
+| per-host tooltip/dropdown helpers bridge local coordinates | use native document behavior where possible; retain only an explicit bridge for behavior RmlUI cannot express |
+
+RmlUI's own context documentation confirms the constraint being tested:
+`Update()` processes elements in the context's documents and `Render()` renders
+all visible elements in those documents. The application controls when those
+calls happen, so invalidation scheduling and cache capture remain part of the
+integration design. See the [RmlUI context manual](https://mikke89.github.io/RmlUiDoc/pages/cpp_manual/contexts.html).
+
+Record at least these workloads for both paths:
+
+| Workload | Purpose |
+| --- | --- |
+| Idle after caches settle | establishes cache reuse and wake-up cost |
+| Pointer movement across chrome and active tab | exercises hover, cursor, and hit testing |
+| Text edit, selection, and keyboard dismissal in the tab | exercises focus and keyboard ownership |
+| Open dropdown or tooltip crossing the tab boundary | exercises native stacking, popup placement, and input capture |
+| Tab/model update and right-panel resize | exposes document invalidation and full-window cache cost |
+
+`GlobalContextMenu` is a useful existing full-window context, but it is not
+proof that arbitrary panel RML can simply be moved there. A shared popup host
+would need an explicit window-space anchor and a defined focus, capture,
+dismissal, and callback contract. It is one experiment to evaluate, not the
+only acceptable result.
+
+### Test and benchmark roles
+
+The focused GUI tests protect the current panel orchestration while experiments
+are developed. In particular, `test_panel_registry_render_paths.cpp` guards
+preload, direct-draw, and cached-draw fallback contracts, and the layout and
+animation-demand tests guard related registry behavior. They are useful
+regressions for a migration because a changed rendering architecture must not
+silently break those contracts.
+
+They do **not** instantiate a live RmlUI window, compare context counts, drive
+native RmlUI popup behavior, or measure CPU/GPU performance. Passing them is a
+necessary safety signal for code they cover, not evidence that a global or
+shared context is viable. The experiment protocol above therefore requires
+both focused tests and reproducible benchmark traces.
+
+If the framework spike becomes an application prototype, add tests in layers:
+
+1. a deterministic RmlUI integration test for two documents in one context,
+   covering topmost hit testing, focus transfer, document removal, and input
+   outside both documents;
+2. focused tests for the ownership boundary, proving that destroying one
+   document does not destroy a borrowed shared context and that a context owner
+   releases it exactly once; and
+3. the existing `BUILD_GUI_TESTS` regressions for panel selection, cache
+   fallback, and layout orchestration.
+
+The first two require a deliberately initialized RmlUI test harness; do not
+fake them with source-text assertions. Performance remains a benchmark rather
+than a unit-test assertion, because it depends on scene, GPU, window size, and
+interaction workload.
+
+## Current boundary
+
+Until an experiment produces evidence, retain the current routing and cache
+code rather than replacing it with an incomplete abstraction. This document
+does not select one context for all UI, retain one context per panel forever,
+or prescribe a shared popup context. It records the current behavior, the
+custom code to minimize, and the evidence required for a later implementation
+decision.
 
 ## Relevant code
 

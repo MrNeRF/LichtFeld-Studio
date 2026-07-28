@@ -6,14 +6,16 @@
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
-# Reuse nanobind headers for Python UI regression tests
-if(NOT DEFINED NB_DIR)
-    find_package(Python REQUIRED COMPONENTS Interpreter Development Development.Module Development.SABIModule)
-    find_package(nanobind CONFIG REQUIRED)
-endif()
+# The full suite embeds Python regression tests. Lightweight GUI tests do not.
+if(BUILD_TESTS)
+    if(NOT DEFINED NB_DIR)
+        find_package(Python REQUIRED COMPONENTS Interpreter Development Development.Module Development.SABIModule)
+        find_package(nanobind CONFIG REQUIRED)
+    endif()
 
-if(COMMAND nanobind_build_library AND NOT TARGET nanobind-static)
-    nanobind_build_library(nanobind-static)
+    if(COMMAND nanobind_build_library AND NOT TARGET nanobind-static)
+        nanobind_build_library(nanobind-static)
+    endif()
 endif()
 
 # =============================================================================
@@ -59,6 +61,57 @@ if(BUILD_UNICODE_TEST_ONLY)
 
     message(STATUS "Building standalone Unicode path test (no CUDA)")
     return()  # Skip the rest of the file
+endif()
+
+# =============================================================================
+# Lightweight GUI tests (no LibTorch oracle)
+# =============================================================================
+if(BUILD_GUI_TESTS)
+    add_executable(lichtfeld_gui_tests
+        test_panel_registry_animation_demand.cpp
+        test_panel_registry_render_paths.cpp
+        test_panel_layout_render_demand.cpp
+    )
+
+    set_target_properties(lichtfeld_gui_tests PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    target_include_directories(lichtfeld_gui_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_BINARY_DIR}/include
+        ${CMAKE_SOURCE_DIR}/tests
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/visualizer
+    )
+
+    target_compile_definitions(lichtfeld_gui_tests PRIVATE
+        TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data"
+        PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+    )
+
+    target_link_libraries(lichtfeld_gui_tests PRIVATE
+        lfs_visualizer
+        lfs_core
+        GTest::gtest_main
+        glm::glm
+    )
+
+    add_test(NAME lichtfeld.gui
+        COMMAND $<TARGET_FILE:lichtfeld_gui_tests> --gtest_color=no
+    )
+    set_tests_properties(lichtfeld.gui PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "gui;fast"
+        TIMEOUT 120
+    )
+
+    message(STATUS "GUI tests configured without LibTorch -> lichtfeld_gui_tests")
+endif()
+
+if(NOT BUILD_TESTS)
+    return()
 endif()
 
 # Find LibTorch for tensor comparison tests
@@ -160,6 +213,7 @@ set(TEST_FILES
     test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
     test_panel_registry_animation_demand.cpp
+    test_panel_registry_render_paths.cpp
     test_panel_layout_render_demand.cpp
     test_reactive_store.cpp
     test_video_color_convert.cpp

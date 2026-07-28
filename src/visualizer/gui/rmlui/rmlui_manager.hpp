@@ -186,6 +186,7 @@ namespace lfs::vis::gui {
                                      float dp_ratio,
                                      std::unique_ptr<Rml::RenderInterface> render_interface,
                                      RenderInterface_VK* vulkan_render_interface);
+        void traceContextUpdateDemand(const Rml::Context* context);
 
         std::unique_ptr<RmlSystemInterface> system_interface_;
         std::unique_ptr<Rml::RenderInterface> owned_render_interface_;
@@ -200,6 +201,7 @@ namespace lfs::vis::gui {
         std::unordered_map<const Rml::Context*, TrackedContextFrame> previous_context_frames_;
         std::unordered_map<const Rml::Context*, std::chrono::steady_clock::time_point>
             tooltip_reveal_deadlines_;
+        std::unordered_map<const Rml::Context*, int> context_update_demand_states_;
         std::vector<VulkanContextCommand> vulkan_queue_;
         std::vector<VulkanContextCommand> vulkan_foreground_queue_;
         SDL_Window* window_ = nullptr;
@@ -208,6 +210,7 @@ namespace lfs::vis::gui {
         bool resize_deferring_ = false;
         bool debugger_enabled_ = false;
         bool debugger_initialized_ = false;
+        bool context_demand_trace_enabled_ = false;
         bool vulkan_frame_active_ = false;
         VkExtent2D vulkan_frame_extent_{};
         bool initialized_ = false;

@@ -109,6 +109,8 @@ namespace lfs::vis::gui {
         dp_ratio_ = dp_ratio;
         window_ = window;
         debugger_enabled_ = lfs::core::environment::flag("LFS_RML_DEBUGGER");
+        context_demand_trace_enabled_ =
+            lfs::core::environment::flag("LFS_RML_CONTEXT_DEMAND_TRACE");
 
         system_interface_ = std::make_unique<RmlSystemInterface>(window);
         owned_render_interface_ = std::move(render_interface);
@@ -297,6 +299,7 @@ namespace lfs::vis::gui {
         vulkan_queue_.clear();
         vulkan_foreground_queue_.clear();
         context_names_.clear();
+        context_update_demand_states_.clear();
         font_blobs_.clear();
         cjk_fonts_loaded_ = false;
         cjk_fonts_load_attempted_ = false;
@@ -377,6 +380,7 @@ namespace lfs::vis::gui {
             if (auto fn = lfs::python::get_rml_context_destroy_handler())
                 fn(context);
             context_names_.erase(context);
+            context_update_demand_states_.erase(context);
             tracked_context_frames_.erase(context);
             previous_context_frames_.erase(context);
             tooltip_reveal_deadlines_.erase(context);
@@ -609,6 +613,7 @@ namespace lfs::vis::gui {
                                           const float clip_y2) {
         if (!context || !vulkan_render_interface_)
             return;
+        traceContextUpdateDemand(context);
         auto& queue = foreground ? vulkan_foreground_queue_ : vulkan_queue_;
         std::string context_name = "unknown";
         if (const auto it = context_names_.find(context); it != context_names_.end())
@@ -631,6 +636,7 @@ namespace lfs::vis::gui {
             draw.cache_width <= 0 || draw.cache_height <= 0 ||
             draw.draw_width <= 0.0f || draw.draw_height <= 0.0f)
             return;
+        traceContextUpdateDemand(draw.context);
 
         auto& queue = draw.foreground ? vulkan_foreground_queue_ : vulkan_queue_;
         std::string context_name = "unknown";
@@ -654,6 +660,27 @@ namespace lfs::vis::gui {
             .refresh_cache = draw.refresh,
             .cache_visible_region = draw.cache_visible_region,
         });
+    }
+
+    void RmlUIManager::traceContextUpdateDemand(const Rml::Context* const context) {
+        if (!context_demand_trace_enabled_ || !context)
+            return;
+
+        const double delay = context->GetNextUpdateDelay();
+        const int state = delay == 0.0 ? 0 : std::isfinite(delay) ? 1 : 2;
+        auto [it, inserted] = context_update_demand_states_.try_emplace(context, state);
+        if (!inserted && it->second == state)
+            return;
+        it->second = state;
+
+        const auto name_it = context_names_.find(context);
+        const std::string_view name = name_it != context_names_.end()
+                                          ? std::string_view(name_it->second)
+                                          : std::string_view("unknown");
+        const std::string_view state_name =
+            state == 0 ? "immediate" : state == 1 ? "delayed" : "idle";
+        LOG_PERF("gui_render.rmlui_context_demand context={} state={} delay={:.3f}",
+                 name, state_name, delay);
     }
 
     void RmlUIManager::releaseCachedVulkanContext(CachedVulkanContextRender& cache) {
