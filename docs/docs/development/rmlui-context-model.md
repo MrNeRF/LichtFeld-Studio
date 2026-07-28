@@ -210,6 +210,7 @@ cross-context checks described below.
 | Panel selection and direct rendering | `test_panel_registry_render_paths.cpp` | space, single-panel, and child selection; preload; cache hit and miss fallback; invocation-local input and clip state; consumed height |
 | Panel visibility and floating stack | `test_panel_registry_animation_demand.cpp` | visible animation demand by panel space; floating-panel stack promotion; disabled floating-panel behavior |
 | Right-panel layout policy | `test_panel_layout_render_demand.cpp` | scene-header and active-tab live/cached combinations, including the required preload before a live direct draw |
+| Shared-context framework contract | `test_rml_shared_context_contract.cpp` | two documents in one real RmlUI context; native document ordering, hit testing, click delivery, and unloading one document while another remains live |
 | RmlUI text and key translation | `test_rml_text_input_handler.cpp`, `test_sdl_rml_key_mapping.cpp` | text selection shortcuts, SDL-to-RmlUI keys and modifiers, and frame input filtering by window |
 | RmlUI document/resource boundaries | `test_rml_path_utils.cpp`, `test_rml_static_style_boundaries.cpp`, `tests/python/test_rmlui_image_sources.py` | file/image source encoding and rewriting, stylesheet ownership, dirty-update policies, and update requests from dynamic image content |
 | Fixed-surface routing and tooltips | `tests/python/test_menubar_resources.py` | menu popup layering and retained submenu bounds; menu pointer/keyboard blocking; tooltip wake-up demand; viewport-overlay positioning |
@@ -420,12 +421,12 @@ useful native behavior.
 
 Use two stages instead:
 
-1. **Framework spike outside the current host path.** Create a small,
-   full-window shared context with two controlled RML documents positioned by
-   document properties. It establishes native document ordering, hit testing,
-   focus, and the cost of updating/rendering one changed document beside an
-   unchanged one. It must be disposable and does not migrate a production
-   panel.
+1. **Framework spike outside the current host path.** This now exists as
+   `test_rml_shared_context_contract.cpp`. It creates one real RmlUI context
+   with two controlled documents and verifies native document ordering, hit
+   testing, click delivery, and independent document unloading. It is
+   deliberately headless: it establishes framework semantics, not rendering
+   cost or full-window application behavior.
 2. **Narrow application prototype after an ownership split.** Separate context
    ownership, document bounds, input dispatch, and cache ownership in
    `RmlPanelHost` or a successor. Only then place the right-panel chrome and
@@ -485,26 +486,32 @@ animation-demand tests guard related registry behavior. They are useful
 regressions for a migration because a changed rendering architecture must not
 silently break those contracts.
 
-They do **not** instantiate a live RmlUI window, compare context counts, drive
-native RmlUI popup behavior, or measure CPU/GPU performance. Passing them is a
-necessary safety signal for code they cover, not evidence that a global or
-shared context is viable. The experiment protocol above therefore requires
-both focused tests and reproducible benchmark traces.
+`test_rml_shared_context_contract.cpp` is a deliberately initialized, live
+RmlUI-context test; unlike the registry tests, it does not use a mock context.
+It proves only the framework behavior listed above. It does **not** compare
+context counts, exercise application popup policy, render through the Vulkan
+backend, or measure CPU/GPU performance. Passing it is a necessary safety
+signal for a future shared owner, not evidence that a global or shared context
+is viable. The experiment protocol above therefore still requires focused
+tests and reproducible benchmark traces.
 
-If the framework spike becomes an application prototype, add tests in layers:
+If the framework spike becomes an application prototype, extend tests in
+layers:
 
-1. a deterministic RmlUI integration test for two documents in one context,
-   covering topmost hit testing, focus transfer, document removal, and input
-   outside both documents;
-2. focused tests for the ownership boundary, proving that destroying one
-   document does not destroy a borrowed shared context and that a context owner
-   releases it exactly once; and
+1. extend the existing deterministic RmlUI integration test with focus
+   transfer and input outside both documents;
+2. add focused tests for the ownership boundary, proving that an owned context
+   is released exactly once; and
 3. the existing `BUILD_GUI_TESTS` regressions for panel selection, cache
    fallback, and layout orchestration.
 
-The first two require a deliberately initialized RmlUI test harness; do not
-fake them with source-text assertions. Performance remains a benchmark rather
-than a unit-test assertion, because it depends on scene, GPU, window size, and
+`RmlContextOwner` now makes the first ownership boundary explicit. The current
+`RmlPanelHost` uses its owned form, so behavior is unchanged. Its borrowed form
+is covered by the same RmlUI harness: destroying that wrapper leaves the shared
+context live and able to load a document. This is intentionally only the
+lifetime boundary; it does not make current panel-local layout, input, or cache
+state safe to share yet. Performance remains a benchmark rather than a
+unit-test assertion, because it depends on scene, GPU, window size, and
 interaction workload.
 
 ## Current boundary

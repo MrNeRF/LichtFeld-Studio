@@ -71,6 +71,7 @@ if(BUILD_GUI_TESTS)
         test_panel_registry_animation_demand.cpp
         test_panel_registry_render_paths.cpp
         test_panel_layout_render_demand.cpp
+        test_rml_shared_context_contract.cpp
     )
 
     set_target_properties(lichtfeld_gui_tests PROPERTIES
@@ -215,6 +216,7 @@ set(TEST_FILES
     test_panel_registry_animation_demand.cpp
     test_panel_registry_render_paths.cpp
     test_panel_layout_render_demand.cpp
+    test_rml_shared_context_contract.cpp
     test_reactive_store.cpp
     test_video_color_convert.cpp
     test_python_integration.cpp

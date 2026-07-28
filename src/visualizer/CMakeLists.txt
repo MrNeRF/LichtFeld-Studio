@@ -180,6 +180,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/rmlui_system_interface.cpp
         gui/rmlui/rml_text_input_handler.cpp
         gui/rmlui/rmlui_manager.cpp
+        gui/rmlui/rml_context_owner.cpp
         gui/rmlui/rml_document_utils.cpp
         gui/rmlui/rml_panel_host.cpp
         gui/rmlui/rml_theme.cpp

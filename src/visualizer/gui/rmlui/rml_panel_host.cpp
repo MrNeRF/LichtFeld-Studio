@@ -160,17 +160,15 @@ namespace lfs::vis::gui {
     RmlPanelHost::RmlPanelHost(RmlUIManager* manager, std::string context_name,
                                std::string rml_path, std::string inline_rcss)
         : manager_(manager),
-          context_name_(std::move(context_name)),
+          context_owner_(manager, std::move(context_name)),
           rml_path_(std::move(rml_path)),
           inline_rcss_(std::move(inline_rcss)) {
         assert(manager_);
     }
 
     RmlPanelHost::~RmlPanelHost() {
-        if (manager_ && manager_->isInitialized()) {
+        if (manager_ && manager_->isInitialized())
             manager_->releaseCachedVulkanContext(direct_cache_);
-            manager_->destroyContext(context_name_);
-        }
         rml_context_ = nullptr;
         document_ = nullptr;
     }
@@ -250,7 +248,9 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::ensureContext() {
         if (rml_context_)
             return true;
-        rml_context_ = manager_->createContext(context_name_, 100, 100);
+        if (!context_owner_.ensureContext(100, 100))
+            return false;
+        rml_context_ = context_owner_.get();
         return rml_context_ != nullptr;
     }
 

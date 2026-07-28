@@ -6,6 +6,7 @@
 
 #include "gui/panel_height_mode.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/rmlui/rml_context_owner.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include <core/export.hpp>
@@ -101,7 +102,7 @@ namespace lfs::vis::gui {
         void compositeDirectToScreen(float x, float y, float w, float h);
 
         RmlUIManager* manager_;
-        std::string context_name_;
+        RmlContextOwner context_owner_;
         std::string rml_path_;
         std::string inline_rcss_;
         Rml::Context* rml_context_ = nullptr;
