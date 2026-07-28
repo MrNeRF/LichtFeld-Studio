@@ -208,12 +208,12 @@ namespace lfs::core {
         return id;
     }
 
-    void Scene::removeNode(const std::string& name, const bool keep_children) {
-        removeNodeInternal(name, keep_children, false);
+    void Scene::removeNode(std::string name, const bool keep_children) {
+        removeNodeInternal(std::move(name), keep_children);
     }
 
     std::vector<std::unique_ptr<lfs::core::SplatData>> Scene::detachSplatModelsForRemoval(
-        const std::string& name,
+        std::string name,
         const bool keep_children) {
         std::vector<std::unique_ptr<lfs::core::SplatData>> detached;
 
@@ -248,7 +248,7 @@ namespace lfs::core {
         return detached;
     }
 
-    void Scene::removeNodeInternal(const std::string& name, const bool keep_children, [[maybe_unused]] const bool force) {
+    void Scene::removeNodeInternal(std::string name, const bool keep_children) {
         if (name.empty())
             return;
 
@@ -285,7 +285,7 @@ namespace lfs::core {
             const std::vector<NodeId> children_copy = node->children;
             for (const NodeId child_id : children_copy) {
                 if (const auto* child = getNodeById(child_id)) {
-                    removeNodeInternal(child->name, false, true);
+                    removeNodeInternal(child->name, false);
                 }
             }
         }
@@ -298,8 +298,7 @@ namespace lfs::core {
         assert(idx_it != id_to_index_.end());
         const size_t removed_index = idx_it->second;
 
-        const std::string name_copy = name;
-        const bool removed_training_model = (training_model_node_ == name_copy);
+        const bool removed_training_model = (training_model_node_ == name);
 
         removeConsolidatedNodeData(id);
 
@@ -329,8 +328,8 @@ namespace lfs::core {
         }
 
         notifyMutation(MutationType::NODE_REMOVED);
-        if (!name_copy.empty()) {
-            LOG_DEBUG("Removed node '{}'{}", name_copy, keep_children ? " (children kept)" : "");
+        if (!name.empty()) {
+            LOG_DEBUG("Removed node '{}'{}", name, keep_children ? " (children kept)" : "");
         }
     }
 
@@ -1796,6 +1795,10 @@ namespace lfs::core {
     }
 
     bool Scene::renameNode(const NodeId id, const std::string& new_name) {
+        if (id == NULL_NODE) {
+            return false;
+        }
+
         auto* node = getNodeById(id);
         if (!node) {
             LOG_WARN("Scene: Cannot find node id {} to rename", id);
@@ -1816,6 +1819,7 @@ namespace lfs::core {
         }
 
         const std::string old_name = node->name;
+        assert(!old_name.empty());
         name_to_id_.erase(old_name);
         name_to_id_[new_name] = id;
         node->name = new_name;
@@ -1828,7 +1832,7 @@ namespace lfs::core {
         return true;
     }
 
-    bool Scene::renameNode(const std::string& old_name, const std::string& new_name) {
+    bool Scene::renameNode(std::string old_name, const std::string& new_name) {
         if (old_name.empty())
             return false;
 
@@ -2353,7 +2357,7 @@ namespace lfs::core {
             }
         }
         for (auto it = to_remove.rbegin(); it != to_remove.rend(); ++it) {
-            removeNodeInternal(*it, false, true);
+            removeNodeInternal(*it, false);
         }
     }
 
@@ -2465,9 +2469,18 @@ namespace lfs::core {
         return result_name;
     }
 
-    std::string Scene::mergeGroup(const std::string& group_name) {
-        const auto* const group_node = getNode(group_name);
-        if (!group_node || group_node->type != NodeType::GROUP) {
+    std::string Scene::mergeGroup(const NodeId group_id) {
+        if (group_id == NULL_NODE) {
+            return "";
+        }
+
+        const auto* const group_node = getNodeById(group_id);
+        if (!group_node) {
+            return "";
+        }
+        const std::string group_name = group_node->name;
+        assert(!group_name.empty());
+        if (group_node->type != NodeType::GROUP) {
             return "";
         }
 
@@ -2484,7 +2497,7 @@ namespace lfs::core {
         };
 
         const NodeId parent_id = group_node->parent_id;
-        collect(group_node->id);
+        collect(group_id);
 
         auto merged = mergeSplatsWithTransforms(splats);
         if (!merged) {
@@ -2493,9 +2506,22 @@ namespace lfs::core {
 
         Transaction txn(*this);
         removeNode(group_name, false);
-        addSplat(group_name, std::move(merged), parent_id);
+        const NodeId merged_id = addSplat(group_name, std::move(merged), parent_id);
+        if (merged_id == NULL_NODE) {
+            LOG_ERROR("Failed to add merged group '{}'", group_name);
+            return "";
+        }
+        assert(getNodeIdByName(group_name) == merged_id);
 
         return group_name;
+    }
+
+    std::string Scene::mergeGroup(std::string group_name) {
+        const NodeId group_id = getNodeIdByName(group_name);
+        if (group_id == NULL_NODE) {
+            return "";
+        }
+        return mergeGroup(group_id);
     }
 
     std::unique_ptr<lfs::core::SplatData> Scene::createMergedModelWithTransforms() const {

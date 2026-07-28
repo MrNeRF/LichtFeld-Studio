@@ -184,9 +184,9 @@ namespace lfs::core {
         Scene(Scene&&) = default;
         Scene& operator=(Scene&&) = default;
 
-        void removeNode(const std::string& name, bool keep_children = false);
+        void removeNode(std::string name, bool keep_children = false);
         [[nodiscard]] std::vector<std::unique_ptr<lfs::core::SplatData>> detachSplatModelsForRemoval(
-            const std::string& name,
+            std::string name,
             bool keep_children = false);
         void replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
         // Swap a node's model in place, returning the previous model so the caller can
@@ -200,7 +200,7 @@ namespace lfs::core {
         void setNodeTransform(const std::string& name, const glm::mat4& transform);
         glm::mat4 getNodeTransform(const std::string& name) const;
         bool renameNode(NodeId id, const std::string& new_name);
-        bool renameNode(const std::string& old_name, const std::string& new_name);
+        bool renameNode(std::string old_name, const std::string& new_name);
         void clear();
         std::pair<std::string, std::string> cycleVisibilityWithNames();
 
@@ -221,7 +221,8 @@ namespace lfs::core {
         [[nodiscard]] bool reparent(NodeId node, NodeId new_parent);
         [[nodiscard]] bool moveNode(NodeId node, NodeId new_parent, int index);
         [[nodiscard]] std::string duplicateNode(const std::string& name);
-        [[nodiscard]] std::string mergeGroup(const std::string& group_name);
+        [[nodiscard]] std::string mergeGroup(NodeId group_id);
+        [[nodiscard]] std::string mergeGroup(std::string group_name);
         [[nodiscard]] const glm::mat4& getWorldTransform(NodeId node) const;
         [[nodiscard]] std::vector<NodeId> getRootNodes() const;
         [[nodiscard]] SceneNode* getNodeById(NodeId id);
@@ -473,7 +474,7 @@ namespace lfs::core {
         void rebuildModelCacheIfNeeded(bool include_hidden_splats) const;
         void rebuildTransformCacheIfNeeded() const;
         void updateWorldTransform(const SceneNode& node) const;
-        void removeNodeInternal(const std::string& name, bool keep_children, bool force);
+        void removeNodeInternal(std::string name, bool keep_children);
         [[nodiscard]] size_t currentSelectionCapacity() const;
         [[nodiscard]] lfs::core::Tensor liveSelectionMask(size_t expected_size,
                                                           Device device,
