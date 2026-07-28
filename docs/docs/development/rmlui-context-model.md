@@ -294,12 +294,28 @@ paths have been checked against both the current code and history:
 | --- | --- | --- |
 | `GuiManager::hitTestPointer()` | The chain is the application-level precedence policy between modals, viewport tools, panel resizing, and floating panels. | Keep it as a small explicit policy layer; document and test changes to its order rather than moving it into a generic RML surface. |
 | `RmlMenuBar::dropdownElementAtPoint()` and submenu routing | Commit `916e9420` replaced `Context::GetElementAtPoint()` with its local recursive geometry traversal to fix submenu hover activation. The current Python regression explicitly protects that replacement. | Do not remove this traversal as a shared-context cleanup. Any future migration must first reproduce the submenu interaction matrix with native RmlUI events and prove it fixes the historical failure. |
-| `RmlPanelHost` select-box bridge | It exists because the native select box is constrained by a panel-local context and cached texture; the code owns out-of-panel hover, wheel, capture, and option activation. | This remains the primary simplification candidate, but only after an overlay/shared-document design can preserve popup input and cache boundaries. It is not safe to delete in a per-panel context. |
+| `RmlPanelHost` select-box bridge | It exists because the native select box is constrained by a panel-local context and cached texture; the code owns out-of-panel hover, wheel, capture, and option activation. | This remains the primary simplification candidate, but only after a shared-document design can preserve popup input and cache boundaries. It is not safe to delete in a per-panel context. |
 
 This screening narrows the useful next experiment: do not rewrite the menu bar
 or top-level policy merely because they are manual. Instead, find a popup path
-whose owner and popup can remain in one tested shared document or overlay while
-the source panel continues to use its local cache.
+whose owner and popup can remain in one tested shared document while the source
+panel continues to use its local cache.
+
+### Native select popup boundary
+
+The RmlUI 6.2 integration exposes document load and unload operations plus
+context-level stacking, but it has no public operation for moving an existing
+element, or the native popup owned by a `select` element, from one context to
+another. Element ownership is internal to its source document and carries the
+document's style, data-model, and event relationships.
+
+Consequently, a separate overlay context cannot host the live native popup of a
+`RmlPanelHost` document. A central overlay would have to mirror the options and
+route the selected value back to the source document manually. That would move
+the select-box bridge rather than remove it, while adding another ownership and
+input boundary. The native route to window-wide popup stacking is instead to
+place the source document itself in a full-window shared context; this is the
+trade-off exercised by the shell/right-panel prototype.
 
 ### Experiments and decision criteria
 
