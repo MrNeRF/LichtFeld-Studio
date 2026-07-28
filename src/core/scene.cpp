@@ -428,7 +428,6 @@ namespace lfs::core {
         nodes_.clear();
         id_to_index_.clear();
         name_to_id_.clear();
-        next_node_id_ = 0;
 
         cached_combined_.reset();
         cached_transform_indices_.reset();

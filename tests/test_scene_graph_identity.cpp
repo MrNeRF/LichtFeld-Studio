@@ -100,7 +100,8 @@ protected:
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
 };
 
-// Catches PLYRemoved reading its name from the node-owned string that removeNode just destroyed.
+// Locks the removed node's real event name and recursive subtree deletion; the underlying
+// use-after-free requires a lifetime sanitizer to detect directly.
 TEST_F(SceneGraphIdentityTest, DeleteGroupByIdEmitsRemovedEventsWithCorrectNames) {
     auto& scene = scene_manager_->getScene();
     const auto group_id = scene.addGroup("group");
@@ -127,7 +128,8 @@ TEST_F(SceneGraphIdentityTest, DeleteGroupByIdEmitsRemovedEventsWithCorrectNames
     EXPECT_EQ(scene.getNodeById(child_b_id), nullptr);
 }
 
-// Catches PLYRemoved reading its name from the node-owned string that removeNode just destroyed.
+// Locks the removed node's real event name and child promotion; the underlying use-after-free
+// requires a lifetime sanitizer to detect directly.
 TEST_F(SceneGraphIdentityTest, DeleteGroupByIdKeepChildrenEmitsCorrectName) {
     auto& scene = scene_manager_->getScene();
     const auto parent_id = scene.addGroup("parent");
@@ -284,6 +286,126 @@ TEST_F(SceneGraphIdentityTest, StaleNodeIdOperationsAreNoOps) {
     ASSERT_NE(child_b, nullptr);
     EXPECT_EQ(group->children, (std::vector<lfs::core::NodeId>{child_b_id}));
     EXPECT_EQ(child_b->parent_id, group_id);
+}
+
+// Catches Scene::clear resetting the allocator so stale IDs alias newly created nodes.
+TEST_F(SceneGraphIdentityTest, NodeIdsAreNotRecycledAcrossSceneClear) {
+    auto& scene = scene_manager_->getScene();
+    const std::vector<lfs::core::NodeId> old_ids{
+        scene.addGroup("old_a"),
+        scene.addGroup("old_b"),
+    };
+    ASSERT_NE(old_ids[0], lfs::core::NULL_NODE);
+    ASSERT_NE(old_ids[1], lfs::core::NULL_NODE);
+
+    scene.clear();
+
+    const std::vector<lfs::core::NodeId> new_ids{
+        scene.addGroup("new_a"),
+        scene.addGroup("new_b"),
+    };
+    ASSERT_NE(new_ids[0], lfs::core::NULL_NODE);
+    ASSERT_NE(new_ids[1], lfs::core::NULL_NODE);
+    for (const auto new_id : new_ids) {
+        EXPECT_EQ(std::find(old_ids.begin(), old_ids.end(), new_id), old_ids.end());
+    }
+}
+
+// Catches source-path selection following lexicographic node names instead of node creation order.
+TEST_F(SceneGraphIdentityTest, SceneInfoSourcePathIsMostRecentlyAddedNode) {
+    auto& scene = scene_manager_->getScene();
+    const auto older_id = scene.addSplat("z_older", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto newer_id = scene.addSplat("a_newer", make_test_splat({1.0f, 0.0f, 0.0f}));
+    ASSERT_NE(older_id, lfs::core::NULL_NODE);
+    ASSERT_NE(newer_id, lfs::core::NULL_NODE);
+    const std::filesystem::path older_path{"/tmp/older.ply"};
+    const std::filesystem::path newer_path{"/tmp/newer.sog"};
+    scene_manager_->setPlyPath(older_id, older_path);
+    scene_manager_->setPlyPath(newer_id, newer_path);
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    const auto info = scene_manager_->getSceneInfo();
+
+    EXPECT_EQ(info.source_path, newer_path);
+    EXPECT_EQ(info.source_type, "SOG");
+}
+
+// Catches group merge leaving source paths keyed by IDs from the destroyed subtree.
+TEST_F(SceneGraphIdentityTest, MergeClearsDescendantPlyPaths) {
+    auto& scene = scene_manager_->getScene();
+    const auto group_id = scene.addGroup("group");
+    const auto child_a_id = scene.addSplat("child_a", make_test_splat({0.0f, 0.0f, 0.0f}), group_id);
+    const auto child_b_id = scene.addSplat("child_b", make_test_splat({1.0f, 0.0f, 0.0f}), group_id);
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    ASSERT_NE(child_a_id, lfs::core::NULL_NODE);
+    ASSERT_NE(child_b_id, lfs::core::NULL_NODE);
+    scene_manager_->setPlyPath(child_a_id, std::filesystem::path{"/tmp/child_a.ply"});
+    scene_manager_->setPlyPath(child_b_id, std::filesystem::path{"/tmp/child_b.ply"});
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    ASSERT_EQ(scene_manager_->mergeGroupNode(group_id), "group");
+
+    EXPECT_FALSE(scene_manager_->getPlyPath(child_a_id).has_value());
+    EXPECT_FALSE(scene_manager_->getPlyPath(child_b_id).has_value());
+    EXPECT_TRUE(scene_manager_->getSceneInfo().source_path.empty());
+}
+
+// Catches keep-children removal erasing source paths owned by the promoted child nodes.
+TEST_F(SceneGraphIdentityTest, KeepChildrenRemovalPreservesChildPlyPaths) {
+    auto& scene = scene_manager_->getScene();
+    const auto group_id = scene.addGroup("group");
+    const auto child_a_id = scene.addSplat("child_a", make_test_splat({0.0f, 0.0f, 0.0f}), group_id);
+    const auto child_b_id = scene.addSplat("child_b", make_test_splat({1.0f, 0.0f, 0.0f}), group_id);
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    ASSERT_NE(child_a_id, lfs::core::NULL_NODE);
+    ASSERT_NE(child_b_id, lfs::core::NULL_NODE);
+    const std::filesystem::path child_a_path{"/tmp/child_a.ply"};
+    const std::filesystem::path child_b_path{"/tmp/child_b.ply"};
+    scene_manager_->setPlyPath(child_a_id, child_a_path);
+    scene_manager_->setPlyPath(child_b_id, child_b_path);
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    scene_manager_->removeNode(group_id, true);
+
+    EXPECT_EQ(scene.getNodeById(group_id), nullptr);
+    ASSERT_NE(scene.getNodeById(child_a_id), nullptr);
+    ASSERT_NE(scene.getNodeById(child_b_id), nullptr);
+    EXPECT_EQ(scene_manager_->getPlyPath(child_a_id), child_a_path);
+    EXPECT_EQ(scene_manager_->getPlyPath(child_b_id), child_b_path);
+}
+
+// Catches the by-name merge overload retaining a node-owned label across subtree destruction.
+TEST_F(SceneGraphIdentityTest, SceneMergeGroupByNameMergesSubtree) {
+    auto& scene = scene_manager_->getScene();
+    const auto group_id = scene.addGroup("group");
+    const auto child_a_id = scene.addSplat("child_a", make_test_splat({0.0f, 0.0f, 0.0f}), group_id);
+    const auto child_b_id = scene.addSplat(
+        "child_b",
+        make_test_splat({
+            1.0f,
+            0.0f,
+            0.0f,
+            2.0f,
+            0.0f,
+            0.0f,
+        }),
+        group_id);
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    ASSERT_NE(child_a_id, lfs::core::NULL_NODE);
+    ASSERT_NE(child_b_id, lfs::core::NULL_NODE);
+
+    const std::string merged_name = scene.mergeGroup(std::string{"group"});
+
+    EXPECT_EQ(merged_name, "group");
+    const auto* merged = scene.getNode("group");
+    ASSERT_NE(merged, nullptr);
+    EXPECT_EQ(merged->type, lfs::core::NodeType::SPLAT);
+    EXPECT_EQ(merged->gaussian_count.load(std::memory_order_acquire), 3u);
+    EXPECT_EQ(scene.getTotalGaussianCount(), 3u);
+    EXPECT_EQ(scene.getNodeById(group_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(child_a_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(child_b_id), nullptr);
+    EXPECT_EQ(scene.getNodeCount(), 1u);
 }
 
 // Catches path metadata being stranded under a node's old mutable label after rename.

@@ -2172,8 +2172,11 @@ namespace lfs::vis::gui {
         const std::string node_name = source_name + " (splat)";
         auto& scene = scene_manager->getScene();
 
-        if (scene.getNode(node_name))
+        const core::NodeId existing_id = scene.getNodeIdByName(node_name);
+        if (existing_id != core::NULL_NODE) {
+            scene_manager->clearPlyPath(existing_id);
             scene.removeNode(node_name);
+        }
 
         const std::string added_name =
             scene_manager->addGeneratedSplatNode(std::move(splat_data), source_name, node_name, true);

@@ -685,6 +685,10 @@ namespace lfs::vis {
 
     void SceneManager::setPlyPath(std::string name, const std::filesystem::path& path) {
         const core::NodeId id = scene_.getNodeIdByName(name);
+        if (id == core::NULL_NODE) {
+            LOG_WARN("Cannot set PLY path for missing node '{}'", name);
+            return;
+        }
         setPlyPath(id, path);
     }
 
@@ -699,6 +703,10 @@ namespace lfs::vis {
 
     void SceneManager::clearPlyPath(std::string name) {
         const core::NodeId id = scene_.getNodeIdByName(name);
+        if (id == core::NULL_NODE) {
+            LOG_WARN("Cannot clear PLY path for missing node '{}'", name);
+            return;
+        }
         clearPlyPath(id);
     }
 
@@ -1301,14 +1309,6 @@ namespace lfs::vis {
         return TrainingRemovalImpact::None;
     }
 
-    SceneManager::TrainingRemovalImpact SceneManager::classifyTrainingRemovalImpact(std::string name) const {
-        const core::NodeId id = scene_.getNodeIdByName(name);
-        if (id == core::NULL_NODE) {
-            return TrainingRemovalImpact::None;
-        }
-        return classifyTrainingRemovalImpact(id);
-    }
-
     std::expected<void, std::string> SceneManager::validateNodeRemoval(const core::NodeId id,
                                                                        const TrainingRemovalImpact impact) const {
         const auto* node = scene_.getNodeById(id);
@@ -1327,15 +1327,6 @@ namespace lfs::vis {
 
         return std::unexpected(
             std::format("Cannot delete '{}': {}", node->name, trainer->getActionBlockedReason(TrainingAction::DeleteTrainingNode)));
-    }
-
-    std::expected<void, std::string> SceneManager::validateNodeRemoval(std::string name,
-                                                                       const TrainingRemovalImpact impact) const {
-        const core::NodeId id = scene_.getNodeIdByName(name);
-        if (id == core::NULL_NODE) {
-            return {};
-        }
-        return validateNodeRemoval(id, impact);
     }
 
     std::expected<void, std::string> SceneManager::canRemoveNode(const core::NodeId id) const {
@@ -3116,6 +3107,10 @@ namespace lfs::vis {
         }
 
         scene_.clear();
+        {
+            std::lock_guard lock(state_mutex_);
+            splat_paths_.clear();
+        }
 
         constexpr const char* MODEL_NAME = "Trained Model";
         scene_.addSplat(MODEL_NAME, std::move(splat_data));
@@ -3132,7 +3127,6 @@ namespace lfs::vis {
             std::lock_guard lock(state_mutex_);
             content_type_ = ContentType::SplatFiles;
             dataset_path_.clear();
-            splat_paths_.clear();
         }
 
         state::SceneLoaded{
@@ -4177,31 +4171,35 @@ namespace lfs::vis {
             scene_.removeNode(group_name, false);
             merged_id = scene_.addSplat(group_name, std::move(merged_model), parent_id);
         }
-        if (merged_id == core::NULL_NODE) {
-            LOG_ERROR("Failed to add merged group '{}'", group_name);
-            return {};
-        }
-        assert(scene_.getNodeById(merged_id));
-        selection_.invalidateNodeMask();
+        const auto emit_removed_events = [&] {
+            for (const auto& child_name : children_to_remove) {
+                state::PLYRemoved{
+                    .name = child_name,
+                    .children_kept = false,
+                    .parent_of_removed = {},
+                    .from_history = false,
+                }
+                    .emit();
+            }
 
-        // Emit PLYRemoved for all original children and the group
-        for (const auto& child_name : children_to_remove) {
             state::PLYRemoved{
-                .name = child_name,
+                .name = group_name,
                 .children_kept = false,
                 .parent_of_removed = {},
                 .from_history = false,
             }
                 .emit();
+        };
+        if (merged_id == core::NULL_NODE) {
+            LOG_ERROR("Failed to add merged group '{}'", group_name);
+            emit_removed_events();
+            pushSceneGraphHistoryEntry(*this, "Merge Group", std::move(history_before), {group_name}, history_options);
+            return {};
         }
+        assert(scene_.getNodeById(merged_id));
+        selection_.invalidateNodeMask();
 
-        state::PLYRemoved{
-            .name = group_name,
-            .children_kept = false,
-            .parent_of_removed = {},
-            .from_history = false,
-        }
-            .emit();
+        emit_removed_events();
 
         // Emit PLYAdded for merged node
         const auto* merged = scene_.getNode(group_name);
@@ -4990,7 +4988,7 @@ namespace lfs::vis {
 
     std::expected<void, std::string> SceneManager::applySelectedGaussianDeletionPlan(
         const GaussianDeletionPlan& plan) {
-        std::vector<std::pair<std::string, TrainingRemovalImpact>> removed_node_impacts;
+        std::vector<std::pair<core::NodeId, TrainingRemovalImpact>> removed_node_impacts;
 
         if (plan.consolidated) {
             auto* combined = const_cast<core::SplatData*>(scene_.getCombinedModel());
@@ -5003,11 +5001,15 @@ namespace lfs::vis {
         } else {
             removed_node_impacts.reserve(plan.removed_node_names.size());
             for (const auto& node_name : plan.removed_node_names) {
-                const auto impact = classifyTrainingRemovalImpact(node_name);
-                if (const auto result = validateNodeRemoval(node_name, impact); !result) {
+                const core::NodeId id = scene_.getNodeIdByName(node_name);
+                if (id == core::NULL_NODE) {
+                    continue;
+                }
+                const auto impact = classifyTrainingRemovalImpact(id);
+                if (const auto result = validateNodeRemoval(id, impact); !result) {
                     return result;
                 }
-                removed_node_impacts.emplace_back(node_name, impact);
+                removed_node_impacts.emplace_back(id, impact);
             }
 
             for (const auto& slice : plan.partial_slices) {
@@ -5026,14 +5028,13 @@ namespace lfs::vis {
         } else {
             for (const auto& slice : plan.partial_slices) {
                 auto* node = scene_.getMutableNode(slice.node_name);
+                if (!node || !node->model) {
+                    continue;
+                }
                 node->model->soft_delete(plan.selection_mask.slice(0, slice.begin, slice.end));
             }
 
-            for (const auto& [node_name, impact] : removed_node_impacts) {
-                const core::NodeId id = scene_.getNodeIdByName(node_name);
-                if (id == core::NULL_NODE) {
-                    continue;
-                }
+            for (const auto& [id, impact] : removed_node_impacts) {
                 if (const auto result = removeNodeImpl(id, false, HistoryMode::Skip, impact); !result) {
                     return result;
                 }

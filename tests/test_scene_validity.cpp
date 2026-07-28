@@ -889,31 +889,45 @@ namespace lfs::python {
         EXPECT_EQ(after_clear.allocated_bytes, before_pick.allocated_bytes);
     }
 
-    TEST_F(SceneValidityTest, MeshRayPickCacheRejectsReusedObjectAddressAndNodeId) {
+    // Catches the ray-pick CPU cache accepting stale geometry when a new node reuses a mesh address.
+    TEST_F(SceneValidityTest, MeshRayPickCacheRejectsReusedObjectAddressForDifferentNodeId) {
         alignas(core::MeshData) std::byte storage[sizeof(core::MeshData)];
+        bool original_is_live = true;
         lfs::vis::SceneManager scene_manager;
         const auto construct_mesh = [&](const float x_offset) {
-            auto* mesh = std::construct_at(
+            return std::construct_at(
                 reinterpret_cast<core::MeshData*>(storage),
                 make_test_mesh_data(x_offset));
-            return std::shared_ptr<core::MeshData>(mesh, [](core::MeshData* value) {
-                std::destroy_at(value);
-            });
         };
 
-        auto original = construct_mesh(0.0f);
+        auto original = std::shared_ptr<core::MeshData>(
+            construct_mesh(0.0f),
+            [&original_is_live](core::MeshData* value) {
+                if (original_is_live) {
+                    std::destroy_at(value);
+                }
+            });
+        const auto* const original_address = original.get();
+        const uint32_t original_generation = original->generation();
         const core::NodeId original_id = scene_manager.getScene().addMesh("Original", original);
         ASSERT_NE(original_id, core::NULL_NODE);
         ASSERT_EQ(scene_manager.pickNodeByRay({0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}),
                   "Original");
 
-        // Bypass the manager cache clear to exercise the identity guard directly.
         scene_manager.getScene().clear();
-        original.reset();
-        auto replacement = construct_mesh(10.0f);
+        std::destroy_at(original.get());
+        original_is_live = false;
+        auto replacement = std::shared_ptr<core::MeshData>(
+            construct_mesh(10.0f),
+            [](core::MeshData* value) {
+                std::destroy_at(value);
+            });
+        ASSERT_EQ(replacement.get(), original_address);
+        ASSERT_EQ(replacement->generation(), original_generation);
         const core::NodeId replacement_id =
             scene_manager.getScene().addMesh("Replacement", replacement);
-        ASSERT_EQ(replacement_id, original_id);
+        ASSERT_NE(replacement_id, core::NULL_NODE);
+        ASSERT_NE(replacement_id, original_id);
 
         EXPECT_TRUE(scene_manager.pickNodeByRay({0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}).empty());
     }
