@@ -43,6 +43,7 @@ body.floating-panel {
 
 #close-btn:hover {
     color: @{error};
+    background-color: @{alpha(text,0.07)};
 }
 
 .panel-title,
