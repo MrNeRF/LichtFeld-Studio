@@ -113,6 +113,7 @@ class PreferencesPanel(Panel):
             return
         if 0 <= index < len(self._theme_catalog):
             lf.ui.set_theme(self._theme_catalog[index]["id"])
+            self._refresh_selection()
 
     def _scale_index(self):
         preference = float(lf.ui.get_ui_scale_preference())
@@ -128,7 +129,15 @@ class PreferencesPanel(Panel):
             return
         if 0 <= index < len(self.SCALE_OPTIONS):
             lf.ui.set_ui_scale(self.SCALE_OPTIONS[index][0])
+            self._refresh_selection()
 
     def _on_reset_appearance(self, _handle, _event, _args):
         lf.ui.set_theme("dark")
         lf.ui.set_ui_scale(0.0)
+        self._refresh_selection()
+
+    def _refresh_selection(self):
+        self._last_state = self._state()
+        if self._handle:
+            self._handle.dirty("theme_idx")
+            self._handle.dirty("scale_idx")
