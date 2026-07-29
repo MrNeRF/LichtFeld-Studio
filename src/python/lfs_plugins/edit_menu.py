@@ -44,6 +44,10 @@ class EditMenu:
                 lf.ui.tr("menu.edit.input_settings"),
                 lambda: lf.ui.set_panel_enabled("lfs.input_settings", True),
             ),
+            menu_action(
+                lf.ui.tr("menu.edit.preferences"),
+                lambda: lf.ui.set_panel_enabled("lfs.preferences", True),
+            ),
         ]
 
 

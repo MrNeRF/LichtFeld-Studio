@@ -155,6 +155,12 @@ def _build_builtin_panel_steps(lf):
         lf.register_class(InputSettingsPanel)
         lf.ui.set_panel_enabled("lfs.input_settings", False)
 
+    def preferences_panel():
+        from .preferences_panel import PreferencesPanel
+
+        lf.register_class(PreferencesPanel)
+        lf.ui.set_panel_enabled("lfs.preferences", False)
+
     def mesh2splat_panel():
         from .mesh2splat_panel import Mesh2SplatPanel
 
@@ -200,6 +206,7 @@ def _build_builtin_panel_steps(lf):
         ("histogram_panel", histogram_panel),
         ("scripts_panel", scripts_panel),
         ("input_settings_panel", input_settings_panel),
+        ("preferences_panel", preferences_panel),
         ("mesh2splat_panel", mesh2splat_panel),
         ("plugin_marketplace_panel", plugin_marketplace_panel),
         ("asset_manager_panel", asset_manager_panel),

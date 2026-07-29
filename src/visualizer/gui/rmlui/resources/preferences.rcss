@@ -1,0 +1,37 @@
+#content-wrap {
+    overflow-y: auto;
+}
+
+.preferences-section {
+    margin-bottom: 8dp;
+}
+
+.preferences-section-title {
+    display: block;
+    font-size: 12dp;
+    font-weight: bold;
+    margin-bottom: 6dp;
+}
+
+.preferences-row {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    margin-bottom: 5dp;
+}
+
+.preferences-label {
+    min-width: 112dp;
+    font-size: 12dp;
+}
+
+.preferences-select {
+    flex: 1;
+    min-width: 180dp;
+}
+
+.preferences-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 6dp;
+}
