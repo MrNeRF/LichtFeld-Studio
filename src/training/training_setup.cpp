@@ -231,7 +231,8 @@ namespace lfs::training {
                 view_size,
                 view_size,
                 uid,
-                source.camera_id());
+                source.camera_id(),
+                source.has_depth() ? source.depth_path() : std::filesystem::path{});
             camera->set_has_alpha(has_alpha);
             camera->set_split(source.split());
             camera->set_cube_face_projection(lfs::core::CubeFaceProjection{
@@ -263,7 +264,7 @@ namespace lfs::training {
 
             size_t panoramas = 0;
             size_t virtual_views = 0;
-            size_t ignored_depth_maps = 0;
+            size_t projected_depth_maps = 0;
             int min_face_size = std::numeric_limits<int>::max();
             int max_face_size = 0;
 
@@ -302,7 +303,7 @@ namespace lfs::training {
                 const std::string base_name = std::format("{:06d}_{}", camera->uid(), stem);
 
                 if (camera->has_depth())
-                    ++ignored_depth_maps;
+                    ++projected_depth_maps;
 
                 for (size_t view_index = 0; view_index < kSphericalUndistortViews.size(); ++view_index) {
                     const auto& view = kSphericalUndistortViews[view_index];
@@ -331,10 +332,11 @@ namespace lfs::training {
                          kSphericalUndistortFovDegrees,
                          min_face_size == max_face_size ? std::to_string(max_face_size)
                                                         : std::format("{}-{}", min_face_size, max_face_size));
-                if (ignored_depth_maps > 0) {
-                    LOG_WARN("Equirectangular spherical undistort ignored {} depth map{}; perspective depth conversion is not implemented",
-                             ignored_depth_maps,
-                             ignored_depth_maps == 1 ? "" : "s");
+                if (projected_depth_maps > 0) {
+                    LOG_INFO("Projected {} panorama depth map{} onto the generated faces "
+                             "(nearest sampling, radial distance converted to camera-space z)",
+                             projected_depth_maps,
+                             projected_depth_maps == 1 ? "" : "s");
                 }
             }
 

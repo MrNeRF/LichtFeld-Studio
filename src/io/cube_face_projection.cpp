@@ -126,6 +126,67 @@ namespace lfs::io {
         return size;
     }
 
+    std::vector<float> project_cube_face_depth(
+        const uint8_t* source,
+        const bool source_is_16bit,
+        const int width,
+        const int height,
+        const lfs::core::CubeFaceProjection& projection,
+        const int output_size) {
+        if (!source || width <= 0 || height <= 0 || output_size <= 0) {
+            throw std::runtime_error("Invalid spherical depth projection input");
+        }
+
+        std::vector<float> projected(static_cast<size_t>(output_size) * output_size);
+
+        const float focal = lfs::core::cube_face_focal(projection.fov_degrees, output_size);
+        const float inv_focal = 1.0f / focal;
+        const float center = 0.5f * static_cast<float>(output_size);
+        const auto& m = projection.pano_to_face;
+        const auto* const source16 = reinterpret_cast<const uint16_t*>(source);
+        const float inv_max = source_is_16bit ? 1.0f / 65535.0f : 1.0f / 255.0f;
+
+        for (int y = 0; y < output_size; ++y) {
+            const float face_y = (static_cast<float>(y) + 0.5f - center) * inv_focal;
+            for (int x = 0; x < output_size; ++x) {
+                const float face_x = (static_cast<float>(x) + 0.5f - center) * inv_focal;
+                constexpr float face_z = 1.0f;
+
+                const float pano_x = m[0] * face_x + m[3] * face_y + m[6] * face_z;
+                const float pano_y = m[1] * face_x + m[4] * face_y + m[7] * face_z;
+                const float pano_z = m[2] * face_x + m[5] * face_y + m[8] * face_z;
+
+                // pano_to_face is orthonormal, so |p| = sqrt(u^2 + v^2 + 1) and
+                // 1/|p| is exactly cos(theta) between this ray and the face axis.
+                // The normalisation factor and the radial-to-z factor are the
+                // same number.
+                const float inv_len = 1.0f / std::sqrt(pano_x * pano_x + pano_y * pano_y + pano_z * pano_z);
+                const float cos_theta = inv_len;
+
+                const float azimuth = std::atan2(pano_x * inv_len, pano_z * inv_len);
+                const float elevation = std::asin(std::clamp(pano_y * inv_len, -1.0f, 1.0f));
+
+                const int sx = wrap_index(
+                    static_cast<int>(std::lround(
+                        (azimuth / (2.0f * kPi) + 0.5f) * static_cast<float>(width) - 0.5f)),
+                    width);
+                const int sy = std::clamp(
+                    static_cast<int>(std::lround(
+                        (elevation / kPi + 0.5f) * static_cast<float>(height) - 0.5f)),
+                    0, height - 1);
+
+                const size_t src_index = static_cast<size_t>(sy) * width + sx;
+                const float radial = (source_is_16bit ? static_cast<float>(source16[src_index])
+                                                      : static_cast<float>(source[src_index])) *
+                                     inv_max;
+
+                projected[static_cast<size_t>(y) * output_size + x] = radial * cos_theta;
+            }
+        }
+
+        return projected;
+    }
+
     std::vector<uint8_t> project_cube_face_hwc(
         const uint8_t* source,
         const int width,

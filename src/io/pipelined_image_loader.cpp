@@ -196,8 +196,7 @@ namespace lfs::io {
             key += "_cube" + std::to_string(cube_face_projection->face_size) +
                    "_src" + std::to_string(cube_face_projection->source_width) +
                    "x" + std::to_string(cube_face_projection->source_height) +
-                   "_fov" + std::to_string(static_cast<int>(
-                                std::lround(cube_face_projection->fov_degrees * 100.0f)));
+                   "_fov" + std::to_string(static_cast<int>(std::lround(cube_face_projection->fov_degrees * 100.0f)));
             for (const float value : cube_face_projection->pano_to_face) {
                 key += "_" + std::to_string(static_cast<int>(std::lround(value * 1000.0f)));
             }
@@ -2535,7 +2534,50 @@ namespace lfs::io {
                         int src_w = 0;
                         int src_h = 0;
                         lfs::core::Tensor gpu_gray;
-                        if (depth_16bit) {
+                        if (item.is_depth && item.cube_face_projection) {
+                            // Depth needs nearest sampling and a radial-to-z
+                            // conversion, so it cannot share the colour path's
+                            // EWA resampling. The result is already normalised
+                            // float, which the sizing branch below passes through.
+                            const int output_size = projected_face_output_size(
+                                *item.cube_face_projection,
+                                item.params.resize_factor,
+                                item.params.max_width);
+
+                            std::vector<float> face_depth;
+                            if (depth_16bit) {
+                                int channels = 0;
+                                stbi_us* const gray16 = stbi_load_16(
+                                    lfs::core::path_to_utf8(item.path).c_str(),
+                                    &src_w, &src_h, &channels, 1);
+                                if (!gray16)
+                                    throw std::runtime_error("Failed to decode 16-bit depth");
+                                const StbiImagePtr gray_guard(reinterpret_cast<uint8_t*>(gray16));
+                                face_depth = project_cube_face_depth(
+                                    reinterpret_cast<const uint8_t*>(gray16), true,
+                                    src_w, src_h, *item.cube_face_projection, output_size);
+                            } else {
+                                const auto [gray_data, w, h] = load_grayscale_stb(item.path);
+                                if (!gray_data)
+                                    throw std::runtime_error("Failed to decode depth");
+                                const StbiImagePtr gray_guard(gray_data);
+                                src_w = w;
+                                src_h = h;
+                                face_depth = project_cube_face_depth(
+                                    gray_data, false, src_w, src_h,
+                                    *item.cube_face_projection, output_size);
+                            }
+
+                            src_w = output_size;
+                            src_h = output_size;
+                            auto cpu_tensor = lfs::core::Tensor::empty(
+                                lfs::core::TensorShape({static_cast<size_t>(src_h), static_cast<size_t>(src_w)}),
+                                lfs::core::Device::CPU,
+                                lfs::core::DataType::Float32);
+                            std::memcpy(cpu_tensor.data_ptr(), face_depth.data(), cpu_tensor.bytes());
+                            gpu_gray = cpu_tensor.to(lfs::core::Device::CUDA, aux_stream);
+                            synchronize_async_upload_before_free(aux_stream, "cube face depth");
+                        } else if (depth_16bit) {
                             int channels = 0;
                             stbi_us* const gray16 = stbi_load_16(
                                 lfs::core::path_to_utf8(item.path).c_str(),
@@ -2565,8 +2607,11 @@ namespace lfs::io {
                             src_w = w;
                             src_h = h;
 
-                            // Cube faces are projected from the full-resolution
-                            // panorama, so the projected face is the final size.
+                            // Masks reach here with a cube face projection; depth
+                            // is handled above because it needs nearest sampling.
+                            // Either way the projected face is already the final
+                            // size, since it comes from the full-resolution
+                            // panorama rather than a resized decode.
                             std::vector<uint8_t> projected_gray;
                             const uint8_t* gray_source = gray_data;
                             if (item.cube_face_projection) {
