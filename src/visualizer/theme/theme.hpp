@@ -223,7 +223,8 @@ namespace lfs::vis {
     LFS_VIS_API void saveThemePreferenceName(const std::string& theme_name);
     [[nodiscard]] LFS_VIS_API std::string loadThemePreferenceName(); // Returns a canonical theme id
 
-    // UI scale preference (0.0 = auto from OS)
+    // UI scale preference. The API represents automatic OS scaling as 0.0;
+    // preferences.json serializes that selection as the explicit string "auto".
     LFS_VIS_API void saveUiScalePreference(float scale);
     [[nodiscard]] LFS_VIS_API float loadUiScalePreference();
 
