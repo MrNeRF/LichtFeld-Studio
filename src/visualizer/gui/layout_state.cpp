@@ -4,52 +4,23 @@
 
 #include "gui/layout_state.hpp"
 #include "core/logger.hpp"
+#include "core/user_paths.hpp"
+#include <atomic>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-#ifdef _WIN32
-#include <cstdlib>
-#include <shlobj.h>
-#else
-#include <pwd.h>
-#include <unistd.h>
-#endif
-
 namespace lfs::vis::gui {
 
+    namespace {
+        std::atomic<bool> g_persistence_enabled{true};
+    }
+
     std::filesystem::path LayoutState::getConfigDir() {
-        std::filesystem::path config_dir;
-#ifdef _WIN32
-        wchar_t path[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
-            config_dir = std::filesystem::path(path) / "LichtFeldStudio";
-        } else {
-            const char* appdata = std::getenv("APPDATA");
-            if (appdata) {
-                config_dir = std::filesystem::path(appdata) / "LichtFeldStudio";
-            } else {
-                config_dir = std::filesystem::current_path() / "config";
-            }
-        }
-#else
-        const char* xdg = std::getenv("XDG_CONFIG_HOME");
-        if (xdg) {
-            config_dir = std::filesystem::path(xdg) / "LichtFeldStudio";
-        } else {
-            const char* home = std::getenv("HOME");
-            if (!home) {
-                struct passwd* pw = getpwuid(getuid());
-                if (pw)
-                    home = pw->pw_dir;
-            }
-            if (home) {
-                config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio";
-            } else {
-                config_dir = std::filesystem::current_path() / "config";
-            }
-        }
-#endif
-        return config_dir;
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (paths)
+            return paths->configDir();
+        LOG_WARN("Unable to resolve user settings path: {}; using local config directory", paths.error());
+        return std::filesystem::current_path() / "config";
     }
 
     std::filesystem::path LayoutState::getConfigPath() {
@@ -57,6 +28,8 @@ namespace lfs::vis::gui {
     }
 
     void LayoutState::save() const {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return;
         try {
             const auto path = getConfigPath();
             std::filesystem::create_directories(path.parent_path());
@@ -103,6 +76,8 @@ namespace lfs::vis::gui {
     }
 
     void LayoutState::load() {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return;
         try {
             const auto path = getConfigPath();
             if (!std::filesystem::exists(path))
@@ -154,6 +129,10 @@ namespace lfs::vis::gui {
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load layout state: {}", e.what());
         }
+    }
+
+    void LayoutState::setPersistenceEnabled(const bool enabled) noexcept {
+        g_persistence_enabled.store(enabled, std::memory_order_release);
     }
 
 } // namespace lfs::vis::gui

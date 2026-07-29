@@ -43,6 +43,16 @@ namespace lfs::core {
         /** Create all primary directories. This never creates legacy paths. */
         [[nodiscard]] std::expected<void, std::string> ensureDirectories() const;
 
+        /**
+         * Copy recognized legacy GUI settings into the resolved tree.
+         *
+         * Existing destination files are never replaced and legacy files are
+         * never renamed or deleted. The returned paths are the files copied
+         * during this invocation.
+         */
+        [[nodiscard]] std::expected<std::vector<std::filesystem::path>, std::string>
+        migrateLegacyGuiSettings() const;
+
         [[nodiscard]] const std::filesystem::path& configDir() const noexcept { return config_dir_; }
         [[nodiscard]] const std::filesystem::path& dataDir() const noexcept { return data_dir_; }
         [[nodiscard]] const std::filesystem::path& cacheDir() const noexcept { return cache_dir_; }
