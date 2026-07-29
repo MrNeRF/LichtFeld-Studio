@@ -50,6 +50,7 @@
 #include <mutex>
 #include <print>
 #include <rasterization_api.h>
+#include <string>
 #include <string_view>
 
 #ifdef WIN32
@@ -1060,6 +1061,10 @@ namespace lfs::app {
                 LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
             }
 
+            const std::string window_title = params->safe_mode
+                                                 ? "LichtFeld Studio (Safe Mode)"
+                                                 : "LichtFeld Studio";
+
             if (!params->python_scripts.empty()) {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }
@@ -1093,7 +1098,7 @@ namespace lfs::app {
                     ? params->project_path
                     : params->resume_project;
             auto viewer = vis::Visualizer::create({
-                .title = "LichtFeld Studio",
+                .title = window_title,
                 .width = 1280,
                 .height = 720,
                 .antialiasing = false,
