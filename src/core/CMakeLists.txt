@@ -41,7 +41,6 @@ set(TENSOR_SOURCES
         tensor/tensor_row_proxy.cpp
         tensor/tensor_nn_ops.cpp
         tensor/pinned_memory_allocator.cpp
-        tensor/offset_allocator.cpp
         tensor/tensor_exports.cu
 )
 
