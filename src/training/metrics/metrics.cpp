@@ -5,13 +5,11 @@
 #include "metrics.hpp"
 #include "../rasterization/fast_rasterizer.hpp"
 #include "../rasterization/gsplat_rasterizer.hpp"
-#include "core/cuda/undistort/undistort.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
-#include "io/cuda/image_format_kernels.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include <algorithm>
 #include <cassert>
@@ -385,87 +383,6 @@ namespace lfs::training {
         return colormap.to(depth_normalized.device());
     }
 
-    lfs::core::Tensor MetricsEvaluator::load_eval_mask(lfs::core::Camera* cam,
-                                                       lfs::core::Tensor& gt_image,
-                                                       const bool alpha_as_mask) const {
-        if (cam->has_mask()) {
-            bool is_segment_and_ignore = _params.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
-            auto m = cam->load_and_get_mask(
-                _params.dataset.resize_factor,
-                _params.dataset.max_width,
-                _params.optimization.invert_masks,
-                _params.optimization.mask_threshold,
-                !is_segment_and_ignore);
-            if (is_segment_and_ignore) {
-                m = m.gt(250).to(lfs::core::DataType::UInt8).contiguous();
-            }
-            return m;
-        }
-
-        if (!alpha_as_mask)
-            return {};
-
-        // Re-load from disk because the dataloader strips alpha to produce RGB gt_image.
-        // We need the original alpha channel as the mask, with undistortion applied consistently.
-        auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
-            cam->image_path(), _params.dataset.resize_factor, _params.dataset.max_width);
-
-        if (!img_data || channels != 4) {
-            if (img_data)
-                lfs::core::free_image(img_data);
-            return {};
-        }
-
-        const auto H = static_cast<size_t>(height);
-        const auto W = static_cast<size_t>(width);
-
-        auto cpu_tensor = lfs::core::Tensor::from_blob(
-            img_data, lfs::core::TensorShape({H, W, 4}),
-            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-        lfs::core::free_image(img_data);
-
-        auto rgb = lfs::core::Tensor::zeros(
-            lfs::core::TensorShape({3, H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-        auto mask = lfs::core::Tensor::zeros(
-            lfs::core::TensorShape({H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-        lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
-            gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(),
-            H, W, nullptr);
-        gpu_uint8 = lfs::core::Tensor();
-
-        if (_params.optimization.invert_masks)
-            lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
-        if (_params.optimization.mask_threshold > 0)
-            lfs::io::cuda::launch_mask_threshold(
-                mask.ptr<float>(), H, W, _params.optimization.mask_threshold, nullptr);
-
-        if (cam->is_undistort_prepared()) {
-            const auto scaled = lfs::core::scale_undistort_params(
-                cam->undistort_params(),
-                static_cast<int>(W), static_cast<int>(H));
-            auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
-            rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
-            auto rgb_uint8 = lfs::core::Tensor::empty(
-                rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-            lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                rgb_float.ptr<float>(),
-                rgb_uint8.ptr<uint8_t>(),
-                rgb_float.shape()[1],
-                rgb_float.shape()[2],
-                rgb_float.shape()[0],
-                nullptr);
-            rgb = std::move(rgb_uint8);
-            mask = lfs::core::undistort_mask(mask, scaled, nullptr);
-        }
-
-        gt_image = std::move(rgb);
-        return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
-    }
-
     EvalMetrics MetricsEvaluator::evaluate(const int iteration,
                                            const lfs::core::SplatData& splatData,
                                            std::shared_ptr<CameraDataset> val_dataset,
@@ -499,32 +416,33 @@ namespace lfs::training {
             mask_mode == lfs::core::param::MaskMode::Ignore ||
             mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
 
-        for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
-            lfs::core::Camera* cam = val_dataset->get_camera(image_idx);
-            lfs::core::Tensor gt_image;
-            try {
-                gt_image = load_eval_gt_image_cpu(
-                    *cam,
-                    _params.dataset.resize_factor,
-                    _params.dataset.max_width);
-            } catch (const std::exception& e) {
-                LOG_WARN("Eval: skipping camera '{}' (failed to load GT image: {})", cam->image_name(), e.what());
-                skipped_images++;
-                continue;
+        PipelinedAuxiliaryImageConfig aux_config;
+        aux_config.load_masks = use_masking;
+        aux_config.use_alpha_as_mask = use_masking && _params.optimization.use_alpha_as_mask;
+        aux_config.invert_masks = _params.optimization.invert_masks;
+        aux_config.mask_threshold = _params.optimization.mask_threshold;
+
+        auto val_dataloader = create_pipelined_dataloader(val_dataset, {}, aux_config);
+
+        // The pipelined loader yields examples rather than indices; keep a counter
+        // so saved eval comparison images stay numbered as before.
+        size_t image_idx = 0;
+        while (auto example_opt = val_dataloader->next()) {
+            const size_t current_idx = image_idx++;
+            auto& example = *example_opt;
+            auto camera_with_image = std::move(example.data);
+            lfs::core::Camera* cam = camera_with_image.camera;
+            lfs::core::Tensor gt_image = std::move(camera_with_image.image);
+
+            if (gt_image.device() != lfs::core::Device::CUDA) {
+                gt_image = gt_image.to(lfs::core::Device::CUDA);
             }
 
             lfs::core::Tensor mask;
             if (use_masking) {
-                const bool cam_alpha = _params.optimization.use_alpha_as_mask && cam->has_alpha();
-                try {
-                    mask = load_eval_mask(cam, gt_image, cam_alpha);
-                } catch (const std::exception& e) {
-                    LOG_WARN("Eval: skipping camera '{}' (failed to load mask: {})", cam->image_name(), e.what());
-                    skipped_images++;
-                    continue;
-                }
-
-                if (!mask.is_valid()) {
+                if (example.mask && example.mask->is_valid()) {
+                    mask = std::move(*example.mask);
+                } else {
                     LOG_DEBUG("Eval: camera '{}' has no mask, proceeding unmasked", cam->image_name());
                     mask = lfs::core::Tensor();
                 }
@@ -576,7 +494,7 @@ namespace lfs::training {
                 }
                 const std::vector<lfs::core::Tensor> rgb_images = {gt_vis, render_vis};
                 lfs::core::image_io::save_images_async(
-                    eval_dir / (std::to_string(image_idx) + ".png"),
+                    eval_dir / (std::to_string(current_idx) + ".png"),
                     rgb_images,
                     true, // horizontal
                     4);   // separator width

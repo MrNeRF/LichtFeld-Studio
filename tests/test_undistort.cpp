@@ -2,9 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cube_face_projection.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "io/formats/colmap.hpp"
+#include "training/training_setup.hpp"
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
@@ -18,6 +23,53 @@ namespace {
     constexpr float TEST_CY = 240.0f;
     constexpr int TEST_W = 640;
     constexpr int TEST_H = 480;
+    constexpr float SPHERICAL_UNDISTORT_FOV = 96.0f;
+    constexpr size_t SPHERICAL_UNDISTORT_VIEW_COUNT = 6;
+    constexpr std::array<std::array<float, 3>, SPHERICAL_UNDISTORT_VIEW_COUNT> SPHERICAL_UNDISTORT_FORWARDS{{
+        {1.f, 0.f, 0.f},
+        {-1.f, 0.f, 0.f},
+        {0.f, 1.f, 0.f},
+        {0.f, -1.f, 0.f},
+        {0.f, 0.f, 1.f},
+        {0.f, 0.f, -1.f},
+    }};
+
+    using Vec3 = std::array<float, 3>;
+
+    Vec3 cross(const Vec3& a, const Vec3& b) {
+        return {
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0]};
+    }
+
+    float length(const Vec3& v) {
+        return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    }
+
+    Vec3 normalize(const Vec3& v) {
+        const float len = length(v);
+        if (len <= 0.0f)
+            return {0.0f, 0.0f, 1.0f};
+        return {v[0] / len, v[1] / len, v[2] / len};
+    }
+
+    std::array<float, 9> expected_spherical_matrix(const Vec3& forward_in) {
+        const Vec3 forward = normalize(forward_in);
+        constexpr Vec3 world_up{0.0f, 1.0f, 0.0f};
+        constexpr Vec3 fallback_up{0.0f, 0.0f, 1.0f};
+
+        Vec3 right = cross(world_up, forward);
+        if (length(right) < 1e-5f)
+            right = cross(fallback_up, forward);
+        right = normalize(right);
+        const Vec3 up = cross(forward, right);
+
+        return {
+            right[0], right[1], right[2],
+            up[0], up[1], up[2],
+            forward[0], forward[1], forward[2]};
+    }
 
     void validate_params(const UndistortParams& p, int src_w, int src_h) {
         EXPECT_GT(p.dst_width, 0);
@@ -586,6 +638,138 @@ TEST_F(UndistortCameraTest, EquirectangularModelDoesNotUseUndistortion) {
     EXPECT_FALSE(equirect_cam.has_distortion());
     equirect_cam.prepare_undistortion();
     EXPECT_FALSE(equirect_cam.is_undistort_prepared());
+}
+
+// Pins the face-sizing policy to concrete values. The previous version of this
+// test re-derived the formula, so it could not detect a change to it.
+//
+// A 2:1 4K panorama resolves 3840/(2*pi) = 611.15 px/rad, so a 96 degree face
+// matching that rate at its centre is 2 * 611.15 * tan(48 deg) = 1358 px.
+TEST(SphericalFaceSizing, MatchesPanoramaSamplingRateAtFaceCentre) {
+    EXPECT_EQ(cube_face_size_for_panorama(3840, 1920, 96.0f), 1358);
+    EXPECT_EQ(cube_face_size_for_panorama(3840, 1920, 90.0f), 1222);
+    EXPECT_EQ(cube_face_size_for_panorama(2048, 1024, 96.0f), 724);
+}
+
+TEST(SphericalFaceSizing, FocalRoundTripsToTheRequestedFov) {
+    constexpr float kPi = 3.14159265358979323846f;
+    for (const float fov : {60.0f, 90.0f, 96.0f, 120.0f}) {
+        const float focal = cube_face_focal(fov, 1000);
+        EXPECT_NEAR(focal2fov(focal, 1000) * 180.0f / kPi, fov, 1e-2f);
+    }
+}
+
+TEST(SphericalFaceSizing, DegenerateFovStaysFinite) {
+    // Field of view is clamped, so neither a zero nor an over-wide value may
+    // produce a zero, negative or infinite focal length.
+    EXPECT_GT(cube_face_size_for_panorama(3840, 1920, 0.0f), 0);
+    EXPECT_GT(cube_face_size_for_panorama(3840, 1920, 360.0f), 0);
+    EXPECT_GT(cube_face_focal(0.0f, 512), 0.0f);
+    EXPECT_TRUE(std::isfinite(cube_face_focal(0.0f, 512)));
+    EXPECT_TRUE(std::isfinite(cube_face_focal(360.0f, 512)));
+}
+
+TEST_F(UndistortCameraTest, EquirectangularSphericalExpansionUsesVirtualPinholeCameras) {
+    auto& source = cameras_[0];
+    auto equirect_cam = std::make_shared<Camera>(
+        source->R(), source->T(),
+        source->focal_x(), source->focal_y(),
+        source->center_x(), source->center_y(),
+        Tensor(), Tensor(),
+        CameraModelType::EQUIRECTANGULAR,
+        "pano.jpg", source->image_path(), "",
+        source->camera_width(), source->camera_height(), 7, 99);
+    equirect_cam->set_has_alpha(true);
+    equirect_cam->set_split(CameraSplit::Eval);
+
+    auto expanded = lfs::training::expandEquirectangularCamerasForUndistort({equirect_cam});
+
+    ASSERT_TRUE(expanded.has_value()) << expanded.error();
+    ASSERT_EQ(expanded->size(), SPHERICAL_UNDISTORT_VIEW_COUNT);
+
+    const auto [source_width, source_height, source_channels] = get_image_info(source->image_path());
+    ASSERT_GT(source_channels, 0);
+    const int expected_face_size = cube_face_size_for_panorama(
+        source_width, source_height, SPHERICAL_UNDISTORT_FOV);
+    const float expected_focal = cube_face_focal(SPHERICAL_UNDISTORT_FOV, expected_face_size);
+
+    for (size_t i = 0; i < expanded->size(); ++i) {
+        const auto& face = (*expanded)[i];
+        ASSERT_TRUE(face);
+        EXPECT_EQ(face->camera_model_type(), CameraModelType::PINHOLE);
+        EXPECT_TRUE(face->has_cube_face_projection());
+        EXPECT_EQ(face->image_path(), source->image_path());
+        EXPECT_EQ(face->split(), CameraSplit::Eval);
+        EXPECT_TRUE(face->has_alpha());
+        EXPECT_EQ(face->camera_id(), 99);
+        EXPECT_EQ(face->uid(), static_cast<int>(i));
+        EXPECT_EQ(face->camera_width(), expected_face_size);
+        EXPECT_EQ(face->camera_height(), expected_face_size);
+        EXPECT_NEAR(face->focal_x(), expected_focal, 1e-4f);
+        EXPECT_NEAR(face->focal_y(), expected_focal, 1e-4f);
+        ASSERT_TRUE(face->cube_face_projection().has_value());
+        EXPECT_EQ(face->cube_face_projection()->face_size, expected_face_size);
+        EXPECT_EQ(face->cube_face_projection()->source_width, source_width);
+        EXPECT_EQ(face->cube_face_projection()->source_height, source_height);
+        EXPECT_NEAR(face->cube_face_projection()->fov_degrees, SPHERICAL_UNDISTORT_FOV, 1e-4f);
+        const auto& pano_to_face = face->cube_face_projection()->pano_to_face;
+        const auto expected_matrix = expected_spherical_matrix(SPHERICAL_UNDISTORT_FORWARDS[i]);
+        for (size_t j = 0; j < pano_to_face.size(); ++j)
+            EXPECT_NEAR(pano_to_face[j], expected_matrix[j], 1e-6f);
+        for (int row = 0; row < 3; ++row) {
+            const float row_len =
+                pano_to_face[row * 3 + 0] * pano_to_face[row * 3 + 0] +
+                pano_to_face[row * 3 + 1] * pano_to_face[row * 3 + 1] +
+                pano_to_face[row * 3 + 2] * pano_to_face[row * 3 + 2];
+            EXPECT_NEAR(row_len, 1.0f, 1e-5f);
+        }
+        const float dot01 = pano_to_face[0] * pano_to_face[3] +
+                            pano_to_face[1] * pano_to_face[4] +
+                            pano_to_face[2] * pano_to_face[5];
+        const float dot02 = pano_to_face[0] * pano_to_face[6] +
+                            pano_to_face[1] * pano_to_face[7] +
+                            pano_to_face[2] * pano_to_face[8];
+        const float dot12 = pano_to_face[3] * pano_to_face[6] +
+                            pano_to_face[4] * pano_to_face[7] +
+                            pano_to_face[5] * pano_to_face[8];
+        EXPECT_NEAR(dot01, 0.0f, 1e-5f);
+        EXPECT_NEAR(dot02, 0.0f, 1e-5f);
+        EXPECT_NEAR(dot12, 0.0f, 1e-5f);
+    }
+}
+
+TEST_F(UndistortCameraTest, SphericalExpansionKeepsPassthroughCamerasAndAvoidsUidCollisions) {
+    auto& source = cameras_[0];
+    auto equirect_cam = std::make_shared<Camera>(
+        source->R(), source->T(),
+        source->focal_x(), source->focal_y(),
+        source->center_x(), source->center_y(),
+        Tensor(), Tensor(),
+        CameraModelType::EQUIRECTANGULAR,
+        "pano.jpg", source->image_path(), "",
+        source->camera_width(), source->camera_height(), 2, 20);
+    auto pinhole_cam = std::make_shared<Camera>(
+        source->R(), source->T(),
+        source->focal_x(), source->focal_y(),
+        source->center_x(), source->center_y(),
+        Tensor(), Tensor(),
+        CameraModelType::PINHOLE,
+        "pinhole.jpg", source->image_path(), "",
+        source->camera_width(), source->camera_height(), 12, 12);
+
+    auto expanded = lfs::training::expandEquirectangularCamerasForUndistort({equirect_cam, pinhole_cam});
+
+    ASSERT_TRUE(expanded.has_value()) << expanded.error();
+    ASSERT_EQ(expanded->size(), SPHERICAL_UNDISTORT_VIEW_COUNT + 1);
+    for (size_t i = 0; i < SPHERICAL_UNDISTORT_VIEW_COUNT; ++i) {
+        ASSERT_TRUE((*expanded)[i]);
+        EXPECT_EQ((*expanded)[i]->camera_model_type(), CameraModelType::PINHOLE);
+        EXPECT_TRUE((*expanded)[i]->has_cube_face_projection());
+        EXPECT_EQ((*expanded)[i]->uid(), static_cast<int>(13 + i));
+    }
+    EXPECT_EQ((*expanded)[SPHERICAL_UNDISTORT_VIEW_COUNT], pinhole_cam);
+    EXPECT_FALSE((*expanded)[SPHERICAL_UNDISTORT_VIEW_COUNT]->has_cube_face_projection());
+    EXPECT_EQ((*expanded)[SPHERICAL_UNDISTORT_VIEW_COUNT]->uid(), 12);
 }
 
 TEST(UndistortScale, ScaleUndistortParams) {

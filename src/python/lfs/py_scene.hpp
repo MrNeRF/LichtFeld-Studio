@@ -514,6 +514,7 @@ namespace lfs::python {
         // Camera training control
         void set_camera_training_enabled(const std::string& name, bool enabled);
         size_t active_camera_count() const { return scene_->getActiveCameraCount(); }
+        size_t active_training_image_count(bool undistort) const;
         std::vector<PySceneNode> get_active_cameras();
 
         // Training data

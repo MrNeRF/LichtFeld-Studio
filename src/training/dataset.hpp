@@ -588,10 +588,19 @@ namespace lfs::training {
         std::optional<CameraExample> next() {
             if (shutdown_)
                 return std::nullopt;
-            prefetch_next_batch();
 
             try {
-                auto ready = loader_->get();
+                std::optional<lfs::io::ReadyImage> ready_opt;
+                while (!ready_opt) {
+                    prefetch_next_batch();
+                    if (sampler_exhausted_ && loader_->in_flight_count() == 0) {
+                        sequence_to_camera_.clear();
+                        return std::nullopt;
+                    }
+                    ready_opt = loader_->try_get_for(config_.output_wait_timeout);
+                }
+
+                auto ready = std::move(*ready_opt);
                 const auto it = sequence_to_camera_.find(ready.sequence_id);
                 if (it == sequence_to_camera_.end()) {
                     LOG_ERROR("[PipelinedDataLoader] Unknown sequence_id: {}", ready.sequence_id);
@@ -659,6 +668,7 @@ namespace lfs::training {
             sampler_.reset();
             sequence_to_camera_.clear();
             next_sequence_id_ = 0;
+            sampler_exhausted_ = false;
             prefetch_next_batch();
         }
 
@@ -676,10 +686,15 @@ namespace lfs::training {
 
     private:
         void prefetch_next_batch() {
+            if (sampler_exhausted_)
+                return;
+
             while (loader_->in_flight_count() < config_.prefetch_count) {
                 const auto indices = sampler_.next(1);
-                if (!indices || indices->empty())
+                if (!indices || indices->empty()) {
+                    sampler_exhausted_ = true;
                     break;
+                }
 
                 const size_t local_idx = (*indices)[0];
                 const size_t camera_idx = dataset_->local_to_source(local_idx);
@@ -705,6 +720,7 @@ namespace lfs::training {
                     request.undistort = &cam->undistort_params();
                     request.params.undistort = request.undistort;
                 }
+                request.cube_face_projection = cam->cube_face_projection();
 
                 if (aux_config_.load_masks && cam->has_mask()) {
                     request.mask_path = cam->mask_path();
@@ -746,6 +762,7 @@ namespace lfs::training {
 
         std::unordered_map<size_t, size_t> sequence_to_camera_;
         size_t next_sequence_id_ = 0;
+        bool sampler_exhausted_ = false;
 
         bool shutdown_ = false;
     };

@@ -665,6 +665,9 @@ class Scene:
     def active_camera_count(self) -> int:
         """Number of cameras enabled for training"""
 
+    def active_training_image_count(self, undistort: bool) -> int:
+        """Effective number of training images after internal image expansion"""
+
     def get_active_cameras(self) -> list[SceneNode]:
         """Get camera nodes enabled for training"""
 

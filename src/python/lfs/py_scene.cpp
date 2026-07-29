@@ -687,6 +687,19 @@ namespace lfs::python {
         return result;
     }
 
+    size_t PyScene::active_training_image_count(const bool undistort) const {
+        size_t count = 0;
+        for (const auto* node : scene_->getNodes()) {
+            if (node->type != core::NodeType::CAMERA || !node->camera || !node->training_enabled) {
+                continue;
+            }
+            count += undistort && node->camera->camera_model_type() == core::CameraModelType::EQUIRECTANGULAR
+                         ? 12
+                         : 1;
+        }
+        return count;
+    }
+
     void PyScene::set_camera_training_enabled(const std::string& name, bool enabled) {
         if (auto* const scene_manager = get_scene_manager()) {
             const auto* node = scene_->getNode(name);
@@ -1369,6 +1382,10 @@ Returns:
             // Camera training control
             .def("set_camera_training_enabled", &PyScene::set_camera_training_enabled, nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name")
             .def_prop_ro("active_camera_count", &PyScene::active_camera_count, "Number of cameras enabled for training")
+            .def("active_training_image_count",
+                 &PyScene::active_training_image_count,
+                 nb::arg("undistort"),
+                 "Effective number of training images after internal image expansion")
             .def("get_active_cameras", &PyScene::get_active_cameras, "Get camera nodes enabled for training")
             // Training data
             .def("has_training_data", &PyScene::has_training_data, "Check if training dataset is loaded")

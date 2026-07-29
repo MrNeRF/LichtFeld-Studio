@@ -180,10 +180,13 @@ namespace lfs::core {
           _T(std::move(other._T)),
           _radial_distortion(std::move(other._radial_distortion)),
           _tangential_distortion(std::move(other._tangential_distortion)),
+          _camera_model_type(other._camera_model_type),
           _image_path(std::move(other._image_path)),
           _image_name(std::move(other._image_name)),
           _mask_path(std::move(other._mask_path)),
           _depth_path(std::move(other._depth_path)),
+          _cube_face_projection(std::move(other._cube_face_projection)),
+          _has_alpha(other._has_alpha),
           _normal_path(std::move(other._normal_path)),
           _split(other._split),
           _camera_width(other._camera_width),
@@ -235,10 +238,13 @@ namespace lfs::core {
             _T = std::move(other._T);
             _radial_distortion = std::move(other._radial_distortion);
             _tangential_distortion = std::move(other._tangential_distortion);
+            _camera_model_type = other._camera_model_type;
             _image_path = std::move(other._image_path);
             _image_name = std::move(other._image_name);
             _mask_path = std::move(other._mask_path);
             _depth_path = std::move(other._depth_path);
+            _cube_face_projection = std::move(other._cube_face_projection);
+            _has_alpha = other._has_alpha;
             _normal_path = std::move(other._normal_path);
             _split = other._split;
             _camera_width = other._camera_width;
@@ -288,6 +294,8 @@ namespace lfs::core {
           _image_path(other._image_path),
           _mask_path(other._mask_path),
           _depth_path(other._depth_path),
+          _cube_face_projection(other._cube_face_projection),
+          _has_alpha(other._has_alpha),
           _normal_path(other._normal_path),
           _split(other._split),
           _camera_width(other._camera_width),
@@ -346,6 +354,10 @@ namespace lfs::core {
         return {_focal_x * x_scale, _focal_y * y_scale, _center_x * x_scale, _center_y * y_scale};
     }
 
+    void Camera::set_cube_face_projection(CubeFaceProjection projection) {
+        _cube_face_projection = std::move(projection);
+    }
+
     Tensor Camera::load_and_get_image(int resize_factor, int max_width, const bool output_uint8,
                                       const bool update_dimensions) {
         const ImageLoadParams params{
@@ -376,7 +388,10 @@ namespace lfs::core {
 
     void Camera::load_image_size(int resize_factor, int max_width) {
         int w, h;
-        if (_undistort_prepared) {
+        if (_cube_face_projection) {
+            w = _cube_face_projection->face_size;
+            h = _cube_face_projection->face_size;
+        } else if (_undistort_prepared) {
             w = _camera_width;
             h = _camera_height;
         } else {
@@ -423,11 +438,11 @@ namespace lfs::core {
     }
 
     size_t Camera::get_num_bytes_from_file(int resize_factor, int max_width) const {
-        auto result = get_image_info(_image_path);
-
-        int w = std::get<0>(result);
-        int h = std::get<1>(result);
-        int c = std::get<2>(result);
+        auto [w, h, c] = get_image_info(_image_path);
+        if (_cube_face_projection) {
+            w = _cube_face_projection->face_size;
+            h = _cube_face_projection->face_size;
+        }
 
         if (resize_factor > 0) {
             w = w / resize_factor;
@@ -450,6 +465,10 @@ namespace lfs::core {
 
     size_t Camera::get_num_bytes_from_file() const {
         auto [w, h, c] = get_image_info(_image_path);
+        if (_cube_face_projection) {
+            w = _cube_face_projection->face_size;
+            h = _cube_face_projection->face_size;
+        }
         size_t num_bytes = w * h * c * sizeof(uint8_t);
         return num_bytes;
     }

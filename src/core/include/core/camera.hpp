@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/camera_types.h"
+#include "core/cube_face_projection.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
@@ -14,6 +15,7 @@
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <future>
+#include <optional>
 #include <string>
 
 namespace lfs::core {
@@ -155,6 +157,9 @@ namespace lfs::core {
         const std::filesystem::path& image_path() const noexcept { return _image_path; }
         const std::filesystem::path& mask_path() const noexcept { return _mask_path; }
         const std::filesystem::path& depth_path() const noexcept { return _depth_path; }
+        void set_cube_face_projection(CubeFaceProjection projection);
+        const std::optional<CubeFaceProjection>& cube_face_projection() const noexcept { return _cube_face_projection; }
+        bool has_cube_face_projection() const noexcept { return _cube_face_projection.has_value(); }
         const std::filesystem::path& normal_path() const noexcept { return _normal_path; }
         bool has_in_memory_mask() const noexcept { return _in_memory_mask_raw.is_valid(); }
         bool has_mask() const noexcept {
@@ -214,6 +219,7 @@ namespace lfs::core {
         std::filesystem::path _image_path;
         std::filesystem::path _mask_path;
         std::filesystem::path _depth_path;
+        std::optional<CubeFaceProjection> _cube_face_projection;
         std::filesystem::path _normal_path;
         bool _has_alpha = false;
         CameraSplit _split = CameraSplit::Train;

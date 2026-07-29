@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training_setup.hpp"
+#include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
@@ -15,12 +17,19 @@
 #include "dataset.hpp"
 #include "io/loader.hpp"
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
 #include <format>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
 #include <random>
+#include <string_view>
+#include <tuple>
 #include <variant>
+#include <vector>
 
 namespace lfs::training {
 
@@ -89,6 +98,247 @@ namespace lfs::training {
             if (s == "by_cameras")
                 return lfs::io::CentralizeDataset::ByCameras;
             return lfs::io::CentralizeDataset::Off;
+        }
+
+        constexpr int kSphericalUndistortViewCount = 6;
+
+        // Cube faces, widened from 90 to 96 degrees.
+        //
+        // All views expanded from one panorama share that panorama's camera centre,
+        // so overlapping views carry no extra parallax: they resample the same rays
+        // twice. Redundant coverage is therefore pure cost, and worse, it is uneven
+        // cost -- an icosahedral 12-view layout at 90 degrees covers 25% of the
+        // sphere once, 50% twice and 25% three times, which weights the photometric
+        // loss by up to 3x purely as an artefact of the view geometry.
+        //
+        // Six faces tile the sphere exactly. The extra 3 degrees on each edge is a
+        // deliberate seam margin so SSIM windows and densification see real context
+        // across face boundaries, and it costs only ~12% angular overcoverage.
+        constexpr float kSphericalUndistortFovDegrees = 96.0f;
+
+        struct SphericalViewDefinition {
+            std::string_view suffix;
+            std::array<float, 3> forward;
+        };
+
+        constexpr std::array<SphericalViewDefinition, kSphericalUndistortViewCount> kSphericalUndistortViews{{
+            {"cube_px", {1.f, 0.f, 0.f}},
+            {"cube_nx", {-1.f, 0.f, 0.f}},
+            {"cube_py", {0.f, 1.f, 0.f}},
+            {"cube_ny", {0.f, -1.f, 0.f}},
+            {"cube_pz", {0.f, 0.f, 1.f}},
+            {"cube_nz", {0.f, 0.f, -1.f}},
+        }};
+
+        using Vec3 = std::array<float, 3>;
+
+        [[nodiscard]] Vec3 cross(const Vec3& a, const Vec3& b) {
+            return {
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0]};
+        }
+
+        [[nodiscard]] float length(const Vec3& v) {
+            return std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        }
+
+        [[nodiscard]] Vec3 normalize(const Vec3& v) {
+            const float len = length(v);
+            if (len <= 0.0f)
+                return {0.0f, 0.0f, 1.0f};
+            return {v[0] / len, v[1] / len, v[2] / len};
+        }
+
+        [[nodiscard]] std::array<float, 9> makeViewFromForward(const Vec3& forward_in) {
+            const Vec3 forward = normalize(forward_in);
+            constexpr Vec3 world_up{0.0f, 1.0f, 0.0f};
+            constexpr Vec3 fallback_up{0.0f, 0.0f, 1.0f};
+
+            Vec3 right = cross(world_up, forward);
+            if (length(right) < 1e-5f)
+                right = cross(fallback_up, forward);
+            right = normalize(right);
+            const Vec3 up = cross(forward, right);
+
+            return {
+                right[0], right[1], right[2],
+                up[0], up[1], up[2],
+                forward[0], forward[1], forward[2]};
+        }
+
+        [[nodiscard]] std::string sanitizeFilenameComponent(const std::string_view value) {
+            std::string out;
+            out.reserve(value.size());
+            for (const unsigned char ch : value) {
+                if (std::isalnum(ch) || ch == '-' || ch == '_') {
+                    out.push_back(static_cast<char>(ch));
+                } else {
+                    out.push_back('_');
+                }
+            }
+            while (!out.empty() && out.back() == '_')
+                out.pop_back();
+            return out.empty() ? "camera" : out;
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Camera> makeSphericalViewCamera(
+            const lfs::core::Camera& source,
+            const SphericalViewDefinition& view,
+            const int view_size,
+            const int source_width,
+            const int source_height,
+            const int uid,
+            const std::string& image_name,
+            const bool has_alpha) {
+            const auto pano_to_view = makeViewFromForward(view.forward);
+            auto R_cpu = source.R().cpu();
+            if (!R_cpu.is_contiguous())
+                R_cpu = R_cpu.contiguous();
+            auto T_cpu = source.T().cpu();
+            if (!T_cpu.is_contiguous())
+                T_cpu = T_cpu.contiguous();
+
+            auto R_acc = R_cpu.accessor<float, 2>();
+            auto T_acc = T_cpu.accessor<float, 1>();
+
+            std::vector<float> R_face(9, 0.0f);
+            std::vector<float> T_face(3, 0.0f);
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 3; ++col) {
+                    for (int k = 0; k < 3; ++k)
+                        R_face[row * 3 + col] += pano_to_view[row * 3 + k] * R_acc(k, col);
+                }
+                for (int k = 0; k < 3; ++k)
+                    T_face[row] += pano_to_view[row * 3 + k] * T_acc(k);
+            }
+
+            const float focal = lfs::core::cube_face_focal(kSphericalUndistortFovDegrees, view_size);
+            const float center = 0.5f * static_cast<float>(view_size);
+            auto camera = std::make_shared<lfs::core::Camera>(
+                lfs::core::Tensor::from_vector(R_face, {3, 3}, lfs::core::Device::CPU),
+                lfs::core::Tensor::from_vector(T_face, {3}, lfs::core::Device::CPU),
+                focal,
+                focal,
+                center,
+                center,
+                lfs::core::Tensor::empty({0}, lfs::core::Device::CPU),
+                lfs::core::Tensor::empty({0}, lfs::core::Device::CPU),
+                lfs::core::CameraModelType::PINHOLE,
+                image_name,
+                source.image_path(),
+                source.has_mask() ? source.mask_path() : std::filesystem::path{},
+                view_size,
+                view_size,
+                uid,
+                source.camera_id());
+            camera->set_has_alpha(has_alpha);
+            camera->set_split(source.split());
+            camera->set_cube_face_projection(lfs::core::CubeFaceProjection{
+                .pano_to_face = pano_to_view,
+                .face_size = view_size,
+                .source_width = source_width,
+                .source_height = source_height,
+                .fov_degrees = kSphericalUndistortFovDegrees});
+            return camera;
+        }
+
+        [[nodiscard]] std::expected<std::vector<std::shared_ptr<lfs::core::Camera>>, std::string>
+        expandEquirectangularCamerasForUndistortImpl(
+            const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
+            int next_uid = 0;
+            const bool has_passthrough_cameras = std::any_of(cameras.begin(), cameras.end(), [](const auto& camera) {
+                return camera &&
+                       camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR;
+            });
+            if (has_passthrough_cameras) {
+                for (const auto& camera : cameras) {
+                    if (camera)
+                        next_uid = std::max(next_uid, camera->uid() + 1);
+                }
+            }
+
+            std::vector<std::shared_ptr<lfs::core::Camera>> expanded;
+            expanded.reserve(cameras.size() * kSphericalUndistortViews.size());
+
+            size_t panoramas = 0;
+            size_t virtual_views = 0;
+            size_t ignored_depth_maps = 0;
+            int min_face_size = std::numeric_limits<int>::max();
+            int max_face_size = 0;
+
+            for (const auto& camera : cameras) {
+                if (!camera ||
+                    camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR) {
+                    expanded.push_back(camera);
+                    if (!has_passthrough_cameras && camera)
+                        next_uid = std::max(next_uid, camera->uid() + 1);
+                    continue;
+                }
+
+                ++panoramas;
+                int source_width = 0;
+                int source_height = 0;
+                int source_channels = 0;
+                try {
+                    std::tie(source_width, source_height, source_channels) =
+                        lfs::core::get_image_info(camera->image_path());
+                } catch (const std::exception& e) {
+                    return std::unexpected(std::format("Failed to inspect panorama '{}': {}",
+                                                       lfs::core::path_to_utf8(camera->image_path()), e.what()));
+                }
+                if (source_width <= 0 || source_height <= 0 || source_channels <= 0) {
+                    return std::unexpected(std::format("Failed to inspect panorama '{}'",
+                                                       lfs::core::path_to_utf8(camera->image_path())));
+                }
+
+                const int view_size = lfs::core::cube_face_size_for_panorama(
+                    source_width, source_height, kSphericalUndistortFovDegrees);
+                min_face_size = std::min(min_face_size, view_size);
+                max_face_size = std::max(max_face_size, view_size);
+
+                const std::string stem = sanitizeFilenameComponent(
+                    std::filesystem::path(camera->image_name()).stem().string());
+                const std::string base_name = std::format("{:06d}_{}", camera->uid(), stem);
+
+                if (camera->has_depth())
+                    ++ignored_depth_maps;
+
+                for (size_t view_index = 0; view_index < kSphericalUndistortViews.size(); ++view_index) {
+                    const auto& view = kSphericalUndistortViews[view_index];
+                    const std::string image_name =
+                        std::format("{}_{}.png", base_name, view.suffix);
+                    expanded.push_back(makeSphericalViewCamera(
+                        *camera,
+                        view,
+                        view_size,
+                        source_width,
+                        source_height,
+                        next_uid++,
+                        image_name,
+                        camera->has_alpha()));
+                    ++virtual_views;
+                }
+            }
+
+            if (panoramas > 0) {
+                LOG_INFO("Undistort expanded {} equirectangular panorama{} into {} internal spherical pinhole views "
+                         "({} views/panorama, {:.0f} deg FOV, face size {} px auto, sampled internally from source panoramas)",
+                         panoramas,
+                         panoramas == 1 ? "" : "s",
+                         virtual_views,
+                         kSphericalUndistortViews.size(),
+                         kSphericalUndistortFovDegrees,
+                         min_face_size == max_face_size ? std::to_string(max_face_size)
+                                                        : std::format("{}-{}", min_face_size, max_face_size));
+                if (ignored_depth_maps > 0) {
+                    LOG_WARN("Equirectangular spherical undistort ignored {} depth map{}; perspective depth conversion is not implemented",
+                             ignored_depth_maps,
+                             ignored_depth_maps == 1 ? "" : "s");
+                }
+            }
+
+            return expanded;
         }
 
         void applyTrainingSHDegree(lfs::core::SplatData& splat, const int target_degree) {
@@ -376,6 +626,12 @@ namespace lfs::training {
         }
     } // namespace
 
+    std::expected<std::vector<std::shared_ptr<lfs::core::Camera>>, std::string>
+    expandEquirectangularCamerasForUndistort(
+        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
+        return expandEquirectangularCamerasForUndistortImpl(cameras);
+    }
+
     std::expected<void, std::string> migrateTrainingModelToAllocator(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::SplatData& model,
@@ -501,22 +757,36 @@ namespace lfs::training {
                     }
                 }
 
-                const auto& cameras = data.cameras;
                 const bool enable_eval = params.optimization.enable_eval;
                 const int test_every = params.dataset.test_every;
+
+                for (size_t i = 0; i < data.cameras.size(); ++i) {
+                    const bool is_eval = enable_eval && (i % test_every) == 0;
+                    data.cameras[i]->set_split(is_eval ? lfs::core::CameraSplit::Eval : lfs::core::CameraSplit::Train);
+                }
+
+                std::vector<std::shared_ptr<lfs::core::Camera>> undistorted_cameras;
+                const auto* cameras_ptr = &data.cameras;
+                if (params.optimization.undistort) {
+                    auto expanded_cameras = expandEquirectangularCamerasForUndistort(data.cameras);
+                    if (!expanded_cameras)
+                        return std::unexpected(expanded_cameras.error());
+                    undistorted_cameras = std::move(*expanded_cameras);
+                    cameras_ptr = &undistorted_cameras;
+                }
+                const auto& cameras = *cameras_ptr;
 
                 size_t train_count = 0;
                 size_t val_count = 0;
                 size_t mask_count = 0;
-                for (size_t i = 0; i < cameras.size(); ++i) {
-                    const bool is_eval = enable_eval && (i % test_every) == 0;
-                    cameras[i]->set_split(is_eval ? lfs::core::CameraSplit::Eval : lfs::core::CameraSplit::Train);
+                for (const auto& camera : cameras) {
+                    const bool is_eval = enable_eval && camera->split() == lfs::core::CameraSplit::Eval;
                     if (is_eval) {
                         val_count++;
                     } else {
                         train_count++;
                     }
-                    if (cameras[i]->has_mask()) {
+                    if (camera->has_mask()) {
                         mask_count++;
                     }
                 }
@@ -529,7 +799,7 @@ namespace lfs::training {
                     train_count);
 
                 for (size_t i = 0; i < cameras.size(); ++i) {
-                    if (!enable_eval || (i % test_every) != 0) {
+                    if (!enable_eval || cameras[i]->split() != lfs::core::CameraSplit::Eval) {
                         scene.addCamera(cameras[i]->image_name(), train_cameras_id, cameras[i]);
                     }
                 }
@@ -541,7 +811,7 @@ namespace lfs::training {
                         val_count);
 
                     for (size_t i = 0; i < cameras.size(); ++i) {
-                        if ((i % test_every) == 0) {
+                        if (cameras[i]->split() == lfs::core::CameraSplit::Eval) {
                             scene.addCamera(cameras[i]->image_name(), val_cameras_id, cameras[i]);
                         }
                     }
@@ -870,16 +1140,30 @@ namespace lfs::training {
                     scene.addPointCloud("PointCloud", createRandomPointCloud(), dataset_id);
                 }
 
-                const auto& cameras = data.cameras;
                 const bool enable_eval = params.optimization.enable_eval;
                 const int test_every = params.dataset.test_every;
 
-                size_t train_count = 0, val_count = 0, mask_count = 0;
-                for (size_t i = 0; i < cameras.size(); ++i) {
+                for (size_t i = 0; i < data.cameras.size(); ++i) {
                     const bool is_val = enable_eval && (i % test_every) == 0;
-                    cameras[i]->set_split(is_val ? lfs::core::CameraSplit::Eval : lfs::core::CameraSplit::Train);
+                    data.cameras[i]->set_split(is_val ? lfs::core::CameraSplit::Eval : lfs::core::CameraSplit::Train);
+                }
+
+                std::vector<std::shared_ptr<lfs::core::Camera>> undistorted_cameras;
+                const auto* cameras_ptr = &data.cameras;
+                if (params.optimization.undistort) {
+                    auto expanded_cameras = expandEquirectangularCamerasForUndistort(data.cameras);
+                    if (!expanded_cameras)
+                        return std::unexpected(expanded_cameras.error());
+                    undistorted_cameras = std::move(*expanded_cameras);
+                    cameras_ptr = &undistorted_cameras;
+                }
+                const auto& cameras = *cameras_ptr;
+
+                size_t train_count = 0, val_count = 0, mask_count = 0;
+                for (const auto& camera : cameras) {
+                    const bool is_val = enable_eval && camera->split() == lfs::core::CameraSplit::Eval;
                     is_val ? ++val_count : ++train_count;
-                    if (cameras[i]->has_mask())
+                    if (camera->has_mask())
                         ++mask_count;
                 }
 
@@ -888,7 +1172,7 @@ namespace lfs::training {
                     "Training", cameras_group_id, train_count);
 
                 for (size_t i = 0; i < cameras.size(); ++i) {
-                    if (!enable_eval || (i % test_every) != 0) {
+                    if (!enable_eval || cameras[i]->split() != lfs::core::CameraSplit::Eval) {
                         scene.addCamera(cameras[i]->image_name(), train_cameras_id, cameras[i]);
                     }
                 }
@@ -897,7 +1181,7 @@ namespace lfs::training {
                     const auto val_cameras_id = scene.addCameraGroup(
                         "Validation", cameras_group_id, val_count);
                     for (size_t i = 0; i < cameras.size(); ++i) {
-                        if ((i % test_every) == 0) {
+                        if (cameras[i]->split() == lfs::core::CameraSplit::Eval) {
                             scene.addCamera(cameras[i]->image_name(), val_cameras_id, cameras[i]);
                         }
                     }
