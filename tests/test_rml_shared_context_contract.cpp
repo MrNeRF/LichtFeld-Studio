@@ -53,6 +53,17 @@ namespace {
         int count = 0;
     };
 
+    class TargetRecordingListener final : public Rml::EventListener {
+    public:
+        void ProcessEvent(Rml::Event& event) override {
+            target = event.GetTargetElement();
+            ++count;
+        }
+
+        Rml::Element* target = nullptr;
+        int count = 0;
+    };
+
     bool belongsToDocument(Rml::Element* element,
                            Rml::ElementDocument* const document) {
         while (element) {
@@ -61,6 +72,16 @@ namespace {
             element = element->GetParentNode();
         }
         return false;
+    }
+
+    Rml::Element* ancestorWithAttribute(Rml::Element* element,
+                                        const char* const attribute) {
+        while (element) {
+            if (element->HasAttribute(attribute))
+                return element;
+            element = element->GetParentNode();
+        }
+        return nullptr;
     }
 
     class RmlSharedContextContractTest : public ::testing::Test {
@@ -218,6 +239,81 @@ namespace {
         ASSERT_NE(document, nullptr);
         EXPECT_TRUE(context_->Update());
         EXPECT_EQ(context_->GetNumDocuments(), 1);
+    }
+
+    TEST_F(RmlSharedContextContractTest,
+           NativeMouseEventsKeepAnExplicitSubmenuOpenAcrossItsPopupBoundary) {
+        constexpr const char* document_source = R"(
+            <rml>
+                <head>
+                    <style>
+                        div { display: block; }
+                        body { margin: 0px; width: 100%; height: 100%; }
+                        #dropdown-overlay { position: absolute; left: 0px; top: 0px; width: 320px; height: 240px; }
+                        #dropdown-popup { position: absolute; left: 20px; top: 40px; width: 120px; height: 24px; }
+                        .submenu-container { position: relative; width: 120px; height: 24px; }
+                        .submenu-popup { display: none; position: absolute; left: 100%; top: 0px; width: 120px; height: 24px; }
+                        .submenu-container.open > .submenu-popup { display: block; }
+                        .menu-item { width: 120px; height: 24px; }
+                    </style>
+                </head>
+                <body>
+                    <div id="dropdown-overlay">
+                        <div id="dropdown-popup">
+                            <div id="submenu-root" class="submenu-container" data-root-index="0">
+                                <div id="submenu-label" class="menu-item"></div>
+                                <div id="submenu-popup" class="submenu-popup">
+                                    <div id="submenu-action" class="menu-item" data-action="callback"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </body>
+            </rml>
+        )";
+
+        auto* const document = context_->LoadDocumentFromMemory(document_source, "native-menu-contract");
+        ASSERT_NE(document, nullptr);
+        document->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+        ASSERT_TRUE(context_->Update());
+
+        auto* const overlay = document->GetElementById("dropdown-overlay");
+        auto* const submenu_root = document->GetElementById("submenu-root");
+        auto* const submenu_action = document->GetElementById("submenu-action");
+        ASSERT_NE(overlay, nullptr);
+        ASSERT_NE(submenu_root, nullptr);
+        ASSERT_NE(submenu_action, nullptr);
+
+        TargetRecordingListener mouseover;
+        CountingClickListener clicks;
+        overlay->AddEventListener(Rml::EventId::Mouseover, &mouseover);
+        overlay->AddEventListener(Rml::EventId::Click, &clicks);
+
+        context_->ProcessMouseMove(40, 52, 0);
+        auto* const hover_root = ancestorWithAttribute(context_->GetHoverElement(), "data-root-index");
+        EXPECT_EQ(hover_root, submenu_root);
+        EXPECT_GE(mouseover.count, 1);
+        EXPECT_EQ(ancestorWithAttribute(mouseover.target, "data-root-index"), submenu_root);
+
+        if (hover_root != submenu_root) {
+            overlay->RemoveEventListener(Rml::EventId::Click, &clicks);
+            overlay->RemoveEventListener(Rml::EventId::Mouseover, &mouseover);
+            return;
+        }
+
+        submenu_root->SetClass("open", true);
+        EXPECT_TRUE(context_->Update());
+
+        context_->ProcessMouseMove(160, 52, 0);
+        EXPECT_EQ(context_->GetHoverElement(), submenu_action);
+        EXPECT_EQ(mouseover.target, submenu_action);
+
+        context_->ProcessMouseButtonDown(0, 0);
+        context_->ProcessMouseButtonUp(0, 0);
+        EXPECT_EQ(clicks.count, 1);
+
+        overlay->RemoveEventListener(Rml::EventId::Click, &clicks);
+        overlay->RemoveEventListener(Rml::EventId::Mouseover, &mouseover);
     }
 
 } // namespace

@@ -110,7 +110,7 @@ def test_rml_tooltips_request_only_pending_animation_frames():
     assert "rml_viewport_overlay_.needsAnimationFrame()" in gui_manager_cpp
 
 
-def test_menu_bar_uses_retained_bounds_for_submenu_hover():
+def test_menu_bar_uses_native_hover_for_submenu_state():
     menu_bar_cpp = (
         PROJECT_ROOT
         / "src"
@@ -126,9 +126,9 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
         / "rml_menu_bar.hpp"
     ).read_text(encoding="utf-8")
 
-    assert "Rml::Element* dropdownElementAtPoint(float x, float y) const" in menu_bar_header
-    assert "RmlMenuBar::dropdownElementAtPoint" in menu_bar_cpp
-    assert "GetAbsoluteOffset(Rml::BoxArea::Border)" in menu_bar_cpp
+    assert "dropdownElementAtPoint" not in menu_bar_header
+    assert "dropdownElementAtPoint" not in menu_bar_cpp
+    assert "rml_context_->GetHoverElement()" in menu_bar_cpp
     assert "setOpenSubmenu(submenuIndexForElement(hit_element))" in menu_bar_cpp
     assert "rml_context_->GetElementAtPoint" not in menu_bar_cpp
     assert 'action == "window_toggle_fullscreen"' not in menu_bar_cpp

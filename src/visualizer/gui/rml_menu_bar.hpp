@@ -124,7 +124,6 @@ namespace lfs::vis::gui {
         void closeDropdown();
         void rebuildDropdownDOM();
         void setOpenSubmenu(int index);
-        Rml::Element* dropdownElementAtPoint(float x, float y) const;
         int submenuIndexForElement(Rml::Element* element) const;
         void rebuildToolbarButtons();
         void dispatchToolbarAction(const std::string& action, const std::string& value);

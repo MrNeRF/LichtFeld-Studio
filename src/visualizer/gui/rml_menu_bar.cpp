@@ -528,7 +528,7 @@ namespace lfs::vis::gui {
 
             Rml::Element* hit_element = nullptr;
             if (hovered_label < 0 && dropdown_container_)
-                hit_element = dropdownElementAtPoint(mx, my);
+                hit_element = rml_context_->GetHoverElement();
             setOpenSubmenu(submenuIndexForElement(hit_element));
 
             if (input.mouse_clicked[0]) {
@@ -540,7 +540,7 @@ namespace lfs::vis::gui {
                 if (hovered_label < 0 && dropdown_container_) {
                     auto* hit = dropdown_container_;
                     {
-                        Rml::Element* clicked = hit_element ? hit_element : dropdownElementAtPoint(mx, my);
+                        Rml::Element* clicked = hit_element;
                         const bool clicked_submenu = submenuIndexForElement(clicked) >= 0;
                         if (clicked) {
                             while (clicked && clicked != hit) {
@@ -663,27 +663,6 @@ namespace lfs::vis::gui {
 
         menu_model_.DirtyVariable("dropdown_items");
         render_needed_ = true;
-    }
-
-    Rml::Element* RmlMenuBar::dropdownElementAtPoint(const float x, const float y) const {
-        if (!dropdown_container_)
-            return nullptr;
-
-        const auto contains = [x, y](Rml::Element* element) {
-            const auto box = element->GetAbsoluteOffset(Rml::BoxArea::Border);
-            const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
-            return x >= box.x && x < box.x + size.x && y >= box.y && y < box.y + size.y;
-        };
-
-        const auto find_deepest = [&](const auto& self, Rml::Element* element) -> Rml::Element* {
-            for (int i = element->GetNumChildren() - 1; i >= 0; --i) {
-                if (auto* hit = self(self, element->GetChild(i)))
-                    return hit;
-            }
-            return contains(element) ? element : nullptr;
-        };
-
-        return find_deepest(find_deepest, dropdown_container_);
     }
 
     int RmlMenuBar::submenuIndexForElement(Rml::Element* element) const {
