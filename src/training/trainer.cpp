@@ -2711,7 +2711,7 @@ namespace lfs::training {
             if (scene_ && params.optimization.undistort) {
                 auto expanded_cameras = expandEquirectangularCamerasForUndistort(source_cameras);
                 if (!expanded_cameras)
-                    return std::unexpected(expanded_cameras.error());
+                    return std::unexpected(std::string(expanded_cameras.error().user_message()));
                 source_cameras = std::move(*expanded_cameras);
             }
 

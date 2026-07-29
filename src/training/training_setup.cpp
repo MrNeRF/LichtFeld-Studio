@@ -244,7 +244,7 @@ namespace lfs::training {
             return camera;
         }
 
-        [[nodiscard]] std::expected<std::vector<std::shared_ptr<lfs::core::Camera>>, std::string>
+        [[nodiscard]] lfs::Result<std::vector<std::shared_ptr<lfs::core::Camera>>>
         expandEquirectangularCamerasForUndistortImpl(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
             int next_uid = 0;
@@ -285,12 +285,22 @@ namespace lfs::training {
                     std::tie(source_width, source_height, source_channels) =
                         lfs::core::get_image_info(camera->image_path());
                 } catch (const std::exception& e) {
-                    return std::unexpected(std::format("Failed to inspect panorama '{}': {}",
-                                                       lfs::core::path_to_utf8(camera->image_path()), e.what()));
+                    return lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::DataLoss,
+                        .domain = lfs::ErrorDomain::Training,
+                        .user_message = std::format("Failed to inspect panorama '{}': {}",
+                                                    lfs::core::path_to_utf8(camera->image_path()), e.what()),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    });
                 }
                 if (source_width <= 0 || source_height <= 0 || source_channels <= 0) {
-                    return std::unexpected(std::format("Failed to inspect panorama '{}'",
-                                                       lfs::core::path_to_utf8(camera->image_path())));
+                    return lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::DataLoss,
+                        .domain = lfs::ErrorDomain::Training,
+                        .user_message = std::format("Failed to inspect panorama '{}'",
+                                                    lfs::core::path_to_utf8(camera->image_path())),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    });
                 }
 
                 const int view_size = lfs::core::cube_face_size_for_panorama(
@@ -628,7 +638,7 @@ namespace lfs::training {
         }
     } // namespace
 
-    std::expected<std::vector<std::shared_ptr<lfs::core::Camera>>, std::string>
+    lfs::Result<std::vector<std::shared_ptr<lfs::core::Camera>>>
     expandEquirectangularCamerasForUndistort(
         const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
         return expandEquirectangularCamerasForUndistortImpl(cameras);
@@ -772,7 +782,7 @@ namespace lfs::training {
                 if (params.optimization.undistort) {
                     auto expanded_cameras = expandEquirectangularCamerasForUndistort(data.cameras);
                     if (!expanded_cameras)
-                        return std::unexpected(expanded_cameras.error());
+                        return std::unexpected(std::string(expanded_cameras.error().user_message()));
                     undistorted_cameras = std::move(*expanded_cameras);
                     cameras_ptr = &undistorted_cameras;
                 }
@@ -1155,7 +1165,7 @@ namespace lfs::training {
                 if (params.optimization.undistort) {
                     auto expanded_cameras = expandEquirectangularCamerasForUndistort(data.cameras);
                     if (!expanded_cameras)
-                        return std::unexpected(expanded_cameras.error());
+                        return std::unexpected(std::string(expanded_cameras.error().user_message()));
                     undistorted_cameras = std::move(*expanded_cameras);
                     cameras_ptr = &undistorted_cameras;
                 }

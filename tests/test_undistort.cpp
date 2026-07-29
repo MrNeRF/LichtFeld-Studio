@@ -687,7 +687,7 @@ TEST_F(UndistortCameraTest, EquirectangularSphericalExpansionUsesVirtualPinholeC
 
     auto expanded = lfs::training::expandEquirectangularCamerasForUndistort({equirect_cam});
 
-    ASSERT_TRUE(expanded.has_value()) << expanded.error();
+    ASSERT_TRUE(expanded.has_value()) << expanded.error().user_message();
     ASSERT_EQ(expanded->size(), SPHERICAL_UNDISTORT_VIEW_COUNT);
 
     const auto [source_width, source_height, source_channels] = get_image_info(source->image_path());
@@ -762,7 +762,7 @@ TEST_F(UndistortCameraTest, SphericalExpansionKeepsPassthroughCamerasAndAvoidsUi
 
     auto expanded = lfs::training::expandEquirectangularCamerasForUndistort({equirect_cam, pinhole_cam});
 
-    ASSERT_TRUE(expanded.has_value()) << expanded.error();
+    ASSERT_TRUE(expanded.has_value()) << expanded.error().user_message();
     ASSERT_EQ(expanded->size(), SPHERICAL_UNDISTORT_VIEW_COUNT + 1);
     for (size_t i = 0; i < SPHERICAL_UNDISTORT_VIEW_COUNT; ++i) {
         ASSERT_TRUE((*expanded)[i]);

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "io/loader.hpp"
@@ -46,7 +47,7 @@ namespace lfs::training {
      * the source image path and sample the requested tangent view through the native
      * image loader cache.
      */
-    std::expected<std::vector<std::shared_ptr<lfs::core::Camera>>, std::string>
+    [[nodiscard]] lfs::Result<std::vector<std::shared_ptr<lfs::core::Camera>>>
     expandEquirectangularCamerasForUndistort(
         const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
 
