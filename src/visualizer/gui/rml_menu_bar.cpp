@@ -974,6 +974,10 @@ namespace lfs::vis::gui {
         dropdown_popup_->SetProperty("top", std::format("{}px", label_offset.y + label_size.y));
         dropdown_container_->SetClass("visible", true);
         dropdown_overlay_->SetClass("visible", true);
+        // A top-level menu can switch by hover. Update now so the following
+        // pointer move is tested against this menu's items, not the previous
+        // menu's retained layout.
+        rml_context_->Update();
         render_needed_ = true;
     }
 
