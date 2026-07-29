@@ -3,8 +3,10 @@
 
 #include "theme.hpp"
 #include "core/config_paths.hpp"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include "internal/resource_paths.hpp"
 #include <algorithm>
 #include <cctype>
@@ -1051,24 +1053,56 @@ namespace lfs::vis {
 
     namespace {
         std::filesystem::path getThemeConfigDir() {
-            return lfs::core::user_config_dir();
+            const auto paths = lfs::core::UserPaths::resolve();
+            return paths ? paths->configDir() : std::filesystem::current_path() / "config";
+        }
+
+        [[nodiscard]] bool preferencesDisabled() {
+            return lfs::core::environment::flag("LFS_SAFE_MODE", false);
+        }
+
+        [[nodiscard]] nlohmann::json loadPreferences() {
+            if (preferencesDisabled())
+                return nlohmann::json::object();
+            std::ifstream file(getThemeConfigDir() / "preferences.json");
+            nlohmann::json preferences;
+            if (file) {
+                file >> preferences;
+            }
+            return preferences.is_object() ? preferences : nlohmann::json::object();
+        }
+
+        void savePreferences(nlohmann::json preferences) {
+            if (preferencesDisabled())
+                return;
+            const auto path = getThemeConfigDir() / "preferences.json";
+            std::filesystem::create_directories(path.parent_path());
+            preferences["schema_version"] = 1;
+            std::ofstream file(path);
+            if (file)
+                file << preferences.dump(2);
+        }
+
+        [[nodiscard]] std::optional<std::string> loadLegacyPreference(const char* const filename) {
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths)
+                return std::nullopt;
+            for (const auto& legacy_dir : paths->legacyConfigDirs()) {
+                std::ifstream file(legacy_dir / filename);
+                std::string value;
+                if (file >> value)
+                    return value;
+            }
+            return std::nullopt;
         }
     } // namespace
 
     void saveThemePreferenceName(const std::string& theme_name) {
         try {
-            const auto config_dir = getThemeConfigDir();
-            std::filesystem::create_directories(config_dir);
-            const auto pref_path = config_dir / "theme_preference";
-            std::ofstream file(pref_path);
-            if (file) {
-                const std::string normalized = normalizeThemeIdImpl(theme_name);
-                if (isKnownThemePresetId(normalized)) {
-                    file << normalized;
-                } else {
-                    file << "dark";
-                }
-            }
+            auto preferences = loadPreferences();
+            const std::string normalized = normalizeThemeIdImpl(theme_name);
+            preferences["theme"] = isKnownThemePresetId(normalized) ? normalized : "dark";
+            savePreferences(std::move(preferences));
         } catch (...) {
             // Silently ignore - not critical
         }
@@ -1076,17 +1110,17 @@ namespace lfs::vis {
 
     std::string loadThemePreferenceName() {
         try {
-            const auto config_dir = getThemeConfigDir();
-            const auto pref_path = config_dir / "theme_preference";
-            if (std::filesystem::exists(pref_path)) {
-                std::ifstream file(pref_path);
-                std::string pref;
-                if (file >> pref) {
-                    const std::string normalized = normalizeThemeIdImpl(pref);
-                    if (isKnownThemePresetId(normalized)) {
-                        return normalized;
-                    }
-                }
+            if (preferencesDisabled())
+                return "dark";
+            const auto preferences = loadPreferences();
+            const std::string pref = preferences.value("theme", "");
+            const std::string normalized = normalizeThemeIdImpl(pref);
+            if (isKnownThemePresetId(normalized))
+                return normalized;
+            if (const auto legacy = loadLegacyPreference("theme_preference")) {
+                const auto legacy_normalized = normalizeThemeIdImpl(*legacy);
+                if (isKnownThemePresetId(legacy_normalized))
+                    return legacy_normalized;
             }
         } catch (...) {
             // Silently ignore - not critical
@@ -1096,13 +1130,9 @@ namespace lfs::vis {
 
     void saveUiScalePreference(float scale) {
         try {
-            const auto config_dir = getThemeConfigDir();
-            std::filesystem::create_directories(config_dir);
-            const auto pref_path = config_dir / "ui_scale";
-            std::ofstream file(pref_path);
-            if (file) {
-                file << scale;
-            }
+            auto preferences = loadPreferences();
+            preferences["ui_scale"] = scale;
+            savePreferences(std::move(preferences));
         } catch (const std::exception& e) {
             LOG_WARN("Failed to save UI scale preference: {}", e.what());
         }
@@ -1110,14 +1140,13 @@ namespace lfs::vis {
 
     float loadUiScalePreference() {
         try {
-            const auto config_dir = getThemeConfigDir();
-            const auto pref_path = config_dir / "ui_scale";
-            if (std::filesystem::exists(pref_path)) {
-                std::ifstream file(pref_path);
-                float scale = 0.0f;
-                if (file >> scale)
-                    return scale;
-            }
+            if (preferencesDisabled())
+                return 0.0f;
+            const auto preferences = loadPreferences();
+            if (preferences.contains("ui_scale") && preferences["ui_scale"].is_number())
+                return preferences["ui_scale"].get<float>();
+            if (const auto legacy = loadLegacyPreference("ui_scale"))
+                return std::stof(*legacy);
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load UI scale preference: {}", e.what());
         }
