@@ -1062,18 +1062,41 @@ namespace lfs::app {
             python::set_user_plugin_loading_enabled(!params->safe_mode);
             vis::gui::LayoutState::setPersistenceEnabled(!params->safe_mode);
             vis::input::InputBindings::setPersistenceEnabled(!params->safe_mode);
-            if (params->safe_mode) {
-                LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
-            } else if (const auto paths = lfs::core::UserPaths::resolve()) {
-                const auto migration = paths->migrateLegacyGuiSettings();
-                if (!migration) {
-                    LOG_WARN("Legacy GUI settings migration skipped: {}", migration.error());
-                } else if (!migration->empty()) {
-                    LOG_INFO("Migrated {} legacy GUI settings file(s) into {}",
-                             migration->size(), lfs::core::path_to_utf8(paths->configDir()));
+            if (const auto paths = lfs::core::UserPaths::resolve()) {
+                const auto reset_file = [&paths](const bool requested, const char* const label,
+                                                  const auto& reset) {
+                    if (!requested)
+                        return;
+                    const auto result = reset();
+                    if (!result) {
+                        LOG_ERROR("Unable to reset {}: {}", label, result.error());
+                    } else if (*result) {
+                        LOG_INFO("Reset {}. Backup saved to {}", label,
+                                 lfs::core::path_to_utf8(**result));
+                    } else {
+                        LOG_INFO("Reset {} requested, but no settings file existed", label);
+                    }
+                };
+                reset_file(params->reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
+                reset_file(params->reset_layout, "layout", [&paths] { return paths->resetLayout(); });
+
+                if (!params->safe_mode && !params->reset_layout) {
+                    const auto migration = paths->migrateLegacyGuiSettings();
+                    if (!migration) {
+                        LOG_WARN("Legacy GUI settings migration skipped: {}", migration.error());
+                    } else if (!migration->empty()) {
+                        LOG_INFO("Migrated {} legacy GUI settings file(s) into {}",
+                                 migration->size(), lfs::core::path_to_utf8(paths->configDir()));
+                    }
+                } else if (params->reset_layout) {
+                    LOG_INFO("Legacy layout migration skipped because --reset-layout was requested");
                 }
             } else {
                 LOG_WARN("Unable to resolve user settings path: {}", paths.error());
+            }
+
+            if (params->safe_mode) {
+                LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
             }
 
             const std::string window_title = params->safe_mode

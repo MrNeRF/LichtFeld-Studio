@@ -328,6 +328,8 @@ namespace lfs::core {
             // belong to OptimizationParameters: saved training configurations
             // must not make a later normal launch enter safe mode.
             bool safe_mode = false;
+            bool reset_preferences = false;
+            bool reset_layout = false;
 
             // Viewer mode: splat files to load (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::vector<std::filesystem::path> view_paths;
