@@ -1132,7 +1132,7 @@ namespace lfs::vis {
             auto preferences = loadPreferences();
             // Keep the user's choice distinct from the scale currently reported by a monitor.
             // A zero scale is the public API's automatic-mode sentinel.
-            preferences["ui_scale"] = scale <= 0.0f ? json{"auto"} : json{scale};
+            preferences["ui_scale"] = scale <= 0.0f ? json("auto") : json(scale);
             savePreferences(std::move(preferences));
         } catch (const std::exception& e) {
             LOG_WARN("Failed to save UI scale preference: {}", e.what());
@@ -1148,6 +1148,12 @@ namespace lfs::vis {
                 const auto& ui_scale = preferences["ui_scale"];
                 if (ui_scale.is_string() && ui_scale.get<std::string>() == "auto")
                     return 0.0f;
+                // Compatibility with the short-lived array representation from
+                // the initial preferences.json migration.
+                if (ui_scale.is_array() && ui_scale.size() == 1 &&
+                    ui_scale.front().is_string() && ui_scale.front().get<std::string>() == "auto") {
+                    return 0.0f;
+                }
                 // Compatibility with preferences.json written by earlier builds.
                 if (ui_scale.is_number())
                     return ui_scale.get<float>();
