@@ -42,6 +42,38 @@ namespace lfs::core {
             return home / fallback;
         }
 
+        [[nodiscard]] bool isMissingPathError(const std::error_code& error) {
+            return error == std::errc::no_such_file_or_directory ||
+                   error == std::errc::not_a_directory;
+        }
+
+        [[nodiscard]] std::expected<bool, std::string> copyFileIfMissing(
+            const std::filesystem::path& source,
+            const std::filesystem::path& destination) {
+            std::error_code error;
+            if (!std::filesystem::is_regular_file(source, error)) {
+                if (error && !isMissingPathError(error))
+                    return std::unexpected(std::format("Unable to inspect legacy settings file '{}': {}",
+                                                        path_to_utf8(source), error.message()));
+                return false;
+            }
+            if (std::filesystem::exists(destination, error)) {
+                if (error)
+                    return std::unexpected(std::format("Unable to inspect destination settings file '{}': {}",
+                                                        path_to_utf8(destination), error.message()));
+                return false;
+            }
+            std::filesystem::create_directories(destination.parent_path(), error);
+            if (error)
+                return std::unexpected(std::format("Unable to create settings directory '{}': {}",
+                                                    path_to_utf8(destination.parent_path()), error.message()));
+            if (!std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error)) {
+                return std::unexpected(std::format("Unable to copy legacy settings file '{}' to '{}': {}",
+                                                    path_to_utf8(source), path_to_utf8(destination), error.message()));
+            }
+            return true;
+        }
+
     } // namespace
 
     UserPaths::UserPaths(std::filesystem::path config_dir,
@@ -118,6 +150,51 @@ namespace lfs::core {
                                                     path_to_utf8(directory), error.message()));
         }
         return {};
+    }
+
+    std::expected<std::vector<std::filesystem::path>, std::string>
+    UserPaths::migrateLegacyGuiSettings() const {
+        std::vector<std::filesystem::path> copied;
+        for (const auto& legacy_dir : legacyConfigDirs()) {
+            const auto layout_result = copyFileIfMissing(legacy_dir / "layout.json", layoutFile());
+            if (!layout_result)
+                return std::unexpected(layout_result.error());
+            if (*layout_result)
+                copied.push_back(layoutFile());
+
+            const auto legacy_profiles = legacy_dir / "input_profiles";
+            std::error_code error;
+            if (!std::filesystem::is_directory(legacy_profiles, error)) {
+                if (error && !isMissingPathError(error))
+                    return std::unexpected(std::format("Unable to inspect legacy input profiles '{}': {}",
+                                                        path_to_utf8(legacy_profiles), error.message()));
+                continue;
+            }
+
+            for (std::filesystem::recursive_directory_iterator it(legacy_profiles, error), end;
+                 it != end && !error;
+                 it.increment(error)) {
+                if (!it->is_regular_file(error)) {
+                    if (error)
+                        break;
+                    continue;
+                }
+                const auto relative = std::filesystem::relative(it->path(), legacy_profiles, error);
+                if (error)
+                    break;
+                const auto destination = keymapDir() / relative;
+                const auto profile_result = copyFileIfMissing(it->path(), destination);
+                if (!profile_result)
+                    return std::unexpected(profile_result.error());
+                if (*profile_result)
+                    copied.push_back(destination);
+            }
+            if (error) {
+                return std::unexpected(std::format("Unable to migrate legacy input profiles '{}': {}",
+                                                    path_to_utf8(legacy_profiles), error.message()));
+            }
+        }
+        return copied;
     }
 
     std::filesystem::path UserPaths::preferencesFile() const { return config_dir_ / "preferences.json"; }

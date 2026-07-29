@@ -7,8 +7,10 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -19,6 +21,8 @@
 namespace lfs::vis::input {
 
     namespace {
+
+        std::atomic<bool> g_persistence_enabled{true};
 
         constexpr int PROFILE_VERSION = 20; // Version 20 adds the performance HUD toggle.
         constexpr Action LAST_ACTION = Action::TOGGLE_PERFORMANCE_HUD;
@@ -205,7 +209,8 @@ namespace lfs::vis::input {
     InputBindings::InputBindings() {
         const auto config_dir = getConfigDir();
         const auto saved_path = config_dir / "Default.json";
-        if (std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
+        if (g_persistence_enabled.load(std::memory_order_acquire) &&
+            std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
             return;
         }
 
@@ -216,6 +221,14 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::loadProfile(const std::string& name) {
+        if (!g_persistence_enabled.load(std::memory_order_acquire)) {
+            auto profile = createDefaultProfile();
+            current_profile_name_ = profile.name;
+            bindings_ = std::move(profile.bindings);
+            rebuildLookupMaps();
+            notifyBindingsChanged();
+            return;
+        }
         const auto config_dir = getConfigDir();
         const auto path = config_dir / (name + ".json");
         if (std::filesystem::exists(path) && loadProfileFromFile(path)) {
@@ -235,6 +248,8 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::saveProfile(const std::string& name) const {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return;
         const auto config_dir = getConfigDir();
         std::filesystem::create_directories(config_dir);
         const auto path = config_dir / (name + ".json");
@@ -242,10 +257,20 @@ namespace lfs::vis::input {
     }
 
     std::filesystem::path InputBindings::getConfigDir() {
-        return lfs::core::user_config_dir() / "input_profiles";
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (paths)
+            return paths->keymapDir();
+        LOG_WARN("Unable to resolve input profile path: {}; using local config directory", paths.error());
+        return std::filesystem::current_path() / "config" / "keymaps";
+    }
+
+    void InputBindings::setPersistenceEnabled(const bool enabled) noexcept {
+        g_persistence_enabled.store(enabled, std::memory_order_release);
     }
 
     bool InputBindings::saveProfileToFile(const std::filesystem::path& path) const {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return false;
         using json = nlohmann::json;
 
         json j;
@@ -307,6 +332,8 @@ namespace lfs::vis::input {
     }
 
     bool InputBindings::loadProfileFromFile(const std::filesystem::path& path) {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return false;
         using json = nlohmann::json;
 
         try {
@@ -582,6 +609,9 @@ namespace lfs::vis::input {
 
     std::vector<std::string> InputBindings::getAvailableProfiles() const {
         std::vector<std::string> profiles = {"Default"};
+
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return profiles;
 
         const auto config_dir = getConfigDir();
         if (std::filesystem::exists(config_dir)) {

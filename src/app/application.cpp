@@ -20,6 +20,7 @@
 #include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "core/tensor.hpp"
+#include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/project_document.hpp"
@@ -41,8 +42,10 @@
 #include "sequencer/timeline.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
+#include "visualizer/gui/layout_state.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
+#include "visualizer/input/input_bindings.hpp"
 #include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
@@ -1057,8 +1060,20 @@ namespace lfs::app {
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             python::set_user_plugin_loading_enabled(!params->safe_mode);
+            vis::gui::LayoutState::setPersistenceEnabled(!params->safe_mode);
+            vis::input::InputBindings::setPersistenceEnabled(!params->safe_mode);
             if (params->safe_mode) {
                 LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
+            } else if (const auto paths = lfs::core::UserPaths::resolve()) {
+                const auto migration = paths->migrateLegacyGuiSettings();
+                if (!migration) {
+                    LOG_WARN("Legacy GUI settings migration skipped: {}", migration.error());
+                } else if (!migration->empty()) {
+                    LOG_INFO("Migrated {} legacy GUI settings file(s) into {}",
+                             migration->size(), lfs::core::path_to_utf8(paths->configDir()));
+                }
+            } else {
+                LOG_WARN("Unable to resolve user settings path: {}", paths.error());
             }
 
             const std::string window_title = params->safe_mode

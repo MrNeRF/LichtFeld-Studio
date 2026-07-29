@@ -5,6 +5,7 @@
 #include "gui/layout_state.hpp"
 #include "core/config_paths.hpp"
 #include "core/logger.hpp"
+#include "core/user_paths.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -60,6 +61,8 @@ namespace lfs::vis::gui {
     }
 
     void LayoutState::load() {
+        if (!g_persistence_enabled.load(std::memory_order_acquire))
+            return;
         try {
             const auto load_file =
                 [this](const std::filesystem::path& path,
@@ -151,6 +154,10 @@ namespace lfs::vis::gui {
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load UI state: {}", e.what());
         }
+    }
+
+    void LayoutState::setPersistenceEnabled(const bool enabled) noexcept {
+        g_persistence_enabled.store(enabled, std::memory_order_release);
     }
 
 } // namespace lfs::vis::gui

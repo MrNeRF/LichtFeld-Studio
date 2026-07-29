@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -35,6 +37,7 @@ namespace lfs::vis::gui {
         void saveUserPreferences() const;
         void load();
         static std::filesystem::path getConfigDir();
+        LFS_VIS_API static void setPersistenceEnabled(bool enabled) noexcept;
 
     private:
         static std::filesystem::path getLegacyConfigPath();
