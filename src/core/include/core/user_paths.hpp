@@ -53,6 +53,14 @@ namespace lfs::core {
         [[nodiscard]] std::expected<std::vector<std::filesystem::path>, std::string>
         migrateLegacyGuiSettings() const;
 
+        /** Move preferences.json to a timestamped backup, if it exists. */
+        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        resetPreferences() const;
+
+        /** Move layout.json to a timestamped backup, if it exists. */
+        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        resetLayout() const;
+
         [[nodiscard]] const std::filesystem::path& configDir() const noexcept { return config_dir_; }
         [[nodiscard]] const std::filesystem::path& dataDir() const noexcept { return data_dir_; }
         [[nodiscard]] const std::filesystem::path& cacheDir() const noexcept { return cache_dir_; }

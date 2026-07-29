@@ -7,7 +7,9 @@
 #include "core/environment.hpp"
 #include "path_utils.hpp"
 
+#include <chrono>
 #include <format>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -72,6 +74,40 @@ namespace lfs::core {
                                                     path_to_utf8(source), path_to_utf8(destination), error.message()));
             }
             return true;
+        }
+
+        [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
+        backupAndRemoveFile(const std::filesystem::path& source,
+                            const std::filesystem::path& backup_root,
+                            const std::string_view category) {
+            std::error_code error;
+            if (!std::filesystem::exists(source, error)) {
+                if (error)
+                    return std::unexpected(std::format("Unable to inspect settings file '{}': {}",
+                                                        path_to_utf8(source), error.message()));
+                return std::nullopt;
+            }
+            if (!std::filesystem::is_regular_file(source, error) || error)
+                return std::unexpected(std::format("Settings reset requires a regular file '{}': {}",
+                                                    path_to_utf8(source), error.message()));
+
+            const auto now = std::chrono::system_clock::now().time_since_epoch();
+            const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+            const auto destination = backup_root / std::format("reset-{}-{}", category, millis) / source.filename();
+            std::filesystem::create_directories(destination.parent_path(), error);
+            if (error)
+                return std::unexpected(std::format("Unable to create reset backup directory '{}': {}",
+                                                    path_to_utf8(destination.parent_path()), error.message()));
+            if (!std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error))
+                return std::unexpected(std::format("Unable to back up settings file '{}' to '{}': {}",
+                                                    path_to_utf8(source), path_to_utf8(destination), error.message()));
+            if (!std::filesystem::exists(destination, error) || error)
+                return std::unexpected(std::format("Unable to verify reset backup '{}': {}",
+                                                    path_to_utf8(destination), error.message()));
+            if (!std::filesystem::remove(source, error) || error)
+                return std::unexpected(std::format("Backed up '{}' but could not reset it: {}",
+                                                    path_to_utf8(source), error.message()));
+            return destination;
         }
 
     } // namespace
@@ -195,6 +231,14 @@ namespace lfs::core {
             }
         }
         return copied;
+    }
+
+    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetPreferences() const {
+        return backupAndRemoveFile(preferencesFile(), backupDir(), "preferences");
+    }
+
+    std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetLayout() const {
+        return backupAndRemoveFile(layoutFile(), backupDir(), "layout");
     }
 
     std::filesystem::path UserPaths::preferencesFile() const { return config_dir_ / "preferences.json"; }
