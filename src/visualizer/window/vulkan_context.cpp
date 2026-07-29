@@ -8,6 +8,7 @@
 #include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "vulkan_result.hpp"
@@ -22,6 +23,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <set>
 #include <stop_token>
 #include <string_view>
@@ -388,21 +390,16 @@ namespace lfs::vis {
             create_info.pUserData = const_cast<bool*>(validation_errors_fatal);
         }
 
-        [[nodiscard]] std::filesystem::path defaultPipelineCachePath() {
-#ifdef _WIN32
-            if (const char* local_app_data = std::getenv("LOCALAPPDATA"); local_app_data && local_app_data[0] != '\0') {
-                return std::filesystem::path(local_app_data) / "LichtFeld" / "pipeline_cache.bin";
+        [[nodiscard]] std::optional<std::filesystem::path> defaultPipelineCachePath() {
+            if (lfs::core::environment::flag("LFS_SAFE_MODE", false))
+                return std::nullopt;
+
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths) {
+                LOG_WARN("Unable to resolve Vulkan cache path: {}", paths.error());
+                return std::nullopt;
             }
-            return std::filesystem::current_path() / "LichtFeld" / "pipeline_cache.bin";
-#else
-            if (const char* xdg_cache_home = std::getenv("XDG_CACHE_HOME"); xdg_cache_home && xdg_cache_home[0] != '\0') {
-                return std::filesystem::path(xdg_cache_home) / "lichtfeld" / "pipeline_cache.bin";
-            }
-            if (const char* home = std::getenv("HOME"); home && home[0] != '\0') {
-                return std::filesystem::path(home) / ".cache" / "lichtfeld" / "pipeline_cache.bin";
-            }
-            return std::filesystem::current_path() / ".cache" / "lichtfeld" / "pipeline_cache.bin";
-#endif
+            return paths->cacheDir() / "pipeline_cache.bin";
         }
 
         [[nodiscard]] bool readFile(const std::filesystem::path& path, std::vector<char>& data) {
@@ -4768,14 +4765,14 @@ namespace lfs::vis {
             return fail("Pipeline cache requires an initialized Vulkan device");
         }
 
-        const std::filesystem::path path = defaultPipelineCachePath();
+        const auto path = defaultPipelineCachePath();
         std::vector<char> cache_data;
-        if (readFile(path, cache_data)) {
+        if (path && readFile(*path, cache_data)) {
             VkPhysicalDeviceProperties device_props{};
             vkGetPhysicalDeviceProperties(physical_device_, &device_props);
             if (const char* reason = pipelineCacheRejectReason(cache_data, device_props)) {
                 LOG_WARN("Discarding on-disk Vulkan pipeline cache ({}): {} — pipelines will be recompiled",
-                         lfs::core::path_to_utf8(path), reason);
+                         lfs::core::path_to_utf8(*path), reason);
                 cache_data.clear();
             }
         }
@@ -4803,7 +4800,7 @@ namespace lfs::vis {
                            "lichtfeld.pipeline_cache");
         if (!cache_data.empty()) {
             LOG_INFO("Loaded Vulkan pipeline cache: {} ({} bytes)",
-                     lfs::core::path_to_utf8(path),
+                     lfs::core::path_to_utf8(*path),
                      cache_data.size());
         }
         return true;
@@ -4814,7 +4811,7 @@ namespace lfs::vis {
             return;
         }
 
-        const std::filesystem::path path = defaultPipelineCachePath();
+        const auto path = defaultPipelineCachePath();
         std::size_t cache_size = 0;
         VkResult result = vkGetPipelineCacheData(device_, pipeline_cache_, &cache_size, nullptr);
         if (result == VK_SUCCESS && cache_size > 0) {
@@ -4823,16 +4820,18 @@ namespace lfs::vis {
             if (result == VK_SUCCESS && cache_size > 0) {
                 cache_data.resize(cache_size);
                 std::error_code ec;
-                std::filesystem::create_directories(path.parent_path(), ec);
-                if (!ec) {
+                if (path) {
+                    std::filesystem::create_directories(path->parent_path(), ec);
+                }
+                if (path && !ec) {
                     std::ofstream file;
-                    if (lfs::core::open_file_for_write(path,
+                    if (lfs::core::open_file_for_write(*path,
                                                        std::ios::binary | std::ios::trunc,
                                                        file)) {
                         file.write(cache_data.data(), static_cast<std::streamsize>(cache_data.size()));
                         if (file) {
                             LOG_INFO("Saved Vulkan pipeline cache: {} ({} bytes)",
-                                     lfs::core::path_to_utf8(path),
+                                     lfs::core::path_to_utf8(*path),
                                      cache_data.size());
                         }
                     }
