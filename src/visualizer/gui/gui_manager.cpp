@@ -3003,12 +3003,19 @@ namespace lfs::vis::gui {
           gizmo_manager_(viewer),
           async_tasks_(viewer) {
 
-        panel_layout_.loadState();
-        {
-            LayoutState state;
-            state.load();
-            show_vram_hud_ = state.perf_hud_visible;
-            perf_hud_expanded_ = state.perf_hud_expanded;
+        const LayoutState saved_layout = panel_layout_.loadState();
+        show_vram_hud_ = saved_layout.perf_hud_visible;
+        perf_hud_expanded_ = saved_layout.perf_hud_expanded;
+        if (saved_layout.window_state_saved) {
+            if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr) {
+                window_manager->setInitialWindowState({
+                    .x = saved_layout.window_x,
+                    .y = saved_layout.window_y,
+                    .width = saved_layout.window_width,
+                    .height = saved_layout.window_height,
+                    .maximized = saved_layout.window_maximized,
+                });
+            }
         }
 
         // Create components
@@ -3025,6 +3032,10 @@ namespace lfs::vis::gui {
         window_states_["training_tab"] = false;
         window_states_["export_dialog"] = false;
         window_states_["python_console"] = false;
+        for (const auto& [name, visible] : saved_layout.window_visibility) {
+            if (window_states_.contains(name))
+                window_states_[name] = visible;
+        }
 
         lfs::python::set_modal_enqueue_callback(
             [this](lfs::core::ModalRequest req) { enqueueModal(std::move(req)); });
@@ -3762,7 +3773,19 @@ namespace lfs::vis::gui {
         if (dev_resource_watch_.scan_future.valid())
             dev_resource_watch_.scan_future.wait();
 
-        panel_layout_.saveState();
+        panel_layout_.saveState(window_states_);
+        if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr) {
+            const auto window = window_manager->persistentWindowState();
+            LayoutState state;
+            state.load(false);
+            state.window_state_saved = true;
+            state.window_x = window.x;
+            state.window_y = window.y;
+            state.window_width = window.width;
+            state.window_height = window.height;
+            state.window_maximized = window.maximized;
+            state.save();
+        }
 
         if (video_widget_)
             video_widget_->shutdown();
@@ -3894,9 +3917,6 @@ namespace lfs::vis::gui {
                   make_panel(PieMenuPanel(&gizmo_manager_)),
                   PanelSpace::ViewportOverlay, 950);
 
-        reg_panel("native.startup_overlay", "Startup Overlay",
-                  make_panel(StartupOverlayPanel(&startup_overlay_, &drag_drop_hovering_)),
-                  PanelSpace::ViewportOverlay, 0);
     }
 
     VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent,
@@ -4753,6 +4773,10 @@ namespace lfs::vis::gui {
         draw_ctx.viewport = &viewport_layout_;
         draw_ctx.scene = scene;
         draw_ctx.ui_hidden = ui_hidden_;
+        draw_ctx.screen_bounds = PanelDrawBounds{
+            .width = static_cast<float>(sdl_input.window_w),
+            .height = static_cast<float>(sdl_input.window_h),
+        };
         draw_ctx.frame_serial = ++panel_frame_serial_;
         draw_ctx.scene_generation = python::get_scene_generation();
         draw_ctx.suppress_non_native_panels = startup_plugin_preload_blocking_python;
@@ -5584,10 +5608,21 @@ namespace lfs::vis::gui {
                                            panel_input.screen_h,
                                            panel_input.screen_x,
                                            panel_input.screen_y,
-                                           viewport_layout_.pos.x,
-                                           viewport_layout_.pos.y,
-                                           viewport_layout_.size.x,
-                                           viewport_layout_.size.y);
+                                           panel_input.screen_x,
+                                           panel_input.screen_y,
+                                           static_cast<float>(panel_input.screen_w),
+                                           static_cast<float>(panel_input.screen_h));
+            }
+            if (startup_overlay_.isVisible()) {
+                LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.startup_overlay", 0.25);
+                startup_overlay_.render({
+                                            .pos = {0.0f, 0.0f},
+                                            .size = {
+                                                static_cast<float>(panel_input.screen_w),
+                                                static_cast<float>(panel_input.screen_h),
+                                            },
+                                        },
+                                        drag_drop_hovering_);
             }
         }
 

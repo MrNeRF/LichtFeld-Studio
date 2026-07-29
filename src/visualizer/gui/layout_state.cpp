@@ -39,7 +39,19 @@ namespace lfs::vis::gui {
             j["scene_panel_ratio"] = scene_panel_ratio;
             j["python_console_width"] = python_console_width;
             j["bottom_dock_height"] = bottom_dock_height;
+            j["left_dock_width"] = left_dock_width;
             j["show_sequencer"] = show_sequencer;
+            j["active_main_tab"] = active_main_tab;
+
+            if (window_state_saved) {
+                j["window"] = {
+                    {"x", window_x},
+                    {"y", window_y},
+                    {"width", window_width},
+                    {"height", window_height},
+                    {"maximized", window_maximized},
+                };
+            }
 
             if (!file_association.empty())
                 j["file_association"] = file_association;
@@ -75,7 +87,7 @@ namespace lfs::vis::gui {
         }
     }
 
-    void LayoutState::load() {
+    void LayoutState::load(const bool log_success) {
         if (!g_persistence_enabled.load(std::memory_order_acquire))
             return;
         try {
@@ -92,8 +104,24 @@ namespace lfs::vis::gui {
             scene_panel_ratio = j.value("scene_panel_ratio", scene_panel_ratio);
             python_console_width = j.value("python_console_width", python_console_width);
             bottom_dock_height = j.value("bottom_dock_height", bottom_dock_height);
+            left_dock_width = j.value("left_dock_width", left_dock_width);
             show_sequencer = j.value("show_sequencer", show_sequencer);
+            active_main_tab = j.value("active_main_tab", active_main_tab);
             file_association = j.value("file_association", file_association);
+
+            if (j.contains("window") && j["window"].is_object()) {
+                const auto& window = j["window"];
+                const int width = window.value("width", window_width);
+                const int height = window.value("height", window_height);
+                if (width > 0 && height > 0) {
+                    window_state_saved = true;
+                    window_x = window.value("x", window_x);
+                    window_y = window.value("y", window_y);
+                    window_width = width;
+                    window_height = height;
+                    window_maximized = window.value("maximized", window_maximized);
+                }
+            }
 
             if (j.contains("windows") && j["windows"].is_object()) {
                 for (const auto& [key, val] : j["windows"].items()) {
@@ -125,7 +153,8 @@ namespace lfs::vis::gui {
                 perf_hud_expanded = ph.value("expanded", perf_hud_expanded);
             }
 
-            LOG_INFO("Layout state loaded from {}", path.string());
+            if (log_success)
+                LOG_INFO("Layout state loaded from {}", path.string());
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load layout state: {}", e.what());
         }

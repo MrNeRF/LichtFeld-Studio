@@ -271,7 +271,7 @@ namespace lfs::vis::gui {
 
     void VramHudOverlay::loadPersistedState() {
         LayoutState ls;
-        ls.load();
+        ls.load(false);
         pos_x_ = ls.vram_hud_x;
         pos_y_ = ls.vram_hud_y;
         size_w_ = ls.vram_hud_width;
@@ -303,7 +303,7 @@ namespace lfs::vis::gui {
             return;
         (void)sanitizeGeometry();
         LayoutState ls;
-        ls.load();
+        ls.load(false);
         ls.vram_hud_x = pos_x_;
         ls.vram_hud_y = pos_y_;
         ls.vram_hud_width = size_w_;

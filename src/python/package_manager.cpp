@@ -141,7 +141,9 @@ namespace lfs::python {
             void* environment_ptr = environment.empty() ? nullptr : environment.data();
 
             // Keep lpApplicationName and argv[0] aligned to the same executable path.
-            if (!CreateProcessW(program_w.c_str(), cmdline.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+            const DWORD creation_flags = CREATE_NO_WINDOW |
+                                         (environment.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT);
+            if (!CreateProcessW(program_w.c_str(), cmdline.data(), nullptr, nullptr, TRUE, creation_flags,
                                 environment_ptr, nullptr, &si, &pi)) {
                 CloseHandle(hReadPipe);
                 CloseHandle(hWritePipe);

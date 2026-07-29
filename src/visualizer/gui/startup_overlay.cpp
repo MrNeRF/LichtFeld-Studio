@@ -248,10 +248,7 @@ namespace lfs::vis::gui {
     }
 
     bool StartupOverlay::blocksUnderlayInput() const {
-        if (!visible_)
-            return false;
-        std::lock_guard lock(plugin_load_mutex_);
-        return !plugin_load_state_started_;
+        return visible_;
     }
 
     static std::string escapeRmlText(const std::string& input) {

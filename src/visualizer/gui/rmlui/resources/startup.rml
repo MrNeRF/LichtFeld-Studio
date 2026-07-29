@@ -3,6 +3,7 @@
   <link type="text/rcss" href="startup.rcss"/>
 </head>
 <body id="body">
+  <div id="backdrop"></div>
   <div id="overlay-box">
     <img id="logo" />
     <span id="supported-text" class="dim-text"></span>

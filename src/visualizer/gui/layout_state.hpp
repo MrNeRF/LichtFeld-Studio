@@ -14,12 +14,19 @@
 namespace lfs::vis::gui {
 
     struct LayoutState {
-        float right_panel_width = 300.0f;
+        float right_panel_width = 360.0f;
         float scene_panel_ratio = 0.4f;
         float python_console_width = -1.0f;
         float bottom_dock_height = 320.0f;
         float left_dock_width = 320.0f;
         bool show_sequencer = false;
+        std::string active_main_tab;
+        bool window_state_saved = false;
+        int window_x = 0;
+        int window_y = 0;
+        int window_width = 1280;
+        int window_height = 720;
+        bool window_maximized = false;
         std::string file_association;
         std::unordered_map<std::string, bool> window_visibility;
 
@@ -33,7 +40,7 @@ namespace lfs::vis::gui {
         bool perf_hud_expanded = true;
 
         void save() const;
-        void load();
+        void load(bool log_success = true);
         static std::filesystem::path getConfigDir();
         LFS_VIS_API static void setPersistenceEnabled(bool enabled) noexcept;
 

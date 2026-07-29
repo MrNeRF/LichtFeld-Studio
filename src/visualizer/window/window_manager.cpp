@@ -509,6 +509,31 @@ namespace lfs::vis {
 #endif
     }
 
+    void WindowManager::setInitialWindowState(PersistentWindowState state) {
+        if (state.width <= 0 || state.height <= 0)
+            return;
+        initial_window_state_ = state;
+    }
+
+    WindowManager::PersistentWindowState WindowManager::persistentWindowState() const {
+        PersistentWindowState state;
+        state.maximized = isMaximized();
+        if (!window_)
+            return state;
+
+        if (is_borderless_maximized_) {
+            state.x = borderless_restore_pos_.x;
+            state.y = borderless_restore_pos_.y;
+            state.width = borderless_restore_size_.x;
+            state.height = borderless_restore_size_.y;
+            return state;
+        }
+
+        SDL_GetWindowPosition(window_, &state.x, &state.y);
+        SDL_GetWindowSize(window_, &state.width, &state.height);
+        return state;
+    }
+
     void WindowManager::setInputController(InputController* ic) {
         input_controller_ = ic;
         input_router_.setInputController(ic);
@@ -577,6 +602,19 @@ namespace lfs::vis {
             const int xpos = monitor_pos_.x + (monitor_size_.x - window_size_.x) / 2;
             const int ypos = monitor_pos_.y + (monitor_size_.y - window_size_.y) / 2;
             SDL_SetWindowPosition(window_, xpos, ypos);
+        }
+
+        if (initial_window_state_) {
+            const auto& state = *initial_window_state_;
+            const bool position_set = SDL_SetWindowPosition(window_, state.x, state.y);
+            const bool size_set = SDL_SetWindowSize(window_, state.width, state.height);
+            if (!position_set || !size_set) {
+                LOG_WARN("Failed to restore saved window geometry {}x{} at {},{}: {}",
+                         state.width, state.height, state.x, state.y, SDL_GetError());
+            } else if (state.maximized) {
+                saveBorderlessRestoreGeometry();
+                maximizeBorderless("restore-saved-window-state", false);
+            }
         }
 
         int fb_w = 0;

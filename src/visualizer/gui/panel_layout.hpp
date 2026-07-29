@@ -70,8 +70,8 @@ namespace lfs::vis::gui {
     public:
         PanelLayoutManager();
 
-        void loadState();
-        void saveState() const;
+        [[nodiscard]] LayoutState loadState();
+        void saveState(const std::unordered_map<std::string, bool>& window_visibility) const;
 
         void renderRightPanel(const UIContext& ctx, const PanelDrawContext& draw_ctx,
                               bool show_main_panel, bool ui_hidden,

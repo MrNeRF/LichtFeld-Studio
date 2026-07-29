@@ -29,26 +29,31 @@ namespace lfs::vis::gui {
 
     PanelLayoutManager::PanelLayoutManager() = default;
 
-    void PanelLayoutManager::loadState() {
+    LayoutState PanelLayoutManager::loadState() {
         LayoutState state;
         state.load();
-        // right_panel_width_ intentionally not loaded — always start at default
+        right_panel_width_ = state.right_panel_width;
         scene_panel_ratio_ = state.scene_panel_ratio;
         python_console_width_ = state.python_console_width;
         bottom_dock_height_ = state.bottom_dock_height;
         left_dock_width_ = state.left_dock_width;
-        show_sequencer_ = false;
+        show_sequencer_ = state.show_sequencer;
+        active_tab_id_ = state.active_main_tab;
+        return state;
     }
 
-    void PanelLayoutManager::saveState() const {
+    void PanelLayoutManager::saveState(
+        const std::unordered_map<std::string, bool>& window_visibility) const {
         LayoutState state;
-        state.load();
-        // right_panel_width not saved — always start at default
+        state.load(false);
+        state.right_panel_width = right_panel_width_;
         state.scene_panel_ratio = scene_panel_ratio_;
         state.python_console_width = python_console_width_;
         state.bottom_dock_height = bottom_dock_height_;
         state.left_dock_width = left_dock_width_;
         state.show_sequencer = show_sequencer_;
+        state.active_main_tab = active_tab_id_;
+        state.window_visibility = window_visibility;
         state.save();
     }
 

@@ -143,8 +143,15 @@ namespace lfs::vis::gui::native_panels {
           drag_hovering_(drag_hovering) {}
 
     void StartupOverlayPanel::draw(const PanelDrawContext& ctx) {
-        if (ctx.viewport)
+        if (ctx.screen_bounds && ctx.screen_bounds->valid()) {
+            const ViewportLayout screen{
+                .pos = {ctx.screen_bounds->x, ctx.screen_bounds->y},
+                .size = {ctx.screen_bounds->width, ctx.screen_bounds->height},
+            };
+            overlay_->render(screen, drag_hovering_ ? *drag_hovering_ : false);
+        } else if (ctx.viewport) {
             overlay_->render(*ctx.viewport, drag_hovering_ ? *drag_hovering_ : false);
+        }
     }
 
     bool StartupOverlayPanel::poll(const PanelDrawContext& ctx) {
