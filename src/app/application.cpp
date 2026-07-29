@@ -1055,6 +1055,11 @@ namespace lfs::app {
         }
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            python::set_user_plugin_loading_enabled(!params->safe_mode);
+            if (params->safe_mode) {
+                LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
+            }
+
             if (!params->python_scripts.empty()) {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }

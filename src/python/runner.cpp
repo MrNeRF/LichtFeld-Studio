@@ -57,6 +57,7 @@ namespace lfs::python {
     static std::atomic<bool> g_builtin_ui_ready{false};
     static std::atomic<bool> g_builtin_ui_deferred_logged{false};
     static std::atomic<bool> g_python_bridge_failed{false};
+    static std::atomic<bool> g_user_plugin_loading_enabled{true};
     static std::mutex g_python_bridge_failure_mutex;
     static std::optional<lfs::Error> g_python_bridge_failure_error;
 
@@ -1322,7 +1323,15 @@ _add_dll_dirs()
         g_plugin_preload_completion_hook.store(hook, std::memory_order_release);
     }
 
+    void set_user_plugin_loading_enabled(const bool enabled) noexcept {
+        g_user_plugin_loading_enabled.store(enabled, std::memory_order_release);
+    }
+
     bool ensure_plugins_loaded(const bool wait_for_completion) {
+        if (!g_user_plugin_loading_enabled.load(std::memory_order_acquire)) {
+            LOG_INFO("User plugin loading is disabled for this process");
+            return false;
+        }
         if (!ensure_initialized()) {
             return false;
         }
@@ -1372,6 +1381,10 @@ _add_dll_dirs()
     }
 
     void preload_user_plugins_async() {
+        if (!g_user_plugin_loading_enabled.load(std::memory_order_acquire)) {
+            LOG_INFO("Skipping user plugin preload because safe mode is active");
+            return;
+        }
         if (!lfs::core::environment::flag("LFS_PLUGIN_AUTOLOAD", true))
             return;
 

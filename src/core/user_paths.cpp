@@ -1,0 +1,152 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "core/user_paths.hpp"
+
+#include "core/environment.hpp"
+#include "path_utils.hpp"
+
+#include <format>
+#include <system_error>
+#include <utility>
+
+namespace lfs::core {
+
+    namespace {
+
+        [[nodiscard]] std::optional<std::filesystem::path> environmentPath(const char* const name) {
+            if (const auto value = environment::value(name))
+                return utf8_to_path(std::string(*value));
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<std::filesystem::path> userHomeDirectory() {
+#ifdef _WIN32
+            if (const auto path = environmentPath("USERPROFILE"))
+                return path;
+            if (const auto path = environmentPath("HOME"))
+                return path;
+#else
+            if (const auto path = environmentPath("HOME"))
+                return path;
+#endif
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::filesystem::path xdgOrHome(const char* const variable,
+                                                      const std::filesystem::path& home,
+                                                      const char* const fallback) {
+            if (const auto path = environmentPath(variable))
+                return *path;
+            return home / fallback;
+        }
+
+    } // namespace
+
+    UserPaths::UserPaths(std::filesystem::path config_dir,
+                         std::filesystem::path data_dir,
+                         std::filesystem::path cache_dir,
+                         std::filesystem::path log_dir,
+                         std::filesystem::path plugin_dir,
+                         std::filesystem::path venv_dir,
+                         const bool unified_root)
+        : config_dir_(std::move(config_dir)),
+          data_dir_(std::move(data_dir)),
+          cache_dir_(std::move(cache_dir)),
+          log_dir_(std::move(log_dir)),
+          plugin_dir_(std::move(plugin_dir)),
+          venv_dir_(std::move(venv_dir)),
+          unified_root_(unified_root) {}
+
+    UserPaths UserPaths::fromUnifiedRoot(const std::filesystem::path& root) {
+        return UserPaths(
+            root / "config",
+            root / "data",
+            root / "cache",
+            root / "logs",
+            root / "plugins",
+            root / "venv",
+            true);
+    }
+
+    std::expected<UserPaths, std::string> UserPaths::resolve(const UserPathOptions& options) {
+        if (options.explicit_root && !options.explicit_root->empty())
+            return fromUnifiedRoot(*options.explicit_root);
+
+        if (const auto root = environmentPath("LFS_HOME"))
+            return fromUnifiedRoot(*root);
+
+        if (options.portable) {
+            if (!options.executable_dir || options.executable_dir->empty())
+                return std::unexpected("Portable user storage requires an executable directory");
+            return fromUnifiedRoot(*options.executable_dir / ".lichtfeld");
+        }
+
+        const auto home = userHomeDirectory();
+        if (!home)
+            return std::unexpected("Unable to resolve the current user's home directory");
+
+#ifdef _WIN32
+        return fromUnifiedRoot(*home / ".lichtfeld");
+#else
+        const auto config_home = xdgOrHome("XDG_CONFIG_HOME", *home, ".config");
+        const auto data_home = xdgOrHome("XDG_DATA_HOME", *home, ".local/share");
+        const auto cache_home = xdgOrHome("XDG_CACHE_HOME", *home, ".cache");
+        const auto state_home = xdgOrHome("XDG_STATE_HOME", *home, ".local/state");
+        const auto plugin_home = *home / ".lichtfeld";
+        return UserPaths(
+            config_home / "lichtfeld-studio",
+            data_home / "lichtfeld-studio",
+            cache_home / "lichtfeld-studio",
+            state_home / "lichtfeld-studio",
+            plugin_home / "plugins",
+            plugin_home / "venv",
+            false);
+#endif
+    }
+
+    std::expected<void, std::string> UserPaths::ensureDirectories() const {
+        const std::filesystem::path directories[] = {
+            config_dir_, data_dir_, cache_dir_, log_dir_, plugin_dir_, venv_dir_,
+            keymapDir(), presetDir(), assetLibraryDir(), backupDir(), migrationDir()};
+        for (const auto& directory : directories) {
+            std::error_code error;
+            std::filesystem::create_directories(directory, error);
+            if (error)
+                return std::unexpected(std::format("Unable to create user directory '{}': {}",
+                                                    path_to_utf8(directory), error.message()));
+        }
+        return {};
+    }
+
+    std::filesystem::path UserPaths::preferencesFile() const { return config_dir_ / "preferences.json"; }
+    std::filesystem::path UserPaths::layoutFile() const { return config_dir_ / "layout.json"; }
+    std::filesystem::path UserPaths::keymapDir() const { return config_dir_ / "keymaps"; }
+    std::filesystem::path UserPaths::presetDir() const { return data_dir_ / "presets"; }
+    std::filesystem::path UserPaths::assetLibraryDir() const { return data_dir_ / "asset_library"; }
+    std::filesystem::path UserPaths::backupDir() const { return data_dir_ / "backups"; }
+    std::filesystem::path UserPaths::migrationDir() const { return data_dir_ / "migrations"; }
+
+    std::vector<std::filesystem::path> UserPaths::legacyConfigDirs() const {
+        std::vector<std::filesystem::path> result;
+        const auto home = userHomeDirectory();
+#ifdef _WIN32
+        if (const auto appdata = environmentPath("APPDATA"))
+            result.push_back(*appdata / "LichtFeldStudio");
+        if (const auto local_appdata = environmentPath("LOCALAPPDATA"))
+            result.push_back(*local_appdata / "LichtFeldStudio");
+        if (home)
+            result.push_back(*home / ".lichtfeld");
+#else
+        if (home) {
+            if (const auto config_home = environmentPath("XDG_CONFIG_HOME"))
+                result.push_back(*config_home / "LichtFeldStudio");
+            result.push_back(*home / ".config" / "LichtFeldStudio");
+            result.push_back(*home / ".lichtfeld");
+        }
+#endif
+        return result;
+    }
+
+} // namespace lfs::core
