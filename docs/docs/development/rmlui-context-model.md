@@ -293,13 +293,14 @@ paths have been checked against both the current code and history:
 | Path | Result | Consequence |
 | --- | --- | --- |
 | `GuiManager::hitTestPointer()` | The chain is the application-level precedence policy between modals, viewport tools, panel resizing, and floating panels. | Keep it as a small explicit policy layer; document and test changes to its order rather than moving it into a generic RML surface. |
-| `RmlMenuBar::dropdownElementAtPoint()` and submenu routing | Commit `916e9420` replaced `Context::GetElementAtPoint()` with its local recursive geometry traversal to fix submenu hover activation. The current Python regression explicitly protects that replacement. | Do not remove this traversal as a shared-context cleanup. Any future migration must first reproduce the submenu interaction matrix with native RmlUI events and prove it fixes the historical failure. |
+| `RmlMenuBar` submenu hit testing | Commit `916e9420` introduced an explicit open state and a recursive geometry traversal to fix submenu hover activation. The native RmlUI contract now proves that, once the explicit state keeps the popup visible, `ProcessMouseMove()` supplies the parent, popup, and click target through `GetHoverElement()` and bubbling. | The geometry traversal was removed. Retain the explicit open state: it resolves the `display: none` transition that CSS `:hover` alone could not preserve, while RmlUI owns stacking-aware hit testing. |
 | `RmlPanelHost` select-box bridge | It exists because the native select box is constrained by a panel-local context and cached texture; the code owns out-of-panel hover, wheel, capture, and option activation. | This remains the primary simplification candidate, but only after a shared-document design can preserve popup input and cache boundaries. It is not safe to delete in a per-panel context. |
 
-This screening narrows the useful next experiment: do not rewrite the menu bar
-or top-level policy merely because they are manual. Instead, find a popup path
-whose owner and popup can remain in one tested shared document while the source
-panel continues to use its local cache.
+This screening narrows the useful next experiment: do not rewrite top-level
+policy merely because it is manual. First remove isolated mechanics where a
+single RmlUI document already owns the relevant surfaces, as with the menu
+submenu target. Then investigate popup paths whose owner and popup must cross
+the local panel cache boundary.
 
 ### Native select popup boundary
 
