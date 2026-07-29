@@ -69,6 +69,11 @@ namespace lfs::python {
     static std::atomic<bool> g_py_real_init_succeeded{false};   // real once-lambda reached Ready
     static std::atomic<bool> g_force_py_init_failure{false};    // test-only latch override
 
+    [[nodiscard]] bool user_plugin_loading_enabled() noexcept {
+        return g_user_plugin_loading_enabled.load(std::memory_order_acquire) &&
+               !lfs::core::environment::flag("LFS_SAFE_MODE", false);
+    }
+
     enum class PluginPreloadState : std::uint8_t {
         NotStarted,
         Discovering,
@@ -1313,10 +1318,15 @@ _add_dll_dirs()
 
     void set_user_plugin_loading_enabled(const bool enabled) noexcept {
         g_user_plugin_loading_enabled.store(enabled, std::memory_order_release);
+#ifdef _WIN32
+        (void)_putenv_s("LFS_SAFE_MODE", enabled ? "0" : "1");
+#else
+        (void)setenv("LFS_SAFE_MODE", enabled ? "0" : "1", 1);
+#endif
     }
 
     bool ensure_plugins_loaded(const bool wait_for_completion) {
-        if (!g_user_plugin_loading_enabled.load(std::memory_order_acquire)) {
+        if (!user_plugin_loading_enabled()) {
             LOG_INFO("User plugin loading is disabled for this process");
             return false;
         }
@@ -1369,7 +1379,7 @@ _add_dll_dirs()
     }
 
     void preload_user_plugins_async() {
-        if (!g_user_plugin_loading_enabled.load(std::memory_order_acquire)) {
+        if (!user_plugin_loading_enabled()) {
             LOG_INFO("Skipping user plugin preload because safe mode is active");
             return;
         }
