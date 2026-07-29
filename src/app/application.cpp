@@ -627,7 +627,7 @@ namespace lfs::app {
                         LOG_INFO("Reset {}. Backup saved to {}", label,
                                  lfs::core::path_to_utf8(**result));
                     } else {
-                        LOG_INFO("Reset {} requested, but no settings file existed", label);
+                        LOG_INFO("Reset {}. No existing settings file required a backup", label);
                     }
                 };
                 reset_file(params->reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });

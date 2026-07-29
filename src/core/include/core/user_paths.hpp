@@ -53,7 +53,7 @@ namespace lfs::core {
         [[nodiscard]] std::expected<std::vector<std::filesystem::path>, std::string>
         migrateLegacyGuiSettings() const;
 
-        /** Move preferences.json to a timestamped backup, if it exists. */
+        /** Back up preferences.json, if it exists, then write built-in defaults. */
         [[nodiscard]] std::expected<std::optional<std::filesystem::path>, std::string>
         resetPreferences() const;
 
