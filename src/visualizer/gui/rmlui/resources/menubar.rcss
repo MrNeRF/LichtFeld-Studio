@@ -340,3 +340,10 @@ body {
 .submenu-container.open > .submenu-popup {
     display: flex;
 }
+
+/* Let RmlUi's own hover state keep the submenu visible. This avoids a stale
+ * retained hit rectangle from another top-level menu deciding which submenu
+ * opens while the pointer crosses the menu bar. */
+.submenu-container:hover > .submenu-popup {
+    display: flex;
+}

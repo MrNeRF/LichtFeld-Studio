@@ -1,3 +1,8 @@
+/* This compact utility panel does not need a directional drop shadow. */
+body.floating-panel {
+    box-shadow: none;
+}
+
 .preferences-section {
     margin-bottom: 8dp;
 }
