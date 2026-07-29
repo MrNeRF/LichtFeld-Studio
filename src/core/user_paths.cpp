@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <format>
+#include <fstream>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -108,6 +109,26 @@ namespace lfs::core {
                 return std::unexpected(std::format("Backed up '{}' but could not reset it: {}",
                                                     path_to_utf8(source), error.message()));
             return destination;
+        }
+
+        [[nodiscard]] std::expected<void, std::string>
+        writeDefaultPreferences(const std::filesystem::path& destination) {
+            std::error_code error;
+            std::filesystem::create_directories(destination.parent_path(), error);
+            if (error)
+                return std::unexpected(std::format("Unable to create preferences directory '{}': {}",
+                                                    path_to_utf8(destination.parent_path()), error.message()));
+
+            std::ofstream file(destination, std::ios::trunc);
+            if (!file)
+                return std::unexpected(std::format("Unable to write default preferences '{}'",
+                                                    path_to_utf8(destination)));
+            file << "{\n  \"schema_version\": 1,\n  \"theme\": \"dark\",\n  \"ui_scale\": \"auto\"\n}\n";
+            file.close();
+            if (!file)
+                return std::unexpected(std::format("Unable to finish writing default preferences '{}'",
+                                                    path_to_utf8(destination)));
+            return {};
         }
 
     } // namespace
@@ -234,7 +255,12 @@ namespace lfs::core {
     }
 
     std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetPreferences() const {
-        return backupAndRemoveFile(preferencesFile(), backupDir(), "preferences");
+        auto backup = backupAndRemoveFile(preferencesFile(), backupDir(), "preferences");
+        if (!backup)
+            return std::unexpected(backup.error());
+        if (const auto defaults = writeDefaultPreferences(preferencesFile()); !defaults)
+            return std::unexpected(defaults.error());
+        return *backup;
     }
 
     std::expected<std::optional<std::filesystem::path>, std::string> UserPaths::resetLayout() const {
