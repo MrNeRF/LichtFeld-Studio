@@ -5,13 +5,16 @@
 #include "core/cube_face_projection.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "io/cube_face_projection.hpp"
 #include "io/formats/colmap.hpp"
 #include "training/training_setup.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <vector>
 
 using namespace lfs::core;
 
@@ -807,4 +810,251 @@ TEST(UndistortScale, ScaleUndistortParams) {
 
     run_image_undistort(scaled);
     run_mask_undistort(scaled);
+}
+
+// ====================== Cube-face projection ======================
+//
+// These build their panorama analytically, so they need no dataset and the
+// expected value is a closed form rather than a golden image.
+
+namespace {
+
+    constexpr float kProjPi = 3.14159265358979323846f;
+
+    // Equirectangular pixel centre -> unit direction.
+    Vec3 equirect_direction(const int x, const int y, const int width, const int height) {
+        const float az = (static_cast<float>(x) + 0.5f) / width * 2.0f * kProjPi - kProjPi;
+        const float el = (static_cast<float>(y) + 0.5f) / height * kProjPi - 0.5f * kProjPi;
+        return {std::cos(el) * std::sin(az), std::sin(el), std::cos(el) * std::cos(az)};
+    }
+
+    // Face pixel -> unnormalised direction, matching project_cube_face_hwc.
+    Vec3 face_direction(const std::array<float, 9>& m, const int x, const int y,
+                        const int size, const float fov_degrees) {
+        const float focal = cube_face_focal(fov_degrees, size);
+        const float c = 0.5f * static_cast<float>(size);
+        const float u = (static_cast<float>(x) + 0.5f - c) / focal;
+        const float v = (static_cast<float>(y) + 0.5f - c) / focal;
+        return {m[0] * u + m[3] * v + m[6],
+                m[1] * u + m[4] * v + m[7],
+                m[2] * u + m[5] * v + m[8]};
+    }
+
+    // Smooth band-limited signal in [0, 1] built from the direction components,
+    // so it stays continuous at the poles. An az/el signal does not: every
+    // azimuth meets at the pole, so sin(k*az) is discontinuous there, and a
+    // correctly filtered face would legitimately disagree with a point sample.
+    float smooth_sphere_signal(const Vec3& d) {
+        const float len = length(d);
+        const float nx = d[0] / len;
+        const float ny = d[1] / len;
+        const float nz = d[2] / len;
+        constexpr float k = 3.0f;
+        return 0.5f + 0.5f * std::sin(k * nx) * std::sin(k * ny) * std::sin(k * nz);
+    }
+
+    // Deliberately high-frequency signal for the aliasing test. Singular at the
+    // poles, which is why only an equatorial face uses it.
+    float sphere_signal(const Vec3& d, const float cycles_per_rad) {
+        const float k = 2.0f * kProjPi * cycles_per_rad;
+        const float az = std::atan2(d[0], d[2]);
+        const float len = length(d);
+        const float el = std::asin(std::clamp(len > 0.0f ? d[1] / len : 0.0f, -1.0f, 1.0f));
+        return 0.5f + 0.5f * std::sin(k * az) * std::sin(0.5f * k * el);
+    }
+
+    std::vector<uint8_t> make_smooth_panorama(const int width, const int height) {
+        std::vector<uint8_t> pano(static_cast<size_t>(width) * height);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                pano[static_cast<size_t>(y) * width + x] = static_cast<uint8_t>(std::lround(
+                    255.0f * smooth_sphere_signal(equirect_direction(x, y, width, height))));
+            }
+        }
+        return pano;
+    }
+
+    std::vector<uint8_t> make_signal_panorama(const int width, const int height,
+                                              const float cycles_per_rad) {
+        std::vector<uint8_t> pano(static_cast<size_t>(width) * height);
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                pano[static_cast<size_t>(y) * width + x] = static_cast<uint8_t>(std::lround(
+                    255.0f * sphere_signal(equirect_direction(x, y, width, height), cycles_per_rad)));
+            }
+        }
+        return pano;
+    }
+
+    const std::array<Vec3, 6>& cube_forwards() {
+        static const std::array<Vec3, 6> f{{
+            {1.f, 0.f, 0.f},
+            {-1.f, 0.f, 0.f},
+            {0.f, 1.f, 0.f},
+            {0.f, -1.f, 0.f},
+            {0.f, 0.f, 1.f},
+            {0.f, 0.f, -1.f},
+        }};
+        return f;
+    }
+
+} // namespace
+
+// A transposed or mirrored face basis still produces a plausible-looking image,
+// so check that each face pixel carries the panorama content for the direction
+// that pixel actually represents.
+TEST(CubeFaceProjection, FacePixelsCarryTheContentOfTheirOwnRay) {
+    constexpr int W = 1024;
+    constexpr int H = 512;
+    constexpr int S = 128;
+    constexpr float kFov = 96.0f;
+    const auto pano = make_smooth_panorama(W, H);
+
+    for (size_t f = 0; f < cube_forwards().size(); ++f) {
+        const auto basis = expected_spherical_matrix(cube_forwards()[f]);
+        const lfs::core::CubeFaceProjection proj{basis, S, W, H, kFov};
+        const auto face = lfs::io::project_cube_face_hwc(pano.data(), W, H, 1, proj, S);
+
+        double sum_sq = 0.0;
+        for (int y = 0; y < S; ++y) {
+            for (int x = 0; x < S; ++x) {
+                const float expected =
+                    255.0f * smooth_sphere_signal(face_direction(basis, x, y, S, kFov));
+                const double d =
+                    static_cast<double>(face[static_cast<size_t>(y) * S + x]) - expected;
+                sum_sq += d * d;
+            }
+        }
+        const double rmse = std::sqrt(sum_sq / (static_cast<double>(S) * S));
+        EXPECT_LT(rmse, 3.0) << "face " << f << " does not match the panorama along its own rays";
+    }
+}
+
+// The elliptical filter weights must sum to one everywhere, including at the
+// poles where the footprint is extremely anisotropic and gets strided.
+TEST(CubeFaceProjection, ConstantPanoramaIsPreservedOnEveryFace) {
+    constexpr int W = 512;
+    constexpr int H = 256;
+    constexpr int S = 96;
+    constexpr uint8_t kValue = 173;
+    const std::vector<uint8_t> pano(static_cast<size_t>(W) * H, kValue);
+
+    for (size_t f = 0; f < cube_forwards().size(); ++f) {
+        const lfs::core::CubeFaceProjection proj{
+            expected_spherical_matrix(cube_forwards()[f]), S, W, H, 96.0f};
+        const auto face = lfs::io::project_cube_face_hwc(pano.data(), W, H, 1, proj, S);
+        const auto bounds = std::minmax_element(face.begin(), face.end());
+        EXPECT_EQ(static_cast<int>(*bounds.first), static_cast<int>(kValue)) << "face " << f;
+        EXPECT_EQ(static_cast<int>(*bounds.second), static_cast<int>(kValue)) << "face " << f;
+    }
+}
+
+// Content the face cannot resolve must be attenuated towards the local mean
+// rather than aliased into spurious low-frequency structure. A plain bilinear
+// fetch fails this; the prefilter is what makes it pass.
+TEST(CubeFaceProjection, SignalAboveFaceNyquistIsAttenuatedNotAliased) {
+    constexpr int W = 2048;
+    constexpr int H = 1024;
+    constexpr int S = 64;
+    constexpr float kFov = 96.0f;
+    // The face resolves ~14 cyc/rad here; the panorama still resolves 60 easily.
+    const auto pano = make_signal_panorama(W, H, 60.0f);
+
+    const lfs::core::CubeFaceProjection proj{
+        expected_spherical_matrix(cube_forwards()[4]), S, W, H, kFov};
+    const auto face = lfs::io::project_cube_face_hwc(pano.data(), W, H, 1, proj, S);
+
+    double mean = 0.0;
+    for (const uint8_t v : face)
+        mean += v;
+    mean /= static_cast<double>(face.size());
+
+    double stddev = 0.0;
+    for (const uint8_t v : face)
+        stddev += (v - mean) * (v - mean);
+    stddev = std::sqrt(stddev / static_cast<double>(face.size()));
+
+    EXPECT_NEAR(mean, 127.5, 12.0) << "attenuated output should sit near the signal mean";
+    EXPECT_LT(stddev, 30.0) << "unresolvable detail survived as aliasing instead of being filtered";
+}
+
+// ====================== Cube-face depth ======================
+
+// Analytic scene: a cube of half-extent h centred on the camera, stored as
+// 16-bit equirectangular radial distance. Camera-space z on a flat wall is
+// exactly h wherever it is sampled, which holds only if the radial-to-z
+// conversion is applied.
+TEST(CubeFaceDepth, FlatWallHasConstantCameraSpaceZ) {
+    constexpr int W = 1024;
+    constexpr int H = 512;
+    constexpr int S = 96;
+    constexpr float kFov = 96.0f;
+    constexpr double kHalf = 0.5;
+
+    std::vector<uint16_t> pano(static_cast<size_t>(W) * H);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            const Vec3 d = equirect_direction(x, y, W, H);
+            const double m = std::max(std::max(std::abs(d[0]), std::abs(d[1])), std::abs(d[2]));
+            pano[static_cast<size_t>(y) * W + x] =
+                static_cast<uint16_t>(std::lround(std::clamp(kHalf / m, 0.0, 1.0) * 65535.0));
+        }
+    }
+
+    const float focal = cube_face_focal(kFov, S);
+    const float center = 0.5f * S;
+    const float wall = std::tan(45.0f * kProjPi / 180.0f) * 0.94f; // stay off the seam
+
+    for (size_t f = 0; f < cube_forwards().size(); ++f) {
+        const lfs::core::CubeFaceProjection proj{
+            expected_spherical_matrix(cube_forwards()[f]), S, W, H, kFov};
+        const auto face = lfs::io::project_cube_face_depth(
+            reinterpret_cast<const uint8_t*>(pano.data()), true, W, H, proj, S);
+
+        double worst = 0.0;
+        for (int y = 0; y < S; ++y) {
+            const float v = (static_cast<float>(y) + 0.5f - center) / focal;
+            for (int x = 0; x < S; ++x) {
+                const float u = (static_cast<float>(x) + 0.5f - center) / focal;
+                if (std::abs(u) > wall || std::abs(v) > wall)
+                    continue;
+                worst = std::max(worst,
+                                 std::abs(static_cast<double>(face[static_cast<size_t>(y) * S + x]) - kHalf));
+            }
+        }
+        EXPECT_LT(worst, 0.01) << "face " << f << ": z is not constant on a flat wall";
+    }
+}
+
+// Negative control for the test above: without the radial-to-z conversion an
+// off-axis pixel would report the radial distance, which differs materially.
+TEST(CubeFaceDepth, RadialToZConversionIsApplied) {
+    constexpr int W = 1024;
+    constexpr int H = 512;
+    constexpr int S = 96;
+    constexpr float kFov = 96.0f;
+    constexpr float kRadial = 0.5f;
+
+    // Constant radial distance in every direction: a sphere around the camera.
+    const std::vector<uint16_t> pano(static_cast<size_t>(W) * H,
+                                     static_cast<uint16_t>(std::lround(kRadial * 65535.0f)));
+
+    const lfs::core::CubeFaceProjection proj{
+        expected_spherical_matrix(cube_forwards()[4]), S, W, H, kFov};
+    const auto face = lfs::io::project_cube_face_depth(
+        reinterpret_cast<const uint8_t*>(pano.data()), true, W, H, proj, S);
+
+    const float focal = cube_face_focal(kFov, S);
+    const float center = 0.5f * S;
+
+    // The centre pixel looks along the axis, so z equals the radial distance.
+    const int mid = S / 2;
+    EXPECT_NEAR(face[static_cast<size_t>(mid) * S + mid], kRadial, 0.01f);
+
+    // A corner pixel is off-axis, so z must be shortened by cos(theta).
+    const float u = (0.5f - center) / focal;
+    const float v = (0.5f - center) / focal;
+    const float cos_theta = 1.0f / std::sqrt(u * u + v * v + 1.0f);
+    EXPECT_NEAR(face[0], kRadial * cos_theta, 0.01f);
+    EXPECT_LT(face[0], kRadial * 0.65f) << "corner z was not converted from radial distance";
 }
