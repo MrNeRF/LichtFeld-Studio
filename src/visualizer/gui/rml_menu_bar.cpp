@@ -680,11 +680,12 @@ namespace lfs::vis::gui {
 
         const auto find_deepest = [&](const auto& self, Rml::Element* element) -> Rml::Element* {
             // RmlUi retains the previous geometry for display:none submenus.
-            // Restrict hit-testing to the popup whose owning submenu is open,
-            // otherwise a hidden sibling can steal the pointer from Theme.
+            // A CSS-hovered popup is visible before the retained model receives
+            // its open class, so accept either state and ignore hidden siblings.
             if (element->IsClassSet("submenu-popup")) {
                 const auto* parent = element->GetParentNode();
-                if (!parent || !parent->IsClassSet("open"))
+                if (!parent || (!parent->IsClassSet("open") &&
+                                !parent->IsPseudoClassSet("hover")))
                     return nullptr;
             }
             for (int i = element->GetNumChildren() - 1; i >= 0; --i) {
