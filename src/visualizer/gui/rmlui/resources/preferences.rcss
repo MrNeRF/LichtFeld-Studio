@@ -1,7 +1,3 @@
-#content-wrap {
-    overflow-y: auto;
-}
-
 .preferences-section {
     margin-bottom: 8dp;
 }
