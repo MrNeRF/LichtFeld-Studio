@@ -24,6 +24,7 @@ target_include_directories(edge_compute_backend
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/include
 	${CMAKE_CURRENT_SOURCE_DIR}/rasterization/src
         ${CMAKE_CURRENT_SOURCE_DIR}/utils
+        ${CMAKE_CURRENT_SOURCE_DIR}/../fastgs/utils  # helper_math.h, shared with fastgs
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src/core/include
         ${CUDAToolkit_INCLUDE_DIRS}
