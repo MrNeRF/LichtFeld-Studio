@@ -368,7 +368,8 @@ GUI-touching phases, compute-sanitizer memcheck for CUDA-touching phases.
   `begin_chunk`/`end_chunk` concept, zstd path, error plumbing; rewrite open/find/create/
   finalize/copy_chunk/read_at per the new grammar; delete `prev_index_offset` + footer authority
   + the offset-identical prev-index test.
-- **P3 — Core chapters**: `PROJ`/`REFS`/`SCNG`/`SELM`/`SPLT` + non-training `PRMS`.
+- **P3 — Core chapters**: `PROJ`/`REFS`/`SCNG`/`SELM`/`SPLT`/`PCLD`/`MESH` (gap #12 chunks,
+  owner decision 2026-07-30) + non-training `PRMS`.
   Exit: representative multi-node edited scene round-trips with stable UUIDs, relink flow,
   unknown-field preservation.
 - **P4 — Training snapshot & chapter**: productionize the P0 snapshot service; bounded-window
