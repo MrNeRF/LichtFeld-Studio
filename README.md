@@ -79,7 +79,9 @@ LichtFeld Studio is free and open source. If it is useful in your research, prod
 
 Windows binaries are now available through the Lichtfeld Portal. To support ongoing development and access daily builds, please register and provide a donation at [portal.lichtfeld.io](https://portal.lichtfeld.io/). Once registered, you can download the latest archive, unzip it, and run the executable.
 
-For building from source and platform-specific notes, see the repo-local
+For building from source and platform-specific notes, see the
+[Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/). Developers can find
+contributor setup and test commands in the repo-local
 [source build guide](docs/building_and_distribution.md).
 
 Current project notes:
