@@ -3225,6 +3225,13 @@ namespace lfs::vis::gui {
         if (!loc.initialize(locale_path)) {
             LOG_WARN("Failed to initialize localization system, using default strings");
         } else {
+            const std::string saved_language = lfs::vis::loadLanguagePreference();
+            if (!saved_language.empty() && !loc.setLanguage(saved_language)) {
+                LOG_WARN("Saved language preference '{}' is unavailable; using {}",
+                         saved_language,
+                         loc.getCurrentLanguage());
+                lfs::vis::clearLanguagePreference();
+            }
             LOG_INFO("Localization initialized with language: {}", loc.getCurrentLanguageName());
         }
 

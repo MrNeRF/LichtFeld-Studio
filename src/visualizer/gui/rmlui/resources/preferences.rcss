@@ -16,19 +16,25 @@ body.floating-panel {
 
 .preferences-row {
     display: flex;
-    align-items: center;
-    gap: 8dp;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12dp;
     margin-bottom: 5dp;
 }
 
 .preferences-label {
-    min-width: 112dp;
+    flex: 1 1 auto;
+    min-width: 100dp;
+    max-width: 190dp;
     font-size: 12dp;
+    white-space: normal;
 }
 
 .preferences-select {
-    flex: 1;
-    min-width: 180dp;
+    flex: 0 0 200dp;
+    width: 200dp;
+    min-width: 140dp;
+    margin-left: auto;
 }
 
 .preferences-actions {

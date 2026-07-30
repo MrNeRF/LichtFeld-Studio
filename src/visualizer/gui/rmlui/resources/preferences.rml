@@ -5,6 +5,18 @@
 </head>
 <body template="floating-window" data-model="preferences">
   <div class="preferences-section">
+    <span class="preferences-section-title">@tr:preferences.language</span>
+    <div class="preferences-row">
+      <span class="preferences-label">@tr:preferences.language</span>
+      <select class="preferences-select" data-value="language_idx">
+        <option data-for="language : languages" data-attr-value="language.index">{{ language.label }}</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <div class="preferences-section">
     <span class="preferences-section-title">@tr:menu.view.theme</span>
     <div class="preferences-row">
       <span class="preferences-label">@tr:menu.view.theme</span>
@@ -23,7 +35,7 @@
   <div class="separator"></div>
 
   <div class="preferences-actions">
-    <button class="btn btn--secondary" data-event-click="reset_appearance">@tr:reset</button>
+    <button class="btn btn--primary" data-event-click="close">@tr:common.ok</button>
   </div>
 </body>
 </rml>

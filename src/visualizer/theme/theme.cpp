@@ -1166,6 +1166,41 @@ namespace lfs::vis {
         return 0.0f;
     }
 
+    void saveLanguagePreference(const std::string& language_code) {
+        try {
+            if (language_code.empty())
+                return;
+            auto preferences = loadPreferences();
+            preferences["language"] = language_code;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save language preference: {}", e.what());
+        }
+    }
+
+    std::string loadLanguagePreference() {
+        try {
+            if (preferencesDisabled())
+                return {};
+            const auto preferences = loadPreferences();
+            const auto it = preferences.find("language");
+            return it != preferences.end() && it->is_string() ? it->get<std::string>() : std::string{};
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load language preference: {}", e.what());
+            return {};
+        }
+    }
+
+    void clearLanguagePreference() {
+        try {
+            auto preferences = loadPreferences();
+            preferences.erase("language");
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to clear language preference: {}", e.what());
+        }
+    }
+
     void setThemeVignetteEnabled(bool enabled) {
         Theme t = theme();
         t.vignette.enabled = enabled;
