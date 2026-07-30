@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Application appearance preferences panel."""
+"""Application-level appearance and language preferences."""
 
 import lichtfeld as lf
 
@@ -35,6 +35,7 @@ class PreferencesPanel(Panel):
     def __init__(self):
         self._handle = None
         self._theme_catalog = []
+        self._language_catalog = []
         self._last_state = None
 
     def on_bind_model(self, ctx):
@@ -45,15 +46,18 @@ class PreferencesPanel(Panel):
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
         model.bind("theme_idx", self._theme_index, self._set_theme_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
-        model.bind_event("reset_appearance", self._on_reset_appearance)
+        model.bind("language_idx", self._language_index, self._set_language_index)
+        model.bind_event("close", self._on_close)
         model.bind_record_list("themes")
         model.bind_record_list("scales")
+        model.bind_record_list("languages")
         self._handle = model.get_handle()
 
     def on_mount(self, doc):
         super().on_mount(doc)
         self._rebuild_records()
         self._last_state = self._state()
+        self._refresh_selection()
 
     def on_unmount(self, doc):
         self._handle = None
@@ -67,15 +71,21 @@ class PreferencesPanel(Panel):
         if self._handle:
             self._handle.dirty("theme_idx")
             self._handle.dirty("scale_idx")
+            self._handle.dirty("language_idx")
 
     def _state(self):
-        return lf.ui.get_theme(), float(lf.ui.get_ui_scale_preference())
+        return (
+            lf.ui.get_theme(),
+            float(lf.ui.get_ui_scale_preference()),
+            lf.ui.get_current_language(),
+        )
 
     def _rebuild_records(self):
         self._theme_catalog = sorted(
             lf.ui.themes(),
             key=lambda theme: (theme.get("order", 0), theme.get("name", theme.get("id", ""))),
         )
+        self._language_catalog = list(lf.ui.get_languages())
         if not self._handle:
             return
         self._handle.update_record_list(
@@ -96,6 +106,13 @@ class PreferencesPanel(Panel):
                     "label": lf.ui.tr(label) if scale == 0.0 else label,
                 }
                 for index, (scale, label) in enumerate(self.SCALE_OPTIONS)
+            ],
+        )
+        self._handle.update_record_list(
+            "languages",
+            [
+                {"index": str(index), "label": name}
+                for index, (_code, name) in enumerate(self._language_catalog)
             ],
         )
 
@@ -131,13 +148,28 @@ class PreferencesPanel(Panel):
             lf.ui.set_ui_scale(self.SCALE_OPTIONS[index][0])
             self._refresh_selection()
 
-    def _on_reset_appearance(self, _handle, _event, _args):
-        lf.ui.set_theme("dark")
-        lf.ui.set_ui_scale(0.0)
-        self._refresh_selection()
+    def _language_index(self):
+        current = lf.ui.get_current_language()
+        for index, (code, _name) in enumerate(self._language_catalog):
+            if code == current:
+                return str(index)
+        return "0"
+
+    def _set_language_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self._language_catalog):
+            lf.ui.set_language(self._language_catalog[index][0])
+            self._refresh_selection()
+
+    def _on_close(self, _handle, _event, _args):
+        lf.ui.set_panel_enabled(self.id, False)
 
     def _refresh_selection(self):
         self._last_state = self._state()
         if self._handle:
             self._handle.dirty("theme_idx")
             self._handle.dirty("scale_idx")
+            self._handle.dirty("language_idx")

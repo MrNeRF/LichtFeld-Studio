@@ -228,6 +228,12 @@ namespace lfs::vis {
     LFS_VIS_API void saveUiScalePreference(float scale);
     [[nodiscard]] LFS_VIS_API float loadUiScalePreference();
 
+    // Language preference. An empty result means that the user has not chosen
+    // a language yet and the first-run startup selector should be shown.
+    LFS_VIS_API void saveLanguagePreference(const std::string& language_code);
+    [[nodiscard]] LFS_VIS_API std::string loadLanguagePreference();
+    LFS_VIS_API void clearLanguagePreference();
+
     // Color utilities
     [[nodiscard]] LFS_VIS_API ThemeColor lighten(const ThemeColor& color, float amount);
     [[nodiscard]] LFS_VIS_API ThemeColor darken(const ThemeColor& color, float amount);
