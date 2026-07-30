@@ -32,10 +32,12 @@ namespace lfs::training::kernels {
             float render_norm;
         };
 
+        template <bool Weighted>
         __device__ __forceinline__ PixelSample load_pixel(
             const float* __restrict__ rendered_normal,
             const float* __restrict__ rendered_alpha,
             const float* __restrict__ target_normal,
+            const float* __restrict__ pixel_weight,
             const size_t idx,
             const size_t num_pixels) {
             PixelSample s = {};
@@ -54,6 +56,15 @@ namespace lfs::training::kernels {
                 return s;
             }
 
+            float effective_alpha = a;
+            if constexpr (Weighted) {
+                const float w = pixel_weight[idx];
+                if (!isfinite(w) || w <= 0.0f) {
+                    return s;
+                }
+                effective_alpha *= w;
+            }
+
             const float t_norm = sqrtf(tx * tx + ty * ty + tz * tz);
             if (t_norm < kNormalLossMinPriorNorm) {
                 return s;
@@ -70,7 +81,7 @@ namespace lfs::training::kernels {
             s.cos = s.render_hat.x * s.target_hat.x +
                     s.render_hat.y * s.target_hat.y +
                     s.render_hat.z * s.target_hat.z;
-            s.alpha = a;
+            s.alpha = effective_alpha;
             s.render_norm = n_norm;
             s.active = true;
             return s;
@@ -111,10 +122,12 @@ namespace lfs::training::kernels {
             }
         }
 
+        template <bool Weighted>
         __global__ void normal_loss_stats_kernel(
             const float* __restrict__ rendered_normal,
             const float* __restrict__ rendered_alpha,
             const float* __restrict__ target_normal,
+            const float* __restrict__ pixel_weight,
             double* __restrict__ block_partials,
             const size_t num_pixels,
             const int num_blocks) {
@@ -123,7 +136,8 @@ namespace lfs::training::kernels {
             for (size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
                  idx < num_pixels;
                  idx += static_cast<size_t>(blockDim.x) * gridDim.x) {
-                const PixelSample s = load_pixel(rendered_normal, rendered_alpha, target_normal, idx, num_pixels);
+                const PixelSample s = load_pixel<Weighted>(
+                    rendered_normal, rendered_alpha, target_normal, pixel_weight, idx, num_pixels);
                 if (!s.active) {
                     continue;
                 }
@@ -158,10 +172,12 @@ namespace lfs::training::kernels {
             finals[slots::kInvNorm] = valid ? static_cast<float>(weight / fmax(sum_alpha, 1.0)) : 0.0f;
         }
 
+        template <bool Weighted>
         __global__ void normal_loss_grad_kernel(
             const float* __restrict__ rendered_normal,
             const float* __restrict__ rendered_alpha,
             const float* __restrict__ target_normal,
+            const float* __restrict__ pixel_weight,
             float* __restrict__ grad_normal,
             const float* __restrict__ finals,
             double* __restrict__ block_partials,
@@ -174,7 +190,8 @@ namespace lfs::training::kernels {
             for (size_t idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
                  idx < num_pixels;
                  idx += static_cast<size_t>(blockDim.x) * gridDim.x) {
-                const PixelSample s = load_pixel(rendered_normal, rendered_alpha, target_normal, idx, num_pixels);
+                const PixelSample s = load_pixel<Weighted>(
+                    rendered_normal, rendered_alpha, target_normal, pixel_weight, idx, num_pixels);
                 if (!s.active || inv_norm == 0.0f) {
                     grad_normal[idx] = 0.0f;
                     grad_normal[num_pixels + idx] = 0.0f;
@@ -214,6 +231,60 @@ namespace lfs::training::kernels {
                2 * static_cast<size_t>(kStatCount) * num_blocks;
     }
 
+    namespace {
+        template <bool Weighted>
+        void launch_normal_loss_impl(
+            const float* rendered_normal,
+            const float* rendered_alpha,
+            const float* target_normal,
+            float* grad_normal,
+            float* loss_out,
+            float* partial_sums,
+            const int width,
+            const int height,
+            const float weight,
+            const float* pixel_weight,
+            const cudaStream_t stream) {
+            const size_t num_pixels = static_cast<size_t>(width) * height;
+            const int num_blocks = static_cast<int>(normal_loss_block_count(num_pixels));
+            float* finals = partial_sums;
+            double* block_partials = reinterpret_cast<double*>(partial_sums + slots::kSlotCount);
+
+            normal_loss_stats_kernel<Weighted><<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+                rendered_normal,
+                rendered_alpha,
+                target_normal,
+                pixel_weight,
+                block_partials,
+                num_pixels,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.stats");
+            normal_loss_finalize_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+                block_partials,
+                finals,
+                num_blocks,
+                weight);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.finalize_stats");
+            normal_loss_grad_kernel<Weighted><<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+                rendered_normal,
+                rendered_alpha,
+                target_normal,
+                pixel_weight,
+                grad_normal,
+                finals,
+                block_partials,
+                num_pixels,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.grad");
+            normal_loss_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+                block_partials,
+                finals,
+                loss_out,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.finalize_loss");
+        }
+    } // namespace
+
     void launch_normal_loss(
         const float* rendered_normal,
         const float* rendered_alpha,
@@ -224,44 +295,36 @@ namespace lfs::training::kernels {
         const int width,
         const int height,
         const float weight,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* pixel_weight) {
         stream = resolve_stream(stream);
-
-        const size_t num_pixels = static_cast<size_t>(width) * height;
-        const int num_blocks = static_cast<int>(normal_loss_block_count(num_pixels));
-        float* finals = partial_sums;
-        double* block_partials = reinterpret_cast<double*>(partial_sums + slots::kSlotCount);
-
-        normal_loss_stats_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-            rendered_normal,
-            rendered_alpha,
-            target_normal,
-            block_partials,
-            num_pixels,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.stats");
-        normal_loss_finalize_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
-            block_partials,
-            finals,
-            num_blocks,
-            weight);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.finalize_stats");
-        normal_loss_grad_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-            rendered_normal,
-            rendered_alpha,
-            target_normal,
-            grad_normal,
-            finals,
-            block_partials,
-            num_pixels,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.grad");
-        normal_loss_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
-            block_partials,
-            finals,
-            loss_out,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_loss.finalize_loss");
+        if (pixel_weight) {
+            launch_normal_loss_impl<true>(
+                rendered_normal,
+                rendered_alpha,
+                target_normal,
+                grad_normal,
+                loss_out,
+                partial_sums,
+                width,
+                height,
+                weight,
+                pixel_weight,
+                stream);
+        } else {
+            launch_normal_loss_impl<false>(
+                rendered_normal,
+                rendered_alpha,
+                target_normal,
+                grad_normal,
+                loss_out,
+                partial_sums,
+                width,
+                height,
+                weight,
+                nullptr,
+                stream);
+        }
     }
 
 } // namespace lfs::training::kernels

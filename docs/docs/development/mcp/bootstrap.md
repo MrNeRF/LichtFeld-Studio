@@ -31,11 +31,11 @@ For most tasks, resources answer the first two questions an agent needs:
 
 ## How To Pick The Next Namespace
 
-- Need dataset import, training, or export progress: start with `runtime.*`
-- Need toolbar, menu, or panel actions: start with `ui.*`
-- Need operator ids or schemas: start with `operator.*` or `lichtfeld://operators/registry`
-- Need visible Gaussians or scene nodes: start with `selection.*`, `gaussians.*`, or `scene.*`
-- Need Python execution inside the app: start with `editor.*`
+- Need dataset import, training, or export progress: start with `runtime_*`
+- Need toolbar, menu, or panel actions: start with `ui_*`
+- Need operator ids or schemas: start with `operator_*` or `lichtfeld://operators/registry`
+- Need visible Gaussians or scene nodes: start with `selection_*`, `gaussians_*`, or `scene_*`
+- Need Python execution inside the app: start with `editor_*`
 
 ## Minimal Mutation Pattern
 
@@ -44,7 +44,7 @@ Use the same pattern for most tasks:
 1. Read the relevant resource.
 2. Invoke the tool with explicit arguments.
 3. Read back the narrowest state resource.
-4. If the action is long-running, switch to `runtime.job.wait` or `runtime.events.tail`.
+4. If the action is long-running, switch to `runtime_job_wait` or `runtime_events_tail`.
 
 ## Long-Running Jobs
 
@@ -61,7 +61,7 @@ Example wait loop:
 
 ```json
 {
-  "tool": "runtime.job.wait",
+  "tool": "runtime_job_wait",
   "arguments": {
     "job_id": "training.main",
     "until": "changed",

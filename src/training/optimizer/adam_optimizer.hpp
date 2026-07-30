@@ -7,6 +7,7 @@
 #include "core/splat_data.hpp"
 #include <array>
 #include <cstdint>
+#include <cuda_runtime_api.h>
 #include <string>
 #include <unordered_map>
 
@@ -69,6 +70,10 @@ namespace lfs::training {
         float* exp_avg_sq_scale = nullptr;
         const bool* frozen_mask = nullptr;
         int frozen_mask_size = 0;
+        float frozen_lr_scale = 0.0f;
+        const bool* crop_damping_mask = nullptr;
+        int crop_damping_mask_size = 0;
+        float cropbox_lr_scale = 1.0f;
         int n_elements = 0;
         int n_attributes = 0;
         float step_size = 0.0f;
@@ -102,10 +107,17 @@ namespace lfs::training {
         explicit AdamOptimizer(lfs::core::SplatData& splat_data, const AdamConfig& config);
 
         void step(int iteration);
-        FastGSFusedAdamState prepare_fastgs_fused_adam(int iteration);
+        FastGSFusedAdamState prepare_fastgs_fused_adam(int iteration, cudaStream_t execution_stream = nullptr);
         void commit_fastgs_fused_adam(int iteration);
         void set_frozen_mask(lfs::core::Tensor mask);
         [[nodiscard]] const lfs::core::Tensor& frozen_mask() const { return frozen_mask_; }
+        void set_frozen_lr_scale(float scale);
+        void set_crop_damping_mask(lfs::core::Tensor mask);
+        void set_cropbox_lr_scale(float scale);
+        [[nodiscard]] const lfs::core::Tensor& crop_damping_mask() const noexcept {
+            return crop_damping_mask_;
+        }
+        [[nodiscard]] float cropbox_lr_scale() const noexcept { return cropbox_lr_scale_; }
 
         // Gradient management
         void allocate_gradients();
@@ -164,6 +176,9 @@ namespace lfs::training {
         lfs::core::SplatData& splat_data_;
         std::unordered_map<std::string, AdamParamState> states_;
         lfs::core::Tensor frozen_mask_;
+        float frozen_lr_scale_ = 0.0f;
+        lfs::core::Tensor crop_damping_mask_;
+        float cropbox_lr_scale_ = 1.0f;
         int64_t fused_step_iteration_ = -1;
         bool last_step_zeroed_gradients_ = false;
 
@@ -185,6 +200,8 @@ namespace lfs::training {
         size_t scale_row_count(ParamType type) const;
         const bool* frozen_mask_ptr() const;
         int frozen_mask_size() const;
+        const bool* crop_damping_mask_ptr() const;
+        int crop_damping_mask_size() const;
 
         // Translate a primitive-row delta into the actual tensor growth along dim 0.
         // shN (1D swizzled): delta = swizzled_float_count(N + n_new) - swizzled_float_count(N).

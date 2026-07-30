@@ -6,9 +6,6 @@
 #define PROJECT_VERSION_PATCH @PROJECT_VERSION_PATCH@
 #define PROJECT_VERSION_STRING "@PROJECT_VERSION@"
 
-// Git version (generated at build time)
-#include "git_version.h"
-
 // Platform detection
 #if defined(_WIN32) || defined(_WIN64)
 #define PLATFORM_WINDOWS

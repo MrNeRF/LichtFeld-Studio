@@ -27,6 +27,9 @@ namespace lfs::core {
         uint32_t line = 0;
         uintptr_t stream = 0;
         uint64_t thread_id = 0;
+        uint64_t a0 = 0;
+        uint64_t a1 = 0;
+        uint64_t a2 = 0;
     };
 
     struct LFS_CORE_API CudaCheckState {
@@ -81,6 +84,7 @@ namespace lfs::core {
     enum class CudaFailureDisposition : uint8_t {
         Throw,
         LogOnly,
+        LogOnlyNoLatch,
     };
 
     // Returns the assigned monotonic sequence number, so LFS_CUDA_LAUNCH_CHECK/
@@ -89,8 +93,19 @@ namespace lfs::core {
                                                  const char* file,
                                                  uint32_t line,
                                                  cudaStream_t stream = nullptr) noexcept;
+    LFS_CORE_API uint64_t record_cuda_breadcrumb(const char* tag,
+                                                 const char* file,
+                                                 uint32_t line,
+                                                 cudaStream_t stream,
+                                                 uint64_t a0,
+                                                 uint64_t a1 = 0,
+                                                 uint64_t a2 = 0) noexcept;
     LFS_CORE_API std::vector<CudaBreadcrumb> cuda_breadcrumbs_most_recent_first();
     LFS_CORE_API void clear_cuda_breadcrumbs_for_testing() noexcept;
+
+    LFS_CORE_API void register_cuda_address_range(
+        const void* base, std::size_t bytes, std::string label);
+    LFS_CORE_API void unregister_cuda_address_range(const void* base);
 
     // The single runtime diagnostics control, generalized from the boolean
     // LFS_CUDA_SYNC_DEBUG into a comma-separated mode list. See
@@ -128,8 +143,8 @@ namespace lfs::core {
     LFS_CORE_API bool cuda_is_unavailable() noexcept;
     LFS_CORE_API bool latch_cuda_unavailable(cudaError_t error) noexcept;
 
-    // Resets the unavailable latch, launch/await attribution state, and
-    // failure-report deduplication state. Breadcrumb storage is reset separately.
+    // Resets the unavailable latch, launch/await attribution state, address-range
+    // registry, and failure-report deduplication state. Breadcrumb storage is reset separately.
     LFS_CORE_API void reset_cuda_diagnostics_for_testing() noexcept;
 
     // Current breadcrumb sequence counter without recording a new entry.
@@ -227,16 +242,22 @@ namespace lfs::core {
 
 } // namespace lfs::core
 
-#define LFS_CUDA_DETAIL_CHECK_IMPL(call, message)                                     \
+#define LFS_CUDA_DETAIL_CHECK_IMPL(call, stream_value, arg0, arg1, arg2, message)     \
     do {                                                                              \
         const auto _lfs_cuda_site = LFS_SOURCE_SITE_CURRENT();                        \
-        ::lfs::core::record_cuda_breadcrumb(#call, __FILE__, __LINE__);               \
+        const cudaStream_t _lfs_cuda_stream = (stream_value);                         \
         const auto _lfs_cuda_state = ::lfs::core::prepare_cuda_check(                 \
-            #call, _lfs_cuda_site);                                                   \
+            #call, _lfs_cuda_site, _lfs_cuda_stream);                                 \
         const auto _lfs_cuda_result = (call);                                         \
         static_assert(std::is_same_v<std::remove_cv_t<decltype(_lfs_cuda_result)>,    \
                                      cudaError_t>,                                    \
                       "LFS_CUDA_CHECK requires an expression returning cudaError_t"); \
+        const uint64_t _lfs_cuda_arg0 = static_cast<uint64_t>(arg0);                  \
+        const uint64_t _lfs_cuda_arg1 = static_cast<uint64_t>(arg1);                  \
+        const uint64_t _lfs_cuda_arg2 = static_cast<uint64_t>(arg2);                  \
+        ::lfs::core::record_cuda_breadcrumb(                                          \
+            #call, __FILE__, __LINE__, _lfs_cuda_stream,                              \
+            _lfs_cuda_arg0, _lfs_cuda_arg1, _lfs_cuda_arg2);                          \
         if (_lfs_cuda_result != cudaSuccess ||                                        \
             ::lfs::core::cuda_sync_debug_enabled()) [[unlikely]] {                    \
             const auto _lfs_cuda_completion = ::lfs::core::complete_cuda_check(       \
@@ -249,11 +270,36 @@ namespace lfs::core {
         }                                                                             \
     } while (false)
 
-#define LFS_CUDA_CHECK(call) LFS_CUDA_DETAIL_CHECK_IMPL(call, std::string_view{})
+#define LFS_CUDA_CHECK(call) \
+    LFS_CUDA_DETAIL_CHECK_IMPL(call, nullptr, 0, 0, 0, std::string_view{})
+
+#define LFS_CUDA_CHECK_STREAM(call, stream_value) \
+    LFS_CUDA_DETAIL_CHECK_IMPL(call, stream_value, 0, 0, 0, std::string_view{})
+
+#define LFS_CUDA_CHECK_ARGS(call, arg0, arg1, arg2) \
+    LFS_CUDA_DETAIL_CHECK_IMPL(call, nullptr, arg0, arg1, arg2, std::string_view{})
+
+#define LFS_CUDA_CHECK_STREAM_ARGS(call, stream_value, arg0, arg1, arg2) \
+    LFS_CUDA_DETAIL_CHECK_IMPL(call, stream_value, arg0, arg1, arg2, std::string_view{})
 
 #define LFS_CUDA_CHECK_MSG(call, ...) \
     LFS_CUDA_DETAIL_CHECK_IMPL(       \
-        call,                         \
+        call, nullptr, 0, 0, 0,       \
+        ::lfs::core::detail::format_cuda_safe(__VA_ARGS__))
+
+#define LFS_CUDA_CHECK_MSG_STREAM(call, stream_value, ...) \
+    LFS_CUDA_DETAIL_CHECK_IMPL(                            \
+        call, stream_value, 0, 0, 0,                       \
+        ::lfs::core::detail::format_cuda_safe(__VA_ARGS__))
+
+#define LFS_CUDA_CHECK_MSG_ARGS(call, arg0, arg1, arg2, ...) \
+    LFS_CUDA_DETAIL_CHECK_IMPL(                              \
+        call, nullptr, arg0, arg1, arg2,                     \
+        ::lfs::core::detail::format_cuda_safe(__VA_ARGS__))
+
+#define LFS_CUDA_CHECK_MSG_STREAM_ARGS(call, stream_value, arg0, arg1, arg2, ...) \
+    LFS_CUDA_DETAIL_CHECK_IMPL(                                                   \
+        call, stream_value, arg0, arg1, arg2,                                     \
         ::lfs::core::detail::format_cuda_safe(__VA_ARGS__))
 
 #define LFS_ENSURE_CUDA_SUCCESS(result, expression)   \
@@ -285,11 +331,33 @@ namespace lfs::core {
         ::lfs::core::record_cuda_breadcrumb((tag), __FILE__, __LINE__);           \
     } while (false)
 
+#define LFS_CUDA_BREADCRUMB_ARGS(tag, arg0, arg1, arg2)                                \
+    do {                                                                               \
+        static_assert(std::is_array_v<std::remove_reference_t<decltype(tag)>>,         \
+                      "LFS_CUDA_BREADCRUMB_ARGS tag must be a static string literal"); \
+        ::lfs::core::record_cuda_breadcrumb(                                           \
+            (tag), __FILE__, __LINE__, nullptr,                                        \
+            static_cast<uint64_t>(arg0),                                               \
+            static_cast<uint64_t>(arg1),                                               \
+            static_cast<uint64_t>(arg2));                                              \
+    } while (false)
+
 #define LFS_CUDA_BREADCRUMB_STREAM(tag, stream_value)                                    \
     do {                                                                                 \
         static_assert(std::is_array_v<std::remove_reference_t<decltype(tag)>>,           \
                       "LFS_CUDA_BREADCRUMB_STREAM tag must be a static string literal"); \
         ::lfs::core::record_cuda_breadcrumb((tag), __FILE__, __LINE__, (stream_value));  \
+    } while (false)
+
+#define LFS_CUDA_BREADCRUMB_STREAM_ARGS(tag, stream_value, arg0, arg1, arg2)                  \
+    do {                                                                                      \
+        static_assert(std::is_array_v<std::remove_reference_t<decltype(tag)>>,                \
+                      "LFS_CUDA_BREADCRUMB_STREAM_ARGS tag must be a static string literal"); \
+        ::lfs::core::record_cuda_breadcrumb(                                                  \
+            (tag), __FILE__, __LINE__, (stream_value),                                        \
+            static_cast<uint64_t>(arg0),                                                      \
+            static_cast<uint64_t>(arg1),                                                      \
+            static_cast<uint64_t>(arg2));                                                     \
     } while (false)
 
 // Every public launcher or logical phase performs this immediately after its

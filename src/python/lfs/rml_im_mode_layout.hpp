@@ -10,10 +10,14 @@
 
 #include <nanobind/nanobind.h>
 
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -45,10 +49,16 @@ namespace lfs::python {
         InputInt,
         Combo,
         Selectable,
+        Image,
+        ImageButton,
+        MenuBar,
+        Menu,
+        MenuItem,
         CollapsHeader,
         Separator,
         Spacing,
         ProgressBar,
+        PlotLines,
         DisabledGroup,
         Line,
     };
@@ -59,16 +69,29 @@ namespace lfs::python {
         bool bool_value = false;
         int int_value = 0;
         float float_value = 0.0f;
-        std::string items_key;
+        size_t items_hash = 0;
+        size_t items_hash_secondary = 0;
+        size_t items_count = 0;
+        bool items_initialized = false;
         std::string string_value;
         bool open = true;
+        bool active = true;
     };
 
     struct Slot {
         SlotType type;
         std::string key;
         Rml::Element* element = nullptr;
-        SlotEventState events;
+        std::shared_ptr<SlotEventState> events = std::make_shared<SlotEventState>();
+        std::array<std::optional<std::string>, 3> content;
+        std::array<std::optional<std::string>, 3> property_content;
+        std::array<std::optional<bool>, 4> class_content;
+        std::array<std::optional<double>, 4> numeric_content;
+        std::deque<float> plot_values;
+        std::deque<float> plot_scratch;
+        bool plot_initialized = false;
+        std::optional<float> plot_width;
+        std::optional<float> plot_height;
     };
 
     struct ContainerLevel {
@@ -85,31 +108,40 @@ namespace lfs::python {
         float wheel = 0.0f;
         bool double_clicked = false;
         bool dragging = false;
+        bool right_clicked = false;
     };
 
     struct TableState {
         int num_columns = 0;
+        int setup_column = 0;
+        int current_row_index = -1;
         int current_column = -1;
         std::vector<float> column_widths;
+        std::string key;
+        std::string current_row_key;
+        size_t id_stack_depth = 0;
         Rml::Element* table_element = nullptr;
         Rml::Element* current_row = nullptr;
         Rml::Element* current_cell = nullptr;
+        bool cell_container_open = false;
     };
 
     class SlotEventListener : public Rml::EventListener {
     public:
-        explicit SlotEventListener(SlotEventState* state) : state_(state) {}
+        explicit SlotEventListener(std::weak_ptr<SlotEventState> state) : state_(std::move(state)) {}
         void ProcessEvent(Rml::Event& event) override;
         void OnDetach(Rml::Element*) override { delete this; }
 
     private:
-        SlotEventState* state_;
+        std::weak_ptr<SlotEventState> state_;
     };
 
     class RmlSubLayout;
+    class RmlImModeLayoutTestAccess;
 
     class RmlImModeLayout {
         friend class RmlSubLayout;
+        friend class RmlImModeLayoutTestAccess;
 
     public:
         RmlImModeLayout() = default;
@@ -308,7 +340,7 @@ namespace lfs::python {
         std::tuple<bool, bool> menu_item_toggle(const std::string& label, const std::string& shortcut, bool selected);
         bool menu_item_shortcut(const std::string& label, const std::string& shortcut, bool enabled = true);
 
-        // --- Popups (no-op) ---
+        // --- Popups ---
         bool begin_popup(const std::string& id);
         void open_popup(const std::string& id);
         void end_popup();
@@ -320,7 +352,7 @@ namespace lfs::python {
         void push_modal_style();
         void pop_modal_style();
 
-        // --- Images (no-op Phase 3) ---
+        // --- Images ---
         void image(uint64_t texture_id, std::tuple<float, float> size, nb::object tint = nb::none());
         void image_uv(uint64_t texture_id, std::tuple<float, float> size,
                       std::tuple<float, float> uv0, std::tuple<float, float> uv1,
@@ -370,7 +402,7 @@ namespace lfs::python {
                                                                   float neutral_x, float neutral_y,
                                                                   float range = 0.5f);
 
-        // --- Plots (no-op) ---
+        // --- Plots ---
         void plot_lines(const std::string& label, nb::object values,
                         float scale_min = 0.0f, float scale_max = 0.0f,
                         std::tuple<float, float> size = {0.0f, 0.0f});
@@ -407,14 +439,30 @@ namespace lfs::python {
 
     private:
         Slot& ensure_slot(SlotType type, const std::string& key);
-        Rml::Element* create_element(SlotType type, const std::string& key);
         Rml::Element* ensure_line_container();
         void finish_current_line();
         void prune_excess_slots(ContainerLevel& level);
+        void finish_table_cell();
+        void finish_table_row();
+        void push_persistent_container(const std::string& key, Rml::Element* container);
+        void pop_persistent_container();
+        bool menu_item_impl(const std::string& label, const std::string& shortcut,
+                            bool enabled, bool selected);
         std::string build_id(const std::string& key) const;
         std::string build_slot_id(const char* prefix, const std::string* label = nullptr) const;
         std::string color_to_css(nb::object color) const;
         static std::string stable_label_token(const std::string& label);
+        void set_slot_text(Slot& slot, size_t index, Rml::Element* element,
+                           const std::string& content);
+        void set_slot_float_text(Slot& slot, size_t index, Rml::Element* element,
+                                 float value);
+        void set_slot_int_text(Slot& slot, size_t index, Rml::Element* element,
+                               int value);
+
+        using PathDialogCallback = std::function<std::filesystem::path(
+            bool, const std::filesystem::path&, const std::optional<std::string>&)>;
+        static void set_path_dialog_callback_for_testing(PathDialogCallback callback);
+        static void reset_path_dialog_callback_for_testing();
 
         void warn_unsupported(const char* method);
 
@@ -445,6 +493,7 @@ namespace lfs::python {
         bool tooltip_shown_ = false;
         Rml::Element* tooltip_hover_el_ = nullptr;
         std::string tooltip_text_;
+        std::string rendered_tooltip_text_;
         std::chrono::steady_clock::time_point tooltip_hover_started_at_{};
         bool tooltip_candidate_seen_ = false;
 
@@ -456,17 +505,25 @@ namespace lfs::python {
         MouseState mouse_;
         std::optional<TableState> table_;
         float cached_line_height_ = 18.0f;
+        bool warned_split_overflow_ = false;
 
         std::vector<float> item_width_stack_;
         void apply_item_width(Rml::Element* el);
     };
 
-    enum class RmlLayoutDirection : uint8_t { Row,
-                                              Column };
+    enum class RmlLayoutType : uint8_t {
+        Row,
+        Column,
+        Split,
+        Box,
+        GridFlow,
+    };
 
     class RmlSubLayout {
     public:
-        RmlSubLayout(RmlImModeLayout* parent, RmlLayoutDirection dir);
+        RmlSubLayout(RmlImModeLayout* parent, RmlLayoutType type,
+                     float factor = 0.5f, int columns = 0,
+                     bool even_columns = true, bool even_rows = true);
         RmlSubLayout& enter();
         void exit();
 
@@ -505,6 +562,7 @@ namespace lfs::python {
         std::tuple<bool, int> input_int(const std::string& l, int v, int st = 1, int sf = 100) { return parent_->input_int(l, v, st, sf); }
         std::tuple<bool, int> input_int_formatted(const std::string& l, int v, int st = 0, int sf = 0) { return parent_->input_int_formatted(l, v, st, sf); }
         std::tuple<bool, float> stepper_float(const std::string& l, float v, const std::vector<float>& st = {1.0f, 0.1f, 0.01f}) { return parent_->stepper_float(l, v, st); }
+        std::tuple<bool, std::string> path_input(const std::string& l, const std::string& v, bool folder_mode = true, const std::string& dialog_title = "") { return parent_->path_input(l, v, folder_mode, dialog_title); }
 
         std::tuple<bool, std::tuple<float, float, float>> color_edit3(const std::string& l, std::tuple<float, float, float> c) { return parent_->color_edit3(l, c); }
         std::tuple<bool, int> combo(const std::string& l, int idx, const std::vector<std::string>& items) { return parent_->combo(l, idx, items); }
@@ -567,7 +625,13 @@ namespace lfs::python {
 
     private:
         RmlImModeLayout* parent_;
-        RmlLayoutDirection direction_;
+        RmlLayoutType type_;
+        float factor_;
+        int columns_;
+        bool even_columns_;
+        bool even_rows_;
+        std::string container_key_;
+        Rml::Element* container_element_ = nullptr;
         bool entered_ = false;
     };
 

@@ -38,6 +38,7 @@ namespace lfs::vis::gui::native_panels {
         void setInputClipY(float y_min, float y_max) override;
         void setInput(const PanelInputState* input) override;
         void setForcedHeight(float h) override;
+        void setPanelSpace(PanelSpace space) override;
         bool wantsKeyboard() const override;
         bool needsAnimationFrame() const override;
         void reloadRmlResources() override;

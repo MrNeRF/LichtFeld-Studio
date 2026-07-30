@@ -30,6 +30,11 @@
     border-color: @{alpha(border,0.30)};
 }
 
+.im-box {
+    background-color: @{alpha(surface_bright,0.18)};
+    border-color: @{alpha(border,0.30)};
+}
+
 .im-popup-backdrop {
     background-color: @{alpha(background,0.40)};
 }

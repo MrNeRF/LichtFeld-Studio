@@ -13,10 +13,41 @@
 #include <algorithm>
 #include <cassert>
 #include <nanobind/stl/string.h>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
     namespace {
+        lfs::python::MouseState makeMouseState(const std::optional<PanelInputState>& input,
+                                               float prev_mouse_x, float prev_mouse_y,
+                                               bool have_prev_mouse,
+                                               bool& have_left_click_time,
+                                               std::chrono::steady_clock::time_point& last_left_click_at) {
+            lfs::python::MouseState mouse;
+            if (!input) {
+                mouse.pos_x = prev_mouse_x;
+                mouse.pos_y = prev_mouse_y;
+                return mouse;
+            }
+
+            mouse.pos_x = input->mouse_x;
+            mouse.pos_y = input->mouse_y;
+            if (have_prev_mouse) {
+                mouse.delta_x = mouse.pos_x - prev_mouse_x;
+                mouse.delta_y = mouse.pos_y - prev_mouse_y;
+            }
+            mouse.wheel = input->mouse_wheel;
+            mouse.right_clicked = input->mouse_clicked[1];
+            if (input->mouse_clicked[0]) {
+                constexpr auto kDoubleClickWindow = std::chrono::milliseconds(350);
+                const auto now = std::chrono::steady_clock::now();
+                mouse.double_clicked =
+                    have_left_click_time && (now - last_left_click_at) <= kDoubleClickWindow;
+                last_left_click_at = now;
+                have_left_click_time = true;
+            }
+            mouse.dragging = input->mouse_down[0];
+            return mouse;
+        }
+
         bool panelHookDirtyResult(const nb::object& result,
                                   const bool none_is_dirty,
                                   bool& warned_non_bool,
@@ -92,6 +123,8 @@ namespace lfs::vis::gui {
             ops.set_height_mode(host_, height_mode_);
         if (foreground_ && ops.set_foreground)
             ops.set_foreground(host_, true);
+        if (ops.set_floating)
+            ops.set_floating(host_, floating_);
         return true;
     }
 
@@ -300,34 +333,9 @@ namespace lfs::vis::gui {
         if (lfs::python::bridge().prepare_ui)
             lfs::python::bridge().prepare_ui();
 
-        lfs::python::MouseState mouse;
-        if (current_input_) {
-            mouse.pos_x = current_input_->mouse_x;
-            mouse.pos_y = current_input_->mouse_y;
-            if (have_prev_mouse_) {
-                mouse.delta_x = mouse.pos_x - prev_mouse_x_;
-                mouse.delta_y = mouse.pos_y - prev_mouse_y_;
-            }
-            mouse.wheel = current_input_->mouse_wheel;
-            if (current_input_->mouse_clicked[0]) {
-                constexpr auto kDoubleClickWindow = std::chrono::milliseconds(350);
-                const auto now = std::chrono::steady_clock::now();
-                mouse.double_clicked =
-                    have_left_click_time_ && (now - last_left_click_at_) <= kDoubleClickWindow;
-                last_left_click_at_ = now;
-                have_left_click_time_ = true;
-            }
-            mouse.dragging = current_input_->mouse_down[0];
-        } else {
-            auto& io = ImGui::GetIO();
-            mouse.pos_x = io.MousePos.x;
-            mouse.pos_y = io.MousePos.y;
-            mouse.delta_x = io.MouseDelta.x;
-            mouse.delta_y = io.MouseDelta.y;
-            mouse.wheel = io.MouseWheel;
-            mouse.double_clicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-            mouse.dragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left);
-        }
+        const lfs::python::MouseState mouse = makeMouseState(
+            current_input_, prev_mouse_x_, prev_mouse_y_, have_prev_mouse_,
+            have_left_click_time_, last_left_click_at_);
         prev_mouse_x_ = mouse.pos_x;
         prev_mouse_y_ = mouse.pos_y;
         have_prev_mouse_ = true;
@@ -614,6 +622,19 @@ namespace lfs::vis::gui {
             const auto& ops = lfs::python::get_rml_panel_host_ops();
             if (ops.set_foreground)
                 ops.set_foreground(host_, fg);
+        }
+    }
+
+    void RmlPythonPanelAdapter::setPanelSpace(const PanelSpace space) {
+        const bool floating = space == PanelSpace::Floating;
+        if (floating_ == floating)
+            return;
+
+        floating_ = floating;
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            if (ops.set_floating)
+                ops.set_floating(host_, floating_);
         }
     }
 

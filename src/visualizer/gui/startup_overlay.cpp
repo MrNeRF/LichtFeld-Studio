@@ -28,9 +28,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
-#include <imgui_internal.h>
 #include <utility>
-#include <imgui.h>
 
 #ifdef _WIN32
 #include <shellapi.h>
@@ -344,6 +342,8 @@ namespace lfs::vis::gui {
 
         set_text("supported-text", lichtfeld::Strings::Startup::SUPPORTED_BY);
         set_text("lang-label", lichtfeld::Strings::Preferences::LANGUAGE);
+        set_text("discord-link", lichtfeld::Strings::Startup::DISCORD);
+        set_text("donate-link", lichtfeld::Strings::Startup::DONATE);
         has_applied_plugin_load_state_ = false;
         updateClickHintUI();
     }
@@ -356,7 +356,7 @@ namespace lfs::vis::gui {
         if (!hint)
             return;
 
-        if (isPluginLoadComplete()) {
+        if (visible_ && shown_frames_ > 2) {
             hint->SetInnerRML(LOC(lichtfeld::Strings::Startup::CLICK_TO_CONTINUE));
             hint->SetProperty("visibility", "visible");
         } else {
@@ -683,6 +683,11 @@ namespace lfs::vis::gui {
             refresh_cache = true;
         }
 
+        if (shown_frames_ == 3) {
+            updateClickHintUI();
+            refresh_cache = true;
+        }
+
         if (updatePluginLoadUI())
             refresh_cache = true;
 
@@ -696,7 +701,10 @@ namespace lfs::vis::gui {
         bool rml_select_open = isLanguageSelectOpen();
         bool input_event_forwarded = false;
         const bool plugin_load_complete = isPluginLoadComplete();
-        if (plugin_load_complete && input_ && hasInputActivity(*input_)) {
+        if (input_ && hasInputActivity(*input_) &&
+            (plugin_load_complete || rml_select_open ||
+             isLanguageSelectHit(input_->mouse_x - viewport.pos.x,
+                                 input_->mouse_y - viewport.pos.y))) {
             const auto input_result = forwardInput(*input_, viewport.pos.x, viewport.pos.y,
                                                    viewport.size.x, viewport.size.y);
             escape_consumed = input_result.escape_consumed;
@@ -707,11 +715,8 @@ namespace lfs::vis::gui {
         if (input_event_forwarded || (refresh_cache && !updated_this_frame))
             rml_context_->Update();
 
-        const auto* main_viewport = ImGui::GetMainViewport();
-        const float screen_x = main_viewport ? main_viewport->Pos.x : 0.0f;
-        const float screen_y = main_viewport ? main_viewport->Pos.y : 0.0f;
-        const float offset_x = viewport.pos.x - screen_x;
-        const float offset_y = viewport.pos.y - screen_y;
+        const float offset_x = viewport.pos.x;
+        const float offset_y = viewport.pos.y;
         rml_manager_->trackContextFrame(rml_context_,
                                         static_cast<int>(offset_x),
                                         static_cast<int>(offset_y));
@@ -739,14 +744,14 @@ namespace lfs::vis::gui {
         ++shown_frames_;
 
         bool clicked_language_select = false;
-        if (plugin_load_complete && input_) {
+        if (input_) {
             const float local_x = input_->mouse_x - viewport.pos.x;
             const float local_y = input_->mouse_y - viewport.pos.y;
             clicked_language_select = input_->mouse_clicked[0] && isLanguageSelectHit(local_x, local_y);
         }
 
-        if (plugin_load_complete && shown_frames_ > 2 && !rml_select_open &&
-            !clicked_language_select && !drag_hovering && input_) {
+        if (shown_frames_ > 2 && !rml_select_open && !clicked_language_select &&
+            !drag_hovering && input_) {
             const bool mouse_clicked =
                 input_->mouse_clicked[0] || input_->mouse_clicked[1] || input_->mouse_clicked[2];
             const bool key_action = (!escape_consumed &&
@@ -759,7 +764,7 @@ namespace lfs::vis::gui {
                 LOG_DEBUG("StartupOverlay: dismissed by key action");
                 visible_ = false;
             } else if (mouse_clicked) {
-                LOG_DEBUG("StartupOverlay: dismissed by mouse click after startup load");
+                LOG_DEBUG("StartupOverlay: dismissed by mouse click");
                 visible_ = false;
             }
         }

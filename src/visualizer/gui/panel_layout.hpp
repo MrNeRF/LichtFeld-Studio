@@ -142,6 +142,8 @@ namespace lfs::vis::gui {
         static constexpr float TAB_BAR_H = 28.0f;
         static constexpr float STATUS_BAR_HEIGHT = 22.0f;
         static constexpr float PANEL_GAP = 2.0f;
+        // Matches #resize-handle in right_panel.rcss: left: -4dp; width: 8dp.
+        static constexpr float RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH = 4.0f;
 
     private:
         void renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h,
@@ -161,7 +163,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] float maxRightPanelWidth(bool show_main_panel, bool ui_hidden,
                                                const ScreenState& screen) const;
 
-        float right_panel_width_ = 340.0f;
+        float right_panel_width_ = 360.0f;
         float scene_panel_ratio_ = 0.4f;
 
         float python_console_width_ = -1.0f;

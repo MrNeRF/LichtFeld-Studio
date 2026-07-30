@@ -8,6 +8,17 @@
 - vcpkg (`VCPKG_ROOT` environment variable set)
 - GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
 
+Windows builds require the **C++ Clang Compiler for Windows** Visual Studio
+Installer individual component in addition to the regular C++ desktop workload.
+It provides `clang-cl`, which is used only to build libplacebo (an unconditional
+dependency of the standard build) with a Microsoft-compatible ABI. The port
+locates `clang-cl.exe` on `PATH` or under `VSINSTALLDIR`/`VCINSTALLDIR` (for
+example from the x64 Native Tools Command Prompt). **MSBuild support for LLVM
+(clang-cl) toolset** is optional and only needed if you want the LLVM toolset
+selectable in Visual Studio IDE projects; the vcpkg port itself does not use
+MSBuild. The rest of LichtFeld Studio continues to use the configured Visual
+Studio/MSVC toolchain.
+
 On Windows, set `CUDNN_ROOT_DIR` to the cuDNN version root so the build can copy
 the CUDA-versioned cuDNN runtime DLLs next to the executable and into portable
 installs:

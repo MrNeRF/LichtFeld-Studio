@@ -45,6 +45,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/split_view_service.cpp
         rendering/viewport_artifact_service.cpp
         rendering/viewport_frame_lifecycle_service.cpp
+        rendering/viewport_interop_service.cpp
         rendering/viewport_appearance_correction.cpp
         rendering/viewport_request_builder.cpp
         rendering/passes/vulkan_scene_image_uploader.cpp
@@ -227,8 +228,6 @@ target_link_libraries(lfs_visualizer
         lfs_python_utils
         lfs_sequencer
         SDL3::SDL3
-        imgui::imgui
-        implot::implot
         Zep::Zep
         glm::glm
         TBB::tbb
@@ -237,6 +236,7 @@ target_link_libraries(lfs_visualizer
         OpenSSL::SSL
         OpenSSL::Crypto
         CUDA::cudart
+        Freetype::Freetype
         nfd::nfd
         vterm
         lfs_oiio

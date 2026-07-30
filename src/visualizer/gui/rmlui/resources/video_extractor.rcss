@@ -110,6 +110,51 @@ body {
     min-width: 130dp;
 }
 
+.hdr-badge {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4dp;
+    padding: 2dp 8dp;
+    border-radius: 4dp;
+    font-size: 10dp;
+    font-weight: 700;
+    letter-spacing: 0.3dp;
+    text-transform: uppercase;
+    white-space: nowrap;
+    line-height: 18dp;
+    height: 18dp;
+    flex-shrink: 0;
+}
+
+.hdr-badge--sdr {
+    background-color: #45475a;
+    color: #bac2de;
+}
+
+.hdr-badge--hdr {
+    background-color: #5a4a2a;
+    color: #f9e2af;
+}
+
+#hdr-badge-type {
+    font-weight: 500;
+    letter-spacing: 0.1dp;
+}
+
+#hdr-badge-label {
+    font-weight: 700;
+    letter-spacing: 0.3dp;
+}
+
+.hdr-badge--sdr #hdr-badge-label {
+    color: #bac2de;
+}
+
+.hdr-badge--hdr #hdr-badge-label {
+    color: #f9e2af;
+}
+
 #timeline {
     position: relative;
     height: 20dp;

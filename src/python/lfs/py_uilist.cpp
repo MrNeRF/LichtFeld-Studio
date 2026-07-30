@@ -5,8 +5,6 @@
 #include "py_uilist.hpp"
 #include "core/logger.hpp"
 
-#include <imgui.h>
-
 namespace lfs::python {
 
     PyUIListRegistry& PyUIListRegistry::instance() {
@@ -73,142 +71,47 @@ namespace lfs::python {
 
     std::tuple<bool, int> PyUILayoutTemplates::template_list(
         PyUILayout& layout,
-        const std::string& listtype_name,
-        const std::string& list_id,
-        nb::object data,
-        const std::string& propname,
-        int active_index,
-        int rows) {
-
-        bool changed = false;
-        int new_index = active_index;
-
-        nb::gil_scoped_acquire gil;
-
-        nb::object list_obj;
-        try {
-            if (nb::hasattr(data, propname.c_str())) {
-                list_obj = data.attr(propname.c_str());
-            } else if (nb::hasattr(data, "get")) {
-                list_obj = data.attr("get")(propname);
-            } else {
-                LOG_ERROR("template_list: data object has no property '{}'", propname);
-                return {false, active_index};
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("template_list: failed to get property '{}': {}", propname, e.what());
+        const std::string&,
+        const std::string&,
+        nb::object,
+        const std::string&,
+        const int active_index,
+        int) {
+        if (layout.isDrawHook()) {
+            layout.warnUnsupportedInDrawHook("template_list");
             return {false, active_index};
         }
-
-        size_t list_len = 0;
-        try {
-            list_len = nb::len(list_obj);
-        } catch (const std::exception& e) {
-            LOG_ERROR("template_list: failed to get list length: {}", e.what());
-            return {false, active_index};
-        }
-
-        PyUIListInfo* const uilist_info = PyUIListRegistry::instance().get_uilist(listtype_name);
-        const float item_height = ImGui::GetTextLineHeightWithSpacing();
-        const float list_height = item_height * static_cast<float>(rows) + ImGui::GetStyle().WindowPadding.y * 2.0f;
-
-        const std::string child_id = "##" + list_id;
-        if (ImGui::BeginChild(child_id.c_str(), ImVec2(0, list_height), ImGuiChildFlags_Borders)) {
-            for (size_t i = 0; i < list_len; ++i) {
-                ImGui::PushID(static_cast<int>(i));
-                const bool is_selected = (static_cast<int>(i) == active_index);
-
-                nb::object item;
-                try {
-                    item = list_obj[nb::int_(i)];
-                } catch (const std::exception& e) {
-                    LOG_ERROR("template_list: failed to get item {}: {}", i, e.what());
-                    ImGui::PopID();
-                    continue;
-                }
-
-                if (uilist_info && nb::hasattr(uilist_info->list_instance, "draw_item")) {
-                    try {
-                        PyUILayout item_layout;
-                        uilist_info->list_instance.attr("draw_item")(
-                            item_layout, data, item, 0, data, propname, static_cast<int>(i));
-                        if (ImGui::IsItemClicked()) {
-                            new_index = static_cast<int>(i);
-                            changed = true;
-                        }
-                    } catch (const std::exception& e) {
-                        LOG_ERROR("template_list draw_item: {}", e.what());
-                    }
-                } else {
-                    std::string item_label;
-                    try {
-                        if (nb::hasattr(item, "name")) {
-                            item_label = nb::cast<std::string>(item.attr("name"));
-                        } else {
-                            item_label = nb::cast<std::string>(nb::repr(item));
-                        }
-                    } catch (const std::exception&) {
-                        // LFS-CENSUS-OK(empty-catch): read-only label lookup for display;
-                        // an unreadable item name falls back to an ordinal label.
-                        item_label = "Item " + std::to_string(i);
-                    }
-                    if (ImGui::Selectable(item_label.c_str(), is_selected)) {
-                        new_index = static_cast<int>(i);
-                        changed = true;
-                    }
-                }
-                ImGui::PopID();
-            }
-        }
-        ImGui::EndChild();
-
-        return {changed, new_index};
+        throw nb::type_error(
+            "UILayout.template_list is unsupported; use the live "
+            "RmlUILayout.template_list API from a Python panel draw callback");
     }
 
     bool PyUILayoutTemplates::template_tree(
         PyUILayout& layout,
-        const std::string& label,
-        nb::object draw_callback,
-        bool default_open) {
-
-        const ImGuiTreeNodeFlags flags = default_open ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
-        const bool is_open = ImGui::TreeNodeEx(label.c_str(), flags);
-        if (is_open) {
-            nb::gil_scoped_acquire gil;
-            try {
-                draw_callback(layout);
-            } catch (const std::exception& e) {
-                LOG_ERROR("template_tree draw callback: {}", e.what());
-            }
-            ImGui::TreePop();
+        const std::string&,
+        nb::object,
+        bool) {
+        if (layout.isDrawHook()) {
+            layout.warnUnsupportedInDrawHook("template_tree");
+            return false;
         }
-        return is_open;
+        throw nb::type_error(
+            "UILayout.template_tree is unsupported; use the live "
+            "RmlUILayout.tree_node/tree_pop API from a Python panel draw callback");
     }
 
     std::tuple<bool, std::string> PyUILayoutTemplates::template_id(
         PyUILayout& layout,
-        const std::string& label,
-        const std::vector<std::string>& items,
+        const std::string&,
+        const std::vector<std::string>&,
         const std::string& current_id) {
-
-        int current_idx = -1;
-        for (size_t i = 0; i < items.size(); ++i) {
-            if (items[i] == current_id) {
-                current_idx = static_cast<int>(i);
-                break;
-            }
+        if (layout.isDrawHook()) {
+            layout.warnUnsupportedInDrawHook("template_id");
+            return {false, current_id};
         }
-
-        std::vector<const char*> items_cstr;
-        items_cstr.reserve(items.size());
-        for (const auto& s : items)
-            items_cstr.push_back(s.c_str());
-
-        if (ImGui::Combo(label.c_str(), &current_idx, items_cstr.data(), static_cast<int>(items_cstr.size()))) {
-            if (current_idx >= 0 && current_idx < static_cast<int>(items.size()))
-                return {true, items[current_idx]};
-        }
-        return {false, current_id};
+        throw nb::type_error(
+            "UILayout.template_id is unsupported; use the live "
+            "RmlUILayout.combo API from a Python panel draw callback");
     }
 
     void register_uilist(nb::module_& m) {
@@ -243,14 +146,14 @@ namespace lfs::python {
                 },
                 nb::arg("listtype_name"), nb::arg("list_id"), nb::arg("data"),
                 nb::arg("propname"), nb::arg("active_index"), nb::arg("rows") = 5,
-                "Draw a selectable list widget, returns (changed, new_active_index)")
+                "Unsupported on UILayout; use RmlUILayout.template_list.")
             .def(
                 "template_tree",
                 [](PyUILayout& self, const std::string& label, nb::object draw_callback, bool default_open) {
                     return PyUILayoutTemplates::template_tree(self, label, draw_callback, default_open);
                 },
                 nb::arg("label"), nb::arg("draw_callback"), nb::arg("default_open") = false,
-                "Draw a collapsible tree node with custom content")
+                "Unsupported on UILayout; use RmlUILayout.tree_node/tree_pop.")
             .def(
                 "template_id",
                 [](PyUILayout& self, const std::string& label, const std::vector<std::string>& items,
@@ -258,7 +161,7 @@ namespace lfs::python {
                     return PyUILayoutTemplates::template_id(self, label, items, current_id);
                 },
                 nb::arg("label"), nb::arg("items"), nb::arg("current_id"),
-                "Draw a combo selector from string IDs, returns (changed, selected_id)");
+                "Unsupported on UILayout; use RmlUILayout.combo.");
     }
 
 } // namespace lfs::python

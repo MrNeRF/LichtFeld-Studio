@@ -715,3 +715,113 @@ TEST_F(ColmapImageLayoutTest, WriteBackStagesAndPublishesOneValidatedGeneration)
             << "staging generation was not cleaned up: " << entry.path();
     }
 }
+
+TEST_F(ColmapImageLayoutTest, WriteBackDropsImagesForDeletedCamerasAndClearsTracks) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for Camera-backed COLMAP write-back";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path output_dir = temp_dir_ / "out_sparse";
+
+    write_text_file(dataset_dir / "cameras.txt",
+                    "1 PINHOLE 640 480 500 500 320 240\n");
+    write_text_file(dataset_dir / "images.txt",
+                    "1 1 0 0 0 0 0 0 1 frame_a.png\n"
+                    "10 20 7\n"
+                    "2 1 0 0 0 1 0 0 1 frame_b.png\n"
+                    "30 40 7\n");
+    write_text_file(dataset_dir / "points3D.txt",
+                    "7 10 20 30 1 2 3 0.25 1 0 2 0\n");
+
+    auto cameras_result = lfs::io::read_colmap_cameras_only(dataset_dir);
+    ASSERT_TRUE(cameras_result.has_value()) << cameras_result.error().format();
+    auto [cameras, scene_center] = std::move(*cameras_result);
+    (void)scene_center;
+    ASSERT_EQ(cameras.size(), 2u);
+
+    std::shared_ptr<const lfs::core::Camera> kept_camera;
+    for (const auto& camera : cameras) {
+        ASSERT_NE(camera, nullptr);
+        if (camera->image_name() == "frame_a.png") {
+            kept_camera = camera;
+        }
+    }
+    ASSERT_NE(kept_camera, nullptr);
+
+    const std::vector<lfs::io::ColmapCameraWriteData> camera_data{
+        lfs::io::ColmapCameraWriteData{
+            .camera = kept_camera,
+            .data_world_transform = glm::mat4(1.0f),
+        },
+    };
+
+    const auto write_result = lfs::io::write_colmap_reconstruction(
+        dataset_dir,
+        output_dir,
+        camera_data,
+        nullptr,
+        glm::mat4(1.0f),
+        lfs::io::ColmapWriteOptions{.format = lfs::io::ColmapWriteFormat::Text});
+    ASSERT_TRUE(write_result.has_value()) << write_result.error().format();
+
+    std::ifstream images_stream(output_dir / "images.txt");
+    const std::string images_text{std::istreambuf_iterator<char>(images_stream),
+                                  std::istreambuf_iterator<char>()};
+    EXPECT_NE(images_text.find("frame_a.png"), std::string::npos);
+    EXPECT_EQ(images_text.find("frame_b.png"), std::string::npos);
+
+    std::istringstream image_lines(images_text);
+    std::string image_line;
+    while (std::getline(image_lines, image_line) && (image_line.empty() || image_line.starts_with("#"))) {
+    }
+    ASSERT_FALSE(image_line.empty());
+    uint32_t image_id = 0;
+    uint32_t camera_id = 0;
+    double qw = 0.0;
+    double qx = 0.0;
+    double qy = 0.0;
+    double qz = 0.0;
+    double tx = 0.0;
+    double ty = 0.0;
+    double tz = 0.0;
+    std::string image_name;
+    std::istringstream image_pose(image_line);
+    ASSERT_TRUE(image_pose >> image_id >> qw >> qx >> qy >> qz >> tx >> ty >> tz >> camera_id >> image_name);
+    EXPECT_EQ(image_id, 1u);
+    EXPECT_EQ(image_name, "frame_a.png");
+
+    std::string points2d_line;
+    ASSERT_TRUE(std::getline(image_lines, points2d_line));
+    std::istringstream points2d(points2d_line);
+    double x = 0.0;
+    double y = 0.0;
+    std::string point3d_token;
+    ASSERT_TRUE(points2d >> x >> y >> point3d_token);
+    EXPECT_NEAR(x, 10.0, 1e-6);
+    EXPECT_NEAR(y, 20.0, 1e-6);
+    EXPECT_EQ(point3d_token, "-1");
+
+    std::ifstream points_stream(output_dir / "points3D.txt");
+    const std::string points_text{std::istreambuf_iterator<char>(points_stream),
+                                  std::istreambuf_iterator<char>()};
+    std::istringstream point_lines(points_text);
+    std::string point_line;
+    while (std::getline(point_lines, point_line) && (point_line.empty() || point_line.starts_with("#"))) {
+    }
+    ASSERT_FALSE(point_line.empty());
+    uint64_t point_id = 0;
+    double px = 0.0;
+    double py = 0.0;
+    double pz = 0.0;
+    int r = 0;
+    int g = 0;
+    int b = 0;
+    double error = 0.0;
+    std::istringstream point_record(point_line);
+    ASSERT_TRUE(point_record >> point_id >> px >> py >> pz >> r >> g >> b >> error);
+    EXPECT_EQ(point_id, 7u);
+    int track_image_id = 0;
+    EXPECT_FALSE(point_record >> track_image_id)
+        << "tracks must be cleared after dropping images so no dangling image_id remains";
+}

@@ -11,6 +11,8 @@
 #include "optimizer/scheduler.hpp"
 #include <memory>
 
+class CropDampingStrategyTest_McmcRejectedRowsAreNeverSampledAtZeroScale_Test;
+
 namespace lfs::training {
 
     /// MCMC-based optimization strategy. SplatData owned by Scene.
@@ -63,6 +65,8 @@ namespace lfs::training {
         int relocate_gs_test() { return relocate_gs(); }
 
     private:
+        friend class ::CropDampingStrategyTest_McmcRejectedRowsAreNeverSampledAtZeroScale_Test;
+
         // Helper functions
         lfs::core::Tensor multinomial_sample(const lfs::core::Tensor& weights, int n, bool replacement = true);
         int relocate_gs();

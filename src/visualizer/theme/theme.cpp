@@ -64,22 +64,22 @@ namespace lfs::vis {
 
     namespace {
 
-        json colorToJson(const ImVec4& c) {
+        json colorToJson(const ThemeColor& c) {
             return json::array({c.x, c.y, c.z, c.w});
         }
 
-        ImVec4 colorFromJson(const json& j) {
+        ThemeColor colorFromJson(const json& j) {
             if (j.is_array() && j.size() >= 4) {
                 return {j[0].get<float>(), j[1].get<float>(), j[2].get<float>(), j[3].get<float>()};
             }
             return {0.0f, 0.0f, 0.0f, 1.0f};
         }
 
-        json vec2ToJson(const ImVec2& v) {
+        json vec2ToJson(const ThemeVec2& v) {
             return json::array({v.x, v.y});
         }
 
-        ImVec2 vec2FromJson(const json& j) {
+        ThemeVec2 vec2FromJson(const json& j) {
             if (j.is_array() && j.size() >= 2) {
                 return {j[0].get<float>(), j[1].get<float>()};
             }
@@ -111,27 +111,21 @@ namespace lfs::vis {
             return name;
         }
 
-        bool useLightPopupBackground(const Theme& t) {
-            // Use palette luminance instead of theme name so popup behavior stays
-            // correct even if theme names vary or are edited in JSON files.
-            constexpr float LIGHT_POPUP_BG_THRESHOLD = 0.72f;
-            const float brightness =
-                (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
-            return brightness >= LIGHT_POPUP_BG_THRESHOLD;
+        int colorByte(const float value) {
+            return static_cast<int>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
         }
 
-        ImVec4 mix(const ImVec4& a, const ImVec4& b, const float factor) {
-            return {
-                a.x + (b.x - a.x) * factor,
-                a.y + (b.y - a.y) * factor,
-                a.z + (b.z - a.z) * factor,
-                a.w + (b.w - a.w) * factor};
+        ThemePackedColor packColor(const int r, const int g, const int b, const int a) {
+            return (static_cast<ThemePackedColor>(a & 0xff) << 24u) |
+                   (static_cast<ThemePackedColor>(b & 0xff) << 16u) |
+                   (static_cast<ThemePackedColor>(g & 0xff) << 8u) |
+                   static_cast<ThemePackedColor>(r & 0xff);
         }
 
     } // namespace
 
     // Color utilities
-    ImVec4 lighten(const ImVec4& color, const float amount) {
+    ThemeColor lighten(const ThemeColor& color, const float amount) {
         return {
             std::min(1.0f, color.x + amount),
             std::min(1.0f, color.y + amount),
@@ -139,7 +133,7 @@ namespace lfs::vis {
             color.w};
     }
 
-    ImVec4 darken(const ImVec4& color, const float amount) {
+    ThemeColor darken(const ThemeColor& color, const float amount) {
         return {
             std::max(0.0f, color.x - amount),
             std::max(0.0f, color.y - amount),
@@ -147,127 +141,84 @@ namespace lfs::vis {
             color.w};
     }
 
-    ImVec4 withAlpha(const ImVec4& color, const float alpha) {
+    ThemeColor withAlpha(const ThemeColor& color, const float alpha) {
         return {color.x, color.y, color.z, alpha};
     }
 
-    ImU32 toU32(const ImVec4& color) {
-        return IM_COL32(
-            static_cast<int>(color.x * 255.0f),
-            static_cast<int>(color.y * 255.0f),
-            static_cast<int>(color.z * 255.0f),
-            static_cast<int>(color.w * 255.0f));
+    ThemePackedColor toU32(const ThemeColor& color) {
+        return packColor(colorByte(color.x),
+                         colorByte(color.y),
+                         colorByte(color.z),
+                         colorByte(color.w));
     }
 
-    ImU32 toU32WithAlpha(const ImVec4& color, const float alpha) {
-        return IM_COL32(
-            static_cast<int>(color.x * 255.0f),
-            static_cast<int>(color.y * 255.0f),
-            static_cast<int>(color.z * 255.0f),
-            static_cast<int>(alpha * 255.0f));
+    ThemePackedColor toU32WithAlpha(const ThemeColor& color, const float alpha) {
+        return packColor(colorByte(color.x),
+                         colorByte(color.y),
+                         colorByte(color.z),
+                         colorByte(alpha));
     }
 
     // Theme computed colors
-    ImU32 Theme::primary_u32() const { return toU32(palette.primary); }
-    ImU32 Theme::error_u32() const { return toU32(palette.error); }
-    ImU32 Theme::success_u32() const { return toU32(palette.success); }
-    ImU32 Theme::warning_u32() const { return toU32(palette.warning); }
-    ImU32 Theme::text_u32() const { return toU32(palette.text); }
-    ImU32 Theme::text_dim_u32() const { return toU32(palette.text_dim); }
-    ImU32 Theme::border_u32() const { return toU32(palette.border); }
-    ImU32 Theme::surface_u32() const { return toU32(palette.surface); }
+    ThemePackedColor Theme::primary_u32() const { return toU32(palette.primary); }
+    ThemePackedColor Theme::error_u32() const { return toU32(palette.error); }
+    ThemePackedColor Theme::success_u32() const { return toU32(palette.success); }
+    ThemePackedColor Theme::warning_u32() const { return toU32(palette.warning); }
+    ThemePackedColor Theme::text_u32() const { return toU32(palette.text); }
+    ThemePackedColor Theme::text_dim_u32() const { return toU32(palette.text_dim); }
+    ThemePackedColor Theme::border_u32() const { return toU32(palette.border); }
+    ThemePackedColor Theme::surface_u32() const { return toU32(palette.surface); }
 
-    ImU32 Theme::selection_fill_u32() const { return toU32WithAlpha(palette.primary, SELECTION_FILL_ALPHA); }
-    ImU32 Theme::selection_border_u32() const { return toU32WithAlpha(palette.primary, SELECTION_BORDER_ALPHA); }
-    ImU32 Theme::selection_line_u32() const { return toU32WithAlpha(palette.primary, SELECTION_LINE_ALPHA); }
+    ThemePackedColor Theme::selection_fill_u32() const { return toU32WithAlpha(palette.primary, SELECTION_FILL_ALPHA); }
+    ThemePackedColor Theme::selection_border_u32() const { return toU32WithAlpha(palette.primary, SELECTION_BORDER_ALPHA); }
+    ThemePackedColor Theme::selection_line_u32() const { return toU32WithAlpha(palette.primary, SELECTION_LINE_ALPHA); }
 
-    ImU32 Theme::polygon_vertex_u32() const { return toU32(palette.warning); }
-    ImU32 Theme::polygon_vertex_hover_u32() const { return toU32(lighten(palette.warning, 0.2f)); }
-    ImU32 Theme::polygon_close_hint_u32() const { return toU32WithAlpha(palette.success, POLYGON_CLOSE_ALPHA); }
+    ThemePackedColor Theme::polygon_vertex_u32() const { return toU32(palette.warning); }
+    ThemePackedColor Theme::polygon_vertex_hover_u32() const { return toU32(lighten(palette.warning, 0.2f)); }
+    ThemePackedColor Theme::polygon_close_hint_u32() const { return toU32WithAlpha(palette.success, POLYGON_CLOSE_ALPHA); }
 
-    ImU32 Theme::overlay_background_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
-    ImU32 Theme::overlay_text_u32() const { return toU32(overlay.text); }
-    ImU32 Theme::overlay_shadow_u32() const { return IM_COL32(0, 0, 0, 180); }
-    ImU32 Theme::overlay_hint_u32() const { return toU32WithAlpha(overlay.text_dim, OVERLAY_HINT_ALPHA); }
-    ImU32 Theme::overlay_border_u32() const { return toU32(overlay.border); }
-    ImU32 Theme::overlay_icon_u32() const { return toU32(overlay.icon); }
-    ImU32 Theme::overlay_highlight_u32() const { return toU32WithAlpha(overlay.highlight, OVERLAY_HIGHLIGHT_ALPHA); }
-    ImU32 Theme::overlay_selection_u32() const { return toU32WithAlpha(overlay.selection, OVERLAY_SELECTION_ALPHA); }
-    ImU32 Theme::overlay_selection_flash_u32() const { return toU32WithAlpha(overlay.selection_flash, OVERLAY_SELECTION_FLASH_ALPHA); }
+    ThemePackedColor Theme::overlay_background_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
+    ThemePackedColor Theme::overlay_text_u32() const { return toU32(overlay.text); }
+    ThemePackedColor Theme::overlay_shadow_u32() const { return packColor(0, 0, 0, 180); }
+    ThemePackedColor Theme::overlay_hint_u32() const { return toU32WithAlpha(overlay.text_dim, OVERLAY_HINT_ALPHA); }
+    ThemePackedColor Theme::overlay_border_u32() const { return toU32(overlay.border); }
+    ThemePackedColor Theme::overlay_icon_u32() const { return toU32(overlay.icon); }
+    ThemePackedColor Theme::overlay_highlight_u32() const { return toU32WithAlpha(overlay.highlight, OVERLAY_HIGHLIGHT_ALPHA); }
+    ThemePackedColor Theme::overlay_selection_u32() const { return toU32WithAlpha(overlay.selection, OVERLAY_SELECTION_ALPHA); }
+    ThemePackedColor Theme::overlay_selection_flash_u32() const { return toU32WithAlpha(overlay.selection_flash, OVERLAY_SELECTION_FLASH_ALPHA); }
 
-    ImU32 Theme::progress_bar_bg_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
-    ImU32 Theme::progress_bar_fill_u32() const { return toU32WithAlpha(palette.warning, PROGRESS_FILL_ALPHA); }
-    ImU32 Theme::progress_marker_u32() const { return toU32WithAlpha(palette.error, PROGRESS_MARKER_ALPHA); }
+    ThemePackedColor Theme::progress_bar_bg_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
+    ThemePackedColor Theme::progress_bar_fill_u32() const { return toU32WithAlpha(palette.warning, PROGRESS_FILL_ALPHA); }
+    ThemePackedColor Theme::progress_marker_u32() const { return toU32WithAlpha(palette.error, PROGRESS_MARKER_ALPHA); }
 
-    ImVec4 Theme::button_normal() const { return palette.surface; }
-    ImVec4 Theme::button_hovered() const { return palette.surface_bright; }
-    ImVec4 Theme::button_active() const { return darken(palette.surface_bright, 0.05f); }
-    ImVec4 Theme::button_selected() const { return palette.primary; }
-    ImVec4 Theme::button_selected_hovered() const { return lighten(palette.primary, 0.1f); }
+    ThemeColor Theme::button_normal() const { return palette.surface; }
+    ThemeColor Theme::button_hovered() const { return palette.surface_bright; }
+    ThemeColor Theme::button_active() const { return darken(palette.surface_bright, 0.05f); }
+    ThemeColor Theme::button_selected() const { return palette.primary; }
+    ThemeColor Theme::button_selected_hovered() const { return lighten(palette.primary, 0.1f); }
 
-    ImVec4 Theme::toolbar_background() const { return withAlpha(palette.surface, TOOLBAR_BG_ALPHA); }
-    ImVec4 Theme::subtoolbar_background() const { return withAlpha(darken(palette.surface, 0.03f), SUBTOOLBAR_BG_ALPHA); }
+    ThemeColor Theme::toolbar_background() const { return withAlpha(palette.surface, TOOLBAR_BG_ALPHA); }
+    ThemeColor Theme::subtoolbar_background() const { return withAlpha(darken(palette.surface, 0.03f), SUBTOOLBAR_BG_ALPHA); }
 
-    ImVec4 Theme::menu_background() const { return lighten(palette.surface, menu.bg_lighten); }
-    ImVec4 Theme::menu_hover() const { return lighten(palette.surface_bright, menu.hover_lighten); }
-    ImVec4 Theme::menu_active() const { return withAlpha(palette.primary, menu.active_alpha); }
-    ImVec4 Theme::menu_popup_background() const { return lighten(palette.surface, menu.popup_lighten); }
-    ImVec4 Theme::menu_border() const { return withAlpha(palette.border, menu.border_alpha); }
-    ImU32 Theme::menu_bottom_border_u32() const { return toU32(darken(palette.surface, menu.bottom_border_darken)); }
+    ThemeColor Theme::menu_background() const { return lighten(palette.surface, menu.bg_lighten); }
+    ThemeColor Theme::menu_hover() const { return lighten(palette.surface_bright, menu.hover_lighten); }
+    ThemeColor Theme::menu_active() const { return withAlpha(palette.primary, menu.active_alpha); }
+    ThemeColor Theme::menu_popup_background() const { return lighten(palette.surface, menu.popup_lighten); }
+    ThemeColor Theme::menu_border() const { return withAlpha(palette.border, menu.border_alpha); }
+    ThemePackedColor Theme::menu_bottom_border_u32() const { return toU32(darken(palette.surface, menu.bottom_border_darken)); }
 
-    ImU32 Theme::viewport_border_u32() const { return toU32WithAlpha(darken(palette.background, viewport.border_darken), viewport.border_alpha); }
+    ThemePackedColor Theme::viewport_border_u32() const { return toU32WithAlpha(darken(palette.background, viewport.border_darken), viewport.border_alpha); }
 
-    ImU32 Theme::row_even_u32() const { return toU32(palette.row_even); }
-    ImU32 Theme::row_odd_u32() const { return toU32(palette.row_odd); }
+    ThemePackedColor Theme::row_even_u32() const { return toU32(palette.row_even); }
+    ThemePackedColor Theme::row_odd_u32() const { return toU32(palette.row_odd); }
 
-    void Theme::pushContextMenuStyle() const {
-        const ImVec4 popup_bg = useLightPopupBackground(*this) ? palette.background : palette.surface;
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, popup_bg);
-        ImGui::PushStyleColor(ImGuiCol_Border, palette.border);
-        ImGui::PushStyleColor(ImGuiCol_Header, withAlpha(palette.primary, context_menu.header_alpha));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, withAlpha(palette.primary, context_menu.header_hover_alpha));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, withAlpha(palette.primary, context_menu.header_active_alpha));
-        ImGui::PushStyleColor(ImGuiCol_Text, palette.text);
-        const float dpi = g_dpi_scale;
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, context_menu.rounding * dpi);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(context_menu.padding.x * dpi, context_menu.padding.y * dpi));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(context_menu.item_spacing.x * dpi, context_menu.item_spacing.y * dpi));
-    }
+    void Theme::pushContextMenuStyle() const {}
 
-    void Theme::popContextMenuStyle() {
-        ImGui::PopStyleVar(3);
-        ImGui::PopStyleColor(6);
-    }
+    void Theme::popContextMenuStyle() {}
 
-    void Theme::pushModalStyle() const {
-        constexpr float MODAL_BG_ALPHA = 0.98f;
-        constexpr float MODAL_BORDER_SIZE = 2.0f;
-        constexpr float MODAL_PADDING_X = 20.0f;
-        constexpr float MODAL_PADDING_Y = 15.0f;
-        constexpr float TITLE_DARKEN = 0.1f;
-        constexpr float TITLE_ACTIVE_DARKEN = 0.05f;
-        const bool is_light_popup = useLightPopupBackground(*this);
-        const ImVec4 modal_surface = is_light_popup ? palette.background : palette.surface;
-        const ImVec4 popup_bg{modal_surface.x, modal_surface.y, modal_surface.z, MODAL_BG_ALPHA};
-        const ImVec4 title_bg = darken(modal_surface, is_light_popup ? 0.0f : TITLE_DARKEN);
-        const ImVec4 title_bg_active = darken(modal_surface, is_light_popup ? 0.0f : TITLE_ACTIVE_DARKEN);
+    void Theme::pushModalStyle() const {}
 
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, popup_bg);
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, popup_bg);
-        ImGui::PushStyleColor(ImGuiCol_TitleBg, title_bg);
-        ImGui::PushStyleColor(ImGuiCol_TitleBgActive, title_bg_active);
-        ImGui::PushStyleColor(ImGuiCol_Border, palette.border);
-        ImGui::PushStyleColor(ImGuiCol_Text, palette.text);
-        const float dpi = g_dpi_scale;
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, MODAL_BORDER_SIZE * dpi);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, sizes.popup_rounding * dpi);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(MODAL_PADDING_X * dpi, MODAL_PADDING_Y * dpi));
-    }
-
-    void Theme::popModalStyle() {
-        ImGui::PopStyleVar(3);
-        ImGui::PopStyleColor(6);
-    }
+    void Theme::popModalStyle() {}
 
     void setThemeDpiScale(const float scale) { g_dpi_scale = scale; }
     float getThemeDpiScale() { return g_dpi_scale; }
@@ -308,109 +259,6 @@ namespace lfs::vis {
             applyCurrentTheme(t, active_theme_id);
         }
     } // namespace
-
-    void applyThemeToImGui() {
-        ensureInitialized();
-        if (ImGui::GetCurrentContext() == nullptr) {
-            // Headless Python sessions can still read and mutate theme state
-            // even when no ImGui style exists to update.
-            return;
-        }
-        ImGuiStyle& style = ImGui::GetStyle();
-        const auto& p = g_current_theme.palette;
-        const auto& s = g_current_theme.sizes;
-
-        style.WindowRounding = s.window_rounding;
-        style.FrameRounding = s.frame_rounding;
-        style.PopupRounding = s.popup_rounding;
-        style.ScrollbarRounding = std::max(s.scrollbar_rounding, s.scrollbar_size * 0.5f);
-        style.GrabRounding = s.grab_rounding;
-        style.TabRounding = s.tab_rounding;
-        style.WindowBorderSize = s.border_size;
-        style.ChildBorderSize = s.child_border_size;
-        style.PopupBorderSize = s.popup_border_size;
-        style.WindowPadding = s.window_padding;
-        style.FramePadding = s.frame_padding;
-        style.ItemSpacing = s.item_spacing;
-        style.ItemInnerSpacing = s.item_inner_spacing;
-        style.IndentSpacing = s.indent_spacing;
-        style.ScrollbarSize = s.scrollbar_size;
-        style.GrabMinSize = s.grab_min_size;
-        style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
-
-        const bool is_light = g_current_theme.isLightTheme();
-        const bool is_light_popup = useLightPopupBackground(g_current_theme);
-        const ImVec4 window_bg = p.surface;
-        const ImVec4 child_bg = is_light ? darken(p.surface, 0.015f) : darken(p.surface, 0.025f);
-        const ImVec4 popup_bg = is_light_popup ? lighten(p.surface, 0.02f) : lighten(p.surface, 0.01f);
-        const ImVec4 title_bg = is_light ? darken(p.surface, 0.02f) : lighten(p.surface, 0.035f);
-        const ImVec4 title_bg_active = is_light ? mix(p.surface, p.surface_bright, 0.55f)
-                                                : mix(p.surface, p.surface_bright, 0.75f);
-        const ImVec4 button_bg = is_light ? darken(p.surface, 0.01f) : darken(p.surface, 0.015f);
-        const ImVec4 tab_bg = is_light ? darken(p.surface, 0.01f) : darken(p.surface, 0.008f);
-        const ImVec4 tab_active_bg = is_light ? mix(p.surface_bright, p.primary_dim, 0.10f)
-                                              : mix(p.surface_bright, p.primary_dim, 0.18f);
-        ImVec4* const colors = style.Colors;
-        colors[ImGuiCol_Text] = p.text;
-        colors[ImGuiCol_TextDisabled] = p.text_dim;
-        colors[ImGuiCol_WindowBg] = window_bg;
-        colors[ImGuiCol_ChildBg] = child_bg;
-        colors[ImGuiCol_PopupBg] = popup_bg;
-        colors[ImGuiCol_Border] = p.border;
-        colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
-
-        const float frame_darken = g_current_theme.frameDarkenAmount();
-        colors[ImGuiCol_FrameBg] = darken(window_bg, frame_darken);
-        colors[ImGuiCol_FrameBgHovered] = is_light ? darken(p.surface, 0.08f) : p.surface_bright;
-        colors[ImGuiCol_FrameBgActive] = p.primary_dim;
-        colors[ImGuiCol_TitleBg] = title_bg;
-        colors[ImGuiCol_TitleBgActive] = title_bg_active;
-        colors[ImGuiCol_TitleBgCollapsed] = title_bg;
-        colors[ImGuiCol_MenuBarBg] = title_bg;
-        colors[ImGuiCol_ScrollbarBg] = withAlpha(p.background, 0.5f);
-        colors[ImGuiCol_ScrollbarGrab] = withAlpha(p.text_dim, 0.63f);
-        colors[ImGuiCol_ScrollbarGrabHovered] = withAlpha(p.primary, 0.78f);
-        colors[ImGuiCol_ScrollbarGrabActive] = p.primary;
-        colors[ImGuiCol_CheckMark] = p.primary;
-        colors[ImGuiCol_SliderGrab] = p.primary;
-        colors[ImGuiCol_SliderGrabActive] = lighten(p.primary, 0.1f);
-        colors[ImGuiCol_Button] = button_bg;
-        colors[ImGuiCol_ButtonHovered] = p.surface_bright;
-        colors[ImGuiCol_ButtonActive] = p.primary_dim;
-        colors[ImGuiCol_Header] = withAlpha(p.primary, 0.25f);
-        colors[ImGuiCol_HeaderHovered] = withAlpha(p.primary, 0.5f);
-        colors[ImGuiCol_HeaderActive] = withAlpha(p.primary, 0.7f);
-        colors[ImGuiCol_Separator] = p.border;
-        colors[ImGuiCol_SeparatorHovered] = p.primary;
-        colors[ImGuiCol_SeparatorActive] = p.primary;
-        colors[ImGuiCol_ResizeGrip] = withAlpha(p.primary, 0.2f);
-        colors[ImGuiCol_ResizeGripHovered] = withAlpha(p.primary, 0.6f);
-        colors[ImGuiCol_ResizeGripActive] = p.primary;
-        colors[ImGuiCol_Tab] = tab_bg;
-        colors[ImGuiCol_TabHovered] = p.surface_bright;
-        colors[ImGuiCol_TabActive] = tab_active_bg;
-        colors[ImGuiCol_TabUnfocused] = tab_bg;
-        colors[ImGuiCol_TabUnfocusedActive] = tab_active_bg;
-        colors[ImGuiCol_PlotLines] = p.primary;
-        colors[ImGuiCol_PlotLinesHovered] = lighten(p.primary, 0.2f);
-        colors[ImGuiCol_PlotHistogram] = p.primary;
-        colors[ImGuiCol_PlotHistogramHovered] = lighten(p.primary, 0.2f);
-        colors[ImGuiCol_TableHeaderBg] = title_bg;
-        colors[ImGuiCol_TableBorderStrong] = p.border;
-        colors[ImGuiCol_TableBorderLight] = withAlpha(p.border, 0.65f);
-        colors[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
-        colors[ImGuiCol_TableRowBgAlt] = withAlpha(p.surface_bright, is_light ? 0.16f : 0.14f);
-        colors[ImGuiCol_TextSelectedBg] = withAlpha(p.primary, 0.35f);
-        colors[ImGuiCol_DragDropTarget] = p.primary;
-        colors[ImGuiCol_NavHighlight] = p.primary;
-        colors[ImGuiCol_NavWindowingHighlight] = withAlpha(p.primary, 0.7f);
-        colors[ImGuiCol_NavWindowingDimBg] = withAlpha(p.background, 0.2f);
-        colors[ImGuiCol_ModalWindowDimBg] = withAlpha(p.background, 0.35f);
-
-        style.FrameBorderSize = is_light ? 1.0f : 0.0f;
-
-        style.ScaleAllSizes(g_dpi_scale);
-    }
 
     namespace {
 
@@ -952,7 +800,6 @@ namespace lfs::vis {
             g_current_theme = theme;
             g_current_theme_id = std::string(theme_id);
             g_initialized = true;
-            applyThemeToImGui();
             if (g_theme_change_cb)
                 g_theme_change_cb(g_current_theme_id);
         }

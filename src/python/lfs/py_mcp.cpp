@@ -15,6 +15,9 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
+#include <algorithm>
+#include <string_view>
+
 namespace lfs::python {
 
     namespace {
@@ -136,6 +139,33 @@ namespace lfs::python {
         std::vector<std::string> registered_tools_;
         std::mutex tools_mutex_;
 
+        std::string resolve_python_tool_name(std::string name) {
+            name = mcp::normalize_tool_name(std::move(name));
+            if (!name.starts_with("plugin_")) {
+                name = "plugin_" + name;
+            }
+            return name;
+        }
+
+        std::string python_tool_registry_name(const std::string& name) {
+            const std::string wire_name = resolve_python_tool_name(name);
+            return "plugin." + wire_name.substr(std::string_view("plugin_").size());
+        }
+
+        std::string resolve_call_tool_name(std::string name) {
+            name = mcp::normalize_tool_name(std::move(name));
+            if (name.starts_with("plugin_")) {
+                return name;
+            }
+
+            const std::string plugin_name = "plugin_" + name;
+            std::lock_guard lock(tools_mutex_);
+            if (std::find(registered_tools_.begin(), registered_tools_.end(), plugin_name) != registered_tools_.end()) {
+                return plugin_name;
+            }
+            return name;
+        }
+
         mcp::McpTool create_tool_from_info(const PyToolInfo& info) {
             return mcp::McpTool{
                 .name = info.name,
@@ -177,7 +207,7 @@ namespace lfs::python {
             if (tool_name.empty()) {
                 tool_name = nb::cast<std::string>(fn.attr("__name__"));
             }
-            info.name = "plugin." + tool_name;
+            info.name = python_tool_registry_name(tool_name);
 
             std::string tool_desc = description;
             if (tool_desc.empty()) {
@@ -238,25 +268,34 @@ namespace lfs::python {
 
             mcp::ToolRegistry::instance().register_tool(std::move(tool), std::move(handler));
 
-            std::lock_guard lock(tools_mutex_);
-            registered_tools_.push_back(info.name);
+            const auto registered_tools = mcp::ToolRegistry::instance().list_tools();
+            const auto registered = std::find_if(
+                registered_tools.begin(),
+                registered_tools.end(),
+                [&info](const mcp::McpTool& candidate) { return candidate.name == info.name; });
+            if (registered == registered_tools.end()) {
+                return;
+            }
 
-            LOG_INFO("Registered Python MCP tool: {}", info.name);
+            const std::string wire_name = mcp::normalize_tool_name(info.name);
+            std::lock_guard lock(tools_mutex_);
+            if (std::find(registered_tools_.begin(), registered_tools_.end(), wire_name) == registered_tools_.end()) {
+                registered_tools_.push_back(wire_name);
+            }
+
+            LOG_INFO("Registered Python MCP tool: {}", wire_name);
         }
 
         void unregister_python_tool(const std::string& name) {
-            std::string full_name = name;
-            if (!name.starts_with("plugin.")) {
-                full_name = "plugin." + name;
-            }
-            mcp::ToolRegistry::instance().unregister_tool(full_name);
+            const std::string wire_name = resolve_python_tool_name(name);
+            mcp::ToolRegistry::instance().unregister_tool(wire_name);
 
             std::lock_guard lock(tools_mutex_);
             registered_tools_.erase(
-                std::remove(registered_tools_.begin(), registered_tools_.end(), full_name),
+                std::remove(registered_tools_.begin(), registered_tools_.end(), wire_name),
                 registered_tools_.end());
 
-            LOG_INFO("Unregistered Python MCP tool: {}", full_name);
+            LOG_INFO("Unregistered Python MCP tool: {}", wire_name);
         }
 
         std::vector<std::string> list_python_tools() {
@@ -269,7 +308,7 @@ namespace lfs::python {
             std::vector<std::string> names;
             names.reserve(tools.size());
             for (const auto& tool : tools) {
-                names.push_back(tool.name);
+                names.push_back(mcp::normalize_tool_name(tool.name));
             }
             return names;
         }
@@ -376,7 +415,10 @@ namespace lfs::python {
                     }
                 }
                 return json_to_python(
-                    mcp::ToolRegistry::instance().call_tool(name, json_args, lfs::OperationId::generate()));
+                    mcp::ToolRegistry::instance().call_tool(
+                        resolve_call_tool_name(name),
+                        json_args,
+                        lfs::OperationId::generate()));
             },
             nb::arg("name"), nb::arg("args") = nb::none(),
             "Invoke a registered shared capability/tool");

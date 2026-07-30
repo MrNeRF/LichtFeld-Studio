@@ -915,7 +915,11 @@ Runtime compatibility constants:
 
 ## Layout API
 
-The `ui` object passed to `Panel.draw()` provides the immediate widget API used by both simple and hybrid panels. Depending on the panel space and shell, it may be rendered through the direct viewport path or the immediate-mode RML bridge, but the Python widget surface stays the same.
+The `ui` object passed to a regular `Panel.draw()` is a live `RmlUILayout`,
+an immediate widget API reconciled into retained RmlUi elements. Viewport
+overlay panels and document-less draw hooks receive the compatibility
+`UILayout`: its viewport drawing methods are live during the overlay frame,
+while interactive controls warn once and return inert defaults.
 
 ### Text
 
@@ -986,7 +990,7 @@ The `ui` object passed to `Panel.draw()` provides the immediate widget API used 
 
 | Method                                              | Returns              | Description              |
 |-----------------------------------------------------|----------------------|--------------------------|
-| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | File/folder picker. `dialog_title` is accepted for compatibility and currently ignored. |
+| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | Editable path plus native browse button on `RmlUILayout`; `folder_mode` selects folder vs file. A non-empty title is passed to the custom-title dialog path, while an empty title uses the native default. Unsupported on compatibility `UILayout`. |
 
 ### Property Binding
 
@@ -1030,6 +1034,12 @@ The `ui` object passed to `Panel.draw()` provides the immediate widget API used 
 | `table_set_bg_color(target, color)`                 | `None`  | Set row/cell background  |
 | `end_table()`                                       | `None`  | End table                |
 
+Rows are position-identified by default. If rows can be removed or reordered,
+call `push_id()` with a stable value (a hidden `##key` is accepted) after
+`begin_table()` and before `table_next_row()`, and keep that id active through
+the row's cells. The Rml bridge then preserves the matching row, focus, caret,
+listeners, and cell state across reconciliation.
+
 ### Images
 
 | Method                                                       | Returns | Description            |
@@ -1058,7 +1068,7 @@ ui.image_texture(tex, (256, 256))
 
 ### DynamicTexture
 
-GPU tensor to UI texture bridge. In the Vulkan viewer this uses the backend's opaque ImGui texture handle.
+GPU tensor to UI texture bridge. In the Vulkan viewer this uses an opaque Vulkan UI texture id (`uint64`).
 
 ```python
 tex = lf.ui.DynamicTexture()          # Empty
@@ -1069,7 +1079,7 @@ tex = lf.ui.DynamicTexture(tensor)    # From tensor
 |--------------------|----------------------|------------------------------------------------|
 | `update(tensor)`   | `None`               | Upload `[H, W, 3\|4]` tensor (auto-converts CPU→CUDA, uint8→float32) |
 | `destroy()`        | `None`               | Release UI texture resources                   |
-| `id`               | `int`                | Opaque ImGui backend texture handle            |
+| `id`               | `int`                | Opaque Vulkan UI texture id (`uint64`)         |
 | `width`            | `int`                | Current width in pixels                        |
 | `height`           | `int`                | Current height in pixels                       |
 | `valid`            | `bool`               | `True` if texture is initialized               |
@@ -1129,6 +1139,10 @@ Calling `update()` with a different resolution automatically recreates the backe
 
 ### Drawing (Viewport)
 
+On a viewport-overlay `UILayout`, these primitives enqueue into the active
+viewport-scoped `ScreenOverlayRenderer`. Coordinates are absolute screen
+coordinates. Outside an active overlay frame they emit no command.
+
 | Method                                                         | Returns | Description            |
 |----------------------------------------------------------------|---------|------------------------|
 | `draw_line(x0, y0, x1, y1, color, thickness=1)`               | `None`  | Line                   |
@@ -1146,13 +1160,24 @@ Calling `update()` with a different resolution automatically recreates the backe
 
 ### Drawing (Window)
 
+The `draw_window_*` names are compatibility aliases and use the same absolute
+screen-coordinate convention as `draw_*`; they do not add a window origin.
+
 | Method                                                         | Returns | Description            |
 |----------------------------------------------------------------|---------|------------------------|
-| `draw_window_rect_filled(x0, y0, x1, y1, color)`              | `None`  | Filled rect to window  |
-| `draw_window_rect(x0, y0, x1, y1, color, thickness=1)`        | `None`  | Rect outline to window |
-| `draw_window_line(x0, y0, x1, y1, color, thickness=1)`        | `None`  | Line to window         |
-| `draw_window_text(x, y, text, color)`                          | `None`  | Text to window         |
-| `draw_window_triangle_filled(x0, y0, x1, y1, x2, y2, color)` | `None`  | Triangle to window     |
+| `draw_window_rect_filled(x0, y0, x1, y1, color)`              | `None`  | Filled rectangle       |
+| `draw_window_rect(x0, y0, x1, y1, color, thickness=1)`        | `None`  | Rectangle outline      |
+| `draw_window_rect_rounded(x0, y0, x1, y1, color, r, thickness=1)` | `None` | Rounded outline    |
+| `draw_window_rect_rounded_filled(x0, y0, x1, y1, color, r)`   | `None`  | Filled rounded rect    |
+| `draw_window_line(x0, y0, x1, y1, color, thickness=1)`        | `None`  | Line                   |
+| `draw_window_text(x, y, text, color)`                          | `None`  | Text                   |
+| `draw_window_triangle_filled(x0, y0, x1, y1, x2, y2, color)` | `None`  | Filled triangle        |
+
+The legacy `background` arguments on applicable `draw_*` calls are accepted
+but ignored: there is no separate background draw list. Overlay calls share
+one command stream, packed as shapes followed by text/images. Enqueue order is
+retained within each batch, but cross-batch call order is not a z-order
+guarantee.
 
 ### Progress & Status
 
@@ -1223,9 +1248,9 @@ Calling `update()` with a different resolution automatically recreates the backe
 
 | Method                                                                            | Returns        | Description           |
 |-----------------------------------------------------------------------------------|----------------|-----------------------|
-| `crf_curve_preview(label, gamma, toe, shoulder, gamma_r=0, gamma_g=0, gamma_b=0)`| `None`         | Tone curve preview    |
-| `chromaticity_diagram(label, rx, ry, gx, gy, bx, by, nx, ny, range=0.5)`         | `(bool, list)` | Chromaticity diagram  |
-| `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Custom list template |
+| `crf_curve_preview(label, gamma, toe, shoulder, gamma_r=0, gamma_g=0, gamma_b=0)`| `None`         | Unsupported layout method; warns once. Use retained `<crf-curve>`. |
+| `chromaticity_diagram(label, rx, ry, gx, gy, bx, by, nx, ny, range=0.5)`         | `(bool, list)` | Unsupported layout method; warns once. Use retained `<chromaticity-diagram>`. |
+| `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Live on `RmlUILayout`. Compatibility `UILayout` raises `TypeError` outside draw hooks and warns/returns inert values in draw hooks. |
 
 ### Layout Composition
 
@@ -1235,12 +1260,19 @@ Create composable sub-layouts with automatic widget positioning and state cascad
 |----------------------------------------------------|-------------|---------------------------------|
 | `row()`                                            | `SubLayout` | Horizontal layout               |
 | `column()`                                         | `SubLayout` | Vertical layout                 |
-| `split(factor=0.5)`                                | `SubLayout` | Two-column split                |
+| `split(factor=0.5)`                                | `SubLayout` | Two-child split; factor controls first/second width ratio |
 | `box()`                                            | `SubLayout` | Bordered container              |
-| `grid_flow(columns=0, even_columns=True, even_rows=True)` | `SubLayout` | Responsive grid         |
+| `grid_flow(columns=0, even_columns=True, even_rows=True)` | `SubLayout` | Responsive grid with explicit column/row sizing controls |
 | `prop_enum(data, prop_id, value, text='')`          | `bool`      | Enum toggle button              |
 
 `SubLayout` is a context manager. Use `with ui.row() as row:` to enter the layout, then call widget methods on `row` instead of `ui`. Sub-layouts nest arbitrarily.
+
+For `split`, values are clamped to `[0, 1]`; a 4dp gap is accounted for while
+preserving the requested ratio. Only two children are shown. For `grid_flow`,
+positive `columns` with `even_columns=True` assigns equal percentage widths;
+`columns=0` uses a wrapping 100dp basis. `even_columns=False` uses content
+width. `even_rows=True` grows and stretches cells to the row height;
+`even_rows=False` preserves natural height.
 
 #### SubLayout state properties
 
@@ -1684,6 +1716,8 @@ lf.undo.stack() -> dict
 | `lf.ui.get_pivot_mode()` / `set_pivot_mode(mode)` | `int`      | Pivot mode enum index      |
 | `lf.ui.get_fps()`                           | `float`          | Current FPS                |
 | `lf.ui.get_git_commit()`                    | `str`            | Git commit hash            |
+| `lf.ui.is_key_pressed(key, repeat=False)`    | `bool`           | SDL-backed rising edge for the current UI frame; UI thread only, no repeat events |
+| `lf.ui.is_key_down(key)`                     | `bool`           | Current SDL keyboard level |
 
 For a coarse CUDA memory number in Python plugin code, use
 `lfs_plugins.get_gpu_memory()` from the helper package. There is no
@@ -1737,6 +1771,9 @@ Inject UI into existing panels at predefined hook points. Callbacks receive a `l
 | `@lf.ui.hook(panel, section, position="append")` | Decorator form of `add_hook` |
 
 Hook points are runtime-defined. Query them with `lf.ui.get_hook_points()` instead of hard-coding.
+Callbacks whose layout cannot host interactive widgets warn once per method
+and return inert controls. Viewport drawing remains available during an active
+overlay frame.
 
 ### Tensor API
 
@@ -1985,7 +2022,7 @@ from lfs_plugins.icon_manager import get_icon, get_ui_icon, get_scene_icon, get_
 | `get_scene_icon(name)`                      | `int`   | Load `assets/icon/scene/{name}.png`      |
 | `get_plugin_icon(name, plugin_path, plugin_name)` | `int` | Load `{plugin_path}/icons/{name}.png` with fallback |
 
-All return opaque UI texture handles (0 on failure). Icons are cached by C++.
+All return opaque Vulkan UI texture ids (0 on failure). Icons are cached by C++ (`IconCache`).
 
 Direct loading:
 ```python

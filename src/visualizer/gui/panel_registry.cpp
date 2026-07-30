@@ -11,12 +11,12 @@
 #include "theme/theme.hpp"
 #include "visualizer/app_store.hpp"
 
+#include <SDL3/SDL_mouse.h>
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <optional>
 #include <string>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -138,15 +138,6 @@ namespace lfs::vis::gui {
                     .y = ctx.viewport->pos.y,
                     .width = ctx.viewport->size.x,
                     .height = ctx.viewport->size.y,
-                };
-            }
-
-            if (const auto* vp = ImGui::GetMainViewport()) {
-                return {
-                    .x = vp->WorkPos.x,
-                    .y = vp->WorkPos.y,
-                    .width = vp->WorkSize.x,
-                    .height = vp->WorkSize.y,
                 };
             }
 
@@ -535,6 +526,18 @@ namespace lfs::vis::gui {
             }
         }
 
+        int8_t floating_cursor_dir_x = 0;
+        int8_t floating_cursor_dir_y = 0;
+        if (hovered_floating_direct >= 0) {
+            const auto& hovered =
+                floating_direct_layouts[static_cast<std::size_t>(
+                    hovered_floating_direct)];
+            if (hovered.mouse_in_resize_grip) {
+                floating_cursor_dir_x = hovered.hover_dir_x;
+                floating_cursor_dir_y = hovered.hover_dir_y;
+            }
+        }
+
         for (size_t snap_idx = 0; snap_idx < snapshots.size(); ++snap_idx) {
             auto& snap = snapshots[snap_idx];
             bool draw_succeeded = false;
@@ -548,7 +551,6 @@ namespace lfs::vis::gui {
                                          : std::chrono::steady_clock::time_point{};
 
             try {
-                ImGui::PushID(snap.id.c_str());
                 snap.panel->setPanelSpace(space);
 
                 switch (space) {
@@ -621,6 +623,8 @@ namespace lfs::vis::gui {
                                     }
                                 }
                                 if (pi.float_resizing) {
+                                    floating_cursor_dir_x = pi.float_resize_dir_x;
+                                    floating_cursor_dir_y = pi.float_resize_dir_y;
                                     if (mouse_down_left) {
                                         const float dx = mouse_x - pi.float_resize_start_mx;
                                         const float dy = mouse_y - pi.float_resize_start_my;
@@ -684,21 +688,7 @@ namespace lfs::vis::gui {
                                     guiFocusState().want_capture_mouse = true;
                                 }
 
-                                if (interactive) {
-                                    const int8_t dx =
-                                        pi.float_resizing ? pi.float_resize_dir_x : layout.hover_dir_x;
-                                    const int8_t dy =
-                                        pi.float_resizing ? pi.float_resize_dir_y : layout.hover_dir_y;
-                                    if (dx && dy) {
-                                        const bool nw_se = (dx == dy);
-                                        ImGui::SetMouseCursor(nw_se ? ImGuiMouseCursor_ResizeNWSE
-                                                                    : ImGuiMouseCursor_ResizeNESW);
-                                    } else if (dx) {
-                                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-                                    } else if (dy) {
-                                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-                                    }
-                                }
+                                (void)interactive;
                             }
                         }
 
@@ -706,10 +696,6 @@ namespace lfs::vis::gui {
                         snap.panel->setForcedHeight(forced);
                         try {
                             with_panel_input(snap.panel, [&] {
-                                if (snap.panel->wantsExternalFloatingShadow()) {
-                                    widgets::DrawFloatingWindowShadow({px, py}, {w, h},
-                                                                      theme().sizes.window_rounding);
-                                }
                                 snap.panel->drawDirect(px, py, w, h, ctx);
                             });
                         } catch (...) {
@@ -728,14 +714,7 @@ namespace lfs::vis::gui {
                     break;
                 }
                 case PanelSpace::SidePanel: {
-                    const ImGuiTreeNodeFlags flags = snap.has_option(PanelOption::DEFAULT_CLOSED)
-                                                         ? ImGuiTreeNodeFlags_None
-                                                         : ImGuiTreeNodeFlags_DefaultOpen;
-                    if (snap.has_option(PanelOption::HIDE_HEADER)) {
-                        snap.panel->draw(ctx);
-                    } else if (ImGui::CollapsingHeader(snap.label.c_str(), flags)) {
-                        snap.panel->draw(ctx);
-                    }
+                    snap.panel->draw(ctx);
                     break;
                 }
                 case PanelSpace::ViewportOverlay:
@@ -752,10 +731,8 @@ namespace lfs::vis::gui {
                     break;
                 }
 
-                ImGui::PopID();
                 draw_succeeded = true;
             } catch (const std::exception& e) {
-                ImGui::PopID();
                 LOG_ERROR("Panel '{}' draw error: {}", snap.label, e.what());
             }
 
@@ -770,6 +747,12 @@ namespace lfs::vis::gui {
                              snap.id, elapsed);
                 }
             }
+        }
+
+        if (space == PanelSpace::Floating) {
+            std::lock_guard lock(mutex_);
+            floating_cursor_dir_x_ = floating_cursor_dir_x;
+            floating_cursor_dir_y_ = floating_cursor_dir_y;
         }
     }
 
@@ -1052,13 +1035,10 @@ namespace lfs::vis::gui {
 
         bool draw_succeeded = false;
         try {
-            ImGui::PushID(snap.id.c_str());
             snap.panel->setPanelSpace(panel_space);
             snap.panel->draw(ctx);
-            ImGui::PopID();
             draw_succeeded = true;
         } catch (const std::exception& e) {
-            ImGui::PopID();
             LOG_ERROR("Panel '{}' error: {}", snap.label, e.what());
         }
 
@@ -1171,6 +1151,38 @@ namespace lfs::vis::gui {
                 return p.enabled;
         }
         return false;
+    }
+
+    bool PanelRegistry::apply_floating_resize_cursor() const {
+        int8_t dir_x = 0;
+        int8_t dir_y = 0;
+        {
+            std::lock_guard lock(mutex_);
+            dir_x = floating_cursor_dir_x_;
+            dir_y = floating_cursor_dir_y_;
+        }
+
+        SDL_Cursor* cursor = nullptr;
+        if (dir_x != 0 && dir_y != 0) {
+            static SDL_Cursor* const nwse =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NWSE_RESIZE);
+            static SDL_Cursor* const nesw =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NESW_RESIZE);
+            cursor = dir_x == dir_y ? nwse : nesw;
+        } else if (dir_x != 0) {
+            static SDL_Cursor* const ew =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+            cursor = ew;
+        } else if (dir_y != 0) {
+            static SDL_Cursor* const ns =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+            cursor = ns;
+        }
+
+        if (!cursor)
+            return false;
+        SDL_SetCursor(cursor);
+        return true;
     }
 
     void PanelRegistry::rescale_floating_panels(float previous_scale, float new_scale) {

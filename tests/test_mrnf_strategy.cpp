@@ -14,6 +14,7 @@ class MRNFStrategyTest_DeserializeResizesTransientBuffersToLoadedModel_Test;
 class MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test;
 class MRNFStrategyTest_DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate_Test;
 class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
+class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_Test;
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
@@ -86,6 +87,40 @@ TEST(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
     EXPECT_NEAR(guidance_ptr[2], 1.0f, 1e-5f);
     EXPECT_GT(guidance_ptr[0], 1.0f);
     EXPECT_GT(guidance_ptr[1], guidance_ptr[0]);
+}
+
+TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 100;
+    opt_params.max_cap = 32;
+    opt_params.growth_grad_threshold = 0.5f;
+    strategy.initialize(opt_params);
+    strategy._refine_weight_max = Tensor::ones({10}, Device::CUDA);
+    strategy._vis_count = Tensor::ones({10}, Device::CUDA);
+
+    auto crop_mask = Tensor::zeros_bool({10}, Device::CPU);
+    crop_mask.ptr<unsigned char>()[0] = 1;
+    strategy.get_optimizer().set_crop_damping_mask(crop_mask);
+    strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
+
+    const auto damped_candidates =
+        strategy.compute_refine_candidates().to(DataType::Int32).to_vector_int();
+    ASSERT_EQ(damped_candidates.size(), 10u);
+    EXPECT_EQ(damped_candidates[0], 0);
+    for (size_t i = 1; i < damped_candidates.size(); ++i) {
+        EXPECT_EQ(damped_candidates[i], 1);
+    }
+
+    strategy.get_optimizer().set_cropbox_lr_scale(1.0f);
+    const auto unit_scale_candidates =
+        strategy.compute_refine_candidates().to(DataType::Int32).to_vector_int();
+    strategy.get_optimizer().set_crop_damping_mask({});
+    const auto unmasked_candidates =
+        strategy.compute_refine_candidates().to(DataType::Int32).to_vector_int();
+    EXPECT_EQ(unit_scale_candidates, unmasked_candidates);
 }
 
 TEST(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate) {

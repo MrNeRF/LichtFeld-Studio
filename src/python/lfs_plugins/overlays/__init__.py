@@ -426,6 +426,7 @@ def _draw_empty_state_overlay(layout):
     layout.draw_window_text(center_x - hint_w * 0.5, center_y + 70.0, hint, hint_color)
 
     layout.end_window()
+    lf.ui.request_redraw()
 
 
 def _draw_drag_drop_overlay(layout):

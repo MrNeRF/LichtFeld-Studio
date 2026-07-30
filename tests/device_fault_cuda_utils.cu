@@ -5,8 +5,8 @@
 // and exercises DeviceFaultRecord layout + device_fault_try_record_first.
 // Also provides a many-OOB-threads kernel for first-fault-wins unit tests.
 
-#include "core/device_fault.hpp"
 #include "core/cuda_error.hpp"
+#include "core/device_fault.hpp"
 #include "core/error_codes.hpp"
 #include "core/source_site.hpp"
 

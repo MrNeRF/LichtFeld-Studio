@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <mutex>
 #include <unordered_set>
-#include <imgui.h>
 
 namespace lfs::python {
 
@@ -244,61 +243,7 @@ namespace lfs::python {
             return false;
         }
 
-        void draw_schema_menu_items(const nb::object& items_obj, const nb::object& menu_instance) {
-            if (!items_obj.is_valid() || items_obj.is_none())
-                return;
-
-            for (nb::handle item_handle : items_obj) {
-                if (!nb::isinstance<nb::dict>(item_handle))
-                    continue;
-                nb::dict item = nb::borrow<nb::dict>(item_handle);
-
-                if (is_separator_item(item)) {
-                    ImGui::Separator();
-                    continue;
-                }
-
-                if (is_submenu_item(item)) {
-                    const auto label = object_to_string(dict_get(item, "label"));
-                    if (ImGui::BeginMenu(label.c_str())) {
-                        draw_schema_menu_items(dict_get(item, "items"), menu_instance);
-                        ImGui::EndMenu();
-                    }
-                    continue;
-                }
-
-                const auto label = object_to_string(dict_get(item, "label"));
-                const auto enabled = object_to_bool(dict_get(item, "enabled"), true);
-
-                if (is_operator_item(item)) {
-                    const auto operator_id = object_to_string(dict_get(item, "operator_id"));
-                    const bool can_execute = enabled && vis::op::operators().poll(operator_id);
-                    if (ImGui::MenuItem(label.c_str(), nullptr, false, can_execute))
-                        vis::op::operators().invoke(operator_id);
-                    continue;
-                }
-
-                const auto shortcut = object_to_string(dict_get(item, "shortcut"));
-                const auto selected = object_to_bool(dict_get(item, "selected"), false);
-                const bool clicked = ImGui::MenuItem(
-                    label.c_str(),
-                    shortcut.empty() ? nullptr : shortcut.c_str(),
-                    selected,
-                    enabled);
-                if (!clicked)
-                    continue;
-
-                nb::object callback = dict_get(item, "callback");
-                if (callback.is_valid() && !callback.is_none()) {
-                    nb::borrow<nb::callable>(callback)();
-                    continue;
-                }
-
-                const auto action_id = object_to_string(dict_get(item, "action_id"));
-                if (!action_id.empty() && nb::hasattr(menu_instance, "on_menu_action"))
-                    menu_instance.attr("on_menu_action")(action_id);
-            }
-        }
+        void draw_schema_menu_items(const nb::object&, const nb::object&) {}
     } // namespace
 
     void PyMenuRegistry::register_menu(nb::object menu_class) {
@@ -378,43 +323,7 @@ namespace lfs::python {
             }
         }
 
-        const char* const section = menu_location_to_string(location);
-        const bool has_hooks = PyUIHookRegistry::instance().has_hooks("menu", section);
-
-        if (menu_classes_copy.empty() && !has_hooks) {
-            return;
-        }
-
-        nb::gil_scoped_acquire gil;
-
-        if (has_hooks) {
-            PyUIHookRegistry::instance().invoke("menu", section, PyHookPosition::Prepend);
-        }
-
-        for (const auto& mc : menu_classes_copy) {
-            if (ImGui::BeginMenu(LOC(mc.label.c_str()))) {
-                try {
-                    bool should_draw = true;
-                    if (nb::hasattr(mc.menu_class, "poll")) {
-                        should_draw = nb::cast<bool>(mc.menu_class.attr("poll")(nb::none()));
-                    }
-                    if (should_draw && has_schema_menu_items(mc)) {
-                        draw_schema_menu_items(get_schema_items(mc), mc.menu_instance);
-                    } else if (should_draw && nb::hasattr(mc.menu_instance, "draw")) {
-                        warn_legacy_menu_draw_once(mc.idname);
-                        PyUILayout layout(1);
-                        mc.menu_instance.attr("draw")(layout);
-                    }
-                } catch (const std::exception& e) {
-                    LOG_ERROR("Menu class '{}' draw error: {}", mc.idname, e.what());
-                }
-                ImGui::EndMenu();
-            }
-        }
-
-        if (has_hooks) {
-            PyUIHookRegistry::instance().invoke("menu", section, PyHookPosition::Append);
-        }
+        (void)menu_classes_copy;
     }
 
     bool PyMenuRegistry::has_items(MenuLocation location) const {
@@ -490,9 +399,7 @@ namespace lfs::python {
             if (!should_draw) {
                 return;
             }
-            if (has_schema_menu_items(*target)) {
-                draw_schema_menu_items(get_schema_items(*target), target->menu_instance);
-            } else if (nb::hasattr(target->menu_instance, "draw")) {
+            if (!has_schema_menu_items(*target) && nb::hasattr(target->menu_instance, "draw")) {
                 warn_legacy_menu_draw_once(idname);
                 PyUILayout layout(1);
                 target->menu_instance.attr("draw")(layout);

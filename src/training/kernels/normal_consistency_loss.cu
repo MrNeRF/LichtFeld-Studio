@@ -27,6 +27,18 @@ namespace lfs::training::kernels {
             return std::min((num_pixels + kThreadsPerBlock - 1) / kThreadsPerBlock, kMaxBlocks);
         }
 
+        template <bool Weighted>
+        __device__ __forceinline__ float effective_alpha(
+            const float alpha,
+            const float* __restrict__ pixel_weight,
+            const size_t idx) {
+            if constexpr (Weighted) {
+                const float w = pixel_weight[idx];
+                return isfinite(w) && w > 0.0f ? alpha * w : 0.0f;
+            }
+            return alpha;
+        }
+
         struct Intrinsics {
             float fx;
             float fy;
@@ -293,10 +305,12 @@ namespace lfs::training::kernels {
             }
         }
 
+        template <bool Weighted>
         __global__ void consistency_stats_kernel(
             const float* __restrict__ rendered_normal,
             const float* __restrict__ depth_accum,
             const float* __restrict__ alpha_map,
+            const float* __restrict__ pixel_weight,
             double* __restrict__ block_partials,
             const Intrinsics k,
             const int width,
@@ -315,9 +329,13 @@ namespace lfs::training::kernels {
                 if (!s.active) {
                     continue;
                 }
-                sums[0] += s.alpha;
+                const float aw = effective_alpha<Weighted>(s.alpha, pixel_weight, idx);
+                if (aw == 0.0f) {
+                    continue;
+                }
+                sums[0] += aw;
                 sums[1] += 1.0;
-                sums[2] += static_cast<double>(s.alpha) * s.cos;
+                sums[2] += static_cast<double>(aw) * s.cos;
             }
             reduce_and_store(sums, block_partials, num_blocks);
         }
@@ -346,10 +364,12 @@ namespace lfs::training::kernels {
             finals[slots::kInvNorm] = valid ? static_cast<float>(weight / fmax(sum_alpha, 1.0)) : 0.0f;
         }
 
+        template <bool Weighted>
         __global__ void consistency_grad_kernel(
             const float* __restrict__ rendered_normal,
             const float* __restrict__ depth_accum,
             const float* __restrict__ alpha_map,
+            const float* __restrict__ pixel_weight,
             float* __restrict__ grad_normal,
             float* __restrict__ grad_depth_accum,
             float* __restrict__ grad_alpha,
@@ -374,10 +394,14 @@ namespace lfs::training::kernels {
                 if (!s.active || inv_norm == 0.0f) {
                     continue;
                 }
+                const float aw = effective_alpha<Weighted>(s.alpha, pixel_weight, idx);
+                if (aw == 0.0f) {
+                    continue;
+                }
 
-                sums[0] += static_cast<double>(s.alpha) * (1.0 - s.cos);
+                sums[0] += static_cast<double>(aw) * (1.0 - s.cos);
 
-                const float g_w = inv_norm * s.alpha;
+                const float g_w = inv_norm * aw;
 
                 // d(1 - cos)/dn_render = -(n_d - cos * n_hat) / |n_render|
                 const float nr_scale = -g_w / s.nr_norm;
@@ -411,10 +435,12 @@ namespace lfs::training::kernels {
             return true;
         }
 
+        template <bool Weighted>
         __global__ void prior_depth_stats_kernel(
             const float* __restrict__ prior_normal,
             const float* __restrict__ depth_accum,
             const float* __restrict__ alpha_map,
+            const float* __restrict__ pixel_weight,
             double* __restrict__ block_partials,
             const Intrinsics k,
             const int width,
@@ -434,10 +460,14 @@ namespace lfs::training::kernels {
                 if (!s.active || !prior_normal_at(prior_normal, idx, num_pixels, prior_hat)) {
                     continue;
                 }
+                const float aw = effective_alpha<Weighted>(s.alpha, pixel_weight, idx);
+                if (aw == 0.0f) {
+                    continue;
+                }
                 const float cos = s.nd.x * prior_hat.x + s.nd.y * prior_hat.y + s.nd.z * prior_hat.z;
-                sums[0] += s.alpha;
+                sums[0] += aw;
                 sums[1] += 1.0;
-                sums[2] += static_cast<double>(s.alpha) * cos;
+                sums[2] += static_cast<double>(aw) * cos;
             }
             reduce_and_store(sums, block_partials, num_blocks);
         }
@@ -465,10 +495,12 @@ namespace lfs::training::kernels {
             finals[slots::kInvNorm] = valid ? static_cast<float>(weight / fmax(sum_alpha, 1.0)) : 0.0f;
         }
 
+        template <bool Weighted>
         __global__ void prior_depth_grad_kernel(
             const float* __restrict__ prior_normal,
             const float* __restrict__ depth_accum,
             const float* __restrict__ alpha_map,
+            const float* __restrict__ pixel_weight,
             float* __restrict__ grad_depth_accum,
             float* __restrict__ grad_alpha,
             const float* __restrict__ finals,
@@ -498,9 +530,13 @@ namespace lfs::training::kernels {
                 if (!active || inv_norm == 0.0f) {
                     continue;
                 }
+                const float aw = effective_alpha<Weighted>(s.alpha, pixel_weight, idx);
+                if (aw == 0.0f) {
+                    continue;
+                }
 
-                sums[0] += static_cast<double>(s.alpha) * (1.0 - cos);
-                const float g_w = inv_norm * s.alpha;
+                sums[0] += static_cast<double>(aw) * (1.0 - cos);
+                const float g_w = inv_norm * aw;
                 accumulate_depth_normal_backward(
                     s, prior_hat, cos, g_w, k, x, y, width, grad_depth_accum, grad_alpha);
             }
@@ -528,6 +564,136 @@ namespace lfs::training::kernels {
                2 * static_cast<size_t>(kStatCount) * num_blocks;
     }
 
+    namespace {
+        template <bool Weighted>
+        void launch_normal_consistency_loss_impl(
+            const float* rendered_normal,
+            const float* rendered_depth_accum,
+            const float* rendered_alpha,
+            float* grad_normal,
+            float* grad_depth_accum,
+            float* grad_alpha,
+            float* loss_out,
+            float* partial_sums,
+            const int width,
+            const int height,
+            const float fx,
+            const float fy,
+            const float cx,
+            const float cy,
+            const float weight,
+            const float* pixel_weight,
+            const cudaStream_t stream) {
+            const size_t num_pixels = static_cast<size_t>(width) * height;
+            const int num_blocks = static_cast<int>(consistency_block_count(num_pixels));
+            float* finals = partial_sums;
+            double* block_partials = reinterpret_cast<double*>(partial_sums + slots::kSlotCount);
+            const Intrinsics k{fx, fy, cx, cy};
+
+            consistency_stats_kernel<Weighted><<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+                rendered_normal,
+                rendered_depth_accum,
+                rendered_alpha,
+                pixel_weight,
+                block_partials,
+                k,
+                width,
+                height,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.stats");
+            consistency_finalize_stats_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+                block_partials,
+                finals,
+                num_blocks,
+                weight);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.finalize_stats");
+            consistency_grad_kernel<Weighted><<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+                rendered_normal,
+                rendered_depth_accum,
+                rendered_alpha,
+                pixel_weight,
+                grad_normal,
+                grad_depth_accum,
+                grad_alpha,
+                finals,
+                block_partials,
+                k,
+                width,
+                height,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.grad");
+            consistency_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+                block_partials,
+                finals,
+                loss_out,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.finalize_loss");
+        }
+
+        template <bool Weighted>
+        void launch_normal_prior_depth_loss_impl(
+            const float* prior_normal,
+            const float* rendered_depth_accum,
+            const float* rendered_alpha,
+            float* grad_depth_accum,
+            float* grad_alpha,
+            float* loss_out,
+            float* partial_sums,
+            const int width,
+            const int height,
+            const float fx,
+            const float fy,
+            const float cx,
+            const float cy,
+            const float weight,
+            const float* pixel_weight,
+            const cudaStream_t stream) {
+            const size_t num_pixels = static_cast<size_t>(width) * height;
+            const int num_blocks = static_cast<int>(consistency_block_count(num_pixels));
+            float* finals = partial_sums;
+            double* block_partials = reinterpret_cast<double*>(partial_sums + slots::kSlotCount);
+            const Intrinsics k{fx, fy, cx, cy};
+
+            prior_depth_stats_kernel<Weighted><<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+                prior_normal,
+                rendered_depth_accum,
+                rendered_alpha,
+                pixel_weight,
+                block_partials,
+                k,
+                width,
+                height,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.stats");
+            prior_depth_finalize_stats_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+                block_partials,
+                finals,
+                num_blocks,
+                weight);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.finalize_stats");
+            prior_depth_grad_kernel<Weighted><<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+                prior_normal,
+                rendered_depth_accum,
+                rendered_alpha,
+                pixel_weight,
+                grad_depth_accum,
+                grad_alpha,
+                finals,
+                block_partials,
+                k,
+                width,
+                height,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.grad");
+            consistency_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+                block_partials,
+                finals,
+                loss_out,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.finalize_loss");
+        }
+    } // namespace
+
     void launch_normal_consistency_loss(
         const float* rendered_normal,
         const float* rendered_depth_accum,
@@ -544,51 +710,20 @@ namespace lfs::training::kernels {
         const float cx,
         const float cy,
         const float weight,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* pixel_weight) {
         stream = resolve_stream(stream);
-
-        const size_t num_pixels = static_cast<size_t>(width) * height;
-        const int num_blocks = static_cast<int>(consistency_block_count(num_pixels));
-        float* finals = partial_sums;
-        double* block_partials = reinterpret_cast<double*>(partial_sums + slots::kSlotCount);
-        const Intrinsics k{fx, fy, cx, cy};
-
-        consistency_stats_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-            rendered_normal,
-            rendered_depth_accum,
-            rendered_alpha,
-            block_partials,
-            k,
-            width,
-            height,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.stats");
-        consistency_finalize_stats_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
-            block_partials,
-            finals,
-            num_blocks,
-            weight);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.finalize_stats");
-        consistency_grad_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-            rendered_normal,
-            rendered_depth_accum,
-            rendered_alpha,
-            grad_normal,
-            grad_depth_accum,
-            grad_alpha,
-            finals,
-            block_partials,
-            k,
-            width,
-            height,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.grad");
-        consistency_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
-            block_partials,
-            finals,
-            loss_out,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_consistency.finalize_loss");
+        if (pixel_weight) {
+            launch_normal_consistency_loss_impl<true>(
+                rendered_normal, rendered_depth_accum, rendered_alpha,
+                grad_normal, grad_depth_accum, grad_alpha, loss_out, partial_sums,
+                width, height, fx, fy, cx, cy, weight, pixel_weight, stream);
+        } else {
+            launch_normal_consistency_loss_impl<false>(
+                rendered_normal, rendered_depth_accum, rendered_alpha,
+                grad_normal, grad_depth_accum, grad_alpha, loss_out, partial_sums,
+                width, height, fx, fy, cx, cy, weight, nullptr, stream);
+        }
     }
 
     void launch_normal_prior_depth_loss(
@@ -606,50 +741,20 @@ namespace lfs::training::kernels {
         const float cx,
         const float cy,
         const float weight,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* pixel_weight) {
         stream = resolve_stream(stream);
-
-        const size_t num_pixels = static_cast<size_t>(width) * height;
-        const int num_blocks = static_cast<int>(consistency_block_count(num_pixels));
-        float* finals = partial_sums;
-        double* block_partials = reinterpret_cast<double*>(partial_sums + slots::kSlotCount);
-        const Intrinsics k{fx, fy, cx, cy};
-
-        prior_depth_stats_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-            prior_normal,
-            rendered_depth_accum,
-            rendered_alpha,
-            block_partials,
-            k,
-            width,
-            height,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.stats");
-        prior_depth_finalize_stats_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
-            block_partials,
-            finals,
-            num_blocks,
-            weight);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.finalize_stats");
-        prior_depth_grad_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-            prior_normal,
-            rendered_depth_accum,
-            rendered_alpha,
-            grad_depth_accum,
-            grad_alpha,
-            finals,
-            block_partials,
-            k,
-            width,
-            height,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.grad");
-        consistency_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
-            block_partials,
-            finals,
-            loss_out,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.normal_prior_depth.finalize_loss");
+        if (pixel_weight) {
+            launch_normal_prior_depth_loss_impl<true>(
+                prior_normal, rendered_depth_accum, rendered_alpha,
+                grad_depth_accum, grad_alpha, loss_out, partial_sums,
+                width, height, fx, fy, cx, cy, weight, pixel_weight, stream);
+        } else {
+            launch_normal_prior_depth_loss_impl<false>(
+                prior_normal, rendered_depth_accum, rendered_alpha,
+                grad_depth_accum, grad_alpha, loss_out, partial_sums,
+                width, height, fx, fy, cx, cy, weight, nullptr, stream);
+        }
     }
 
 } // namespace lfs::training::kernels

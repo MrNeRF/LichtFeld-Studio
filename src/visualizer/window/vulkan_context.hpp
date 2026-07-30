@@ -198,6 +198,13 @@ namespace lfs::vis {
         [[nodiscard]] PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSet() const { return vk_cmd_push_descriptor_set_; }
         [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }
         [[nodiscard]] bool hasFloat16Storage() const { return has_float16_storage_; }
+        [[nodiscard]] bool hasConditionalRendering() const { return has_conditional_rendering_; }
+        [[nodiscard]] PFN_vkCmdBeginConditionalRenderingEXT vkCmdBeginConditionalRendering() const {
+            return vk_cmd_begin_conditional_rendering_;
+        }
+        [[nodiscard]] PFN_vkCmdEndConditionalRenderingEXT vkCmdEndConditionalRendering() const {
+            return vk_cmd_end_conditional_rendering_;
+        }
         [[nodiscard]] bool hasFillModeNonSolid() const { return has_fill_mode_non_solid_; }
         [[nodiscard]] bool hasWideLines() const { return has_wide_lines_; }
         [[nodiscard]] float minLineWidth() const { return line_width_range_[0]; }
@@ -270,8 +277,11 @@ namespace lfs::vis {
         // of the handle; this method dup()'s on Linux and the imported VkDeviceMemory
         // is released by destroyExternalBuffer. The returned ExternalBuffer's
         // native_handle stays kInvalidExternalNativeHandle (we are not the owner).
+        // buffer_size is the logical VkBuffer span; exported_allocation_size is the
+        // exact physical payload size recorded alongside the foreign handle.
         [[nodiscard]] bool importExternalBuffer(ExternalNativeHandle handle,
-                                                VkDeviceSize size,
+                                                VkDeviceSize buffer_size,
+                                                VkDeviceSize exported_allocation_size,
                                                 VkBufferUsageFlags usage,
                                                 ExternalBuffer& out,
                                                 std::string_view diagnostic_scope = "vulkan.external.imported_buffer",
@@ -488,12 +498,15 @@ namespace lfs::vis {
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;
         bool has_float16_storage_ = false;
+        bool has_conditional_rendering_ = false;
         bool has_host_image_copy_ = false;
         bool has_fill_mode_non_solid_ = false;
         bool has_wide_lines_ = false;
         std::array<float, 2> line_width_range_{1.0f, 1.0f};
         lfs::rendering::VulkanDebugNameWriter debug_name_writer_;
         PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
+        PFN_vkCmdBeginConditionalRenderingEXT vk_cmd_begin_conditional_rendering_ = nullptr;
+        PFN_vkCmdEndConditionalRenderingEXT vk_cmd_end_conditional_rendering_ = nullptr;
         uint32_t active_image_index_ = 0;
         std::size_t frame_index_ = 0;
         std::size_t active_frame_index_ = 0;

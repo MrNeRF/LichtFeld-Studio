@@ -314,10 +314,21 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] bool isDeletable(const core::NodeType type, const bool parent_is_dataset) {
+            return type != core::NodeType::CAMERA_GROUP &&
+                   type != core::NodeType::KEYFRAME &&
+                   type != core::NodeType::KEYFRAME_GROUP &&
+                   type != core::NodeType::CROPBOX &&
+                   type != core::NodeType::ELLIPSOID &&
+                   !parent_is_dataset;
+        }
+
+        [[nodiscard]] bool isRenamable(const core::NodeType type, const bool parent_is_dataset) {
             return type != core::NodeType::CAMERA &&
                    type != core::NodeType::CAMERA_GROUP &&
                    type != core::NodeType::KEYFRAME &&
                    type != core::NodeType::KEYFRAME_GROUP &&
+                   type != core::NodeType::CROPBOX &&
+                   type != core::NodeType::ELLIPSOID &&
                    !parent_is_dataset;
         }
 
@@ -344,12 +355,46 @@ namespace lfs::vis::gui {
             case core::NodeType::PLY_SEQUENCE:
             case core::NodeType::POINTCLOUD:
             case core::NodeType::MESH:
-            case core::NodeType::CROPBOX:
-            case core::NodeType::ELLIPSOID:
                 return true;
             default:
                 return false;
             }
+        }
+
+        [[nodiscard]] std::unordered_set<core::NodeId> buildTrainingDeleteBlockedNodeIds(
+            const core::Scene& scene,
+            const TrainerManager* trainer) {
+            std::unordered_set<core::NodeId> blocked;
+            if (!trainer || trainer->canPerform(TrainingAction::DeleteTrainingNode)) {
+                return blocked;
+            }
+
+            const auto mark_with_ancestors = [&](core::NodeId id) {
+                for (const core::SceneNode* node = scene.getNodeById(id);
+                     node != nullptr;
+                     node = node->parent_id == core::NULL_NODE ? nullptr : scene.getNodeById(node->parent_id)) {
+                    blocked.insert(node->id);
+                }
+            };
+
+            const std::string& training_model_name = scene.getTrainingModelNodeName();
+            if (!training_model_name.empty()) {
+                const core::NodeId training_model_id = scene.getNodeIdByName(training_model_name);
+                if (training_model_id != core::NULL_NODE) {
+                    mark_with_ancestors(training_model_id);
+                }
+            }
+
+            for (const core::SceneNode* node : scene.getNodes()) {
+                if (node &&
+                    node->type == core::NodeType::CAMERA &&
+                    node->camera &&
+                    node->training_enabled) {
+                    mark_with_ancestors(node->id);
+                }
+            }
+
+            return blocked;
         }
 
         [[nodiscard]] bool ctrlDown() {
@@ -490,6 +535,14 @@ namespace lfs::vis::gui {
     void SceneGraphElement::OnUpdate() {
         claimRenameTextInputFocus();
         ensureDom();
+        const bool delete_training_node_allowed = [&] {
+            const auto* trainer = services().trainerOrNull();
+            return !trainer || trainer->canPerform(TrainingAction::DeleteTrainingNode);
+        }();
+        if (delete_training_node_allowed != last_delete_training_node_allowed_) {
+            last_delete_training_node_allowed_ = delete_training_node_allowed;
+            tree_rebuild_needed_ = true;
+        }
         bool rebuilt_tree = false;
         if (tree_rebuild_needed_) {
             if (auto* scene_manager = services().sceneOrNull()) {
@@ -749,6 +802,7 @@ namespace lfs::vis::gui {
 
         const auto nodes = scene.getNodes();
         const auto active_gaussian_counts = scene.getActiveGaussianCountsByNode();
+        const auto delete_blocked_ids = buildTrainingDeleteBlockedNodeIds(scene, services().trainerOrNull());
         snapshots.reserve(nodes.size());
         root_ids.reserve(nodes.size());
 
@@ -792,6 +846,11 @@ namespace lfs::vis::gui {
                                              formatWithThousands(frame_count > 0 ? frame_count : node->children.size()));
                 break;
             }
+            case core::NodeType::CAMERA_GROUP:
+                snapshot.label = std::format("{}  ({})",
+                                             node->name,
+                                             formatWithThousands(node->children.size()));
+                break;
             case core::NodeType::KEYFRAME:
                 if (node->keyframe)
                     snapshot.label = std::format("Keyframe {}  ({:.2f}s)",
@@ -822,7 +881,10 @@ namespace lfs::vis::gui {
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
             snapshot.draggable = canDrag(snapshot.type, parent_is_dataset);
-            snapshot.deletable = isDeletable(snapshot.type, parent_is_dataset);
+            snapshot.can_delete = isDeletable(snapshot.type, parent_is_dataset);
+            snapshot.delete_enabled = snapshot.can_delete && !delete_blocked_ids.contains(id);
+            snapshot.can_rename = isRenamable(snapshot.type, parent_is_dataset);
+            snapshot.rename_enabled = snapshot.can_rename;
             snapshot.camera_frustum_container =
                 (snapshot.type == core::NodeType::GROUP &&
                  std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
@@ -878,7 +940,10 @@ namespace lfs::vis::gui {
             .encoded_label = encode(snapshot.label),
             .padding_left_dp = formatDp(4 + depth * 16),
             .has_mask = snapshot.has_mask,
-            .deletable = snapshot.deletable,
+            .can_delete = snapshot.can_delete,
+            .delete_enabled = snapshot.delete_enabled,
+            .can_rename = snapshot.can_rename,
+            .rename_enabled = snapshot.rename_enabled,
             .camera_loss_icon_color = snapshot.camera_loss_icon_color,
         });
         if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id))
@@ -1247,7 +1312,8 @@ namespace lfs::vis::gui {
         setCachedClass(slot.vis_icon, "icon-vis-off", !row.visible);
 
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
-        setCachedProperty(slot.delete_icon, "display", row.deletable ? "inline" : "none");
+        setCachedProperty(slot.delete_icon, "display", row.can_delete ? "inline" : "none");
+        setCachedClass(slot.delete_icon, "trash-disabled", row.can_delete && !row.delete_enabled);
 
         const std::string_view icon_sprite = typeIconSprite(row.type);
         const std::string_view unicode = unicodeIcon(row.type);
@@ -1453,7 +1519,7 @@ namespace lfs::vis::gui {
 
     void SceneGraphElement::beginRename(const core::NodeId node_id) {
         const auto it = node_snapshots_.find(node_id);
-        if (it == node_snapshots_.end() || !it->second.deletable)
+        if (it == node_snapshots_.end() || !it->second.rename_enabled)
             return;
         rename_node_id_ = node_id;
         rename_buffer_ = it->second.name;
@@ -1474,6 +1540,10 @@ namespace lfs::vis::gui {
         const auto it = node_snapshots_.find(rename_node_id_);
         if (it == node_snapshots_.end())
             return;
+        if (!it->second.rename_enabled) {
+            cancelRename();
+            return;
+        }
 
         const std::string next_name = rename_buffer_.empty() ? it->second.name : rename_buffer_;
         if (next_name != it->second.name) {
@@ -1531,6 +1601,11 @@ namespace lfs::vis::gui {
                 .visible = !static_cast<bool>(node->visible)}
                 .emit();
         } else if (action == "delete") {
+            const auto snapshot_it = node_snapshots_.find(node_id);
+            if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
+                return;
+            if (const auto result = scene_manager->canRemoveNode(node_id); !result)
+                return;
             cmd::RemoveNodeById{.node_id = static_cast<int32_t>(node_id), .keep_children = false}.emit();
             tree_rebuild_needed_ = true;
             markStateDirty();
@@ -1905,12 +1980,12 @@ namespace lfs::vis::gui {
             drag_ghost_->SetProperty("display", "none");
     }
 
-    std::vector<core::NodeId> SceneGraphElement::deletableSelectedNodeIds() const {
+    std::vector<core::NodeId> SceneGraphElement::deleteEnabledSelectedNodeIds() const {
         std::vector<core::NodeId> ids;
         ids.reserve(selected_ids_.size());
         for (const core::NodeId id : selected_ids_) {
             const auto it = node_snapshots_.find(id);
-            if (it != node_snapshots_.end() && it->second.deletable)
+            if (it != node_snapshots_.end() && it->second.delete_enabled)
                 ids.push_back(id);
         }
         return ids;
@@ -1920,8 +1995,25 @@ namespace lfs::vis::gui {
         auto* scene_manager = services().sceneOrNull();
         if (!scene_manager)
             return;
-        for (const core::NodeId id : deletableSelectedNodeIds())
-            cmd::RemoveNodeById{.node_id = static_cast<int32_t>(id), .keep_children = false}.emit();
+
+        const auto ids = deleteEnabledSelectedNodeIds();
+        if (ids.empty())
+            return;
+
+        std::vector<std::string> names;
+        names.reserve(ids.size());
+        for (const core::NodeId id : ids) {
+            const auto* node = scene_manager->getScene().getNodeById(id);
+            if (!node)
+                continue;
+            names.push_back(node->name);
+        }
+        if (names.empty())
+            return;
+
+        if (const auto result = scene_manager->removeNodesWithResult(names, /*keep_children=*/false); !result) {
+            LOG_WARN("{}", result.error());
+        }
     }
 
     void SceneGraphElement::toggleChildrenTraining(const core::NodeId group_id, const bool enabled) {
@@ -1993,10 +2085,10 @@ namespace lfs::vis::gui {
                                            prefixedAction("disable_all_selected_train")));
             }
 
-            const auto deletable = deletableSelectedNodeIds();
-            if (!deletable.empty()) {
+            const auto delete_enabled = deleteEnabledSelectedNodeIds();
+            if (!delete_enabled.empty()) {
                 items.push_back(makeAction(
-                    std::format("{} ({})", tr(string_keys::Scene::DELETE_ITEM), deletable.size()),
+                    std::format("{} ({})", tr(string_keys::Scene::DELETE_ITEM), delete_enabled.size()),
                     prefixedAction("delete_selected"),
                     !items.empty()));
             }
@@ -2074,40 +2166,6 @@ namespace lfs::vis::gui {
                         "Export COLMAP sparse...",
                         prefixedAction("export_colmap")));
                 }
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::DELETE_ITEM),
-                    prefixedAction(std::format("delete:{}", node_id)),
-                    !items.empty()));
-                break;
-            case core::NodeType::CROPBOX:
-                items.push_back(makeAction(tr("common.apply"), prefixedAction("apply_cropbox")));
-                items.push_back(makeAction(
-                    tr("scene.fit_to_scene"),
-                    prefixedAction("fit_cropbox:0"),
-                    true));
-                items.push_back(makeAction(
-                    tr("scene.fit_to_scene_trimmed"),
-                    prefixedAction("fit_cropbox:1")));
-                items.push_back(makeAction(tr("scene.reset_crop"), prefixedAction("reset_cropbox")));
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::DELETE_ITEM),
-                    prefixedAction(std::format("delete:{}", node_id)),
-                    true));
-                break;
-            case core::NodeType::ELLIPSOID:
-                items.push_back(makeAction(tr("common.apply"), prefixedAction("apply_ellipsoid")));
-                items.push_back(makeAction(
-                    tr("scene.fit_to_scene"),
-                    prefixedAction("fit_ellipsoid:0"),
-                    true));
-                items.push_back(makeAction(
-                    tr("scene.fit_to_scene_trimmed"),
-                    prefixedAction("fit_ellipsoid:1")));
-                items.push_back(makeAction(tr("scene.reset_crop"), prefixedAction("reset_ellipsoid")));
-                items.push_back(makeAction(
-                    tr(string_keys::Scene::DELETE_ITEM),
-                    prefixedAction(std::format("delete:{}", node_id)),
-                    true));
                 break;
             default:
                 break;
@@ -2125,15 +2183,9 @@ namespace lfs::vis::gui {
 
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
                 items.push_back(makeAction(
-                    tr("scene.add_crop_box"),
-                    prefixedAction(std::format("add_cropbox:{}", node_id)),
-                    !items.empty()));
-                items.push_back(makeAction(
-                    tr("scene.add_crop_ellipsoid"),
-                    prefixedAction(std::format("add_ellipsoid:{}", node_id))));
-                items.push_back(makeAction(
                     tr("scene.save_to_disk"),
-                    prefixedAction(std::format("save_node:{}", node_id))));
+                    prefixedAction(std::format("save_node:{}", node_id)),
+                    !items.empty()));
             }
 
             // Add Save Asset for asset-compatible node types
@@ -2144,14 +2196,16 @@ namespace lfs::vis::gui {
                     !items.empty()));
             }
 
-            if (node_snapshots_.at(node_id).deletable) {
+            if (node_snapshots_.at(node_id).rename_enabled) {
                 items.push_back(makeAction(
                     tr(string_keys::Scene::RENAME),
                     prefixedAction(std::format("rename:{}", node_id)),
                     !items.empty()));
             }
 
-            if (node->type != core::NodeType::CAMERA) {
+            if (node->type != core::NodeType::CAMERA &&
+                node->type != core::NodeType::CROPBOX &&
+                node->type != core::NodeType::ELLIPSOID) {
                 items.push_back(makeAction(
                     tr("scene.duplicate"),
                     prefixedAction(std::format("duplicate:{}", node_id))));
@@ -2181,7 +2235,7 @@ namespace lfs::vis::gui {
                 }
             }
 
-            if (node_snapshots_.at(node_id).deletable) {
+            if (node_snapshots_.at(node_id).delete_enabled) {
                 items.push_back(makeAction(
                     tr(string_keys::Scene::DELETE_ITEM),
                     prefixedAction(std::format("delete:{}", node_id)),
@@ -2268,12 +2322,22 @@ namespace lfs::vis::gui {
                 toggleChildrenTraining(group_id, kind == "enable_all_train");
         } else if (kind == "delete" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
-            if (parseNodeId(parts[1], node_id))
+            if (parseNodeId(parts[1], node_id)) {
+                const auto snapshot_it = node_snapshots_.find(node_id);
+                if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)
+                    return;
+                if (const auto result = scene_manager->canRemoveNode(node_id); !result)
+                    return;
                 cmd::RemoveNodeById{.node_id = static_cast<int32_t>(node_id), .keep_children = false}.emit();
+            }
         } else if (kind == "rename" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
-            if (parseNodeId(parts[1], node_id))
+            if (parseNodeId(parts[1], node_id)) {
+                const auto snapshot_it = node_snapshots_.find(node_id);
+                if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.rename_enabled)
+                    return;
                 beginRename(node_id);
+            }
         } else if (kind == "duplicate" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (parseNodeId(parts[1], node_id))
@@ -2357,28 +2421,12 @@ namespace lfs::vis::gui {
                 }
             };
             gui->enqueueModal(std::move(request));
-        } else if ((kind == "add_cropbox" || kind == "add_ellipsoid" || kind == "save_node") && parts.size() >= 2) {
+        } else if (kind == "save_node" && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (!parseNodeId(parts[1], node_id))
                 return;
-            if (kind == "add_cropbox")
-                cmd::AddCropBoxById{.node_id = static_cast<int32_t>(node_id)}.emit();
-            else if (kind == "add_ellipsoid")
-                cmd::AddCropEllipsoidById{.node_id = static_cast<int32_t>(node_id)}.emit();
-            else if (scene->getNodeById(node_id))
+            if (scene->getNodeById(node_id))
                 saveNodeToDisk(*scene, node_id);
-        } else if (kind == "apply_cropbox") {
-            cmd::ApplyCropBox{}.emit();
-        } else if (kind == "fit_cropbox" && parts.size() >= 2) {
-            cmd::FitCropBoxToScene{.use_percentile = parts[1] == "1"}.emit();
-        } else if (kind == "reset_cropbox") {
-            cmd::ResetCropBox{}.emit();
-        } else if (kind == "apply_ellipsoid") {
-            cmd::ApplyEllipsoid{}.emit();
-        } else if (kind == "fit_ellipsoid" && parts.size() >= 2) {
-            cmd::FitEllipsoidToScene{.use_percentile = parts[1] == "1"}.emit();
-        } else if (kind == "reset_ellipsoid") {
-            cmd::ResetEllipsoid{}.emit();
         } else if (kind == "enable_all_selected_train") {
             toggleSelectedTraining(true);
         } else if (kind == "disable_all_selected_train") {

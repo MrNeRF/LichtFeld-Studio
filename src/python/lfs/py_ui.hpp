@@ -15,6 +15,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <cfloat>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -255,7 +256,7 @@ namespace lfs::python {
         // Tablet support (defaults to 1.0 for mouse)
         float pressure = 1.0f;
 
-        // GUI state - true if mouse is over ImGui window
+        // GUI state - true if mouse is over an application UI surface
         bool over_gui = false;
 
         // Raw key code for KEY events
@@ -311,10 +312,18 @@ namespace lfs::python {
     // Get the current application context
     PyAppContext get_app_context();
 
-    // UI layout object passed to draw() - wraps ImGui calls
+    // UI layout object passed to draw() for legacy Python plugin compatibility.
     class PyUILayout {
     public:
+        enum class Mode : uint8_t {
+            Legacy,
+            DrawHook,
+        };
+
         explicit PyUILayout(int initial_menu_depth = 0) : menu_depth_(initial_menu_depth) {}
+        explicit PyUILayout(Mode mode, int initial_menu_depth = 0)
+            : menu_depth_(initial_menu_depth),
+              mode_(mode) {}
 
         void setCollecting(vis::gui::MenuDropdownContent* target) {
             collecting_ = target != nullptr;
@@ -477,7 +486,7 @@ namespace lfs::python {
         void begin_disabled(bool disabled = true);
         void end_disabled();
 
-        // Images (texture_id is an opaque ImGui backend texture handle as uint64)
+        // Images (texture_id is an opaque UI texture handle as uint64)
         void image(uint64_t texture_id, std::tuple<float, float> size,
                    nb::object tint = nb::none());
         void image_uv(uint64_t texture_id, std::tuple<float, float> size,
@@ -655,6 +664,11 @@ namespace lfs::python {
             float range = 0.5f);
 
     private:
+        friend class PyUILayoutTemplates;
+
+        void warnUnsupportedInDrawHook(const char* method) const;
+        [[nodiscard]] bool isDrawHook() const { return mode_ == Mode::DrawHook; }
+
         int menu_depth_;
         int box_id_counter_ = 0;
         int grid_id_counter_ = 0;
@@ -663,6 +677,13 @@ namespace lfs::python {
         vis::gui::MenuDropdownContent* collect_target_ = nullptr;
         int collect_callback_index_ = 0;
         int execute_at_index_ = -1;
+        Mode mode_ = Mode::Legacy;
+        std::tuple<float, float> next_window_pos_{0.0f, 0.0f};
+        std::tuple<float, float> next_window_size_{0.0f, 0.0f};
+        bool next_window_pos_set_ = false;
+        bool next_window_size_set_ = false;
+        std::tuple<float, float> window_pos_{0.0f, 0.0f};
+        std::tuple<float, float> window_size_{0.0f, 0.0f};
     };
 
     using PollDependency = lfs::vis::op::PollDependency;
@@ -775,6 +796,7 @@ namespace lfs::python {
 
         // Clear hooks for a panel/section
         void clear_hooks(const std::string& panel, const std::string& section = "");
+        void clear_hooks_for_module(const std::string& module_prefix);
 
         // Clear all hooks
         void clear_all();
@@ -805,6 +827,7 @@ namespace lfs::python {
             nb::object callback;
             PyHookPosition position;
             std::string name;
+            std::string module;
         };
 
         mutable std::mutex mutex_;
@@ -910,8 +933,9 @@ namespace lfs::python {
         void show_input(const std::string& title, const std::string& message,
                         const std::string& default_value, nb::object callback);
         void show_message(const std::string& title, const std::string& message,
-                          MessageStyle style = MessageStyle::Info,
-                          nb::object callback = nb::none());
+                          MessageStyle style = MessageStyle::Info);
+        void show_message(const std::string& title, const std::string& message,
+                          MessageStyle style, nb::object callback);
 
         void draw_modals();
 
@@ -952,5 +976,7 @@ namespace lfs::python {
     void register_ui_panels(nb::module_& m);
     void register_rml_im_mode_layout(nb::module_& m);
     void register_keymap(nb::module_& m);
+
+    [[nodiscard]] std::string rml_src_for_dynamic_texture(uint64_t texture_id, int width, int height);
 
 } // namespace lfs::python

@@ -154,6 +154,8 @@ namespace lfs::vis::gui {
         last_scene_h_ = -1.0f;
         last_splitter_h_ = -1.0f;
         last_over_interactive_ = false;
+        last_over_resize_handle_ = false;
+        rml_pointer_inside_ = false;
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/right_panel.rml");
@@ -424,28 +426,48 @@ namespace lfs::vis::gui {
         const float mx = input.mouse_x - layout.pos.x;
         const float my = input.mouse_y - layout.pos.y;
         const float dp_ratio = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
-        const float resize_handle_half_w = 4.0f * dp_ratio;
+        const float resize_handle_half_w =
+            PanelLayoutManager::RIGHT_PANEL_RESIZE_EDGE_HALF_WIDTH * dp_ratio;
 
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
 
-        if (mouse_moved)
-            rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), mods);
-
-        auto* hover = rml_context_->GetHoverElement();
+        const bool pointer_in_context =
+            mx >= 0.0f && mx < layout.size.x && my >= 0.0f && my < layout.size.y;
+        if (pointer_in_context) {
+            if (mouse_moved)
+                rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), mods);
+            rml_pointer_inside_ = true;
+        } else if (rml_pointer_inside_) {
+            // RmlUi does not clear hover merely because it receives an
+            // out-of-bounds position. Explicitly leave so it cannot retain a
+            // cursor or request frames after the pointer entered the viewport.
+            rml_context_->ProcessMouseLeave();
+            rml_pointer_inside_ = false;
+            last_over_interactive_ = false;
+            input_dirty_ = true;
+        }
+        auto* hover = pointer_in_context ? rml_context_->GetHoverElement() : nullptr;
         const bool over_resize_handle_geom =
             mx >= -resize_handle_half_w &&
             mx <= resize_handle_half_w &&
             my >= 0.0f &&
-            my <= layout.size.y;
+            my < layout.size.y;
+        // Use geometry for the resize edge so stale RmlUi hover state cannot
+        // keep the cursor active after the pointer leaves the panel.
         const bool over_resize_handle =
             over_resize_handle_geom || (hover && isOrHasAncestor(hover, "resize-handle"));
+        if (resize_handle_el_ && !resize_dragging_ &&
+            over_resize_handle != last_over_resize_handle_) {
+            resize_handle_el_->SetAttribute("class", over_resize_handle ? "hover" : "");
+            last_over_resize_handle_ = over_resize_handle;
+            input_dirty_ = true;
+        }
         const bool over_splitter = hover && isOrHasAncestor(hover, "splitter");
         const bool over_interactive = hover && hover->GetTagName() != "body" &&
                                       hover->GetId() != "rp-body" &&
                                       hover->GetId() != "left-border" &&
                                       hover->GetId() != "tab-separator";
-        const bool over_resize_control = over_resize_handle || over_splitter;
 
         if (over_interactive != last_over_interactive_) {
             input_dirty_ = true;
@@ -464,8 +486,10 @@ namespace lfs::vis::gui {
                 cursor_request_ = CursorRequest::ResizeEW;
             } else {
                 resize_dragging_ = false;
-                if (resize_handle_el_)
+                if (resize_handle_el_) {
                     resize_handle_el_->SetAttribute("class", "");
+                    last_over_resize_handle_ = false;
+                }
                 if (on_resize_end)
                     on_resize_end();
             }
@@ -490,9 +514,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        if (over_interactive || over_resize_control) {
+        if (over_interactive || over_resize_handle || over_splitter) {
             wants_input_ = true;
-
             if (over_resize_handle) {
                 cursor_request_ = CursorRequest::ResizeEW;
                 if (input.mouse_clicked[0]) {

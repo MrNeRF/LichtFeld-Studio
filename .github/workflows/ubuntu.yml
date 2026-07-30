@@ -150,7 +150,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /github/home/.cache/vcpkg/archives
-          key: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-v1-${{ hashFiles('**/vcpkg.json', 'vcpkg-configuration.json') }}
+          key: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
           restore-keys: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-
 
       - name: Configure

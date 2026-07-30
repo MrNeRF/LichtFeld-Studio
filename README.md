@@ -12,7 +12,7 @@ Train, inspect, edit, automate, and export 3D Gaussian Splatting scenes from a s
 LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoints, inspect reconstructions in real time, edit gaussian selections, extend the app with Python plugins, and automate workflows through MCP and embedded Python.
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289DA?logo=discord&logoColor=white)](https://discord.gg/TbxJST2BbC)
-[![Website](https://img.shields.io/badge/Website-LichtFeld%20Studio-blue)](https://mrnerf.github.io/lichtfeld-studio-web/)
+[![Website](https://img.shields.io/badge/Website-LichtFeld%20Studio-blue)](https://lichtfeld.io)
 [![X](https://img.shields.io/badge/X-Follow-111111?logo=x&logoColor=white)](https://twitter.com/janusch_patas)
 [![Papers](https://img.shields.io/badge/Papers-Awesome%203DGS-orange)](https://mrnerf.github.io/awesome-3D-gaussian-splatting/)
 

@@ -30,7 +30,6 @@
 #include "gui/startup_overlay.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
-#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
@@ -47,7 +46,6 @@
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
-#include <imgui.h>
 
 struct SDL_Cursor;
 
@@ -59,11 +57,11 @@ namespace lfs::vis {
     class VisualizerImpl;
     class VulkanContext;
     class WindowManager;
-    struct VulkanSceneInteropTarget;
 
     namespace gui {
         struct GuiHitTestResult {
             bool blocks_pointer = false;
+            bool blocks_mouse_button = false;
             bool takes_keyboard_focus = false;
         };
 
@@ -86,6 +84,7 @@ namespace lfs::vis {
             [[nodiscard]] bool isInteractiveTransitionSettling() const;
             void syncVisiblePanelsBeforeSceneRender();
             void setRmlResizeDeferring(bool defer) { rmlui_manager_.setResizeDeferring(defer); }
+            void ensureCjkFontsLoaded() { rmlui_manager_.ensureCjkFontsLoaded(); }
 
             // Sub-manager access
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
@@ -157,53 +156,18 @@ namespace lfs::vis {
 
             // Drag-drop state for overlays
             [[nodiscard]] bool isDragHovering() const { return drag_drop_hovering_; }
-            void setVulkanSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
-                                     glm::ivec2 size,
-                                     bool flip_y,
-                                     std::uint64_t generation,
-                                     VkSemaphore completion_semaphore = VK_NULL_HANDLE,
-                                     std::uint64_t completion_value = 0);
-            void setVulkanExternalSceneImage(VkImage image,
-                                             VkImageView image_view,
-                                             VkImageLayout layout,
-                                             glm::ivec2 size,
-                                             bool flip_y,
-                                             std::uint64_t generation,
-                                             VkSemaphore completion_semaphore = VK_NULL_HANDLE,
-                                             std::uint64_t completion_value = 0);
-
-            // Split-view's right panel routes through a parallel CUDA/Vulkan interop
-            // slot so we don't pay PCIe staging cost for it; the left panel reuses the
-            // existing scene image interop above.
-            void setVulkanSplitRightImage(std::shared_ptr<const lfs::core::Tensor> image,
-                                          glm::ivec2 size,
-                                          bool flip_y,
-                                          std::uint64_t generation);
-            void clearVulkanSplitRightImage();
-
-            // Splat depth -> R32_SFLOAT external image for the depth-blit pass to sample.
-            void setVulkanDepthBlitImage(std::shared_ptr<const lfs::core::Tensor> depth,
-                                         glm::ivec2 size,
-                                         std::uint64_t generation);
-            void clearVulkanDepthBlitImage();
 
             // Used by native panel wrappers
             void renderSelectionOverlays(const UIContext& ctx);
             void renderViewportDecorations();
 
         private:
+            [[nodiscard]] bool isPositionOverRightPanelResizeEdge(double x, double y) const;
             [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
                                                                              std::size_t frame_slot) const;
             void recordVulkanViewport(VkCommandBuffer command_buffer,
                                       VkExtent2D extent,
                                       const VulkanViewportPassParams& params);
-            void prepareVulkanSceneInterop(VulkanContext& context);
-            void resetVulkanSceneInterop();
-            void prepareVulkanSplitRightInterop(VulkanContext& context);
-            void resetVulkanSplitRightInterop();
-            void prepareVulkanDepthBlitInterop(VulkanContext& context);
-            void resetVulkanDepthBlitInterop();
-            [[nodiscard]] bool shouldDeferVulkanInteropResize() const;
             void setupEventHandlers();
             void checkCudaVersionAndNotify();
             void applyDefaultStyle();
@@ -212,14 +176,6 @@ namespace lfs::vis {
             void updateInputOverrides(const PanelInputState& input, bool mouse_in_viewport);
             void applyUiScale(float scale);
             void rebuildFonts(float scale);
-            void loadImGuiSettings();
-            void saveImGuiSettings() const;
-            void persistImGuiSettingsIfNeeded();
-            void beginImGuiPlatformFrame(WindowManager* window_manager,
-                                         VulkanContext* vulkan_context);
-            [[nodiscard]] bool shouldUseCachedImGuiResizeFrame(
-                const WindowManager* window_manager,
-                const VulkanContext* vulkan_context) const;
             void initCustomCursors();
             void destroyCustomCursors();
             void applyRmlCursorRequest(RmlCursorRequest req);
@@ -320,15 +276,14 @@ namespace lfs::vis {
             bool ui_hidden_ = false;
 
             // Font storage
-            ImFont* font_regular_ = nullptr;
-            ImFont* font_bold_ = nullptr;
-            ImFont* font_heading_ = nullptr;
-            ImFont* font_small_ = nullptr;
-            ImFont* font_section_ = nullptr;
-            ImFont* font_monospace_ = nullptr;
-            ImFont* mono_fonts_[FontSet::MONO_SIZE_COUNT] = {};
+            FontSet::FontHandle font_regular_ = nullptr;
+            FontSet::FontHandle font_bold_ = nullptr;
+            FontSet::FontHandle font_heading_ = nullptr;
+            FontSet::FontHandle font_small_ = nullptr;
+            FontSet::FontHandle font_section_ = nullptr;
+            FontSet::FontHandle font_monospace_ = nullptr;
+            FontSet::FontHandle mono_fonts_[FontSet::MONO_SIZE_COUNT] = {};
             float mono_font_scales_[FontSet::MONO_SIZE_COUNT] = {};
-            std::filesystem::path imgui_ini_path_;
             FontSet buildFontSet() const;
 
             // Async task management
@@ -360,48 +315,7 @@ namespace lfs::vis {
 
             // RmlUI integration
             RmlUIManager rmlui_manager_;
-            std::chrono::steady_clock::time_point last_imgui_platform_frame_time_{};
-            std::uint64_t cached_imgui_resize_frame_count_ = 0;
-            bool used_cached_imgui_resize_frame_ = false;
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
-            lfs::rendering::CudaVulkanUploadStream vulkan_interop_upload_stream_;
-            std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_scene_interop_;
-            std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
-            std::uint64_t vulkan_scene_image_generation_ = 0;
-            glm::ivec2 vulkan_scene_image_size_{0, 0};
-            bool vulkan_scene_image_flip_y_ = false;
-            VkImage vulkan_external_scene_image_ = VK_NULL_HANDLE;
-            VkImageView vulkan_external_scene_image_view_ = VK_NULL_HANDLE;
-            VkImageLayout vulkan_external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-            glm::ivec2 vulkan_external_scene_image_size_{0, 0};
-            bool vulkan_external_scene_image_flip_y_ = false;
-            std::uint64_t vulkan_external_scene_image_generation_ = 0;
-            VkSemaphore vulkan_frame_completion_semaphore_ = VK_NULL_HANDLE;
-            std::uint64_t vulkan_frame_completion_value_ = 0;
-            bool vulkan_scene_interop_disabled_ = false;
-
-            // Parallel slot for split-view's right panel.
-            std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_split_right_interop_;
-            std::shared_ptr<const lfs::core::Tensor> vulkan_split_right_image_;
-            std::uint64_t vulkan_split_right_image_generation_ = 0;
-            glm::ivec2 vulkan_split_right_image_size_{0, 0};
-            bool vulkan_split_right_image_flip_y_ = false;
-            VkImage vulkan_split_right_external_image_ = VK_NULL_HANDLE;
-            VkImageView vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
-            VkImageLayout vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-            std::uint64_t vulkan_split_right_external_image_generation_ = 0;
-            bool vulkan_split_right_interop_disabled_ = false;
-
-            // R32_SFLOAT slot for splat depth (consumed by VulkanDepthBlitPass).
-            std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_depth_blit_interop_;
-            std::shared_ptr<const lfs::core::Tensor> vulkan_depth_blit_image_;
-            std::uint64_t vulkan_depth_blit_image_generation_ = 0;
-            glm::ivec2 vulkan_depth_blit_image_size_{0, 0};
-            VkImage vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
-            VkImageView vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
-            VkImageLayout vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-            std::uint64_t vulkan_depth_blit_external_image_generation_ = 0;
-            bool vulkan_depth_blit_interop_disabled_ = false;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
 
@@ -432,6 +346,7 @@ namespace lfs::vis {
             bool right_panel_pointer_live_capture_ = false;
             RightPanelPointerRegion right_panel_pointer_capture_region_ =
                 RightPanelPointerRegion::None;
+            bool right_panel_resize_edge_was_hovered_ = false;
             bool bottom_dock_pointer_live_capture_ = false;
             bool left_dock_pointer_live_capture_ = false;
             bool dock_resize_interaction_active_ = false;

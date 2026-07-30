@@ -58,7 +58,6 @@ namespace lfs::core {
             EVENT(ResumeTraining, );
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
-            EVENT(SwitchToLatestCheckpoint, );
             EVENT(SaveCheckpoint, std::optional<int> iteration;);
             EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path; std::filesystem::path init_path; std::string centralize_dataset; std::optional<int> max_width; std::optional<int> min_track_length; bool apply_auto_crop = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
@@ -96,16 +95,14 @@ namespace lfs::core {
             EVENT(MergeGroup, std::string name;);                                        // Merge group children into single PLY
             EVENT(MergeGroupById, int32_t node_id;);                                     // Merge group children into single PLY
             EVENT(SetNodeLocked, std::string name; bool locked;);                        // Lock/unlock node for editing
-            EVENT(CropPLY, lfs::geometry::BoundingBox crop_box; bool inverse;);
-            EVENT(CropPLYEllipsoid, glm::mat4 world_transform; glm::vec3 radii; bool inverse;);
+            EVENT(CropPLY, lfs::geometry::BoundingBox crop_box; bool inverse; int32_t target_node_id = -1;);
+            EVENT(CropPLYEllipsoid, glm::mat4 world_transform; glm::vec3 radii; bool inverse; int32_t target_node_id = -1;);
             EVENT(ApplyCropBox, );
             EVENT(ApplyEllipsoid, );
             EVENT(AddCropBox, std::string node_name;);       // Add cropbox to splat node
             EVENT(AddCropEllipsoid, std::string node_name;); // Add ellipsoid to splat node
-            EVENT(AddCropBoxById, int32_t node_id;);
-            EVENT(AddCropEllipsoidById, int32_t node_id;);
-            EVENT(ResetCropBox, );   // Reset selected cropbox
-            EVENT(ResetEllipsoid, ); // Reset selected ellipsoid
+            EVENT(ResetCropBox, );                           // Reset selected cropbox
+            EVENT(ResetEllipsoid, );                         // Reset selected ellipsoid
             EVENT(FitCropBoxToScene, bool use_percentile;);
             EVENT(FitEllipsoidToScene, bool use_percentile;);
             EVENT(ToggleCropInverse, );

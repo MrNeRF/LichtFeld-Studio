@@ -37,8 +37,10 @@ void main() {
         signed_dist = sdSegment(ScreenPos, P0, P1) - thickness * 0.5;
     } else if (shape < 1.5) {
         signed_dist = length(ScreenPos - P0) - radius;
-    } else {
+    } else if (shape < 2.5) {
         signed_dist = abs(length(ScreenPos - P0) - radius) - thickness * 0.5;
+    } else {
+        signed_dist = -aa;
     }
 
     float alpha = Color.a * smoothstep(aa, -aa, signed_dist);

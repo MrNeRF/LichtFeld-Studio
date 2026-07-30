@@ -52,7 +52,7 @@ namespace lfs::core {
         if (destroy_status != cudaSuccess) {
             ensure_cuda_success(
                 destroy_status, "cudaEventDestroy(tensor event pool release)", {},
-                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
         }
     }
 
@@ -66,7 +66,7 @@ namespace lfs::core {
             if (destroy_status != cudaSuccess) {
                 ensure_cuda_success(
                     destroy_status, "cudaEventDestroy(tensor event pool shutdown)", {},
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
             }
         }
         pool_.clear();

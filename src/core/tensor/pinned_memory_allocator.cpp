@@ -21,7 +21,7 @@ namespace lfs::core {
         constexpr size_t DEFAULT_CACHE_LIMIT = 1024ULL * MIB;
 
         bool is_cuda_shutdown(const cudaError_t status) {
-            return status == cudaErrorCudartUnloading;
+            return status == cudaErrorCudartUnloading || is_cuda_unavailable_error(status);
         }
 
         size_t configured_cache_limit() {
@@ -53,7 +53,7 @@ namespace lfs::core {
             if (status != cudaSuccess) {
                 ensure_cuda_success(
                     status, "cudaEventDestroy(pinned static teardown)", {},
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 cudaGetLastError();
             }
         }
@@ -182,7 +182,6 @@ namespace lfs::core {
     }
 
     void* PinnedMemoryAllocator::allocate(const size_t bytes) {
-        LFS_CUDA_BREADCRUMB("tensor.pinned.allocate");
         if (bytes == 0) {
             return nullptr;
         }
@@ -193,7 +192,7 @@ namespace lfs::core {
             !cuda_is_unavailable();
         const size_t allocation_size = use_pinned ? round_size(bytes) : bytes;
 
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         if (shutdown_.load(std::memory_order_acquire)) {
             LOG_ERROR("Attempted to allocate pinned memory after shutdown");
             return nullptr;
@@ -224,6 +223,9 @@ namespace lfs::core {
                     update_peaks_locked();
                     publish_stats_locked();
                     LFS_COUNTER_ADD("io.pinned_host.cache_hit", 1);
+                    LFS_CUDA_BREADCRUMB_ARGS(
+                        "tensor.pinned.allocate",
+                        reinterpret_cast<uintptr_t>(ptr), 0, size);
                     return ptr;
                 }
 
@@ -268,11 +270,19 @@ namespace lfs::core {
         update_peaks_locked();
         publish_stats_locked();
         LFS_COUNTER_ADD("io.pinned_host.cache_miss", 1);
+        const double active_mib = stats_.allocated_bytes / static_cast<double>(MIB);
+        const double cached_mib = stats_.cached_bytes / static_cast<double>(MIB);
+        lock.unlock();
+
+        register_cuda_address_range(ptr, allocation_size, "pinned-staging");
 
         LOG_TRACE("Pinned memory allocated: {} bytes (active: {:.2f} MiB, cache: {:.2f} MiB)",
                   bytes,
-                  stats_.allocated_bytes / static_cast<double>(MIB),
-                  stats_.cached_bytes / static_cast<double>(MIB));
+                  active_mib,
+                  cached_mib);
+        LFS_CUDA_BREADCRUMB_ARGS(
+            "tensor.pinned.allocate",
+            reinterpret_cast<uintptr_t>(ptr), 0, allocation_size);
         return ptr;
     }
 
@@ -353,7 +363,6 @@ namespace lfs::core {
 
     void PinnedMemoryAllocator::release_blocks(std::vector<Block> blocks,
                                                const bool count_as_evictions) {
-        LFS_CUDA_BREADCRUMB("tensor.pinned.free");
         size_t cuda_frees = 0;
         size_t fallback_frees = 0;
         size_t evicted_bytes = 0;
@@ -379,12 +388,17 @@ namespace lfs::core {
             if (!safe_to_release) {
                 LOG_ERROR("Leaking {}-byte host block rather than recycling memory still in use",
                           block.size);
+                // Keep the range LIVE because the intentionally leaked block remains mapped.
                 continue;
             }
 
+            LFS_CUDA_BREADCRUMB_ARGS(
+                "tensor.pinned.free",
+                0, reinterpret_cast<uintptr_t>(block.ptr), block.size);
             if (block.backend == Backend::CudaHost) {
                 const cudaError_t status = cudaFreeHost(block.ptr);
                 if (status == cudaSuccess || is_cuda_shutdown(status)) {
+                    unregister_cuda_address_range(block.ptr);
                     ++cuda_frees;
                     released_bytes += block.size;
                     if (is_cuda_shutdown(status)) {
@@ -394,11 +408,12 @@ namespace lfs::core {
                     ensure_cuda_success(status, "cudaFreeHost(pinned block)",
                                         std::format("bytes={}", block.size),
                                         LFS_SOURCE_SITE_CURRENT(),
-                                        CudaFailureDisposition::LogOnly);
+                                        CudaFailureDisposition::LogOnlyNoLatch);
                     cudaGetLastError();
                 }
             } else {
                 std::free(block.ptr);
+                unregister_cuda_address_range(block.ptr);
                 ++fallback_frees;
                 released_bytes += block.size;
             }

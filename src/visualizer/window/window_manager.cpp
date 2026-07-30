@@ -19,11 +19,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <imgui_impl_sdl3.h>
 #include <iostream>
 #include <string>
 #include <utility>
-#include <imgui.h>
 
 namespace lfs::vis {
 
@@ -551,13 +549,10 @@ namespace lfs::vis {
 
     void WindowManager::pollEvents() {
         frame_input_.beginFrame();
-        const bool imgui_ready = ImGui::GetCurrentContext() != nullptr;
         const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             const bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-            if (imgui_ready && !suppress_gui_route)
-                ImGui_ImplSDL3_ProcessEvent(&event);
             if (!suppress_gui_route)
                 frame_input_.processEvent(event, main_window_id);
             processEvent(event);
@@ -572,7 +567,6 @@ namespace lfs::vis {
 
     void WindowManager::waitEvents(double timeout_seconds) {
         frame_input_.beginFrame();
-        const bool imgui_ready = ImGui::GetCurrentContext() != nullptr;
         const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
         if (vulkan_context_ &&
@@ -588,15 +582,11 @@ namespace lfs::vis {
         const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {
             bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-            if (imgui_ready && !suppress_gui_route)
-                ImGui_ImplSDL3_ProcessEvent(&event);
             if (!suppress_gui_route)
                 frame_input_.processEvent(event, main_window_id);
             processEvent(event);
             while (SDL_PollEvent(&event)) {
                 suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
-                if (imgui_ready && !suppress_gui_route)
-                    ImGui_ImplSDL3_ProcessEvent(&event);
                 if (!suppress_gui_route)
                     frame_input_.processEvent(event, main_window_id);
                 processEvent(event);

@@ -74,7 +74,10 @@ namespace lfs::vis::gui {
             std::string label;
             bool draggable = false;
             bool has_mask = false;
-            bool deletable = false;
+            bool can_delete = false;
+            bool delete_enabled = false;
+            bool can_rename = false;
+            bool rename_enabled = false;
             std::optional<std::string> camera_loss_icon_color;
         };
 
@@ -93,7 +96,10 @@ namespace lfs::vis::gui {
             std::string encoded_label;
             std::string padding_left_dp;
             bool has_mask = false;
-            bool deletable = false;
+            bool can_delete = false;
+            bool delete_enabled = false;
+            bool can_rename = false;
+            bool rename_enabled = false;
             std::optional<std::string> camera_loss_icon_color;
         };
 
@@ -166,7 +172,7 @@ namespace lfs::vis::gui {
         void showContextMenu(core::NodeId node_id, float mouse_x, float mouse_y);
         void showModelsHeaderContextMenu(float mouse_x, float mouse_y);
         bool isModelsHeaderTarget(Rml::Element* target) const;
-        std::vector<core::NodeId> deletableSelectedNodeIds() const;
+        std::vector<core::NodeId> deleteEnabledSelectedNodeIds() const;
         void deleteSelectedNodes();
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);
         void toggleSelectedTraining(bool enabled);
@@ -208,6 +214,7 @@ namespace lfs::vis::gui {
         bool dom_dirty_ = true;
         bool tree_rebuild_needed_ = true;
         bool rename_focus_pending_ = false;
+        bool last_delete_training_node_allowed_ = true;
         uint64_t last_scene_generation_ = 0;
         uint64_t state_revision_ = 1;
         uint64_t last_bound_revision_ = 0;

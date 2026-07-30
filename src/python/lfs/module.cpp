@@ -64,9 +64,11 @@
 
 #include "config.h"
 #include "core/checkpoint_format.hpp"
+#include "git_version.h"
 #include "input/input_controller.hpp"
 #include "python/runner.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
 #include "training/strategies/istrategy.hpp"
 #include "training/trainer.hpp"
 #include "training/training_state.hpp"
@@ -1804,7 +1806,7 @@ NB_MODULE(lichtfeld, m) {
     // Packages submodule (uses uv for package management)
     lfs::python::register_packages(m);
 
-    // UI submodule (ImGui widgets and panel registration)
+    // UI submodule (widgets and panel registration)
     auto ui_module = m.def_submodule("ui", "User interface API");
     lfs::python::register_ui(ui_module);
 

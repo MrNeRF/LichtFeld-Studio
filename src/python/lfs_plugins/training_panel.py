@@ -411,7 +411,8 @@ class TrainingPanel(Panel):
         self._new_save_step = 7000
         self._auto_scaled_for_cameras = 0
         self._auto_scale_steps_locked = True
-        self._auto_scale_scene_generation = RuntimeState.scene_generation.value
+        self._auto_scale_user_override = False
+        self._auto_scale_dataset_path = ""
         self._last_state = ""
         self._last_save_steps = None
         self._color_edit_prop = None
@@ -1321,13 +1322,13 @@ class TrainingPanel(Panel):
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
 
-    def _sync_auto_scale_scene_generation(self):
-        scene_generation = RuntimeState.scene_generation.value
-        if scene_generation == self._auto_scale_scene_generation:
-            return False
-        self._auto_scale_scene_generation = scene_generation
-        self._auto_scaled_for_cameras = 0
-        return True
+    def _sync_auto_scale_markers(self):
+        d = lf.dataset_params()
+        dataset_path = d.data_path if d and d.has_params() else ""
+        if dataset_path != self._auto_scale_dataset_path:
+            self._auto_scale_dataset_path = dataset_path
+            self._auto_scaled_for_cameras = 0
+            self._auto_scale_user_override = False
 
     def _unsubscribe_reactive_state(self):
         self._reactive_binding.close()
@@ -1391,7 +1392,7 @@ class TrainingPanel(Panel):
         if not self._handle:
             return False
         self._sync_panel_label()
-        self._sync_auto_scale_scene_generation()
+        self._sync_auto_scale_markers()
 
         dirty = False
         state = RuntimeState.trainer_state.value
@@ -1785,7 +1786,10 @@ class TrainingPanel(Panel):
 
         try:
             if prop == "steps_scaler":
+                current_scaler = float(getattr(params, "steps_scaler", 1.0))
                 params.apply_step_scaling(val)
+                if abs(val - current_scaler) > 0.005:
+                    self._auto_scale_user_override = True
                 if self._handle:
                     self._sync_text_bufs()
                     self._handle.dirty_all()
@@ -1817,6 +1821,7 @@ class TrainingPanel(Panel):
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
+        self._auto_scale_user_override = True
         return True
 
     def _set_ppisp_activation_step(self, val_str):
@@ -2353,8 +2358,8 @@ class TrainingPanel(Panel):
         params.remove_eval_step(step)
 
     def _try_auto_scale_steps(self, params):
-        self._sync_auto_scale_scene_generation()
-        if not self._auto_scale_steps_locked:
+        self._sync_auto_scale_markers()
+        if not self._auto_scale_steps_locked or self._auto_scale_user_override:
             return False
         scene = lf.get_scene()
         if scene is None:
@@ -2374,6 +2379,7 @@ class TrainingPanel(Panel):
 
         if locked:
             self._auto_scaled_for_cameras = 0
+            self._auto_scale_user_override = False
             params = lf.optimization_params()
             if params and params.has_params() and self._try_auto_scale_steps(params):
                 self._sync_text_bufs()

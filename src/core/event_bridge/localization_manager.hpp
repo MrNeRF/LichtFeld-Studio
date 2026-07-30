@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::event {
@@ -45,6 +46,8 @@ namespace lfs::event {
         std::string locales_dir_;
         std::string current_language_;
         std::unordered_map<std::string, std::string> current_strings_;
+        std::unordered_map<std::string, std::string> fallback_strings_;
+        mutable std::unordered_set<std::string> warned_missing_keys_;
         std::vector<std::string> available_languages_;
         std::unordered_map<std::string, std::string> language_names_;
         mutable std::unordered_map<std::string, std::string> overrides_;

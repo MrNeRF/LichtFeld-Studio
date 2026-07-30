@@ -348,7 +348,6 @@ namespace {
         ASSERT_FALSE(result.has_value());
         EXPECT_NE(result.error().find("unknown feature flags"), std::string::npos);
     }
-
     TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsFullInitPointCloudUntilTrainingStarts) {
         constexpr size_t initial_points = 12;
         constexpr int target_splats = 5;

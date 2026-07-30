@@ -13,6 +13,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -127,6 +128,49 @@ namespace {
         print_bench("masking_ops_tight_loop", median_ms(std::move(samples)));
     }
 
+    void bench_eager_binary_dispatch_tight_loop() {
+        auto a = Tensor::randn({16}, Device::CUDA);
+        auto b = Tensor::randn({16}, Device::CUDA);
+        Tensor c;
+        for (int k = 0; k < 64; ++k) {
+            c = a.add(b);
+        }
+        sync_device();
+
+        std::vector<double> samples;
+        samples.reserve(kReps);
+        for (int i = 0; i < kReps; ++i) {
+            samples.push_back(time_ms([&] {
+                for (int k = 0; k < 4096; ++k) {
+                    c = a.add(b);
+                }
+            }));
+        }
+        print_bench("eager_binary_dispatch_tight_loop", median_ms(std::move(samples)));
+    }
+
+    void bench_deferred_alias_copy_materialize() {
+        auto source = Tensor::randn({262144}, Device::CUDA);
+        const auto run = [&] {
+            Tensor deferred = source.add(1.0f).mul(2.0f).sub(3.0f);
+            std::array<Tensor, 4> aliases{deferred, deferred, deferred, deferred};
+            (void)deferred.data_ptr();
+            for (const Tensor& alias : aliases) {
+                (void)alias.data_ptr();
+            }
+        };
+
+        run();
+        sync_device();
+
+        std::vector<double> samples;
+        samples.reserve(kReps);
+        for (int i = 0; i < kReps; ++i) {
+            samples.push_back(time_ms(run));
+        }
+        print_bench("deferred_alias_copy_materialize", median_ms(std::move(samples)));
+    }
+
 } // namespace
 
 int main() {
@@ -139,5 +183,7 @@ int main() {
     bench_sort_middle_axis();
     bench_broadcast_binary_add();
     bench_masking_op_loop();
+    bench_eager_binary_dispatch_tight_loop();
+    bench_deferred_alias_copy_materialize();
     return 0;
 }

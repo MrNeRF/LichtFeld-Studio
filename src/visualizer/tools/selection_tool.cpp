@@ -15,7 +15,6 @@
 #include <cmath>
 #include <cstdio>
 #include <glm/gtc/quaternion.hpp>
-#include <imgui.h>
 
 namespace lfs::vis::tools {
 
@@ -298,11 +297,10 @@ namespace lfs::vis::tools {
             {viewport_bounds.x, viewport_bounds.y},
             {viewport_bounds.x + viewport_bounds.width, viewport_bounds.y + viewport_bounds.height});
 
-        // ImGui::GetMousePos returns the cached, NewFrame-aligned cursor — matches what the
-        // viewport pass will see this frame. SDL_GetMouseState samples one extra event-pump
-        // late, which surfaces as a visible lag on the selection ring.
-        const ImVec2 mouse_imv = ImGui::GetMousePos();
-        const glm::vec2 mp{mouse_imv.x, mouse_imv.y};
+        float mouse_x = 0.0f;
+        float mouse_y = 0.0f;
+        SDL_GetMouseState(&mouse_x, &mouse_y);
+        const glm::vec2 mp{mouse_x, mouse_y};
         const auto& t = theme();
 
         // Cursor outlines are drawn by GuiManager in a late-stage Vulkan overlay pass so

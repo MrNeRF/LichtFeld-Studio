@@ -5,8 +5,26 @@
     border-radius: @{num(size.window_rounding)}dp;
 }
 
+.crop-roi-popover {
+    color: @{text};
+    background-color: @{toolbar.background};
+    border-color: @{overlay.border};
+}
+
+.crop-roi-popover-title {
+    color: @{text};
+}
+
 .viewport-frame-border {
     background-color: @{menu.background};
+}
+
+.left-dock-resize-indicator {
+    background-color: @{alpha(info,0.30)};
+}
+
+.left-dock-resize-indicator.active {
+    background-color: @{alpha(info,0.50)};
 }
 
 .viewport-split-divider {

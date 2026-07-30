@@ -142,20 +142,11 @@ namespace lfs::python {
         std::once_flag g_redirect_once;
         std::atomic<bool> g_plugins_loaded{false};
 
-        // ImGui state shared across DLL boundaries (set once during init, read from render thread)
-        void* g_imgui_context{nullptr};
-        void* g_imgui_alloc_fn{nullptr};
-        void* g_imgui_free_fn{nullptr};
-        void* g_imgui_alloc_user_data{nullptr};
-
         constexpr float DEFAULT_DPI_SCALE{1.0f};
 
         CreateTextureFn g_create_texture{nullptr};
         DeleteTextureFn g_delete_texture{nullptr};
         MaxTextureSizeFn g_max_texture_size_fn{nullptr};
-
-        void* g_implot_context{nullptr};
-
         void* g_view_context_state{nullptr};
         float g_shared_dpi_scale{DEFAULT_DPI_SCALE};
         void* g_rml_manager{nullptr};
@@ -175,6 +166,7 @@ namespace lfs::python {
 
         // Thread-local frame context for unified access
         thread_local PyContext g_frame_context;
+        thread_local OverlayDrawContext g_overlay_draw_context;
 
         // Cached state updated via signal bridge
         std::atomic<bool> g_has_selection{false};
@@ -228,6 +220,10 @@ namespace lfs::python {
         g_redraw_generation.fetch_add(1, std::memory_order_acq_rel);
         if (!was_requested && g_main_loop_wake_callback)
             g_main_loop_wake_callback();
+    }
+
+    bool has_redraw_request() {
+        return g_redraw_requested.load(std::memory_order_acquire);
     }
 
     bool consume_redraw_request() {
@@ -681,26 +677,6 @@ namespace lfs::python {
     void mark_plugins_loaded() { g_plugins_loaded.store(true, std::memory_order_release); }
     bool are_plugins_loaded() { return g_plugins_loaded.load(std::memory_order_acquire); }
 
-    void set_imgui_context(void* ctx) {
-        g_imgui_context = ctx;
-    }
-
-    void* get_imgui_context() {
-        return g_imgui_context;
-    }
-
-    void set_imgui_allocator_functions(void* alloc_func, void* free_func, void* user_data) {
-        g_imgui_alloc_fn = alloc_func;
-        g_imgui_free_fn = free_func;
-        g_imgui_alloc_user_data = user_data;
-    }
-
-    void get_imgui_allocator_functions(void** alloc_func, void** free_func, void** user_data) {
-        *alloc_func = g_imgui_alloc_fn;
-        *free_func = g_imgui_free_fn;
-        *user_data = g_imgui_alloc_user_data;
-    }
-
     void set_ui_texture_service(const CreateTextureFn create, const DeleteTextureFn del, const MaxTextureSizeFn max_size) {
         assert(create && del && max_size);
         g_create_texture = create;
@@ -733,9 +709,6 @@ namespace lfs::python {
         assert(g_max_texture_size_fn);
         return g_max_texture_size_fn();
     }
-
-    void set_implot_context(void* ctx) { g_implot_context = ctx; }
-    void* get_implot_context() { return g_implot_context; }
 
     void set_view_context_state(void* state) {
         g_view_context_state = state;
@@ -1363,6 +1336,14 @@ namespace lfs::python {
     bool has_viewport_bounds() {
         std::lock_guard lock(g_viewport.mutex);
         return g_viewport.is_set;
+    }
+
+    void set_overlay_draw_context(const OverlayDrawContext context) {
+        g_overlay_draw_context = context;
+    }
+
+    OverlayDrawContext get_overlay_draw_context() {
+        return g_overlay_draw_context;
     }
 
     bool is_exit_popup_open() { return g_exit_popup_open.load(); }

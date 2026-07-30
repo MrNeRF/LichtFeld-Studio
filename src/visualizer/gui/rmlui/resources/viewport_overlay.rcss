@@ -30,6 +30,15 @@ body {
     z-index: 1;
 }
 
+.left-dock-resize-indicator {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 12;
+}
+
 .panel-toolbar-root {
     position: absolute;
     top: 0;
@@ -187,6 +196,49 @@ body {
 
 .toolbar-layer-primary {
     top: 5dp;
+}
+
+.crop-roi-popover {
+    position: absolute;
+    top: 42dp;
+    left: 50%;
+    width: 440dp;
+    margin-left: -220dp;
+    padding: 8dp 10dp;
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+    box-sizing: border-box;
+    pointer-events: auto;
+    z-index: 10;
+}
+
+.crop-roi-popover.hidden {
+    display: none;
+}
+
+.crop-roi-popover-title {
+    height: 20dp;
+    line-height: 20dp;
+    font-size: 12dp;
+    font-weight: bold;
+}
+
+.crop-roi-setting-row > .setting-row__label-col {
+    width: 180dp;
+    min-width: 180dp;
+}
+
+.crop-roi-setting-row .setting-slider {
+    height: 22dp;
+    min-height: 22dp;
+}
+
+.crop-roi-setting-row .slider-value {
+    width: 42dp;
+    min-width: 42dp;
 }
 
 .viewport-selection-overlay {

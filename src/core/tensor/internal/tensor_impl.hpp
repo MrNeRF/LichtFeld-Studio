@@ -26,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -43,6 +44,9 @@
 #include "core/export.hpp"
 
 namespace lfs::core {
+
+    struct LazyExprState;
+    inline void pin_operands(std::initializer_list<const Tensor*> tensors);
 
     namespace detail {
         constexpr size_t tensor_logical_rank(const size_t physical_rank) {
@@ -390,6 +394,7 @@ namespace lfs::core {
     private:
         friend struct internal::LazyIrTensorAccess;
         friend class TensorLeaf;
+        friend void pin_operands(std::initializer_list<const Tensor*> tensors);
         friend std::shared_ptr<Tensor> internal::lazy_executor_snapshot_operand(
             const Tensor& source);
 
@@ -430,11 +435,7 @@ namespace lfs::core {
             bool tracked = false;
             std::string name; // Optional name for identification in traces
 
-            // Deferred expression materialization (lazy mode = on)
-            bool has_deferred_expr = false;
-            bool materializing_deferred_expr = false;
-            uint64_t deferred_expr_node_id = 0;
-            std::function<Tensor()> deferred_materializer;
+            std::shared_ptr<LazyExprState> lazy;
         };
 
         void* data_ = nullptr;
@@ -461,9 +462,16 @@ namespace lfs::core {
         static std::atomic<size_t> next_id_;
         static inline bool profiling_enabled_ = false;
 
-        void materialize_if_deferred();
+        void materialize_deferred_slow();
+        void materialize_if_deferred() {
+            if (state_ && state_->lazy) [[unlikely]] {
+                materialize_deferred_slow();
+            }
+        }
         void materialize_if_deferred() const {
-            const_cast<Tensor*>(this)->materialize_if_deferred();
+            if (state_ && state_->lazy) [[unlikely]] {
+                const_cast<Tensor*>(this)->materialize_deferred_slow();
+            }
         }
 
         static Tensor make_deferred_expr_tensor(TensorShape shape,
@@ -625,16 +633,19 @@ namespace lfs::core {
             if (!a_needs_broadcast && !b_needs_broadcast) {
                 // Element-wise operation without broadcasting
                 if (device_ == Device::CUDA) {
+                    pin_operands({this, &other});
                     tensor_ops::launch_binary_op_generic(
                         ptr<SrcT>(), other.ptr<SrcT>(), result.ptr<OutT>(),
                         result.numel(), op, result.stream());
                     // No sync - tensor operation
                 } else {
+                    pin_operands({this, &other});
                     apply_binary_cpu(ptr<SrcT>(), other.ptr<SrcT>(), result.ptr<OutT>(),
                                      result.numel(), op);
                 }
             } else {
                 // Broadcasting needed
+                pin_operands({this, &other});
                 auto a_shape = shape_.dims();
                 auto b_shape = other.shape().dims();
                 auto c_shape = broadcast_shape.dims();
@@ -650,6 +661,7 @@ namespace lfs::core {
                     // CPU broadcasting: materialize broadcasts first
                     auto a_broadcast = a_needs_broadcast ? broadcast_to(broadcast_shape) : clone();
                     auto b_broadcast = b_needs_broadcast ? other.broadcast_to(broadcast_shape) : other.clone();
+                    pin_operands({&a_broadcast, &b_broadcast});
                     apply_binary_cpu(a_broadcast.ptr<SrcT>(), b_broadcast.ptr<SrcT>(),
                                      result.ptr<OutT>(), result.numel(), op);
                 }
@@ -796,12 +808,14 @@ namespace lfs::core {
             const Tensor& other_dense = other.contiguous_read(other_materialized);
 
             if (device_ == Device::CUDA) {
+                pin_operands({this, &other_dense});
                 tensor_ops::launch_binary_op_generic(
                     ptr<SrcT>(), other_dense.ptr<SrcT>(), ptr<SrcT>(),
                     numel(), op, stream());
                 // No sync - tensor operation
             } else {
                 // CPU implementation
+                pin_operands({this, &other_dense});
                 apply_binary_cpu(ptr<SrcT>(), other_dense.ptr<SrcT>(), ptr<SrcT>(),
                                  numel(), op);
             }
@@ -945,7 +959,7 @@ namespace lfs::core {
 
         // Helper to create view with shared ownership
         Tensor create_view(const TensorShape& new_shape) const {
-            if (state_ && state_->has_deferred_expr) {
+            if (state_ && state_->lazy) {
                 const uint64_t source_id = lazy_expr_id();
                 Tensor source = *this;
                 const cudaStream_t source_stream = source.stream();
@@ -990,6 +1004,16 @@ namespace lfs::core {
             LFS_ASSERT_MSG(new_shape.elements() == numel(),
                            "metadata-only view must preserve the logical element count");
 
+            if (state_ && state_->lazy) {
+                const bool identity_shape = new_shape == shape_;
+                const bool identity_strides =
+                    new_strides == strides_ || new_strides == new_shape.strides();
+                if (identity_shape && identity_strides) {
+                    return create_view(new_shape);
+                }
+                materialize_if_deferred();
+            }
+
             Tensor view;
             view.data_ = data_;
             view.data_owner_ = data_owner_;
@@ -1025,7 +1049,9 @@ namespace lfs::core {
 
     public:
         Tensor() = default;
-        Tensor(void* data, TensorShape shape, Device device, DataType dtype);
+        // Non-owning CUDA storage must stamp its producer stream; lifetime remains caller-owned.
+        Tensor(void* data, TensorShape shape, Device device, DataType dtype,
+               cudaStream_t home_stream = nullptr);
 
         // Copy constructor and assignment - SHALLOW COPY (LibTorch behavior)
         Tensor(const Tensor& other);
@@ -1141,10 +1167,11 @@ namespace lfs::core {
         static Tensor eye(size_t m, size_t n, Device device = Device::CUDA);
         static Tensor diag(const Tensor& diagonal);
 
-        static Tensor from_blob(void* data, TensorShape shape, Device device, DataType dtype) {
+        static Tensor from_blob(void* data, TensorShape shape, Device device, DataType dtype,
+                                cudaStream_t home_stream = nullptr) {
             LFS_ASSERT_MSG(data != nullptr || shape.elements() == 0,
                            "from_blob received null data for a non-empty tensor");
-            return Tensor(data, shape, device, dtype);
+            return Tensor(data, shape, device, dtype, home_stream);
         }
         static Tensor from_external_owner(void* data,
                                           TensorShape shape,
@@ -1350,18 +1377,15 @@ namespace lfs::core {
         DataType dtype() const { return dtype_; }
         bool owns_memory() const { return static_cast<bool>(data_owner_) && !is_view_; }
         bool is_view() const { return is_view_; }
-        bool is_external_storage() const { return has_external_storage(); }
+        bool is_external_storage() const {
+            return storage_meta_ && static_cast<bool>(storage_meta_->external_owner);
+        }
         bool is_empty() const { return !is_valid() || numel() == 0; }
         bool has_lazy_expr() const {
-            return (state_ && state_->has_deferred_expr) || internal::tensor_has_lazy_expr(*this);
+            return (state_ && state_->lazy) || internal::tensor_has_lazy_expr(*this);
         }
-        bool is_deferred() const { return state_ && state_->has_deferred_expr; }
-        uint64_t lazy_expr_id() const {
-            if (state_ && state_->has_deferred_expr && state_->deferred_expr_node_id != 0) {
-                return state_->deferred_expr_node_id;
-            }
-            return internal::tensor_lazy_expr_id(*this);
-        }
+        bool is_deferred() const { return state_ && state_->lazy; }
+        uint64_t lazy_expr_id() const;
         std::optional<internal::LazyExprDebugInfo> lazy_expr_info() const {
             if (const uint64_t node_id = lazy_expr_id(); node_id != 0) {
                 return internal::lazy_ir_node_info(node_id);
@@ -1371,7 +1395,7 @@ namespace lfs::core {
         size_t debug_id() const { return id_; }
 
         bool is_valid() const {
-            return static_cast<bool>(data_owner_) || is_view_ || (state_ && state_->has_deferred_expr);
+            return static_cast<bool>(data_owner_) || is_view_ || (state_ && state_->lazy);
         }
 
         // CRITICAL: All size queries must check validity first
@@ -1603,16 +1627,18 @@ namespace lfs::core {
             TensorLeaf(*this), ops::op_type{}, shape_, device_, result_dtype);            \
         link_deferred_result_to_inputs(result, {lazy_expr_id()});                         \
         if (dtype_ == DataType::Float32 &&                                                \
-            result.is_valid() && result.has_lazy_expr()) {                                \
+            result.is_valid() && result.is_deferred()) {                                  \
             const uint64_t result_node_id = result.lazy_expr_id();                        \
             if (result_node_id != 0 && result.state_) {                                   \
+                LFS_ASSERT_MSG(result.state_->lazy != nullptr,                            \
+                               "fusable unary result requires shared lazy state");        \
                 internal::lazy_executor_register_pointwise_fusion_op(                     \
                     result_node_id,                                                       \
                     lazy_expr_id(),                                                       \
                     *this,                                                                \
                     internal::LazyPointwiseOp{internal::LazyPointwiseOpKind::fusion_kind, \
                                               0.0f},                                      \
-                    std::weak_ptr<void>(result.state_));                                  \
+                    result.state_->lazy);                                                 \
             }                                                                             \
         }                                                                                 \
         return result;                                                                    \
@@ -1815,16 +1841,18 @@ namespace lfs::core {
             shape_, device_, result_dtype);                                                \
         link_deferred_result_to_inputs(result, {lazy_expr_id()});                          \
         if (result_dtype == DataType::Float32 &&                                           \
-            result.is_valid() && result.has_lazy_expr()) {                                 \
+            result.is_valid() && result.is_deferred()) {                                   \
             const uint64_t result_node_id = result.lazy_expr_id();                         \
             if (result_node_id != 0 && result.state_) {                                    \
+                LFS_ASSERT_MSG(result.state_->lazy != nullptr,                             \
+                               "fusable scalar result requires shared lazy state");        \
                 internal::lazy_executor_register_pointwise_fusion_op(                      \
                     result_node_id,                                                        \
                     lazy_expr_id(),                                                        \
                     scalar_input,                                                          \
                     internal::LazyPointwiseOp{internal::LazyPointwiseOpKind::fusion_kind,  \
                                               static_cast<float>(scalar_value)},           \
-                    std::weak_ptr<void>(result.state_));                                   \
+                    result.state_->lazy);                                                  \
             }                                                                              \
         }                                                                                  \
         return result;                                                                     \
@@ -2616,6 +2644,39 @@ namespace lfs::core {
         template <typename Derived>
         friend class TensorExpr;
     };
+
+    inline void pin_operands(std::initializer_list<const Tensor*> tensors) {
+        for (const Tensor* tensor : tensors) {
+            if (tensor) {
+                tensor->materialize_if_deferred();
+            }
+        }
+    }
+
+    struct LazyExprState {
+        ~LazyExprState() noexcept {
+            if (node_id != 0 && !materializer_unregistered) {
+                try {
+                    internal::lazy_executor_unregister_deferred_materializer(node_id);
+                } catch (...) {
+                }
+            }
+        }
+
+        std::mutex gate;
+        std::atomic<std::thread::id> gate_owner{};
+        uint64_t node_id = 0;
+        std::function<Tensor()> materializer;
+        Tensor result;
+        bool materializer_unregistered = false;
+    };
+
+    inline uint64_t Tensor::lazy_expr_id() const {
+        if (state_ && state_->lazy && state_->lazy->node_id != 0) {
+            return state_->lazy->node_id;
+        }
+        return internal::tensor_lazy_expr_id(*this);
+    }
 
     // ============= TensorRowProxy for operator[] =============
     // Implementations in tensor_row_proxy.cpp (except template methods)

@@ -24,6 +24,7 @@ namespace lfs::vis {
                                     VulkanContext::ExternalBuffer buffer,
                                     lfs::rendering::CudaVulkanBufferInterop interop,
                                     std::size_t bytes,
+                                    std::string debug_label,
                                     std::shared_ptr<void> extra_owner = {});
 
         // SUB-VIEW variant — borrows the VkBuffer and lifetime from `parent` at a
@@ -50,6 +51,7 @@ namespace lfs::vis {
         VulkanContext* context_ = nullptr;
         VulkanContext::ExternalBuffer buffer_{};
         lfs::rendering::CudaVulkanBufferInterop interop_{};
+        const void* registered_cuda_base_ = nullptr;
         // Sub-view members.
         std::shared_ptr<VulkanExternalTensorStorage> parent_;
         std::size_t offset_ = 0;

@@ -57,7 +57,8 @@ namespace lfs::training::kernels {
         float cx,
         float cy,
         float weight,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* pixel_weight = nullptr);
 
     // Prior-supervised depth normals: alpha-weighted cosine between the prior
     // normal map and the normal derived from rendered expected depth. Gradients
@@ -78,6 +79,7 @@ namespace lfs::training::kernels {
         float cx,
         float cy,
         float weight,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* pixel_weight = nullptr);
 
 } // namespace lfs::training::kernels

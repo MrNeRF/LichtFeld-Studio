@@ -7,9 +7,9 @@
 //   1 coverage      per depth rank: conservative macro-tile count (bbox)
 //   2 generate_keys per depth rank: emit (macro_id, slot) at cumsum offsets,
 //                   per-macro-row ellipse refinement, sentinel padding
-//   3 ranges        per sorted instance: macro segment boundaries
-//   4 batch_counts  per macro tile: ceil(len / RASTER_BATCH_SIZE)
+//   3 ranges+counts per macro tile: segment bounds + ceil(len / batch size)
 //   5 batch_prepare wave-chunked raster/compose indirect args
+//   6 wave_partition depth-rank windows + indirect commands/predicates
 
 #include "config.slang"
 #include "indirect_layout.inc"
@@ -19,11 +19,15 @@ import utils;
 #define _MACRO_ENTRY_coverage 1
 #define _MACRO_ENTRY_generate_keys 2
 #define _MACRO_ENTRY_ranges 3
-#define _MACRO_ENTRY_batch_counts 4
 #define _MACRO_ENTRY_batch_prepare 5
+#define _MACRO_ENTRY_wave_partition 6
 
 #ifndef MACRO_ENTRY
 #define MACRO_ENTRY 0
+#endif
+
+#ifndef LFS_VISIBLE_BOUNDED
+#define LFS_VISIBLE_BOUNDED 0
 #endif
 
 static const float MACRO_PX_W = float(HIGS_MACRO_TILE_WIDTH_TILES * HIGS_TILE_WIDTH);
@@ -140,22 +144,31 @@ layout(binding=4) StructuredBuffer<int32_t> primitive_sort_indices;
 layout(binding=5) RWStructuredBuffer<sortingKey_t> out_unsorted_keys;
 layout(binding=6) RWStructuredBuffer<int32_t> out_unsorted_gauss_idx;
 layout(binding=7) StructuredBuffer<uint32_t> visible_count;
+layout(binding=8) StructuredBuffer<uint32_t> depth_wave_dispatch;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniforms) {
-    const uint depth_rank = dispatchThreadID.x;
+    const uint record = (1u + uniforms.depth_wave) * LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS;
+    const uint local_rank = dispatchThreadID.x;
+    const uint rank_count = depth_wave_dispatch[record + LFS_VK_DEPTH_WAVE_RANK_COUNT_WORD];
+    if (local_rank >= rank_count)
+        return;
+    const uint depth_rank =
+        depth_wave_dispatch[record + LFS_VK_DEPTH_WAVE_RANK_BASE_WORD] + local_rank;
     const uint visible = min(visible_count[0], uniforms.num_splats);
     if (depth_rank >= visible)
         return;
 
-    int offset = depth_rank == 0u ? 0 : index_buffer_offset[depth_rank - 1u];
-    int offset_max = index_buffer_offset[depth_rank];
+    const int instance_base =
+        int(depth_wave_dispatch[record + LFS_VK_DEPTH_WAVE_INSTANCE_BASE_WORD]);
+    int offset = (depth_rank == 0u ? 0 : index_buffer_offset[depth_rank - 1u]) -
+                 instance_base;
+    int offset_max = index_buffer_offset[depth_rank] - instance_base;
     const int sort_capacity = int(uniforms.sort_capacity);
     if (sort_capacity <= 0 || offset < 0 || offset_max < 0 ||
-        offset >= sort_capacity || offset >= offset_max)
+        offset >= sort_capacity || offset >= offset_max || offset_max > sort_capacity)
         return;
-    offset_max = min(offset_max, sort_capacity);
 
     const bool wrap_x = base_camera_model(uniforms.camera_model) == uint(CameraModel::EQUIRECTANGULAR);
     const uint mgw = higs_macro_grid_width(uniforms.grid_width);
@@ -211,46 +224,40 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
 layout(binding=0) StructuredBuffer<sortingKey_t> sorted_keys;
 layout(binding=1) RWStructuredBuffer<int32_t> out_macro_ranges;
 layout(binding=2) StructuredBuffer<uint32_t> tile_instance_count;
+layout(binding=3) RWStructuredBuffer<int32_t> out_macro_batch_counts;
 
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniforms) {
-    const uint32_t globalIdx = dispatchThreadID.x;
-    const uint32_t num_macro =
-        higs_macro_grid_width(uniforms.grid_width) * higs_macro_grid_height(uniforms.grid_height);
-
-    const uint32_t num_isects = min(tile_instance_count[0], uniforms.sort_capacity);
-    if (globalIdx > num_isects)
-        return;
-
-    uint32_t currtile = num_macro;
-    if (globalIdx < num_isects) {
-        currtile = min((uint32_t)sorted_keys[globalIdx], num_macro);
+// One thread owns both boundaries and the derived count for a macro tile.
+// Binary searches avoid a cross-workgroup ranges->counts dependency.
+[ForceInline]
+uint lower_bound_macro(uint target, uint count) {
+    uint low = 0u;
+    uint high = count;
+    while (low < high) {
+        const uint mid = low + (high - low) / 2u;
+        if (uint(sorted_keys[mid]) < target)
+            low = mid + 1u;
+        else
+            high = mid;
     }
-    uint32_t prevtile = globalIdx == 0u ? (uint32_t)-1 :
-        min((uint32_t)sorted_keys[globalIdx - 1u], num_macro);
-    for (uint32_t i = prevtile + 1u; i <= currtile; ++i) {
-        out_macro_ranges[i] = globalIdx;
-    }
+    return low;
 }
-
-#elif MACRO_ENTRY == _MACRO_ENTRY_batch_counts
-
-layout(binding=0) StructuredBuffer<int32_t> macro_ranges;
-layout(binding=1) RWStructuredBuffer<int32_t> out_macro_batch_counts;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
 void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniforms) {
     const uint mt = dispatchThreadID.x;
-    const uint num_macro =
+    const uint32_t num_macro =
         higs_macro_grid_width(uniforms.grid_width) * higs_macro_grid_height(uniforms.grid_height);
     if (mt >= num_macro)
         return;
 
-    const int32_t range_start = max(macro_ranges[mt], 0);
-    const int32_t range_end = max(macro_ranges[mt + 1u], range_start);
-    const uint len = uint(range_end - range_start);
+    const uint num_isects = tile_instance_count[0];
+    const uint range_start = lower_bound_macro(mt, num_isects);
+    const uint range_end = lower_bound_macro(mt + 1u, num_isects);
+    out_macro_ranges[mt] = int32_t(range_start);
+    if (mt + 1u == num_macro)
+        out_macro_ranges[num_macro] = int32_t(range_end);
+    const uint len = range_end - range_start;
     out_macro_batch_counts[mt] = int32_t((len + RASTER_BATCH_SIZE - 1u) / RASTER_BATCH_SIZE);
 }
 
@@ -282,7 +289,8 @@ void main(uniform Uniforms uniforms) {
         out_wave_args[raster + LFS_VK_DISPATCH_Z_WORD_OFFSET] = wave_batches > 0u ? 1u : 0u;
         // Wave 0's compose always runs so an empty frame still initializes
         // the pixel state instead of presenting stale content.
-        const bool compose_runs = wave_batches > 0u || w == 0u;
+        const bool compose_runs = wave_batches > 0u ||
+                                  (uniforms.depth_wave == 0u && w == 0u);
         const uint higs_grid_w = (uniforms.image_width + HIGS_TILE_WIDTH - 1u) / HIGS_TILE_WIDTH;
         const uint higs_grid_h = (uniforms.image_height + HIGS_TILE_HEIGHT - 1u) / HIGS_TILE_HEIGHT;
         const uint compose = LFS_VK_MACRO_WAVE_DISPATCH_COMPOSE_BASE_WORD_OFFSET +
@@ -291,6 +299,218 @@ void main(uniform Uniforms uniforms) {
         out_wave_args[compose + LFS_VK_DISPATCH_Y_WORD_OFFSET] = compose_runs ? higs_grid_h : 0u;
         out_wave_args[compose + LFS_VK_DISPATCH_Z_WORD_OFFSET] = compose_runs ? 1u : 0u;
     }
+}
+
+#elif MACRO_ENTRY == _MACRO_ENTRY_wave_partition
+
+layout(binding=0) StructuredBuffer<int32_t> index_buffer_offset;
+#if LFS_VISIBLE_BOUNDED
+layout(binding=1) StructuredBuffer<uint32_t> visible_count;
+layout(binding=2) StructuredBuffer<uint32_t> tile_sort_count;
+layout(binding=3) RWStructuredBuffer<uint32_t> out_wave_dispatch;
+layout(binding=4) RWStructuredBuffer<uint32_t> out_wave_predicates;
+#else
+layout(binding=1) StructuredBuffer<uint32_t> tile_sort_count;
+layout(binding=2) RWStructuredBuffer<uint32_t> out_wave_dispatch;
+layout(binding=3) RWStructuredBuffer<uint32_t> out_wave_predicates;
+#endif
+
+[ForceInline]
+void write_dispatch(RWStructuredBuffer<uint32_t> records,
+                    uint base,
+                    uint x,
+                    uint y,
+                    uint z) {
+    records[base + LFS_VK_DISPATCH_X_WORD_OFFSET] = x;
+    records[base + LFS_VK_DISPATCH_Y_WORD_OFFSET] = y;
+    records[base + LFS_VK_DISPATCH_Z_WORD_OFFSET] = z;
+}
+
+[ForceInline]
+void write_empty_record(RWStructuredBuffer<uint32_t> records,
+                        uint wave,
+                        uint per_tile_groups,
+                        uint fullscreen_x,
+                        uint fullscreen_y) {
+    const uint record = (1u + wave) * LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS;
+    for (uint i = 0u; i < LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS; ++i)
+        records[record + i] = 0u;
+    write_dispatch(records,
+                   record + LFS_VK_DEPTH_WAVE_RANGE_WORD_OFFSET,
+                   1u,
+                   1u,
+                   1u);
+    write_dispatch(records,
+                   record + LFS_VK_DEPTH_WAVE_PER_TILE_WORD_OFFSET,
+                   per_tile_groups,
+                   1u,
+                   1u);
+    write_dispatch(records,
+                   record + LFS_VK_DEPTH_WAVE_FULLSCREEN_WORD_OFFSET,
+                   fullscreen_x,
+                   fullscreen_y,
+                   fullscreen_x > 0u && fullscreen_y > 0u ? 1u : 0u);
+}
+
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void main(uniform Uniforms uniforms) {
+    const uint armed = uniforms.depth_wave;
+#if LFS_VISIBLE_BOUNDED
+    const uint domain = min(visible_count[0], uniforms.num_splats);
+    const uint num_tiles =
+        higs_macro_grid_width(uniforms.grid_width) * higs_macro_grid_height(uniforms.grid_height);
+    const uint fullscreen_x =
+        (uniforms.image_width + HIGS_TILE_WIDTH - 1u) / HIGS_TILE_WIDTH;
+    const uint fullscreen_y =
+        (uniforms.image_height + HIGS_TILE_HEIGHT - 1u) / HIGS_TILE_HEIGHT;
+#else
+    const uint domain = uniforms.num_splats;
+    const uint num_tiles = uniforms.grid_width * uniforms.grid_height;
+    const uint fullscreen_x = uniforms.grid_width;
+    const uint fullscreen_y = uniforms.grid_height;
+#endif
+    const uint per_tile_groups = (num_tiles + 255u) / 256u;
+
+    out_wave_dispatch[LFS_VK_DEPTH_WAVE_HEADER_NEEDED_WORD] = 0u;
+    for (uint w = 0u; w < armed; ++w) {
+        write_empty_record(out_wave_dispatch,
+                           w,
+                           per_tile_groups,
+                           w == 0u ? fullscreen_x : 0u,
+                           w == 0u ? fullscreen_y : 0u);
+        out_wave_predicates[w] = w == 0u ? 1u : 0u;
+    }
+
+    const uint raw = tile_sort_count[0];
+    if (raw == 0xffffffffu) {
+        out_wave_dispatch[LFS_VK_DEPTH_WAVE_HEADER_NEEDED_WORD] = 0u;
+        return;
+    }
+
+    uint rank_begin = 0u;
+    uint needed = 0u;
+    bool overflow = false;
+    for (uint w = 0u; w < armed; ++w) {
+        if (rank_begin >= domain)
+            continue;
+
+        const int32_t signed_base = rank_begin == 0u
+                                        ? 0
+                                        : index_buffer_offset[rank_begin - 1u];
+        if (signed_base < 0 || signed_base >= int32_t(0x7fffffffu)) {
+            overflow = true;
+            break;
+        }
+        const uint base = uint(signed_base);
+        const uint limit = base + uniforms.sort_capacity;
+        uint low = rank_begin;
+        uint high = domain;
+        while (low < high) {
+            const uint mid = low + (high - low + 1u) / 2u;
+            const int32_t signed_end = index_buffer_offset[mid - 1u];
+            if (signed_end < 0 || signed_end >= int32_t(0x7fffffffu)) {
+                overflow = true;
+                break;
+            }
+            if (uint(signed_end) <= limit)
+                low = mid;
+            else
+                high = mid - 1u;
+        }
+        if (overflow || low == rank_begin) {
+            overflow = true;
+            break;
+        }
+
+        const uint rank_end = low;
+        const uint span = uint(index_buffer_offset[rank_end - 1u]) - base;
+        const uint record = (1u + w) * LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS;
+        out_wave_dispatch[record + LFS_VK_DEPTH_WAVE_COUNT_WORD_OFFSET + 0u] = span;
+        out_wave_dispatch[record + LFS_VK_DEPTH_WAVE_COUNT_WORD_OFFSET + 1u] = span;
+        write_dispatch(out_wave_dispatch,
+                       record + LFS_VK_DEPTH_WAVE_KEYGEN_WORD_OFFSET,
+                       (rank_end - rank_begin + 63u) / 64u,
+                       1u,
+                       1u);
+        write_dispatch(out_wave_dispatch,
+                       record + LFS_VK_DEPTH_WAVE_RADIX_WORD_OFFSET,
+                       max((span + 512u * 8u - 1u) / (512u * 8u), 1u),
+                       1u,
+                       1u);
+        write_dispatch(out_wave_dispatch,
+                       record + LFS_VK_DEPTH_WAVE_RANGE_WORD_OFFSET,
+                       max((span + 1u + 255u) / 256u, 1u),
+                       1u,
+                       1u);
+        write_dispatch(out_wave_dispatch,
+                       record + LFS_VK_DEPTH_WAVE_PER_TILE_WORD_OFFSET,
+                       per_tile_groups,
+                       1u,
+                       1u);
+        write_dispatch(out_wave_dispatch,
+                       record + LFS_VK_DEPTH_WAVE_FULLSCREEN_WORD_OFFSET,
+                       fullscreen_x,
+                       fullscreen_y,
+                       fullscreen_x > 0u && fullscreen_y > 0u ? 1u : 0u);
+        out_wave_dispatch[record + LFS_VK_DEPTH_WAVE_RANK_BASE_WORD] = rank_begin;
+        out_wave_dispatch[record + LFS_VK_DEPTH_WAVE_RANK_COUNT_WORD] =
+            rank_end - rank_begin;
+        out_wave_dispatch[record + LFS_VK_DEPTH_WAVE_INSTANCE_BASE_WORD] = base;
+        out_wave_predicates[w] = 1u;
+        rank_begin = rank_end;
+        needed++;
+    }
+
+    while (!overflow && rank_begin < domain) {
+        const int32_t signed_base = rank_begin == 0u
+                                        ? 0
+                                        : index_buffer_offset[rank_begin - 1u];
+        if (signed_base < 0 || signed_base >= int32_t(0x7fffffffu)) {
+            overflow = true;
+            break;
+        }
+        const uint base = uint(signed_base);
+        const uint limit = base + uniforms.sort_capacity;
+        uint low = rank_begin;
+        uint high = domain;
+        while (low < high) {
+            const uint mid = low + (high - low + 1u) / 2u;
+            const int32_t signed_end = index_buffer_offset[mid - 1u];
+            if (signed_end < 0 || signed_end >= int32_t(0x7fffffffu)) {
+                overflow = true;
+                break;
+            }
+            if (uint(signed_end) <= limit)
+                low = mid;
+            else
+                high = mid - 1u;
+        }
+        if (overflow || low == rank_begin) {
+            overflow = true;
+            break;
+        }
+        rank_begin = low;
+        needed++;
+    }
+
+    // A bad per-rank prefix value can be discovered after earlier waves were
+    // made live. Restore the complete CLEANER prefill before publishing the
+    // overflow sentinel so no active record from this failed partition can be
+    // consumed by the current frame.
+    if (overflow) {
+        for (uint w = 0u; w < armed; ++w) {
+            write_empty_record(out_wave_dispatch,
+                               w,
+                               per_tile_groups,
+                               w == 0u ? fullscreen_x : 0u,
+                               w == 0u ? fullscreen_y : 0u);
+            out_wave_predicates[w] = w == 0u ? 1u : 0u;
+        }
+    }
+
+    out_wave_dispatch[LFS_VK_DEPTH_WAVE_HEADER_NEEDED_WORD] =
+        overflow ? 0xffffffffu : needed;
 }
 
 #endif

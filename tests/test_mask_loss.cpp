@@ -16,6 +16,7 @@
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "training/losses/mask_loss.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
 
@@ -103,6 +104,55 @@ TEST_F(MaskLossTest, OpacityPenaltyFormula) {
     // With power=2 on binary mask: (1-0)^2 = 1, (1-1)^2 = 0
     EXPECT_GT(penalty_val, 1.0f);  // Should be significant
     EXPECT_LT(penalty_val, 10.0f); // But bounded
+}
+
+TEST_F(MaskLossTest, UserMaskAndRoiWeightsComposeMultiplicatively) {
+    const auto user_mask = Tensor::from_vector(
+                               std::vector<float>{255.0f, 0.0f, 255.0f, 255.0f},
+                               {size_t{2}, size_t{2}},
+                               Device::CUDA)
+                               .to(DataType::UInt8);
+    const auto roi_weight = Tensor::from_vector(
+        std::vector<float>{1.0f, 0.5f, 0.25f, 0.0f},
+        {size_t{2}, size_t{2}},
+        Device::CUDA);
+
+    const auto composed =
+        lfs::training::losses::compose_pixel_loss_weights(user_mask, roi_weight);
+
+    EXPECT_EQ(
+        composed.to(Device::CPU).to_vector(),
+        (std::vector<float>{1.0f, 0.0f, 0.25f, 0.0f}));
+}
+
+TEST_F(MaskLossTest, RoiWeightedOpacityPenaltyKeepsGlobalPixelMean) {
+    const auto alpha = Tensor::from_vector(
+        std::vector<float>{0.2f, 0.4f, 0.6f, 0.8f},
+        {size_t{2}, size_t{2}},
+        Device::CUDA);
+    const auto penalty_weight = Tensor::from_vector(
+        std::vector<float>{1.0f, 0.5f, 0.25f, 0.0f},
+        {size_t{2}, size_t{2}},
+        Device::CUDA);
+    const auto roi_weight = Tensor::from_vector(
+        std::vector<float>{1.0f, 0.1f, 0.0f, 1.0f},
+        {size_t{2}, size_t{2}},
+        Device::CUDA);
+    constexpr float scale = 2.0f;
+
+    const auto result = lfs::training::losses::compute_mask_opacity_penalty(
+        alpha, penalty_weight, roi_weight, scale);
+
+    const float expected_loss =
+        (0.2f * 1.0f * 1.0f +
+         0.4f * 0.5f * 0.1f +
+         0.6f * 0.25f * 0.0f +
+         0.8f * 0.0f * 1.0f) /
+        4.0f * scale;
+    EXPECT_NEAR(result.loss.item<float>(), expected_loss, 1.0e-7f);
+    EXPECT_EQ(
+        result.grad_alpha.to(Device::CPU).to_vector(),
+        (std::vector<float>{0.5f, 0.025f, 0.0f, 0.0f}));
 }
 
 // Test that penalty is zero when mask covers everything

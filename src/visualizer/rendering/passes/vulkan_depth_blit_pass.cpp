@@ -123,11 +123,10 @@ namespace lfs::vis {
                     vkCreateCommandPool(device, &pool, nullptr, &transfer_pool),
                     "vkCreateCommandPool(device, &pool, nullptr, &transfer_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Depth-blit transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
-                                vkHandleValue(device),
-                                pool.queueFamilyIndex,
-                                static_cast<std::uint32_t>(pool.flags)
-                            ),
+                        "Depth-blit transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                        vkHandleValue(device),
+                        pool.queueFamilyIndex,
+                        static_cast<std::uint32_t>(pool.flags)),
                     std::source_location::current())) {
                 return false;
             }
@@ -216,11 +215,10 @@ namespace lfs::vis {
                     vmaCreateBuffer(allocator, &bi, &sa, &staging_buffer, &staging_alloc, &ai),
                     "vmaCreateBuffer(allocator, &bi, &sa, &staging_buffer, &staging_alloc, &ai)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Depth-blit staging-buffer allocation failed (allocator={:#x}, requested_size={}, usage={:#x})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                bytes,
-                                static_cast<std::uint32_t>(bi.usage)
-                            ),
+                        "Depth-blit staging-buffer allocation failed (allocator={:#x}, requested_size={}, usage={:#x})",
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        bytes,
+                        static_cast<std::uint32_t>(bi.usage)),
                     std::source_location::current())) {
                 return false;
             }
@@ -254,11 +252,10 @@ namespace lfs::vis {
                     vkAllocateCommandBuffers(device, &a, &transfer_cmd),
                     "vkAllocateCommandBuffers(device, &a, &transfer_cmd)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Depth-blit transfer command-buffer allocation failed (device={:#x}, command_pool={:#x}, requested_count={})",
-                                vkHandleValue(device),
-                                vkHandleValue(transfer_pool),
-                                a.commandBufferCount
-                            ),
+                        "Depth-blit transfer command-buffer allocation failed (device={:#x}, command_pool={:#x}, requested_count={})",
+                        vkHandleValue(device),
+                        vkHandleValue(transfer_pool),
+                        a.commandBufferCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -342,12 +339,11 @@ namespace lfs::vis {
                     vkCreateSampler(device, &s, nullptr, &sampler),
                     "vkCreateSampler(device, &s, nullptr, &sampler)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Depth-blit sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
-                                vkHandleValue(device),
-                                static_cast<int>(s.magFilter),
-                                static_cast<int>(s.minFilter),
-                                static_cast<int>(s.addressModeU)
-                            ),
+                        "Depth-blit sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
+                        vkHandleValue(device),
+                        static_cast<int>(s.magFilter),
+                        static_cast<int>(s.minFilter),
+                        static_cast<int>(s.addressModeU)),
                     std::source_location::current())) {
                 return false;
             }
@@ -371,11 +367,10 @@ namespace lfs::vis {
                     vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout),
                     "vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Depth-blit descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
-                                vkHandleValue(device),
-                                li.bindingCount,
-                                static_cast<int>(b.descriptorType)
-                            ),
+                        "Depth-blit descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                        vkHandleValue(device),
+                        li.bindingCount,
+                        static_cast<int>(b.descriptorType)),
                     std::source_location::current())) {
                 return false;
             }
@@ -396,12 +391,11 @@ namespace lfs::vis {
                     vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool),
                     "vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Depth-blit descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
-                                vkHandleValue(device),
-                                frame_count,
-                                pi.maxSets,
-                                ps.descriptorCount
-                            ),
+                        "Depth-blit descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                        vkHandleValue(device),
+                        frame_count,
+                        pi.maxSets,
+                        ps.descriptorCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -419,12 +413,11 @@ namespace lfs::vis {
                     vkAllocateDescriptorSets(device, &ai, sets.data()),
                     "vkAllocateDescriptorSets(device, &ai, sets.data())",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Depth-blit descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
-                                vkHandleValue(device),
-                                vkHandleValue(desc_pool),
-                                vkHandleValue(desc_layout),
-                                ai.descriptorSetCount
-                            ),
+                        "Depth-blit descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                        vkHandleValue(device),
+                        vkHandleValue(desc_pool),
+                        vkHandleValue(desc_layout),
+                        ai.descriptorSetCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -708,13 +701,12 @@ namespace lfs::vis {
                     vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info),
                     "vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Depth-blit image allocation failed (allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                w,
-                                h,
-                                static_cast<int>(img.format),
-                                static_cast<std::uint32_t>(img.usage)
-                            ),
+                        "Depth-blit image allocation failed (allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        w,
+                        h,
+                        static_cast<int>(img.format),
+                        static_cast<std::uint32_t>(img.usage)),
                     std::source_location::current())) {
                 return false;
             }

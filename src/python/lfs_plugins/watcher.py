@@ -196,6 +196,11 @@ class PluginWatcher:
                     lf.ui.unregister_panels_for_module(module_name)
                 except Exception:
                     _log.warning("Builtin panel unregister failed before reload: %s", module_name, exc_info=True)
+            if hasattr(lf.ui, "clear_hooks_for_module"):
+                try:
+                    lf.ui.clear_hooks_for_module(module_name)
+                except Exception:
+                    _log.warning("Builtin hook cleanup failed before reload: %s", module_name, exc_info=True)
 
             self._unregister_menu_classes_for_module(module_name)
             module = importlib.reload(old_module)

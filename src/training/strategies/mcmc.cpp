@@ -160,15 +160,17 @@ namespace lfs::training {
         using namespace lfs::core;
 
         const size_t n = static_cast<size_t>(_splat_data->size());
+        Tensor weights;
         if (!_error_score_max.is_valid() ||
             _error_score_max.ndim() != 1 ||
             _error_score_max.numel() != n) {
-            return zero_frozen_scores(
+            weights = zero_frozen_scores(
                 *_splat_data,
                 Tensor::ones({n}, _splat_data->means().device()));
+        } else {
+            weights = zero_frozen_scores(*_splat_data, _error_score_max.clamp_min(1e-12f));
         }
-
-        return zero_frozen_scores(*_splat_data, _error_score_max.clamp_min(1e-12f));
+        return apply_crop_damping_to_scores(*_optimizer, weights);
     }
 
     void MCMC::ensure_ratio_workspace_size(const size_t required) {

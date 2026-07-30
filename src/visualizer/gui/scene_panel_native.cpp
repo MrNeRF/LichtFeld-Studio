@@ -186,7 +186,7 @@ namespace lfs::vis::gui {
             const size_t total_gpu_bytes = history.totalMemory().gpu_bytes;
 
             if (undo_items.empty() && redo_items.empty())
-                return "No history yet";
+                return LOC(lichtfeld::Strings::Scene::HISTORY_EMPTY);
 
             if (total_gpu_bytes < total_bytes) {
                 return std::format("{} undo / {} redo · {} total · {} GPU",
@@ -748,11 +748,13 @@ namespace lfs::vis::gui {
         changed |= setCachedProperty(history_transaction_el_, "display",
                                      history.hasActiveTransaction() ? "block" : "none");
         changed |= setCachedText(history_undo_btn_el_,
-                                 has_undo ? std::format("Undo: {}", undo_items.front().metadata.label)
-                                          : std::string("Undo"));
+                                 has_undo ? std::format("{}: {}", LOC(lichtfeld::Strings::Common::UNDO),
+                                                        undo_items.front().metadata.label)
+                                          : LOC(lichtfeld::Strings::Common::UNDO));
         changed |= setCachedText(history_redo_btn_el_,
-                                 has_redo ? std::format("Redo: {}", redo_items.front().metadata.label)
-                                          : std::string("Redo"));
+                                 has_redo ? std::format("{}: {}", LOC(lichtfeld::Strings::Common::REDO),
+                                                        redo_items.front().metadata.label)
+                                          : LOC(lichtfeld::Strings::Common::REDO));
         changed |= setCachedDisabled(history_undo_btn_el_, !has_undo);
         changed |= setCachedDisabled(history_redo_btn_el_, !has_redo);
         changed |= setCachedDisabled(history_clear_btn_el_, !can_clear);
@@ -761,11 +763,11 @@ namespace lfs::vis::gui {
         changed |= setCachedProperty(history_empty_undo_el_, "display", has_undo ? "none" : "block");
         changed |= setCachedProperty(history_empty_redo_el_, "display", has_redo ? "none" : "block");
         changed |= setCachedText(history_empty_undo_el_,
-                                 has_undo || has_redo ? "No entries in this stack"
-                                                      : "Nothing recorded yet");
+                                 has_undo || has_redo ? LOC(lichtfeld::Strings::Scene::NO_ENTRIES_IN_STACK)
+                                                      : LOC(lichtfeld::Strings::Scene::NOTHING_RECORDED));
         changed |= setCachedText(history_empty_redo_el_,
-                                 has_undo || has_redo ? "No entries in this stack"
-                                                      : "Nothing recorded yet");
+                                 has_undo || has_redo ? LOC(lichtfeld::Strings::Scene::NO_ENTRIES_IN_STACK)
+                                                      : LOC(lichtfeld::Strings::Scene::NOTHING_RECORDED));
         return changed;
     }
 
@@ -825,25 +827,35 @@ namespace lfs::vis::gui {
 
         bool changed = false;
         changed |= setCachedText(scene_tab_el_, tr("window.scene"));
-        changed |= setCachedText(history_tab_el_, "History");
-        changed |= setCachedText(logging_tab_el_, "Logging");
+        changed |= setCachedText(history_tab_el_, tr("scene.history"));
+        changed |= setCachedText(logging_tab_el_, tr("scene.logging"));
         changed |= setCachedAttribute(filter_input_el_, "placeholder", tr("scene.search"));
         changed |= setCachedText(empty_primary_el_, tr("scene.no_data_loaded"));
         changed |= setCachedText(empty_secondary_el_, tr("scene.use_file_menu"));
-        changed |= setCachedText(history_summary_label_el_, "Shared History");
-        changed |= setCachedText(history_note_el_,
-                                 "Newest block is at the top. Click a block to jump there. New projects start clean.");
-        changed |= setCachedText(history_undo_title_el_, "Undo Stack");
-        changed |= setCachedText(history_redo_title_el_, "Redo Stack");
+        changed |= setCachedText(history_summary_label_el_, LOC(lichtfeld::Strings::Scene::HISTORY_SHARED));
+        changed |= setCachedText(history_note_el_, LOC(lichtfeld::Strings::Scene::HISTORY_NOTE));
+        changed |= setCachedText(history_undo_title_el_, LOC(lichtfeld::Strings::Scene::UNDO_STACK));
+        changed |= setCachedText(history_redo_title_el_, LOC(lichtfeld::Strings::Scene::REDO_STACK));
+        changed |= setCachedText(history_undo_btn_el_, LOC(lichtfeld::Strings::Common::UNDO));
+        changed |= setCachedText(history_redo_btn_el_, LOC(lichtfeld::Strings::Common::REDO));
         changed |= setCachedText(history_clear_btn_el_, tr(lichtfeld::Strings::DebugInfo::CLEAR_HISTORY));
-        changed |= setCachedText(logging_summary_label_el_, "CLI Log Mirror");
-        changed |= setCachedText(logging_level_label_el_, "Log Level");
-        changed |= setCachedText(logging_export_btn_el_, "Export .txt");
-        changed |= setCachedText(logging_copy_btn_el_, "Copy");
+        changed |= setCachedText(logging_summary_label_el_, LOC(lichtfeld::Strings::Scene::LOG_MIRROR));
+        changed |= setCachedText(logging_level_label_el_, LOC(lichtfeld::Strings::Scene::LOG_LEVEL));
+        changed |= setCachedText(logging_export_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_EXPORT));
+        changed |= setCachedText(logging_copy_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_COPY));
         changed |= setCachedText(logging_note_el_,
-                                 std::format("Mirrors console output. The panel shows the latest {} entries to stay responsive; copy and export use the full buffered log history.",
-                                             MAX_RENDERED_LOG_ENTRIES));
-        changed |= setCachedText(logging_empty_el_, "No logs captured yet");
+                                 std::vformat(LOC(lichtfeld::Strings::Scene::LOG_NOTE),
+                                              std::make_format_args(MAX_RENDERED_LOG_ENTRIES)));
+        changed |= setCachedText(logging_empty_el_, LOC(lichtfeld::Strings::Scene::NO_LOGS));
+        const std::array log_option_keys{
+            lichtfeld::Strings::Scene::LOG_TRACE, lichtfeld::Strings::Scene::LOG_DEBUG,
+            lichtfeld::Strings::Scene::LOG_INFO, lichtfeld::Strings::Scene::LOG_PERFORMANCE,
+            lichtfeld::Strings::Scene::LOG_WARN, lichtfeld::Strings::Scene::LOG_ERROR,
+            lichtfeld::Strings::Scene::LOG_CRITICAL, lichtfeld::Strings::Scene::LOG_OFF};
+        for (size_t i = 0; i < log_option_keys.size(); ++i)
+            if (auto* const option = logging_level_select_el_->GetOption(static_cast<int>(i)))
+                changed |= setCachedText(option, LOC(log_option_keys[i]));
+        logging_level_select_el_->SetSelection(logging_level_select_el_->GetSelection());
         last_history_generation_ = std::numeric_limits<uint64_t>::max();
         last_log_generation_ = std::numeric_limits<uint64_t>::max();
         return changed;

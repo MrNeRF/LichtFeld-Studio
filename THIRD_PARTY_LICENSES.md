@@ -47,8 +47,9 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 ## Graphics & UI Libraries
 | Project | Description | License |
 |---------|-------------|---------|
-| [Dear ImGui](https://github.com/ocornut/imgui) | Immediate mode GUI library | MIT |
 | [SDL3](https://www.libsdl.org/) | Window/input/context management | zlib |
+| [RmlUi](https://github.com/mikke89/RmlUi) | Retained-mode UI (HTML/CSS-like documents) | MIT |
+| [Zep](https://github.com/Rezonality/zep) | Embeddable text editor (Rml display backend) | MIT |
 | [GLM](https://github.com/g-truc/glm) | OpenGL Mathematics library | MIT |
 | [glad](https://github.com/Dav1dde/glad) | OpenGL loader | MIT |
 

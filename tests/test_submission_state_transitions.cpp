@@ -11,10 +11,10 @@
 
 using lfs::ErrorCode;
 using lfs::ErrorDomain;
+using lfs::rendering::apply_submission_transition;
 using lfs::rendering::SubmissionFencePolicy;
 using lfs::rendering::SubmissionState;
 using lfs::rendering::SubmissionTransition;
-using lfs::rendering::apply_submission_transition;
 
 namespace {
 

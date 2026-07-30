@@ -102,6 +102,7 @@ class _ParamsStub:
         self.eval_steps = []
         self.bg_color = (0.0, 0.0, 0.0)
         self.bg_image_path = ""
+        self.auto_scaled_for = None
 
     def has_params(self):
         return True
@@ -113,6 +114,9 @@ class _ParamsStub:
         self.start_refine = int(self.start_refine * scale)
         self.stop_refine = int(self.stop_refine * scale)
         self.grow_until_iter = int(self.grow_until_iter * scale)
+
+    def auto_scale_steps(self, camera_count):
+        self.auto_scaled_for = camera_count
 
     def set(self, prop, value):
         setattr(self, prop, value)
@@ -126,6 +130,7 @@ class _ParamsStub:
 
 class _DatasetStub:
     def __init__(self):
+        self.data_path = "/data/scene_a"
         self.max_width = 2048
         self.test_every = 8
 
@@ -139,6 +144,56 @@ class _ModelStub:
 
     def bind(self, name, getter, setter):
         self.bindings[name] = (getter, setter)
+
+
+def test_auto_scale_marker_survives_reset_but_not_dataset_change(
+    training_panel_module, monkeypatch
+):
+    dataset = _DatasetStub()
+    scene = SimpleNamespace(active_camera_count=600)
+    monkeypatch.setattr(training_panel_module.lf, "dataset_params", lambda: dataset)
+    monkeypatch.setattr(training_panel_module.lf, "get_scene", lambda: scene)
+    panel = training_panel_module.TrainingPanel()
+    params = _ParamsStub()
+
+    assert panel._try_auto_scale_steps(params) is True
+    assert params.auto_scaled_for == 600
+
+    # Reset re-enters with the same dataset path.
+    params.auto_scaled_for = None
+    assert panel._try_auto_scale_steps(params) is False
+    assert params.auto_scaled_for is None
+
+    dataset.data_path = "/data/scene_b"
+    assert panel._try_auto_scale_steps(params) is True
+    assert params.auto_scaled_for == 600
+
+
+def test_auto_scale_user_override_survives_camera_change_until_relocked(
+    training_panel_module, monkeypatch
+):
+    dataset = _DatasetStub()
+    scene = SimpleNamespace(active_camera_count=900)
+    monkeypatch.setattr(training_panel_module.lf, "dataset_params", lambda: dataset)
+    monkeypatch.setattr(training_panel_module.lf, "get_scene", lambda: scene)
+    params = _ParamsStub()
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    panel = training_panel_module.TrainingPanel()
+
+    assert panel._try_auto_scale_steps(params) is True
+    assert params.auto_scaled_for == 900
+
+    assert panel._set_iterations(params, 50000) is True
+    assert params.iterations == 50000
+
+    scene.active_camera_count = 800
+    assert panel._try_auto_scale_steps(params) is False
+    assert params.auto_scaled_for == 900
+    assert params.iterations == 50000
+
+    panel._set_auto_scale_steps_locked(False)
+    panel._set_auto_scale_steps_locked(True)
+    assert params.auto_scaled_for == 800
 
 
 def test_training_panel_progress_updates_bound_value(training_panel_module, monkeypatch):

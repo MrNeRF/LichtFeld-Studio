@@ -16,6 +16,17 @@
 
 namespace lfs::training {
 
+    namespace {
+        struct GsplatThreadLocalCaches {
+            core::Tensor K;
+            core::Tensor image_chw;
+            core::Tensor alpha_chw;
+            core::Tensor depth_chw;
+        };
+
+        thread_local GsplatThreadLocalCaches gsplat_thread_caches;
+    } // namespace
+
     std::expected<std::pair<RenderOutput, GsplatRasterizeContext>, std::string> gsplat_rasterize_forward(
         core::Camera& viewpoint_camera,
         core::SplatData& gaussian_model,
@@ -94,6 +105,8 @@ namespace lfs::training {
                 }
             }
 
+            core::pin_operands({&means, &opacities, &scales, &quats, &sh0, &shN});
+
             // Current-stream-first (the caller's guard), tensor stream as
             // fallback — matches the lib-wide rule and the begin_frame stream,
             // so a metrics-thread render lands its kernels and consumers on the
@@ -103,7 +116,7 @@ namespace lfs::training {
                                                 : means.stream();
 
             // Keep K tensor cached and update values in-place to avoid per-call allocations.
-            thread_local core::Tensor cached_K_tensor;
+            auto& cached_K_tensor = gsplat_thread_caches.K;
             if (!cached_K_tensor.is_valid() || cached_K_tensor.numel() != 9 ||
                 cached_K_tensor.stream() != fwd_stream) {
                 cached_K_tensor = core::Tensor::empty({1, 3, 3}, core::Device::CUDA, core::DataType::Float32);
@@ -138,8 +151,10 @@ namespace lfs::training {
 
             if (use_bg_image) {
                 // Use per-pixel background image - passed directly to gsplat kernel
+                core::pin_operands({&bg_image});
                 bg_image_ptr = bg_image.ptr<float>();
             } else if (bg_color.is_valid() && bg_color.numel() > 0) {
+                core::pin_operands({&bg_color});
                 bg_color_ptr = bg_color.ptr<float>();
             }
 
@@ -346,10 +361,10 @@ namespace lfs::training {
             // Create tensor views over arena memory for output
             auto render_colors_tensor = core::Tensor::from_blob(
                 render_colors_ptr_out, {static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W), static_cast<size_t>(channels)},
-                core::Device::CUDA, core::DataType::Float32);
+                core::Device::CUDA, core::DataType::Float32, fwd_stream);
             auto render_alphas_tensor = core::Tensor::from_blob(
                 render_alphas_ptr_out, {static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W), 1UL},
-                core::Device::CUDA, core::DataType::Float32);
+                core::Device::CUDA, core::DataType::Float32, fwd_stream);
 
             // Process based on render mode
             core::Tensor final_image, final_depth;
@@ -380,9 +395,9 @@ namespace lfs::training {
             }
 
             // Convert from [1, H, W, C] arena views to reusable CHW buffers.
-            thread_local core::Tensor cached_image_chw;
-            thread_local core::Tensor cached_alpha_chw;
-            thread_local core::Tensor cached_depth_chw;
+            auto& cached_image_chw = gsplat_thread_caches.image_chw;
+            auto& cached_alpha_chw = gsplat_thread_caches.alpha_chw;
+            auto& cached_depth_chw = gsplat_thread_caches.depth_chw;
 
             if (final_image.is_valid() && final_image.numel() > 0) {
                 auto image_hwc = final_image.squeeze(0); // [H, W, C]
@@ -857,6 +872,17 @@ namespace lfs::training {
             arena.end_frame(ctx.frame_id, stream);
             throw;
         }
+    }
+
+    bool release_gsplat_rasterizer_thread_local_caches() noexcept {
+        gsplat_thread_caches.K = {};
+        gsplat_thread_caches.image_chw = {};
+        gsplat_thread_caches.alpha_chw = {};
+        gsplat_thread_caches.depth_chw = {};
+        return !gsplat_thread_caches.K.is_valid() &&
+               !gsplat_thread_caches.image_chw.is_valid() &&
+               !gsplat_thread_caches.alpha_chw.is_valid() &&
+               !gsplat_thread_caches.depth_chw.is_valid();
     }
 
 } // namespace lfs::training

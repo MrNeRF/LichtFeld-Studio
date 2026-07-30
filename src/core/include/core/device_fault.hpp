@@ -213,6 +213,17 @@ namespace lfs::core {
         cudaStream_t stream,
         SourceSite location);
 
+    class ValidatedIndexToken;
+
+    // Declared before the class so the friend declaration inside it is not
+    // the first declaration MSVC sees — attaching dllexport/dllimport only
+    // on a later redeclaration is C2375 (redefinition; different linkage).
+    [[nodiscard]] LFS_CORE_API ValidatedIndexToken issue_validated_index_token(
+        const void* storage_identity,
+        std::uint64_t mutation_version,
+        int device_ordinal,
+        std::uint64_t producer_event_or_range);
+
     // ---------------------------------------------------------------------------
     // ValidatedIndexToken (host-only; phase-6c §1.10 / P3).
     //

@@ -1,12 +1,14 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/lazy_config.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <optional>
@@ -511,6 +513,40 @@ TEST(TensorLazyIrTest, OnModeContextCacheGrowthGuardrailBoundedByPlannedNodes) {
     EXPECT_LE(diagnostics.max_context_cache_entries, diagnostics.planned_nodes);
 }
 
+TEST(TensorLazyIrTest, OnModeContextCacheCollisionUsesFreshMaterialization) {
+    LazyTestGuard guard;
+
+    constexpr uint64_t COLLIDING_NODE_ID = 0xc0111de;
+    auto eager_root = Tensor::zeros({4}, Device::CPU, DataType::Float32);
+    auto stale = Tensor::full({4}, 1.0f, Device::CPU, DataType::Float32);
+    auto fresh = Tensor::full({4}, 9.0f, Device::CPU, DataType::Float32);
+
+    bool observed_active_context = false;
+    auto result = internal::lazy_planner_execute_plan_for_tensor(
+        eager_root,
+        [&]() {
+            observed_active_context = internal::lazy_executor_context_active();
+            internal::lazy_executor_cache_materialization(COLLIDING_NODE_ID, stale);
+
+            Tensor cached;
+            EXPECT_TRUE(internal::lazy_executor_lookup_cached_materialization(
+                COLLIDING_NODE_ID, cached));
+            EXPECT_FLOAT_EQ(cached.to_vector().front(), 1.0f);
+
+            internal::lazy_executor_cache_materialization(COLLIDING_NODE_ID, fresh);
+            EXPECT_TRUE(internal::lazy_executor_lookup_cached_materialization(
+                COLLIDING_NODE_ID, cached));
+            return cached;
+        });
+
+    EXPECT_TRUE(observed_active_context);
+    const auto values = result.to_vector();
+    ASSERT_EQ(values.size(), 4u);
+    for (const float value : values) {
+        EXPECT_FLOAT_EQ(value, 9.0f);
+    }
+}
+
 TEST(TensorLazyIrTest, OnModePlannerRegistryPrunesAfterMaterialization) {
     LazyTestGuard guard;
 
@@ -685,11 +721,24 @@ TEST(TensorLazyIrTest, OnModeInteropPointerBoundaryMaterializes) {
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
 
+    reset_cuda_diagnostics_for_testing();
+    clear_cuda_breadcrumbs_for_testing();
+
     const void* storage = deferred.storage_ptr();
     const float* data = deferred.ptr<float>();
     ASSERT_NE(storage, nullptr);
     ASSERT_NE(data, nullptr);
     EXPECT_FLOAT_EQ(data[0], 3.0f);
+
+    const auto breadcrumbs = cuda_breadcrumbs_most_recent_first();
+    const auto storage_move = std::find_if(
+        breadcrumbs.begin(), breadcrumbs.end(), [](const CudaBreadcrumb& breadcrumb) {
+            return breadcrumb.tag != nullptr &&
+                   std::string_view(breadcrumb.tag) == "tensor.deferred.storage_move";
+        });
+    ASSERT_NE(storage_move, breadcrumbs.end());
+    EXPECT_EQ(storage_move->a1, reinterpret_cast<uintptr_t>(storage));
+    EXPECT_EQ(storage_move->a2, deferred.bytes());
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
     EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);

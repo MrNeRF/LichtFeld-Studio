@@ -53,7 +53,7 @@ namespace lfs::core {
                     ensure_cuda_success(
                         destroy_status, "cudaEventDestroy(arena frame completion)",
                         "context=arena destruction", LFS_SOURCE_SITE_CURRENT(),
-                        CudaFailureDisposition::LogOnly);
+                        CudaFailureDisposition::LogOnlyNoLatch);
                 }
                 last_frame_event_ = nullptr;
                 last_frame_event_valid_ = false;
@@ -122,7 +122,7 @@ namespace lfs::core {
                     ensure_cuda_success(
                         destroy_status, "cudaEventDestroy(arena frame completion)",
                         "context=arena move assignment", LFS_SOURCE_SITE_CURRENT(),
-                        CudaFailureDisposition::LogOnly);
+                        CudaFailureDisposition::LogOnlyNoLatch);
                 }
             }
             last_frame_event_ = other.last_frame_event_;
@@ -667,7 +667,7 @@ namespace lfs::core {
         if (free_status != cudaSuccess) {
             ensure_cuda_success(
                 free_status, "cudaFree(arena cache trim probe)", {},
-                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
         }
     }
 
@@ -699,7 +699,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     free_status, "cudaFree(arena backing)",
                     detail::format_cuda_safe("capacity_bytes={}", arena.capacity),
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
             }
         }
         arena.fallback_buffer = nullptr;
@@ -724,32 +724,50 @@ namespace lfs::core {
         // its release fence before the reset frees or decommits the backing.
         drain_external_release();
 
-        const std::scoped_lock lock(arena_mutex_, frame_mutex_);
+        {
+            const std::scoped_lock lock(arena_mutex_, frame_mutex_);
 
-        frame_contexts_.clear();
+            frame_contexts_.clear();
 
-        for (auto& entry : device_arenas_) {
-            const auto device = entry.first;
-            auto& arena = entry.second;
-            if (arena) {
-                LFS_CUDA_CHECK_MSG(cudaSetDevice(device),
-                                   "RasterizerMemoryArena reset device={}", device);
-                LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
-                                   "RasterizerMemoryArena reset device={}", device);
+            for (auto& entry : device_arenas_) {
+                const auto device = entry.first;
+                auto& arena = entry.second;
+                if (arena) {
+                    LFS_CUDA_CHECK_MSG(cudaSetDevice(device),
+                                       "RasterizerMemoryArena reset device={}", device);
+                    LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
+                                       "RasterizerMemoryArena reset device={}", device);
 
-                // No frame can own the arena now. Publish the empty high-water
-                // before deciding which VMM chunks are unused, otherwise the old
-                // frame offset pins every chunk it crossed.
-                arena->offset.store(0, std::memory_order_release);
-                decommit_unused_memory(*arena);
+                    // No frame can own the arena now. Publish the empty high-water
+                    // before deciding which VMM chunks are unused, otherwise the old
+                    // frame offset pins every chunk it crossed.
+                    arena->offset.store(0, std::memory_order_release);
+                    decommit_unused_memory(*arena);
+                }
             }
+
+            active_frames_ = 0;
+            pending_render_frames_ = 0;
+            active_training_frames_ = 0;
+
+            empty_cuda_cache();
         }
 
-        active_frames_ = 0;
-        pending_render_frames_ = 0;
-        active_training_frames_ = 0;
+        {
+            std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
+            if (last_frame_event_) {
+                const cudaError_t destroy_status = cudaEventDestroy(last_frame_event_);
+                if (destroy_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        destroy_status, "cudaEventDestroy(arena frame completion)",
+                        "context=arena reset", LFS_SOURCE_SITE_CURRENT(),
+                        CudaFailureDisposition::LogOnlyNoLatch);
+                }
+                last_frame_event_ = nullptr;
+            }
+            last_frame_event_valid_ = false;
+        }
 
-        empty_cuda_cache();
         sync_lock.unlock();
         sync_cv_.notify_all();
         LOG_DEBUG("Arena reset");
@@ -1593,7 +1611,7 @@ namespace lfs::core {
                     ensure_cuda_success(
                         free_status, "cudaFree(failed arena growth buffer)",
                         detail::format_cuda_safe("ptr={}, bytes={}", new_buffer, new_capacity),
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
                 return false;
             }
@@ -1606,7 +1624,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     free_status, "cudaFree(previous arena backing)",
                     detail::format_cuda_safe("ptr={}, bytes={}", arena.fallback_buffer, old_capacity),
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
             }
         }
         arena.fallback_buffer = new_buffer;
@@ -1723,14 +1741,13 @@ namespace lfs::core {
         return 1.0f - (static_cast<float>(free_memory) / static_cast<float>(total_memory));
     }
 
-    // Global singleton implementation
-    GlobalArenaManager& GlobalArenaManager::instance() {
-        static GlobalArenaManager instance;
-        return instance;
-    }
-
     RasterizerMemoryArena& GlobalArenaManager::get_arena() {
         std::lock_guard<std::mutex> lock(init_mutex_);
+
+        if (shutdown_) {
+            LOG_ERROR("Attempted to access the global rasterizer arena after shutdown");
+            throw std::runtime_error("Global rasterizer arena is shut down");
+        }
 
         if (!arena_) {
             // Auto-detect GPU VRAM size
@@ -1756,7 +1773,7 @@ namespace lfs::core {
 
     RasterizerMemoryArena* GlobalArenaManager::try_get_arena() {
         std::lock_guard<std::mutex> lock(init_mutex_);
-        return arena_.get();
+        return shutdown_ ? nullptr : arena_.get();
     }
 
     bool GlobalArenaManager::install_external_backing(RasterizerMemoryArena::ExternalBacking backing) {
@@ -1786,7 +1803,13 @@ namespace lfs::core {
 
     void GlobalArenaManager::reconfigure_for_testing(RasterizerMemoryArena::Config config) {
         std::lock_guard<std::mutex> lock(init_mutex_);
+        shutdown_ = false;
         arena_ = std::make_unique<RasterizerMemoryArena>(std::move(config));
+    }
+
+    bool RasterizerMemoryArena::has_last_frame_event_for_testing() const {
+        std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
+        return last_frame_event_ != nullptr;
     }
 
     bool RasterizerMemoryArena::is_rendering_active() const {

@@ -4,6 +4,7 @@
 
 #include "adam_optimizer.hpp"
 #include "adam_api.h" // fast_lfs::optimizer::adam_step_raw
+#include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
@@ -96,6 +97,39 @@ namespace lfs::training {
             mask.set_name("adam.frozen_mask");
         }
         frozen_mask_ = std::move(mask);
+    }
+
+    void AdamOptimizer::set_frozen_lr_scale(const float scale) {
+        if (!std::isfinite(scale) || scale < 0.0f || scale > 1.0f) {
+            throw std::runtime_error("AdamOptimizer frozen LR scale must be within [0, 1]");
+        }
+        frozen_lr_scale_ = scale;
+    }
+
+    void AdamOptimizer::set_crop_damping_mask(lfs::core::Tensor mask) {
+        if (mask.is_valid()) {
+            LFS_ASSERT_MSG(
+                mask.dtype() == lfs::core::DataType::Bool && mask.ndim() == 1,
+                "AdamOptimizer crop damping mask must be a 1D bool tensor");
+            LFS_ASSERT_MSG(
+                mask.numel() == static_cast<size_t>(splat_data_.size()),
+                "AdamOptimizer crop damping mask must match the model row count");
+            if (mask.device() != lfs::core::Device::CUDA) {
+                mask = mask.cuda();
+            }
+            if (!mask.is_contiguous()) {
+                mask = mask.contiguous();
+            }
+            mask.set_name("adam.crop_damping_mask");
+        }
+        crop_damping_mask_ = std::move(mask);
+    }
+
+    void AdamOptimizer::set_cropbox_lr_scale(const float scale) {
+        LFS_ASSERT_MSG(
+            std::isfinite(scale) && scale >= 0.0f && scale <= 1.0f,
+            "AdamOptimizer crop box LR scale must be finite and within [0, 1]");
+        cropbox_lr_scale_ = scale;
     }
 
     void AdamOptimizer::step(const int iteration) {
@@ -251,6 +285,18 @@ namespace lfs::training {
     int AdamOptimizer::frozen_mask_size() const {
         return frozen_mask_.is_valid()
                    ? static_cast<int>(frozen_mask_.numel())
+                   : 0;
+    }
+
+    const bool* AdamOptimizer::crop_damping_mask_ptr() const {
+        return crop_damping_mask_.is_valid() && crop_damping_mask_.numel() > 0
+                   ? crop_damping_mask_.ptr<bool>()
+                   : nullptr;
+    }
+
+    int AdamOptimizer::crop_damping_mask_size() const {
+        return crop_damping_mask_.is_valid()
+                   ? static_cast<int>(crop_damping_mask_.numel())
                    : 0;
     }
 
@@ -454,6 +500,9 @@ namespace lfs::training {
         if (frozen_mask_.is_valid()) {
             lfs::core::waitForCUDAStream(execution_stream, frozen_mask_.stream());
         }
+        if (crop_damping_mask_.is_valid()) {
+            crop_damping_mask_.sync_to_stream(execution_stream);
+        }
 
         if (type == ParamType::ShN) {
             const auto layout_rest = static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
@@ -467,6 +516,10 @@ namespace lfs::training {
                 state.grad.ptr<float>(),
                 frozen_mask_ptr(),
                 frozen_mask_size(),
+                frozen_lr_scale_,
+                crop_damping_mask_ptr(),
+                crop_damping_mask_size(),
+                cropbox_lr_scale_,
                 static_cast<int>(scale_row_count(type)),
                 slots,
                 param_lr,
@@ -495,6 +548,10 @@ namespace lfs::training {
             state.grad.ptr<float>(),
             frozen_mask_ptr(),
             frozen_mask_size(),
+            frozen_lr_scale_,
+            crop_damping_mask_ptr(),
+            crop_damping_mask_size(),
+            cropbox_lr_scale_,
             static_cast<int>(state.size),
             static_cast<int>(feature_dim),
             param_lr,
@@ -512,7 +569,13 @@ namespace lfs::training {
         state.grad.set_stream(execution_stream);
     }
 
-    FastGSFusedAdamState AdamOptimizer::prepare_fastgs_fused_adam(const int iteration) {
+    FastGSFusedAdamState AdamOptimizer::prepare_fastgs_fused_adam(
+        const int iteration,
+        const cudaStream_t execution_stream) {
+        if (crop_damping_mask_.is_valid()) {
+            crop_damping_mask_.sync_to_stream(execution_stream);
+        }
+
         FastGSFusedAdamState fused;
         fused.enabled = true;
         fused.beta1 = static_cast<float>(config_.beta1);
@@ -555,6 +618,10 @@ namespace lfs::training {
             out.exp_avg_sq_scale = state.exp_avg_sq_scale.ptr<float>();
             out.frozen_mask = frozen_mask_ptr();
             out.frozen_mask_size = frozen_mask_size();
+            out.frozen_lr_scale = frozen_lr_scale_;
+            out.crop_damping_mask = crop_damping_mask_ptr();
+            out.crop_damping_mask_size = crop_damping_mask_size();
+            out.cropbox_lr_scale = cropbox_lr_scale_;
             out.n_elements = static_cast<int>(param.numel());
             out.n_attributes = n_attributes;
             out.step_size = static_cast<float>(get_param_lr(type) * bias_correction1_rcp);
@@ -1386,6 +1453,7 @@ namespace lfs::training {
         static_assert(std::is_nothrow_move_assignable_v<decltype(states_)>);
         config_ = std::move(loaded.config_);
         states_ = std::move(loaded.states_);
+        frozen_lr_scale_ = loaded.frozen_lr_scale_;
     }
 
     void AdamOptimizer::reserve_capacity(const size_t capacity) {

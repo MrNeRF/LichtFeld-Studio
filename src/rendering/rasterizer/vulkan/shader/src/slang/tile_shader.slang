@@ -13,11 +13,13 @@
 // limitations under the License.
 
 #include "config.slang"
+#include "indirect_layout.inc"
 
 import utils;
 
 #define _ENTRY_generate_keys 1
 #define _ENTRY_compute_tile_ranges 2
+#define _ENTRY_compute_tile_ranges_and_batch_counts 3
 
 #ifndef ENTRY
 #define ENTRY 0
@@ -61,6 +63,8 @@ layout(binding=5) RWStructuredBuffer<sortingKey_t> out_unsorted_keys;
 layout(binding=6) RWStructuredBuffer<int32_t> out_unsorted_gauss_idx;
 #if LFS_VISIBLE_BOUNDED
 layout(binding=7) StructuredBuffer<uint32_t> visible_count;
+#else
+layout(binding=7) StructuredBuffer<uint32_t> depth_wave_dispatch;
 #endif
 
 #define BLOCK_SIZE 64
@@ -79,7 +83,17 @@ void main(
     const uint grid_width = uniforms.grid_width;
     const bool wrap_x = base_camera_model(uniforms.camera_model) == uint(CameraModel::EQUIRECTANGULAR);
 
+#if LFS_VISIBLE_BOUNDED
     int32_t depth_rank = dispatchThreadID.x;
+#else
+    const uint record = (1u + uniforms.depth_wave) * LFS_VK_DEPTH_WAVE_RECORD_STRIDE_WORDS;
+    const uint local_rank = dispatchThreadID.x;
+    const uint rank_count = depth_wave_dispatch[record + LFS_VK_DEPTH_WAVE_RANK_COUNT_WORD];
+    if (local_rank >= rank_count)
+        return;
+    int32_t depth_rank = int32_t(
+        depth_wave_dispatch[record + LFS_VK_DEPTH_WAVE_RANK_BASE_WORD] + local_rank);
+#endif
 
 #if LFS_VISIBLE_BOUNDED
     // The cumsum only covers [0, visible_count) entries; offsets past it are
@@ -93,13 +107,18 @@ void main(
 
     // index_buffer_offset is cumsum'd over the depth-ordered tiles_touched
     // array, so the offset interval for this depth_rank is contiguous.
-    int offset = depth_rank == 0 ? 0 : index_buffer_offset[depth_rank-1];
-    int offset_max = index_buffer_offset[depth_rank];
+#if LFS_VISIBLE_BOUNDED
+    const int instance_base = 0;
+#else
+    const int instance_base =
+        int(depth_wave_dispatch[record + LFS_VK_DEPTH_WAVE_INSTANCE_BASE_WORD]);
+#endif
+    int offset = (depth_rank == 0 ? 0 : index_buffer_offset[depth_rank-1]) - instance_base;
+    int offset_max = index_buffer_offset[depth_rank] - instance_base;
     const int sort_capacity = int(uniforms.sort_capacity);
     if (sort_capacity <= 0 || offset < 0 || offset_max < 0 ||
-        offset >= sort_capacity || offset >= offset_max)
+        offset >= sort_capacity || offset >= offset_max || offset_max > sort_capacity)
         return;
-    offset_max = min(offset_max, sort_capacity);
 
     int32_t primitive_idx = primitive_sort_indices[depth_rank];
 
@@ -228,14 +247,10 @@ void main(
     const uint grid_width = uniforms.grid_width;
     const uint32_t num_tiles = grid_height*grid_width;
 
-    const uint32_t num_isects = min(tile_instance_count[0], uniforms.sort_capacity);
+    const uint32_t num_isects = tile_instance_count[0];
     if (globalIdx > num_isects)
         return;
 
-    // Two-stage sort: keys are tile-id-only (no depth packed), so the tile
-    // id is the key value clamped to [0, num_tiles]. The sentinel invocation
-    // at globalIdx == num_isects must not read sorted_keys[num_isects], which
-    // is out of bounds when num_isects is clamped to sort_capacity.
     uint32_t currtile = num_tiles;
     if (globalIdx < num_isects) {
         currtile = min((uint32_t)sorted_keys[globalIdx], num_tiles);
@@ -248,3 +263,54 @@ void main(
 }
 
 #endif  // ENTRY == _ENTRY_compute_tile_ranges
+
+
+#if ENTRY == _ENTRY_compute_tile_ranges_and_batch_counts
+
+layout(binding=0) StructuredBuffer<sortingKey_t> sorted_keys;
+layout(binding=1) RWStructuredBuffer<int32_t> out_tile_ranges;
+layout(binding=2) StructuredBuffer<uint32_t> tile_instance_count;
+layout(binding=3) RWStructuredBuffer<int32_t> out_tile_batch_counts;
+
+// One thread owns both boundaries and the derived count for a tile. Binary
+// searches avoid a cross-workgroup ranges->counts dependency and its barrier.
+[ForceInline]
+uint lower_bound_tile(uint target, uint count) {
+    uint low = 0u;
+    uint high = count;
+    while (low < high) {
+        const uint mid = low + (high - low) / 2u;
+        if (uint(sorted_keys[mid]) < target)
+            low = mid + 1u;
+        else
+            high = mid;
+    }
+    return low;
+}
+
+[shader("compute")]
+[numthreads(256, 1, 1)]
+void main(
+    uint3 dispatchThreadID : SV_DispatchThreadID,
+    uniform Uniforms uniforms
+) {
+    const uint tile_idx = dispatchThreadID.x;
+    const uint num_tiles = uniforms.grid_height * uniforms.grid_width;
+    if (tile_idx >= num_tiles)
+        return;
+
+    const uint num_isects = tile_instance_count[0];
+    const uint range_start = lower_bound_tile(tile_idx, num_isects);
+    const uint range_end = lower_bound_tile(tile_idx + 1u, num_isects);
+    out_tile_ranges[tile_idx] = int32_t(range_start);
+    if (tile_idx + 1u == num_tiles)
+        out_tile_ranges[num_tiles] = int32_t(range_end);
+
+    const uint tile_count = range_end - range_start;
+    out_tile_batch_counts[tile_idx] =
+        tile_count > RASTER_DENSE_TILE_THRESHOLD
+            ? int32_t((tile_count + RASTER_BATCH_SIZE - 1u) / RASTER_BATCH_SIZE)
+            : 0;
+}
+
+#endif  // ENTRY == _ENTRY_compute_tile_ranges_and_batch_counts

@@ -51,7 +51,6 @@ namespace lfs::vis {
             return std::string(outcome.error().detail());
         }
 
-
         struct EnvPush {
             float cam_to_world[16];
             float intrinsics[4];
@@ -139,11 +138,10 @@ namespace lfs::vis {
                     vkCreateCommandPool(device, &pi, nullptr, &transfer_pool),
                     "vkCreateCommandPool(device, &pi, nullptr, &transfer_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Environment transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
-                                vkHandleValue(device),
-                                pi.queueFamilyIndex,
-                                static_cast<std::uint32_t>(pi.flags)
-                            ),
+                        "Environment transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                        vkHandleValue(device),
+                        pi.queueFamilyIndex,
+                        static_cast<std::uint32_t>(pi.flags)),
                     std::source_location::current())) {
                 return false;
             }
@@ -236,13 +234,12 @@ namespace lfs::vis {
                     vkCreateSampler(device, &info, nullptr, &sampler),
                     "vkCreateSampler(device, &info, nullptr, &sampler)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Environment sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode_u={}, address_mode_v={})",
-                                vkHandleValue(device),
-                                static_cast<int>(info.magFilter),
-                                static_cast<int>(info.minFilter),
-                                static_cast<int>(info.addressModeU),
-                                static_cast<int>(info.addressModeV)
-                            ),
+                        "Environment sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode_u={}, address_mode_v={})",
+                        vkHandleValue(device),
+                        static_cast<int>(info.magFilter),
+                        static_cast<int>(info.minFilter),
+                        static_cast<int>(info.addressModeU),
+                        static_cast<int>(info.addressModeV)),
                     std::source_location::current())) {
                 return false;
             }
@@ -266,11 +263,10 @@ namespace lfs::vis {
                     vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout),
                     "vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Environment descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
-                                vkHandleValue(device),
-                                li.bindingCount,
-                                static_cast<int>(b.descriptorType)
-                            ),
+                        "Environment descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                        vkHandleValue(device),
+                        li.bindingCount,
+                        static_cast<int>(b.descriptorType)),
                     std::source_location::current())) {
                 return false;
             }
@@ -291,12 +287,11 @@ namespace lfs::vis {
                     vkCreateDescriptorPool(device, &pci, nullptr, &desc_pool),
                     "vkCreateDescriptorPool(device, &pci, nullptr, &desc_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Environment descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
-                                vkHandleValue(device),
-                                frame_count,
-                                pci.maxSets,
-                                ps.descriptorCount
-                            ),
+                        "Environment descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                        vkHandleValue(device),
+                        frame_count,
+                        pci.maxSets,
+                        ps.descriptorCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -314,12 +309,11 @@ namespace lfs::vis {
                     vkAllocateDescriptorSets(device, &ai, sets.data()),
                     "vkAllocateDescriptorSets(device, &ai, sets.data())",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Environment descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
-                                vkHandleValue(device),
-                                vkHandleValue(desc_pool),
-                                vkHandleValue(desc_layout),
-                                ai.descriptorSetCount
-                            ),
+                        "Environment descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                        vkHandleValue(device),
+                        vkHandleValue(desc_pool),
+                        vkHandleValue(desc_layout),
+                        ai.descriptorSetCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -753,14 +747,13 @@ namespace lfs::vis {
                     vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info),
                     "vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Environment image allocation failed (allocator={:#x}, path='{}', requested_extent={}x{}, format={}, usage={:#x})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                utf8,
-                                w,
-                                h,
-                                static_cast<int>(img.format),
-                                static_cast<std::uint32_t>(img.usage)
-                            ),
+                        "Environment image allocation failed (allocator={:#x}, path='{}', requested_extent={}x{}, format={}, usage={:#x})",
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        utf8,
+                        w,
+                        h,
+                        static_cast<int>(img.format),
+                        static_cast<std::uint32_t>(img.usage)),
                     std::source_location::current())) {
                 return false;
             }

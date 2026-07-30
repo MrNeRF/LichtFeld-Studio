@@ -781,19 +781,20 @@ namespace lfs::vis::gui {
             return true;
         }
 
-        [[nodiscard]] bool uploadRgbaRegion(const std::vector<std::uint8_t>& rgba,
+        [[nodiscard]] bool uploadRgbaRegion(const std::uint8_t* const rgba,
+                                            const std::size_t rgba_size,
                                             const int texture_width,
                                             const int texture_height,
                                             const int offset_x,
                                             const int offset_y,
                                             const int region_width,
                                             const int region_height) {
-            if (rgba.empty() || texture_width <= 0 || texture_height <= 0 ||
+            if (!rgba || rgba_size == 0 || texture_width <= 0 || texture_height <= 0 ||
                 offset_x < 0 || offset_y < 0 || region_width <= 0 || region_height <= 0 ||
                 offset_x + region_width > texture_width ||
                 offset_y + region_height > texture_height ||
-                rgba.size() != static_cast<std::size_t>(region_width) *
-                                   static_cast<std::size_t>(region_height) * 4u) {
+                rgba_size != static_cast<std::size_t>(region_width) *
+                                 static_cast<std::size_t>(region_height) * 4u) {
                 return false;
             }
             VulkanContext* const ctx = getVulkanUiTextureContext();
@@ -810,7 +811,7 @@ namespace lfs::vis::gui {
                 return false;
             }
 
-            const VkDeviceSize upload_size = static_cast<VkDeviceSize>(rgba.size());
+            const VkDeviceSize upload_size = static_cast<VkDeviceSize>(rgba_size);
             VkBuffer staging_buffer = VK_NULL_HANDLE;
             VmaAllocation staging_allocation = VK_NULL_HANDLE;
             if (!createBuffer(upload_size,
@@ -820,7 +821,7 @@ namespace lfs::vis::gui {
                 return false;
             }
 
-            if (!writeAllocation(staging_allocation, rgba.data(), upload_size)) {
+            if (!writeAllocation(staging_allocation, rgba, upload_size)) {
                 LOG_ERROR("Failed to map Vulkan UI texture staging memory");
                 vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
                 return false;
@@ -895,7 +896,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool uploadRgba(const std::vector<std::uint8_t>& rgba,
                                       const int new_width,
                                       const int new_height) {
-            return uploadRgbaRegion(rgba, new_width, new_height, 0, 0, new_width, new_height);
+            return uploadRgbaRegion(rgba.data(), rgba.size(), new_width, new_height,
+                                    0, 0, new_width, new_height);
         }
 
         [[nodiscard]] bool uploadRegion(const std::uint8_t* pixels,
@@ -909,8 +911,8 @@ namespace lfs::vis::gui {
             if (!pixels || region_width <= 0 || region_height <= 0 || channels <= 0 || channels > 4) {
                 return false;
             }
-            return uploadRgbaRegion(toRgba(pixels, region_width, region_height, channels),
-                                    texture_width,
+            const std::vector<std::uint8_t> rgba = toRgba(pixels, region_width, region_height, channels);
+            return uploadRgbaRegion(rgba.data(), rgba.size(), texture_width,
                                     texture_height,
                                     x,
                                     y,
@@ -924,6 +926,12 @@ namespace lfs::vis::gui {
                                   const int channels) {
             if (!pixels || new_width <= 0 || new_height <= 0 || channels <= 0 || channels > 4) {
                 return false;
+            }
+            if (channels == 4) {
+                const std::size_t rgba_size = static_cast<std::size_t>(new_width) *
+                                              static_cast<std::size_t>(new_height) * 4u;
+                return uploadRgbaRegion(pixels, rgba_size, new_width, new_height,
+                                        0, 0, new_width, new_height);
             }
             return uploadRgba(toRgba(pixels, new_width, new_height, channels), new_width, new_height);
         }

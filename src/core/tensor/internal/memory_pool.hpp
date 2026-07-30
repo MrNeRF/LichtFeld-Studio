@@ -211,16 +211,30 @@ namespace lfs::core {
         void record_stream(void* ptr, cudaStream_t stream) {
             if (!ptr)
                 return;
-            std::lock_guard<std::mutex> lock(map_mutex_);
-            auto it = allocation_map_.find(ptr);
-            if (it == allocation_map_.end())
-                return;
-            AllocationInfo& info = it->second;
-            if (stream == info.home_stream)
-                return;
-            if (std::find(info.extra_streams.begin(), info.extra_streams.end(), stream) ==
-                info.extra_streams.end()) {
-                info.extra_streams.push_back(stream);
+            bool map_miss = false;
+            {
+                std::lock_guard<std::mutex> lock(map_mutex_);
+                auto it = allocation_map_.find(ptr);
+                if (it == allocation_map_.end()) {
+                    map_miss = true;
+                } else {
+                    AllocationInfo& info = it->second;
+                    if (stream == info.home_stream)
+                        return;
+                    if (std::find(info.extra_streams.begin(), info.extra_streams.end(), stream) ==
+                        info.extra_streams.end()) {
+                        info.extra_streams.push_back(stream);
+                    }
+                    return;
+                }
+            }
+            if (map_miss) {
+                static std::atomic<bool> warned{false};
+                if (!warned.exchange(true, std::memory_order_relaxed)) {
+                    LOG_WARN("CUDA memory-pool record_stream missed allocation "
+                             "(ptr={}, stream={})",
+                             ptr, static_cast<const void*>(stream));
+                }
             }
         }
 
@@ -265,19 +279,33 @@ namespace lfs::core {
         void rehome_stream(void* ptr, cudaStream_t stream) {
             if (!ptr)
                 return;
-            std::lock_guard<std::mutex> lock(map_mutex_);
-            auto it = allocation_map_.find(ptr);
-            if (it == allocation_map_.end())
-                return;
-            AllocationInfo& info = it->second;
-            if (stream == info.home_stream)
-                return;
-            if (std::find(info.extra_streams.begin(), info.extra_streams.end(), info.home_stream) ==
-                info.extra_streams.end()) {
-                info.extra_streams.push_back(info.home_stream);
+            bool map_miss = false;
+            {
+                std::lock_guard<std::mutex> lock(map_mutex_);
+                auto it = allocation_map_.find(ptr);
+                if (it == allocation_map_.end()) {
+                    map_miss = true;
+                } else {
+                    AllocationInfo& info = it->second;
+                    if (stream == info.home_stream)
+                        return;
+                    if (std::find(info.extra_streams.begin(), info.extra_streams.end(), info.home_stream) ==
+                        info.extra_streams.end()) {
+                        info.extra_streams.push_back(info.home_stream);
+                    }
+                    std::erase(info.extra_streams, stream);
+                    info.home_stream = stream;
+                    return;
+                }
             }
-            std::erase(info.extra_streams, stream);
-            info.home_stream = stream;
+            if (map_miss) {
+                static std::atomic<bool> warned{false};
+                if (!warned.exchange(true, std::memory_order_relaxed)) {
+                    LOG_WARN("CUDA memory-pool rehome_stream missed allocation "
+                             "(ptr={}, stream={})",
+                             ptr, static_cast<const void*>(stream));
+                }
+            }
         }
 
         void deallocate(void* ptr, cudaStream_t stream = nullptr) {
@@ -315,7 +343,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     free_status, "CUDA memory-pool untracked free",
                     ::lfs::core::detail::format_cuda_safe("ptr={}, stream={}", ptr, static_cast<void*>(stream)),
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
             }
         }
 
@@ -580,7 +608,7 @@ namespace lfs::core {
                     ensure_cuda_success(
                         status, "cudaFree(memory-pool direct tier)",
                         ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}", ptr, info.size),
-                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
                 }
                 direct_alloc_count_.fetch_sub(1, std::memory_order_release);
                 return;
@@ -598,7 +626,7 @@ namespace lfs::core {
                     free_status, "CUDA memory-pool async-tier free",
                     ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, stream={}", ptr, info.size,
                                                           static_cast<void*>(info.home_stream)),
-                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
             }
         }
 

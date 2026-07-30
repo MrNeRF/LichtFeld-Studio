@@ -485,6 +485,9 @@ namespace lfs::app {
                         if (result.is_running_modal()) {
                             return json{{"success", true}, {"status", "running_modal"}};
                         }
+                        if (const auto error = props.get<std::string>("error"); error && !error->empty()) {
+                            return json{{"error", *error}};
+                        }
                         return json{{"error", operator_cancel_message(*descriptor)}};
                     }
 

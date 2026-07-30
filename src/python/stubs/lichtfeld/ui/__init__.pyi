@@ -439,7 +439,7 @@ class RmlUILayout:
 
     def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
         """
-        Draw a path input, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.
+        Draw an editable path input with a native file or folder browser. folder_mode selects folder versus file; a non-empty dialog_title uses the custom title, while an empty title keeps the native default. Returns (changed, path).
         """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]: ...
@@ -488,7 +488,10 @@ class RmlUILayout:
 
     def end_table(self) -> None: ...
 
-    def table_next_row(self) -> None: ...
+    def table_next_row(self) -> None:
+        """
+        Advance to the next row. Use push_id()/pop_id() around each row (a ##hidden key is accepted) for stable identity across reorder/removal. Rows without an explicit key use position identity.
+        """
 
     def table_next_column(self) -> None: ...
 
@@ -646,11 +649,17 @@ class RmlUILayout:
 
     def column(self) -> object: ...
 
-    def split(self, factor: float = 0.5) -> object: ...
+    def split(self, factor: float = 0.5) -> object:
+        """
+        Create a two-child split. factor is clamped to [0, 1] and sets the first/second width ratio; excess children are hidden.
+        """
 
     def box(self) -> object: ...
 
-    def grid_flow(self, columns: int = 0, even_columns: bool = True, even_rows: bool = True) -> object: ...
+    def grid_flow(self, columns: int = 0, even_columns: bool = True, even_rows: bool = True) -> object:
+        """
+        Create a wrapping grid. With even_columns=True, columns > 0 uses equal percentage widths and columns=0 uses a 100dp wrapping basis; even_columns=False uses content widths. even_rows controls cell growth and stretching.
+        """
 
     def prop_enum(self, data: object, prop_id: str, value: str, text: str = '') -> bool: ...
 
@@ -698,9 +707,15 @@ class RmlUILayout:
 
     def draw_window_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: object) -> None: ...
 
-    def crf_curve_preview(self, label: str, gamma: float, toe: float, shoulder: float, gamma_r: float = 0.0, gamma_g: float = 0.0, gamma_b: float = 0.0) -> None: ...
+    def crf_curve_preview(self, label: str, gamma: float, toe: float, shoulder: float, gamma_r: float = 0.0, gamma_g: float = 0.0, gamma_b: float = 0.0) -> None:
+        """
+        Unsupported in layout APIs; use the retained RmlUi <crf-curve> custom element.
+        """
 
-    def chromaticity_diagram(self, label: str, red_x: float, red_y: float, green_x: float, green_y: float, blue_x: float, blue_y: float, neutral_x: float, neutral_y: float, range: float = 0.5) -> tuple[bool, list[float]]: ...
+    def chromaticity_diagram(self, label: str, red_x: float, red_y: float, green_x: float, green_y: float, blue_x: float, blue_y: float, neutral_x: float, neutral_y: float, range: float = 0.5) -> tuple[bool, list[float]]:
+        """
+        Unsupported in layout APIs; use the retained RmlUi <chromaticity-diagram> custom element.
+        """
 
     def progress_bar(self, fraction: float, overlay: str = '', width: float = 0.0, height: float = 0.0) -> None: ...
 
@@ -771,11 +786,17 @@ class RmlSubLayout:
 
     def column(self) -> RmlSubLayout: ...
 
-    def split(self, factor: float = 0.5) -> RmlSubLayout: ...
+    def split(self, factor: float = 0.5) -> RmlSubLayout:
+        """
+        Create a two-child split. factor is clamped to [0, 1] and sets the first/second width ratio; excess children are hidden.
+        """
 
     def box(self) -> RmlSubLayout: ...
 
-    def grid_flow(self, columns: int = 0, even_columns: bool = True, even_rows: bool = True) -> RmlSubLayout: ...
+    def grid_flow(self, columns: int = 0, even_columns: bool = True, even_rows: bool = True) -> RmlSubLayout:
+        """
+        Create a wrapping grid. With even_columns=True, columns > 0 uses equal percentage widths and columns=0 uses a 100dp wrapping basis; even_columns=False uses content widths. even_rows controls cell growth and stretching.
+        """
 
     def label(self, text: str) -> None: ...
 
@@ -829,6 +850,11 @@ class RmlSubLayout:
 
     def stepper_float(self, label: str, value: float, steps: Sequence[float] = [1.0, 0.10000000149011612, 0.009999999776482582]) -> tuple[bool, float]: ...
 
+    def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
+        """
+        Draw an editable path input with a native file or folder browser. folder_mode selects folder versus file; a non-empty dialog_title uses the custom title, while an empty title keeps the native default. Returns (changed, path).
+        """
+
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]: ...
 
     def combo(self, label: str, current_idx: int, items: Sequence[str]) -> tuple[bool, int]: ...
@@ -855,7 +881,10 @@ class RmlSubLayout:
 
     def table_setup_column(self, label: str, width: float = 0.0) -> None: ...
 
-    def table_next_row(self) -> None: ...
+    def table_next_row(self) -> None:
+        """
+        Advance to the next row. Use push_id()/pop_id() around each row (a ##hidden key is accepted) for stable identity across reorder/removal. Rows without an explicit key use position identity.
+        """
 
     def table_next_column(self) -> None: ...
 
@@ -913,13 +942,18 @@ class HookPosition(enum.Enum):
     APPEND = 1
 
 def add_hook(panel: str, section: str, callback: object, position: str = 'append') -> None:
-    """Add a UI hook callback to a panel section"""
+    """
+    Add a UI hook callback to a panel section. Hook layouts that cannot host interactive widgets warn once and return inert controls.
+    """
 
 def remove_hook(panel: str, section: str, callback: object) -> None:
     """Remove a specific UI hook callback"""
 
 def clear_hooks(panel: str, section: str = '') -> None:
     """Clear all hooks for a panel or panel/section"""
+
+def clear_hooks_for_module(module_prefix: str) -> None:
+    """Clear all hooks registered by a given module prefix"""
 
 def clear_all_hooks() -> None:
     """Clear all registered UI hooks"""
@@ -1433,7 +1467,7 @@ class UILayout:
 
     def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
         """
-        Draw a path input with browse button, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.
+        Unsupported on compatibility UILayout. In a draw hook, warns once and returns (False, value); use RmlUILayout.path_input in a panel.
         """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]:
@@ -1811,8 +1845,12 @@ class UILayout:
     def prop_search(self, data: object, prop_id: str, search_data: object, search_prop: str, text: str = '') -> tuple[bool, int]:
         """Searchable dropdown for selecting from a collection"""
 
+    @overload
     def template_list(self, list_type_id: str, list_id: str, data: object, prop_id: str, active_data: object, active_prop: str, rows: int = 5) -> tuple[int, int]:
-        """UIList template for drawing custom lists"""
+        """Unsupported on UILayout; use RmlUILayout.template_list."""
+
+    @overload
+    def template_list(self, listtype_name: str, list_id: str, data: object, propname: str, active_index: int, rows: int = 5) -> tuple[bool, int]: ...
 
     def menu(self, menu_id: str, text: str = '', icon: str = '') -> None:
         """Inline menu reference"""
@@ -1821,7 +1859,9 @@ class UILayout:
         """Panel popover"""
 
     def draw_circle(self, x: float, y: float, radius: float, color: object, segments: int = 32, thickness: float = 1.0) -> None:
-        """Draw a circle outline at (x, y) with given radius and color"""
+        """
+        Enqueue a circle in the active viewport ScreenOverlayRenderer using absolute screen coordinates. Emits nothing outside an overlay frame.
+        """
 
     def draw_circle_filled(self, x: float, y: float, radius: float, color: object, segments: int = 32) -> None:
         """Draw a filled circle at (x, y) with given radius and color"""
@@ -1830,16 +1870,18 @@ class UILayout:
         """Draw a rectangle outline from (x0,y0) to (x1,y1)"""
 
     def draw_rect_filled(self, x0: float, y0: float, x1: float, y1: float, color: object, background: bool = False) -> None:
-        """Draw a filled rectangle from (x0,y0) to (x1,y1)"""
+        """Enqueue a filled overlay rectangle; background is compatibility-only."""
 
     def draw_rect_rounded(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float, thickness: float = 1.0, background: bool = False) -> None:
-        """Draw a rounded rectangle outline"""
+        """
+        Enqueue a tessellated rounded outline; background is compatibility-only.
+        """
 
     def draw_rect_rounded_filled(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float, background: bool = False) -> None:
-        """Draw a filled rounded rectangle"""
+        """Enqueue a tessellated rounded fill; background is compatibility-only."""
 
     def draw_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: object, background: bool = False) -> None:
-        """Draw a filled triangle"""
+        """Enqueue a filled overlay triangle; background is compatibility-only."""
 
     def draw_line(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
         """Draw a line from (x0,y0) to (x1,y1)"""
@@ -1851,34 +1893,48 @@ class UILayout:
         """Draw a filled convex polygon"""
 
     def draw_text(self, x: float, y: float, text: str, color: object, background: bool = False) -> None:
-        """Draw text at (x, y) with given color"""
+        """
+        Enqueue overlay text at absolute screen coordinates; background is ignored.
+        """
 
     def draw_window_rect_filled(self, x0: float, y0: float, x1: float, y1: float, color: object) -> None:
-        """Draw a filled rectangle on the window draw list"""
+        """Enqueue a filled rectangle in the viewport ScreenOverlayRenderer."""
 
     def draw_window_rect(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
-        """Draw a rectangle outline on the window draw list"""
+        """Enqueue a rectangle outline in the viewport ScreenOverlayRenderer."""
 
     def draw_window_rect_rounded(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float, thickness: float = 1.0) -> None:
-        """Draw a rounded rectangle outline on the window draw list"""
+        """Enqueue a tessellated rounded outline in the viewport overlay."""
 
     def draw_window_rect_rounded_filled(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float) -> None:
-        """Draw a filled rounded rectangle on the window draw list"""
+        """Enqueue a tessellated rounded fill in the viewport overlay."""
 
     def draw_window_line(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
-        """Draw a line on the window draw list"""
+        """Enqueue a line in the viewport ScreenOverlayRenderer."""
 
     def draw_window_text(self, x: float, y: float, text: str, color: object) -> None:
-        """Draw text on the window draw list"""
+        """Enqueue text in the viewport ScreenOverlayRenderer."""
 
     def draw_window_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: object) -> None:
-        """Draw a filled triangle on the window draw list"""
+        """
+        Enqueue a filled triangle in the viewport ScreenOverlayRenderer. Like every draw_window_* alias, coordinates are absolute screen space.
+        """
 
     def crf_curve_preview(self, label: str, gamma: float, toe: float, shoulder: float, gamma_r: float = 0.0, gamma_g: float = 0.0, gamma_b: float = 0.0) -> None:
-        """Draw CRF tone curve preview widget"""
+        """
+        Unsupported in layout APIs; use the retained RmlUi <crf-curve> custom element.
+        """
 
     def chromaticity_diagram(self, label: str, red_x: float, red_y: float, green_x: float, green_y: float, blue_x: float, blue_y: float, neutral_x: float, neutral_y: float, range: float = 0.5) -> tuple[bool, list[float]]:
-        """Draw chromaticity diagram widget for color correction"""
+        """
+        Unsupported in layout APIs; use the retained RmlUi <chromaticity-diagram> custom element.
+        """
+
+    def template_tree(self, label: str, draw_callback: object, default_open: bool = False) -> bool:
+        """Unsupported on UILayout; use RmlUILayout.tree_node/tree_pop."""
+
+    def template_id(self, label: str, items: Sequence[str], current_id: str) -> tuple[bool, str]:
+        """Unsupported on UILayout; use RmlUILayout.combo."""
 
 def open_image_dialog(start_dir: str = '') -> str:
     """
@@ -2061,11 +2117,13 @@ class Key(enum.Enum):
 
     F2 = 573
 
-def is_key_pressed(key: Key, repeat: bool = True) -> bool:
-    """Check if a key was pressed this frame"""
+def is_key_pressed(key: Key, repeat: bool = False) -> bool:
+    """
+    Return the SDL-backed rising edge for the current UI frame. Must be queried on the UI thread; returns False before frame initialization. The repeat argument is retained only for call compatibility; key repeat is not emitted.
+    """
 
 def is_key_down(key: Key) -> bool:
-    """Check if a key is currently held down"""
+    """Return the current SDL keyboard level for the key."""
 
 def is_ctrl_down() -> bool:
     """Check if Ctrl is currently held"""
@@ -2223,10 +2281,22 @@ def get_crop_tool_operation() -> str:
     """Get the active crop or selection-volume gizmo operation"""
 
 def apply_crop_tool() -> None:
-    """Apply the active crop tool primitive"""
+    """
+    Apply the active crop tool primitive through the node-backed crop command path
+    """
 
 def fit_crop_tool(use_percentile: bool = False) -> None:
-    """Fit the active crop tool primitive to the selected node"""
+    """
+    Fit the active crop tool primitive through the node-backed crop command path
+    """
+
+def reset_crop_tool() -> None:
+    """
+    Reset the active crop tool primitive through the node-backed crop command path
+    """
+
+def delete_crop_tool_volume() -> None:
+    """Delete the active crop tool primitive and leave the crop tool"""
 
 def fit_cropbox_to_scene(use_percentile: bool = False) -> None:
     """Fit cropbox to scene bounds"""

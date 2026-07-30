@@ -10,6 +10,7 @@
       "name": "ffmpeg",
       "features": [
         "avcodec",
+        "avfilter",
         "avformat",
         "nvcodec",
         "swscale",
@@ -18,15 +19,6 @@
     },
     "freetype",
     "glm",
-    {
-      "name": "imgui",
-      "features": [
-        "docking-experimental",
-        "freetype",
-        "sdl3-binding"
-      ]
-    },
-    "implot",
     {
       "name": "libarchive",
       "default-features": false,
@@ -37,6 +29,7 @@
       ]
     },
     "libdeflate",
+    "libplacebo",
     "libwebp",
     "nanobind",
     {
@@ -147,14 +140,6 @@
     {
       "name": "gtest",
       "version": "1.17.0#2"
-    },
-    {
-      "name": "imgui",
-      "version": "1.92.6"
-    },
-    {
-      "name": "implot",
-      "version": "0.17"
     },
     {
       "name": "libarchive",

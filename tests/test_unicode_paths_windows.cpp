@@ -1554,7 +1554,7 @@ TEST_F(UnicodePathTest, SingleUnicodeCharacterPaths) {
 // ============================================================================
 
 TEST_F(UnicodePathTest, FileBrowserDisplayStrings) {
-    // Test the exact string generation used for ImGui display in file_browser.cpp
+    // Test the exact string generation used for GUI display in file_browser.cpp
     // Pattern: dirname = "[DIR] " + path_to_utf8(dir.path().filename())
 
     auto test_dir = test_root_ / "display_test";
@@ -1578,7 +1578,7 @@ TEST_F(UnicodePathTest, FileBrowserDisplayStrings) {
             // This is the exact pattern from the fix:
             std::string dirname = std::string(directory_prefix) + path_to_utf8(entry.path().filename());
 
-            // Verify the string is valid for ImGui display
+            // Verify the string is valid for GUI display
             EXPECT_FALSE(dirname.empty()) << "Display string is empty";
             EXPECT_TRUE(dirname.starts_with(directory_prefix)) << "Prefix missing";
             EXPECT_GT(dirname.length(), strlen(directory_prefix)) << "No filename after prefix";
@@ -1586,7 +1586,7 @@ TEST_F(UnicodePathTest, FileBrowserDisplayStrings) {
             // Verify the UTF-8 is valid (no null bytes in middle, reasonable length)
             EXPECT_EQ(dirname.find('\0'), std::string::npos) << "Null byte in display string";
 
-            // Verify we can get c_str() safely (what ImGui::Selectable uses)
+            // Verify we can get c_str() safely (what selectable UI control uses)
             const char* c_str = dirname.c_str();
             EXPECT_NE(c_str, nullptr);
             EXPECT_GT(strlen(c_str), 0);
@@ -1821,8 +1821,8 @@ TEST_F(UnicodePathTest, SaveDirectoryPopupPathDerivation) {
         std::string output_buffer = path_to_utf8(derived_output);
         EXPECT_FALSE(output_buffer.empty()) << "Output path buffer is empty";
 
-        // Simulate storing in input buffer (like ImGui text input)
-        // This tests that the UTF-8 string can be used with ImGui
+        // Simulate storing in input buffer (like text input)
+        // This tests that the UTF-8 string can be used with GUI text controls
         const char* c_str = output_buffer.c_str();
         EXPECT_NE(c_str, nullptr);
         EXPECT_GT(strlen(c_str), 0);
@@ -1840,7 +1840,7 @@ TEST_F(UnicodePathTest, SaveDirectoryPopupPathDerivation) {
 
         EXPECT_FALSE(dataset_str.empty());
 
-        // Verify it can be used for ImGui::Text display
+        // Verify it can be used for text display
         const char* display_str = dataset_str.c_str();
         EXPECT_NE(display_str, nullptr);
         EXPECT_GT(strlen(display_str), 0);
@@ -2933,15 +2933,15 @@ TEST_F(UnicodePathTest, DatasetConfigJsonRoundTrip) {
 
 // ============================================================================
 // Test 53: utf8_to_path handles strings with embedded null characters
-// This simulates ImGui InputText buffers which are resized with null padding
+// This simulates text input buffers which are resized with null padding
 // ============================================================================
 
 TEST_F(UnicodePathTest, Utf8ToPathHandlesEmbeddedNullCharacters) {
-    // Simulate ImGui InputText buffer: actual path followed by null padding
+    // Simulate text input buffer: actual path followed by null padding
     constexpr size_t BUFFER_SIZE = 1024;
     std::string buffer = path_to_utf8(test_root_ / "output");
     size_t original_length = buffer.size();
-    buffer.resize(BUFFER_SIZE); // Pads with null characters like ImGui does
+    buffer.resize(BUFFER_SIZE); // Pads with null characters like fixed-size text input buffers do
 
     // Verify buffer has embedded nulls
     ASSERT_GT(buffer.size(), original_length);
@@ -2975,7 +2975,7 @@ TEST_F(UnicodePathTest, Utf8ToPathHandlesUnicodeWithEmbeddedNulls) {
     fs::create_directories(unicode_dir);
     ASSERT_TRUE(fs::exists(unicode_dir));
 
-    // Simulate ImGui buffer with Unicode path
+    // Simulate text input buffer with Unicode path
     constexpr size_t BUFFER_SIZE = 1024;
     std::string buffer = path_to_utf8(unicode_dir);
     size_t original_length = buffer.size();

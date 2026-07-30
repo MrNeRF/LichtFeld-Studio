@@ -292,14 +292,14 @@ namespace lfs::core {
         // Unavailable latch short-circuit even when staging is clean (dead context).
         if (cuda_is_unavailable()) {
             throw_device_fault_error(DeviceFaultRecord{}, operation_tag, location,
-                                    reinterpret_cast<std::uintptr_t>(stream));
+                                     reinterpret_cast<std::uintptr_t>(stream));
         }
         const DeviceFaultRecord record = device_fault_slot_consume(stream);
         if (record.code == static_cast<std::uint32_t>(DeviceFaultCode::NoFault)) {
             return;
         }
         throw_device_fault_error(record, operation_tag, location,
-                                reinterpret_cast<std::uintptr_t>(stream));
+                                 reinterpret_cast<std::uintptr_t>(stream));
     }
 
     Error make_device_fault_graph_capture_error(const cudaStream_t stream,

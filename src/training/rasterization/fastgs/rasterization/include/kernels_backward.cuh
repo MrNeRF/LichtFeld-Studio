@@ -539,9 +539,9 @@ namespace fast_lfs::rasterization::kernels::backward {
                         normal = primitive_normals[primitive_idx];
                     }
                     color_grad_factor = make_float3(
-                        (color_unclamped.x >= 0.0f && color_unclamped.x <= config::max_blend_color) ? 1.0f : 0.0f,
-                        (color_unclamped.y >= 0.0f && color_unclamped.y <= config::max_blend_color) ? 1.0f : 0.0f,
-                        (color_unclamped.z >= 0.0f && color_unclamped.z <= config::max_blend_color) ? 1.0f : 0.0f);
+                        color_unclamped.x <= config::max_blend_color ? 1.0f : 0.0f,
+                        color_unclamped.y <= config::max_blend_color ? 1.0f : 0.0f,
+                        color_unclamped.z <= config::max_blend_color ? 1.0f : 0.0f);
                 }
             }
 

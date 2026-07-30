@@ -1138,7 +1138,7 @@ struct Uniforms {
     float expected_far;
     // Explicit padding to keep dist_coeffs 16-byte aligned; mirrors the C++
     // struct exactly (192 bytes total).
-    uint uniforms_pad0;
+    uint depth_wave;
     uint uniforms_pad1;
     uint uniforms_pad2;
     float4 dist_coeffs;
@@ -1185,7 +1185,13 @@ static const uint OVERLAY_PARAM_MARKER_FLAGS = 22;
 static const uint OVERLAY_PARAM_SELECTION_CURSOR = 23;
 static const uint OVERLAY_PARAM_SELECTION_FLAGS = 24;
 static const uint OVERLAY_PARAM_VISIBILITY_FLAGS = 25;
-static const uint OVERLAY_PARAM_COUNT = 26;
+static const uint OVERLAY_PARAM_CROP_EXTRA_BASE = 26;
+static const uint OVERLAY_PARAM_CROP_STRIDE = 7;
+static const uint OVERLAY_PARAM_CROP_EXTRA_COUNT = 15;
+static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE = OVERLAY_PARAM_CROP_EXTRA_BASE + OVERLAY_PARAM_CROP_STRIDE * OVERLAY_PARAM_CROP_EXTRA_COUNT;
+static const uint OVERLAY_PARAM_ELLIPSOID_STRIDE = 5;
+static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT = 15;
+static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + OVERLAY_PARAM_ELLIPSOID_STRIDE * OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT;
 
 [ForceInline]
 bool overlay_enabled(float value)

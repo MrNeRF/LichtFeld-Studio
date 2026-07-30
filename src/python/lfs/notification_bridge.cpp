@@ -106,8 +106,6 @@ namespace lfs::python {
                     if (clicked == edit_label)
                         cmd::SwitchToEditMode{}.emit();
                 });
-
-            cmd::SwitchToLatestCheckpoint{}.emit();
         });
     }
 

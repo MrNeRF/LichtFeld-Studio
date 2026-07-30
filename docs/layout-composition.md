@@ -1,12 +1,14 @@
 # Layout Composition Patterns
 
-Sub-layouts structure UI elements within panels using composable containers. Each container is a context manager that automatically positions widgets.
+Sub-layouts structure UI elements within Rml im-mode panels using composable
+containers. Each container is a context manager that automatically positions
+widgets.
 
 ## Containers
 
 ### Row
 
-Places children horizontally with `ImGui::SameLine()` between them.
+Places children horizontally with `horizontal layout` between them.
 
 ```python
 with layout.row() as row:
@@ -17,7 +19,7 @@ with layout.row() as row:
 
 ### Column
 
-Standard vertical stacking (default ImGui behavior). Useful for applying state to a group of widgets.
+Standard vertical stacking (default vertical layout behavior). Useful for applying state to a group of widgets.
 
 ```python
 with layout.column() as col:
@@ -28,7 +30,11 @@ with layout.column() as col:
 
 ### Split
 
-Two-column layout. The `factor` controls the width ratio of the first column.
+Two-column layout. The `factor` argument sets the width ratio of the first
+child; the second receives the remainder. The 4dp inter-column gap is removed
+from the available width before RmlUi shrinks both percentage bases, preserving
+the requested ratio. A split supports two children; extra children are hidden
+and produce a one-shot warning.
 
 ```python
 with layout.split(0.3) as split:
@@ -48,13 +54,43 @@ with layout.box() as box:
 
 ### GridFlow
 
-Responsive grid. Columns auto-calculated from available width if `columns=0`.
+Responsive grid. With `even_columns=True`, a positive `columns` value assigns
+each child `100 / columns` percent of the row. With `columns=0`, children use a
+100dp basis and wrap according to the available width. With
+`even_columns=False`, children use their automatic content width.
+
+`even_rows=True` lets cells grow and stretch to the row height;
+`even_rows=False` keeps their natural height.
 
 ```python
 with layout.grid_flow(columns=3) as grid:
     for item in items:
         grid.button(item.name)
 ```
+
+## Stable Table Rows
+
+Rml im-mode table rows use position identity unless the caller supplies a
+stable id. For rows that can be reordered or removed, push an id after
+`begin_table()` and before `table_next_row()`, then keep it active while
+drawing that row:
+
+```python
+if layout.begin_table("jobs", 2):
+    for job in jobs:
+        layout.push_id(f"##{job.id}")
+        layout.table_next_row()
+        layout.table_next_column()
+        layout.label(job.name)
+        layout.table_next_column()
+        layout.input_text("Status", job.status)
+        layout.pop_id()
+    layout.end_table()
+```
+
+The hidden `##key` portion is used as the stable token. Without `push_id()`,
+row identity is the bare row index, so insertion, removal, or reorder transfers
+cell state by position.
 
 ## Nesting
 

@@ -3,6 +3,7 @@
 """Tests for the new declarative tool system."""
 
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +25,32 @@ class MockContext:
         self.has_scene = has_scene
         self.num_gaussians = num_gaussians
         self.can_transform = has_scene if can_transform is None else can_transform
+
+
+class NodeTypeStub:
+    def __init__(self, name):
+        self.name = name
+
+    def __str__(self):
+        return f"NodeType.{self.name}"
+
+
+def _node(type_name, children=None):
+    return SimpleNamespace(type=NodeTypeStub(type_name), children=children or [])
+
+
+def _install_scene_stub(monkeypatch, selected_names, nodes_by_name, nodes_by_id=None):
+    nodes_by_id = nodes_by_id or {}
+    scene = SimpleNamespace(
+        get_node=lambda name: nodes_by_name.get(name),
+        get_node_by_id=lambda node_id: nodes_by_id.get(node_id),
+    )
+    lf_stub = SimpleNamespace(
+        get_scene=lambda: scene,
+        get_selected_node_names=lambda: list(selected_names),
+    )
+    monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
+    return scene
 
 
 class TestToolDef:
@@ -238,9 +265,82 @@ class TestToolPolling:
     def test_translate_requires_scene(self):
         """Translate tool should require scene."""
         tool = get_tool_by_id("builtin.translate")
-        assert tool.can_activate(MockContext(has_scene=True)) is True
-        assert tool.can_activate(MockContext(has_scene=False)) is False
+        assert tool.can_activate(MockContext(has_scene=True, can_transform=True)) is True
+        assert tool.can_activate(MockContext(has_scene=True, can_transform=False)) is False
 
+    def test_cropbox_accepts_transformable_selection(self, monkeypatch):
+        """Crop tool should keep the old transform-selection activation path."""
+        _install_scene_stub(monkeypatch, [], {})
+
+        tool = get_tool_by_id("builtin.cropbox")
+        assert tool.can_activate(MockContext(has_scene=True, can_transform=True)) is True
+        assert tool.can_activate(MockContext(has_scene=False, can_transform=True)) is False
+
+    def test_cropbox_accepts_selected_splat(self, monkeypatch):
+        """Crop tool should activate for selected SPLAT nodes via deployed scene API."""
+        _install_scene_stub(monkeypatch, ["model"], {"model": _node("SPLAT")})
+
+        tool = get_tool_by_id("builtin.cropbox")
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0, can_transform=False)) is True
+
+    def test_cropbox_accepts_selected_crop_volume_nodes(self, monkeypatch):
+        """Crop tool should activate for existing crop volume node selections."""
+        tool = get_tool_by_id("builtin.cropbox")
+
+        _install_scene_stub(monkeypatch, ["crop"], {"crop": _node("CROPBOX")})
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0, can_transform=False)) is True
+
+        _install_scene_stub(monkeypatch, ["ellipsoid"], {"ellipsoid": _node("ELLIPSOID")})
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0, can_transform=False)) is True
+
+    def test_cropbox_accepts_dataset_with_model_child(self, monkeypatch):
+        """Crop tool should activate for dataset selections that contain a model target."""
+        group = _node("GROUP", [8])
+        child = _node("POINTCLOUD")
+        dataset = _node("DATASET", [7])
+        _install_scene_stub(
+            monkeypatch,
+            ["dataset"],
+            {"dataset": dataset},
+            {7: group, 8: child},
+        )
+
+        tool = get_tool_by_id("builtin.cropbox")
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=0, can_transform=False)) is True
+
+    def test_cropbox_rejects_loaded_scene_without_target(self, monkeypatch):
+        """Crop tool should not activate from loaded gaussians alone."""
+        _install_scene_stub(monkeypatch, [], {})
+
+        tool = get_tool_by_id("builtin.cropbox")
+        assert tool.can_activate(MockContext(has_scene=True, num_gaussians=100, can_transform=False)) is False
+
+    def test_cropbox_requires_scene(self, monkeypatch):
+        """Crop tool should keep the no-scene guard before checking selection."""
+        _install_scene_stub(monkeypatch, ["model"], {"model": _node("SPLAT")})
+
+        tool = get_tool_by_id("builtin.cropbox")
+        assert tool.can_activate(MockContext(has_scene=False, num_gaussians=100)) is False
+
+
+    def test_crop_volume_selection_disables_other_scene_tools(self, monkeypatch):
+        """Crop volume node selections should only expose the Crop tool."""
+        _install_scene_stub(monkeypatch, ["crop"], {"crop": _node("CROPBOX")})
+        sys.modules["lichtfeld"].ui = SimpleNamespace(
+            is_tool_available=lambda _tool_id: True
+        )
+        context = MockContext(has_scene=True, num_gaussians=100, can_transform=True)
+
+        assert get_tool_by_id("builtin.cropbox").can_activate(context) is True
+        for tool_id in (
+            "builtin.select",
+            "builtin.translate",
+            "builtin.rotate",
+            "builtin.scale",
+            "builtin.mirror",
+            "builtin.align",
+        ):
+            assert get_tool_by_id(tool_id).can_activate(context) is False
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -14,6 +14,28 @@
 namespace nb = nanobind;
 
 namespace lfs::python {
+    namespace {
+        constexpr char kPathInputDoc[] =
+            "Draw an editable path input with a native file or folder browser. "
+            "folder_mode selects folder versus file; a non-empty dialog_title uses "
+            "the custom title, while an empty title keeps the native default. "
+            "Returns (changed, path).";
+
+        constexpr char kSplitDoc[] =
+            "Create a two-child split. factor is clamped to [0, 1] and sets the "
+            "first/second width ratio; excess children are hidden.";
+
+        constexpr char kGridFlowDoc[] =
+            "Create a wrapping grid. With even_columns=True, columns > 0 uses equal "
+            "percentage widths and columns=0 uses a 100dp wrapping basis; "
+            "even_columns=False uses content widths. even_rows controls cell growth "
+            "and stretching.";
+
+        constexpr char kTableNextRowDoc[] =
+            "Advance to the next row. Use push_id()/pop_id() around each row (a "
+            "##hidden key is accepted) for stable identity across reorder/removal. "
+            "Rows without an explicit key use position identity.";
+    } // namespace
 
     void register_rml_im_mode_layout(nb::module_& m) {
         nb::class_<RmlImModeLayout>(m, "RmlUILayout")
@@ -59,7 +81,7 @@ namespace lfs::python {
                  nb::arg("steps") = std::vector<float>{1.0f, 0.1f, 0.01f})
             .def("path_input", &RmlImModeLayout::path_input, nb::arg("label"), nb::arg("value"),
                  nb::arg("folder_mode") = true, nb::arg("dialog_title") = "",
-                 "Draw a path input, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.")
+                 kPathInputDoc)
             // Color
             .def("color_edit3", &RmlImModeLayout::color_edit3, nb::arg("label"), nb::arg("color"))
             .def("color_edit4", &RmlImModeLayout::color_edit4, nb::arg("label"), nb::arg("color"))
@@ -90,7 +112,7 @@ namespace lfs::python {
             .def("begin_table", &RmlImModeLayout::begin_table, nb::arg("id"), nb::arg("columns"))
             .def("table_setup_column", &RmlImModeLayout::table_setup_column, nb::arg("label"), nb::arg("width") = 0.0f)
             .def("end_table", &RmlImModeLayout::end_table)
-            .def("table_next_row", &RmlImModeLayout::table_next_row)
+            .def("table_next_row", &RmlImModeLayout::table_next_row, kTableNextRowDoc)
             .def("table_next_column", &RmlImModeLayout::table_next_column)
             .def("table_set_column_index", &RmlImModeLayout::table_set_column_index, nb::arg("column"))
             .def("table_headers_row", &RmlImModeLayout::table_headers_row)
@@ -196,9 +218,9 @@ namespace lfs::python {
             .def("prop", &RmlImModeLayout::prop, nb::arg("data"), nb::arg("prop_id"), nb::arg("text") = nb::none())
             .def("row", &RmlImModeLayout::row)
             .def("column", &RmlImModeLayout::column)
-            .def("split", &RmlImModeLayout::split, nb::arg("factor") = 0.5f)
+            .def("split", &RmlImModeLayout::split, nb::arg("factor") = 0.5f, kSplitDoc)
             .def("box", &RmlImModeLayout::box)
-            .def("grid_flow", &RmlImModeLayout::grid_flow, nb::arg("columns") = 0, nb::arg("even_columns") = true, nb::arg("even_rows") = true)
+            .def("grid_flow", &RmlImModeLayout::grid_flow, nb::arg("columns") = 0, nb::arg("even_columns") = true, nb::arg("even_rows") = true, kGridFlowDoc)
             .def("prop_enum", &RmlImModeLayout::prop_enum, nb::arg("data"), nb::arg("prop_id"), nb::arg("value"), nb::arg("text") = "")
             .def("operator_", &RmlImModeLayout::operator_, nb::arg("operator_id"), nb::arg("text") = "", nb::arg("icon") = "")
             .def("prop_search", &RmlImModeLayout::prop_search, nb::arg("data"), nb::arg("prop_id"), nb::arg("search_data"), nb::arg("search_prop"), nb::arg("text") = "")
@@ -224,8 +246,8 @@ namespace lfs::python {
             .def("draw_window_line", &RmlImModeLayout::draw_window_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f)
             .def("draw_window_text", &RmlImModeLayout::draw_window_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"))
             .def("draw_window_triangle_filled", &RmlImModeLayout::draw_window_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"))
-            .def("crf_curve_preview", &RmlImModeLayout::crf_curve_preview, nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"), nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f)
-            .def("chromaticity_diagram", &RmlImModeLayout::chromaticity_diagram, nb::arg("label"), nb::arg("red_x"), nb::arg("red_y"), nb::arg("green_x"), nb::arg("green_y"), nb::arg("blue_x"), nb::arg("blue_y"), nb::arg("neutral_x"), nb::arg("neutral_y"), nb::arg("range") = 0.5f)
+            .def("crf_curve_preview", &RmlImModeLayout::crf_curve_preview, nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"), nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f, "Unsupported in layout APIs; use the retained RmlUi <crf-curve> custom element.")
+            .def("chromaticity_diagram", &RmlImModeLayout::chromaticity_diagram, nb::arg("label"), nb::arg("red_x"), nb::arg("red_y"), nb::arg("green_x"), nb::arg("green_y"), nb::arg("blue_x"), nb::arg("blue_y"), nb::arg("neutral_x"), nb::arg("neutral_y"), nb::arg("range") = 0.5f, "Unsupported in layout APIs; use the retained RmlUi <chromaticity-diagram> custom element.")
             // Progress
             .def("progress_bar", &RmlImModeLayout::progress_bar, nb::arg("fraction"), nb::arg("overlay") = "", nb::arg("width") = 0.0f, nb::arg("height") = 0.0f)
             .def("set_tooltip", &RmlImModeLayout::set_tooltip, nb::arg("text"))
@@ -254,9 +276,9 @@ namespace lfs::python {
             .def_rw("scale_y", &RmlSubLayout::scale_y)
             .def("row", &RmlSubLayout::row)
             .def("column", &RmlSubLayout::column)
-            .def("split", &RmlSubLayout::split, nb::arg("factor") = 0.5f)
+            .def("split", &RmlSubLayout::split, nb::arg("factor") = 0.5f, kSplitDoc)
             .def("box", &RmlSubLayout::box)
-            .def("grid_flow", &RmlSubLayout::grid_flow, nb::arg("columns") = 0, nb::arg("even_columns") = true, nb::arg("even_rows") = true)
+            .def("grid_flow", &RmlSubLayout::grid_flow, nb::arg("columns") = 0, nb::arg("even_columns") = true, nb::arg("even_rows") = true, kGridFlowDoc)
             .def("label", &RmlSubLayout::label, nb::arg("text"))
             .def("label_centered", &RmlSubLayout::label_centered, nb::arg("text"))
             .def("heading", &RmlSubLayout::heading, nb::arg("text"))
@@ -283,6 +305,9 @@ namespace lfs::python {
             .def("input_int", &RmlSubLayout::input_int, nb::arg("label"), nb::arg("value"), nb::arg("step") = 1, nb::arg("step_fast") = 100)
             .def("input_int_formatted", &RmlSubLayout::input_int_formatted, nb::arg("label"), nb::arg("value"), nb::arg("step") = 0, nb::arg("step_fast") = 0)
             .def("stepper_float", &RmlSubLayout::stepper_float, nb::arg("label"), nb::arg("value"), nb::arg("steps") = std::vector<float>{1.0f, 0.1f, 0.01f})
+            .def("path_input", &RmlSubLayout::path_input, nb::arg("label"), nb::arg("value"),
+                 nb::arg("folder_mode") = true, nb::arg("dialog_title") = "",
+                 kPathInputDoc)
             .def("color_edit3", &RmlSubLayout::color_edit3, nb::arg("label"), nb::arg("color"))
             .def("combo", &RmlSubLayout::combo, nb::arg("label"), nb::arg("current_idx"), nb::arg("items"))
             .def("listbox", &RmlSubLayout::listbox, nb::arg("label"), nb::arg("current_idx"), nb::arg("items"), nb::arg("height_items") = -1)
@@ -296,7 +321,7 @@ namespace lfs::python {
             .def("tree_pop", &RmlSubLayout::tree_pop)
             .def("begin_table", &RmlSubLayout::begin_table, nb::arg("id"), nb::arg("columns"))
             .def("table_setup_column", &RmlSubLayout::table_setup_column, nb::arg("label"), nb::arg("width") = 0.0f)
-            .def("table_next_row", &RmlSubLayout::table_next_row)
+            .def("table_next_row", &RmlSubLayout::table_next_row, kTableNextRowDoc)
             .def("table_next_column", &RmlSubLayout::table_next_column)
             .def("table_headers_row", &RmlSubLayout::table_headers_row)
             .def("end_table", &RmlSubLayout::end_table)

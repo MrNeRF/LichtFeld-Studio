@@ -35,7 +35,7 @@ target_include_directories(fastlfs_backend
         ${CMAKE_SOURCE_DIR}/src/training/include
 )
 
-# Pure CUDA libraries only
+# The arena singleton resolves from lfs_core when this static backend reaches its final link.
 target_link_libraries(fastlfs_backend
         PUBLIC
         CUDA::cudart

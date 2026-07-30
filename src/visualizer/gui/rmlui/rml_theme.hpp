@@ -58,6 +58,7 @@ namespace lfs::vis::gui::rml_theme {
                                 const std::string& panel_theme_template = {});
     LFS_VIS_API std::string darkenColorToRml(const RmlColor& c, float amount);
     LFS_VIS_API std::string layeredShadow(const Theme& t, int elevation);
+    LFS_VIS_API float layeredShadowPadding(const Theme& t, int elevation);
 
     LFS_VIS_API std::string generateThemeMediaFromTemplate(const std::string& theme_template);
     LFS_VIS_API const std::string& getComponentsThemeMedia();

@@ -1597,7 +1597,7 @@ namespace lfs::vis::gui {
                    projected->y <= static_cast<float>(panel.render_size.y) + margin_y;
         };
 
-        const auto toColor = [](const ImVec4& c, const float alpha) -> glm::vec4 {
+        const auto toColor = [](const ThemeColor& c, const float alpha) -> glm::vec4 {
             return {c.x, c.y, c.z, alpha};
         };
 

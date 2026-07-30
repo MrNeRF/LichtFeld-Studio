@@ -31,6 +31,7 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/depth_loss.cu
     kernels/normal_loss.cu
     kernels/normal_consistency_loss.cu
+    kernels/roi_weight_map.cu
     kernels/image_kernels.cu
     components/sparsity_optimizer_kernels.cu
 )
@@ -83,6 +84,7 @@ set(TRAINING_NEW_SOURCES
     optimizer/scheduler.cpp
     losses/regularization.cpp
     losses/photometric_loss.cpp
+    losses/mask_loss.cpp
     strategies/strategy_utils.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
@@ -102,6 +104,7 @@ set(TRAINING_NEW_SOURCES
     metrics/metrics.cpp
         checkpoint.cpp
         progress.cpp
+        training_cropbox_mask.cpp
         trainer.cpp
     training_setup.cpp
 )

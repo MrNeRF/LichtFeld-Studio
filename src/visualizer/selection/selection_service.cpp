@@ -2892,11 +2892,11 @@ namespace lfs::vis {
 
         if (session.shape == SelectionShape::Box) {
             rendering_manager_->setCropboxGizmoState(
-                true, geometry.box_min, geometry.box_max, geometry.visualizer_transform, false);
+                true, geometry.box_min, geometry.box_max, geometry.visualizer_transform, false, -1);
             rendering_manager_->setEllipsoidGizmoActive(false);
         } else {
             rendering_manager_->setEllipsoidGizmoState(
-                true, geometry.ellipsoid_radii, geometry.visualizer_transform, false);
+                true, geometry.ellipsoid_radii, geometry.visualizer_transform, false, -1);
             rendering_manager_->setCropboxGizmoActive(false);
         }
         rendering_manager_->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);

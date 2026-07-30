@@ -68,7 +68,8 @@
     background-color: @{right_panel.separator};
 }
 
-#resize-handle:hover {
+#resize-handle:hover,
+#resize-handle.hover {
     background-color: @{right_panel.resize_hover};
 }
 

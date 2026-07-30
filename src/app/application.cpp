@@ -287,6 +287,11 @@ namespace lfs::app {
                         vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
                     }
 
+                    if (!params->python_scripts.empty() && !python::ensure_plugins_loaded(true)) {
+                        LOG_ERROR("Failed to load plugins before running headless Python scripts");
+                        return 1;
+                    }
+
                     if (const auto result = trainer->initialize(*ckpt_params_result); !result) {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
@@ -330,6 +335,11 @@ namespace lfs::app {
                     if (!params->python_scripts.empty()) {
                         trainer->set_python_scripts(params->python_scripts);
                         vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
+                    }
+
+                    if (!params->python_scripts.empty() && !python::ensure_plugins_loaded(true)) {
+                        LOG_ERROR("Failed to load plugins before running headless Python scripts");
+                        return 1;
                     }
 
                     if (const auto result = trainer->initialize(*params); !result) {
@@ -675,7 +685,11 @@ namespace lfs::app {
         });
 
         if (params->render_path) {
-            return runHeadlessRender(std::move(params));
+            const int result = runHeadlessRender(std::move(params));
+            if (result == 0) {
+                core::teardown_gpu_before_exit();
+            }
+            return result;
         }
 
         if (params->optimization.headless && params->server.tcp_connection) {

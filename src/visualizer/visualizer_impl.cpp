@@ -279,6 +279,16 @@ namespace lfs::vis {
         if (gui_manager_) {
             gui_manager_->shutdown();
         }
+        // Tear down viewport interop after the viewport pass is reset above, while
+        // the window/Vulkan context is still alive. Belt-and-braces again in
+        // ~RenderingManager once already shut down.
+        if (rendering_manager_) {
+            VulkanContext* context = nullptr;
+            if (window_manager_) {
+                context = window_manager_->getVulkanContext();
+            }
+            rendering_manager_->shutdownViewportInterop(context);
+        }
         LOG_DEBUG("Visualizer destroyed");
     }
 
@@ -1192,10 +1202,6 @@ namespace lfs::vis {
         });
 
         // File loading commands
-        cmd::LoadFile::when([this](const auto& cmd) {
-            handleLoadFileCommand(cmd);
-        });
-
         cmd::LoadConfigFile::when([this](const auto& cmd) {
             handleLoadConfigFile(cmd.path);
         });
@@ -1209,10 +1215,6 @@ namespace lfs::vis {
             if (window_manager_) {
                 window_manager_->requestClose();
             }
-        });
-
-        cmd::SwitchToLatestCheckpoint::when([this](const auto&) {
-            handleSwitchToLatestCheckpoint();
         });
 
         // Signal bridge event handlers
@@ -1340,14 +1342,14 @@ namespace lfs::vis {
                       viewport_.windowSize.x, viewport_.windowSize.y);
         }
 
-        // Initialize GUI (sets up ImGui, builds font atlas)
+        // Initialize GUI systems.
         if (!gui_initialized_) {
             LOG_TIMER("startup.gui_manager.init");
             gui_manager_->init();
             gui_initialized_ = true;
         }
 
-        // InputController requires ImGui to be initialized
+        // InputController requires the GUI focus state to be initialized.
         if (!input_controller_) {
             input_controller_ = std::make_unique<InputController>(
                 window_manager_->getWindow(), viewport_);
@@ -1561,7 +1563,8 @@ namespace lfs::vis {
     }
 
     VisualizerImpl::FrameDemand VisualizerImpl::collectFrameDemand(const bool viewport_export_locked,
-                                                                   const bool drained_store_dirty) {
+                                                                   const bool drained_store_dirty,
+                                                                   const bool consume_python_redraw) {
         FrameDemand demand;
         demand.viewport_export_locked = viewport_export_locked;
         demand.scene_dirty = rendering_manager_ && rendering_manager_->pollDirtyState();
@@ -1569,7 +1572,8 @@ namespace lfs::vis {
         const bool plugin_preload_running = python::is_plugin_preload_running();
         demand.python_animation = !plugin_preload_running && python::has_frame_callback();
         demand.python_overlay = !plugin_preload_running && python::has_viewport_draw_handlers();
-        demand.python_redraw = python::consume_redraw_request();
+        demand.python_redraw = consume_python_redraw ? python::consume_redraw_request()
+                                                     : python::has_redraw_request();
         demand.gui_animation = (gui_manager_ && gui_manager_->needsAnimationFrame()) || plugin_preload_running;
         demand.input_event = inputFrameRequestsRender();
         demand.posted_work = update_work_processed_;
@@ -1612,11 +1616,7 @@ namespace lfs::vis {
                                         std::max(kTooltipRevealMinWaitSeconds, *tooltip_wait));
         }
 
-        if (is_training) {
-            window_manager_->waitEvents(wait_seconds); // Training tick is capped at ~10 Hz when no resize settle is due.
-        } else {
-            window_manager_->waitEvents(wait_seconds);
-        }
+        window_manager_->waitEvents(wait_seconds);
     }
 
     void VisualizerImpl::render() {
@@ -1745,18 +1745,19 @@ namespace lfs::vis {
                 gui_manager_->syncVisiblePanelsBeforeSceneRender();
 
             const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
-            if (gui_manager_) {
+            {
+                auto& interop = rendering_manager_->viewportInterop();
                 if (vulkan_frame.external_image != VK_NULL_HANDLE) {
-                    gui_manager_->setVulkanExternalSceneImage(vulkan_frame.external_image,
-                                                              vulkan_frame.external_image_view,
-                                                              vulkan_frame.external_image_layout,
-                                                              vulkan_frame.size,
-                                                              vulkan_frame.flip_y,
-                                                              vulkan_frame.external_image_generation,
-                                                              vulkan_frame.completion_semaphore,
-                                                              vulkan_frame.completion_value);
+                    interop.setExternalSceneImage(vulkan_frame.external_image,
+                                                  vulkan_frame.external_image_view,
+                                                  vulkan_frame.external_image_layout,
+                                                  vulkan_frame.size,
+                                                  vulkan_frame.flip_y,
+                                                  vulkan_frame.external_image_generation,
+                                                  vulkan_frame.completion_semaphore,
+                                                  vulkan_frame.completion_value);
                 } else {
-                    gui_manager_->setVulkanSceneImage(
+                    interop.setSceneImage(
                         vulkan_frame.image,
                         vulkan_frame.size,
                         vulkan_frame.flip_y,
@@ -1765,13 +1766,13 @@ namespace lfs::vis {
                         vulkan_frame.completion_value);
                 }
                 if (vulkan_frame.split_right_image) {
-                    gui_manager_->setVulkanSplitRightImage(
+                    interop.setSplitRightImage(
                         vulkan_frame.split_right_image,
                         vulkan_frame.split_right_size,
                         vulkan_frame.split_right_flip_y,
                         vulkan_frame.image_generation);
                 } else {
-                    gui_manager_->clearVulkanSplitRightImage();
+                    interop.clearSplitRightImage();
                 }
 
                 // Splat depth -> R32_SFLOAT interop slot for the depth-blit pass.
@@ -1780,12 +1781,12 @@ namespace lfs::vis {
                     mesh_frame.depth_blit.depth->ndim() == 3 &&
                     mesh_frame.depth_blit.depth->size(0) == 1) {
                     const auto& d = *mesh_frame.depth_blit.depth;
-                    gui_manager_->setVulkanDepthBlitImage(
+                    interop.setDepthBlitImage(
                         mesh_frame.depth_blit.depth,
                         glm::ivec2(static_cast<int>(d.size(2)), static_cast<int>(d.size(1))),
                         vulkan_frame.image_generation);
                 } else {
-                    gui_manager_->clearVulkanDepthBlitImage();
+                    interop.clearDepthBlitImage();
                 }
             }
         } else if (interactive_transition_settling) {
@@ -1812,7 +1813,7 @@ namespace lfs::vis {
         update_work_processed_ = false;
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
-        const FrameDemand next_demand = collectFrameDemand(viewport_export_locked);
+        const FrameDemand next_demand = collectFrameDemand(viewport_export_locked, false, false);
 
         LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
                  next_demand.scene_dirty,
@@ -2208,10 +2209,6 @@ namespace lfs::vis {
         restore_camera();
     }
 
-    void VisualizerImpl::handleLoadFileCommand([[maybe_unused]] const lfs::core::events::cmd::LoadFile& cmd) {
-        // File loading is handled by the data_loader_ service
-    }
-
     void VisualizerImpl::handleLoadConfigFile(const std::filesystem::path& path) {
         auto result = lfs::core::param::read_optim_params_from_json(path);
         if (!result) {
@@ -2281,11 +2278,6 @@ namespace lfs::vis {
             window_manager_->requestClose();
         }
         wakeMainLoop();
-    }
-
-    void VisualizerImpl::handleSwitchToLatestCheckpoint() {
-        // This event is emitted by the training flow even when no project/checkpoint manager is active.
-        // In the plain dataset workflow there is nothing to switch, so treat it as a no-op.
     }
 
 } // namespace lfs::vis

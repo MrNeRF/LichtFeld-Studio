@@ -64,6 +64,7 @@ namespace lfs::gui {
         }
         virtual void setInput(const lfs::vis::gui::PanelInputState* input) { (void)input; }
         virtual void setForcedHeight(float h) { (void)h; }
+        virtual void setFloating(bool floating) { (void)floating; }
         [[nodiscard]] virtual bool wantsKeyboard() const { return false; }
         [[nodiscard]] virtual bool needsAnimationFrame() const { return isVideoPlaying(); }
         virtual void reloadRmlResources() {}

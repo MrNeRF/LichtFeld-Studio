@@ -487,6 +487,214 @@ def check_result_in_cu(source: ScannedFile) -> list[Hit]:
     ]
 
 
+CALL_LIKE_OPEN_RE = re.compile(
+    r"\b([A-Za-z_]\w*)\s*(?:<[^;{}()]*>)?\s*\("
+)
+CUDA_LAUNCH_OPEN_RE = re.compile(
+    r"\b([A-Za-z_]\w*)\s*<<<[^;{}]*?>>?>\s*\("
+)
+NON_CALL_KEYWORDS = frozenset(
+    {
+        "alignas",
+        "alignof",
+        "catch",
+        "decltype",
+        "dynamic_cast",
+        "for",
+        "if",
+        "noexcept",
+        "reinterpret_cast",
+        "requires",
+        "sizeof",
+        "static_assert",
+        "static_cast",
+        "switch",
+        "typeid",
+        "while",
+    }
+)
+POINTER_BASE_RE = re.compile(
+    r"\b([A-Za-z_]\w*(?:\s*\.\s*get\s*\(\s*\))?)\s*"
+    r"(?:\.\s*template\s+ptr\s*<[^;(){}]*>|\.\s*ptr\s*<[^;(){}]*>|"
+    r"\.\s*data_ptr)\s*\("
+)
+BARE_POINTER_RE = re.compile(
+    r"(?<![.\w>])(?:template\s+)?(?:ptr\s*<[^;(){}]*>|data_ptr)\s*\("
+)
+FACTORY_ASSIGNMENT_RE = re.compile(
+    r"\b([A-Za-z_]\w*)\s*=\s*"
+    r"(?:(?:[A-Za-z_]\w*)::)*"
+    r"(?:empty|zeros|ones|full|full_like|empty_like|zeros_like)\s*\("
+)
+PIN_OPERANDS_RE = re.compile(r"\bpin_operands\s*\(")
+UNPINNED_MULTI_CAPTURE_ESCAPE = "LFS-CENSUS-OK(unpinned-multi-capture)"
+
+
+def _enclosing_block_stacks(
+    text: str, offsets: Sequence[int]
+) -> dict[int, tuple[int, ...]]:
+    """Map offsets to their unmatched opening-brace ancestry."""
+
+    result: dict[int, tuple[int, ...]] = {}
+    stack: list[int] = []
+    cursor = 0
+    for offset in sorted(set(offsets)):
+        while cursor < offset:
+            if text[cursor] == "{":
+                stack.append(cursor)
+            elif text[cursor] == "}" and stack:
+                stack.pop()
+            cursor += 1
+        result[offset] = tuple(stack)
+    return result
+
+
+def _same_block_prefix(text: str, block_start: int, before: int) -> str:
+    """Return prior same-depth text with completed child blocks blanked."""
+
+    first = block_start + 1 if text[block_start : block_start + 1] == "{" else block_start
+    prefix = list(text[first:before])
+    depth = 0
+    for index, char in enumerate(prefix):
+        if char == "{":
+            depth += 1
+            prefix[index] = " "
+        elif char == "}":
+            prefix[index] = " "
+            if depth > 0:
+                depth -= 1
+        elif depth > 0 and char not in "\r\n":
+            prefix[index] = " "
+    return "".join(prefix)
+
+
+def _visible_enclosing_prefix(
+    text: str, block_stack: Sequence[int], before: int
+) -> str:
+    """Collect dominating text from each visible lexical ancestor."""
+
+    if not block_stack:
+        return _same_block_prefix(text, 0, before)
+    segments = []
+    for index, block_start in enumerate(block_stack):
+        segment_end = (
+            block_stack[index + 1]
+            if index + 1 < len(block_stack)
+            else before
+        )
+        segments.append(_same_block_prefix(text, block_start, segment_end))
+    return "\n".join(segments)
+
+
+def _has_unpinned_multi_capture_escape(
+    source: ScannedFile, call_start: int, call_end: int
+) -> bool:
+    line_start = source.raw.rfind("\n", 0, call_start) + 1
+    previous_line_start = source.raw.rfind("\n", 0, max(line_start - 1, 0)) + 1
+    line_end = source.raw.find("\n", call_end)
+    if line_end == -1:
+        line_end = len(source.raw)
+    return (
+        UNPINNED_MULTI_CAPTURE_ESCAPE
+        in source.raw[previous_line_start:line_end]
+    )
+
+
+def _inside_pin_operands_definition(
+    source: ScannedFile, block_stack: Sequence[int]
+) -> bool:
+    for block_start in reversed(block_stack):
+        header_start = max(
+            source.masked.rfind(";", 0, block_start),
+            source.masked.rfind("}", 0, block_start),
+        )
+        header = source.masked[header_start + 1 : block_start]
+        if re.search(r"\bpin_operands\s*\([^;{}]*\)\s*$", header) is not None:
+            return True
+    return False
+
+
+def check_unpinned_multi_capture(source: ScannedFile) -> list[Hit]:
+    """Find unpinned calls capturing raw storage from multiple tensor bases."""
+
+    relative_parts = source.relative_to_root.parts
+    file_parts = Path(source.file).parts
+    if relative_parts[:2] != ("core", "tensor") and file_parts[:3] != (
+        "src",
+        "core",
+        "tensor",
+    ):
+        return []
+
+    call_matches = [
+        match
+        for regex in (CALL_LIKE_OPEN_RE, CUDA_LAUNCH_OPEN_RE)
+        for match in regex.finditer(source.masked)
+        if match.group(1) not in NON_CALL_KEYWORDS
+    ]
+    spans: list[tuple[int, int, int]] = []
+    for match in call_matches:
+        opening_paren = match.end() - 1
+        closing_paren = _find_matching(source.masked, opening_paren, "(", ")")
+        if closing_paren is not None:
+            spans.append((match.start(1), opening_paren, closing_paren))
+
+    block_stacks = _enclosing_block_stacks(
+        source.masked, [call_start for call_start, _, _ in spans]
+    )
+    qualifying: list[tuple[int, int]] = []
+    for call_start, opening_paren, closing_paren in spans:
+        call_text = source.masked[opening_paren + 1 : closing_paren]
+        bases = {
+            re.sub(r"\s+", "", match.group(1))
+            for match in POINTER_BASE_RE.finditer(call_text)
+        }
+        for bare_match in BARE_POINTER_RE.finditer(call_text):
+            prefix = call_text[: bare_match.start()].rstrip()
+            if re.search(r"\.\s*template\s*$", prefix) is None:
+                bases.add("$this")
+                break
+        if len(bases) < 2:
+            continue
+
+        block_stack = block_stacks[call_start]
+        if _inside_pin_operands_definition(source, block_stack):
+            continue
+        prior_visible_scope = _visible_enclosing_prefix(
+            source.masked, block_stack, call_start
+        )
+        if PIN_OPERANDS_RE.search(prior_visible_scope) is not None:
+            continue
+
+        safe_bases = {
+            match.group(1)
+            for match in FACTORY_ASSIGNMENT_RE.finditer(prior_visible_scope)
+        }
+        if len(bases - safe_bases) < 2:
+            continue
+        if _has_unpinned_multi_capture_escape(
+            source, call_start, closing_paren + 1
+        ):
+            continue
+        qualifying.append((call_start, closing_paren))
+
+    outermost: list[tuple[int, int]] = []
+    for call_start, call_end in sorted(
+        qualifying, key=lambda span: (span[0], -span[1])
+    ):
+        if any(
+            parent_start <= call_start and call_end <= parent_end
+            for parent_start, parent_end in outermost
+        ):
+            continue
+        outermost.append((call_start, call_end))
+
+    return [
+        source.hit(call_start, "unpinned-multi-capture")
+        for call_start, _ in outermost
+    ]
+
+
 RULES = (
     RuleSpec(
         "expected-string",
@@ -534,6 +742,11 @@ RULES = (
         check_result_in_cu,
         extensions=CUDA_SOURCE_EXTENSIONS,
         include_test_paths=True,
+    ),
+    RuleSpec(
+        "unpinned-multi-capture",
+        "tensor call capturing raw storage from two or more unpinned bases",
+        check_unpinned_multi_capture,
     ),
 )
 RULE_BY_ID = {rule.rule_id: rule for rule in RULES}

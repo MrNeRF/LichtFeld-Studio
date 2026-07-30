@@ -338,30 +338,63 @@ namespace lfs::vis::gui {
         }
         return image.contiguous();
     }
+    [[nodiscard]] const VideoExportCropBoxSnapshot* activeVideoExportPointCloudCropBox(
+        const VideoExportSceneSnapshot& snapshot) {
+        const VideoExportCropBoxSnapshot* selected = nullptr;
+        if (snapshot.selected_cropbox_index >= 0) {
+            const size_t idx = static_cast<size_t>(snapshot.selected_cropbox_index);
+            if (idx < snapshot.cropboxes.size() && snapshot.cropboxes[idx].has_data &&
+                snapshot.cropboxes[idx].data.enabled) {
+                selected = &snapshot.cropboxes[idx];
+            }
+        }
+        if (selected) {
+            return selected;
+        }
+
+        const VideoExportCropBoxSnapshot* single = nullptr;
+        for (const auto& cb : snapshot.cropboxes) {
+            if (!cb.has_data || !cb.data.enabled) {
+                continue;
+            }
+            if (single) {
+                return nullptr;
+            }
+            single = &cb;
+        }
+        return single;
+    }
+
+    [[nodiscard]] const VideoExportEllipsoidSnapshot* activeVideoExportPointCloudEllipsoid(
+        const VideoExportSceneSnapshot& snapshot) {
+        if (!snapshot.active_ellipsoid || !snapshot.active_ellipsoid->data.enabled) {
+            return nullptr;
+        }
+        return &*snapshot.active_ellipsoid;
+    }
 
     void applyVideoExportPointCloudFilters(rendering::PointCloudFilterState& filters,
                                            const VideoExportSceneSnapshot& snapshot,
                                            const RenderSettings& render_settings) {
-        if (!(render_settings.use_crop_box || render_settings.show_crop_box) || snapshot.cropboxes.empty()) {
+        if (const auto* const cb = activeVideoExportPointCloudCropBox(snapshot)) {
+            filters.crop_box = rendering::BoundingBox{
+                .min = cb->data.min,
+                .max = cb->data.max,
+                .transform = glm::inverse(cb->world_transform)};
+            filters.crop_ellipsoid.reset();
+            filters.crop_inverse = cb->data.inverse;
+            filters.crop_desaturate = render_settings.desaturate_cropping;
             return;
         }
 
-        const size_t idx = (snapshot.selected_cropbox_index >= 0)
-                               ? static_cast<size_t>(snapshot.selected_cropbox_index)
-                               : 0;
-        if (idx >= snapshot.cropboxes.size() || !snapshot.cropboxes[idx].has_data) {
-            return;
+        if (const auto* const el = activeVideoExportPointCloudEllipsoid(snapshot)) {
+            filters.crop_ellipsoid = rendering::Ellipsoid{
+                .radii = el->data.radii,
+                .transform = glm::inverse(el->world_transform)};
+            filters.crop_box.reset();
+            filters.crop_inverse = el->data.inverse;
+            filters.crop_desaturate = render_settings.desaturate_cropping;
         }
-
-        const auto& cb = snapshot.cropboxes[idx];
-        filters.crop_box = rendering::BoundingBox{
-            .min = cb.data.min,
-            .max = cb.data.max,
-            .transform = glm::inverse(cb.world_transform)};
-        filters.crop_inverse = cb.data.inverse;
-        filters.crop_desaturate = render_settings.show_crop_box &&
-                                  !render_settings.use_crop_box &&
-                                  render_settings.desaturate_cropping;
     }
 
     rendering::MeshRenderOptions makeVideoExportMeshOptions(const RenderSettings& render_settings,
@@ -405,6 +438,7 @@ namespace lfs::vis::gui {
                 .data = cb.has_data ? &cb.data : nullptr,
                 .world_transform = cb.world_transform,
                 .local_transform = glm::mat4(1.0f),
+                .effectively_visible = true,
             });
         }
 
@@ -417,6 +451,7 @@ namespace lfs::vis::gui {
                 .data = &el.data,
                 .world_transform = el.world_transform,
                 .local_transform = glm::mat4(1.0f),
+                .effectively_visible = true,
             });
         }
         return state;
@@ -1291,6 +1326,14 @@ namespace lfs::vis::gui {
         lfs::vis::app_store().import_overlay_state.set(std::move(state));
     }
 
+    void AsyncTaskManager::setImportNumImages(const size_t num_images) {
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            import_state_.num_images = num_images;
+        }
+        publishImportOverlayState();
+    }
+
     void AsyncTaskManager::publishVideoExportOverlayState() {
         lfs::vis::AppStore::VideoExportOverlayState state;
         state.active = video_export_state_.active.load();
@@ -2129,8 +2172,11 @@ namespace lfs::vis::gui {
         const std::string node_name = source_name + " (splat)";
         auto& scene = scene_manager->getScene();
 
-        if (scene.getNode(node_name))
+        const core::NodeId existing_id = scene.getNodeIdByName(node_name);
+        if (existing_id != core::NULL_NODE) {
+            scene_manager->clearPlyPath(existing_id);
             scene.removeNode(node_name);
+        }
 
         const std::string added_name =
             scene_manager->addGeneratedSplatNode(std::move(splat_data), source_name, node_name, true);

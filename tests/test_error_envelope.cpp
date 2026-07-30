@@ -123,7 +123,8 @@ TEST(ErrorEnvelopeTest, InvalidUtf8DetailPathSerializesUnderStrictDump) {
         .domain = lfs::ErrorDomain::IO,
         .user_message = "Load failed",
         .detection = LFS_SOURCE_SITE_CURRENT(),
-        .fields = lfs::SmallFields{}.add("path", std::string("/data/sc\xff\x80ene.ply")),
+        .fields = lfs::SmallFields{}.add("path", std::string("/data/sc\xff\x80"
+                                                             "ene.ply")),
     });
 
     const nlohmann::json envelope = lfs::core::to_wire_envelope(error);

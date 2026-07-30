@@ -41,7 +41,6 @@ set(TENSOR_SOURCES
         tensor/tensor_row_proxy.cpp
         tensor/tensor_nn_ops.cpp
         tensor/pinned_memory_allocator.cpp
-        tensor/offset_allocator.cpp
         tensor/tensor_exports.cu
 )
 
@@ -59,6 +58,7 @@ set(CORE_SOURCES
         error_reporter.cpp
         guarded_task.cpp
         failure_report.cpp
+        cuda/memory_arena_owner.cpp
         memory_pressure.cpp
         operator_callbacks.cpp
         animatable_property.cpp

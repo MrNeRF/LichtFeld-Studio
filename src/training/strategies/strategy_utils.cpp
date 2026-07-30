@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "strategy_utils.hpp"
+#include "core/assert.hpp"
 #include "core/logger.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include <algorithm>
@@ -176,25 +177,79 @@ namespace lfs::training {
         }
     }
 
+    lfs::core::Tensor apply_crop_damping_to_scores(
+        const AdamOptimizer& optimizer,
+        const lfs::core::Tensor& scores) {
+        const auto& crop_mask = optimizer.crop_damping_mask();
+        const float scale = optimizer.cropbox_lr_scale();
+        if (!crop_mask.is_valid() || crop_mask.numel() == 0 || scale == 1.0f) {
+            return scores;
+        }
+
+        LFS_ASSERT_MSG(scores.is_valid(), "crop-damped scores must be valid");
+        LFS_ASSERT_MSG(scores.ndim() == 1, "crop-damped scores must be one-dimensional");
+        LFS_ASSERT_MSG(
+            scores.numel() <= crop_mask.numel(),
+            "crop damping mask must cover every score row");
+        LFS_ASSERT_MSG(
+            scores.device() == crop_mask.device(),
+            "crop damping mask and scores must use the same device");
+
+        const auto active_mask = scores.numel() == crop_mask.numel()
+                                     ? crop_mask
+                                     : crop_mask.slice(0, 0, scores.numel());
+        if (scale == 0.0f) {
+            return scores.masked_fill(active_mask, 0.0f);
+        }
+        return lfs::core::Tensor::where(active_mask, scores * scale, scores);
+    }
+
     size_t frozen_row_count(const lfs::core::SplatData& splat_data, const size_t n) {
         size_t frozen_count = 0;
         (void)build_frozen_vector(splat_data, n, &frozen_count);
         return frozen_count;
     }
 
+    namespace {
+        void apply_frozen_ranges_to_optimizer_impl(
+            const lfs::core::SplatData& splat_data,
+            AdamOptimizer& optimizer,
+            const float* freeze_lr_scale) {
+            if (freeze_lr_scale != nullptr) {
+                optimizer.set_frozen_lr_scale(*freeze_lr_scale);
+            }
+
+            const size_t n = static_cast<size_t>(splat_data.size());
+            auto mask = make_frozen_mask(splat_data, n, lfs::core::Device::CUDA);
+            if (!mask.is_valid()) {
+                optimizer.set_frozen_mask({});
+                return;
+            }
+
+            const size_t frozen_count = frozen_row_count(splat_data, n);
+            optimizer.set_frozen_mask(std::move(mask));
+            if (freeze_lr_scale != nullptr && *freeze_lr_scale > 0.0f) {
+                LOG_INFO("Frozen training mask: {} / {} Gaussians frozen (LR scale: {})",
+                         frozen_count,
+                         n,
+                         *freeze_lr_scale);
+            } else {
+                LOG_INFO("Frozen training mask: {} / {} Gaussians frozen", frozen_count, n);
+            }
+        }
+    } // namespace
+
     void apply_frozen_ranges_to_optimizer(
         const lfs::core::SplatData& splat_data,
         AdamOptimizer& optimizer) {
-        const size_t n = static_cast<size_t>(splat_data.size());
-        auto mask = make_frozen_mask(splat_data, n, lfs::core::Device::CUDA);
-        if (!mask.is_valid()) {
-            optimizer.set_frozen_mask({});
-            return;
-        }
+        apply_frozen_ranges_to_optimizer_impl(splat_data, optimizer, nullptr);
+    }
 
-        const size_t frozen_count = frozen_row_count(splat_data, n);
-        optimizer.set_frozen_mask(std::move(mask));
-        LOG_INFO("Frozen training mask: {} / {} Gaussians frozen", frozen_count, n);
+    void apply_frozen_ranges_to_optimizer(
+        const lfs::core::SplatData& splat_data,
+        AdamOptimizer& optimizer,
+        const float freeze_lr_scale) {
+        apply_frozen_ranges_to_optimizer_impl(splat_data, optimizer, &freeze_lr_scale);
     }
 
     void remap_frozen_ranges_after_compaction(

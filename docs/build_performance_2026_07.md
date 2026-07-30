@@ -2,6 +2,11 @@
 
 Marker: `FASTER-BUILD-2026-07-13`
 
+> **Note (2026-07, PR #1395):** Dear ImGui and ImPlot were subsequently removed
+> from the application graph. Timings and dependency lists in this report are
+> historical snapshots from the build-performance campaign and are not updated
+> for the RmlUi-only GUI stack.
+
 This report covers the complete LichtFeld Studio application graph only. Every
 timed configure used `Release` and `BUILD_TESTS=OFF`; no shipped application
 feature was disabled. USD, FFmpeg, OpenImageIO, RmlUi, Python, MCP, the GUI,

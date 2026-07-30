@@ -51,11 +51,24 @@ namespace lfs::training {
         const lfs::core::SplatData& splat_data,
         lfs::core::Tensor& scores);
 
+    // Scale crop-rejected row signals without mutating accumulated statistics.
+    // Invalid crop mask and scale 1 return the original tensor without device work.
+    lfs::core::Tensor apply_crop_damping_to_scores(
+        const AdamOptimizer& optimizer,
+        const lfs::core::Tensor& scores);
+
     size_t frozen_row_count(const lfs::core::SplatData& splat_data, size_t n);
 
+    // Refresh the topology-derived mask without changing the configured LR scale.
     void apply_frozen_ranges_to_optimizer(
         const lfs::core::SplatData& splat_data,
         AdamOptimizer& optimizer);
+
+    // Configure the LR scale and refresh the topology-derived mask.
+    void apply_frozen_ranges_to_optimizer(
+        const lfs::core::SplatData& splat_data,
+        AdamOptimizer& optimizer,
+        float freeze_lr_scale);
 
     void remap_frozen_ranges_after_compaction(
         lfs::core::SplatData& splat_data,

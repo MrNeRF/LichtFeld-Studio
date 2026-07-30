@@ -83,8 +83,17 @@
 .row-icon.type-icon.pointcloud   { image-color: @{alpha(secondary,0.80)}; }
 .row-icon.type-icon.mesh         { image-color: @{alpha(success,0.90)}; }
 
+.row-icon.trash-icon.trash-disabled,
+.row-icon.trash-icon.trash-disabled:hover {
+    image-color: @{alpha(text_dim,0.50)};
+}
+
 .tree-row.selected .row-icon.trash-icon {
     image-color: @{error};
+}
+
+.tree-row.selected .row-icon.trash-icon.trash-disabled {
+    image-color: @{alpha(text_dim,0.55)};
 }
 
 .rename-input {

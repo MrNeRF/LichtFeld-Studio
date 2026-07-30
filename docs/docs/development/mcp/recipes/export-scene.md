@@ -8,16 +8,16 @@ Use this flow when you need to export one or more scene nodes to `PLY`, `SOG`, `
 
 ## Sequence
 
-1. Read `lichtfeld://scene/nodes` or call `scene.list_nodes`.
+1. Read `lichtfeld://scene/nodes` or call `scene_list_nodes`.
 2. Choose either a single `node` or a list of `nodes`.
-3. Call one of the `scene.export_*` tools.
+3. Call one of the `scene_export_*` tools.
 4. Treat the export as synchronous in the current GUI implementation.
 
 ## Export To PLY
 
 ```json
 {
-  "tool": "scene.export_ply",
+  "tool": "scene_export_ply",
   "arguments": {
     "path": "/tmp/export.ply",
     "node": "training_model",
@@ -28,10 +28,10 @@ Use this flow when you need to export one or more scene nodes to `PLY`, `SOG`, `
 
 Other export entry points:
 
-- `scene.export_sog`
-- `scene.export_spz`
-- `scene.export_usd`
-- `scene.export_html`
+- `scene_export_sog`
+- `scene_export_spz`
+- `scene_export_usd`
+- `scene_export_html`
 
 ## Status And Cancellation
 
@@ -39,13 +39,13 @@ These tools document the current execution model:
 
 ```json
 {
-  "tool": "scene.export_status",
+  "tool": "scene_export_status",
   "arguments": {}
 }
 ```
 ```json
 {
-  "tool": "scene.export_cancel",
+  "tool": "scene_export_cancel",
   "arguments": {}
 }
 ```
@@ -53,5 +53,5 @@ These tools document the current execution model:
 In the current GUI implementation:
 
 - exports complete synchronously
-- `scene.export_status` reports idle state
-- `scene.export_cancel` returns an error because there is nothing cancellable once export starts
+- `scene_export_status` reports idle state
+- `scene_export_cancel` returns an error because there is nothing cancellable once export starts

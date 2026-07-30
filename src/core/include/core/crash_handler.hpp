@@ -21,14 +21,15 @@ namespace lfs::core {
     // (the wedge scenario 6f3b93868 defended against). Ordering:
     //   1. device_fault_registry_teardown()  — dedicated cudaMalloc fault slots
     //      (phase-6c §9 Ruling 2; must run before pool shutdown)
-    //   2. Tensor::shutdown_memory_pool()
-    //   3. PinnedMemoryAllocator::instance().shutdown()
+    //   2. GlobalArenaManager::instance().shutdown()
+    //   3. Tensor::shutdown_memory_pool()
+    //   4. PinnedMemoryAllocator::instance().shutdown()
     // CPU-only processes pay only idempotent-guard checks — see
     // Tensor::shutdown_memory_pool's g_cuda_memory_pool_instance guard and
     // PinnedMemoryAllocator's constructor, neither of which touches CUDA unless
     // a prior allocation path already did. Call this before flush_and_exit, never
     // after: a teardown failure must have a chance to reach the flushed log.
-    // Safe to call multiple times (all three steps are idempotent no-ops on
+    // Safe to call multiple times (all four steps are idempotent no-ops on
     // repeat).
     LFS_CORE_API void teardown_gpu_before_exit() noexcept;
 

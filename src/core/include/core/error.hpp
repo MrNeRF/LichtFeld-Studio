@@ -197,6 +197,14 @@ namespace lfs {
         std::optional<NativeError> native;
     };
 
+    class Error;
+
+    // Declared before Error so the friend declarations inside the class are
+    // not the first declarations MSVC sees — attaching dllexport/dllimport
+    // only on a later redeclaration is C2375 (redefinition; different linkage).
+    [[nodiscard]] LFS_CORE_API Error make_error(ErrorInit init) noexcept;
+    [[nodiscard]] LFS_CORE_API Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
+
     // One-pointer immutable COW error handle. See the file-level comment for
     // the ownership/COW contract. Public surface matches Section 5.2/7.2
     // exactly, plus two additive, non-contradictory members not shown in
@@ -207,7 +215,7 @@ namespace lfs {
     class [[nodiscard("discarded LichtFeld error")]] LFS_CORE_API Error {
     public:
         Error(const Error& other) noexcept;
-        Error(Error && other) noexcept;
+        Error(Error&& other) noexcept;
         Error& operator=(const Error& other) noexcept;
         Error& operator=(Error&& other) noexcept;
         ~Error();
@@ -231,24 +239,24 @@ namespace lfs {
         // cause). Same rvalue/COW/best-effort contract as with_context();
         // beyond kMaxSuppressedErrors the call is a silent no-op.
         [[nodiscard]] std::span<const Error> suppressed() const noexcept;
-        Error&& with_suppressed(Error secondary)&&;
+        Error&& with_suppressed(Error secondary) &&;
 
         // Appends one outer-caller context frame. Best-effort: a no-op past
         // kMaxErrorContextFrames, on an immortal seed, or if the COW clone
         // allocation fails (the original error is returned unchanged).
         Error&& with_context(std::string operation, core::SourceSite source,
-                             SmallFields fields = {})&&;
+                             SmallFields fields = {}) &&;
 
     private:
         Error() noexcept = default; // empty handle, Result<void> success only
-        explicit Error(ErrorPayload * payload) noexcept;
+        explicit Error(ErrorPayload* payload) noexcept;
 
         ErrorPayload* payload_ = nullptr; // exactly one machine word
 
         template <class>
         friend class Result;
-        friend Error make_error(ErrorInit init) noexcept;
-        friend Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
+        friend LFS_CORE_API Error make_error(ErrorInit init) noexcept;
+        friend LFS_CORE_API Error make_immortal_error_for_testing(bool unknown_seed) noexcept;
     };
 
     static_assert(sizeof(Error) == sizeof(void*));
@@ -300,8 +308,8 @@ namespace lfs {
 
         template <class R>
         concept result_like = requires {
-                                  typename result_like_traits<std::remove_cvref_t<R>>::value_type;
-                              };
+            typename result_like_traits<std::remove_cvref_t<R>>::value_type;
+        };
 
     } // namespace detail
 
@@ -323,134 +331,134 @@ namespace lfs {
             requires(!std::same_as<std::remove_cvref_t<U>, Result> &&
                      !std::same_as<std::remove_cvref_t<U>, Error> &&
                      std::constructible_from<T, U &&>)
-        Result(U && value) noexcept(std::is_nothrow_constructible_v<T, U&&>) // NOLINT(*-explicit-*)
+        Result(U&& value) noexcept(std::is_nothrow_constructible_v<T, U&&>) // NOLINT(*-explicit-*)
             : value_(std::forward<U>(value)) {}
 
         Result(Error error) noexcept // NOLINT(*-explicit-*)
             : value_(std::unexpect, std::move(error)) {}
 
         Result(const Result&) = default;
-        Result(Result &&) = default;
+        Result(Result&&) = default;
         Result& operator=(const Result&) = default;
         Result& operator=(Result&&) = default;
         ~Result() = default;
 
-        [[nodiscard]] static Result from_expected(std::expected<T, Error> && value) {
+        [[nodiscard]] static Result from_expected(std::expected<T, Error>&& value) {
             return Result{std::move(value)};
         }
 
-        [[nodiscard]] std::expected<T, Error>& as_expected()& noexcept { return value_; }
+        [[nodiscard]] std::expected<T, Error>& as_expected() & noexcept { return value_; }
         [[nodiscard]] const std::expected<T, Error>& as_expected() const& noexcept { return value_; }
-        [[nodiscard]] std::expected<T, Error>&& as_expected()&& noexcept { return std::move(value_); }
-        [[nodiscard]] std::expected<T, Error> into_expected()&& { return std::move(value_); }
+        [[nodiscard]] std::expected<T, Error>&& as_expected() && noexcept { return std::move(value_); }
+        [[nodiscard]] std::expected<T, Error> into_expected() && { return std::move(value_); }
 
         [[nodiscard]] explicit operator bool() const noexcept { return value_.has_value(); }
         [[nodiscard]] bool has_value() const noexcept { return value_.has_value(); }
 
-        [[nodiscard]] T& value()& { return value_.value(); }
+        [[nodiscard]] T& value() & { return value_.value(); }
         [[nodiscard]] const T& value() const& { return value_.value(); }
-        [[nodiscard]] T&& value()&& { return std::move(value_).value(); }
+        [[nodiscard]] T&& value() && { return std::move(value_).value(); }
         [[nodiscard]] const T&& value() const&& { return std::move(value_).value(); }
 
-        [[nodiscard]] Error& error()& { return value_.error(); }
+        [[nodiscard]] Error& error() & { return value_.error(); }
         [[nodiscard]] const Error& error() const& { return value_.error(); }
-        [[nodiscard]] Error&& error()&& { return std::move(value_).error(); }
+        [[nodiscard]] Error&& error() && { return std::move(value_).error(); }
         [[nodiscard]] const Error&& error() const&& { return std::move(value_).error(); }
 
-        [[nodiscard]] T& operator*()& noexcept { return *value_; }
+        [[nodiscard]] T& operator*() & noexcept { return *value_; }
         [[nodiscard]] const T& operator*() const& noexcept { return *value_; }
-        [[nodiscard]] T&& operator*()&& noexcept { return *std::move(value_); }
+        [[nodiscard]] T&& operator*() && noexcept { return *std::move(value_); }
         [[nodiscard]] const T&& operator*() const&& noexcept { return *std::move(value_); }
         [[nodiscard]] T* operator->() noexcept { return value_.operator->(); }
         [[nodiscard]] const T* operator->() const noexcept { return value_.operator->(); }
 
         template <class U>
-        [[nodiscard]] T value_or(U && default_value) const& {
+        [[nodiscard]] T value_or(U&& default_value) const& {
             return value_.value_or(std::forward<U>(default_value));
         }
         template <class U>
-        [[nodiscard]] T value_or(U && default_value)&& {
+        [[nodiscard]] T value_or(U&& default_value) && {
             return std::move(value_).value_or(std::forward<U>(default_value));
         }
 
         template <class F>
-        [[nodiscard]] auto and_then(F && f)& {
+        [[nodiscard]] auto and_then(F&& f) & {
             return and_then_impl(*this, std::forward<F>(f));
         }
         template <class F>
-        [[nodiscard]] auto and_then(F && f) const& {
+        [[nodiscard]] auto and_then(F&& f) const& {
             return and_then_impl(*this, std::forward<F>(f));
         }
         template <class F>
-        [[nodiscard]] auto and_then(F && f)&& {
+        [[nodiscard]] auto and_then(F&& f) && {
             return and_then_impl(std::move(*this), std::forward<F>(f));
         }
         template <class F>
-        [[nodiscard]] auto and_then(F && f) const&& {
+        [[nodiscard]] auto and_then(F&& f) const&& {
             return and_then_impl(std::move(*this), std::forward<F>(f));
         }
 
         template <class F>
-        [[nodiscard]] auto transform(F && f)& {
+        [[nodiscard]] auto transform(F&& f) & {
             return Result<std::remove_cv_t<std::invoke_result_t<F, T&>>>::from_expected(
                 value_.transform(std::forward<F>(f)));
         }
         template <class F>
-        [[nodiscard]] auto transform(F && f) const& {
+        [[nodiscard]] auto transform(F&& f) const& {
             return Result<std::remove_cv_t<std::invoke_result_t<F, const T&>>>::from_expected(
                 value_.transform(std::forward<F>(f)));
         }
         template <class F>
-        [[nodiscard]] auto transform(F && f)&& {
+        [[nodiscard]] auto transform(F&& f) && {
             return Result<std::remove_cv_t<std::invoke_result_t<F, T&&>>>::from_expected(
                 std::move(value_).transform(std::forward<F>(f)));
         }
         template <class F>
-        [[nodiscard]] auto transform(F && f) const&& {
+        [[nodiscard]] auto transform(F&& f) const&& {
             return Result<std::remove_cv_t<std::invoke_result_t<F, const T&&>>>::from_expected(
                 std::move(value_).transform(std::forward<F>(f)));
         }
 
         template <class F>
-        [[nodiscard]] auto or_else(F && f)& {
+        [[nodiscard]] auto or_else(F&& f) & {
             return or_else_impl(*this, std::forward<F>(f));
         }
         template <class F>
-        [[nodiscard]] auto or_else(F && f) const& {
+        [[nodiscard]] auto or_else(F&& f) const& {
             return or_else_impl(*this, std::forward<F>(f));
         }
         template <class F>
-        [[nodiscard]] auto or_else(F && f)&& {
+        [[nodiscard]] auto or_else(F&& f) && {
             return or_else_impl(std::move(*this), std::forward<F>(f));
         }
         template <class F>
-        [[nodiscard]] auto or_else(F && f) const&& {
+        [[nodiscard]] auto or_else(F&& f) const&& {
             return or_else_impl(std::move(*this), std::forward<F>(f));
         }
 
         template <class F>
-        [[nodiscard]] auto transform_error(F && f)& {
+        [[nodiscard]] auto transform_error(F&& f) & {
             return Result::from_expected(value_.transform_error(std::forward<F>(f)));
         }
         template <class F>
-        [[nodiscard]] auto transform_error(F && f) const& {
+        [[nodiscard]] auto transform_error(F&& f) const& {
             return Result::from_expected(value_.transform_error(std::forward<F>(f)));
         }
         template <class F>
-        [[nodiscard]] auto transform_error(F && f)&& {
+        [[nodiscard]] auto transform_error(F&& f) && {
             return Result::from_expected(std::move(value_).transform_error(std::forward<F>(f)));
         }
         template <class F>
-        [[nodiscard]] auto transform_error(F && f) const&& {
+        [[nodiscard]] auto transform_error(F&& f) const&& {
             return Result::from_expected(std::move(value_).transform_error(std::forward<F>(f)));
         }
 
     private:
-        explicit Result(std::expected<T, Error> && value) noexcept(std::is_nothrow_move_constructible_v<T>)
+        explicit Result(std::expected<T, Error>&& value) noexcept(std::is_nothrow_move_constructible_v<T>)
             : value_(std::move(value)) {}
 
         template <class Self, class F>
-        static auto and_then_impl(Self && self, F && f) {
+        static auto and_then_impl(Self&& self, F&& f) {
             using Ret = std::invoke_result_t<F, decltype(*std::forward<Self>(self).as_expected())>;
             static_assert(detail::result_like<Ret>,
                           "Result<T>::and_then callback must return lfs::Result<U> or "
@@ -465,7 +473,7 @@ namespace lfs {
         }
 
         template <class Self, class F>
-        static auto or_else_impl(Self && self, F && f) {
+        static auto or_else_impl(Self&& self, F&& f) {
             using Ret = std::invoke_result_t<F, decltype(std::forward<Self>(self).error())>;
             static_assert(detail::result_like<Ret>,
                           "Result<T>::or_else callback must return lfs::Result<T> or "
@@ -505,7 +513,7 @@ namespace lfs {
             return result;
         }
 
-        [[nodiscard]] static Result from_expected(std::expected<void, Error> && value) {
+        [[nodiscard]] static Result from_expected(std::expected<void, Error>&& value) {
             if (value.has_value()) {
                 return Result{};
             }
@@ -519,7 +527,7 @@ namespace lfs {
             LFS_ASSERT_MSG(has_value(), "lfs::Status::value() called on a failed Status");
         }
 
-        [[nodiscard]] Error& error()& {
+        [[nodiscard]] Error& error() & {
             LFS_ASSERT_MSG(!has_value(), "lfs::Status::error() called on a successful Status");
             return error_;
         }
@@ -527,12 +535,12 @@ namespace lfs {
             LFS_ASSERT_MSG(!has_value(), "lfs::Status::error() called on a successful Status");
             return error_;
         }
-        [[nodiscard]] Error&& error()&& {
+        [[nodiscard]] Error&& error() && {
             LFS_ASSERT_MSG(!has_value(), "lfs::Status::error() called on a successful Status");
             return std::move(error_);
         }
 
-        [[nodiscard]] std::expected<void, Error> into_expected()&& {
+        [[nodiscard]] std::expected<void, Error> into_expected() && {
             if (has_value()) {
                 return {};
             }
@@ -540,7 +548,7 @@ namespace lfs {
         }
 
         template <class F>
-        [[nodiscard]] Result and_then(F && f) const {
+        [[nodiscard]] Result and_then(F&& f) const {
             if (!has_value()) {
                 return *this;
             }
@@ -548,7 +556,7 @@ namespace lfs {
         }
 
         template <class F>
-        [[nodiscard]] Result or_else(F && f) const {
+        [[nodiscard]] Result or_else(F&& f) const {
             if (has_value()) {
                 return *this;
             }
@@ -556,7 +564,7 @@ namespace lfs {
         }
 
         template <class F>
-        [[nodiscard]] Result transform_error(F && f) const {
+        [[nodiscard]] Result transform_error(F&& f) const {
             if (has_value()) {
                 return *this;
             }

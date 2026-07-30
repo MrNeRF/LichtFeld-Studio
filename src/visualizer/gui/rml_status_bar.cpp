@@ -291,6 +291,7 @@ namespace lfs::vis::gui {
         model_.lfs_mem_color = colorToRml(palette.info);
         model_.gpu_mem_color = colorToRml(palette.text);
         model_.fps_color = colorToRml(palette.success);
+        model_.status_message_color = colorToRml(palette.info);
 
         rml_context_ = rml_manager_->createContext("status_bar", 800, 22);
         if (!rml_context_) {
@@ -1004,9 +1005,9 @@ namespace lfs::vis::gui {
         setModelBool("show_status_message", model_.show_status_message, status_msg.visible);
         if (status_msg.visible) {
             setModelString("status_message_text", model_.status_message_text, status_msg.text);
-            const ImVec4& status_col = status_msg.level == ErrorNoticeLevel::Error     ? p.error
-                                       : status_msg.level == ErrorNoticeLevel::Warning ? p.warning
-                                                                                       : p.info;
+            const ThemeColor& status_col = status_msg.level == ErrorNoticeLevel::Error     ? p.error
+                                           : status_msg.level == ErrorNoticeLevel::Warning ? p.warning
+                                                                                           : p.info;
             setModelString("status_message_color", model_.status_message_color,
                            colorToRmlAlpha(status_col, status_msg.alpha));
         }
@@ -1020,7 +1021,7 @@ namespace lfs::vis::gui {
         float total_gib = mem.total / gib;
         float pct = total_gib > 0.0f ? (used_gib / total_gib) * 100.0f : 0.0f;
 
-        ImVec4 mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
+        ThemeColor mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
         setModelBool("gpu_panel_active", model_.gpu_panel_active,
                      lfs::diagnostics::VramProfiler::instance().enabled());
         setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.2f} GiB", app_gib));
@@ -1034,7 +1035,7 @@ namespace lfs::vis::gui {
         // FPS
         float fps = reactive_fps_available_ ? reactive_fps_value_
                                             : (rm ? rm->getAverageFPS() : 0.0f);
-        ImVec4 fps_col = fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error);
+        ThemeColor fps_col = fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error);
         setModelString("fps_value", model_.fps_value, std::format("{:.0f}", fps));
         setModelString("fps_color", model_.fps_color, colorToRml(fps_col));
         setModelString("fps_label", model_.fps_label,

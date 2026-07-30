@@ -688,8 +688,7 @@ namespace lfs::training {
             active_mask = _free_mask.slice(0, 0, n).logical_not();
         }
         lfs::core::Tensor trainable_mask = make_trainable_mask(*_splat_data, n, _splat_data->means().device());
-        auto refine_candidates = (_refine_weight_max > _params->growth_grad_threshold) &&
-                                 (_vis_count > 0.0f);
+        auto refine_candidates = compute_refine_candidates();
         if (active_mask.is_valid()) {
             refine_candidates = refine_candidates.logical_and(active_mask);
         }
@@ -916,6 +915,11 @@ namespace lfs::training {
         LFS_GAUGE("model.gaussians.capacity", static_cast<double>(_splat_data->size()));
     }
 
+    lfs::core::Tensor MRNF::compute_refine_candidates() const {
+        auto candidate_weights = apply_crop_damping_to_scores(*_optimizer, _refine_weight_max);
+        return (candidate_weights > _params->growth_grad_threshold) && (_vis_count > 0.0f);
+    }
+
     void MRNF::compact_splats(const lfs::core::Tensor& keep_mask) {
         LOG_TIMER("MRNF::compact_splats");
         using namespace lfs::core;
@@ -1108,6 +1112,7 @@ namespace lfs::training {
         auto opacities = _splat_data->get_opacity();
         if (opacities.ndim() == 2 && opacities.shape()[1] == 1)
             opacities = opacities.squeeze(-1);
+        opacities = apply_crop_damping_to_scores(*_optimizer, opacities);
 
         auto seed = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());

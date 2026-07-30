@@ -52,6 +52,7 @@ namespace lfs::training::kernels {
         int width,
         int height,
         float weight,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* pixel_weight = nullptr);
 
 } // namespace lfs::training::kernels

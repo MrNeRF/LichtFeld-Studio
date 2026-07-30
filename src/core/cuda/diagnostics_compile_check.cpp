@@ -103,9 +103,8 @@ namespace lfs::core::compile_check {
                     result,
                     "result",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "compile-check Vulkan one={}",
-                                value
-                            ),
+                        "compile-check Vulkan one={}",
+                        value),
                     std::source_location::current())) {
                 return false;
             }
@@ -113,11 +112,10 @@ namespace lfs::core::compile_check {
                     result,
                     "result",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "compile-check Vulkan many={}/{}/{}",
-                                value,
-                                1,
-                                2
-                            ),
+                        "compile-check Vulkan many={}/{}/{}",
+                        value,
+                        1,
+                        2),
                     std::source_location::current())) {
                 return false;
             }

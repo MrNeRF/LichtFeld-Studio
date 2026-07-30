@@ -51,7 +51,6 @@ namespace lfs::vis {
             return std::string(outcome.error().detail());
         }
 
-
         struct SplitPush {
             float split[4];       // x = position, y = left_flip_y, z = right_flip_y, w = pad
             float rect[4];        // x, y, w, h
@@ -205,11 +204,10 @@ namespace lfs::vis {
                     vkCreateCommandPool(device, &pool, nullptr, &transfer_pool),
                     "vkCreateCommandPool(device, &pool, nullptr, &transfer_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Split-view transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
-                                vkHandleValue(device),
-                                pool.queueFamilyIndex,
-                                static_cast<std::uint32_t>(pool.flags)
-                            ),
+                        "Split-view transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                        vkHandleValue(device),
+                        pool.queueFamilyIndex,
+                        static_cast<std::uint32_t>(pool.flags)),
                     std::source_location::current())) {
                 return false;
             }
@@ -263,12 +261,11 @@ namespace lfs::vis {
                     vkCreateSampler(device, &s, nullptr, &sampler),
                     "vkCreateSampler(device, &s, nullptr, &sampler)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Split-view sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
-                                vkHandleValue(device),
-                                static_cast<int>(s.magFilter),
-                                static_cast<int>(s.minFilter),
-                                static_cast<int>(s.addressModeU)
-                            ),
+                        "Split-view sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
+                        vkHandleValue(device),
+                        static_cast<int>(s.magFilter),
+                        static_cast<int>(s.minFilter),
+                        static_cast<int>(s.addressModeU)),
                     std::source_location::current())) {
                 return false;
             }
@@ -294,11 +291,10 @@ namespace lfs::vis {
                     vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout),
                     "vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Split-view descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
-                                vkHandleValue(device),
-                                li.bindingCount,
-                                static_cast<int>(bindings[0].descriptorType)
-                            ),
+                        "Split-view descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                        vkHandleValue(device),
+                        li.bindingCount,
+                        static_cast<int>(bindings[0].descriptorType)),
                     std::source_location::current())) {
                 return false;
             }
@@ -319,12 +315,11 @@ namespace lfs::vis {
                     vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool),
                     "vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Split-view descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
-                                vkHandleValue(device),
-                                frame_count,
-                                pi.maxSets,
-                                ps.descriptorCount
-                            ),
+                        "Split-view descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                        vkHandleValue(device),
+                        frame_count,
+                        pi.maxSets,
+                        ps.descriptorCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -342,12 +337,11 @@ namespace lfs::vis {
                     vkAllocateDescriptorSets(device, &ai, sets.data()),
                     "vkAllocateDescriptorSets(device, &ai, sets.data())",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Split-view descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
-                                vkHandleValue(device),
-                                vkHandleValue(desc_pool),
-                                vkHandleValue(desc_layout),
-                                ai.descriptorSetCount
-                            ),
+                        "Split-view descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                        vkHandleValue(device),
+                        vkHandleValue(desc_pool),
+                        vkHandleValue(desc_layout),
+                        ai.descriptorSetCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -649,12 +643,11 @@ namespace lfs::vis {
                     vmaCreateBuffer(allocator, &bi, &sa, &p.staging_buffer, &p.staging_alloc, &ai),
                     "vmaCreateBuffer(allocator, &bi, &sa, &p.staging_buffer, &p.staging_alloc, &ai)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Split-view panel staging-buffer allocation failed (side={}, allocator={:#x}, requested_size={}, usage={:#x})",
-                                side,
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                bytes,
-                                static_cast<std::uint32_t>(bi.usage)
-                            ),
+                        "Split-view panel staging-buffer allocation failed (side={}, allocator={:#x}, requested_size={}, usage={:#x})",
+                        side,
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        bytes,
+                        static_cast<std::uint32_t>(bi.usage)),
                     std::source_location::current())) {
                 return false;
             }
@@ -690,12 +683,11 @@ namespace lfs::vis {
                     vkAllocateCommandBuffers(device, &a, &p.cmd),
                     "vkAllocateCommandBuffers(device, &a, &p.cmd)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Split-view panel command-buffer allocation failed (side={}, device={:#x}, command_pool={:#x}, requested_count={})",
-                                side,
-                                vkHandleValue(device),
-                                vkHandleValue(transfer_pool),
-                                a.commandBufferCount
-                            ),
+                        "Split-view panel command-buffer allocation failed (side={}, device={:#x}, command_pool={:#x}, requested_count={})",
+                        side,
+                        vkHandleValue(device),
+                        vkHandleValue(transfer_pool),
+                        a.commandBufferCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -805,14 +797,13 @@ namespace lfs::vis {
                     vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, &allocation_info),
                     "vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, &allocation_info)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Split-view panel image allocation failed (side={}, allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
-                                side,
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                w,
-                                h,
-                                static_cast<int>(img.format),
-                                static_cast<std::uint32_t>(img.usage)
-                            ),
+                        "Split-view panel image allocation failed (side={}, allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
+                        side,
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        w,
+                        h,
+                        static_cast<int>(img.format),
+                        static_cast<std::uint32_t>(img.usage)),
                     std::source_location::current())) {
                 return false;
             }

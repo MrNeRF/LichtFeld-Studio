@@ -7,9 +7,9 @@
     <div class="scene-header">
         <div class="scene-header-row">
             <div class="scene-tab-bar">
-                <button id="scene-tab" type="button" class="scene-tab">Scene</button>
-                <button id="history-tab" type="button" class="scene-tab">History</button>
-                <button id="logging-tab" type="button" class="scene-tab">Logging</button>
+                <button id="scene-tab" type="button" class="scene-tab"></button>
+                <button id="history-tab" type="button" class="scene-tab"></button>
+                <button id="logging-tab" type="button" class="scene-tab"></button>
             </div>
             <button id="asset-manager-button"
                     type="button"
@@ -29,7 +29,7 @@
     <div id="scene-view">
         <div id="search-container">
             <img id="search-icon" class="row-icon" />
-            <input id="filter-input" type="text" placeholder="Search" />
+            <input id="filter-input" type="text" placeholder="" />
             <button id="filter-clear" type="button">
                 <img />
             </button>
@@ -45,8 +45,8 @@
 
     <div id="history-container">
         <div class="history-summary">
-            <div id="history-summary-label" class="history-summary__label text-muted">Shared History</div>
-            <div id="history-summary-value" class="history-summary__value text-default">No history yet</div>
+            <div id="history-summary-label" class="history-summary__label text-muted"></div>
+            <div id="history-summary-value" class="history-summary__value text-default"></div>
         </div>
 
         <div id="history-transaction" class="history-transaction status-info"></div>
@@ -54,23 +54,23 @@
         <div class="history-actions">
             <button id="history-undo-btn"
                     class="btn btn--primary history-action"
-                    type="button">Undo</button>
+                    type="button"></button>
             <button id="history-redo-btn"
                     class="btn btn--secondary history-action"
-                    type="button">Redo</button>
+                    type="button"></button>
             <button id="history-clear-btn"
                     class="btn btn--ghost history-action history-action--clear"
-                    type="button">Clear History</button>
+                    type="button"></button>
         </div>
 
-        <div id="history-note" class="history-note text-muted">Newest block is at the top. Click a block to jump there. New projects start clean.</div>
+        <div id="history-note" class="history-note text-muted"></div>
 
         <div class="separator"></div>
 
         <div class="history-section">
-            <span id="history-undo-title" class="history-section__title text-accent">Undo Stack</span>
+            <span id="history-undo-title" class="history-section__title text-accent"></span>
             <div class="history-list">
-                <span id="history-empty-undo" class="history-empty text-muted">Nothing recorded yet</span>
+                <span id="history-empty-undo" class="history-empty text-muted"></span>
                 <div id="history-undo-list" class="history-stack-item"></div>
             </div>
         </div>
@@ -78,9 +78,9 @@
         <div class="separator"></div>
 
         <div class="history-section">
-            <span id="history-redo-title" class="history-section__title text-accent">Redo Stack</span>
+            <span id="history-redo-title" class="history-section__title text-accent"></span>
             <div class="history-list">
-                <span id="history-empty-redo" class="history-empty text-muted">Nothing recorded yet</span>
+                <span id="history-empty-redo" class="history-empty text-muted"></span>
                 <div id="history-redo-list" class="history-stack-item"></div>
             </div>
         </div>
@@ -88,42 +88,42 @@
 
     <div id="logging-container">
         <div class="history-summary">
-            <div id="logging-summary-label" class="history-summary__label text-muted">CLI Log Mirror</div>
-            <div id="logging-summary-value" class="history-summary__value text-default">No buffered CLI logs</div>
+            <div id="logging-summary-label" class="history-summary__label text-muted"></div>
+            <div id="logging-summary-value" class="history-summary__value text-default"></div>
         </div>
 
         <div class="logging-toolbar">
             <div class="logging-level-group">
-                <label id="logging-level-label" for="logging-level-select" class="logging-field-label text-muted">Log Level</label>
+            <label id="logging-level-label" for="logging-level-select" class="logging-field-label text-muted"></label>
                 <select id="logging-level-select" class="logging-level-select">
-                    <option value="trace">Trace</option>
-                    <option value="debug">Debug</option>
-                    <option value="info">Info</option>
-                    <option value="performance">Performance</option>
-                    <option value="warn">Warn</option>
-                    <option value="error">Error</option>
-                    <option value="critical">Critical</option>
-                    <option value="off">Off</option>
+                    <option id="logging-level-trace" value="trace"></option>
+                    <option id="logging-level-debug" value="debug"></option>
+                    <option id="logging-level-info" value="info"></option>
+                    <option id="logging-level-performance" value="performance"></option>
+                    <option id="logging-level-warn" value="warn"></option>
+                    <option id="logging-level-error" value="error"></option>
+                    <option id="logging-level-critical" value="critical"></option>
+                    <option id="logging-level-off" value="off"></option>
                 </select>
             </div>
 
             <div class="logging-actions">
                 <button id="logging-export-btn"
                         class="btn btn--secondary history-action"
-                        type="button">Export .txt</button>
+                        type="button"></button>
                 <button id="logging-copy-btn"
                         class="btn btn--secondary history-action"
-                        type="button">Copy</button>
+                        type="button"></button>
             </div>
         </div>
 
         <div id="logging-feedback" class="logging-feedback status-info"></div>
-        <div id="logging-note" class="history-note text-muted">Mirrors console output. Newest entries stay at the top; copy and export keep chronological order.</div>
+        <div id="logging-note" class="history-note text-muted"></div>
 
         <div class="separator"></div>
 
         <div id="logging-scroll" class="logging-scroll">
-            <span id="logging-empty" class="history-empty text-muted">No logs captured yet</span>
+            <span id="logging-empty" class="history-empty text-muted"></span>
             <div id="logging-list" class="logging-list"></div>
         </div>
     </div>

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_data_transform.hpp"
+#include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
@@ -348,40 +349,33 @@ namespace lfs::core {
         return splat_data;
     }
 
-    // Helper: compute inside-cropbox mask for given means and bounding box
-    static Tensor compute_cropbox_mask(const Tensor& means,
-                                       const lfs::geometry::BoundingBox& bounding_box) {
-        const auto bbox_min = bounding_box.getMinBounds();
-        const auto bbox_max = bounding_box.getMaxBounds();
+    Tensor compute_cropbox_mask(const Tensor& means,
+                                const glm::vec3& crop_min,
+                                const glm::vec3& crop_max,
+                                const glm::mat4& points_to_cropbox) {
+        LFS_ASSERT_MSG(means.is_valid(), "crop box means must be valid");
+        LFS_ASSERT_MSG(means.dtype() == DataType::Float32, "crop box means must be Float32");
+        LFS_ASSERT_MSG(means.ndim() == 2, "crop box means must be a 2D tensor");
+        LFS_ASSERT_MSG(means.size(1) >= 3, "crop box means must have at least three columns");
 
-        const int num_points = means.size(0);
-
-        // Use full mat4 if available (preserves scale), otherwise fall back to EuclideanTransform
-        const glm::mat4 world_to_bbox_matrix = bounding_box.hasFullTransform()
-                                                   ? bounding_box.getworld2BBoxMat4()
-                                                   : bounding_box.getworld2BBox().toMat4();
-
-        const std::vector<float> transform_data = {
-            world_to_bbox_matrix[0][0], world_to_bbox_matrix[1][0], world_to_bbox_matrix[2][0], world_to_bbox_matrix[3][0],
-            world_to_bbox_matrix[0][1], world_to_bbox_matrix[1][1], world_to_bbox_matrix[2][1], world_to_bbox_matrix[3][1],
-            world_to_bbox_matrix[0][2], world_to_bbox_matrix[1][2], world_to_bbox_matrix[2][2], world_to_bbox_matrix[3][2],
-            world_to_bbox_matrix[0][3], world_to_bbox_matrix[1][3], world_to_bbox_matrix[2][3], world_to_bbox_matrix[3][3]};
-        auto transform_tensor = Tensor::from_vector(
-            transform_data,
-            TensorShape({4, 4}),
+        const auto rotation = Tensor::from_vector(
+            {points_to_cropbox[0][0], points_to_cropbox[1][0], points_to_cropbox[2][0],
+             points_to_cropbox[0][1], points_to_cropbox[1][1], points_to_cropbox[2][1],
+             points_to_cropbox[0][2], points_to_cropbox[1][2], points_to_cropbox[2][2]},
+            {3, 3},
+            means.device());
+        const auto translation = Tensor::from_vector(
+            {points_to_cropbox[3][0], points_to_cropbox[3][1], points_to_cropbox[3][2]},
+            {1, 3},
             means.device());
 
-        auto ones = Tensor::ones({static_cast<size_t>(num_points), 1}, means.device());
-        auto means_homo = means.cat(ones, 1);
+        const auto xyz_means = means.slice(1, 0, 3);
+        const auto local_points = xyz_means.mm(rotation.t()).add(translation);
 
-        const auto transformed_points = transform_tensor.mm(means_homo.t()).t();
-        const auto local_points = transformed_points.slice(1, 0, 3);
-
-        const std::vector<float> bbox_min_data = {bbox_min.x, bbox_min.y, bbox_min.z};
-        const std::vector<float> bbox_max_data = {bbox_max.x, bbox_max.y, bbox_max.z};
-
-        auto bbox_min_tensor = Tensor::from_vector(bbox_min_data, TensorShape({3}), means.device());
-        auto bbox_max_tensor = Tensor::from_vector(bbox_max_data, TensorShape({3}), means.device());
+        auto bbox_min_tensor = Tensor::from_vector(
+            {crop_min.x, crop_min.y, crop_min.z}, {3}, means.device());
+        auto bbox_max_tensor = Tensor::from_vector(
+            {crop_max.x, crop_max.y, crop_max.z}, {3}, means.device());
 
         auto inside_min = local_points.ge(bbox_min_tensor.unsqueeze(0));
         auto inside_max = local_points.le(bbox_max_tensor.unsqueeze(0));
@@ -389,6 +383,18 @@ namespace lfs::core {
         auto inside_both = inside_min && inside_max;
         std::vector<int> reduce_dims = {1};
         return inside_both.all(std::span<const int>(reduce_dims), false);
+    }
+
+    static Tensor compute_cropbox_mask(const Tensor& means,
+                                       const lfs::geometry::BoundingBox& bounding_box) {
+        const glm::mat4 points_to_cropbox = bounding_box.hasFullTransform()
+                                                ? bounding_box.getworld2BBoxMat4()
+                                                : bounding_box.getworld2BBox().toMat4();
+        return compute_cropbox_mask(
+            means,
+            bounding_box.getMinBounds(),
+            bounding_box.getMaxBounds(),
+            points_to_cropbox);
     }
 
     SplatData crop_by_cropbox(const SplatData& splat_data,

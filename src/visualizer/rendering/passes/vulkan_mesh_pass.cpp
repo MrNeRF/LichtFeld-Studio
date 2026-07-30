@@ -235,11 +235,10 @@ namespace lfs::vis {
                     vkCreateCommandPool(device, &pool_info, nullptr, &transfer_pool),
                     "vkCreateCommandPool(device, &pool_info, nullptr, &transfer_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
-                                vkHandleValue(device),
-                                pool_info.queueFamilyIndex,
-                                static_cast<std::uint32_t>(pool_info.flags)
-                            ),
+                        "Mesh transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                        vkHandleValue(device),
+                        pool_info.queueFamilyIndex,
+                        static_cast<std::uint32_t>(pool_info.flags)),
                     std::source_location::current())) {
                 return false;
             }
@@ -494,12 +493,11 @@ namespace lfs::vis {
                     vkCreateSampler(device, &info, nullptr, &sampler),
                     "vkCreateSampler(device, &info, nullptr, &sampler)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh material sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
-                                vkHandleValue(device),
-                                static_cast<int>(info.magFilter),
-                                static_cast<int>(info.minFilter),
-                                static_cast<int>(info.addressModeU)
-                            ),
+                        "Mesh material sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
+                        vkHandleValue(device),
+                        static_cast<int>(info.magFilter),
+                        static_cast<int>(info.minFilter),
+                        static_cast<int>(info.addressModeU)),
                     std::source_location::current())) {
                 return false;
             }
@@ -523,12 +521,11 @@ namespace lfs::vis {
                     vkCreateSampler(device, &shadow_info, nullptr, &shadow_sampler),
                     "vkCreateSampler(device, &shadow_info, nullptr, &shadow_sampler)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh shadow sampler creation failed (device={:#x}, compare_enable={}, compare_op={}, address_mode={})",
-                                vkHandleValue(device),
-                                shadow_info.compareEnable == VK_TRUE,
-                                static_cast<int>(shadow_info.compareOp),
-                                static_cast<int>(shadow_info.addressModeU)
-                            ),
+                        "Mesh shadow sampler creation failed (device={:#x}, compare_enable={}, compare_op={}, address_mode={})",
+                        vkHandleValue(device),
+                        shadow_info.compareEnable == VK_TRUE,
+                        static_cast<int>(shadow_info.compareOp),
+                        static_cast<int>(shadow_info.addressModeU)),
                     std::source_location::current())) {
                 return false;
             }
@@ -557,10 +554,9 @@ namespace lfs::vis {
                     vkCreateDescriptorSetLayout(device, &light_info, nullptr, &light_layout),
                     "vkCreateDescriptorSetLayout(device, &light_info, nullptr, &light_layout)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh light descriptor-set layout creation failed (device={:#x}, binding_count={})",
-                                vkHandleValue(device),
-                                light_info.bindingCount
-                            ),
+                        "Mesh light descriptor-set layout creation failed (device={:#x}, binding_count={})",
+                        vkHandleValue(device),
+                        light_info.bindingCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -588,10 +584,9 @@ namespace lfs::vis {
                     vkCreateDescriptorSetLayout(device, &mat_info, nullptr, &material_layout),
                     "vkCreateDescriptorSetLayout(device, &mat_info, nullptr, &material_layout)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh material descriptor-set layout creation failed (device={:#x}, binding_count={})",
-                                vkHandleValue(device),
-                                mat_info.bindingCount
-                            ),
+                        "Mesh material descriptor-set layout creation failed (device={:#x}, binding_count={})",
+                        vkHandleValue(device),
+                        mat_info.bindingCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -702,13 +697,12 @@ namespace lfs::vis {
                     vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info),
                     "vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh shadow image allocation failed (allocator={:#x}, target_address={:#x}, requested_resolution={}, format={}, usage={:#x})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                reinterpret_cast<std::uintptr_t>(&out),
-                                resolution,
-                                static_cast<int>(img.format),
-                                static_cast<std::uint32_t>(img.usage)
-                            ),
+                        "Mesh shadow image allocation failed (allocator={:#x}, target_address={:#x}, requested_resolution={}, format={}, usage={:#x})",
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        reinterpret_cast<std::uintptr_t>(&out),
+                        resolution,
+                        static_cast<int>(img.format),
+                        static_cast<std::uint32_t>(img.usage)),
                     std::source_location::current())) {
                 return false;
             }
@@ -939,14 +933,13 @@ namespace lfs::vis {
                     vkCreateDescriptorPool(device, &pool_info, nullptr, &new_pool),
                     "vkCreateDescriptorPool(device, &pool_info, nullptr, &new_pool)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh light descriptor-pool creation failed (device={:#x}, frame_slot={}, required_count={}, capacity={}, max_sets={}, pool_size_count={})",
-                                vkHandleValue(device),
-                                frame_slot,
-                                required,
-                                capacity,
-                                pool_info.maxSets,
-                                pool_info.poolSizeCount
-                            ),
+                        "Mesh light descriptor-pool creation failed (device={:#x}, frame_slot={}, required_count={}, capacity={}, max_sets={}, pool_size_count={})",
+                        vkHandleValue(device),
+                        frame_slot,
+                        required,
+                        capacity,
+                        pool_info.maxSets,
+                        pool_info.poolSizeCount),
                     std::source_location::current())) {
                 return false;
             }
@@ -1083,14 +1076,13 @@ namespace lfs::vis {
                     vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info),
                     "vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh texture image allocation failed (label='{}', allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
-                                label,
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                w,
-                                h,
-                                static_cast<int>(img.format),
-                                static_cast<std::uint32_t>(img.usage)
-                            ),
+                        "Mesh texture image allocation failed (label='{}', allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
+                        label,
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        w,
+                        h,
+                        static_cast<int>(img.format),
+                        static_cast<std::uint32_t>(img.usage)),
                     std::source_location::current())) {
                 return false;
             }
@@ -1828,12 +1820,11 @@ namespace lfs::vis {
                     vmaCreateBuffer(allocator, &b, &a, &out.ubo, &out.ubo_alloc, nullptr),
                     "vmaCreateBuffer(allocator, &b, &a, &out.ubo, &out.ubo_alloc, nullptr)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh material UBO allocation failed (allocator={:#x}, material_index={}, requested_size={}, usage={:#x})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                material_index,
-                                b.size,
-                                static_cast<std::uint32_t>(b.usage)
-                            ),
+                        "Mesh material UBO allocation failed (allocator={:#x}, material_index={}, requested_size={}, usage={:#x})",
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        material_index,
+                        b.size,
+                        static_cast<std::uint32_t>(b.usage)),
                     std::source_location::current())) {
                 return false;
             }
@@ -1935,11 +1926,10 @@ namespace lfs::vis {
                     vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr),
                     "vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh device-local buffer allocation failed (allocator={:#x}, requested_size={}, usage={:#x})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                size,
-                                static_cast<std::uint32_t>(info.usage)
-                            ),
+                        "Mesh device-local buffer allocation failed (allocator={:#x}, requested_size={}, usage={:#x})",
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        size,
+                        static_cast<std::uint32_t>(info.usage)),
                     std::source_location::current())) {
                 return false;
             }
@@ -1962,12 +1952,11 @@ namespace lfs::vis {
                     vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr),
                     "vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr)",
                     lfs::rendering::formatVulkanDiagnostic(
-                                "Mesh staging-buffer allocation failed (allocator={:#x}, source={:#x}, requested_size={}, usage={:#x})",
-                                reinterpret_cast<std::uintptr_t>(allocator),
-                                reinterpret_cast<std::uintptr_t>(data),
-                                size,
-                                static_cast<std::uint32_t>(info.usage)
-                            ),
+                        "Mesh staging-buffer allocation failed (allocator={:#x}, source={:#x}, requested_size={}, usage={:#x})",
+                        reinterpret_cast<std::uintptr_t>(allocator),
+                        reinterpret_cast<std::uintptr_t>(data),
+                        size,
+                        static_cast<std::uint32_t>(info.usage)),
                     std::source_location::current())) {
                 return false;
             }

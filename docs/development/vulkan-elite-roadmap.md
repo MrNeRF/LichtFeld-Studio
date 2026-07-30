@@ -1,6 +1,6 @@
 # Vulkan elite roadmap
 
-Goal: take the Vulkan migration from "works, ~7.5/10" to **staff-level / industry-leading** for a 3DGS renderer. ImGui is greenlit for full removal.
+Goal: take the Vulkan migration from "works, ~7.5/10" to **staff-level / industry-leading** for a 3DGS renderer. Dear ImGui / ImPlot have been fully removed (PR #1395); RmlUi is the only GUI stack.
 
 Each phase has: scope, file-level deliverables, acceptance criteria, effort. Phases are ordered so each one unblocks the next.
 
@@ -59,45 +59,53 @@ Critical correctness + truth-in-docs. No new features.
 
 ---
 
-## Phase 1 — ImGui exorcism (5–7 days)
+## Phase 1 — legacy immediate-mode UI exorcism (5–7 days) — **done (PR #1395)**
 
-Rip out every ImGui touchpoint. RmlUi is the GUI; `rml_im_mode_panel_adapter` is the bridge.
+Rip out every Dear ImGui / ImPlot touchpoint. RmlUi is the GUI; `RmlImModeLayout` / `RmlImModePanelAdapter` is the Python im-mode bridge over retained RmlUi.
 
 ### 1.1 Delete the dead render path
 - `src/visualizer/gui/gui_manager.cpp`
-- Remove `ImGui::CreateContext()` (line ~2628), `ImGui_ImplSDL3_InitForVulkan` (~2669), `ImGui_ImplSDL3_NewFrame` (~3667), `ImGui::Render()` (~4112), `ImGui_ImplSDL3_Shutdown` (~3167), `ImGui::IsAnyItemActive()` reads, `imgui_internal.h` includes.
-- Replace `ImGui::GetMainViewport()` (line ~4104) with the SDL3 window/extent the surrounding code already has.
-- 74 call sites — most are state-flag reads, not real UI; mechanical pass.
-- **Accept**: app runs, modal overlays render, menu bar/context menus work. No `imgui*` symbols in `nm liblfs_visualizer.so`.
+- Remove the ImGui context, SDL/Vulkan ImGui backend lifecycle, frame render calls, active-item reads, and backend headers.
+- Replace main-viewport lookups with the SDL3 window/extent the surrounding code already has.
+- **Accept**: app runs, modal overlays render, menu bar/context menus work. No `imgui` / `implot` symbols in `nm` of linked libraries.
 
-### 1.2 Migrate Python plugin UI (the heavy one)
-- `src/python/lfs/py_ui.cpp` (5479 lines, **265 call sites**), `py_ui_menus.cpp`, `py_ui_theme.cpp`, `py_uilist.cpp`, `py_ui_panels.cpp`.
-- Target: `src/python/lfs/rml_im_mode_panel_adapter.{cpp,hpp}` already exposes the immediate-mode bridge over RmlUi. Audit its API parity gap vs ImGui's:
-  - `Begin/End`, `Text`, `Button`, `Checkbox`, `SliderFloat`, `InputText`, `ColorPicker`, `Image`, `BeginChild/EndChild`, `BeginPopup`, layout helpers (`SameLine`, `Separator`, columns/grid).
-- Where the adapter is missing a primitive, add it (it's a thin RmlUi factory in C++).
-- Bind `PyUILayout` and `PySubLayout` Python wrappers to the adapter instead of raw ImGui.
-- Keep the public Python API surface identical (`tests/python/test_*` must pass).
-- **Accept**: `./build/.../python3.12 -m pytest tests/python/ -v` passes (excluding pre-existing `test_icon_cache.py` GL-context segfault). Manual: load a sample plugin, verify panels render.
+### 1.2 Migrate Python plugin UI
+- `src/python/lfs/py_ui*.cpp`, `py_uilist.cpp`, `py_ui_panels.cpp` — public Python surface preserved.
+- Target: `RmlImModeLayout` / `RmlImModePanelAdapter` with slot-based reconciliation and equality-gated updates.
+- Viewport immediate drawing (`draw_window_*` / `draw_*`) restored via `ScreenOverlayRenderer` (viewport-scoped).
+- Chromaticity / CRF via retained Rml custom elements (`<chromaticity-diagram>` / `<crf-curve>`).
+- **Accept**: targeted native UI tests pass with the known headless
+  GL-context icon-cache case excluded; Python tests introduce no failures
+  beyond the documented baseline, with `test_tensor_pytorch_interop.py`
+  excluded. Manual: load a sample plugin and verify panels render.
 
-### 1.3 Migrate visualizer panels
-- `src/visualizer/gui/ui_widgets.{cpp,hpp}` (151 sites) — port helper widgets to RmlUi (most are just `ImGui::Text` / `Button` / `SliderFloat` wrappers; rename to RmlUi equivalents).
-- `src/visualizer/gui/panel_registry.cpp` (15 sites), `panel_layout.cpp` (3), `startup_overlay.cpp` (1) — small.
-- `src/visualizer/gui/pie_menu.hpp`, `gizmo_transform.hpp` — drop the `#include <imgui.h>` if unused after refactor; otherwise port their inline ImGui usage.
-- `src/visualizer/tools/{align_tool,selection_tool}.cpp`, `src/visualizer/input/input_controller.cpp`, `src/visualizer/sequencer/rml_sequencer_panel.cpp`, `src/visualizer/gui/windows/video_extractor_dialog.cpp`, `src/visualizer/gui/panels/windows_console_utils.cpp`, `src/visualizer/theme/theme.hpp` — most likely just stale includes, verify and delete.
-- **Accept**: `grep -rn "include.*imgui" src/` returns zero hits.
+### 1.3 Migrate visualizer panels / overlays
+- Shared widgets, panel host/layout, pie menu, gizmos, startup overlay, theme tokens — off ImGui types and draw lists.
+- Pie-menu icons via `IconCache` + `ScreenOverlayRenderer::addImage`.
+- Zep editor display via `ZepDisplay_Rml`.
+- **Accept**: mechanical greps below return zero hits.
 
 ### 1.4 vcpkg + CMake cleanup
-- `vcpkg.json`: remove `imgui` and `implot` entries.
-- Root + module `CMakeLists.txt`: remove any `imgui::imgui`, `implot::implot` link targets.
-- Drop `LFS_*IMGUI*` flags if any.
-- **Accept**: full clean build from cleared vcpkg cache; binary size reduction logged (~2 MB expected).
+- `vcpkg.json`: remove `imgui` and `implot` entries (and features).
+- Root + module `CMakeLists.txt`: remove `find_package(imgui|implot)` and `imgui::imgui` / `implot::implot` link targets.
+- **Accept**: full clean build from cleared vcpkg cache; binary size reduction logged.
 
 ### 1.5 Sanity
 - Re-run smoke test + Python tests.
-- `nm liblfs_visualizer.so | grep -i imgui` → empty.
-- `ldd build/LichtFeld-Studio | grep -iE 'imgui|imm|implot'` → empty.
+- Mechanical acceptance greps (real identifiers):
 
-**Phase 1 exit**: Single GUI stack (RmlUi), zero ImGui code/symbols, `~265+151+74+74 ≈ 564` ImGui call sites gone. Composite 8 → 8.5.
+```sh
+rg -n 'imgui|implot|ImGui|ImPlot' src/ CMakeLists.txt vcpkg.json \
+  src/**/CMakeLists.txt cmake/ tests/CMakeLists.txt
+# expect: empty
+
+nm -C build/LichtFeld-Studio build/liblfs_*.so \
+  build/src/python/lichtfeld*.so 2>/dev/null | rg -i 'imgui|implot'
+ldd build/LichtFeld-Studio 2>/dev/null | rg -i 'imgui|implot'
+# expect: empty
+```
+
+**Phase 1 exit**: Single GUI stack (RmlUi), zero ImGui/ImPlot code/deps/symbols. Composite 8 → 8.5.
 
 ---
 
@@ -279,10 +287,25 @@ Pick at most one based on user demand.
 - 0.6 `vulkan_result.hpp` + `vkResultToString` helper. 46 sites converted across `vulkan_context.cpp`, `vulkan_loader_probe.cpp`, `vksplat_viewport_renderer.cpp` (the two with VkResult sites in scope).
 - 0.7 `vulkan-rendering-pipeline.md` updated — `cudaStreamSynchronize` claim removed; per-frame timeline-semaphore handoff is documented as already in place.
 
-**Phase 1 — minimal scope, fully landed**
-- 1.1 `ImGui::Render()` replaced with `ImGui::EndFrame()` (no consumer existed; pure CPU waste). `ImGui::GetMainViewport()` modal site replaced with `panel_input.screen_*` already in scope.
-- 1.2 RmlUi-backed focus-state aggregators added (`wantsCaptureMouse / wantsCaptureKeyboard / wantsTextInput / anyItemActive`) over all live `Rml::Context`s using existing `rml_input::*` utilities + `Rml::Context::GetHoverElement / GetFocusElement`. All four `gui_manager.cpp` ImGui focus-state reads now OR with the RmlUi state. Camera/viewport input suppression now reflects the actual active GUI surface.
-- 1.3 Stale `<imgui.h>` include removed from `rml_sequencer_panel.cpp`. The 7 other audited files (`align_tool.cpp`, `selection_tool.cpp`, `input_controller.cpp`, `windows_console_utils.cpp`, `video_extractor_dialog.cpp`, `rml_python_panel_adapter.cpp`, `window_manager.cpp`) still use ImGui; full removal is a separate later project per scope.
+**Phase 1 — fully landed (PR #1395)**
+- ImGui/ImPlot fully removed: no vcpkg deps, no CMake links, no includes, no symbols.
+- Python plugin panels on `RmlImModeLayout` (slot-based reconciliation, equality-gated updates) via `RmlImModePanelAdapter`.
+- Viewport immediate drawing restored through `ScreenOverlayRenderer`; pie-menu icons via `IconCache` + `addImage`.
+- Floating-panel / color-picker shadows via RmlUi `box-shadow` theme tokens; unsupported interactive hook surfaces warn once instead of silent no-ops.
+- `ui.is_key_pressed` / `is_key_down` use SDL state. Presses are edge-triggered
+  per UI frame and do not emit repeats.
+- Live `RmlUILayout.path_input` browsing routes to the native folder/file
+  dialog. A non-empty title selects the custom-title overload; an empty title
+  keeps the native default. Legacy `UILayout.path_input` remains unsupported.
+- `RmlUILayout.split(factor)` honors its ratio. `grid_flow(columns,
+  even_columns, even_rows)` honors fixed/automatic column sizing and row
+  stretching.
+- Rml im-mode table rows retain logical identity across reorder/removal when
+  callers push a stable row id before `table_next_row()`; otherwise identity
+  is positional.
+- Chromaticity / CRF ship as retained Rml custom elements (`<chromaticity-diagram>` / `<crf-curve>`).
+- Zep editor renders via `ZepDisplay_Rml`.
+- Mechanical greps in §1.5 pass empty.
 
 **Phase 2 — fully landed**
 - 2.1 **Indirect dispatch + deferred readback in `vulkan`**. New tiny Slang shader `setup_dispatch_indirect.slang` reads `index_buffer_offset[num_splats-1]` on the GPU and writes a `VkDispatchIndirectCommand` for `compute_tile_ranges`. `compute_tile_ranges` now reads `num_isects` from `index_buffer_offset` directly via a new binding 2 (no more `uniforms.active_sh` dependency). The synchronous mid-frame `readElement` is gone; `executeCalculateIndexBufferOffset` records an async `vkCmdCopyBuffer` of the cumsum tail into a host-visible coherent + persistently-mapped buffer for the next frame to consume. `executeGenerateKeys` pre-fills `unsorted_keys` with the `0xFFFFFFFF` sentinel so the radix sort's tail (when capacity > actual num_indices) sorts to the end harmlessly. CPU-side high-water-mark + 2× safety factor sizes the sort buffers; first frame uses an `8 × num_splats` heuristic seed; `resetNumIndicesEstimate()` is called on model-identity change so a fresh model can't under-size the buffers. New `executeComputeIndirect` helper + new `INDIRECT_DISPATCH_READ` barrier mask. Net effect: the per-frame `vkQueueWaitIdle` previously baked into `readElement` → `HOST_GUARD` is gone.
@@ -320,20 +343,19 @@ The `LOG_TIMER("vksplat.render")` in `rendering_manager_vulkan.cpp` wraps the ra
 2. Phase 4 — descriptor buffer (`VK_EXT_descriptor_buffer`) + graphics pipeline library + push descriptor + mutable descriptor type.
 3. Phase 5 — Slang convergence (single math source for CUDA `gsplat_fwd` and Vulkan `vulkan`).
 4. Phase 6 — Vulkan-native backward; Vulkan-backend training (the moat).
-5. Full ImGui exorcism (`py_ui.cpp` → `rml_im_mode_panel_adapter`, theme `ImVec4` → `Color`, ui_widgets/panel_registry migration, ImPlot retirement). Estimated 6–10 weeks; out of scope this sprint per explicit decision.
 
 ## Sequencing notes
 
-- Phases 0 → 1 → 2 are the **must-land** sequence to claim staff-level. ~3 weeks total.
+- Phases 0 → 1 → 2 are the **must-land** sequence to claim staff-level. ~3 weeks total. **Phases 0–2 have landed.**
 - Phase 3 can run parallel to 2 (different files).
-- Phase 4 needs Phase 1 done (RmlUi is the main descriptor consumer left).
+- Phase 4 needs Phase 1 done (RmlUi is the main descriptor consumer left) — unblocked.
 - Phase 5 unblocks Phase 6; both can be deferred if priorities shift.
 - Phase 7 strictly optional.
 
 ## What "elite" means once this lands
 
 - Zero OpenGL surface area
-- Single GUI stack (RmlUi), zero ImGui CPU/binary cost
+- Single GUI stack (RmlUi), zero ImGui/ImPlot CPU/binary cost
 - Vulkan 1.3 + 6 opportunistic extensions actively used (descriptor buffer, graphics pipeline library, push descriptor, mutable descriptor type, present wait, low latency 2)
 - Cross-API timeline-semaphore handoff with no CPU stalls
 - Indirect-dispatch splat pipeline with no GPU→CPU readbacks

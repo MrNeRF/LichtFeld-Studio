@@ -14,6 +14,10 @@ This branch exposes a broad MCP surface for LichtFeld Studio. The goal of this s
 - Prefer targeted resources over code reading.
 - Fall back to source only when the resource and tool metadata still leave ambiguity.
 
+## Tool Metadata
+
+In `tools/list`, `annotations` contains only the standard MCP hints `readOnlyHint`, `destructiveHint`, and `idempotentHint`. LichtFeld-specific metadata lives under `_meta` with namespaced keys: `app.lichtfeld/category`, `app.lichtfeld/kind`, `app.lichtfeld/runtime`, `app.lichtfeld/thread_affinity`, `app.lichtfeld/long_running`, and `app.lichtfeld/user_visible`.
+
 ## First Resources To Read
 
 Read these first in most sessions:
@@ -39,17 +43,17 @@ Then narrow further:
 
 | Namespace | Use |
 | --- | --- |
-| `scene.*` | Load datasets, checkpoints, scene nodes, exports |
-| `training.*` | Training state, loss, and training control |
-| `runtime.*` | Normalized job and event tracking |
-| `ui.tool.*`, `ui.menu.*`, `ui.panel.*`, `ui.operator.*` | Drive the registered GUI surface |
-| `operator.*` | Introspect and invoke registered GUI operators, including modal flows |
-| `selection.*` | Screen-space Gaussian selection |
-| `transform.*` | Node transform inspection and edits |
-| `gaussians.*` | Raw Gaussian tensor reads and writes |
-| `history.*` | Shared undo/redo inspection, playback, and grouped transactions |
-| `editor.*` | Integrated Python console execution |
-| `camera.*`, `render.*`, `sequencer.*` | View state, captures, and timeline workflows |
+| `scene_*` | Load datasets, checkpoints, scene nodes, exports |
+| `training_*` | Training state, loss, and training control |
+| `runtime_*` | Normalized job and event tracking |
+| `ui_tool_*`, `ui_menu_*`, `ui_panel_*`, `ui_operator_*` | Drive the registered GUI surface |
+| `operator_*` | Introspect and invoke registered GUI operators, including modal flows |
+| `selection_*` | Screen-space Gaussian selection |
+| `transform_*` | Node transform inspection and edits |
+| `gaussians_*` | Raw Gaussian tensor reads and writes |
+| `history_*` | Shared undo/redo inspection, playback, and grouped transactions |
+| `editor_*` | Integrated Python console execution |
+| `camera_*`, `render_*`, `sequencer_*` | View state, captures, and timeline workflows |
 
 ## Runtime Model
 
@@ -64,11 +68,11 @@ Then narrow further:
 
 When a tool can block or keep running, use the runtime APIs instead of sleeping:
 
-- `runtime.job.list`
-- `runtime.job.describe`
-- `runtime.job.wait`
-- `runtime.job.control`
-- `runtime.events.tail`
+- `runtime_job_list`
+- `runtime_job_describe`
+- `runtime_job_wait`
+- `runtime_job_control`
+- `runtime_events_tail`
 
 ## Recommended Reading Order
 
@@ -80,5 +84,5 @@ When a tool can block or keep running, use the runtime APIs instead of sleeping:
 
 - Do not guess operator ids or modal event shapes.
 - Do not scan the entire source tree before checking `resources/list`, `tools/list`, and the bootstrap resources.
-- Do not poll blindly when `runtime.job.wait` or `runtime.events.tail` can tell you what changed.
+- Do not poll blindly when `runtime_job_wait` or `runtime_events_tail` can tell you what changed.
 - Do not assume exports are asynchronous in the current GUI implementation.

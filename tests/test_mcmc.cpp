@@ -3,7 +3,9 @@
 
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mcmc.hpp"
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <vector>
 
@@ -102,6 +104,71 @@ TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {
     for (int i = 0; i < 10 * 3; ++i) {
         EXPECT_FLOAT_EQ(grad[i], 0.0f);
     }
+}
+
+TEST(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
+    auto splat_data = create_test_splat_data(8);
+    MCMC strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mcmc_defaults();
+    opt_params.iterations = 100;
+    opt_params.max_cap = 16;
+    strategy.initialize(opt_params);
+    strategy._error_score_max = Tensor::ones({8}, Device::CUDA);
+
+    auto crop_mask = make_mask(8, 1);
+    strategy.get_optimizer().set_crop_damping_mask(crop_mask);
+    strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
+    const auto damped_weights = strategy.get_sampling_weights();
+    const auto damped_cpu = damped_weights.cpu().to_vector();
+    ASSERT_EQ(damped_cpu.size(), 8u);
+    EXPECT_FLOAT_EQ(damped_cpu[0], 0.0f);
+    EXPECT_GT(damped_cpu[1], 0.0f);
+
+    const auto samples = Tensor::multinomial(damped_weights, 256, true).to_vector_int64();
+    EXPECT_TRUE(std::none_of(samples.begin(), samples.end(), [](const int64_t index) {
+        return index == 0;
+    }));
+
+    strategy.get_optimizer().set_cropbox_lr_scale(1.0f);
+    const auto unit_scale_weights = strategy.get_sampling_weights().cpu().to_vector();
+    strategy.get_optimizer().set_crop_damping_mask({});
+    const auto unmasked_weights = strategy.get_sampling_weights().cpu().to_vector();
+    EXPECT_EQ(unit_scale_weights, unmasked_weights);
+}
+
+TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
+    auto splat_data = create_test_splat_data(8);
+    ImprovedGSPlus strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::igs_plus_defaults();
+    opt_params.iterations = 100;
+    opt_params.start_refine = 0;
+    opt_params.stop_refine = 80;
+    opt_params.refine_every = 10;
+    opt_params.max_cap = 16;
+    strategy.initialize(opt_params);
+
+    auto crop_mask = make_mask(8, 1);
+    strategy.get_optimizer().set_crop_damping_mask(crop_mask);
+    strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
+    const auto scores = Tensor::ones({8}, Device::CUDA);
+    const auto damped_scores = strategy.damp_densification_scores(scores);
+    const auto damped_cpu = damped_scores.cpu().to_vector();
+    ASSERT_EQ(damped_cpu.size(), 8u);
+    EXPECT_FLOAT_EQ(damped_cpu[0], 0.0f);
+    EXPECT_GT(damped_cpu[1], 0.0f);
+
+    const auto samples = Tensor::multinomial(damped_scores, 256, true).to_vector_int64();
+    EXPECT_TRUE(std::none_of(samples.begin(), samples.end(), [](const int64_t index) {
+        return index == 0;
+    }));
+
+    strategy.get_optimizer().set_cropbox_lr_scale(1.0f);
+    const auto unit_scale_scores = strategy.damp_densification_scores(scores).cpu().to_vector();
+    strategy.get_optimizer().set_crop_damping_mask({});
+    const auto unmasked_scores = strategy.damp_densification_scores(scores).cpu().to_vector();
+    EXPECT_EQ(unit_scale_scores, unmasked_scores);
 }
 
 TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {

@@ -322,6 +322,11 @@ namespace lfs::training {
         }
     }
 
+    lfs::core::Tensor ImprovedGSPlus::damp_densification_scores(
+        const lfs::core::Tensor& scores) const {
+        return apply_crop_damping_to_scores(*_optimizer, scores);
+    }
+
     void ImprovedGSPlus::densify_with_score(const lfs::core::Tensor& edge_scores, const lfs::core::Tensor& error_scores, const int64_t budget) {
         const int64_t current_size = static_cast<int64_t>(_splat_data->size());
         const int64_t curr_points = static_cast<int64_t>(active_count());
@@ -348,6 +353,7 @@ namespace lfs::training {
 
         const auto normalized_error = normalized_by_positive_median(error_scores);
         const auto normalized_edge = normalized_by_positive_median(edge_scores);
+        const auto candidate_error = damp_densification_scores(normalized_error);
         const auto device = _splat_data->means().device();
 
         auto active_mask = lfs::core::Tensor::zeros_bool({static_cast<size_t>(_splat_data->size())}, device);
@@ -356,19 +362,21 @@ namespace lfs::training {
 
         lfs::core::Tensor candidate_mask = active_mask;
         if (candidate_budget < total_active) {
-            const auto active_error = normalized_error.index_select(0, active_indices);
+            const auto active_error = candidate_error.index_select(0, active_indices);
             auto [sorted_error, _] = active_error.sort(0, true);
             const float threshold = sorted_error[candidate_budget - 1].item_as<float>();
-            candidate_mask = active_mask.logical_and(normalized_error >= threshold);
+            candidate_mask = active_mask.logical_and(candidate_error >= threshold);
         }
 
         auto sampling_scores = normalized_error * (normalized_edge * EDGE_SCORE_WEIGHT + 1.0f);
         sampling_scores = sampling_scores.masked_fill(~candidate_mask, 0.0f);
 
-        int64_t selectable = static_cast<int64_t>(sampling_scores.count_nonzero());
+        int64_t selectable = static_cast<int64_t>(
+            damp_densification_scores(sampling_scores).count_nonzero());
         if (selectable < budget_for_alloc) {
             auto edge_fallback = normalized_edge.masked_fill(~active_mask, 0.0f);
-            selectable = static_cast<int64_t>(edge_fallback.count_nonzero());
+            selectable = static_cast<int64_t>(
+                damp_densification_scores(edge_fallback).count_nonzero());
             if (selectable > 0) {
                 sampling_scores = std::move(edge_fallback);
             } else {
@@ -376,7 +384,8 @@ namespace lfs::training {
                 auto active_weight_vals = lfs::core::Tensor::ones({static_cast<size_t>(active_indices.numel())}, device);
                 active_weights.index_put_(active_indices, active_weight_vals);
                 sampling_scores = std::move(active_weights);
-                selectable = total_active;
+                selectable = static_cast<int64_t>(
+                    damp_densification_scores(sampling_scores).count_nonzero());
             }
         }
 
@@ -399,7 +408,9 @@ namespace lfs::training {
         _pending_failure_snapshot.sampled_scale_max = 0.0f;
         _pending_failure_snapshot.sampled_scale_exp_max = 0.0f;
 
-        LAS_densify(sampling_scores.clamp_min(1e-12f), std::min<int64_t>(budget_for_alloc, selectable));
+        LAS_densify(
+            damp_densification_scores(sampling_scores.clamp_min(1e-12f)),
+            std::min<int64_t>(budget_for_alloc, selectable));
     }
 
     void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc) {

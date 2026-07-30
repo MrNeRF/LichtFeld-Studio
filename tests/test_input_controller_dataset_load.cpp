@@ -16,7 +16,6 @@
 
 #include <filesystem>
 #include <gtest/gtest.h>
-#include <imgui.h>
 
 namespace lfs::vis {
 
@@ -27,14 +26,9 @@ namespace lfs::vis {
                 lfs::event::EventBridge::instance().clear_all();
                 services().clear();
                 gui::guiFocusState().reset();
-
-                IMGUI_CHECKVERSION();
-                ImGui::CreateContext();
             }
 
             void TearDown() override {
-                ImGui::DestroyContext();
-
                 gui::guiFocusState().reset();
                 services().clear();
                 lfs::event::EventBridge::instance().clear_all();

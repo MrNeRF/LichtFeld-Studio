@@ -80,6 +80,7 @@ message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tes
 set(TEST_FILES
     test_assert_hardening.cpp
     test_cuda_error.cpp
+    test_exportable_storage.cpp
     test_cuda_error_typed.cpp
     test_cuda_launch_check.cpp
     test_tensor_launch_check.cpp
@@ -119,6 +120,7 @@ set(TEST_FILES
     test_mrnf_strategy.cpp
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
+    test_training_cropbox_mask.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
@@ -137,6 +139,8 @@ set(TEST_FILES
     test_densification_tensor_ops.cpp
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
+    test_roi_weight_map.cpp
+    test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
     test_component_config_serialization.cpp
     test_atomic_output.cpp
@@ -149,12 +153,15 @@ set(TEST_FILES
     test_logger.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
+    test_mcp_training_state.cpp
     test_mcp_app_utils.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
     test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
+    test_video_frame_extractor_naming.cpp
+    test_video_hdr_logic.cpp
     test_visualizer_post_work.cpp
     test_panel_registry_animation_demand.cpp
     test_panel_layout_render_demand.cpp
@@ -176,6 +183,8 @@ set(TEST_FILES
     test_gradient_accumulation.cpp
     test_image_resize_parallel.cpp
     test_tensor_slicing_safety.cpp
+    test_tensor_deferred_d1_copy_registry.cpp
+    test_tensor_deferred_d3_pin_operands.cpp
     test_tensor_lazy_ir.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
@@ -194,6 +203,7 @@ set(TEST_FILES
     test_input_controller_focus.cpp
     test_input_controller_dataset_load.cpp
     test_selection_service_interactions.cpp
+    test_scene_graph_identity.cpp
     test_undo_history.cpp
     test_selection_command_dispatch.cpp
     test_selection_operator_modal.cpp
@@ -221,6 +231,7 @@ set(TEST_FILES
     test_export_env_composite.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
+    test_viewport_interop_decision.cpp
     test_mesh_data.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
@@ -229,14 +240,18 @@ set(TEST_FILES
     test_colmap_binary_error_taxonomy.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
+    test_rml_im_mode_layout.cpp
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp
+    test_tensor_d4_from_blob_stream.cpp
+    tensor_hardening_cuda_utils.cu
     test_cuda_event_pool.cpp
     test_tensor_multistream.cpp
     test_tensor_discovery.cpp
     test_tensor_discovery_fuzz.cpp
     test_mcmc_multinomial.cpp
     test_arena_metrics_contention.cpp
+    test_memory_arena_shutdown.cpp
     test_tensor_memory_planner.cpp
     test_vram_profiler_metrics.cpp
     test_memory_pressure.cpp
@@ -264,9 +279,11 @@ list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 # instead of silently dropping coverage from the executable.
 set(TEST_SOURCES test_main.cpp ${TEST_FILES})
 
-# PyModalRegistry data layer (no ImGui) for lock-order regression tests.
+# PyModalRegistry and its native-modal dispatch path for regression tests.
 list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_modal_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_ui_modals.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
 )
@@ -335,8 +352,6 @@ target_link_libraries(lichtfeld_tests PRIVATE
     # External libraries
     GTest::gtest
     nanobind-static
-    imgui::imgui
-    implot::implot
     ${TORCH_LIBRARIES}
     OpenImageIO::OpenImageIO
     OpenMeshCore

@@ -41,6 +41,9 @@ namespace lfs::vis::gui {
         void setInputClipY(float y_min, float y_max) override { host_.setInputClipY(y_min, y_max); }
         void setInput(const PanelInputState* input) override { host_.setInput(input); }
         void setForcedHeight(float h) override { host_.setForcedHeight(h); }
+        void setPanelSpace(PanelSpace space) override {
+            host_.setFloating(space == PanelSpace::Floating);
+        }
         bool wantsKeyboard() const override { return host_.wantsKeyboard(); }
         bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
         void reloadRmlResources() override;

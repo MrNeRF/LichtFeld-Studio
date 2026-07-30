@@ -271,6 +271,8 @@ namespace lfs::vis::gui {
             }
         }
         cjk_fonts_loaded_ = any_loaded;
+        if (any_loaded)
+            Rml::ReleaseFontResources();
     }
 
     void RmlUIManager::shutdown() {
@@ -363,6 +365,13 @@ namespace lfs::vis::gui {
         auto it = contexts_.find(name);
         if (it != contexts_.end()) {
             Rml::Context* const context = it->second;
+            auto erase_context_commands = [context](std::vector<VulkanContextCommand>& queue) {
+                std::erase_if(queue, [context](const VulkanContextCommand& command) {
+                    return command.context == context;
+                });
+            };
+            erase_context_commands(vulkan_queue_);
+            erase_context_commands(vulkan_foreground_queue_);
             if (system_interface_)
                 system_interface_->releaseContext(context);
             if (auto fn = lfs::python::get_rml_context_destroy_handler())

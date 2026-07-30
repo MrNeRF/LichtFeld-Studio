@@ -200,6 +200,7 @@ namespace lfs::core {
 
         // GPU path: Output[C_out, S] = Weight[C_out, C_in] @ Input[C_in, S]
         if (device_ == Device::CUDA && N == 1) {
+            pin_operands({&weight_cont, &input_cont});
             auto output = empty({N, C_out, H, W}, Device::CUDA, dtype_);
 
             tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
@@ -218,6 +219,7 @@ namespace lfs::core {
 
         // Batched GPU path for N > 1: process each batch
         if (device_ == Device::CUDA) {
+            pin_operands({&weight_cont, &input_cont});
             auto output = empty({N, C_out, H, W}, Device::CUDA, dtype_);
 
             for (size_t n = 0; n < N; ++n) {
@@ -408,6 +410,7 @@ namespace lfs::core {
 
         // GPU path: Output[batch, out] = Input[batch, in] @ Weight^T[in, out]
         if (device_ == Device::CUDA) {
+            pin_operands({&input_cont, &weight_cont});
             auto output = empty({batch_size, out_features}, Device::CUDA, dtype_);
 
             tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
@@ -482,6 +485,7 @@ namespace lfs::core {
         const Tensor& bias_cont = bias.contiguous_read(bias_materialized);
 
         if (device_ == Device::CUDA && N == 1) {
+            pin_operands({&weight_cont, &input_cont, &bias_cont});
             auto output = empty({N, C_out, H, W}, Device::CUDA, dtype_);
 
             tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
@@ -535,6 +539,7 @@ namespace lfs::core {
         const Tensor& bias_cont = bias.contiguous_read(bias_materialized);
 
         if (device_ == Device::CUDA) {
+            pin_operands({&input_cont, &weight_cont, &bias_cont});
             auto output = empty({batch_size, out_features}, Device::CUDA, dtype_);
 
             tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
@@ -626,6 +631,7 @@ namespace lfs::core {
         const Tensor& weight_cont = weight.contiguous_read(weight_materialized);
         const Tensor& bias_cont = bias.contiguous_read(bias_materialized);
 
+        pin_operands({&weight_cont, &input_cont});
         tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
                                  output.ptr<float>(), C_out, S, C_in, stream());
 
@@ -648,6 +654,7 @@ namespace lfs::core {
                                    device_name(device_), shape_.str()));
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
+        pin_operands({&input_cont, &output});
         tensor_ops::launch_relu(input_cont.ptr<float>(), output.ptr<float>(),
                                 static_cast<int>(numel()), stream());
     }
@@ -720,11 +727,13 @@ namespace lfs::core {
         const size_t output_size = C_out * S;
         if (output_size >= 500000) {
             // Large outputs: use fused kernel to save memory bandwidth
+            pin_operands({&weight_cont, &input_cont, &bias_cont});
             tensor_ops::launch_sgemm_bias_relu(weight_cont.ptr<float>(), input_cont.ptr<float>(),
                                                bias_cont.ptr<float>(), output.ptr<float>(),
                                                C_out, S, C_in, stream());
         } else {
             // Small outputs: separate kernels have less overhead
+            pin_operands({&weight_cont, &input_cont, &bias_cont});
             tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
                                      output.ptr<float>(), C_out, S, C_in, stream());
             const int total = static_cast<int>(N * C_out * H * W);
@@ -778,6 +787,7 @@ namespace lfs::core {
                                    output.shape().str(), N, C, H_out, W_out));
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
+        pin_operands({&input_cont, &output});
         tensor_ops::launch_max_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
                                       N, C, H_in, W_in, H_out, W_out,
                                       kernel_size, stride, padding, stream());
@@ -816,6 +826,7 @@ namespace lfs::core {
                                    output.shape().str(), N, C, output_h, output_w));
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
+        pin_operands({&input_cont, &output});
         tensor_ops::launch_adaptive_avg_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
                                                N, C, H_in, W_in, output_h, output_w, stream());
     }
@@ -883,6 +894,7 @@ namespace lfs::core {
                                       ? &bias.contiguous_read(bias_materialized)
                                       : &bias;
 
+        pin_operands({&input_cont, &weight_cont});
         tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
                                     output.ptr<float>(), batch_size, out_features, in_features,
                                     stream());
@@ -962,6 +974,7 @@ namespace lfs::core {
                                       ? &bias.contiguous_read(bias_materialized)
                                       : &bias;
 
+        pin_operands({&input_cont, &weight_cont});
         tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
                                     output.ptr<float>(), batch_size, out_features, in_features,
                                     stream());

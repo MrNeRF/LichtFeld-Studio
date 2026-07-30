@@ -6,22 +6,22 @@
 </head>
 <body template="floating-window" data-model="watch_dirs_dialog">
 
-  <span class="impdlg-subtitle text-muted">Auto-import assets from these folders. New files appear live.</span>
+  <span class="impdlg-subtitle text-muted">{{subtitle}}</span>
   <div class="separator"></div>
 
   <div class="setting-row">
-      <button class="btn btn--secondary" data-event-click="on_browse_add" data-attrif-disabled="scan_active">+ Add Directory</button>
+      <button class="btn btn--secondary" data-event-click="on_browse_add" data-attrif-disabled="scan_active">{{add_directory_label}}</button>
   </div>
   <div class="separator"></div>
 
   <div data-for="dir : watch_dirs_list">
       <div class="setting-row">
           <span class="impdlg-value">{{dir.path}}</span>
-          <button class="btn btn--secondary" data-event-click="on_remove_dir(it_index)" data-attrif-disabled="scan_active">Remove</button>
+          <button class="btn btn--secondary" data-event-click="on_remove_dir(it_index)" data-attrif-disabled="scan_active">{{remove_label}}</button>
       </div>
   </div>
 
-  <span class="status-text status-muted" data-if="no_watch_dirs">No watched directories.</span>
+  <span class="status-text status-muted" data-if="no_watch_dirs">{{no_watch_dirs_label}}</span>
 
   <div class="watchdirs-progress" data-if="scan_status_visible">
       <div class="watchdirs-progress-wrap">
@@ -38,7 +38,7 @@
   </div>
 
   <div class="impdlg-buttons">
-      <button type="button" class="btn btn--secondary impdlg-action-btn" data-event-click="on_cancel">Cancel</button>
+      <button type="button" class="btn btn--secondary impdlg-action-btn" data-event-click="on_cancel">{{cancel_label}}</button>
       <button type="button" class="btn btn--primary impdlg-action-btn" data-event-click="on_save"
               data-attrif-disabled="!scan_save_enabled">{{scan_save_label}}</button>
   </div>

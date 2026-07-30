@@ -202,6 +202,7 @@ namespace lfs::training::kernels {
             }
 
             loss_sum = lfs::core::warp_ops::block_reduce_sum(loss_sum);
+            __syncthreads();
             mask_sum = lfs::core::warp_ops::block_reduce_sum(mask_sum);
             if (threadIdx.x == 0) {
                 const float normalized_mask_sum = mask_sum * static_cast<float>(C) + SSIM_EPSILON;

@@ -111,6 +111,8 @@ namespace lfs::mcp {
         McpToolMetadata metadata;
     };
 
+    LFS_MCP_API std::string normalize_tool_name(std::string name);
+
     struct McpResource {
         std::string uri;
         std::string name;

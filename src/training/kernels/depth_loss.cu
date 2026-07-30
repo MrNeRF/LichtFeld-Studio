@@ -63,6 +63,17 @@ namespace lfs::training::kernels {
                    isfinite(alpha);
         }
 
+        template <bool Weighted>
+        __device__ __forceinline__ float load_pixel_weight(
+            const float* __restrict__ pixel_weight,
+            const size_t idx) {
+            if constexpr (Weighted) {
+                const float value = pixel_weight[idx];
+                return isfinite(value) && value > 0.0f ? value : 0.0f;
+            }
+            return 1.0f;
+        }
+
         // Sequential block reductions share warp_reduce's static shared buffer;
         // the leading __syncthreads keeps consecutive reductions from racing.
         template <int N>
@@ -98,10 +109,12 @@ namespace lfs::training::kernels {
             }
         }
 
+        template <bool Weighted>
         __global__ void depth_loss_stats_primary_kernel(
             const float* __restrict__ rendered_depth_accum,
             const float* __restrict__ rendered_alpha_accum,
             const float* __restrict__ target_depth,
+            const float* __restrict__ pixel_weight,
             double* __restrict__ block_partials,
             const size_t num_pixels,
             const int num_blocks) {
@@ -116,7 +129,11 @@ namespace lfs::training::kernels {
                 if (!pixel_active(t, d_raw, a)) {
                     continue;
                 }
-                const double aw = a;
+                const float w = load_pixel_weight<Weighted>(pixel_weight, idx);
+                if (w == 0.0f) {
+                    continue;
+                }
+                const double aw = static_cast<double>(a) * w;
                 const double e = fmaxf(d_raw, 0.0f) / a;
                 sums[0] += aw;
                 sums[1] += aw * e;
@@ -149,10 +166,12 @@ namespace lfs::training::kernels {
             finals[slots::kMeanExpectedDepth] = static_cast<float>(mean_e);
         }
 
+        template <bool Weighted>
         __global__ void depth_loss_stats_inverse_kernel(
             const float* __restrict__ rendered_depth_accum,
             const float* __restrict__ rendered_alpha_accum,
             const float* __restrict__ target_depth,
+            const float* __restrict__ pixel_weight,
             const float* __restrict__ finals,
             double* __restrict__ block_partials,
             const size_t num_pixels,
@@ -173,9 +192,13 @@ namespace lfs::training::kernels {
                     if (!pixel_active(t, d_raw, a)) {
                         continue;
                     }
+                    const float w = load_pixel_weight<Weighted>(pixel_weight, idx);
+                    if (w == 0.0f) {
+                        continue;
+                    }
                     const float e = fmaxf(d_raw, 0.0f) / a;
                     const double p = 1.0f / (e + floor_f);
-                    const double aw = a;
+                    const double aw = static_cast<double>(a) * w;
                     sums[0] += aw * p;
                     sums[1] += aw * p * p;
                 }
@@ -228,17 +251,20 @@ namespace lfs::training::kernels {
         struct PixelSample {
             bool ok;
             float alpha;
+            float weighted_alpha;
             float e;
             float p;
             float d;
             float delta;
         };
 
+        template <bool Weighted>
         __device__ __forceinline__ PixelSample load_sample(
             const size_t idx,
             const float* __restrict__ rendered_depth_accum,
             const float* __restrict__ rendered_alpha_accum,
             const float* __restrict__ target_depth,
+            const float* __restrict__ pixel_weight,
             const int model,
             const float a,
             const float b,
@@ -253,7 +279,12 @@ namespace lfs::training::kernels {
             if (!pixel_active(t, d_raw, alpha)) {
                 return s;
             }
+            const float w = load_pixel_weight<Weighted>(pixel_weight, idx);
+            if (w == 0.0f) {
+                return s;
+            }
             s.alpha = alpha;
+            s.weighted_alpha = alpha * w;
             s.e = fmaxf(d_raw, 0.0f) / alpha;
             s.p = 1.0f / (s.e + floor_f);
             const float fit = a * t + b;
@@ -274,10 +305,12 @@ namespace lfs::training::kernels {
             return s;
         }
 
+        template <bool Weighted>
         __global__ void depth_loss_grad_kernel(
             const float* __restrict__ rendered_depth_accum,
             const float* __restrict__ rendered_alpha_accum,
             const float* __restrict__ target_depth,
+            const float* __restrict__ pixel_weight,
             float* __restrict__ grad_depth,
             float* __restrict__ grad_alpha,
             const float* __restrict__ finals,
@@ -313,8 +346,8 @@ namespace lfs::training::kernels {
                 }
                 const int x = static_cast<int>(idx % width);
                 const int y = static_cast<int>(idx / width);
-                const PixelSample c = load_sample(
-                    idx, rendered_depth_accum, rendered_alpha_accum, target_depth,
+                const PixelSample c = load_sample<Weighted>(
+                    idx, rendered_depth_accum, rendered_alpha_accum, target_depth, pixel_weight,
                     model, a, b, floor_f, p_max, half_step);
 
                 float gp = 0.0f;
@@ -322,64 +355,64 @@ namespace lfs::training::kernels {
                     const float x_r =
                         deadband_signed_residual(c.p - c.d, c.delta) * inv_scaled_sigma;
                     if (x_r != 0.0f) {
-                        sums[0] += static_cast<double>(c.alpha) * robust_rho(x_r);
-                        gp += c.alpha * robust_psi(x_r) * inv_scaled_sigma;
+                        sums[0] += static_cast<double>(c.weighted_alpha) * robust_rho(x_r);
+                        gp += c.weighted_alpha * robust_psi(x_r) * inv_scaled_sigma;
                     }
 
                     if (x + 1 < width) {
-                        const PixelSample n = load_sample(
-                            idx + 1, rendered_depth_accum, rendered_alpha_accum, target_depth,
+                        const PixelSample n = load_sample<Weighted>(
+                            idx + 1, rendered_depth_accum, rendered_alpha_accum, target_depth, pixel_weight,
                             model, a, b, floor_f, p_max, half_step);
                         if (n.ok) {
                             const float h = (n.p - c.p) - (n.d - c.d);
                             const float x_h =
                                 deadband_signed_residual(h, c.delta + n.delta) * inv_scaled_sigma;
                             if (x_h != 0.0f) {
-                                const float w2 = fminf(c.alpha, n.alpha);
+                                const float w2 = fminf(c.weighted_alpha, n.weighted_alpha);
                                 sums[1] += static_cast<double>(w2) * robust_rho(x_h);
                                 gp -= lambda_grad * w2 * robust_psi(x_h) * inv_scaled_sigma;
                             }
                         }
                     }
                     if (y + 1 < height) {
-                        const PixelSample n = load_sample(
-                            idx + width, rendered_depth_accum, rendered_alpha_accum, target_depth,
+                        const PixelSample n = load_sample<Weighted>(
+                            idx + width, rendered_depth_accum, rendered_alpha_accum, target_depth, pixel_weight,
                             model, a, b, floor_f, p_max, half_step);
                         if (n.ok) {
                             const float v = (n.p - c.p) - (n.d - c.d);
                             const float x_v =
                                 deadband_signed_residual(v, c.delta + n.delta) * inv_scaled_sigma;
                             if (x_v != 0.0f) {
-                                const float w2 = fminf(c.alpha, n.alpha);
+                                const float w2 = fminf(c.weighted_alpha, n.weighted_alpha);
                                 sums[1] += static_cast<double>(w2) * robust_rho(x_v);
                                 gp -= lambda_grad * w2 * robust_psi(x_v) * inv_scaled_sigma;
                             }
                         }
                     }
                     if (x > 0) {
-                        const PixelSample n = load_sample(
-                            idx - 1, rendered_depth_accum, rendered_alpha_accum, target_depth,
+                        const PixelSample n = load_sample<Weighted>(
+                            idx - 1, rendered_depth_accum, rendered_alpha_accum, target_depth, pixel_weight,
                             model, a, b, floor_f, p_max, half_step);
                         if (n.ok) {
                             const float h = (c.p - n.p) - (c.d - n.d);
                             const float x_h =
                                 deadband_signed_residual(h, c.delta + n.delta) * inv_scaled_sigma;
                             if (x_h != 0.0f) {
-                                const float w2 = fminf(n.alpha, c.alpha);
+                                const float w2 = fminf(n.weighted_alpha, c.weighted_alpha);
                                 gp += lambda_grad * w2 * robust_psi(x_h) * inv_scaled_sigma;
                             }
                         }
                     }
                     if (y > 0) {
-                        const PixelSample n = load_sample(
-                            idx - width, rendered_depth_accum, rendered_alpha_accum, target_depth,
+                        const PixelSample n = load_sample<Weighted>(
+                            idx - width, rendered_depth_accum, rendered_alpha_accum, target_depth, pixel_weight,
                             model, a, b, floor_f, p_max, half_step);
                         if (n.ok) {
                             const float v = (c.p - n.p) - (c.d - n.d);
                             const float x_v =
                                 deadband_signed_residual(v, c.delta + n.delta) * inv_scaled_sigma;
                             if (x_v != 0.0f) {
-                                const float w2 = fminf(n.alpha, c.alpha);
+                                const float w2 = fminf(n.weighted_alpha, c.weighted_alpha);
                                 gp += lambda_grad * w2 * robust_psi(x_v) * inv_scaled_sigma;
                             }
                         }
@@ -810,6 +843,91 @@ namespace lfs::training::kernels {
             prior, width, height, near_plane, aabb_lo, aabb_hi, stream));
     }
 
+    namespace {
+        template <bool Weighted>
+        void launch_depth_loss_impl(
+            const float* rendered_depth_accum,
+            const float* rendered_alpha_accum,
+            const float* target_depth,
+            float* grad_depth,
+            float* grad_alpha,
+            float* loss_out,
+            float* partial_sums,
+            const int width,
+            const int height,
+            const float weight,
+            const float gradient_term_weight,
+            const float prior_quantization_step,
+            const DepthAnchor* anchor,
+            const float* pixel_weight,
+            const cudaStream_t stream) {
+            const size_t num_pixels = static_cast<size_t>(width) * height;
+            const int num_blocks = static_cast<int>(depth_loss_block_count(num_pixels));
+            float* finals = partial_sums;
+            double* block_partials = reinterpret_cast<double*>(partial_sums + slots::kSlotCount);
+            const bool use_anchor = anchor != nullptr && anchor->valid;
+
+            depth_loss_stats_primary_kernel<Weighted><<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+                rendered_depth_accum,
+                rendered_alpha_accum,
+                target_depth,
+                pixel_weight,
+                block_partials,
+                num_pixels,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.stats_primary");
+            depth_loss_finalize_primary_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+                block_partials,
+                finals,
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.finalize_primary");
+            depth_loss_stats_inverse_kernel<Weighted><<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+                rendered_depth_accum,
+                rendered_alpha_accum,
+                target_depth,
+                pixel_weight,
+                finals,
+                block_partials,
+                num_pixels,
+                num_blocks,
+                use_anchor ? anchor->floor : 0.0f);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.stats_inverse");
+            depth_loss_finalize_alignment_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+                block_partials,
+                finals,
+                num_blocks,
+                use_anchor ? anchor->model : 0,
+                use_anchor ? anchor->scale : 0.0f,
+                use_anchor ? anchor->shift : 0.0f,
+                use_anchor ? anchor->floor : 0.0f);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.finalize_alignment");
+            depth_loss_grad_kernel<Weighted><<<num_blocks, kThreadsPerBlock, 0, stream>>>(
+                rendered_depth_accum,
+                rendered_alpha_accum,
+                target_depth,
+                pixel_weight,
+                grad_depth,
+                grad_alpha,
+                finals,
+                block_partials,
+                width,
+                height,
+                weight,
+                gradient_term_weight,
+                fmaxf(prior_quantization_step, 0.0f),
+                num_blocks);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.grad");
+            depth_loss_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
+                block_partials,
+                finals,
+                loss_out,
+                num_blocks,
+                weight,
+                gradient_term_weight);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.finalize_loss");
+        }
+    } // namespace
+
     void launch_depth_loss(
         const float* rendered_depth_accum,
         const float* rendered_alpha_accum,
@@ -824,70 +942,44 @@ namespace lfs::training::kernels {
         const float gradient_term_weight,
         const float prior_quantization_step,
         const DepthAnchor* anchor,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* pixel_weight) {
         stream = resolve_stream(stream);
-
-        const size_t num_pixels = static_cast<size_t>(width) * height;
-        const int num_blocks = static_cast<int>(depth_loss_block_count(num_pixels));
-        float* finals = partial_sums;
-        double* block_partials = reinterpret_cast<double*>(partial_sums + slots::kSlotCount);
-        const bool use_anchor = anchor != nullptr && anchor->valid;
-
-        depth_loss_stats_primary_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-            rendered_depth_accum,
-            rendered_alpha_accum,
-            target_depth,
-            block_partials,
-            num_pixels,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.stats_primary");
-        depth_loss_finalize_primary_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
-            block_partials,
-            finals,
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.finalize_primary");
-        depth_loss_stats_inverse_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-            rendered_depth_accum,
-            rendered_alpha_accum,
-            target_depth,
-            finals,
-            block_partials,
-            num_pixels,
-            num_blocks,
-            use_anchor ? anchor->floor : 0.0f);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.stats_inverse");
-        depth_loss_finalize_alignment_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
-            block_partials,
-            finals,
-            num_blocks,
-            use_anchor ? anchor->model : 0,
-            use_anchor ? anchor->scale : 0.0f,
-            use_anchor ? anchor->shift : 0.0f,
-            use_anchor ? anchor->floor : 0.0f);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.finalize_alignment");
-        depth_loss_grad_kernel<<<num_blocks, kThreadsPerBlock, 0, stream>>>(
-            rendered_depth_accum,
-            rendered_alpha_accum,
-            target_depth,
-            grad_depth,
-            grad_alpha,
-            finals,
-            block_partials,
-            width,
-            height,
-            weight,
-            gradient_term_weight,
-            fmaxf(prior_quantization_step, 0.0f),
-            num_blocks);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.grad");
-        depth_loss_finalize_loss_kernel<<<1, kThreadsPerBlock, 0, stream>>>(
-            block_partials,
-            finals,
-            loss_out,
-            num_blocks,
-            weight,
-            gradient_term_weight);
-        LFS_CUDA_LAUNCH_CHECK(stream, "training.depth.finalize_loss");
+        if (pixel_weight) {
+            launch_depth_loss_impl<true>(
+                rendered_depth_accum,
+                rendered_alpha_accum,
+                target_depth,
+                grad_depth,
+                grad_alpha,
+                loss_out,
+                partial_sums,
+                width,
+                height,
+                weight,
+                gradient_term_weight,
+                prior_quantization_step,
+                anchor,
+                pixel_weight,
+                stream);
+        } else {
+            launch_depth_loss_impl<false>(
+                rendered_depth_accum,
+                rendered_alpha_accum,
+                target_depth,
+                grad_depth,
+                grad_alpha,
+                loss_out,
+                partial_sums,
+                width,
+                height,
+                weight,
+                gradient_term_weight,
+                prior_quantization_step,
+                anchor,
+                nullptr,
+                stream);
+        }
     }
 
 } // namespace lfs::training::kernels

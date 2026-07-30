@@ -5,12 +5,10 @@
 #include "py_ui.hpp"
 #include "visualizer/theme/theme.hpp"
 
-#include <imgui.h>
-
 namespace lfs::python {
 
     namespace {
-        std::tuple<float, float, float, float> imvec4_to_tuple(const ImVec4& c) {
+        std::tuple<float, float, float, float> theme_color_to_tuple(const lfs::vis::ThemeColor& c) {
             return {c.x, c.y, c.z, c.w};
         }
     } // namespace
@@ -21,26 +19,26 @@ namespace lfs::python {
         PyTheme py_theme;
         py_theme.name = t.name;
 
-        py_theme.palette.background = imvec4_to_tuple(t.palette.background);
-        py_theme.palette.surface = imvec4_to_tuple(t.palette.surface);
-        py_theme.palette.surface_bright = imvec4_to_tuple(t.palette.surface_bright);
-        py_theme.palette.primary = imvec4_to_tuple(t.palette.primary);
-        py_theme.palette.primary_dim = imvec4_to_tuple(t.palette.primary_dim);
-        py_theme.palette.secondary = imvec4_to_tuple(t.palette.secondary);
-        py_theme.palette.text = imvec4_to_tuple(t.palette.text);
-        py_theme.palette.text_dim = imvec4_to_tuple(t.palette.text_dim);
-        py_theme.palette.border = imvec4_to_tuple(t.palette.border);
-        py_theme.palette.success = imvec4_to_tuple(t.palette.success);
-        py_theme.palette.warning = imvec4_to_tuple(t.palette.warning);
-        py_theme.palette.error = imvec4_to_tuple(t.palette.error);
-        py_theme.palette.info = imvec4_to_tuple(t.palette.info);
-        py_theme.palette.toolbar_background = imvec4_to_tuple(t.toolbar_background());
-        py_theme.palette.row_even = imvec4_to_tuple(t.palette.row_even);
-        py_theme.palette.row_odd = imvec4_to_tuple(t.palette.row_odd);
-        py_theme.palette.overlay_border = imvec4_to_tuple(t.overlay.border);
-        py_theme.palette.overlay_icon = imvec4_to_tuple(t.overlay.icon);
-        py_theme.palette.overlay_text = imvec4_to_tuple(t.overlay.text);
-        py_theme.palette.overlay_text_dim = imvec4_to_tuple(t.overlay.text_dim);
+        py_theme.palette.background = theme_color_to_tuple(t.palette.background);
+        py_theme.palette.surface = theme_color_to_tuple(t.palette.surface);
+        py_theme.palette.surface_bright = theme_color_to_tuple(t.palette.surface_bright);
+        py_theme.palette.primary = theme_color_to_tuple(t.palette.primary);
+        py_theme.palette.primary_dim = theme_color_to_tuple(t.palette.primary_dim);
+        py_theme.palette.secondary = theme_color_to_tuple(t.palette.secondary);
+        py_theme.palette.text = theme_color_to_tuple(t.palette.text);
+        py_theme.palette.text_dim = theme_color_to_tuple(t.palette.text_dim);
+        py_theme.palette.border = theme_color_to_tuple(t.palette.border);
+        py_theme.palette.success = theme_color_to_tuple(t.palette.success);
+        py_theme.palette.warning = theme_color_to_tuple(t.palette.warning);
+        py_theme.palette.error = theme_color_to_tuple(t.palette.error);
+        py_theme.palette.info = theme_color_to_tuple(t.palette.info);
+        py_theme.palette.toolbar_background = theme_color_to_tuple(t.toolbar_background());
+        py_theme.palette.row_even = theme_color_to_tuple(t.palette.row_even);
+        py_theme.palette.row_odd = theme_color_to_tuple(t.palette.row_odd);
+        py_theme.palette.overlay_border = theme_color_to_tuple(t.overlay.border);
+        py_theme.palette.overlay_icon = theme_color_to_tuple(t.overlay.icon);
+        py_theme.palette.overlay_text = theme_color_to_tuple(t.overlay.text);
+        py_theme.palette.overlay_text_dim = theme_color_to_tuple(t.overlay.text_dim);
 
         py_theme.sizes.window_rounding = t.sizes.window_rounding;
         py_theme.sizes.frame_rounding = t.sizes.frame_rounding;

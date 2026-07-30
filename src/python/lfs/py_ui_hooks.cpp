@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "py_rml.hpp"
 #include "py_ui.hpp"
+#include "python/gil.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -58,6 +59,32 @@ namespace lfs::python {
             return qualname;
         }
 
+        std::string callback_module(const nb::object& callback) {
+            PyObject* obj = callback.ptr();
+            std::string module = python_string_attr(obj, "__module__");
+            if (!module.empty())
+                return module;
+
+            PyObject* func = PyObject_GetAttrString(obj, "__func__");
+            if (func) {
+                module = python_string_attr(func, "__module__");
+                Py_DECREF(func);
+                if (!module.empty())
+                    return module;
+            } else {
+                PyErr_Clear();
+            }
+
+            PyObject* cls = PyObject_GetAttrString(obj, "__class__");
+            if (cls) {
+                module = python_string_attr(cls, "__module__");
+                Py_DECREF(cls);
+            } else {
+                PyErr_Clear();
+            }
+            return module;
+        }
+
         bool is_first_party_hook(const nb::object& callback) {
             const std::string module = python_string_attr(callback.ptr(), "__module__");
             return module == "lfs_plugins" || module.starts_with("lfs_plugins.");
@@ -106,7 +133,8 @@ namespace lfs::python {
         std::lock_guard lock(mutex_);
         const std::string key = panel + ":" + section;
         const std::string name = callback_name(callback);
-        hooks_[key].push_back({std::move(callback), position, name});
+        const std::string module = callback_module(callback);
+        hooks_[key].push_back({std::move(callback), position, name, module});
     }
 
     void PyUIHookRegistry::remove_hook(const std::string& panel,
@@ -133,6 +161,25 @@ namespace lfs::python {
         }
     }
 
+    void PyUIHookRegistry::clear_hooks_for_module(const std::string& module_prefix) {
+        std::lock_guard lock(mutex_);
+        if (module_prefix.empty() || module_prefix == "lfs_plugins") {
+            LOG_WARN("Refusing to clear UI hooks for broad module prefix '{}'", module_prefix);
+            return;
+        }
+
+        const std::string child_prefix = module_prefix + ".";
+        for (auto it = hooks_.begin(); it != hooks_.end();) {
+            std::erase_if(it->second, [&](const HookEntry& entry) {
+                return entry.module == module_prefix || entry.module.starts_with(child_prefix);
+            });
+            if (it->second.empty())
+                it = hooks_.erase(it);
+            else
+                ++it;
+        }
+    }
+
     void PyUIHookRegistry::clear_all() {
         std::lock_guard lock(mutex_);
         hooks_.clear();
@@ -148,6 +195,9 @@ namespace lfs::python {
                                            const std::string& section,
                                            Rml::ElementDocument* document,
                                            PyHookPosition position) {
+        if (!can_acquire_gil())
+            return false;
+
         nb::gil_scoped_acquire gil;
         std::vector<HookEntry> callbacks;
         {
@@ -177,7 +227,7 @@ namespace lfs::python {
                 if (document) {
                     entry.callback(PyRmlDocument(document));
                 } else {
-                    PyUILayout layout;
+                    PyUILayout layout(PyUILayout::Mode::DrawHook);
                     entry.callback(layout);
                 }
             } catch (const std::exception& e) {
@@ -235,7 +285,8 @@ namespace lfs::python {
             },
             nb::arg("panel"), nb::arg("section"), nb::arg("callback"),
             nb::arg("position") = "append",
-            "Add a UI hook callback to a panel section");
+            "Add a UI hook callback to a panel section. Hook layouts that cannot "
+            "host interactive widgets warn once and return inert controls.");
 
         m.def(
             "remove_hook",
@@ -252,6 +303,14 @@ namespace lfs::python {
             },
             nb::arg("panel"), nb::arg("section") = "",
             "Clear all hooks for a panel or panel/section");
+
+        m.def(
+            "clear_hooks_for_module",
+            [](const std::string& prefix) {
+                PyUIHookRegistry::instance().clear_hooks_for_module(prefix);
+            },
+            nb::arg("module_prefix"),
+            "Clear all hooks registered by a given module prefix");
 
         m.def(
             "clear_all_hooks", []() {

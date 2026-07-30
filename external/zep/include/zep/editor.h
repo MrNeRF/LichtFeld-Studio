@@ -35,7 +35,7 @@
 //
 // The editor has a list of ZepBuffers.
 // The editor has different editor modes (vim/standard)
-// ZepDisplay can render the editor (with imgui or something else)
+// ZepDisplay can render the editor through the host application's UI backend.
 // The display has multiple BufferRegions, each a window onto a buffer.
 // Multiple regions can refer to the same buffer (N Regions : N Buffers)
 // The Modes receive key presses and act on a buffer region

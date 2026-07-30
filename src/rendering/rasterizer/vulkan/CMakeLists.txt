@@ -185,10 +185,12 @@ _vulkan_add_slang_shader(cumsum_block_scan         cumsum.slang CUMSUM_PHASE=1)
 _vulkan_add_slang_shader(cumsum_scan_block_sums    cumsum.slang CUMSUM_PHASE=2)
 _vulkan_add_slang_shader(cumsum_add_block_offsets  cumsum.slang CUMSUM_PHASE=3)
 _vulkan_add_slang_shader(cumsum_single_pass        cumsum.slang CUMSUM_PHASE=0)
+_vulkan_add_slang_shader(radix_histogram_clear     radix_histogram_clear.slang)
+_vulkan_add_slang_shader(expected_depth_finalize   expected_depth_finalize.slang)
 
-# tile_shader.slang → 2 entries
-_vulkan_add_slang_shader(generate_keys             tile_shader.slang EXPORT_MODE=0 ENTRY=1)
+_vulkan_add_slang_shader(generate_keys_wave        tile_shader.slang EXPORT_MODE=0 ENTRY=1)
 _vulkan_add_slang_shader(compute_tile_ranges       tile_shader.slang EXPORT_MODE=0 ENTRY=2)
+_vulkan_add_slang_shader(compute_tile_ranges_and_batch_counts tile_shader.slang EXPORT_MODE=0 ENTRY=3)
 
 # Two-stage sort helper shaders
 _vulkan_add_slang_shader(seed_primitive_indices    seed_primitive_indices.slang)
@@ -224,7 +226,6 @@ _vulkan_add_slang_shader(rasterize_forward_plain         alphablend_shader.slang
 _vulkan_add_slang_shader(rasterize_forward_3dgut_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_3DGUT_RASTERIZE=1 LFS_RASTER_OVERLAYS=0)
 _vulkan_add_slang_shader(rasterize_forward_light         alphablend_shader.slang EXPORT_MODE=0 LFS_SKIP_DENSE_TILES=1)
 _vulkan_add_slang_shader(rasterize_forward_light_plain   alphablend_shader.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=0 LFS_SKIP_DENSE_TILES=1)
-_vulkan_add_slang_shader(tile_batch_counts               tile_batch_shader.slang TILE_BATCH_ENTRY=1)
 _vulkan_add_slang_shader(tile_batch_descriptors          tile_batch_shader.slang TILE_BATCH_ENTRY=2)
 _vulkan_add_slang_shader(rasterize_forward_batches       tile_batch_shader.slang TILE_BATCH_ENTRY=3 LFS_RASTER_OVERLAYS=1)
 _vulkan_add_slang_shader(rasterize_forward_batches_plain tile_batch_shader.slang TILE_BATCH_ENTRY=3)
@@ -248,10 +249,11 @@ _vulkan_add_slang_shader(prepare_tile_sort_visible    prepare_tile_sort.slang LF
 # HiGS macro-tile binning + raster/compose. The plain raster ships fp16
 # staging; the fp32 variant doubles as validation reference and overlay path.
 _vulkan_add_slang_shader(macro_coverage         macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=1)
-_vulkan_add_slang_shader(generate_macro_keys    macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=2)
+_vulkan_add_slang_shader(generate_macro_keys_wave macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=2)
 _vulkan_add_slang_shader(compute_macro_ranges   macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=3)
-_vulkan_add_slang_shader(macro_batch_counts     macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=4)
 _vulkan_add_slang_shader(macro_batch_prepare    macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=5)
+_vulkan_add_slang_shader(wave_partition         macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=6)
+_vulkan_add_slang_shader(wave_partition_visible macro_tile_shader.slang EXPORT_MODE=0 MACRO_ENTRY=6 LFS_VISIBLE_BOUNDED=1)
 _vulkan_add_slang_shader(macro_raster           macro_raster.slang EXPORT_MODE=0)
 _vulkan_add_slang_shader(macro_raster_fp32      macro_raster.slang EXPORT_MODE=0 LFS_HIGS_FP32=1)
 _vulkan_add_slang_shader(macro_raster_overlays  macro_raster.slang EXPORT_MODE=0 LFS_HIGS_FP32=1 LFS_RASTER_OVERLAYS=1)

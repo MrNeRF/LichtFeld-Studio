@@ -51,7 +51,7 @@
     "rendering": "Rendering",
     "training": "Training",
     "preferences": "Einstellungen",
-    "histogram": "Histogram"
+    "histogram": "Histogramm"
   },
   "getting_started": {
     "title": "Erste Schritte",
@@ -127,7 +127,7 @@
     "filter.datasets": "Datasets",
     "filter.favorites": "Favoriten",
     "filter.missing_files": "Fehlende Dateien",
-    "filter.pcl": "PointCloud",
+    "filter.pcl": "Punktwolke",
     "filter.splat": "Splat",
     "filter.trained_outputs": "Trainierte Outputs",
     "filter.videos": "Videos",
@@ -198,7 +198,7 @@
     "status.one_item_selected": "1 Element ausgewählt",
     "status.multi_items_selected": "{count} Elemente ausgewählt",
     "title": "Asset Manager",
-    "panel_title": "Asset Manager",
+    "panel_title": "Asset-Manager",
     "import_button": "Importieren",
     "import_from_url": "Von URL importieren",
     "toolbar.import": "Importieren",
@@ -221,7 +221,7 @@
     "type.dataset": "Dataset",
     "type.gaussian_splat": "Gaußsches Splat",
     "type.mesh": "MESH",
-    "type.pcl": "PointCloud",
+    "type.pcl": "Punktwolke",
     "type.point_cloud": "Punktwolke",
     "type.folder": "ORDNER",
     "type.rad": "RAD",
@@ -252,7 +252,7 @@
     "status_complete": "Abgeschlossen!",
     "tooltip.refresh": "Alle Asset-Verzeichnisse neu scannen und Katalog-Metadaten aktualisieren",
     "tooltip.clean_missing": "Katalogeinträge entfernen, deren Dateien nicht mehr auf der Festplatte existieren",
-    "folder.watch_dirs_badge": "Watched"
+    "folder.watch_dirs_badge": "Überwacht"
   },
   "training": {
     "section.dataset": "Datensatz",
@@ -266,28 +266,28 @@
     "section.save_steps": "Speicher-/Eval-Schritte",
     "section.basic_params": "Trainingsparameter",
     "section.advanced_params": "Erweiterte Trainingsparameter",
-    "section.sparsity": "Sparsity Einstellungen",
-    "section.pruning_growing": "Pruning/Growing",
+    "section.sparsity": "Einstellungen zur Sparsamkeit",
+    "section.pruning_growing": "Beschneiden/Verdichten",
     "dataset.path": "Pfad:",
     "dataset.images": "Bilder:",
     "dataset.resize_factor": "Skalierungsfaktor:",
     "dataset.max_width": "Max. Breite (px):",
-    "dataset.cpu_cache": "CPU Cache:",
-    "dataset.fs_cache": "FS Cache:",
+    "dataset.cpu_cache": "CPU-Cache:",
+    "dataset.fs_cache": "Dateisystem-Cache:",
     "dataset.use_16bit_color": "16-Bit-Farbe:",
     "dataset.output": "Ausgabe:",
-    "dataset.test_every": "Test Every:",
+    "dataset.test_every": "Testintervall:",
     "opt.strategy": "Strategie:",
     "opt.learning_rates": "Lernraten:",
     "opt.iterations": "Iterationen:",
     "opt.sh_degree": "SH Grad:",
     "opt.use_bilateral": "Bilaterales Gitter:",
     "opt.mask_mode": "Masken-Modus:",
-    "opt.sparsity": "Sparsity:",
+    "opt.sparsity": "Sparsamkeit:",
     "opt.gut": "GUT:",
-    "opt.undistort": "Undistort:",
-    "opt.mip_filter": "Mip Filter:",
-    "opt.bg_modulation": "HG Modulation:",
+    "opt.undistort": "Entzerren:",
+    "opt.mip_filter": "Mip-Filter:",
+    "opt.bg_modulation": "Hintergrundmodulation:",
     "opt.lr.position": "  Position:",
     "opt.lr.sh_coeff": "  SH Koeff:",
     "opt.lr.opacity": "  Opazität:",
@@ -321,15 +321,15 @@
     "tooltip.depth_loss_weight": "Gewichtung des Tiefenkarten-Verlusts",
     "tooltip.mip_filter": "Anti-Aliasing Filter für Training (Mip-Splatting)",
     "tooltip.keep_model": "Trainiertes Modell behalten, Datensatz verwerfen",
-    "tooltip.strategy": "Densifikationsstrategie (default/mcmc)",
+    "tooltip.strategy": "Verdichtungsstrategie (Standard/MCMC)",
     "tooltip.iterations": "Gesamte Trainingsiterationen",
     "tooltip.step_scaling_locked": "Skaliert relevante Trainingsparameter automatisch.",
     "tooltip.step_scaling_unlocked": "Manuell: Trainingsparameter werden nicht automatisch skaliert.",
-    "tooltip.max_gaussians": "Maximale Anzahl Gaussians",
-    "tooltip.sh_degree": "Spherical Harmonics Grad (0-3)",
+    "tooltip.max_gaussians": "Maximale Anzahl Gaußscher Splats",
+    "tooltip.sh_degree": "Grad der sphärischen Harmonischen (0–3)",
     "tooltip.tile_mode": "Anzahl der Kacheln, in die der 3DGUT-Rasterizer das Bild aufteilt",
     "tooltip.steps_scaler": "Trainingsschritte skalieren. Automatisch aus Bildanzahl berechnet (1.0 für <=300 Bilder, Bilder/300 für mehr)",
-    "tooltip.bilateral_grid": "Erscheinungsembedding für Belichtungs-/Farbkorrektur",
+    "tooltip.bilateral_grid": "Erscheinungs-Embedding für Belichtungs- und Farbkorrektur",
     "tooltip.sparsity": "Pruning für Modellkompression aktivieren",
     "tooltip.gut": "Einheitliche Behandlung für verzerrte Kameras",
     "tooltip.undistort": "Bilder vor dem Training entzerren",
@@ -383,8 +383,6 @@
     "tooltip.ppisp_freeze_gaussians": "Gaussian-Parameter während Controller-Training einfrieren",
     "tooltip.strategy_gut_conflict": "Die igs+-Strategie ist nicht verfügbar, wenn GUT aktiviert ist",
     "tooltip.gut_strategy_conflict": "GUT ist mit der igs+-Strategie nicht verfügbar. Wechseln Sie zuerst zu MCMC.",
-    "tooltip.opt.depth_loss_mode.pearson": "Skaleninvarianter Pearson-Korrelationsverlust auf ausgerichteten gültigen Tiefenpixeln",
-    "tooltip.opt.depth_loss_mode.adaptive_warped_l1": "Normalisierter inverser Tiefen-L1-Verlust im LOD-3DGS-Stil mit abgekoppelter Opazitätsgewichtung",
     "error.strategy_gut_title": "Inkompatible Einstellungen",
     "conflict.strategy_gut_start_message": "GUT kann nicht mit der igs+-Strategie verwendet werden. Wählen Sie eine Aktion, um das Training zu starten.",
     "conflict.strategy_gut_strategy_message": "Diese Strategie ist nicht mit GUT kompatibel. GUT deaktivieren, um zu wechseln?",
@@ -396,20 +394,20 @@
     "save_pc.btn_save_start": "Speichern & Starten",
     "save_pc.btn_start_without": "Ohne Speichern starten",
     "losses.lambda_dssim": "Lambda DSSIM:",
-    "losses.opacity_reg": "Opazität Reg:",
-    "losses.scale_reg": "Skalierung Reg:",
-    "losses.tv_loss_weight": "TV Verlust Gewicht:",
+    "losses.opacity_reg": "Opazitätsreg.:",
+    "losses.scale_reg": "Skalierungsreg.:",
+    "losses.tv_loss_weight": "TV-Verlustgewicht:",
     "init.init_opacity": "Init Opazität:",
     "init.init_scaling": "Init Skalierung:",
     "init.random_init": "Zufällige Init:",
     "init.num_points": "  Anzahl Punkte:",
     "init.extent": "  Ausdehnung:",
     "thresholds.min_opacity": "Min Opazität:",
-    "thresholds.prune_opacity": "Prune Opazität:",
-    "thresholds.grow_scale_3d": "Grow Scale 3D:",
-    "thresholds.grow_scale_2d": "Grow Scale 2D:",
-    "thresholds.prune_scale_3d": "Prune Scale 3D:",
-    "thresholds.prune_scale_2d": "Prune Scale 2D:",
+    "thresholds.prune_opacity": "Opazität beschneiden:",
+    "thresholds.grow_scale_3d": "3D-Wachstumsskala:",
+    "thresholds.grow_scale_2d": "2D-Wachstumsskala:",
+    "thresholds.prune_scale_3d": "3D-Skalierung beschneiden:",
+    "thresholds.prune_scale_2d": "2D-Skalierung beschneiden:",
     "thresholds.pause_after_reset": "Pause nach Reset:",
     "thresholds.revised_opacity": "Überarbeitete Opazität:",
     "status.enabled": "Aktiviert",
@@ -440,13 +438,21 @@
     "options.mask.ignore": "Ignorieren",
     "options.mask.segment_and_ignore": "Segment + Ignorieren",
     "options.mask.alpha_consistent": "Alpha-konsistent",
-    "options.depth_loss.pearson": "Pearson-Korrelation",
-    "options.depth_loss.adaptive_warped_l1": "Adaptive Warped L1",
+    "options.depth_loss.ssi": "SSI (automatisch)",
+    "options.depth_loss.ssi_disparity": "SSI (Disparitäts-Prior)",
+    "options.depth_loss.ssi_depth": "SSI (Tiefen-Prior)",
     "options.bg.color": "Farbe",
     "options.bg.modulation": "Modulation",
     "options.bg.image": "Bild",
     "options.bg.random": "Zufaellig",
     "tooltip": {
+      "use_normal_loss": "Normalenkarten aus dem Ordner normals/ laden (z. B. mit dem Vorverarbeitungswerkzeug erzeugt) und gerenderte Oberflächennormalen während des Trainings überwachen",
+      "normal_loss_weight": "Gewichtung des Normalenverlusts",
+      "normal_consistency_weight": "Gewichtung des Konsistenzterms zwischen Tiefe und Normalen (gerenderte Normalen gegenüber aus gerenderter Tiefe abgeleiteten Normalen)",
+      "normal_flatten_weight": "L1-Strafe auf der kleinsten Skalenachse jedes Splats bei aktiver Normalenüberwachung; flacht Splats ab, damit ihre Normalen wohldefiniert sind",
+      "opt.depth_loss_mode.ssi": "Erkennt pro Bild automatisch, ob der Prior disparitäts- oder tiefenähnlich ist",
+      "opt.depth_loss_mode.ssi_disparity": "Prior ist disparitätsähnlich (größer = näher), z. B. Ausgabe von Depth Anything oder MiDaS",
+      "opt.depth_loss_mode.ssi_depth": "Prior ist tiefenähnlich (größer = weiter entfernt), z. B. metrische Tiefenmodelle",
       "btn_switch_edit": "In Bearbeitungsmodus für die trainierte Szene wechseln",
       "ppisp_freeze_from_sidecar": "PPISP-Gewichte aus Sidecar-Datei laden",
       "ppisp_sidecar_path": "Pfad zur PPISP-Sidecar-Datei",
@@ -526,8 +532,6 @@
     "go_to_cam_view": "Zur Kameraansicht",
     "fit_to_scene": "An Szene anpassen",
     "fit_to_scene_trimmed": "An Szene anpassen (beschnitten)",
-    "add_crop_box": "Zuschneidebox hinzufügen",
-    "add_crop_ellipsoid": "Zuschneidellipse hinzufügen",
     "reset_crop": "Zurücksetzen",
     "merge_to_single_ply": "Zu einzelner PLY zusammenführen",
     "move_to": "Verschieben nach",
@@ -566,7 +570,30 @@
     "search": "Suchen",
     "show_in_file_manager": "Im Dateimanager anzeigen",
     "go_to_image": "Zum Bild gehen",
-    "open_in_gt_compare": "In GT-Vergleich öffnen"
+    "open_in_gt_compare": "In GT-Vergleich öffnen",
+    "history": "Verlauf",
+    "logging": "Protokollierung",
+    "history_shared": "Gemeinsamer Verlauf",
+    "history_empty": "Noch kein Verlauf",
+    "history_note": "Der neueste Block steht oben. Klicken Sie auf einen Block, um dorthin zu springen. Neue Projekte beginnen ohne Verlauf.",
+    "undo_stack": "Rückgängig-Stapel",
+    "redo_stack": "Wiederholen-Stapel",
+    "nothing_recorded": "Noch nichts aufgezeichnet",
+    "no_entries_in_stack": "Keine Einträge in diesem Stapel",
+    "log_mirror": "CLI-Protokollspiegel",
+    "log_level": "Protokollebene",
+    "log_export": ".txt exportieren",
+    "log_copy": "Kopieren",
+    "log_note": "Spiegelt die Konsolenausgabe. Das Panel zeigt die letzten {} Einträge, um reaktionsfähig zu bleiben; Kopieren und Exportieren verwenden den gesamten gepufferten Protokollverlauf.",
+    "no_logs": "Noch keine Protokolle erfasst",
+    "log_trace": "Trace",
+    "log_debug": "Debug",
+    "log_info": "Info",
+    "log_performance": "Leistung",
+    "log_warn": "Warnung",
+    "log_error": "Fehler",
+    "log_critical": "Kritisch",
+    "log_off": "Aus"
   },
   "export": {
     "title": "Exportieren",
@@ -607,7 +634,9 @@
     "auto": "Auto",
     "column_label": "Bezeichnung",
     "column_control": "Steuerung",
-    "na": "k. A."
+    "na": "k. A.",
+    "undo": "Rückgängig",
+    "redo": "Wiederholen"
   },
   "status": {
     "ready": "Bereit",
@@ -697,13 +726,13 @@
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Mip Filter",
     "camera_metrics": "Kamerametriken",
-    "appearance_correction": "PPISP Correction",
-    "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
+    "appearance_correction": "PPISP-Korrektur",
+    "ppisp_mode": "Modus",
+    "ppisp_mode_manual": "Manuell",
     "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Belichtung",
     "ppisp_vignette": "Vignette",
-    "ppisp_color_balance": "Color Correction",
+    "ppisp_color_balance": "Farbkorrektur",
     "ppisp_gamma": "Gamma",
     "ppisp_crf_advanced": "CRF",
     "ppisp_gamma_red": "Gamma Rot",
@@ -711,7 +740,7 @@
     "ppisp_gamma_blue": "Gamma Blau",
     "ppisp_crf_toe": "CRF Toe",
     "ppisp_crf_shoulder": "CRF Shoulder",
-    "render_scale": "Render Scale",
+    "render_scale": "Render-Skalierung",
     "selection_colors": "Auswahlfarben",
     "committed": "Bestätigt",
     "preview": "Vorschau",
@@ -744,6 +773,10 @@
     "mirror": "Spiegeln",
     "align_3point": "3-Punkt Ausrichtung",
     "crop_box": "Zuschneidebox",
+    "enable_crop_box": "Zuschneidebox aktivieren",
+    "crop_roi_settings": "Crop-ROI-Einstellungen",
+    "rejected_splat_lr_scale": "LR-Skalierung abgelehnter Splats",
+    "outside_roi_loss_weight": "Verlustgewicht außerhalb der ROI",
     "brush_selection": "Pinselauswahl",
     "rect_selection": "Rechteckauswahl",
     "polygon_selection": "Polygonauswahl",
@@ -751,7 +784,7 @@
     "ring_selection": "Ringauswahl",
     "box_selection": "Box-Auswahl",
     "sphere_selection": "Kugel-Auswahl",
-    "color_selection": "Color selection",
+    "color_selection": "Farbauswahl",
     "local_space": "Lokaler Raum",
     "world_space": "Weltraum",
     "selection_transform": "Auswahltransform",
@@ -767,8 +800,8 @@
     "focus_selection": "Auswahl fokussieren",
     "fullscreen": "Vollbild",
     "toggle_ui": "UI umschalten",
-    "asset_manager": "Asset Manager",
-    "splat_rendering": "Splat Rendering",
+    "asset_manager": "Asset-Manager",
+    "splat_rendering": "Splat-Rendering",
     "point_cloud": "Punktwolke",
     "gaussian_rings": "Gaussian Ringe",
     "center_markers": "Mittelpunktmarkierungen",
@@ -776,7 +809,7 @@
     "orthographic": "Orthografisch",
     "sequencer": "Sequenzer",
     "ellipsoid": "Ellipsoid",
-    "histogram": "Histogram",
+    "histogram": "Histogramm",
     "depth_map": "Tiefenkarte",
     "viewport_export": "Viewport-Export",
     "depth_mode_disable": "Tiefenmodus deaktivieren",
@@ -845,12 +878,13 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "gt_compare_mode": "RGB-, Normalen- oder Tiefen-Referenzvergleich auswählen",
     "raster_backend": "Gaussian-Rasterizer: 3DGS oder 3DGUT",
     "gut_mode": "Für Fisheye/verzerrte/equirektangulare Kameras",
     "mip_filter": "Aliasing für Sub-Pixel-Gaussians reduzieren",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_exposure": "Adjust exposure in EV stops",
+    "ppisp_exposure": "Belichtung in EV-Stufen anpassen",
     "ppisp_gamma": "Gammakurve anpassen",
     "ppisp_color_rgb": "Chromatizität für diesen Farbkanal verschieben",
     "ppisp_gamma_channel": "Pro-Kanal Gamma-Offset",
@@ -912,7 +946,7 @@
     "seq_loop_off": "Schleifenwiedergabe aktivieren",
     "seq_loop_on": "Schleifenwiedergabe deaktivieren",
     "seq_add": "Keyframe an aktueller Position hinzufügen",
-    "seq_clip_duration": "Clip duration (click to edit, in seconds)",
+    "seq_clip_duration": "Clipdauer (zum Bearbeiten klicken, in Sekunden)",
     "seq_speed": "Wiedergabegeschwindigkeit (Klick zum Wechseln)",
     "seq_snap": "Keyframes am Raster einrasten (Rechtsklick für Optionen)",
     "seq_follow": "Abspielkopf bei Wiedergabe folgen",
@@ -972,6 +1006,8 @@
     "viewport_export_resolution": "Exportauflösung wählen",
     "viewport_export_transparency": "PNG mit Alpha exportieren",
     "viewport_export_close": "Viewport-Export schließen",
+    "cropbox_lr_scale": "Adam-Updates und Wachstumssignale für von der aktiven Zuschneidebox abgelehnte Splats skalieren",
+    "cropbox_loss_weight": "Pixelverluste außerhalb der aktiven Zuschneidebox-ROI skalieren",
     "environment_mode": "Hintergrundquelle: Volltonfarbe oder HDRI",
     "environment_map_path": "HDRI-Umgebungsmap auswählen",
     "environment_exposure": "HDRI-Belichtung in EV-Stufen",
@@ -1056,9 +1092,9 @@
     "max_width": "Max. Breite (px)",
     "max_width_disable": "Herunterskalierung deaktivieren",
     "max_width_hint": "Breitere Bilder werden herunterskaliert. 0 deaktiviert die Begrenzung.",
-    "min_track_length": "Minimum Track Length",
-    "min_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
-    "min_track_length_init_warning": "Ignored while Init PLY is set.",
+    "min_track_length": "Minimale Spurlaenge",
+    "min_track_length_hint": "Behält Sparse-Punkte, die in mindestens so vielen Bildern beobachtet wurden. 0 deaktiviert die Filterung.",
+    "min_track_length_init_warning": "Wird ignoriert, solange Init PLY gesetzt ist.",
     "apply_auto_crop": "Auto-Zuschnitt anwenden"
   },
   "notification": {
@@ -1246,7 +1282,7 @@
   "training_params": {
     "strategy": "Strategie:",
     "iterations": "Iterationen:",
-    "max_gaussians": "Max Gaussians:",
+    "max_gaussians": "Max. Gaußsche Splats:",
     "sh_degree": "SH Grad:",
     "tile_mode": "Kachel-Modus:",
     "steps_scaler": "Schritte-Skalierer:",
@@ -1258,11 +1294,15 @@
     "mask_threshold": "  Masken-Schwellenwert:",
     "use_alpha_as_mask": "Alpha-Maske:",
     "use_depth_loss": "Tiefenverlust:",
+    "use_normal_loss": "Normalenverlust:",
+    "normal_loss_weight": "  Normalengewicht:",
+    "normal_consistency_weight": "  Konsistenzgewicht:",
+    "normal_flatten_weight": "  Abflachungsgewicht:",
     "depth_loss_mode": "  Tiefenmodus:",
     "depth_loss_weight": "  Tiefengewicht:",
-    "sparsity": "Sparsity:",
+    "sparsity": "Sparsamkeit:",
     "gut": "GUT:",
-    "undistort": "Undistort:",
+    "undistort": "Entzerren:",
     "mip_filter": "Mip Filter:",
     "bg_settings": "Hintergrund-Einstellungen",
     "bg_mode": "Modus:",
@@ -1280,12 +1320,12 @@
     "random_init": "Zufällige Init:",
     "num_points": "  Anzahl Punkte:",
     "extent": "  Ausdehnung:",
-    "prune_scale_3d": "Prune Scale 3D:",
-    "prune_opacity": "Prune Opazität:",
-    "prune_scale_2d": "Prune Scale 2D:",
+    "prune_scale_3d": "3D-Skalierung beschneiden:",
+    "prune_opacity": "Opazität beschneiden:",
+    "prune_scale_2d": "2D-Skalierung beschneiden:",
     "pause_after_reset": "Pause nach Reset:",
     "revised_opacity": "Überarbeitete Opazität:",
-    "sparsify_steps": "Sparsify Schritte:",
+    "sparsify_steps": "Sparsamkeitsschritte:",
     "init_rho": "Init Rho:",
     "prune_ratio": "Prune Verhältnis:",
     "ppisp": "PPISP:",
@@ -1299,9 +1339,9 @@
     "ppisp_controller_lr": "Controller LR:",
     "ppisp_freeze_gaussians": "Gaussians einfrieren:",
     "disabled": "Deaktiviert",
-    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
-    "ppisp_sidecar_path": "Sidecar Path:",
-    "enable_eval": "Enable Eval:"
+    "ppisp_freeze_from_sidecar": "Eingefrorene Sidecar-Datei:",
+    "ppisp_sidecar_path": "Sidecar-Pfad:",
+    "enable_eval": "Auswertung aktivieren:"
   },
   "image_preview": {
     "title": "Bildvorschau",
@@ -1377,7 +1417,45 @@
     "drop_files_subtitle": "PLY, SOG, SPZ, RAD, USD, COLMAP Datensatz oder Projektdatei",
     "drop_files_hint": "Oder Datei > Datensatz importieren / PLY importieren verwenden",
     "drop_to_import": "Zum Importieren ablegen",
-    "drop_to_import_subtitle": "PLY, SOG, SPZ, RAD, USD, COLMAP Datensatz oder Projekt"
+    "drop_to_import_subtitle": "PLY, SOG, SPZ, RAD, USD, COLMAP Datensatz oder Projekt",
+    "discord": "Discord",
+    "donate": "Spenden"
+  },
+  "python_console": {
+    "new": "Neu",
+    "load": "Laden",
+    "reload": "Neu laden",
+    "save": "Speichern",
+    "save_as": "Speichern unter",
+    "format": "Formatieren",
+    "vim": "Vim",
+    "run": "Ausführen",
+    "stop": "Stopp",
+    "running": "Wird ausgeführt...",
+    "python": "Python",
+    "syntax": "Syntax",
+    "outline": "Gliederung",
+    "scope": "Bereich",
+    "blocks": "Blöcke",
+    "untitled": "Unbenannt",
+    "output": "Ausgabe",
+    "terminal": "Terminal",
+    "packages": "Pakete",
+    "refresh": "Aktualisieren",
+    "search_packages": "Pakete suchen...",
+    "name": "Name",
+    "version": "Version",
+    "path": "Pfad",
+    "no_packages": "Keine Pakete installiert"
+  },
+  "watch_dirs": {
+    "title": "Überwachte Verzeichnisse",
+    "subtitle": "Assets aus diesen Ordnern automatisch importieren. Neue Dateien erscheinen sofort.",
+    "add_directory": "+ Verzeichnis hinzufügen",
+    "empty": "Keine überwachten Verzeichnisse.",
+    "scanning": "Wird durchsucht...",
+    "done": "Fertig",
+    "save_scan": "Speichern und durchsuchen"
   },
   "axis": {
     "x": "X:",
@@ -1402,12 +1480,12 @@
     "source_mesh": "Quell-Mesh",
     "no_meshes": "Keine Meshes geladen",
     "convert": "Konvertieren",
-    "gaussian_scale": "Gaussian Scale",
+    "gaussian_scale": "Gaußsche Skalierung",
     "tooltip_gaussian_scale": "Standardabweichung jedes Gaussians. Steuert die visuelle Ausbreitung.",
     "sampling_density_header": "Abtastdichte-Einstellungen",
-    "sampling_density": "Sampling Density",
+    "sampling_density": "Abtastdichte",
     "tooltip_quality": "Steuert wie dicht die Mesh-Oberfläche abgetastet wird. Höhere Werte erzeugen mehr Gaussians.",
-    "max_resolution": "Max Resolution",
+    "max_resolution": "Maximale Auflösung",
     "tooltip_max_resolution": "Maximale Auflösung für das Abtastraster. Höhere Werte ermöglichen feinere Abtastung bei Qualität 1.0.",
     "effective_resolution": "Effektive Auflösung"
   },
@@ -1506,13 +1584,14 @@
     "candidates_all": "Alle Frames",
     "candidates_readout_fmt": "%d / ~%d Bilder",
     "generate_metadata": "Metadaten-JSON erstellen",
+    "convert_hdr_to_sdr": "HDR in SDR konvertieren (8 Bit)",
     "overwrite_prompt": "Der Ausgabeordner enthält bereits extrahierte Bilder oder Extraktionsmetadaten. Nur generierte Dateien in diesem Ordner entfernen und fortfahren?",
     "overwrite_clear": "Fortfahren",
     "overwrite_cancel": "Abbrechen",
     "rotate_cw": "Im Uhrzeigersinn drehen",
     "rotate_ccw": "Gegen Uhrzeigersinn drehen",
     "discarded_format": " (%d verworfen)",
-    "all": "All"
+    "all": "Alle"
   },
   "plugin_marketplace": {
     "title_line": "Durchsuchen Sie installierbare Plugins aus der Plugin-Registry.",
@@ -1666,20 +1745,20 @@
     "status.update_failed": "Aktualisierung fehlgeschlagen",
     "status.uninstalled": "Deinstalliert: {name}",
     "status.uninstall_failed": "Deinstallation fehlgeschlagen",
-    "status.unloading": "Unloading {name}...",
-    "status.uninstalling": "Uninstalling {name}..."
+    "status.unloading": "{name} wird entladen...",
+    "status.uninstalling": "{name} wird deinstalliert..."
   },
   "ellipsoid": {
     "title": "Ellipsoid",
-    "not_visible": "Ellipsoid not visible",
-    "no_selection": "No ellipsoid selected",
-    "invalid": "Invalid ellipsoid",
+    "not_visible": "Ellipsoid nicht sichtbar",
+    "no_selection": "Kein Ellipsoid ausgewählt",
+    "invalid": "Ungültiges Ellipsoid",
     "position": "Position",
     "rotation": "Rotation",
-    "radii": "Radii",
-    "appearance": "Appearance",
-    "line_width": "Line Width",
-    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
+    "radii": "Radien",
+    "appearance": "Darstellung",
+    "line_width": "Linienbreite",
+    "instructions": "Eingabe: Auswahl bestätigen | Strg+C: Inhalt kopieren"
   },
   "file_association": {
     "title": "Als Standardanwendung festlegen",
@@ -1733,143 +1812,143 @@
     "cancel": "Abbrechen"
   },
   "histogram": {
-    "title_eyebrow": "Gaussian Analysis",
-    "field": "Field",
+    "title_eyebrow": "Gauß-Analyse",
+    "field": "Feld",
     "log_scale": "Logarithmische Skala",
-    "samples": "Samples",
-    "range": "Range",
+    "samples": "Stichproben",
+    "range": "Bereich",
     "range_of_interest": "Bereich von Interesse:",
     "reset": "Zurücksetzen",
-    "mean": "Mean",
+    "mean": "Mittelwert",
     "median": "Median",
     "p95": "P95",
-    "peak_bin": "Peak Bin",
-    "bin_count": "{count} bins",
+    "peak_bin": "Spitzen-Bin",
+    "bin_count": "{count} Bins",
     "bins": "Bins",
     "compare_x_bins": "X-Bins",
     "compare_y_bins": "Y-Bins",
-    "marked": "Marked",
-    "count": "Count",
-    "clear": "Clear",
-    "delete": "Delete",
-    "no_marked_range": "No marked range",
-    "gaussian_count": "{count} Gaussians",
-    "range_value": "{min} to {max}",
-    "status_drag_delete": "Left-drag to mark a range, then delete it  ·  Ctrl+scroll to zoom  ·  double-click to fit",
-    "status_selection": "Marked range becomes the active Gaussian selection.",
-    "summary": "{metric} distribution across {count} Gaussians",
-    "bin_tooltip": "Bin {index}: {left} to {right} | {count} Gaussians",
-    "compare_with": "Compare With",
+    "marked": "Markiert",
+    "count": "Anzahl",
+    "clear": "Löschen",
+    "delete": "Entfernen",
+    "no_marked_range": "Kein markierter Bereich",
+    "gaussian_count": "{count} Gaußsche Splats",
+    "range_value": "{min} bis {max}",
+    "status_drag_delete": "Mit linker Maustaste ziehen, um einen Bereich zu markieren, dann löschen  ·  Strg+Mausrad zum Zoomen  ·  Doppelklick zum Anpassen",
+    "status_selection": "Der markierte Bereich wird zur aktiven Auswahl Gaußscher Splats.",
+    "summary": "Verteilung von {metric} über {count} Gaußsche Splats",
+    "bin_tooltip": "Bin {index}: {left} bis {right} | {count} Gaußsche Splats",
+    "compare_with": "Vergleichen mit",
     "compare_bin_count": "{x_count} x {y_count} Bins",
     "compare": {
-      "off": "Off",
-      "summary": "{x_metric} vs {y_metric} across {count} Gaussians",
+      "off": "Aus",
+      "summary": "{x_metric} gegenüber {y_metric} über {count} Gaußsche Splats",
       "range_value": "X {x_range} | Y {y_range}",
-      "status_selection": "Marked compare region becomes the active Gaussian selection.",
-      "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaussians",
+      "status_selection": "Die markierte Vergleichsregion wird zur aktiven Auswahl Gaußscher Splats.",
+      "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaußsche Splats",
       "empty": {
-        "title": "Compare unavailable",
-        "message": "Choose a second metric to see how two Gaussian properties cluster together.",
+          "title": "Vergleich nicht verfügbar",
+          "message": "Wählen Sie eine zweite Metrik, um zu sehen, wie zwei Eigenschaften Gaußscher Splats zusammen gruppiert sind.",
         "metric_unavailable": {
-          "title": "Compare metric unavailable",
-          "message": "The comparison metric could not be read from the combined Gaussian model."
+            "title": "Vergleichsmetrik nicht verfügbar",
+            "message": "Die Vergleichsmetrik konnte nicht aus dem kombinierten Gauß-Modell gelesen werden."
         },
         "no_visible_values": {
-          "title": "No comparable values",
-          "message": "The selected metric pair does not contain any visible finite samples to visualize."
+            "title": "Keine vergleichbaren Werte",
+            "message": "Das ausgewählte Metrikpaar enthält keine sichtbaren endlichen Stichproben zur Darstellung."
         }
       }
     },
     "delete_failed": {
-      "title": "Delete Failed",
-      "status": "Delete failed: {message}",
-      "unexpected": "The delete pipeline raised an unexpected error.",
-      "invalid_result": "The delete pipeline returned an invalid result.",
-      "reported_failure": "The delete pipeline reported a failure."
+      "title": "Löschen fehlgeschlagen",
+      "status": "Löschen fehlgeschlagen: {message}",
+      "unexpected": "Der Löschvorgang hat einen unerwarteten Fehler ausgelöst.",
+      "invalid_result": "Der Löschvorgang hat ein ungültiges Ergebnis zurückgegeben.",
+      "reported_failure": "Der Löschvorgang hat einen Fehler gemeldet."
     },
     "empty": {
       "unavailable": {
-        "title": "Histogram unavailable",
-        "message": "Switch to a view or edit scene with Gaussian splats to inspect a distribution."
+          "title": "Histogramm nicht verfügbar",
+          "message": "Wechseln Sie zu einer Ansicht oder Bearbeitungsszene mit Gaußschen Splats, um eine Verteilung zu untersuchen."
       },
       "no_scene": {
-        "title": "No scene loaded",
-        "message": "Load a Gaussian scene, then reopen the histogram panel."
+          "title": "Keine Szene geladen",
+          "message": "Laden Sie eine Gauß-Szene und öffnen Sie dann das Histogramm-Panel erneut."
       },
       "no_visible_gaussians": {
-        "title": "No visible Gaussians",
-        "message": "The histogram only works when the active scene exposes a visible Gaussian model."
+          "title": "Keine sichtbaren Gaußschen Splats",
+          "message": "Das Histogramm funktioniert nur, wenn die aktive Szene ein sichtbares Gauß-Modell enthält."
       },
       "metric_unavailable": {
-        "title": "Metric unavailable",
-        "message": "The selected metric could not be read from the combined Gaussian model."
+          "title": "Metrik nicht verfügbar",
+          "message": "Die ausgewählte Metrik konnte nicht aus dem kombinierten Gauß-Modell gelesen werden."
       },
       "no_visible_values": {
-        "title": "No visible values",
-        "message": "The selected metric does not contain any visible finite samples to visualize."
+          "title": "Keine sichtbaren Werte",
+          "message": "Die ausgewählte Metrik enthält keine sichtbaren endlichen Stichproben zur Darstellung."
       },
       "no_selected_values": {
-        "title": "No samples in selection",
-        "message": "The selected models contain no finite samples for this metric."
+          "title": "Keine Stichproben in der Auswahl",
+          "message": "Die ausgewählten Modelle enthalten keine endlichen Stichproben für diese Metrik."
       }
     },
     "metric": {
       "opacity": {
-        "label": "Opacity",
-        "description": "Activated Gaussian opacity in [0, 1]."
+        "label": "Opazität",
+        "description": "Aktivierte Opazität des Gaußschen Splats in [0, 1]."
       },
       "position_x": {
         "label": "Position X",
-        "description": "Gaussian world-space center on the X axis."
+        "description": "Mittelpunkt des Gaußschen Splats im Weltraum auf der X-Achse."
       },
       "position_y": {
         "label": "Position Y",
-        "description": "Gaussian world-space center on the Y axis."
+        "description": "Mittelpunkt des Gaußschen Splats im Weltraum auf der Y-Achse."
       },
       "position_z": {
         "label": "Position Z",
-        "description": "Gaussian world-space center on the Z axis."
+        "description": "Mittelpunkt des Gaußschen Splats im Weltraum auf der Z-Achse."
       },
       "scale_x": {
-        "label": "Scale X",
-        "description": "Activated Gaussian scale on the X axis."
+        "label": "Skalierung X",
+        "description": "Aktivierte Skalierung des Gaußschen Splats auf der X-Achse."
       },
       "scale_y": {
-        "label": "Scale Y",
-        "description": "Activated Gaussian scale on the Y axis."
+        "label": "Skalierung Y",
+        "description": "Aktivierte Skalierung des Gaußschen Splats auf der Y-Achse."
       },
       "scale_z": {
-        "label": "Scale Z",
-        "description": "Activated Gaussian scale on the Z axis."
+        "label": "Skalierung Z",
+        "description": "Aktivierte Skalierung des Gaußschen Splats auf der Z-Achse."
       },
       "scale_max": {
-        "label": "Scale Max",
-        "description": "Largest activated scale component per Gaussian."
+        "label": "Max. Skalierung",
+        "description": "Größte aktivierte Skalierungskomponente pro Gaußschem Splat."
       },
       "volume": {
         "label": "Volume",
-        "description": "Ellipsoid volume derived from activated Gaussian scales."
+        "description": "Ellipsoidvolumen, abgeleitet aus den aktivierten Skalierungen des Gaußschen Splats."
       },
       "anisotropy": {
-        "label": "Anisotropy",
-        "description": "Ratio of largest to smallest activated scale. 1 is sphere-like; larger values are spikier."
+        "label": "Anisotropie",
+        "description": "Verhältnis der größten zur kleinsten aktivierten Skalierung. 1 ist kugelförmig; größere Werte sind spitzer."
       },
       "erank": {
         "label": "Effektiver Rang",
         "description": "Entropiebasierter effektiver Rang aktivierter Gauß-Skalen. 1 ist linienartig, 2 flächenartig, 3 kugelartig."
       },
       "distance": {
-        "label": "Distance",
-        "description": "Distance from the current splat center."
+        "label": "Abstand",
+        "description": "Abstand vom Mittelpunkt des aktuellen Splats."
       },
       "world_distance": {
-        "label": "World Distance",
-        "description": "Distance from the world origin."
+        "label": "Weltabstand",
+        "description": "Abstand vom Weltursprung."
       }
     },
-    "undo": "Undo",
-    "redo": "Redo",
-    "undo_named": "Undo: {name}",
-    "redo_named": "Redo: {name}"
+    "undo": "Rückgängig",
+    "redo": "Wiederholen",
+    "undo_named": "Rückgängig: {name}",
+    "redo_named": "Wiederholen: {name}"
   }
 }

@@ -80,8 +80,10 @@ namespace lfs::python {
     /**
      * @brief Load user plugins configured for startup.
      *        This requires a ready Python runtime.
+     * @param wait_for_completion Allow a headless caller to wait even when
+     *        the Python UI module identified the current thread as graphics.
      */
-    [[nodiscard]] bool ensure_plugins_loaded();
+    [[nodiscard]] bool ensure_plugins_loaded(bool wait_for_completion = false);
 
     /**
      * @brief Schedule plugin autoload after startup.
@@ -96,6 +98,9 @@ namespace lfs::python {
      * are in progress.
      */
     bool is_plugin_preload_running();
+
+    /// @brief True while startup plugin preload may block Python calls.
+    bool is_plugin_preload_blocking_python();
 
     /**
      * @brief Request cooperative cancellation of startup plugin loading.

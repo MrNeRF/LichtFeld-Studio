@@ -137,6 +137,7 @@ namespace lfs::training::kernels {
         float gradient_term_weight,
         float prior_quantization_step = 0.0f,
         const DepthAnchor* anchor = nullptr,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        const float* pixel_weight = nullptr);
 
 } // namespace lfs::training::kernels

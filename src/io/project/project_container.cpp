@@ -273,6 +273,13 @@ namespace lfs::io::project {
                                           impl->header.min_reader_version, CONTAINER_VERSION),
                               path);
         }
+        if (impl->header.declared_file_size != size) {
+            return make_error(
+                ErrorCode::CORRUPTED_DATA,
+                std::format("Declared project size {} does not match actual size {}",
+                            impl->header.declared_file_size, size),
+                path);
+        }
         std::memcpy(impl->uuid.data(), impl->header.project_uuid, impl->uuid.size());
 
         // Newest index source is the footer; the file header's index fields

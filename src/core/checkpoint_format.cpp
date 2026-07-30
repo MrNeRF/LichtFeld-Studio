@@ -170,7 +170,8 @@ namespace lfs::core {
                 return std::unexpected("Invalid checkpoint parameters: " + validation_error);
             if (const auto validation_error = params.dataset.validate(); !validation_error.empty())
                 return std::unexpected("Invalid checkpoint dataset parameters: " + validation_error);
-
+            if (!(params.freeze_lr_scale >= 0.0f && params.freeze_lr_scale <= 1.0f))
+                return std::unexpected("Invalid checkpoint parameters: freeze_lr_scale must be within [0, 1]");
             LOG_DEBUG("Params loaded from checkpoint: {}", path_to_utf8(params.dataset.data_path));
             return params;
 
@@ -209,6 +210,9 @@ namespace lfs::core {
         if (params_json.contains("exclude_frozen_add_splats_from_export")) {
             base_params.exclude_frozen_add_splats_from_export =
                 params_json["exclude_frozen_add_splats_from_export"].get<bool>();
+        }
+        if (params_json.contains("freeze_lr_scale")) {
+            base_params.freeze_lr_scale = params_json["freeze_lr_scale"].get<float>();
         }
         if (params_json.contains("disabled_camera_uids")) {
             base_params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();

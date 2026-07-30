@@ -23,7 +23,6 @@
 #include <limits>
 #include <optional>
 #include <variant>
-#include <imgui.h>
 
 namespace lfs::vis {
 
@@ -34,14 +33,9 @@ namespace lfs::vis {
                 isolateInputProfileHome();
                 services().clear();
                 gui::guiFocusState().reset();
-
-                IMGUI_CHECKVERSION();
-                ImGui::CreateContext();
             }
 
             void TearDown() override {
-                ImGui::DestroyContext();
-
                 gui::guiFocusState().reset();
                 services().clear();
                 restoreHome();

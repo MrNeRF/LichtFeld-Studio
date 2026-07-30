@@ -18,6 +18,10 @@ namespace fast_lfs::rasterization {
         float* exp_avg_sq_scale = nullptr;
         const bool* frozen_mask = nullptr;
         int frozen_mask_size = 0;
+        float frozen_lr_scale = 0.0f;
+        const bool* crop_damping_mask = nullptr;
+        int crop_damping_mask_size = 0;
+        float cropbox_lr_scale = 1.0f;
         int n_elements = 0;
         int n_attributes = 0;
         float step_size = 0.0f;

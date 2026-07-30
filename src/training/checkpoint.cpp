@@ -11,6 +11,7 @@
 #include "core/path_utils.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
+#include "optimizer/adam_optimizer.hpp"
 #include "strategies/istrategy.hpp"
 #include "strategies/strategy_factory.hpp"
 #include <algorithm>
@@ -252,6 +253,9 @@ namespace lfs::training {
             if (params.exclude_frozen_add_splats_from_export) {
                 params_json["exclude_frozen_add_splats_from_export"] = true;
             }
+            if (params.freeze_lr_scale != 0.0f) {
+                params_json["freeze_lr_scale"] = params.freeze_lr_scale;
+            }
             if (!params.disabled_camera_uids.empty()) {
                 params_json["disabled_camera_uids"] = params.disabled_camera_uids;
             }
@@ -398,7 +402,9 @@ namespace lfs::training {
                 return std::unexpected("Invalid checkpoint parameters: " + parameter_error);
             if (const auto parameter_error = loaded_params.dataset.validate(); !parameter_error.empty())
                 return std::unexpected("Invalid checkpoint dataset parameters: " + parameter_error);
-
+            if (!(loaded_params.freeze_lr_scale >= 0.0f && loaded_params.freeze_lr_scale <= 1.0f)) {
+                return std::unexpected("Invalid checkpoint parameters: freeze_lr_scale must be within [0, 1]");
+            }
             file.clear();
             file.seekg(strategy_state_pos);
             if (!file)
@@ -435,6 +441,8 @@ namespace lfs::training {
                 throw std::runtime_error(
                     "Strategy does not support transactional checkpoint state adoption");
             }
+            if (checkpoint_adopter->has_checkpoint_runtime_state())
+                loaded_strategy->get_optimizer().set_frozen_lr_scale(loaded_params.freeze_lr_scale);
 
             std::unique_ptr<BilateralGrid> loaded_bilateral_grid;
             std::unique_ptr<PPISP> loaded_ppisp;

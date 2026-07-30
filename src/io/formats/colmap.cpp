@@ -2752,15 +2752,12 @@ namespace lfs::io {
         };
     }
 
-    void update_image_poses_from_cameras(
+    size_t update_image_poses_from_cameras(
         std::vector<ImageData>& images,
         const std::vector<ColmapCameraWriteData>& cameras) {
         LFS_ASSERT_MSG(!images.empty(),
                        std::format("COLMAP pose export requires at least one source image "
                                    "(image_count={}, scene_camera_count={})",
-                                   images.size(), cameras.size()));
-        LFS_ASSERT_MSG(images.size() == cameras.size(),
-                       std::format("COLMAP pose export requires exactly one scene camera per source image ({} images, {} cameras)",
                                    images.size(), cameras.size()));
         std::unordered_map<std::string, const ColmapCameraWriteData*> camera_by_name;
         camera_by_name.reserve(cameras.size());
@@ -2792,11 +2789,13 @@ namespace lfs::io {
             }
         }
 
+        const size_t source_image_count = images.size();
         size_t matched = 0;
-        for (auto& image : images) {
+        std::erase_if(images, [&](ImageData& image) {
+            // Keep live-camera images by updating their poses; drop source images whose cameras were deleted.
             const auto it = camera_by_name.find(image.name);
             if (it == camera_by_name.end()) {
-                throw std::runtime_error(std::format("No current scene camera found for COLMAP image '{}'", image.name));
+                return true;
             }
             auto [qvec, tvec] = transformed_camera_pose(*it->second->camera, it->second->data_world_transform);
             LFS_ASSERT_MSG(std::ranges::all_of(qvec, [](const float value) { return std::isfinite(value); }) &&
@@ -2805,13 +2804,28 @@ namespace lfs::io {
             image.qvec = std::move(qvec);
             image.tvec = std::move(tvec);
             ++matched;
-        }
+            return false;
+        });
 
-        LFS_ASSERT_MSG(matched == images.size() && matched == camera_by_name.size(),
-                       std::format("COLMAP pose export must establish a one-to-one image association "
-                                   "(matched_count={}, image_count={}, unique_camera_name_count={}, "
-                                   "scene_camera_count={})",
+        LFS_ASSERT_MSG(matched != 0,
+                       std::format("COLMAP pose export must match at least one source image "
+                                   "(matched_count={}, source_image_count={}, "
+                                   "unique_camera_name_count={}, scene_camera_count={})",
+                                   matched, source_image_count, camera_by_name.size(), cameras.size()));
+        LFS_ASSERT_MSG(matched == images.size(),
+                       std::format("COLMAP pose export must match every surviving image "
+                                   "(matched_count={}, surviving_image_count={}, "
+                                   "unique_camera_name_count={}, scene_camera_count={})",
                                    matched, images.size(), camera_by_name.size(), cameras.size()));
+        if (images.size() != source_image_count) {
+            LOG_WARN("COLMAP export skipped {} source images with no current scene camera",
+                     source_image_count - images.size());
+        }
+        if (matched != camera_by_name.size()) {
+            LOG_WARN("COLMAP export matched {} source images but received {} scene cameras",
+                     matched, camera_by_name.size());
+        }
+        return source_image_count - images.size();
     }
 
     uint8_t float_color_to_u8(const float value) {
@@ -2959,6 +2973,13 @@ namespace lfs::io {
             for (auto& point : image.points2D) {
                 point.point3D_id = INVALID_POINT3D_ID;
             }
+        }
+    }
+
+    void clear_point3D_tracks(std::vector<Point3DData>& points) {
+        for (auto& point : points) {
+            point.track.clear();
+            point.track_count = 0;
         }
     }
 
@@ -4045,11 +4066,13 @@ namespace lfs::io {
 
         try {
             ColmapSparseModelData model = read_colmap_sparse_model_for_write(source_base);
-            update_image_poses_from_cameras(model.images, cameras);
+            const size_t dropped_images = update_image_poses_from_cameras(model.images, cameras);
             const bool clear_observation_links = point_cloud_requires_untracked_export(model.points3D, point_cloud);
             model.points3D = build_points3D_for_write(model.points3D, point_cloud, point_cloud_transform);
-            if (clear_observation_links || model.points3D.empty()) {
+            if (clear_observation_links || dropped_images > 0 || model.points3D.empty()) {
+                // Omitted images can leave point tracks referencing image ids that are no longer exported.
                 clear_image_point3D_references(model.images);
+                clear_point3D_tracks(model.points3D);
             }
 
             std::error_code ec;
