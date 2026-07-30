@@ -630,10 +630,12 @@ namespace lfs::app {
                         LOG_INFO("Reset {}. No existing settings file required a backup", label);
                     }
                 };
-                reset_file(params->reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
-                reset_file(params->reset_layout, "layout", [&paths] { return paths->resetLayout(); });
+                const bool reset_preferences = params->reset_preferences || params->reset_all_settings;
+                const bool reset_layout = params->reset_layout || params->reset_all_settings;
+                reset_file(reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
+                reset_file(reset_layout, "layout", [&paths] { return paths->resetLayout(); });
 
-                if (!params->safe_mode && !params->reset_layout && paths->allowsAutomaticLegacyMigration()) {
+                if (!params->safe_mode && !reset_layout && paths->allowsAutomaticLegacyMigration()) {
                     const auto migration = paths->migrateLegacyGuiSettings();
                     if (!migration) {
                         LOG_WARN("Legacy GUI settings migration skipped: {}", migration.error());
@@ -641,8 +643,8 @@ namespace lfs::app {
                         LOG_INFO("Processed {} legacy GUI setting(s); migration record saved under {}",
                                  migration->size(), lfs::core::path_to_utf8(paths->migrationDir()));
                     }
-                } else if (params->reset_layout) {
-                    LOG_INFO("Legacy layout migration skipped because --reset-layout was requested");
+                } else if (reset_layout) {
+                    LOG_INFO("Legacy layout migration skipped because a layout reset was requested");
                 }
             } else {
                 LOG_WARN("Unable to resolve user settings path: {}", paths.error());
