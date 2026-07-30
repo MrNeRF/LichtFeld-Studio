@@ -3261,6 +3261,13 @@ namespace lfs::vis::gui {
         }
 
         applyDefaultStyle();
+        if (auto* const input_controller = viewer_->getInputController()) {
+            if (const auto mode = InputController::cameraNavigationModeFromName(
+                    lfs::vis::loadCameraNavigationPreference())) {
+                input_controller->setCameraNavigationMode(*mode);
+            }
+            input_controller->setCameraViewSnapEnabled(lfs::vis::loadCameraViewSnapPreference());
+        }
         rebuildFonts(current_ui_scale_);
 
         initMenuBar();

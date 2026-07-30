@@ -7,7 +7,51 @@ body.floating-panel {
     margin-bottom: 8dp;
 }
 
+.preferences-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4dp;
+    margin-bottom: 12dp;
+}
+
+.preferences-tab {
+    flex: 1 1 120dp;
+    min-width: 112dp;
+}
+
+.preferences-tab.active {
+    border-width: 2dp;
+    font-weight: bold;
+}
+
 .preferences-section-title {
+    display: block;
+    font-size: 12dp;
+    font-weight: bold;
+    margin-bottom: 6dp;
+}
+
+.preferences-description {
+    display: block;
+    font-size: 12dp;
+    line-height: 18dp;
+    opacity: 0.8;
+}
+
+.preferences-group {
+    border-top-width: 1dp;
+    border-top-color: #49536a;
+    margin-top: 10dp;
+    padding-top: 8dp;
+}
+
+.preferences-group:first-child {
+    border-top-width: 0;
+    margin-top: 0;
+    padding-top: 0;
+}
+
+.preferences-group-title {
     display: block;
     font-size: 12dp;
     font-weight: bold;
@@ -37,13 +81,21 @@ body.floating-panel {
     margin-left: auto;
 }
 
-.preferences-reset-row {
-    display: flex;
-    justify-content: flex-end;
+.preferences-checkbox-row input {
+    margin-left: auto;
 }
 
 .preferences-actions {
     display: flex;
+    align-items: center;
+    gap: 6dp;
     justify-content: flex-end;
-    margin-top: 6dp;
+    margin-top: 12dp;
+    padding-top: 12dp;
+    border-top-width: 1dp;
+    border-top-color: #49536a;
+}
+
+.preferences-actions-spacer {
+    flex: 1;
 }

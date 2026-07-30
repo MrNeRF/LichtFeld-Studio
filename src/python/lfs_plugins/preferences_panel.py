@@ -19,7 +19,7 @@ class PreferencesPanel(Panel):
     order = 100
     template = "rmlui/preferences.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (420, 0)
+    size = (680, 0)
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     update_policy = "dirty"
 
@@ -32,11 +32,18 @@ class PreferencesPanel(Panel):
         (2.0, "200%"),
     )
 
+    NAVIGATION_OPTIONS = (
+        ("orbit", "preferences.navigation_orbit"),
+        ("trackball", "preferences.navigation_trackball"),
+        ("fpv", "preferences.navigation_fpv"),
+        ("drone", "preferences.navigation_drone"),
+    )
     def __init__(self):
         self._handle = None
         self._theme_catalog = []
         self._language_catalog = []
         self._last_state = None
+        self._section = "general"
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("preferences")
@@ -44,14 +51,29 @@ class PreferencesPanel(Panel):
             return
 
         model.bind_func("panel_label", lambda: lf.ui.tr("preferences.title"))
+        model.bind_func("show_general", lambda: self._section == "general")
+        model.bind_func("show_appearance", lambda: self._section == "appearance")
+        model.bind_func("show_input", lambda: self._section == "input")
+        model.bind_func("show_interface", lambda: self._section == "interface")
+        model.bind_func("reset_section_label", self._reset_section_label)
         model.bind("theme_idx", self._theme_index, self._set_theme_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind("language_idx", self._language_index, self._set_language_index)
+        model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
+        model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
+        model.bind("remember_navigation", lf.ui.remember_camera_navigation, self._set_remember_navigation)
+        model.bind("remember_view_snap", lf.ui.remember_camera_view_snap, self._set_remember_view_snap)
         model.bind_event("close", self._on_close)
-        model.bind_event("reset_layout", self._on_reset_layout)
+        model.bind_event("reset_current_section", self._on_reset_current_section)
+        model.bind_event("reset_all_settings", self._on_reset_all_settings)
+        model.bind_event("show_general", lambda *_: self._set_section("general"))
+        model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
+        model.bind_event("show_input", lambda *_: self._set_section("input"))
+        model.bind_event("show_interface", lambda *_: self._set_section("interface"))
         model.bind_record_list("themes")
         model.bind_record_list("scales")
         model.bind_record_list("languages")
+        model.bind_record_list("navigation_modes")
         self._handle = model.get_handle()
 
     def on_mount(self, doc):
@@ -69,16 +91,17 @@ class PreferencesPanel(Panel):
         if state == self._last_state:
             return
         self._last_state = state
-        if self._handle:
-            self._handle.dirty("theme_idx")
-            self._handle.dirty("scale_idx")
-            self._handle.dirty("language_idx")
+        self._dirty_selection()
 
     def _state(self):
         return (
             lf.ui.get_theme(),
             float(lf.ui.get_ui_scale_preference()),
             lf.ui.get_current_language(),
+            lf.get_camera_navigation_mode(),
+            lf.get_camera_view_snap_enabled(),
+            lf.ui.remember_camera_navigation(),
+            lf.ui.remember_camera_view_snap(),
         )
 
     def _rebuild_records(self):
@@ -114,6 +137,13 @@ class PreferencesPanel(Panel):
             [
                 {"index": str(index), "label": name}
                 for index, (_code, name) in enumerate(self._language_catalog)
+            ],
+        )
+        self._handle.update_record_list(
+            "navigation_modes",
+            [
+                {"index": str(index), "label": lf.ui.tr(label)}
+                for index, (_mode, label) in enumerate(self.NAVIGATION_OPTIONS)
             ],
         )
 
@@ -165,38 +195,131 @@ class PreferencesPanel(Panel):
             lf.ui.set_language(self._language_catalog[index][0])
             self._refresh_selection()
 
+    def _navigation_index(self):
+        current = lf.get_camera_navigation_mode()
+        for index, (mode, _label) in enumerate(self.NAVIGATION_OPTIONS):
+            if mode == current:
+                return str(index)
+        return "0"
+
+    def _set_navigation_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.NAVIGATION_OPTIONS):
+            lf.set_camera_navigation_mode(self.NAVIGATION_OPTIONS[index][0])
+            self._refresh_selection()
+
+    def _set_view_snap(self, enabled):
+        lf.set_camera_view_snap_enabled(bool(enabled))
+        self._refresh_selection()
+
+    def _set_remember_navigation(self, enabled):
+        lf.ui.set_remember_camera_navigation(bool(enabled))
+        if enabled:
+            lf.set_camera_navigation_mode(lf.get_camera_navigation_mode())
+        self._refresh_selection()
+
+    def _set_remember_view_snap(self, enabled):
+        lf.ui.set_remember_camera_view_snap(bool(enabled))
+        if enabled:
+            lf.set_camera_view_snap_enabled(lf.get_camera_view_snap_enabled())
+        self._refresh_selection()
+
     def _on_close(self, _handle, _event, _args):
         lf.ui.set_panel_enabled(self.id, False)
 
-    def _on_reset_layout(self, _handle, _event, _args):
-        reset_label = lf.ui.tr("preferences.reset_layout")
+    def _set_section(self, section):
+        if self._section == section:
+            return
+        self._section = section
+        if self._handle:
+            for name in ("show_general", "show_appearance", "show_input", "show_interface", "reset_section_label"):
+                self._handle.dirty(name)
+
+    def _reset_section_label(self):
+        return lf.ui.tr("preferences.reset_current_section")
+
+    def _on_reset_current_section(self, _handle, _event, _args):
+        reset_label = self._reset_section_label()
+        section_name = lf.ui.tr(f"preferences.{self._section}")
 
         def _on_result(button):
             if button != reset_label:
                 return
-            error = lf.ui.reset_layout()
+            error = self._reset_section()
             if error:
                 lf.ui.message_dialog(
                     reset_label,
-                    f"{lf.ui.tr('preferences.reset_layout_failed')} {error}",
+                    f"{lf.ui.tr('preferences.reset_section_failed')} {error}",
                     "error",
                 )
                 return
             lf.ui.message_dialog(
                 reset_label,
-                lf.ui.tr("preferences.reset_layout_success"),
+                lf.ui.tr("preferences.reset_section_success"),
             )
 
         lf.ui.confirm_dialog(
-            reset_label,
-            lf.ui.tr("preferences.reset_layout_confirmation"),
+            f"{reset_label}: {section_name}",
+            f"{lf.ui.tr('preferences.reset_section_confirmation')} {section_name}.",
             [lf.ui.tr("common.cancel"), reset_label],
             _on_result,
         )
 
+    def _on_reset_all_settings(self, _handle, _event, _args):
+        reset_label = lf.ui.tr("preferences.reset_all_settings")
+
+        def _on_result(button):
+            if button != reset_label:
+                return
+            errors = [self._reset_section(section) for section in ("general", "appearance", "input", "interface")]
+            error = next((item for item in errors if item), None)
+            if error:
+                lf.ui.message_dialog(
+                    reset_label,
+                    f"{lf.ui.tr('preferences.reset_section_failed')} {error}",
+                    "error",
+                )
+                return
+            self._refresh_selection()
+            lf.ui.message_dialog(reset_label, lf.ui.tr("preferences.reset_all_settings_success"))
+
+        lf.ui.confirm_dialog(
+            reset_label,
+            lf.ui.tr("preferences.reset_all_settings_confirmation"),
+            [lf.ui.tr("common.cancel"), reset_label],
+            _on_result,
+        )
+
+    def _reset_section(self, section=None):
+        section = section or self._section
+        if section == "general":
+            lf.ui.set_language("en")
+        elif section == "appearance":
+            lf.ui.set_theme("dark")
+            lf.ui.set_ui_scale(0.0)
+        elif section == "input":
+            lf.ui.set_remember_camera_navigation(False)
+            lf.ui.set_remember_camera_view_snap(False)
+            lf.set_camera_navigation_mode("orbit")
+            lf.set_camera_view_snap_enabled(False)
+        elif section == "interface":
+            return lf.ui.reset_layout()
+        self._refresh_selection()
+        return None
+
     def _refresh_selection(self):
         self._last_state = self._state()
+        self._dirty_selection()
+
+    def _dirty_selection(self):
         if self._handle:
             self._handle.dirty("theme_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("language_idx")
+            self._handle.dirty("navigation_idx")
+            self._handle.dirty("view_snap")
+            self._handle.dirty("remember_navigation")
+            self._handle.dirty("remember_view_snap")

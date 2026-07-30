@@ -4,7 +4,14 @@
   <link type="text/rcss" href="preferences.rcss"/>
 </head>
 <body template="floating-window" data-model="preferences">
-  <div class="preferences-section">
+  <div class="preferences-tabs">
+    <button class="btn preferences-tab" data-class-active="show_general" data-event-click="show_general">@tr:preferences.general</button>
+    <button class="btn preferences-tab" data-class-active="show_appearance" data-event-click="show_appearance">@tr:preferences.appearance</button>
+    <button class="btn preferences-tab" data-class-active="show_input" data-event-click="show_input">@tr:preferences.input</button>
+    <button class="btn preferences-tab" data-class-active="show_interface" data-event-click="show_interface">@tr:preferences.interface</button>
+  </div>
+
+  <div class="preferences-section" data-if="show_general">
     <span class="preferences-section-title">@tr:preferences.language</span>
     <div class="preferences-row">
       <span class="preferences-label">@tr:preferences.language</span>
@@ -14,9 +21,35 @@
     </div>
   </div>
 
-  <div class="separator"></div>
+  <div class="preferences-section" data-if="show_input">
+    <span class="preferences-section-title">@tr:preferences.input</span>
+    <div class="preferences-group">
+      <span class="preferences-group-title">@tr:preferences.camera_navigation</span>
+      <div class="preferences-row">
+        <span class="preferences-label">@tr:preferences.navigation_mode</span>
+        <select class="preferences-select" data-value="navigation_idx">
+          <option data-for="mode : navigation_modes" data-attr-value="mode.index">{{ mode.label }}</option>
+        </select>
+      </div>
+      <div class="preferences-row preferences-checkbox-row">
+        <span class="preferences-label">@tr:preferences.remember_camera_navigation</span>
+        <input type="checkbox" data-checked="remember_navigation" />
+      </div>
+    </div>
+    <div class="preferences-group">
+      <span class="preferences-group-title">@tr:preferences.camera_view_snap</span>
+      <div class="preferences-row preferences-checkbox-row">
+        <span class="preferences-label">@tr:preferences.enable_axis_view_snap</span>
+        <input type="checkbox" data-checked="view_snap" />
+      </div>
+      <div class="preferences-row preferences-checkbox-row">
+        <span class="preferences-label">@tr:preferences.remember_camera_view_snap</span>
+        <input type="checkbox" data-checked="remember_view_snap" />
+      </div>
+    </div>
+  </div>
 
-  <div class="preferences-section">
+  <div class="preferences-section" data-if="show_appearance">
     <span class="preferences-section-title">@tr:menu.view.theme</span>
     <div class="preferences-row">
       <span class="preferences-label">@tr:menu.view.theme</span>
@@ -32,18 +65,15 @@
     </div>
   </div>
 
-  <div class="separator"></div>
-
-  <div class="preferences-section">
+  <div class="preferences-section" data-if="show_interface">
     <span class="preferences-section-title">@tr:preferences.interface</span>
-    <div class="preferences-reset-row">
-      <button class="btn" data-event-click="reset_layout">@tr:preferences.reset_layout</button>
-    </div>
+    <span class="preferences-description">@tr:preferences.interface_layout_description</span>
   </div>
 
-  <div class="separator"></div>
-
   <div class="preferences-actions">
+    <button class="btn" data-event-click="reset_current_section">{{ reset_section_label }}</button>
+    <span class="preferences-actions-spacer"></span>
+    <button class="btn" data-event-click="reset_all_settings">@tr:preferences.reset_all_settings</button>
     <button class="btn btn--primary" data-event-click="close">@tr:common.ok</button>
   </div>
 </body>

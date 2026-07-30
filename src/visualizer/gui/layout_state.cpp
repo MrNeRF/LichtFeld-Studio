@@ -98,6 +98,8 @@ namespace lfs::vis::gui {
             std::ifstream file(path);
             if (!file)
                 return;
+            if (file.peek() == std::ifstream::traits_type::eof())
+                return;
 
             const auto j = nlohmann::json::parse(file);
             right_panel_width = j.value("right_panel_width", right_panel_width);

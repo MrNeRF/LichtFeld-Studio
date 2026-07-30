@@ -1201,6 +1201,104 @@ namespace lfs::vis {
         }
     }
 
+    void saveCameraNavigationPreference(const std::string& mode) {
+        try {
+            if (!rememberCameraNavigationPreference())
+                return;
+            const bool known_mode = mode == "orbit" || mode == "trackball" ||
+                                    mode == "fpv" || mode == "drone";
+            auto preferences = loadPreferences();
+            preferences["camera_navigation_mode"] = known_mode ? mode : "orbit";
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera navigation preference: {}", e.what());
+        }
+    }
+
+    std::string loadCameraNavigationPreference() {
+        try {
+            if (preferencesDisabled() || !rememberCameraNavigationPreference())
+                return "orbit";
+            const auto preferences = loadPreferences();
+            const std::string mode = preferences.value("camera_navigation_mode", "orbit");
+            if (mode == "orbit" || mode == "trackball" || mode == "fpv" || mode == "drone")
+                return mode;
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera navigation preference: {}", e.what());
+        }
+        return "orbit";
+    }
+
+    void setRememberCameraNavigationPreference(const bool enabled) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["remember_camera_navigation"] = enabled;
+            if (!enabled)
+                preferences.erase("camera_navigation_mode");
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera navigation persistence preference: {}", e.what());
+        }
+    }
+
+    bool rememberCameraNavigationPreference() {
+        try {
+            if (preferencesDisabled())
+                return false;
+            return loadPreferences().value("remember_camera_navigation", false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera navigation persistence preference: {}", e.what());
+            return false;
+        }
+    }
+
+    void saveCameraViewSnapPreference(const bool enabled) {
+        try {
+            if (!rememberCameraViewSnapPreference())
+                return;
+            auto preferences = loadPreferences();
+            preferences["camera_view_snap"] = enabled;
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera view snap preference: {}", e.what());
+        }
+    }
+
+    bool loadCameraViewSnapPreference() {
+        try {
+            if (preferencesDisabled() || !rememberCameraViewSnapPreference())
+                return false;
+            const auto preferences = loadPreferences();
+            return preferences.value("camera_view_snap", false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera view snap preference: {}", e.what());
+            return false;
+        }
+    }
+
+    void setRememberCameraViewSnapPreference(const bool enabled) {
+        try {
+            auto preferences = loadPreferences();
+            preferences["remember_camera_view_snap"] = enabled;
+            if (!enabled)
+                preferences.erase("camera_view_snap");
+            savePreferences(std::move(preferences));
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save camera view snap persistence preference: {}", e.what());
+        }
+    }
+
+    bool rememberCameraViewSnapPreference() {
+        try {
+            if (preferencesDisabled())
+                return false;
+            return loadPreferences().value("remember_camera_view_snap", false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load camera view snap persistence preference: {}", e.what());
+            return false;
+        }
+    }
+
     void setThemeVignetteEnabled(bool enabled) {
         Theme t = theme();
         t.vignette.enabled = enabled;
