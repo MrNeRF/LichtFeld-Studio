@@ -11,8 +11,7 @@ Thanks for your interest in contributing!
    - Not sure where to start? Ask on [Discord](https://discord.gg/TbxJST2BbC)
 
 2. **Setup**
-   - Installation instructions are in the [Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki)
-   - Install the pre-commit hook: `cp tools/pre-commit .git/hooks/`
+   - Follow the repo-local [source build guide](docs/building_and_distribution.md) for toolchain setup, the pre-commit hook, and test commands
 
 3. **Make Your Changes**
    - Apply `clang-format` before committing
@@ -68,7 +67,7 @@ requests and pushes to `master`; the identical-value audit remains opt-in.
 ## Need Help?
 
 - Join our [Discord](https://discord.gg/TbxJST2BbC) for questions and discussions
-- Check the [Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki) for documentation
+- Check the [source build guide](docs/building_and_distribution.md) for build and test documentation
 - Look at the [FAQ](https://github.com/MrNeRF/LichtFeld-Studio/wiki/Frequently-Asked-Questions)
 
 ## License
