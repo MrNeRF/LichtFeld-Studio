@@ -360,7 +360,7 @@ namespace lfs::core {
                 return std::format("freeze_lr_scale must be within [0, 1] (got {})", freeze_lr_scale);
             }
             if (!add_splat_paths.empty()) {
-                if (resume_checkpoint.has_value()) {
+                if (resume_checkpoint.has_value() || resume_project.has_value()) {
                     return "--add-splat cannot be used together with --resume";
                 }
                 if (!add_splat_freeze.empty() && add_splat_freeze.size() != add_splat_paths.size()) {
@@ -376,7 +376,27 @@ namespace lfs::core {
                     }
                 }
             }
-            if (optimization.ppisp_freeze_from_sidecar && !resume_checkpoint.has_value()) {
+            if (resume_checkpoint && resume_project) {
+                return "Only one resume source may be active";
+            }
+            if (save_project_at_iteration && *save_project_at_iteration == 0) {
+                return "--save-project-at-iter must be positive";
+            }
+            if (save_project_at_iteration &&
+                *save_project_at_iteration >
+                    optimization.iterations) {
+                return "--save-project-at-iter cannot exceed the training iteration limit";
+            }
+            if (!save_project_at_iteration &&
+                !save_project_path.empty()) {
+                return "--save-project-path requires --save-project-at-iter";
+            }
+            if (!save_project_path.empty() &&
+                save_project_path.extension() != ".licht") {
+                return "--save-project-path must end in .licht";
+            }
+            if (optimization.ppisp_freeze_from_sidecar &&
+                !resume_checkpoint.has_value() && !resume_project.has_value()) {
                 if (optimization.ppisp_sidecar_path.empty()) {
                     return "PPISP sidecar freeze requires a sidecar path";
                 }
@@ -898,6 +918,8 @@ namespace lfs::core {
             json["images"] = images;
             json["resize_factor"] = resize_factor;
             json["test_every"] = test_every;
+            json["timelapse_images"] = timelapse_images;
+            json["timelapse_every"] = timelapse_every;
             json["max_width"] = max_width;
             json["min_track_length"] = min_track_length;
             json["loading_params"] = loading_params.to_json();
@@ -921,6 +943,15 @@ namespace lfs::core {
                 dataset.min_track_length = j["min_track_length"].get<int>();
             }
             dataset.test_every = j["test_every"].get<int>();
+            if (j.contains("timelapse_images")) {
+                dataset.timelapse_images =
+                    j["timelapse_images"]
+                        .get<std::vector<std::string>>();
+            }
+            if (j.contains("timelapse_every")) {
+                dataset.timelapse_every =
+                    j["timelapse_every"].get<int>();
+            }
             dataset.output_path = utf8_to_path(j["output_folder"].get<std::string>());
 
             if (j.contains("output_name")) {

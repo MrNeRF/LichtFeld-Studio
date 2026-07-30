@@ -8,6 +8,7 @@
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_serialization_sink.hpp"
 #include "nanoflann.hpp"
 
 #include <algorithm>
@@ -1060,8 +1061,37 @@ namespace lfs::core {
             }
             // On-disk format is canonical [N, K, 3]; deswizzle before writing for
             // forward compatibility and to keep the format identical to pre-swizzle builds.
-            Tensor shN_canon = shN_canonical_cpu();
-            os << shN_canon;
+            if (current_tensor_serialization_sink()) {
+                const auto primitives =
+                    static_cast<std::size_t>(size());
+                const auto coefficients =
+                    static_cast<std::uint32_t>(
+                        max_sh_coeffs_rest());
+                serialize_tensor_with_descriptor(
+                    os, _shN,
+                    TensorSerializationDescriptor{
+                        .serialized_shape =
+                            TensorShape{
+                                primitives,
+                                coefficients,
+                                SH_CHANNELS,
+                            },
+                        .dtype = DataType::Float32,
+                        // Preserve the exact legacy LFKP header emitted by
+                        // shN_canonical_cpu().
+                        .serialized_device = Device::CPU,
+                        .encoding =
+                            TensorPayloadEncoding::
+                                SwizzledShToCanonical,
+                        .sh_primitives = primitives,
+                        .sh_coefficients_rest = coefficients,
+                        .sh_layout_coefficients_rest =
+                            coefficients,
+                    });
+            } else {
+                Tensor shN_canon = shN_canonical_cpu();
+                os << shN_canon;
+            }
         }
 
         const uint8_t has_deleted = _deleted.is_valid() ? 1 : 0;

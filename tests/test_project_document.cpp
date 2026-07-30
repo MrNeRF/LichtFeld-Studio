@@ -5,6 +5,8 @@
 
 #include "io/loaders/loader_utils.hpp"
 #include "io/project_document.hpp"
+#include "training/checkpoint.hpp"
+#include "training/strategies/mcmc.hpp"
 
 #include <gtest/gtest.h>
 
@@ -21,6 +23,7 @@
 #include <memory>
 #include <ranges>
 #include <span>
+#include <sstream>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -869,6 +872,50 @@ namespace {
             point_uuid, PointCloudPayload(point_cloud)));
         require_status(
             document->set_mesh(mesh_uuid, MeshPayload(mesh)));
+        auto checkpoint_model = make_splat(2);
+        lfs::training::MCMC checkpoint_strategy(
+            *checkpoint_model);
+        lfs::core::param::TrainingParameters
+            checkpoint_parameters;
+        checkpoint_parameters.optimization =
+            lfs::core::param::
+                OptimizationParameters::
+                    mcmc_defaults();
+        checkpoint_parameters.optimization.sh_degree = 0;
+        checkpoint_parameters.optimization.max_cap = 2;
+        checkpoint_strategy.initialize(
+            checkpoint_parameters.optimization);
+        std::ostringstream checkpoint_stream(
+            std::ios::binary | std::ios::out);
+        const auto serialized_checkpoint =
+            lfs::training::serialize_checkpoint(
+                checkpoint_stream, 17,
+                checkpoint_strategy,
+                checkpoint_parameters,
+                nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(serialized_checkpoint)
+            << lfs::format_for_developer(
+                   serialized_checkpoint.error());
+        const auto checkpoint_string =
+            checkpoint_stream.str();
+        std::vector<std::byte> checkpoint_bytes(
+            checkpoint_string.size());
+        std::memcpy(
+            checkpoint_bytes.data(),
+            checkpoint_string.data(),
+            checkpoint_string.size());
+        auto checkpoint_payload =
+            LazyChunkValue::from_owned(
+                std::make_shared<
+                    const std::vector<std::byte>>(
+                    std::move(checkpoint_bytes)),
+                checkpoint_uuid);
+        ASSERT_TRUE(checkpoint_payload)
+            << lfs::format_for_developer(
+                   checkpoint_payload.error());
+        require_status(document->set_checkpoint(
+            checkpoint_uuid,
+            std::move(*checkpoint_payload)));
 
         auto& project = document->edit_project();
         for (const auto& [node, fourcc, reason, tag, locator] :
@@ -902,10 +949,14 @@ namespace {
                 WorldOriginProvenance::CentralizeByPointCloud,
         }));
 
-        auto first = document->save(path, save_options(100, 200));
+        auto first_options = save_options(100, 200);
+        first_options.commit.snapshot_uuid =
+            checkpoint_uuid;
+        auto first =
+            document->save(path, first_options);
         ASSERT_TRUE(first) << lfs::format_for_developer(first.error());
         EXPECT_EQ(first->generation, 1u);
-        EXPECT_EQ(first->rewritten_chunks, 8u);
+        EXPECT_EQ(first->rewritten_chunks, 9u);
 
         auto reopened = ProjectDocument::open(path);
         ASSERT_TRUE(reopened)
@@ -972,12 +1023,16 @@ namespace {
                 .to_vector_uint8(),
             (std::vector<std::uint8_t>{0, group}));
 
-        auto second = reopened->save(path, save_options(110, 300));
+        auto second_options = save_options(110, 300);
+        second_options.commit.snapshot_uuid =
+            checkpoint_uuid;
+        auto second =
+            reopened->save(path, second_options);
         ASSERT_TRUE(second)
             << lfs::format_for_developer(second.error());
         EXPECT_EQ(second->generation, 2u);
         EXPECT_EQ(second->rewritten_chunks, 1u);
-        EXPECT_EQ(second->reused_chunks, 7u);
+        EXPECT_EQ(second->reused_chunks, 8u);
 
         auto reader = ProjectReader::open(path);
         ASSERT_TRUE(reader)

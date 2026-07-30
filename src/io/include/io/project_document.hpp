@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "core/checkpoint_format.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "io/geometry_payload.hpp"
@@ -14,10 +15,14 @@
 #include "io/selection_chapter.hpp"
 #include "io/splat_chapter.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <iosfwd>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace lfs::io {
@@ -25,6 +30,49 @@ namespace lfs::io {
 }
 
 namespace lfs::io::project {
+
+    // A binary chapter whose clean source range is also its lazy hydration
+    // handle. Reading a clean value never marks it dirty; saving that same
+    // value reuses its CleanProof byte-for-byte. An owned value retains the
+    // producer's immutable storage and is streamed without a second
+    // checkpoint-sized allocation.
+    class LFS_IO_API LazyChunkValue {
+    public:
+        using StreamVisitor =
+            std::function<lfs::Result<void>(std::istream&, std::uint64_t)>;
+
+        LazyChunkValue(LazyChunkValue&&) noexcept;
+        LazyChunkValue& operator=(LazyChunkValue&&) noexcept;
+        LazyChunkValue(const LazyChunkValue&) = delete;
+        LazyChunkValue& operator=(const LazyChunkValue&) = delete;
+        ~LazyChunkValue();
+
+        [[nodiscard]] static lfs::Result<LazyChunkValue>
+        from_owned(std::shared_ptr<const std::vector<std::byte>> bytes,
+                   const lfs::core::Uuid& snapshot_uuid);
+        [[nodiscard]] static lfs::Result<LazyChunkValue>
+        from_owned(std::vector<std::byte> bytes,
+                   const lfs::core::Uuid& snapshot_uuid);
+
+        [[nodiscard]] std::uint64_t size() const noexcept;
+        [[nodiscard]] const lfs::core::Uuid& snapshot_uuid() const noexcept;
+        [[nodiscard]] bool is_clean_reference() const noexcept;
+        [[nodiscard]] bool owns_staged_bytes() const noexcept;
+
+        [[nodiscard]] lfs::Result<void>
+        read_at(std::uint64_t offset, std::span<std::byte> destination) const;
+        [[nodiscard]] lfs::Result<void>
+        visit_stream(const StreamVisitor& visitor) const;
+        [[nodiscard]] lfs::Result<void>
+        copy_to(std::ostream& destination,
+                std::size_t window_bytes = 8ull * 1024 * 1024) const;
+
+    private:
+        friend class ProjectDocument;
+        struct Impl;
+        explicit LazyChunkValue(std::unique_ptr<Impl> impl);
+        std::unique_ptr<Impl> impl_;
+    };
 
     struct ProjectDocumentOpenOptions {
         ReaderOptions reader;
@@ -52,6 +100,9 @@ namespace lfs::io::project {
         SelectionHydrationReport selection;
         ParameterManagerSnapshot pending_parameters;
         ReverseReferenceIndex reverse_reference_index;
+        std::optional<lfs::core::Uuid> checkpoint_uuid;
+        std::optional<lfs::core::CheckpointHeader> checkpoint_header;
+        bool trainer_state_pending = false;
     };
 
     class LFS_IO_API ProjectHydrationPlan {
@@ -107,6 +158,26 @@ namespace lfs::io::project {
         [[nodiscard]] SelectionChapter& edit_selection() noexcept;
         [[nodiscard]] const ParametersChapter& parameters() const noexcept;
         [[nodiscard]] ParametersChapter& edit_parameters() noexcept;
+
+        [[nodiscard]] const LazyChunkValue*
+        find_checkpoint(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<void>
+        set_checkpoint(const lfs::core::Uuid& instance_uuid,
+                       LazyChunkValue payload);
+        [[nodiscard]] bool
+        remove_checkpoint(const lfs::core::Uuid& instance_uuid);
+        [[nodiscard]] std::vector<lfs::core::Uuid>
+        checkpoint_uuids() const;
+
+        [[nodiscard]] const LazyChunkValue*
+        find_ppisp(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<void>
+        set_ppisp(const lfs::core::Uuid& instance_uuid,
+                  LazyChunkValue payload);
+        [[nodiscard]] bool
+        remove_ppisp(const lfs::core::Uuid& instance_uuid);
+        [[nodiscard]] std::vector<lfs::core::Uuid>
+        ppisp_uuids() const;
 
         [[nodiscard]] lfs::Result<void>
         set_georeference(const ProjectGeoreference& value);

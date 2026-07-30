@@ -143,6 +143,7 @@ set(TEST_FILES
     test_roi_weighted_losses.cpp
     test_checkpoint_resume.cpp
     test_component_config_serialization.cpp
+    test_training_snapshot_service.cpp
     test_atomic_output.cpp
     test_json_chapter_dom.cpp
     test_project_container.cpp

@@ -6,6 +6,8 @@
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include <cuda_runtime.h>
+#include <limits>
+#include <stdexcept>
 
 namespace lfs::core {
 
@@ -102,6 +104,39 @@ namespace lfs::core {
                 const float4 v = src[shAt_device(p, k, slots_per_primitive)];
                 write_unpack4(canonical_row, start_off, active_floats, v);
             }
+        }
+
+        __global__ void undo_reorder_sh_range_kernel(
+            const float4* __restrict__ src,
+            float* __restrict__ dst,
+            const std::uint64_t canonical_float_offset,
+            const std::uint64_t float_count,
+            const std::uint32_t active_floats_per_primitive,
+            const std::uint32_t slots_per_primitive) {
+            const std::uint64_t output_index =
+                static_cast<std::uint64_t>(blockIdx.x) *
+                    blockDim.x +
+                threadIdx.x;
+            if (output_index >= float_count)
+                return;
+
+            const std::uint64_t canonical_index =
+                canonical_float_offset + output_index;
+            const auto primitive = static_cast<std::uint32_t>(
+                canonical_index /
+                active_floats_per_primitive);
+            const auto row_offset = static_cast<std::uint32_t>(
+                canonical_index %
+                active_floats_per_primitive);
+            const auto slot = row_offset / 4u;
+            const auto component = row_offset % 4u;
+            const float4 packed =
+                src[shAt_device(
+                    primitive, slot,
+                    slots_per_primitive)];
+            const float values[4] = {
+                packed.x, packed.y, packed.z, packed.w};
+            dst[output_index] = values[component];
         }
 
         template <typename IndexT>
@@ -365,6 +400,58 @@ namespace lfs::core {
             reinterpret_cast<const float4*>(src_swizzled), dst_canonical,
             static_cast<std::uint32_t>(n_primitives), dst_coeffs_rest, slots);
         LFS_CUDA_LAUNCH_CHECK(stream, "core.sh_layout.undo_reorder");
+    }
+
+    void undo_reorder_sh_range_from_swizzled(
+        const float* src_swizzled,
+        float* dst_canonical_scratch,
+        const std::uint64_t canonical_float_offset,
+        const std::uint64_t float_count,
+        const std::size_t n_primitives,
+        const std::uint32_t dst_coeffs_rest,
+        const std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream) {
+        if (float_count == 0)
+            return;
+        if (!src_swizzled || !dst_canonical_scratch ||
+            n_primitives == 0 || dst_coeffs_rest == 0) {
+            throw std::invalid_argument(
+                "Invalid bounded SH deswizzle arguments");
+        }
+        const std::uint64_t floats_per_primitive =
+            static_cast<std::uint64_t>(
+                dst_coeffs_rest) *
+            kShChannels;
+        if (n_primitives >
+                std::numeric_limits<std::uint64_t>::max() /
+                    floats_per_primitive ||
+            canonical_float_offset >
+                n_primitives * floats_per_primitive ||
+            float_count >
+                n_primitives * floats_per_primitive -
+                    canonical_float_offset) {
+            throw std::out_of_range(
+                "Bounded SH deswizzle range exceeds canonical tensor");
+        }
+        const auto slots =
+            sh_float4_slots_for_rest(
+                layout_coeffs_rest);
+        if (slots == 0) {
+            throw std::invalid_argument(
+                "Bounded SH deswizzle has no source slots");
+        }
+        const auto blocks = static_cast<unsigned>(
+            (float_count + BLOCK - 1) / BLOCK);
+        undo_reorder_sh_range_kernel<<<
+            blocks, BLOCK, 0, stream>>>(
+            reinterpret_cast<const float4*>(src_swizzled),
+            dst_canonical_scratch,
+            canonical_float_offset, float_count,
+            static_cast<std::uint32_t>(
+                floats_per_primitive),
+            slots);
+        LFS_CUDA_LAUNCH_CHECK(
+            stream, "core.sh_layout.undo_reorder_range");
     }
 
     void shN_swizzled_zero_at_indices(

@@ -21,16 +21,21 @@
 #include "optimizer/scheduler.hpp"
 #include "progress.hpp"
 #include "strategies/istrategy.hpp"
+#include "training_snapshot_service.hpp"
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <expected>
+#include <filesystem>
 #include <functional>
+#include <istream>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <stop_token>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -98,6 +103,17 @@ namespace lfs::training {
             bool used_mask = false;
         };
 
+        struct ProjectSnapshotRuntimeMetrics {
+            TrainingSnapshotServiceMetrics capture;
+            std::filesystem::path last_path;
+            std::string last_writer_error;
+            double pre_snapshot_step_mean_ms = 0.0;
+            double post_resume_step_mean_ms = 0.0;
+            double post_resume_step_regression_percent = 0.0;
+            std::size_t post_resume_step_samples = 0;
+            bool writer_in_flight = false;
+        };
+
         // Legacy constructor - takes ownership of strategy and shares datasets
         Trainer(std::shared_ptr<CameraDataset> dataset,
                 std::unique_ptr<IStrategy> strategy,
@@ -137,6 +153,8 @@ namespace lfs::training {
         void request_pause() { pause_requested_ = true; }
         void request_resume() { pause_requested_ = false; }
         void request_save() { save_requested_ = true; }
+        void request_project_save(
+            std::filesystem::path path = {});
         void request_stop() { stop_requested_ = true; }
 
         bool is_paused() const { return is_paused_.load(); }
@@ -242,6 +260,12 @@ namespace lfs::training {
         std::expected<void, std::string> save_checkpoint(int iteration);
         std::expected<void, std::string> save_checkpoint_to(const std::filesystem::path& output_path, int iteration);
         std::expected<int, std::string> load_checkpoint(const std::filesystem::path& checkpoint_path);
+        CheckpointLoadResult load_checkpoint(
+            std::istream& source,
+            std::uint64_t source_bytes,
+            std::string_view source_name = "embedded CKPT");
+        [[nodiscard]] ProjectSnapshotRuntimeMetrics
+        get_project_snapshot_metrics() const;
         void save_final_ply_and_checkpoint(int iteration);
 
         // Orderly shutdown - GPU sync, wait for async saves, release resources. Idempotent.
@@ -408,6 +432,7 @@ namespace lfs::training {
             return params.optimization.use_ppisp &&
                    params.optimization.ppisp_freeze_from_sidecar &&
                    !params.resume_checkpoint.has_value() &&
+                   !params.resume_project.has_value() &&
                    !params.optimization.ppisp_sidecar_path.empty();
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
@@ -416,8 +441,21 @@ namespace lfs::training {
             int iter,
             bool in_controller_phase = false) const;
 
+        struct ProjectSnapshotChapters;
+
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
+        void prepare_project_snapshot_at_safe_point(
+            int capture_iteration,
+            const std::filesystem::path& path);
+        [[nodiscard]] lfs::Result<
+            std::shared_ptr<ProjectSnapshotChapters>>
+        prestage_project_snapshot_chapters() const;
+        void capture_project_snapshot_at_safe_point(int iteration);
+        void observe_training_step_duration(
+            int iteration, double elapsed_ms);
+        void join_finished_project_writer();
+        void finish_project_writer();
         void apply_pending_params_at_safe_point();
         void apply_param_side_effects(
             const lfs::core::param::TrainingParameters& params,
@@ -505,6 +543,29 @@ namespace lfs::training {
         std::unique_ptr<PPISPControllerPool> ppisp_controller_pool_;
 
         std::unique_ptr<ISparsityOptimizer> sparsity_optimizer_;
+
+        std::unique_ptr<TrainingSnapshotService>
+            project_snapshot_service_;
+        std::optional<PreparedTrainingSnapshot>
+            prepared_project_snapshot_;
+        std::shared_ptr<ProjectSnapshotChapters>
+            prestaged_project_chapters_;
+        std::filesystem::path prepared_project_path_;
+        int prepared_project_iteration_ = 0;
+        lfs::core::Uuid project_uuid_;
+        std::jthread project_writer_thread_;
+        std::atomic<bool> project_writer_done_{true};
+        std::atomic<bool> project_writer_in_flight_{false};
+        mutable std::mutex project_snapshot_mutex_;
+        std::optional<std::filesystem::path>
+            requested_project_path_;
+        std::deque<double> recent_step_times_ms_;
+        double project_pre_snapshot_step_mean_ms_ = 0.0;
+        double project_post_resume_step_sum_ms_ = 0.0;
+        std::size_t project_post_resume_step_samples_ = 0;
+        int project_post_resume_start_iteration_ = 0;
+        std::filesystem::path last_project_snapshot_path_;
+        std::string last_project_writer_error_;
 
         // Persistent photometric loss (workspace reuse across iterations)
         lfs::training::losses::PhotometricLoss photometric_loss_;

@@ -32,6 +32,8 @@
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/exporter.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/project_document.hpp"
+#include "io/scene_chapter_adapter.hpp"
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "losses/losses.hpp"
@@ -78,11 +80,29 @@
 #include <utility>
 #include <vector>
 
+#if defined(__linux__)
+#include <sys/resource.h>
+#endif
+
 namespace lfs::training {
 
     namespace {
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
+
+        [[nodiscard]] lfs::Error project_snapshot_error(
+            const lfs::ErrorCode code,
+            std::string detail,
+            const lfs::core::SourceSite source) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message =
+                    "The training project snapshot could not be saved.",
+                .detail = std::move(detail),
+                .detection = source,
+            });
+        }
 
         // Dataset-level normal-prior convention resolution. Prior maps come in
         // several flavors (camera-space OpenCV/OpenGL, world-space in the
@@ -1170,6 +1190,14 @@ namespace lfs::training {
         }
     } // namespace
 
+    struct Trainer::ProjectSnapshotChapters {
+        lfs::core::Uuid snapshot_uuid;
+        int iteration = 0;
+        lfs::io::project::SceneGraphChapter scene_graph;
+        lfs::io::project::SelectionChapter selection;
+        lfs::io::project::ParameterManagerSnapshot parameters;
+    };
+
     Trainer::CameraLossHeatmapState::~CameraLossHeatmapState() {
         if (copy_stream) {
             LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(copy_stream), copy_stream,
@@ -1195,6 +1223,9 @@ namespace lfs::training {
 
         // Stop any ongoing operations
         stop_requested_ = true;
+        finish_project_writer();
+        prepared_project_snapshot_.reset();
+        prestaged_project_chapters_.reset();
 
         // Sync callback stream to avoid race conditions
         if (callback_stream_) {
@@ -1977,6 +2008,9 @@ namespace lfs::training {
           provided_splits_(std::move(provided_splits)) {
         LFS_ASSERT_MSG(base_dataset_ != nullptr, "Trainer requires a camera dataset");
         LFS_ASSERT_MSG(strategy_ != nullptr, "Trainer requires a training strategy");
+        project_uuid_ = lfs::core::generate_uuid_v4();
+        project_snapshot_service_ =
+            std::make_unique<TrainingSnapshotService>();
 
         // Check CUDA availability
         int device_count = 0;
@@ -1990,6 +2024,9 @@ namespace lfs::training {
     Trainer::Trainer(lfs::core::Scene& scene)
         : scene_(&scene) {
         LFS_ASSERT_MSG(scene.hasTrainingData(), "Scene has no cameras");
+        project_uuid_ = lfs::core::generate_uuid_v4();
+        project_snapshot_service_ =
+            std::make_unique<TrainingSnapshotService>();
 
         int device_count = 0;
         LFS_CUDA_TRY(cudaGetDeviceCount(&device_count), nullptr, "CUDA device discovery");
@@ -3010,6 +3047,22 @@ namespace lfs::training {
                 }
             }
 
+            if (params_.save_project_at_iteration) {
+                auto chapters =
+                    prestage_project_snapshot_chapters();
+                if (!chapters) {
+                    return std::unexpected(
+                        std::format(
+                            "Failed to stage .licht CPU chapters: {}",
+                            lfs::format_for_developer(
+                                chapters.error())));
+                }
+                prestaged_project_chapters_ =
+                    std::move(*chapters);
+                LOG_INFO(
+                    "Pre-staged .licht CPU chapters before optimizer start");
+            }
+
             initialized_ = true;
 
             LOG_INFO("Trainer initialization complete");
@@ -3233,6 +3286,11 @@ namespace lfs::training {
 
         LFS_CUDA_LOG_TEARDOWN(cudaDeviceSynchronize(), nullptr, "shutdown: device sync");
 
+        finish_project_writer();
+        prepared_project_snapshot_.reset();
+        prestaged_project_chapters_.reset();
+        project_snapshot_service_.reset();
+
         const bool exiting_headless = params_.optimization.headless;
         if (callback_stream_) {
             lfs::core::CudaMemoryPool::instance().release_stream(callback_stream_);
@@ -3441,6 +3499,837 @@ namespace lfs::training {
         }
 
         return TrainingProgress::Phase::Train;
+    }
+
+    void Trainer::request_project_save(
+        std::filesystem::path path) {
+        auto chapters =
+            prestage_project_snapshot_chapters();
+        std::lock_guard lock(project_snapshot_mutex_);
+        if (!chapters) {
+            const auto message =
+                lfs::format_for_developer(
+                    chapters.error());
+            last_project_writer_error_ = message;
+            LOG_ERROR(
+                "Cannot stage .licht CPU chapters: {}",
+                message);
+            return;
+        }
+        // Coalesce to the newest destination. The next post-step safe point
+        // consumes this request.
+        prestaged_project_chapters_ =
+            std::move(*chapters);
+        requested_project_path_ = std::move(path);
+    }
+
+    lfs::Result<
+        std::shared_ptr<Trainer::ProjectSnapshotChapters>>
+    Trainer::prestage_project_snapshot_chapters() const {
+        if (!scene_) {
+            return project_snapshot_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "Snapshot scene is unavailable",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        const auto training_uuid =
+            scene_->getTrainingModelNodeUuid();
+        if (training_uuid.is_nil()) {
+            return project_snapshot_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "Snapshot scene has no training-model UUID",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+
+        auto chapters =
+            std::make_shared<ProjectSnapshotChapters>();
+        const auto provisional_uuid =
+            lfs::core::generate_uuid_v4();
+        chapters->snapshot_uuid =
+            provisional_uuid;
+        lfs::io::project::ScenePayloadBindings
+            bindings;
+        bindings.emplace(
+            training_uuid,
+            lfs::io::project::PayloadBinding{
+                .fourcc = "CKPT",
+                .instance_uuid =
+                    provisional_uuid,
+                .source_kind = "checkpoint",
+            });
+        auto scene_graph =
+            lfs::io::project::capture_scene_graph(
+                *scene_, bindings);
+        if (!scene_graph) {
+            return std::move(scene_graph)
+                .error()
+                .with_context(
+                    "capture snapshot scene graph",
+                    LFS_SOURCE_SITE_CURRENT());
+        }
+        chapters->scene_graph =
+            std::move(*scene_graph);
+
+        // P4 has no GUI mutation surface. A default SELM is the
+        // correct headless state and avoids the legacy per-mask
+        // Tensor::cpu() path forbidden during capture.
+        chapters->selection = {};
+
+        const auto checkpoint_params =
+            params_for_checkpoint_save();
+        auto& parameters = chapters->parameters;
+        parameters.dataset =
+            checkpoint_params.dataset;
+        parameters.mcmc_session =
+            lfs::core::param::
+                OptimizationParameters::mcmc_defaults();
+        parameters.mrnf_session =
+            lfs::core::param::
+                OptimizationParameters::mrnf_defaults();
+        parameters.igs_session =
+            lfs::core::param::
+                OptimizationParameters::igs_plus_defaults();
+        parameters.mcmc_current =
+            parameters.mcmc_session;
+        parameters.mrnf_current =
+            parameters.mrnf_session;
+        parameters.igs_current =
+            parameters.igs_session;
+        parameters.active_strategy =
+            std::string(
+                lfs::core::param::
+                    canonical_strategy_name(
+                        checkpoint_params
+                            .optimization
+                            .strategy));
+        if (parameters.active_strategy ==
+            lfs::core::param::kStrategyMCMC) {
+            parameters.mcmc_session =
+                checkpoint_params.optimization;
+            parameters.mcmc_current =
+                checkpoint_params.optimization;
+        } else if (
+            parameters.active_strategy ==
+            lfs::core::param::kStrategyIGSPlus) {
+            parameters.igs_session =
+                checkpoint_params.optimization;
+            parameters.igs_current =
+                checkpoint_params.optimization;
+        } else if (
+            parameters.active_strategy ==
+            lfs::core::param::kStrategyMRNF) {
+            parameters.mrnf_session =
+                checkpoint_params.optimization;
+            parameters.mrnf_current =
+                checkpoint_params.optimization;
+        } else {
+            return project_snapshot_error(
+                lfs::ErrorCode::Unsupported,
+                std::format(
+                    "Snapshot strategy '{}' is not registered",
+                    checkpoint_params
+                        .optimization.strategy),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        return chapters;
+    }
+
+    Trainer::ProjectSnapshotRuntimeMetrics
+    Trainer::get_project_snapshot_metrics() const {
+        ProjectSnapshotRuntimeMetrics result;
+        if (project_snapshot_service_) {
+            result.capture =
+                project_snapshot_service_->metrics();
+        }
+        std::lock_guard lock(project_snapshot_mutex_);
+        result.last_path = last_project_snapshot_path_;
+        result.last_writer_error =
+            last_project_writer_error_;
+        result.pre_snapshot_step_mean_ms =
+            project_pre_snapshot_step_mean_ms_;
+        result.post_resume_step_samples =
+            project_post_resume_step_samples_;
+        if (project_post_resume_step_samples_ > 0) {
+            result.post_resume_step_mean_ms =
+                project_post_resume_step_sum_ms_ /
+                static_cast<double>(
+                    project_post_resume_step_samples_);
+        }
+        if (project_pre_snapshot_step_mean_ms_ > 0.0 &&
+            result.post_resume_step_samples > 0) {
+            result.post_resume_step_regression_percent =
+                (result.post_resume_step_mean_ms /
+                     project_pre_snapshot_step_mean_ms_ -
+                 1.0) *
+                100.0;
+        }
+        result.writer_in_flight =
+            project_writer_in_flight_.load(
+                std::memory_order_acquire);
+        return result;
+    }
+
+    void Trainer::join_finished_project_writer() {
+        if (project_writer_thread_.joinable() &&
+            project_writer_done_.load(
+                std::memory_order_acquire)) {
+            project_writer_thread_.join();
+        }
+    }
+
+    void Trainer::finish_project_writer() {
+        if (project_writer_thread_.joinable()) {
+            project_writer_thread_.join();
+        }
+        project_writer_done_.store(
+            true, std::memory_order_release);
+        project_writer_in_flight_.store(
+            false, std::memory_order_release);
+    }
+
+    void Trainer::prepare_project_snapshot_at_safe_point(
+        const int capture_iteration,
+        const std::filesystem::path& requested_path) {
+        join_finished_project_writer();
+        if (!project_snapshot_service_ || !strategy_ ||
+            !scene_) {
+            LOG_ERROR(
+                "Cannot prepare .licht training snapshot: "
+                "trainer has no snapshot service, strategy, or scene");
+            return;
+        }
+        if (project_writer_in_flight_.load(
+                std::memory_order_acquire)) {
+            LOG_INFO(
+                "Coalescing .licht snapshot request at iteration {} "
+                "because the prior project writer is still active",
+                capture_iteration);
+            std::lock_guard lock(project_snapshot_mutex_);
+            requested_project_path_ = requested_path;
+            return;
+        }
+
+        auto path = requested_path;
+        if (path.empty()) {
+            const auto params = getParams();
+            path = params.dataset.output_path /
+                   std::format(
+                       "snapshot_{}.licht",
+                       capture_iteration);
+        }
+        if (path.extension() != ".licht") {
+            LOG_ERROR(
+                "Project snapshot destination must end in .licht: {}",
+                lfs::core::path_to_utf8(path));
+            std::lock_guard lock(project_snapshot_mutex_);
+            last_project_writer_error_ =
+                "Project snapshot destination must end in .licht";
+            return;
+        }
+
+        lfs::core::Uuid snapshot_uuid;
+        {
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            if (!prestaged_project_chapters_ ||
+                prestaged_project_chapters_
+                    ->snapshot_uuid.is_nil()) {
+                last_project_writer_error_ =
+                    "Snapshot CPU chapters were not pre-staged";
+                LOG_ERROR(
+                    "Cannot prepare .licht snapshot: CPU chapters "
+                    "were not staged before the optimizer safe point");
+                return;
+            }
+            snapshot_uuid =
+                prestaged_project_chapters_
+                    ->snapshot_uuid;
+        }
+
+        const auto checkpoint_params =
+            params_for_checkpoint_save();
+        const std::array<cudaStream_t, 3>
+            mutating_streams{
+                training_stream_,
+                metrics_stream_,
+                callback_stream_,
+            };
+        const TrainingSnapshotCaptureRequest request{
+            .iteration = capture_iteration,
+            .snapshot_uuid = snapshot_uuid,
+            .strategy = *strategy_,
+            .params = checkpoint_params,
+            .bilateral_grid = bilateral_grid_.get(),
+            .ppisp = ppisp_.get(),
+            .ppisp_controller_pool =
+                controller_pool_for_save(
+                    capture_iteration),
+            .sparsity_optimizer =
+                dynamic_cast<
+                    const ADMMSparsityOptimizer*>(
+                    sparsity_optimizer_.get()),
+            .mutating_streams = mutating_streams,
+        };
+        auto prepared =
+            project_snapshot_service_->prepare(request);
+        if (!prepared) {
+            const auto message =
+                lfs::format_for_developer(
+                    prepared.error());
+            LOG_ERROR(
+                "Failed to prepare .licht training snapshot "
+                "at iteration {}: {}",
+                capture_iteration, message);
+            std::lock_guard lock(project_snapshot_mutex_);
+            last_project_writer_error_ = message;
+            return;
+        }
+
+        double baseline_sum = 0.0;
+        {
+            std::lock_guard lock(project_snapshot_mutex_);
+            baseline_sum = std::accumulate(
+                recent_step_times_ms_.begin(),
+                recent_step_times_ms_.end(), 0.0);
+            project_pre_snapshot_step_mean_ms_ =
+                recent_step_times_ms_.empty()
+                    ? 0.0
+                    : baseline_sum /
+                          static_cast<double>(
+                              recent_step_times_ms_.size());
+            last_project_writer_error_.clear();
+        }
+        prepared_project_snapshot_.emplace(
+            std::move(*prepared));
+        prepared_project_path_ = std::move(path);
+        prepared_project_iteration_ =
+            capture_iteration;
+        LOG_INFO(
+            "Prepared .licht snapshot {} for iteration {} "
+            "({} checkpoint bytes, pre-step mean {:.3f} ms)",
+            prepared_project_snapshot_->snapshot_uuid()
+                .to_string(),
+            capture_iteration,
+            prepared_project_snapshot_->checkpoint_bytes(),
+            project_pre_snapshot_step_mean_ms_);
+    }
+
+    void Trainer::capture_project_snapshot_at_safe_point(
+        const int iteration) {
+        if (!prepared_project_snapshot_ ||
+            !project_snapshot_service_) {
+            return;
+        }
+        if (prepared_project_iteration_ != iteration) {
+            LOG_WARN(
+                "Prepared .licht snapshot iteration {} reached "
+                "safe point {}; coalescing for the current state",
+                prepared_project_iteration_, iteration);
+        }
+
+        std::shared_ptr<ProjectSnapshotChapters>
+            chapters;
+        {
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            chapters =
+                std::move(
+                    prestaged_project_chapters_);
+        }
+        if (!chapters) {
+            LOG_ERROR(
+                "Cannot capture .licht snapshot: CPU chapters "
+                "were not staged before the optimizer safe point");
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            last_project_writer_error_ =
+                "Snapshot CPU chapters were not pre-staged";
+            requested_project_path_ =
+                prepared_project_path_;
+            prepared_project_snapshot_.reset();
+            prepared_project_path_.clear();
+            prepared_project_iteration_ = 0;
+            return;
+        }
+        const auto checkpoint_params =
+            params_for_checkpoint_save();
+        const std::array<cudaStream_t, 3>
+            mutating_streams{
+                training_stream_,
+                metrics_stream_,
+                callback_stream_,
+            };
+        const auto snapshot_uuid =
+            prepared_project_snapshot_->snapshot_uuid();
+        if (chapters->snapshot_uuid !=
+            snapshot_uuid) {
+            LOG_ERROR(
+                "Prepared GPU snapshot UUID does not match "
+                "the pre-staged CPU chapters");
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            last_project_writer_error_ =
+                "Prepared GPU/CPU snapshot UUID mismatch";
+            prestaged_project_chapters_ =
+                chapters;
+            requested_project_path_ =
+                prepared_project_path_;
+            prepared_project_snapshot_.reset();
+            prepared_project_path_.clear();
+            prepared_project_iteration_ = 0;
+            return;
+        }
+        TrainingSnapshotCaptureRequest request{
+            .iteration = iteration,
+            .snapshot_uuid = snapshot_uuid,
+            .strategy = *strategy_,
+            .params = checkpoint_params,
+            .bilateral_grid = bilateral_grid_.get(),
+            .ppisp = ppisp_.get(),
+            .ppisp_controller_pool =
+                controller_pool_for_save(iteration),
+            .sparsity_optimizer =
+                dynamic_cast<
+                    const ADMMSparsityOptimizer*>(
+                    sparsity_optimizer_.get()),
+            .mutating_streams = mutating_streams,
+            .capture_additional_cpu_state =
+                [this, chapters, iteration](
+                    const lfs::core::Uuid&
+                        captured_uuid)
+                -> lfs::Result<void> {
+                if (!scene_) {
+                    return lfs::Status::failure(
+                        project_snapshot_error(
+                            lfs::ErrorCode::
+                                FailedPrecondition,
+                            "Snapshot scene disappeared",
+                            LFS_SOURCE_SITE_CURRENT()));
+                }
+                const auto training_uuid =
+                    scene_
+                        ->getTrainingModelNodeUuid();
+                if (training_uuid.is_nil()) {
+                    return lfs::Status::failure(
+                        project_snapshot_error(
+                            lfs::ErrorCode::
+                                FailedPrecondition,
+                            "Snapshot scene has no training-model UUID",
+                            LFS_SOURCE_SITE_CURRENT()));
+                }
+                auto staged_training =
+                    chapters->scene_graph
+                        .training_model_uuid();
+                if (!staged_training) {
+                    return lfs::Status::failure(
+                        std::move(staged_training)
+                            .error()
+                            .with_context(
+                                "validate snapshot training-model UUID",
+                                LFS_SOURCE_SITE_CURRENT()));
+                }
+                if (!*staged_training ||
+                    **staged_training !=
+                        training_uuid) {
+                    return lfs::Status::failure(
+                        project_snapshot_error(
+                            lfs::ErrorCode::
+                                ContractViolation,
+                            "Snapshot training-model UUID changed after CPU staging",
+                            LFS_SOURCE_SITE_CURRENT()));
+                }
+                if (chapters->snapshot_uuid !=
+                    captured_uuid) {
+                    return lfs::Status::failure(
+                        project_snapshot_error(
+                            lfs::ErrorCode::
+                                ContractViolation,
+                            "Pre-staged CPU chapter UUID changed before capture",
+                            LFS_SOURCE_SITE_CURRENT()));
+                }
+
+                chapters->iteration =
+                    iteration;
+                return {};
+            },
+        };
+
+        request.safe_point_entered_at =
+            std::chrono::steady_clock::now();
+        // Block CPU-side reader setup while the service establishes all GPU
+        // stream edges and captures the immutable state.
+        std::unique_lock render_lock(render_mutex_);
+        std::unique_lock model_lock(
+            model_access_mutex_);
+        waitForModelReaders();
+        auto prepared =
+            std::move(*prepared_project_snapshot_);
+        prepared_project_snapshot_.reset();
+        auto pending =
+            project_snapshot_service_->capture(
+                std::move(prepared), request);
+        render_lock.unlock();
+        model_lock.unlock();
+
+        const auto path =
+            std::move(prepared_project_path_);
+        prepared_project_iteration_ = 0;
+        if (!pending) {
+            const auto message =
+                lfs::format_for_developer(
+                    pending.error());
+            LOG_ERROR(
+                "Failed to capture .licht training snapshot "
+                "at iteration {}: {}",
+                iteration, message);
+            {
+                std::lock_guard lock(
+                    project_snapshot_mutex_);
+                last_project_writer_error_ = message;
+                // A topology-changing step may invalidate a preplanned
+                // layout. Coalesce and replan at the next post-step point.
+                if (!requested_project_path_) {
+                    requested_project_path_ = path;
+                    prestaged_project_chapters_ =
+                        chapters;
+                }
+            }
+            return;
+        }
+        if (chapters->snapshot_uuid !=
+                snapshot_uuid ||
+            chapters->iteration != iteration) {
+            LOG_ERROR(
+                "Snapshot CPU-state UUID/iteration proof failed");
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            last_project_writer_error_ =
+                "Snapshot CPU-state UUID/iteration proof failed";
+            return;
+        }
+
+        project_post_resume_start_iteration_ =
+            iteration + 1;
+        {
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            project_post_resume_step_sum_ms_ =
+                0.0;
+            project_post_resume_step_samples_ =
+                0;
+        }
+        project_writer_done_.store(
+            false, std::memory_order_release);
+        project_writer_in_flight_.store(
+            true, std::memory_order_release);
+
+        project_writer_thread_ = std::jthread(
+            [this, path, chapters,
+             pending = std::move(*pending)](
+                std::stop_token) mutable {
+#if defined(__linux__)
+                const int current_priority =
+                    getpriority(PRIO_PROCESS, 0);
+                const int background_priority =
+                    std::max(current_priority, 10);
+                if (background_priority >
+                    current_priority) {
+                    static_cast<void>(setpriority(
+                        PRIO_PROCESS, 0,
+                        background_priority));
+                }
+#endif
+                auto writer_result =
+                    [&]()
+                    -> lfs::Result<
+                        TrainingSnapshotPauseMetrics> {
+                    auto captured = pending.wait();
+                    if (!captured) {
+                        return std::move(captured)
+                            .error()
+                            .with_context(
+                                "drain captured training snapshot",
+                                LFS_SOURCE_SITE_CURRENT());
+                    }
+                    if (!captured->metrics
+                             .consistency_proven ||
+                        captured->snapshot_uuid !=
+                            chapters
+                                ->snapshot_uuid ||
+                        captured->iteration !=
+                            chapters->iteration ||
+                        !captured
+                             ->checkpoint_bytes) {
+                        return project_snapshot_error(
+                            lfs::ErrorCode::
+                                ContractViolation,
+                            "Captured CKPT and CPU chapter stamps disagree",
+                            LFS_SOURCE_SITE_CURRENT());
+                    }
+
+                    std::error_code ec;
+                    if (!path.parent_path()
+                             .empty()) {
+                        std::filesystem::
+                            create_directories(
+                                path.parent_path(),
+                                ec);
+                    }
+                    if (ec) {
+                        return lfs::from_std_error_code(
+                            ec,
+                            lfs::ErrorCode::
+                                Unavailable,
+                            lfs::ErrorDomain::IO,
+                            "create training project snapshot directory",
+                            LFS_SOURCE_SITE_CURRENT());
+                    }
+
+                    std::optional<
+                        lfs::io::project::
+                            ProjectDocument>
+                        document;
+                    if (std::filesystem::exists(
+                            path)) {
+                        auto opened =
+                            lfs::io::project::
+                                ProjectDocument::open(
+                                    path);
+                        if (!opened) {
+                            return std::move(opened)
+                                .error()
+                                .with_context(
+                                    "open training project for snapshot append",
+                                    LFS_SOURCE_SITE_CURRENT());
+                        }
+                        document.emplace(
+                            std::move(*opened));
+                    } else {
+                        const auto created_ns =
+                            static_cast<std::uint64_t>(
+                                std::chrono::
+                                    duration_cast<
+                                        std::chrono::
+                                            nanoseconds>(
+                                        std::chrono::
+                                            system_clock::
+                                                now()
+                                                    .time_since_epoch())
+                                        .count());
+                        auto created =
+                            lfs::io::project::
+                                ProjectDocument::create(
+                                    project_uuid_,
+                                    created_ns);
+                        if (!created) {
+                            return std::move(created)
+                                .error()
+                                .with_context(
+                                    "create training project snapshot document",
+                                    LFS_SOURCE_SITE_CURRENT());
+                        }
+                        document.emplace(
+                            std::move(*created));
+                    }
+
+                    document->edit_scene_graph() =
+                        std::move(
+                            chapters->scene_graph);
+                    document->edit_selection() =
+                        std::move(
+                            chapters->selection);
+                    auto params_status =
+                        document
+                            ->edit_parameters()
+                            .set_snapshot(
+                                chapters
+                                    ->parameters);
+                    if (!params_status) {
+                        return std::move(
+                                   params_status)
+                            .error()
+                            .with_context(
+                                "stage project parameter snapshot",
+                                LFS_SOURCE_SITE_CURRENT());
+                    }
+                    for (const auto& uuid :
+                         document
+                             ->checkpoint_uuids()) {
+                        static_cast<void>(
+                            document
+                                ->remove_checkpoint(
+                                    uuid));
+                    }
+                    auto lazy =
+                        lfs::io::project::
+                            LazyChunkValue::from_owned(
+                                captured
+                                    ->checkpoint_bytes,
+                                captured
+                                    ->snapshot_uuid);
+                    if (!lazy) {
+                        return std::move(lazy)
+                            .error()
+                            .with_context(
+                                "own captured CKPT bytes",
+                                LFS_SOURCE_SITE_CURRENT());
+                    }
+                    auto checkpoint_status =
+                        document->set_checkpoint(
+                            captured
+                                ->snapshot_uuid,
+                            std::move(*lazy));
+                    if (!checkpoint_status) {
+                        return std::move(
+                                   checkpoint_status)
+                            .error()
+                            .with_context(
+                                "bind captured CKPT chapter",
+                                LFS_SOURCE_SITE_CURRENT());
+                    }
+
+                    const auto wallclock_ns =
+                        static_cast<std::uint64_t>(
+                            std::chrono::
+                                duration_cast<
+                                    std::chrono::
+                                        nanoseconds>(
+                                    std::chrono::
+                                        system_clock::
+                                            now()
+                                                .time_since_epoch())
+                                    .count());
+                    auto saved = document->save(
+                        path,
+                        lfs::io::project::
+                            ProjectDocumentSaveOptions{
+                                .commit =
+                                    {
+                                        .kind =
+                                            lfs::io::project::
+                                                CommitKind::
+                                                    Explicit,
+                                        .commit_uuid =
+                                            lfs::core::
+                                                generate_uuid_v4(),
+                                        .snapshot_uuid =
+                                            captured
+                                                ->snapshot_uuid,
+                                        .wallclock_unix_ns =
+                                            wallclock_ns,
+                                    },
+                                .file_uuid =
+                                    lfs::core::
+                                        generate_uuid_v4(),
+                            });
+                    if (!saved) {
+                        return std::move(saved)
+                            .error()
+                            .with_context(
+                                "append captured training project generation",
+                                LFS_SOURCE_SITE_CURRENT());
+                    }
+                    LOG_INFO(
+                        "Background .licht append complete: {} "
+                        "generation={} snapshot={} rewritten={} "
+                        "reused={} final_drain={:.3f}ms",
+                        lfs::core::path_to_utf8(
+                            path),
+                        saved->generation,
+                        saved->snapshot_uuid
+                            .to_string(),
+                        saved->rewritten_chunks,
+                        saved->reused_chunks,
+                        captured->metrics
+                            .final_drain_ms);
+                    return captured->metrics;
+                }();
+
+                {
+                    std::lock_guard lock(
+                        project_snapshot_mutex_);
+                    last_project_snapshot_path_ =
+                        path;
+                    if (writer_result) {
+                        last_project_writer_error_
+                            .clear();
+                    } else {
+                        last_project_writer_error_ =
+                            lfs::format_for_developer(
+                                writer_result
+                                    .error());
+                    }
+                }
+                if (!writer_result) {
+                    LOG_ERROR(
+                        "Background .licht append failed for {}: {}",
+                        lfs::core::path_to_utf8(
+                            path),
+                        lfs::format_for_developer(
+                            writer_result.error()));
+                }
+                project_writer_in_flight_.store(
+                    false,
+                    std::memory_order_release);
+                project_writer_done_.store(
+                    true,
+                    std::memory_order_release);
+            });
+    }
+
+    void Trainer::observe_training_step_duration(
+        const int iteration,
+        const double elapsed_ms) {
+        if (!(elapsed_ms >= 0.0) ||
+            !std::isfinite(elapsed_ms)) {
+            return;
+        }
+        bool log_gate = false;
+        double pre_mean = 0.0;
+        double post_mean = 0.0;
+        {
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            recent_step_times_ms_.push_back(
+                elapsed_ms);
+            if (recent_step_times_ms_.size() >
+                100) {
+                recent_step_times_ms_.pop_front();
+            }
+            if (iteration >=
+                    project_post_resume_start_iteration_ &&
+                project_post_resume_start_iteration_ >
+                    0 &&
+                project_post_resume_step_samples_ <
+                    100) {
+                project_post_resume_step_sum_ms_ +=
+                    elapsed_ms;
+                ++project_post_resume_step_samples_;
+                if (project_post_resume_step_samples_ ==
+                    100) {
+                    pre_mean =
+                        project_pre_snapshot_step_mean_ms_;
+                    post_mean =
+                        project_post_resume_step_sum_ms_ /
+                        100.0;
+                    log_gate = true;
+                }
+            }
+        }
+        if (log_gate) {
+            const double regression =
+                pre_mean > 0.0
+                    ? (post_mean / pre_mean - 1.0) *
+                          100.0
+                    : 0.0;
+            LOG_INFO(
+                "Training snapshot post-resume step gate: "
+                "pre100={:.3f}ms post100={:.3f}ms "
+                "regression={:.3f}% {}",
+                pre_mean, post_mean, regression,
+                regression <= 10.0 ? "PASS"
+                                   : "FAIL");
+        }
     }
 
     void Trainer::handle_control_requests(int iter, std::stop_token stop_token) {
@@ -5524,6 +6413,56 @@ namespace lfs::training {
                     lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::PostStep, ctx);
                 }
 
+                join_finished_project_writer();
+                std::optional<std::filesystem::path>
+                    requested_project_path;
+                {
+                    std::lock_guard lock(
+                        project_snapshot_mutex_);
+                    if (requested_project_path_) {
+                        requested_project_path =
+                            std::move(
+                                *requested_project_path_);
+                        requested_project_path_.reset();
+                    }
+                }
+                if (requested_project_path) {
+                    prepare_project_snapshot_at_safe_point(
+                        iter, *requested_project_path);
+                    capture_project_snapshot_at_safe_point(
+                        iter);
+                }
+
+                const auto project_hook =
+                    getParams()
+                        .save_project_at_iteration;
+                if (project_hook &&
+                    *project_hook <=
+                        static_cast<std::size_t>(
+                            std::numeric_limits<int>::
+                                max())) {
+                    const int target =
+                        static_cast<int>(
+                            *project_hook);
+                    if (iter + 1 == target &&
+                        !prepared_project_snapshot_) {
+                        prepare_project_snapshot_at_safe_point(
+                            target,
+                            getParams()
+                                .save_project_path);
+                    }
+                    if (iter == target) {
+                        if (!prepared_project_snapshot_) {
+                            prepare_project_snapshot_at_safe_point(
+                                iter,
+                                getParams()
+                                    .save_project_path);
+                        }
+                        capture_project_snapshot_at_safe_point(
+                            iter);
+                    }
+                }
+
                 if (live_vram_profiler_enabled() && strategy_) {
                     record_splat_vram_breakdown(strategy_->get_model());
                     record_optimizer_vram_breakdown(strategy_->get_optimizer());
@@ -5953,11 +6892,20 @@ namespace lfs::training {
                 }
 
                 train_phase = StepPhase::Forward;
+                const auto training_step_begin =
+                    std::chrono::steady_clock::now();
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
+                const double training_step_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() -
+                        training_step_begin)
+                        .count();
                 if (!step_result) {
                     terminal_error = std::move(step_result).error();
                     break;
                 }
+                observe_training_step_duration(
+                    iter, training_step_ms);
 
                 // Transition to safe control phase and execute deferred Python callbacks
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
@@ -6321,9 +7269,49 @@ namespace lfs::training {
         }
     }
 
-    std::expected<int, std::string> Trainer::load_checkpoint(const std::filesystem::path& checkpoint_path) {
+    std::expected<int, std::string> Trainer::load_checkpoint(
+        const std::filesystem::path& checkpoint_path) {
+        std::error_code error;
+        const auto source_bytes =
+            std::filesystem::file_size(
+                checkpoint_path, error);
+        if (error) {
+            return std::unexpected(
+                std::format(
+                    "Cannot stat checkpoint '{}': {}",
+                    lfs::core::path_to_utf8(
+                        checkpoint_path),
+                    error.message()));
+        }
+        std::ifstream source(
+            checkpoint_path,
+            std::ios::binary);
+        if (!source) {
+            return std::unexpected(
+                std::format(
+                    "Cannot open checkpoint '{}'",
+                    lfs::core::path_to_utf8(
+                        checkpoint_path)));
+        }
+        return load_checkpoint(
+            source, source_bytes,
+            lfs::core::path_to_utf8(
+                checkpoint_path));
+    }
+
+    CheckpointLoadResult Trainer::load_checkpoint(
+        std::istream& source,
+        const std::uint64_t source_bytes,
+        const std::string_view source_name) {
         if (!strategy_) {
             return std::unexpected("Cannot load checkpoint: no strategy initialized");
+        }
+        if (source_bytes == 0 ||
+            source_bytes >
+                lfs::core::
+                    MAX_CHECKPOINT_FILE_BYTES) {
+            return std::unexpected(
+                "Embedded checkpoint size is invalid");
         }
 
         // Create bilateral grid before loading if needed (checkpoint may contain grid state)
@@ -6344,7 +7332,11 @@ namespace lfs::training {
         if (params_.optimization.ppisp_use_controller && !ppisp_controller_pool_) {
             bool should_initialize_controller = true;
             if (is_ppisp_frozen()) {
-                const auto checkpoint_header = lfs::core::load_checkpoint_header(checkpoint_path);
+                source.clear();
+                source.seekg(0, std::ios::beg);
+                const auto checkpoint_header =
+                    lfs::core::load_checkpoint_header(
+                        source, source_bytes);
                 if (!checkpoint_header) {
                     LOG_WARN("Failed to inspect checkpoint header for PPISP controller state: {}",
                              checkpoint_header.error());
@@ -6364,12 +7356,28 @@ namespace lfs::training {
             }
         }
 
+        source.clear();
+        source.seekg(0, std::ios::beg);
+        if (!source) {
+            return std::unexpected(
+                std::format(
+                    "Cannot seek {} to byte zero",
+                    source_name));
+        }
         auto result = lfs::training::load_checkpoint(
-            checkpoint_path, *strategy_, params_, bilateral_grid_.get(), ppisp_.get(),
+            source, source_bytes, *strategy_, params_,
+            bilateral_grid_.get(), ppisp_.get(),
             ppisp_controller_pool_.get(),
-            dynamic_cast<ADMMSparsityOptimizer*>(sparsity_optimizer_.get()), splat_tensor_allocator_);
+            dynamic_cast<ADMMSparsityOptimizer*>(sparsity_optimizer_.get()),
+            splat_tensor_allocator_, source_name);
         if (!result) {
             return result;
+        }
+        if (params_.resume_project && scene_) {
+            const auto disabled =
+                scene_->getTrainingDisabledCameraUids();
+            params_.disabled_camera_uids.assign(
+                disabled.begin(), disabled.end());
         }
         {
             std::unique_lock<std::shared_mutex> render_lock(render_mutex_);

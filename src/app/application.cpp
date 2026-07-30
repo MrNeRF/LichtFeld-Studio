@@ -19,6 +19,7 @@
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
+#include "io/project_document.hpp"
 #include "tcp/include/tcp_publisher.hpp"
 #include "tcp/include/tcp_responder.hpp"
 #include "training/trainer.hpp"
@@ -54,6 +55,20 @@ namespace lfs::app {
     namespace {
 
         bool checkCudaDriverVersion();
+
+        [[nodiscard]] lfs::Error training_project_error(
+            const lfs::ErrorCode code,
+            std::string detail,
+            const lfs::core::SourceSite source) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::App,
+                .user_message =
+                    "The training project could not be restored.",
+                .detail = std::move(detail),
+                .detection = source,
+            });
+        }
 
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
             LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params.resume_checkpoint));
@@ -109,8 +124,174 @@ namespace lfs::app {
             return checkpoint_params;
         }
 
+        struct LoadedTrainingProject {
+            io::project::ProjectDocument document;
+            core::param::TrainingParameters params;
+            core::Uuid checkpoint_uuid;
+            int iteration = 0;
+        };
+
+        lfs::Result<LoadedTrainingProject>
+        loadTrainingProject(
+            const core::param::TrainingParameters& cli_params,
+            core::Scene& scene) {
+            if (!cli_params.resume_project) {
+                return training_project_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "No .licht resume project was provided",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            const auto& path =
+                *cli_params.resume_project;
+            LOG_INFO(
+                "Opening training project: {}",
+                core::path_to_utf8(path));
+
+            auto document =
+                io::project::ProjectDocument::open(path);
+            if (!document) {
+                return std::move(document)
+                    .error()
+                    .with_context(
+                        "open training project",
+                        LFS_SOURCE_SITE_CURRENT());
+            }
+            const auto checkpoint_uuids =
+                document->checkpoint_uuids();
+            if (checkpoint_uuids.size() != 1) {
+                return training_project_error(
+                    lfs::ErrorCode::DataLoss,
+                    std::format(
+                        "Training project must contain exactly one CKPT "
+                        "instance (found {})",
+                        checkpoint_uuids.size()),
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            const auto checkpoint_uuid =
+                checkpoint_uuids.front();
+            const auto* checkpoint =
+                document->find_checkpoint(
+                    checkpoint_uuid);
+            if (!checkpoint) {
+                return training_project_error(
+                    lfs::ErrorCode::ContractViolation,
+                    "Training project CKPT handle disappeared",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+
+            std::optional<
+                core::CheckpointParametersLoadResult>
+                parsed_params;
+            auto visited =
+                checkpoint->visit_stream(
+                    [&](std::istream& source,
+                        const std::uint64_t bytes)
+                        -> lfs::Result<void> {
+                        parsed_params =
+                            core::load_checkpoint_params(
+                                source, bytes);
+                        return {};
+                    });
+            if (!visited) {
+                return std::move(visited)
+                    .error()
+                    .with_context(
+                        "stream CKPT parameters",
+                        LFS_SOURCE_SITE_CURRENT());
+            }
+            if (!parsed_params ||
+                !*parsed_params) {
+                return training_project_error(
+                    lfs::ErrorCode::DataLoss,
+                    parsed_params
+                        ? std::format(
+                              "Failed to parse CKPT parameters: {}",
+                              parsed_params->error())
+                        : "CKPT parameter visitor did not run",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            auto checkpoint_params =
+                std::move(**parsed_params);
+
+            if (!cli_params.dataset.data_path.empty()) {
+                checkpoint_params.dataset.data_path =
+                    cli_params.dataset.data_path;
+            }
+            if (!cli_params.dataset.output_path.empty()) {
+                checkpoint_params.dataset.output_path =
+                    cli_params.dataset.output_path;
+            }
+            if (!cli_params.dataset.output_name.empty()) {
+                checkpoint_params.dataset.output_name =
+                    cli_params.dataset.output_name;
+            }
+            if (cli_params.cli_iterations_set) {
+                checkpoint_params.optimization.iterations =
+                    cli_params.optimization.iterations;
+            }
+            checkpoint_params.optimization.headless =
+                cli_params.optimization.headless;
+            checkpoint_params.optimization.auto_train =
+                cli_params.optimization.auto_train;
+            checkpoint_params.optimization.no_splash =
+                cli_params.optimization.no_splash;
+            checkpoint_params.server =
+                cli_params.server;
+            checkpoint_params.python_scripts =
+                cli_params.python_scripts;
+            checkpoint_params.resume_checkpoint.reset();
+            checkpoint_params.resume_project = path;
+            checkpoint_params.save_project_at_iteration =
+                cli_params.save_project_at_iteration;
+            checkpoint_params.save_project_path =
+                cli_params.save_project_path;
+            checkpoint_params.cli_iterations_set =
+                cli_params.cli_iterations_set;
+
+            auto hydration =
+                document->hydrate(scene);
+            if (!hydration) {
+                return std::move(hydration)
+                    .error()
+                    .with_context(
+                        "hydrate training project display state",
+                        LFS_SOURCE_SITE_CURRENT());
+            }
+            if (!hydration->trainer_state_pending ||
+                !hydration->checkpoint_uuid ||
+                *hydration->checkpoint_uuid !=
+                    checkpoint_uuid ||
+                !hydration->checkpoint_header) {
+                return training_project_error(
+                    lfs::ErrorCode::ContractViolation,
+                    "Project hydration did not preserve the lazy CKPT "
+                    "trainer-state barrier",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            if (hydration->checkpoint_header->iteration < 0) {
+                return training_project_error(
+                    lfs::ErrorCode::DataLoss,
+                    "Project CKPT iteration is negative",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+
+            return LoadedTrainingProject{
+                .document = std::move(*document),
+                .params =
+                    std::move(checkpoint_params),
+                .checkpoint_uuid =
+                    checkpoint_uuid,
+                .iteration =
+                    hydration
+                        ->checkpoint_header
+                        ->iteration,
+            };
+        }
+
         int runHeadlessWithTCP(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-            if (params->dataset.data_path.empty() && !params->resume_checkpoint) {
+            if (params->dataset.data_path.empty() &&
+                !params->resume_checkpoint &&
+                !params->resume_project) {
                 LOG_ERROR("Headless with TCP mode requires --data-path or --resume");
                 return 1;
             }
@@ -122,8 +303,25 @@ namespace lfs::app {
             {
                 core::Scene scene;
                 std::optional<core::param::TrainingParameters> checkpoint_params{std::nullopt};
+                std::optional<LoadedTrainingProject>
+                    training_project;
 
-                if (params->resume_checkpoint) {
+                if (params->resume_project) {
+                    auto loaded =
+                        loadTrainingProject(
+                            *params, scene);
+                    if (!loaded) {
+                        LOG_ERROR(
+                            "Failed to load training project: {}",
+                            lfs::format_for_developer(
+                                loaded.error()));
+                        return 1;
+                    }
+                    checkpoint_params =
+                        loaded->params;
+                    training_project.emplace(
+                        std::move(*loaded));
+                } else if (params->resume_checkpoint) {
                     const auto ckpt_params_result = loadCheckpointParams(*params, scene);
                     if (!ckpt_params_result) {
                         LOG_ERROR("Failed to load checkpoint: {}", ckpt_params_result.error());
@@ -147,13 +345,73 @@ namespace lfs::app {
                 auto manager = std::make_shared<vis::TrainerManager>();
                 {
                     auto trainer = std::make_unique<training::Trainer>(scene);
+                    const auto& effective_params =
+                        checkpoint_params
+                            ? *checkpoint_params
+                            : *params;
 
-                    if (!params->python_scripts.empty()) {
-                        trainer->set_python_scripts(params->python_scripts);
-                        vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
+                    if (!effective_params.python_scripts.empty()) {
+                        trainer->set_python_scripts(effective_params.python_scripts);
+                        vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(effective_params.python_scripts);
                     }
 
-                    trainer->setParams(checkpoint_params ? *checkpoint_params : *params); // Load checkpoint into trainer is called internally
+                    if (training_project) {
+                        if (const auto initialized =
+                                trainer->initialize(
+                                    effective_params);
+                            !initialized) {
+                            LOG_ERROR(
+                                "Failed to initialize trainer from "
+                                "project: {}",
+                                initialized.error());
+                            return 1;
+                        }
+                        const auto* checkpoint =
+                            training_project
+                                ->document
+                                .find_checkpoint(
+                                    training_project
+                                        ->checkpoint_uuid);
+                        if (!checkpoint) {
+                            LOG_ERROR(
+                                "Project CKPT handle disappeared");
+                            return 1;
+                        }
+                        std::optional<
+                            training::
+                                CheckpointLoadResult>
+                            restored;
+                        auto visited =
+                            checkpoint->visit_stream(
+                                [&](std::istream& source,
+                                    const std::uint64_t
+                                        bytes)
+                                    -> lfs::Result<void> {
+                                    restored =
+                                        trainer
+                                            ->load_checkpoint(
+                                                source,
+                                                bytes,
+                                                core::
+                                                    path_to_utf8(
+                                                        *params
+                                                             ->resume_project));
+                                    return {};
+                                });
+                        if (!visited || !restored ||
+                            !*restored ||
+                            **restored !=
+                                training_project
+                                    ->iteration) {
+                            LOG_ERROR(
+                                "Failed to complete project CKPT "
+                                "hydration before TCP training");
+                            return 1;
+                        }
+                    } else {
+                        // Legacy .resume auto-load remains unchanged.
+                        trainer->setParams(effective_params);
+                    }
                     manager->setTrainer(std::move(trainer));
                 }
 
@@ -261,7 +519,9 @@ namespace lfs::app {
         }
 
         int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-            if (params->dataset.data_path.empty() && !params->resume_checkpoint) {
+            if (params->dataset.data_path.empty() &&
+                !params->resume_checkpoint &&
+                !params->resume_project) {
                 LOG_ERROR("Headless mode requires --data-path or --resume");
                 return 1;
             }
@@ -273,7 +533,139 @@ namespace lfs::app {
             {
                 core::Scene scene;
 
-                if (params->resume_checkpoint) {
+                if (params->resume_project) {
+                    auto project =
+                        loadTrainingProject(
+                            *params, scene);
+                    if (!project) {
+                        LOG_ERROR(
+                            "Failed to load training project: {}",
+                            lfs::format_for_developer(
+                                project.error()));
+                        return 1;
+                    }
+
+                    auto trainer =
+                        std::make_unique<
+                            training::Trainer>(
+                            scene);
+                    if (!project->params
+                             .python_scripts
+                             .empty()) {
+                        trainer->set_python_scripts(
+                            project->params
+                                .python_scripts);
+                        vis::gui::panels::
+                            PythonScriptManagerState::
+                                getInstance()
+                                    .setScripts(
+                                        project->params
+                                            .python_scripts);
+                    }
+                    if (!project->params
+                             .python_scripts
+                             .empty() &&
+                        !python::ensure_plugins_loaded(
+                            true)) {
+                        LOG_ERROR(
+                            "Failed to load plugins before running "
+                            "headless Python scripts");
+                        return 1;
+                    }
+                    if (const auto result =
+                            trainer->initialize(
+                                project->params);
+                        !result) {
+                        LOG_ERROR(
+                            "Failed to initialize trainer from "
+                            "project display state: {}",
+                            result.error());
+                        return 1;
+                    }
+
+                    const auto* checkpoint =
+                        project->document
+                            .find_checkpoint(
+                                project
+                                    ->checkpoint_uuid);
+                    if (!checkpoint) {
+                        LOG_ERROR(
+                            "Project CKPT handle disappeared before "
+                            "full trainer hydration");
+                        return 1;
+                    }
+                    std::optional<
+                        training::CheckpointLoadResult>
+                        full_restore;
+                    auto visited =
+                        checkpoint->visit_stream(
+                            [&](std::istream& source,
+                                const std::uint64_t
+                                    bytes)
+                                -> lfs::Result<void> {
+                                full_restore =
+                                    trainer
+                                        ->load_checkpoint(
+                                            source,
+                                            bytes,
+                                            core::
+                                                path_to_utf8(
+                                                    *params
+                                                         ->resume_project));
+                                return {};
+                            });
+                    if (!visited) {
+                        LOG_ERROR(
+                            "Failed to stream project CKPT: {}",
+                            lfs::format_for_developer(
+                                visited.error()));
+                        return 1;
+                    }
+                    if (!full_restore ||
+                        !*full_restore) {
+                        LOG_ERROR(
+                            "Failed to restore project trainer state: {}",
+                            full_restore
+                                ? full_restore
+                                      ->error()
+                                : "CKPT visitor did not run");
+                        return 1;
+                    }
+                    if (**full_restore !=
+                            project->iteration ||
+                        trainer
+                                ->get_current_iteration() !=
+                            project->iteration) {
+                        LOG_ERROR(
+                            "Project resume iteration mismatch: "
+                            "display={} trainer={} expected={}",
+                            **full_restore,
+                            trainer
+                                ->get_current_iteration(),
+                            project->iteration);
+                        return 1;
+                    }
+                    LOG_INFO(
+                        "Project display hydration complete; full "
+                        "trainer state restored at iteration {}",
+                        project->iteration);
+
+                    core::Tensor::trim_memory_pool();
+                    if (const auto result =
+                            trainer->train(
+                                coordinator
+                                    .stop_token());
+                        !result) {
+                        LOG_ERROR(
+                            "Training error: {}",
+                            lfs::format_for_developer(
+                                result.error()));
+                        return 1;
+                    }
+                    trainer->shutdown();
+                    static_cast<void>(
+                        trainer.release());
+                } else if (params->resume_checkpoint) {
                     const auto ckpt_params_result = loadCheckpointParams(*params, scene);
                     if (!ckpt_params_result) {
                         LOG_ERROR("Failed to load checkpoint: {}", ckpt_params_result.error());

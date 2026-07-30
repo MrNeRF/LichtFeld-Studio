@@ -36,7 +36,7 @@ namespace lfs::core {
         }
 
         std::expected<void, std::string> skip_strategy_name(
-            std::ifstream& file,
+            std::istream& file,
             const CheckpointHeader& header) {
             uint32_t type_len = 0;
             file.read(reinterpret_cast<char*>(&type_len), sizeof(type_len));
@@ -57,6 +57,20 @@ namespace lfs::core {
             if (!file)
                 return std::unexpected("Invalid checkpoint: truncated strategy name");
             return {};
+        }
+
+        CheckpointHeaderLoadResult read_and_validate(
+            std::istream& file,
+            const uint64_t file_size) {
+            CheckpointHeader header{};
+            file.read(reinterpret_cast<char*>(&header), sizeof(header));
+            if (!file)
+                return std::unexpected("Invalid checkpoint: truncated header");
+            if (auto validation = validate_checkpoint_header(header, file_size);
+                !validation) {
+                return std::unexpected(validation.error());
+            }
+            return header;
         }
 
     } // namespace
@@ -112,6 +126,16 @@ namespace lfs::core {
         }
     }
 
+    CheckpointHeaderLoadResult load_checkpoint_header(
+        std::istream& stream,
+        const uint64_t file_size) {
+        try {
+            return read_and_validate(stream, file_size);
+        } catch (const std::exception& e) {
+            return std::unexpected(std::string("Read header failed: ") + e.what());
+        }
+    }
+
     std::expected<SplatData, std::string> load_checkpoint_splat_data(
         const std::filesystem::path& path,
         SplatTensorAllocator tensor_allocator) {
@@ -136,6 +160,35 @@ namespace lfs::core {
             LOG_DEBUG("SplatData loaded: {} Gaussians, iter {}", header->num_gaussians, header->iteration);
             return splat;
 
+        } catch (const std::exception& e) {
+            return std::unexpected(std::string("Load SplatData failed: ") + e.what());
+        }
+    }
+
+    CheckpointSplatDataLoadResult load_checkpoint_splat_data(
+        std::istream& stream,
+        const uint64_t file_size,
+        SplatTensorAllocator tensor_allocator) {
+        try {
+            auto header = read_and_validate(stream, file_size);
+            if (!header) {
+                return std::unexpected(header.error());
+            }
+            if (auto skip_result = skip_strategy_name(stream, *header);
+                !skip_result) {
+                return std::unexpected(skip_result.error());
+            }
+
+            SplatData splat;
+            splat.deserialize(stream, std::move(tensor_allocator));
+            if (static_cast<uint64_t>(splat.size()) != header->num_gaussians)
+                return std::unexpected("Invalid checkpoint: model count does not match header");
+            if (splat.get_max_sh_degree() != header->sh_degree)
+                return std::unexpected("Invalid checkpoint: model SH degree does not match header");
+
+            LOG_DEBUG("SplatData loaded from bounded CKPT: {} Gaussians, iter {}",
+                      header->num_gaussians, header->iteration);
+            return splat;
         } catch (const std::exception& e) {
             return std::unexpected(std::string("Load SplatData failed: ") + e.what());
         }
@@ -175,6 +228,42 @@ namespace lfs::core {
             LOG_DEBUG("Params loaded from checkpoint: {}", path_to_utf8(params.dataset.data_path));
             return params;
 
+        } catch (const std::exception& e) {
+            return std::unexpected(std::string("Load params failed: ") + e.what());
+        }
+    }
+
+    CheckpointParametersLoadResult load_checkpoint_params(
+        std::istream& stream,
+        const uint64_t file_size) {
+        try {
+            auto header = read_and_validate(stream, file_size);
+            if (!header) {
+                return std::unexpected(header.error());
+            }
+
+            param::TrainingParameters params;
+            if (header->params_json_size > 0) {
+                stream.seekg(static_cast<std::streamoff>(header->params_json_offset));
+                std::string params_str(header->params_json_size, '\0');
+                stream.read(params_str.data(),
+                            static_cast<std::streamsize>(header->params_json_size));
+                if (!stream)
+                    return std::unexpected("Invalid checkpoint: truncated parameter JSON");
+                params = parse_checkpoint_params_json(params_str);
+            }
+
+            if (params.optimization.max_cap < 0)
+                return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");
+            if (static_cast<uint64_t>(params.optimization.max_cap) > MAX_CHECKPOINT_GAUSSIANS)
+                return std::unexpected("Invalid checkpoint parameters: max_cap exceeds checkpoint limit");
+            if (const auto validation_error = params.optimization.validate(); !validation_error.empty())
+                return std::unexpected("Invalid checkpoint parameters: " + validation_error);
+            if (const auto validation_error = params.dataset.validate(); !validation_error.empty())
+                return std::unexpected("Invalid checkpoint dataset parameters: " + validation_error);
+            if (!(params.freeze_lr_scale >= 0.0f && params.freeze_lr_scale <= 1.0f))
+                return std::unexpected("Invalid checkpoint parameters: freeze_lr_scale must be within [0, 1]");
+            return params;
         } catch (const std::exception& e) {
             return std::unexpected(std::string("Load params failed: ") + e.what());
         }

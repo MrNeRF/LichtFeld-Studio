@@ -305,6 +305,17 @@ namespace lfs::core {
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
 
+            // Embedded CKPT project to resume training from. The display model
+            // is hydrated first; full trainer state must be loaded before
+            // train() is allowed to start.
+            std::optional<std::filesystem::path> resume_project = std::nullopt;
+
+            // Headless/integration-test trigger for the production training
+            // snapshot path. An empty path derives
+            // <output>/snapshot_<iteration>.licht.
+            std::optional<size_t> save_project_at_iteration = std::nullopt;
+            std::filesystem::path save_project_path;
+
             // Headless camera-path -> video render mode (see --render-camera-path)
             std::optional<RenderPathConfig> render_path = std::nullopt;
 
@@ -313,6 +324,9 @@ namespace lfs::core {
 
             // True when --bg-color was provided on the command line.
             bool cli_bg_color_set = false;
+            // True when -i/--iter was provided. Resume adapters use this to
+            // distinguish an explicit continuation target from the default.
+            bool cli_iterations_set = false;
 
             std::vector<int> disabled_camera_uids;
 

@@ -69,11 +69,244 @@ namespace lfs::training {
                 .start_iteration = static_cast<int>(params.iterations),
             };
         }
+
+        [[nodiscard]] lfs::Error checkpoint_stream_error(
+            const lfs::ErrorCode code,
+            std::string detail,
+            const lfs::core::SourceSite source) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message =
+                    "The training checkpoint could not be serialized.",
+                .detail = std::move(detail),
+                .detection = source,
+            });
+        }
     } // namespace
 
     using lfs::core::CheckpointFlags;
     using lfs::core::CheckpointHeader;
     using lfs::core::has_flag;
+
+    lfs::Result<CheckpointStreamResult>
+    serialize_checkpoint(
+        std::ostream& destination,
+        const int iteration,
+        const IStrategy& strategy,
+        const lfs::core::param::TrainingParameters& params,
+        const BilateralGrid* bilateral_grid,
+        const PPISP* ppisp,
+        const PPISPControllerPool* ppisp_controller_pool,
+        const ADMMSparsityOptimizer* sparsity_optimizer) {
+        try {
+            if (iteration < 0) {
+                return checkpoint_stream_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "Cannot serialize checkpoint: iteration is negative",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            if (!params.add_splat_paths.empty() &&
+                !params.add_splat_freeze.empty() &&
+                params.add_splat_paths.size() !=
+                    params.add_splat_freeze.size()) {
+                return checkpoint_stream_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "Cannot serialize checkpoint: add_splat_freeze count "
+                    "does not match add_splat_paths",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+
+            const auto& model = strategy.get_model();
+            if (model.size() <= 0 ||
+                static_cast<std::uint64_t>(model.size()) >
+                    lfs::core::MAX_CHECKPOINT_GAUSSIANS) {
+                return checkpoint_stream_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "Cannot serialize checkpoint: Gaussian count is out of bounds",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            const bool save_sparsity =
+                sparsity_optimizer &&
+                sparsity_optimizer->is_initialized();
+
+            CheckpointHeader header{};
+            header.iteration = iteration;
+            header.num_gaussians =
+                static_cast<std::uint32_t>(model.size());
+            header.sh_degree = model.get_max_sh_degree();
+            header.flags = CheckpointFlags::NONE;
+            if (bilateral_grid)
+                header.flags =
+                    header.flags |
+                    CheckpointFlags::HAS_BILATERAL_GRID;
+            if (ppisp)
+                header.flags =
+                    header.flags | CheckpointFlags::HAS_PPISP;
+            if (ppisp_controller_pool)
+                header.flags =
+                    header.flags |
+                    CheckpointFlags::HAS_PPISP_CONTROLLER;
+            if (save_sparsity)
+                header.flags =
+                    header.flags | CheckpointFlags::HAS_SPARSITY;
+
+            const auto header_pos = destination.tellp();
+            if (header_pos == std::streampos(-1)) {
+                return checkpoint_stream_error(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "Cannot serialize checkpoint: destination is not seekable",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            destination.write(
+                reinterpret_cast<const char*>(&header),
+                sizeof(header));
+
+            const char* const strategy_type =
+                strategy.strategy_type();
+            const auto type_bytes = std::strlen(strategy_type);
+            if (type_bytes == 0 ||
+                type_bytes >
+                    lfs::core::MAX_CHECKPOINT_STRATEGY_NAME_BYTES) {
+                return checkpoint_stream_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "Cannot serialize checkpoint: strategy name is out of bounds",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            const auto type_len =
+                static_cast<std::uint32_t>(type_bytes);
+            destination.write(
+                reinterpret_cast<const char*>(&type_len),
+                sizeof(type_len));
+            destination.write(strategy_type, type_len);
+
+            model.serialize(destination);
+            strategy.serialize(destination);
+
+            if (bilateral_grid) {
+                bilateral_grid->serialize(destination);
+                LOG_DEBUG(
+                    "Bilateral grid state staged (step={}, lr={:.2e})",
+                    bilateral_grid->get_step(),
+                    bilateral_grid->get_lr());
+            }
+            if (ppisp) {
+                ppisp->serialize(destination);
+                LOG_DEBUG(
+                    "PPISP state staged (step={}, lr={:.2e})",
+                    ppisp->get_step(), ppisp->get_lr());
+            }
+            if (ppisp_controller_pool) {
+                ppisp_controller_pool->serialize(destination);
+                LOG_DEBUG(
+                    "PPISP controller pool staged: {} cameras",
+                    ppisp_controller_pool->num_cameras());
+            }
+            if (save_sparsity) {
+                sparsity_optimizer->serialize(destination);
+                LOG_DEBUG(
+                    "Sparsity ADMM state staged: {} rows",
+                    sparsity_optimizer->state_size());
+            }
+
+            const auto params_pos = destination.tellp();
+            if (params_pos == std::streampos(-1)) {
+                return checkpoint_stream_error(
+                    lfs::ErrorCode::DataLoss,
+                    "Cannot serialize checkpoint: cannot locate parameter JSON",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            nlohmann::json params_json;
+            params_json["optimization"] =
+                params.optimization.to_json();
+            params_json["dataset"] = params.dataset.to_json();
+            if (params.init_path) {
+                params_json["init_path"] = *params.init_path;
+            }
+            if (params.exclude_frozen_add_splats_from_export) {
+                params_json["exclude_frozen_add_splats_from_export"] =
+                    true;
+            }
+            if (params.freeze_lr_scale != 0.0f) {
+                params_json["freeze_lr_scale"] =
+                    params.freeze_lr_scale;
+            }
+            if (!params.disabled_camera_uids.empty()) {
+                params_json["disabled_camera_uids"] =
+                    params.disabled_camera_uids;
+            }
+            const auto paths_to_utf8 =
+                [](const std::vector<std::filesystem::path>& paths) {
+                    auto array = nlohmann::json::array();
+                    for (const auto& path : paths) {
+                        array.push_back(
+                            lfs::core::path_to_utf8(path));
+                    }
+                    return array;
+                };
+            if (!params.view_paths.empty()) {
+                params_json["view_paths"] =
+                    paths_to_utf8(params.view_paths);
+            }
+            if (params.import_cameras_path) {
+                params_json["import_cameras_path"] =
+                    lfs::core::path_to_utf8(
+                        *params.import_cameras_path);
+            }
+            if (!params.add_splat_paths.empty()) {
+                params_json["add_splat_paths"] =
+                    paths_to_utf8(params.add_splat_paths);
+            }
+            if (!params.add_splat_freeze.empty()) {
+                params_json["add_splat_freeze"] =
+                    params.add_splat_freeze;
+            }
+
+            const std::string params_text = params_json.dump();
+            destination.write(
+                params_text.data(),
+                static_cast<std::streamsize>(params_text.size()));
+            const auto end_pos = destination.tellp();
+            if (!destination ||
+                end_pos == std::streampos(-1) ||
+                end_pos < params_pos) {
+                return checkpoint_stream_error(
+                    lfs::ErrorCode::DataLoss,
+                    "Cannot serialize checkpoint: destination write failed",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+
+            header.params_json_offset =
+                static_cast<std::uint64_t>(
+                    static_cast<std::streamoff>(params_pos));
+            header.params_json_size =
+                static_cast<std::uint64_t>(end_pos - params_pos);
+            destination.seekp(header_pos);
+            destination.write(
+                reinterpret_cast<const char*>(&header),
+                sizeof(header));
+            destination.seekp(end_pos);
+            if (!destination) {
+                return checkpoint_stream_error(
+                    lfs::ErrorCode::DataLoss,
+                    "Cannot serialize checkpoint: header finalization failed",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+
+            return CheckpointStreamResult{
+                .header = header,
+                .bytes = static_cast<std::uint64_t>(
+                    static_cast<std::streamoff>(end_pos)),
+            };
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): normalize the exception into a typed checkpoint error.
+            return checkpoint_stream_error(
+                lfs::ErrorCode::Internal,
+                std::string("Serialize checkpoint failed: ") +
+                    error.what(),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    }
 
     std::expected<void, std::string> save_checkpoint(
         const std::filesystem::path& path,
@@ -189,104 +422,14 @@ namespace lfs::training {
                                        lfs::core::path_to_utf8(temp_checkpoint_path));
             }
 
-            CheckpointHeader header{};
-            header.iteration = iteration;
-            header.num_gaussians = static_cast<uint32_t>(model.size());
-            header.sh_degree = model.get_max_sh_degree();
-            header.flags = CheckpointFlags::NONE;
-            if (bilateral_grid)
-                header.flags = header.flags | CheckpointFlags::HAS_BILATERAL_GRID;
-            if (ppisp)
-                header.flags = header.flags | CheckpointFlags::HAS_PPISP;
-            if (ppisp_controller_pool)
-                header.flags = header.flags | CheckpointFlags::HAS_PPISP_CONTROLLER;
-            if (save_sparsity)
-                header.flags = header.flags | CheckpointFlags::HAS_SPARSITY;
-
-            const auto header_pos = file.tellp();
-            file.write(reinterpret_cast<const char*>(&header), sizeof(header));
-
-            // Strategy type
-            const char* const strategy_type = strategy.strategy_type();
-            const uint32_t type_len = static_cast<uint32_t>(std::strlen(strategy_type));
-            file.write(reinterpret_cast<const char*>(&type_len), sizeof(type_len));
-            file.write(strategy_type, type_len);
-
-            // Model and strategy state
-            model.serialize(file);
-            strategy.serialize(file);
-
-            // Bilateral grid (if present)
-            if (bilateral_grid) {
-                bilateral_grid->serialize(file);
-                LOG_DEBUG("Bilateral grid state saved (step={}, lr={:.2e})",
-                          bilateral_grid->get_step(), bilateral_grid->get_lr());
+            auto serialized = serialize_checkpoint(
+                file, iteration, strategy, params, bilateral_grid,
+                ppisp, ppisp_controller_pool, sparsity_optimizer);
+            if (!serialized) {
+                return std::unexpected(
+                    lfs::format_for_developer(
+                        serialized.error()));
             }
-
-            // PPISP (if present)
-            if (ppisp) {
-                ppisp->serialize(file);
-                LOG_DEBUG("PPISP state saved (step={}, lr={:.2e})",
-                          ppisp->get_step(), ppisp->get_lr());
-            }
-
-            // PPISP controller pool (if present)
-            if (ppisp_controller_pool) {
-                ppisp_controller_pool->serialize(file);
-                LOG_DEBUG("PPISP controller pool saved: {} cameras", ppisp_controller_pool->num_cameras());
-            }
-
-            // Sparsity ADMM state (if mid-sparsify)
-            if (save_sparsity) {
-                sparsity_optimizer->serialize(file);
-                LOG_DEBUG("Sparsity ADMM state saved: {} rows", sparsity_optimizer->state_size());
-            }
-
-            // Training parameters as JSON
-            const auto params_pos = file.tellp();
-            nlohmann::json params_json;
-            params_json["optimization"] = params.optimization.to_json();
-            params_json["dataset"] = params.dataset.to_json();
-            if (params.init_path.has_value()) {
-                params_json["init_path"] = params.init_path.value();
-            }
-            if (params.exclude_frozen_add_splats_from_export) {
-                params_json["exclude_frozen_add_splats_from_export"] = true;
-            }
-            if (params.freeze_lr_scale != 0.0f) {
-                params_json["freeze_lr_scale"] = params.freeze_lr_scale;
-            }
-            if (!params.disabled_camera_uids.empty()) {
-                params_json["disabled_camera_uids"] = params.disabled_camera_uids;
-            }
-            const auto paths_to_utf8 = [](const std::vector<std::filesystem::path>& paths) {
-                auto array = nlohmann::json::array();
-                for (const auto& p : paths) {
-                    array.push_back(lfs::core::path_to_utf8(p));
-                }
-                return array;
-            };
-            if (!params.view_paths.empty()) {
-                params_json["view_paths"] = paths_to_utf8(params.view_paths);
-            }
-            if (params.import_cameras_path.has_value()) {
-                params_json["import_cameras_path"] = lfs::core::path_to_utf8(*params.import_cameras_path);
-            }
-            if (!params.add_splat_paths.empty()) {
-                params_json["add_splat_paths"] = paths_to_utf8(params.add_splat_paths);
-            }
-            if (!params.add_splat_freeze.empty()) {
-                params_json["add_splat_freeze"] = params.add_splat_freeze;
-            }
-            const std::string params_str = params_json.dump();
-            file.write(params_str.data(), static_cast<std::streamsize>(params_str.size()));
-            const auto params_end = file.tellp();
-
-            // Update header with JSON offset
-            header.params_json_offset = static_cast<uint64_t>(params_pos);
-            header.params_json_size = static_cast<uint64_t>(params_end - params_pos);
-            file.seekp(header_pos);
-            file.write(reinterpret_cast<const char*>(&header), sizeof(header));
             file.close();
             if (!file) {
                 return std::unexpected("Failed to finalize checkpoint file: " +
@@ -307,7 +450,8 @@ namespace lfs::training {
             if (save_sparsity)
                 extras += ", +sparsity";
             LOG_INFO("Checkpoint saved: {} ({} Gaussians, iter {}{})",
-                     lfs::core::path_to_utf8(checkpoint_path), header.num_gaussians, iteration,
+                     lfs::core::path_to_utf8(checkpoint_path),
+                     serialized->header.num_gaussians, iteration,
                      extras);
             lfs::core::events::state::CheckpointSaved{
                 .iteration = iteration,
@@ -329,17 +473,41 @@ namespace lfs::training {
         PPISPControllerPool* ppisp_controller_pool,
         ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator) {
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(
+                path, std::ios::binary, file)) {
+            return std::unexpected(
+                "Failed to open: " +
+                lfs::core::path_to_utf8(path));
+        }
+
+        std::error_code size_error;
+        const auto file_size =
+            std::filesystem::file_size(path, size_error);
+        if (size_error) {
+            return std::unexpected(
+                "Failed to inspect checkpoint size: " +
+                size_error.message());
+        }
+        return load_checkpoint(
+            file, file_size, strategy, params, bilateral_grid,
+            ppisp, ppisp_controller_pool, sparsity_optimizer,
+            std::move(tensor_allocator),
+            lfs::core::path_to_utf8(path));
+    }
+
+    CheckpointLoadResult load_checkpoint(
+        std::istream& file,
+        const std::uint64_t file_size,
+        IStrategy& strategy,
+        lfs::core::param::TrainingParameters& params,
+        BilateralGrid* bilateral_grid,
+        PPISP* ppisp,
+        PPISPControllerPool* ppisp_controller_pool,
+        ADMMSparsityOptimizer* sparsity_optimizer,
+        lfs::core::SplatTensorAllocator tensor_allocator,
+        const std::string_view source_name) {
         try {
-            std::ifstream file;
-            if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
-                return std::unexpected("Failed to open: " + lfs::core::path_to_utf8(path));
-            }
-
-            std::error_code size_error;
-            const auto file_size = std::filesystem::file_size(path, size_error);
-            if (size_error)
-                return std::unexpected("Failed to inspect checkpoint size: " + size_error.message());
-
             CheckpointHeader header{};
             file.read(reinterpret_cast<char*>(&header), sizeof(header));
             if (!file)
@@ -382,8 +550,32 @@ namespace lfs::training {
                 if (!file)
                     return std::unexpected("Invalid checkpoint: truncated parameter JSON");
 
-                const auto cli_data_path = loaded_params.dataset.data_path;
-                const auto cli_output_path = loaded_params.dataset.output_path;
+                const auto cli_data_path =
+                    loaded_params.dataset.data_path;
+                const auto cli_output_path =
+                    loaded_params.dataset.output_path;
+                const auto cli_output_name =
+                    loaded_params.dataset.output_name;
+                const auto runtime_headless =
+                    loaded_params.optimization.headless;
+                const auto runtime_auto_train =
+                    loaded_params.optimization.auto_train;
+                const auto runtime_no_splash =
+                    loaded_params.optimization.no_splash;
+                const auto runtime_debug_python =
+                    loaded_params.optimization.debug_python;
+                const auto runtime_debug_python_port =
+                    loaded_params.optimization.debug_python_port;
+                const auto runtime_config_file =
+                    loaded_params.optimization.config_file;
+                const auto cli_iterations_set =
+                    loaded_params.cli_iterations_set;
+                const auto cli_iterations =
+                    loaded_params.optimization.iterations;
+                const auto cli_bg_color_set =
+                    loaded_params.cli_bg_color_set;
+                const auto cli_bg_color =
+                    loaded_params.optimization.bg_color;
 
                 loaded_params = lfs::core::parse_checkpoint_params_json(params_str, std::move(loaded_params));
 
@@ -391,6 +583,30 @@ namespace lfs::training {
                     loaded_params.dataset.data_path = cli_data_path;
                 if (!cli_output_path.empty())
                     loaded_params.dataset.output_path = cli_output_path;
+                if (!cli_output_name.empty())
+                    loaded_params.dataset.output_name = cli_output_name;
+                loaded_params.optimization.headless =
+                    runtime_headless;
+                loaded_params.optimization.auto_train =
+                    runtime_auto_train;
+                loaded_params.optimization.no_splash =
+                    runtime_no_splash;
+                loaded_params.optimization.debug_python =
+                    runtime_debug_python;
+                loaded_params.optimization.debug_python_port =
+                    runtime_debug_python_port;
+                loaded_params.optimization.config_file =
+                    runtime_config_file;
+                if (cli_iterations_set)
+                    loaded_params.optimization.iterations =
+                        cli_iterations;
+                loaded_params.cli_iterations_set =
+                    cli_iterations_set;
+                if (cli_bg_color_set)
+                    loaded_params.optimization.bg_color =
+                        cli_bg_color;
+                loaded_params.cli_bg_color_set =
+                    cli_bg_color_set;
             }
             if (loaded_params.optimization.max_cap < 0)
                 return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");
@@ -558,7 +774,7 @@ namespace lfs::training {
             }
 
             LOG_INFO("Checkpoint loaded: {} ({} Gaussians, iter {})",
-                     lfs::core::path_to_utf8(path), header.num_gaussians, header.iteration);
+                     source_name, header.num_gaussians, header.iteration);
             return header.iteration;
 
         } catch (const std::exception& e) {

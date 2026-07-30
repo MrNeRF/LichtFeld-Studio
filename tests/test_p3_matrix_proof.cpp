@@ -4,6 +4,14 @@
  */
 
 #include "io/project_document.hpp"
+#include "training/checkpoint.hpp"
+#include "training/components/bilateral_grid.hpp"
+#include "training/components/ppisp.hpp"
+#include "training/components/ppisp_controller_pool.hpp"
+#include "training/components/ppisp_file.hpp"
+#include "training/components/sparsity_optimizer.hpp"
+#include "training/strategies/mcmc.hpp"
+#include "training/strategies/strategy_factory.hpp"
 
 #include <gtest/gtest.h>
 
@@ -11,15 +19,18 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -82,6 +93,42 @@ namespace {
         "SPLT-115",
         "SPLT-116",
     });
+
+    constexpr auto P4_CKPT_MATRIX_ROWS =
+        std::to_array<std::string_view>({
+            "CKPT-126",
+            "CKPT-127",
+            "CKPT-128",
+            "CKPT-129",
+            "CKPT-130",
+            "CKPT-131",
+            "CKPT-132",
+            "CKPT-133",
+            "CKPT-134",
+            "CKPT-135",
+            "CKPT-136",
+            "CKPT-137",
+            "CKPT-138",
+            "CKPT-139",
+            "CKPT-140",
+            "CKPT-141",
+            "CKPT-142",
+            "CKPT-143",
+            "CKPT-144",
+            "CKPT-145",
+            "CKPT-146",
+            "CKPT-147",
+            "CKPT-148",
+            "CKPT-149",
+        });
+
+    constexpr auto P4_PPIS_MATRIX_ROWS =
+        std::to_array<std::string_view>({
+            "PPIS-157",
+            "PPIS-158",
+            "PPIS-159",
+            "PPIS-160",
+        });
 
     struct PendingParameterExclusion {
         std::string_view field;
@@ -374,13 +421,18 @@ namespace {
     }
 
     ProjectDocumentSaveOptions matrix_save_options(
-        const std::uint64_t tag, const std::uint64_t wallclock) {
+        const std::uint64_t tag,
+        const std::uint64_t wallclock,
+        const std::optional<Uuid>& snapshot_uuid =
+            std::nullopt) {
         return ProjectDocumentSaveOptions{
             .commit =
                 {
                     .kind = CommitKind::Explicit,
                     .commit_uuid = matrix_uuid(tag),
-                    .snapshot_uuid = matrix_uuid(tag + 1),
+                    .snapshot_uuid =
+                        snapshot_uuid.value_or(
+                            matrix_uuid(tag + 1)),
                     .wallclock_unix_ns = wallclock,
                 },
             .file_uuid = matrix_uuid(tag + 2),
@@ -418,14 +470,16 @@ namespace {
 
     Tensor uint8_tensor(
         const std::initializer_list<std::uint8_t> values,
-        const lfs::core::TensorShape& shape) {
+        const lfs::core::TensorShape& shape,
+        const Device device = Device::CPU) {
         Tensor result =
             Tensor::empty(shape, Device::CPU, DataType::UInt8);
         std::ranges::copy(values, result.ptr<std::uint8_t>());
-        return result;
+        return result.to(device);
     }
 
-    std::unique_ptr<lfs::core::SplatData> make_matrix_splat() {
+    std::unique_ptr<lfs::core::SplatData> make_matrix_splat(
+        const Device device = Device::CPU) {
         constexpr std::size_t count = 4;
         std::vector<float> means{
             1.0f,
@@ -463,23 +517,23 @@ namespace {
         auto result = std::make_unique<lfs::core::SplatData>(
             1,
             Tensor::from_vector(
-                means, {count, std::size_t{3}}, Device::CPU),
+                means, {count, std::size_t{3}}, device),
             Tensor::from_vector(
                 sh0, {count, std::size_t{1}, std::size_t{3}},
-                Device::CPU),
+                device),
             Tensor::from_vector(
                 shn, {count, std::size_t{3}, std::size_t{3}},
-                Device::CPU),
+                device),
             Tensor::from_vector(
-                scaling, {count, std::size_t{3}}, Device::CPU),
+                scaling, {count, std::size_t{3}}, device),
             Tensor::from_vector(
-                rotation, {count, std::size_t{4}}, Device::CPU),
+                rotation, {count, std::size_t{4}}, device),
             Tensor::from_vector(
-                opacity, {count, std::size_t{1}}, Device::CPU),
+                opacity, {count, std::size_t{1}}, device),
             2.5f);
         result->set_active_sh_degree(0);
         result->deleted() =
-            uint8_tensor({0, 1, 0, 1}, {count});
+            uint8_tensor({0, 1, 0, 1}, {count}, device);
         result->_densification_info = Tensor::from_vector(
             std::vector<float>{
                 0.1f,
@@ -491,10 +545,167 @@ namespace {
                 1.3f,
                 1.4f,
             },
-            {std::size_t{2}, count}, Device::CPU);
+            {std::size_t{2}, count}, device);
         result->set_frozen_ranges({
             {.start = 1, .count = 2},
         });
+        return result;
+    }
+
+    struct MatrixCheckpoint {
+        std::vector<std::byte> bytes;
+        lfs::core::param::TrainingParameters parameters;
+        int iteration = 0;
+        std::string bilateral_bytes;
+        std::string ppisp_bytes;
+        std::string controller_bytes;
+        std::string sparsity_bytes;
+    };
+
+    MatrixCheckpoint make_matrix_checkpoint() {
+        MatrixCheckpoint result;
+        result.iteration = 12'345;
+        result.parameters.optimization =
+            lfs::core::param::OptimizationParameters::
+                mcmc_defaults();
+        result.parameters.optimization.iterations =
+            20'000;
+        result.parameters.optimization.max_cap = 8;
+        result.parameters.optimization.eval_steps =
+            {1'111, 2'222};
+        result.parameters.optimization.save_steps =
+            {3'333, 4'444};
+        result.parameters.optimization.use_depth_loss =
+            true;
+        result.parameters.optimization.depth_loss_weight =
+            0.125f;
+        result.parameters.optimization.bg_mode =
+            lfs::core::param::BackgroundMode::Random;
+        result.parameters.optimization.bg_color =
+            {0.125f, 0.25f, 0.5f};
+        result.parameters.optimization.use_bilateral_grid =
+            true;
+        result.parameters.optimization.use_ppisp = true;
+        result.parameters.optimization
+            .ppisp_use_controller = true;
+        result.parameters.optimization.enable_sparsity =
+            true;
+        result.parameters.optimization.sparsify_steps =
+            100;
+        result.parameters.optimization.init_rho =
+            0.001f;
+        result.parameters.optimization.prune_ratio =
+            0.25f;
+        result.parameters.dataset.images =
+            "images_matrix_checkpoint";
+        result.parameters.dataset.resize_factor = 4;
+        result.parameters.dataset.test_every = 9;
+        result.parameters.dataset.timelapse_images =
+            {"checkpoint_a.png", "checkpoint_b.png"};
+        result.parameters.dataset.timelapse_every = 61;
+        result.parameters.dataset.max_width = 1'920;
+        result.parameters.dataset.min_track_length = 7;
+        result.parameters.dataset.loading_params
+            .use_16bit_color = true;
+        result.parameters.freeze_lr_scale = 0.25f;
+        result.parameters.add_splat_paths = {
+            "frozen-source.ply"};
+        result.parameters.add_splat_freeze = {true};
+        result.parameters
+            .exclude_frozen_add_splats_from_export = true;
+
+        auto model =
+            make_matrix_splat(Device::CUDA);
+        lfs::training::MCMC strategy(*model);
+        strategy.initialize(
+            result.parameters.optimization);
+        lfs::training::BilateralGrid bilateral(
+            1, 2, 3, 4,
+            result.parameters.optimization
+                .iterations);
+        lfs::training::PPISP ppisp(
+            result.parameters.optimization
+                .iterations);
+        ppisp.register_frame(7, 11);
+        ppisp.finalize();
+        lfs::training::PPISPControllerPool controller(
+            1,
+            result.parameters.optimization
+                .iterations);
+        lfs::training::ADMMSparsityOptimizer sparsity({
+            .sparsify_steps = 100,
+            .init_rho = 0.001f,
+            .prune_ratio = 0.25f,
+            .update_every = 50,
+            .start_iteration = 20,
+        });
+        const auto initialized_sparsity =
+            sparsity.initialize(model->opacity_raw());
+        EXPECT_TRUE(initialized_sparsity)
+            << (initialized_sparsity
+                    ? std::string{}
+                    : initialized_sparsity.error());
+
+        {
+            std::ostringstream bytes;
+            bilateral.serialize(bytes);
+            result.bilateral_bytes = bytes.str();
+        }
+        {
+            std::ostringstream bytes;
+            ppisp.serialize(bytes);
+            result.ppisp_bytes = bytes.str();
+        }
+        {
+            std::ostringstream bytes;
+            controller.serialize(bytes);
+            result.controller_bytes = bytes.str();
+        }
+        {
+            std::ostringstream bytes;
+            sparsity.serialize(bytes);
+            result.sparsity_bytes = bytes.str();
+        }
+
+        std::ostringstream stream(
+            std::ios::binary | std::ios::out);
+        const auto serialized =
+            lfs::training::serialize_checkpoint(
+                stream, result.iteration, strategy,
+                result.parameters, &bilateral, &ppisp,
+                &controller, &sparsity);
+        EXPECT_TRUE(serialized)
+            << (serialized ? std::string{}
+                           : lfs::format_for_developer(
+                                 serialized.error()));
+        if (!serialized) {
+            return result;
+        }
+        const std::string bytes = stream.str();
+        EXPECT_EQ(bytes.size(), serialized->bytes);
+        result.bytes.resize(bytes.size());
+        std::memcpy(
+            result.bytes.data(), bytes.data(),
+            bytes.size());
+        return result;
+    }
+
+    std::vector<std::byte> copy_lazy_bytes(
+        const LazyChunkValue& payload,
+        const std::size_t window_bytes = 7) {
+        std::ostringstream stream(
+            std::ios::binary | std::ios::out);
+        const auto copied =
+            payload.copy_to(stream, window_bytes);
+        EXPECT_TRUE(copied)
+            << (copied ? std::string{}
+                       : lfs::format_for_developer(
+                             copied.error()));
+        const std::string bytes = stream.str();
+        std::vector<std::byte> result(bytes.size());
+        std::memcpy(
+            result.data(), bytes.data(),
+            bytes.size());
         return result;
     }
 
@@ -755,6 +966,7 @@ namespace {
 
     struct MatrixRows {
         std::set<std::string> p3;
+        std::set<std::string> p4;
         std::map<std::string, std::string> deferred;
     };
 
@@ -786,6 +998,8 @@ namespace {
                 std::format("{}-{}", authority, line_number);
             if (phase == "P3") {
                 result.p3.insert(row_id);
+            } else if (phase == "P4") {
+                result.p4.insert(row_id);
             } else {
                 result.deferred.emplace(row_id, phase);
             }
@@ -1265,8 +1479,27 @@ namespace {
         parameters.dataset.loading_params.use_16bit_color = true;
         require_ok(document->edit_parameters().set_snapshot(parameters));
 
+        const auto expected_checkpoint =
+            make_matrix_checkpoint();
+        ASSERT_FALSE(expected_checkpoint.bytes.empty());
+        auto checkpoint_payload =
+            LazyChunkValue::from_owned(
+                std::make_shared<
+                    const std::vector<std::byte>>(
+                    expected_checkpoint.bytes),
+                checkpoint_uuid);
+        ASSERT_TRUE(checkpoint_payload)
+            << lfs::format_for_developer(
+                   checkpoint_payload.error());
+        require_ok(document->set_checkpoint(
+            checkpoint_uuid,
+            std::move(*checkpoint_payload)));
+
         auto first_save =
-            document->save(path, matrix_save_options(100, 200));
+            document->save(
+                path,
+                matrix_save_options(
+                    100, 200, checkpoint_uuid));
         ASSERT_TRUE(first_save)
             << lfs::format_for_developer(first_save.error());
 
@@ -1286,6 +1519,16 @@ namespace {
         ASSERT_NE(first_splat, nullptr);
         ASSERT_NE(first_point, nullptr);
         ASSERT_NE(first_mesh, nullptr);
+        const auto* first_checkpoint =
+            first_open->find_checkpoint(checkpoint_uuid);
+        ASSERT_NE(first_checkpoint, nullptr);
+        EXPECT_TRUE(
+            first_checkpoint->is_clean_reference());
+        const auto first_checkpoint_bytes =
+            copy_lazy_bytes(*first_checkpoint);
+        EXPECT_EQ(
+            first_checkpoint_bytes,
+            expected_checkpoint.bytes);
         const std::vector<std::byte> first_splat_bytes(
             first_splat->bytes().begin(), first_splat->bytes().end());
         const auto first_point_bytes =
@@ -1295,11 +1538,14 @@ namespace {
         ASSERT_TRUE(first_mesh_bytes);
 
         auto second_save =
-            first_open->save(path, matrix_save_options(110, 300));
+            first_open->save(
+                path,
+                matrix_save_options(
+                    110, 300, checkpoint_uuid));
         ASSERT_TRUE(second_save)
             << lfs::format_for_developer(second_save.error());
         EXPECT_EQ(second_save->rewritten_chunks, 1u);
-        EXPECT_EQ(second_save->reused_chunks, 7u);
+        EXPECT_EQ(second_save->reused_chunks, 8u);
 
         auto second_open = ProjectDocument::open(path);
         ASSERT_TRUE(second_open)
@@ -1774,6 +2020,456 @@ namespace {
         ASSERT_NE(mesh_vendor,
                   second_mesh->retained_properties().end());
 
+        std::set<std::string> proven_ckpt;
+        const auto prove_ckpt =
+            [&](const std::string_view row) {
+                EXPECT_TRUE(
+                    proven_ckpt.emplace(row).second)
+                    << row;
+            };
+        const auto* second_checkpoint =
+            second_open->find_checkpoint(
+                checkpoint_uuid);
+        ASSERT_NE(second_checkpoint, nullptr);
+        EXPECT_TRUE(
+            second_checkpoint->is_clean_reference());
+        EXPECT_FALSE(
+            second_checkpoint->owns_staged_bytes());
+        EXPECT_EQ(
+            copy_lazy_bytes(*second_checkpoint),
+            expected_checkpoint.bytes);
+
+        std::optional<
+            std::expected<lfs::core::CheckpointHeader,
+                          std::string>>
+            reopened_header;
+        std::optional<
+            std::expected<lfs::core::SplatData,
+                          std::string>>
+            reopened_display_model;
+        std::optional<std::expected<
+            lfs::core::param::TrainingParameters,
+            std::string>>
+            reopened_checkpoint_parameters;
+        std::string reopened_strategy_type;
+        auto inspected_checkpoint =
+            second_checkpoint->visit_stream(
+                [&](std::istream& stream,
+                    const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    reopened_header =
+                        lfs::core::load_checkpoint_header(
+                            stream, bytes);
+                    stream.clear();
+                    stream.seekg(
+                        sizeof(
+                            lfs::core::
+                                CheckpointHeader),
+                        std::ios::beg);
+                    std::uint32_t strategy_size = 0;
+                    stream.read(
+                        reinterpret_cast<char*>(
+                            &strategy_size),
+                        sizeof(strategy_size));
+                    if (stream &&
+                        strategy_size <=
+                            lfs::core::
+                                MAX_CHECKPOINT_STRATEGY_NAME_BYTES) {
+                        reopened_strategy_type.resize(
+                            strategy_size);
+                        stream.read(
+                            reopened_strategy_type
+                                .data(),
+                            strategy_size);
+                    }
+                    stream.clear();
+                    stream.seekg(0);
+                    reopened_display_model =
+                        lfs::core::
+                            load_checkpoint_splat_data(
+                                stream, bytes);
+                    stream.clear();
+                    stream.seekg(0);
+                    reopened_checkpoint_parameters =
+                        lfs::core::
+                            load_checkpoint_params(
+                                stream, bytes);
+                    return {};
+                });
+        ASSERT_TRUE(inspected_checkpoint)
+            << lfs::format_for_developer(
+                   inspected_checkpoint.error());
+        ASSERT_TRUE(reopened_header);
+        ASSERT_TRUE(*reopened_header)
+            << reopened_header->error();
+        EXPECT_EQ(
+            (**reopened_header).iteration,
+            expected_checkpoint.iteration);
+        EXPECT_EQ(
+            (**reopened_header).num_gaussians,
+            4u);
+        EXPECT_EQ(
+            (**reopened_header).version,
+            lfs::core::CHECKPOINT_VERSION);
+        prove_ckpt("CKPT-126");
+
+        ASSERT_TRUE(reopened_display_model);
+        ASSERT_TRUE(*reopened_display_model)
+            << reopened_display_model->error();
+        EXPECT_EQ(
+            (**reopened_display_model).size(), 4u);
+        ASSERT_EQ(
+            (**reopened_display_model)
+                .frozen_ranges()
+                .size(),
+            1u);
+        prove_ckpt("CKPT-127");
+
+        EXPECT_EQ(
+            reopened_strategy_type,
+            lfs::core::param::kStrategyMCMC);
+        prove_ckpt("CKPT-128");
+
+        auto target_model =
+            make_matrix_splat(Device::CUDA);
+        lfs::training::MCMC target_strategy(
+            *target_model);
+        auto restored_parameters =
+            expected_checkpoint.parameters;
+        target_strategy.initialize(
+            restored_parameters.optimization);
+        lfs::training::BilateralGrid
+            restored_bilateral(1, 1, 1, 1, 1);
+        lfs::training::PPISP restored_ppisp(1);
+        lfs::training::PPISPControllerPool
+            restored_controller(1, 1);
+        lfs::training::ADMMSparsityOptimizer
+            restored_sparsity({
+                .sparsify_steps = 1,
+                .init_rho = 0.5f,
+                .prune_ratio = 0.9f,
+                .update_every = 1,
+                .start_iteration = 0,
+            });
+        std::optional<
+            std::expected<int, std::string>>
+            fully_restored;
+        auto restored_checkpoint =
+            second_checkpoint->visit_stream(
+                [&](std::istream& stream,
+                    const std::uint64_t bytes)
+                    -> lfs::Result<void> {
+                    fully_restored =
+                        lfs::training::
+                            load_checkpoint(
+                                stream, bytes,
+                                target_strategy,
+                                restored_parameters,
+                                &restored_bilateral,
+                                &restored_ppisp,
+                                &restored_controller,
+                                &restored_sparsity,
+                                {}, "matrix CKPT");
+                    return {};
+                });
+        ASSERT_TRUE(restored_checkpoint)
+            << lfs::format_for_developer(
+                   restored_checkpoint.error());
+        ASSERT_TRUE(fully_restored);
+        ASSERT_TRUE(*fully_restored)
+            << fully_restored->error();
+        EXPECT_EQ(
+            **fully_restored,
+            expected_checkpoint.iteration);
+        EXPECT_NE(
+            target_strategy.get_optimizer()
+                .get_state(
+                    lfs::training::ParamType::Means),
+            nullptr);
+        prove_ckpt("CKPT-129");
+        EXPECT_NE(
+            target_strategy.get_scheduler(), nullptr);
+        prove_ckpt("CKPT-130");
+        EXPECT_STREQ(
+            target_strategy.strategy_type(),
+            lfs::core::param::kStrategyMCMC.data());
+        prove_ckpt("CKPT-131");
+
+        const auto registered_strategies =
+            lfs::training::StrategyFactory::
+                instance()
+                    .list();
+        auto sorted_strategies = registered_strategies;
+        std::ranges::sort(sorted_strategies);
+        EXPECT_EQ(
+            sorted_strategies,
+            (std::vector<std::string>{
+                std::string(
+                    lfs::core::param::kStrategyIGSPlus),
+                std::string(
+                    lfs::core::param::kStrategyMCMC),
+                std::string(
+                    lfs::core::param::kStrategyMRNF),
+            }));
+        const auto prove_registered_strategy =
+            [&](const std::string_view strategy_name,
+                lfs::core::param::OptimizationParameters
+                    optimization,
+                const std::string_view row) {
+                auto source_model =
+                    make_matrix_splat(Device::CUDA);
+                auto source =
+                    lfs::training::StrategyFactory::
+                        instance()
+                            .create(
+                                std::string(strategy_name),
+                                *source_model);
+                ASSERT_TRUE(source)
+                    << source.error();
+                optimization.strategy =
+                    std::string(strategy_name);
+                optimization.max_cap = 8;
+                optimization.sh_degree = 1;
+                (*source)->initialize(optimization);
+
+                lfs::core::param::TrainingParameters
+                    strategy_parameters;
+                strategy_parameters.optimization =
+                    optimization;
+                std::ostringstream strategy_stream(
+                    std::ios::binary | std::ios::out);
+                const auto serialized_strategy =
+                    lfs::training::
+                        serialize_checkpoint(
+                            strategy_stream,
+                            expected_checkpoint
+                                .iteration,
+                            **source,
+                            strategy_parameters,
+                            nullptr, nullptr, nullptr,
+                            nullptr);
+                ASSERT_TRUE(serialized_strategy)
+                    << lfs::format_for_developer(
+                           serialized_strategy.error());
+                const auto strategy_bytes =
+                    strategy_stream.str();
+                ASSERT_EQ(
+                    strategy_bytes.size(),
+                    serialized_strategy->bytes);
+
+                auto target_model =
+                    make_matrix_splat(Device::CUDA);
+                auto target =
+                    lfs::training::StrategyFactory::
+                        instance()
+                            .create(
+                                std::string(strategy_name),
+                                *target_model);
+                ASSERT_TRUE(target)
+                    << target.error();
+                (*target)->initialize(optimization);
+                auto loaded_parameters =
+                    strategy_parameters;
+                std::istringstream input(
+                    strategy_bytes,
+                    std::ios::binary | std::ios::in);
+                const auto loaded_strategy =
+                    lfs::training::load_checkpoint(
+                        input, strategy_bytes.size(),
+                        **target, loaded_parameters,
+                        nullptr, nullptr, nullptr,
+                        nullptr, {}, "matrix strategy CKPT");
+                ASSERT_TRUE(loaded_strategy)
+                    << loaded_strategy.error();
+                EXPECT_EQ(
+                    *loaded_strategy,
+                    expected_checkpoint.iteration);
+                EXPECT_EQ(
+                    std::string_view(
+                        (*target)->strategy_type()),
+                    strategy_name);
+                EXPECT_NE(
+                    (*target)
+                        ->get_optimizer()
+                        .get_state(
+                            lfs::training::
+                                ParamType::Means),
+                    nullptr);
+                prove_ckpt(row);
+            };
+        prove_registered_strategy(
+            lfs::core::param::kStrategyMRNF,
+            lfs::core::param::
+                OptimizationParameters::
+                    mrnf_defaults(),
+            "CKPT-132");
+        prove_registered_strategy(
+            lfs::core::param::kStrategyIGSPlus,
+            lfs::core::param::
+                OptimizationParameters::
+                    igs_plus_defaults(),
+            "CKPT-133");
+
+        EXPECT_TRUE(lfs::core::has_flag(
+            (**reopened_header).flags,
+            lfs::core::CheckpointFlags::
+                HAS_BILATERAL_GRID));
+        {
+            std::ostringstream restored;
+            restored_bilateral.serialize(restored);
+            EXPECT_EQ(
+                restored.str(),
+                expected_checkpoint.bilateral_bytes);
+        }
+        prove_ckpt("CKPT-134");
+        EXPECT_TRUE(lfs::core::has_flag(
+            (**reopened_header).flags,
+            lfs::core::CheckpointFlags::HAS_PPISP));
+        {
+            std::ostringstream restored;
+            restored_ppisp.serialize(restored);
+            EXPECT_EQ(
+                restored.str(),
+                expected_checkpoint.ppisp_bytes);
+        }
+        prove_ckpt("CKPT-135");
+        EXPECT_TRUE(lfs::core::has_flag(
+            (**reopened_header).flags,
+            lfs::core::CheckpointFlags::
+                HAS_PPISP_CONTROLLER));
+        {
+            std::ostringstream restored;
+            restored_controller.serialize(restored);
+            EXPECT_EQ(
+                restored.str(),
+                expected_checkpoint.controller_bytes);
+        }
+        prove_ckpt("CKPT-136");
+        EXPECT_TRUE(lfs::core::has_flag(
+            (**reopened_header).flags,
+            lfs::core::CheckpointFlags::HAS_SPARSITY));
+        {
+            std::ostringstream restored;
+            restored_sparsity.serialize(restored);
+            EXPECT_EQ(
+                restored.str(),
+                expected_checkpoint.sparsity_bytes);
+        }
+        prove_ckpt("CKPT-137");
+
+        ASSERT_TRUE(reopened_checkpoint_parameters);
+        ASSERT_TRUE(*reopened_checkpoint_parameters)
+            << reopened_checkpoint_parameters->error();
+        const auto& reopened_active =
+            **reopened_checkpoint_parameters;
+        EXPECT_EQ(
+            reopened_active.optimization.iterations,
+            expected_checkpoint.parameters
+                .optimization.iterations);
+        EXPECT_FLOAT_EQ(
+            reopened_active.optimization.means_lr,
+            expected_checkpoint.parameters
+                .optimization.means_lr);
+        prove_ckpt("CKPT-138");
+        EXPECT_EQ(
+            reopened_active.optimization.eval_steps,
+            expected_checkpoint.parameters
+                .optimization.eval_steps);
+        EXPECT_EQ(
+            reopened_active.optimization.strategy,
+            lfs::core::param::kStrategyMCMC);
+        prove_ckpt("CKPT-139");
+        EXPECT_EQ(
+            reopened_active.optimization.mask_mode,
+            expected_checkpoint.parameters
+                .optimization.mask_mode);
+        prove_ckpt("CKPT-140");
+        EXPECT_TRUE(
+            reopened_active.optimization
+                .use_depth_loss);
+        EXPECT_FLOAT_EQ(
+            reopened_active.optimization
+                .depth_loss_weight,
+            0.125f);
+        prove_ckpt("CKPT-141");
+        EXPECT_EQ(
+            reopened_active.optimization.bg_mode,
+            lfs::core::param::BackgroundMode::Random);
+        EXPECT_EQ(
+            reopened_active.optimization.bg_color,
+            (std::array<float, 3>{
+                0.125f, 0.25f, 0.5f}));
+        prove_ckpt("CKPT-142");
+        EXPECT_EQ(
+            reopened_active.optimization
+                .use_bilateral_grid,
+            expected_checkpoint.parameters
+                .optimization.use_bilateral_grid);
+        prove_ckpt("CKPT-143");
+        EXPECT_EQ(
+            reopened_active.optimization.use_ppisp,
+            expected_checkpoint.parameters
+                .optimization.use_ppisp);
+        prove_ckpt("CKPT-144");
+        EXPECT_EQ(
+            reopened_active.optimization
+                .prune_opacity,
+            expected_checkpoint.parameters
+                .optimization.prune_opacity);
+        prove_ckpt("CKPT-145");
+        EXPECT_EQ(
+            reopened_active.optimization.use_edge_map,
+            expected_checkpoint.parameters
+                .optimization.use_edge_map);
+        prove_ckpt("CKPT-146");
+        EXPECT_EQ(
+            reopened_active.optimization
+                .enable_sparsity,
+            expected_checkpoint.parameters
+                .optimization.enable_sparsity);
+        prove_ckpt("CKPT-147");
+        EXPECT_EQ(
+            reopened_active.dataset.images,
+            "images_matrix_checkpoint");
+        EXPECT_EQ(
+            reopened_active.dataset
+                .timelapse_images,
+            (std::vector<std::string>{
+                "checkpoint_a.png",
+                "checkpoint_b.png"}));
+        EXPECT_TRUE(
+            reopened_active.dataset.loading_params
+                .use_16bit_color);
+        prove_ckpt("CKPT-148");
+        EXPECT_EQ(
+            reopened_active.add_splat_paths,
+            expected_checkpoint.parameters
+                .add_splat_paths);
+        ASSERT_EQ(
+            target_strategy.get_model()
+                .frozen_ranges()
+                .size(),
+            1u);
+        EXPECT_EQ(
+            target_strategy.get_model()
+                .frozen_ranges()[0]
+                .start,
+            1u);
+        EXPECT_EQ(
+            target_strategy.get_model()
+                .frozen_ranges()[0]
+                .count,
+            2u);
+        prove_ckpt("CKPT-149");
+
+        const std::set<std::string>
+            registered_ckpt_rows(
+                P4_CKPT_MATRIX_ROWS.begin(),
+                P4_CKPT_MATRIX_ROWS.end());
+        EXPECT_EQ(proven_ckpt, registered_ckpt_rows)
+            << "Every registered CKPT row must reach an explicit "
+               "save->load->save assertion";
+
         const MatrixRows matrix_rows = read_matrix_rows();
         const std::set<std::string> registered(
             P3_MATRIX_ROWS.begin(), P3_MATRIX_ROWS.end());
@@ -1784,9 +2480,19 @@ namespace {
             << "Every registered P3 row must reach an explicit assertion "
                "after save->load->save";
 
+        std::set<std::string> registered_p4(
+            P4_CKPT_MATRIX_ROWS.begin(),
+            P4_CKPT_MATRIX_ROWS.end());
+        registered_p4.insert(
+            P4_PPIS_MATRIX_ROWS.begin(),
+            P4_PPIS_MATRIX_ROWS.end());
+        EXPECT_EQ(matrix_rows.p4, registered_p4)
+            << "P4 matrix registries must change whenever the normative "
+               "ownership matrix gains or loses a CKPT/PPIS row";
+
         ASSERT_FALSE(matrix_rows.deferred.empty());
         for (const auto& [row_id, phase] : matrix_rows.deferred) {
-            EXPECT_TRUE(phase == "P4" || phase == "P5")
+            EXPECT_EQ(phase, "P5")
                 << row_id << " has no explicit later-phase tag";
         }
 
@@ -1796,6 +2502,199 @@ namespace {
             << "PCLD-GAP12-242";
         EXPECT_EQ(mesh_vendor->encoding, 91u)
             << "MESH-GAP12-242";
+    }
+
+    TEST(P4MatrixProof,
+         StandalonePpispSurvivesAsOneCleanLazyAuthority) {
+        MatrixTemporaryDirectory temporary;
+        const auto sidecar_path =
+            temporary.path / "source.ppisp";
+        const auto project_path =
+            temporary.path / "ppisp-proof.licht";
+        const auto extracted_path =
+            temporary.path / "extracted.ppisp";
+        const Uuid project_uuid = matrix_uuid(500);
+        const Uuid ppisp_uuid = matrix_uuid(501);
+
+        lfs::training::PPISP source(1'000);
+        source.register_frame(101, 10);
+        source.register_frame(102, 20);
+        source.register_frame(103, 20);
+        source.finalize();
+        lfs::training::PPISPControllerPool
+            source_controller(2, 1'000);
+        const lfs::training::PPISPFileMetadata metadata{
+            .dataset_path_utf8 =
+                "/non-authoritative/source",
+            .images_folder = "images_4",
+            .frame_image_names =
+                {"a.png", "b.png", "c.png"},
+            .frame_camera_ids = {10, 20, 20},
+            .camera_ids = {10, 20},
+        };
+        const auto saved_sidecar =
+            lfs::training::save_ppisp_file(
+                sidecar_path, source,
+                &source_controller, &metadata);
+        ASSERT_TRUE(saved_sidecar)
+            << saved_sidecar.error();
+
+        std::ifstream sidecar(
+            sidecar_path, std::ios::binary);
+        ASSERT_TRUE(sidecar);
+        sidecar.seekg(0, std::ios::end);
+        const auto sidecar_size = sidecar.tellg();
+        ASSERT_GT(sidecar_size, 0);
+        sidecar.seekg(0, std::ios::beg);
+        std::vector<std::byte> expected_bytes(
+            static_cast<std::size_t>(
+                sidecar_size));
+        sidecar.read(
+            reinterpret_cast<char*>(
+                expected_bytes.data()),
+            static_cast<std::streamsize>(
+                expected_bytes.size()));
+        ASSERT_TRUE(sidecar);
+
+        auto document =
+            ProjectDocument::create(project_uuid, 500);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        auto lazy = LazyChunkValue::from_owned(
+            std::make_shared<
+                const std::vector<std::byte>>(
+                expected_bytes),
+            ppisp_uuid);
+        ASSERT_TRUE(lazy)
+            << lfs::format_for_developer(
+                   lazy.error());
+        require_ok(document->set_ppisp(
+            ppisp_uuid, std::move(*lazy)));
+        const auto first_save = document->save(
+            project_path,
+            matrix_save_options(510, 600));
+        ASSERT_TRUE(first_save)
+            << lfs::format_for_developer(
+                   first_save.error());
+
+        auto opened =
+            ProjectDocument::open(project_path);
+        ASSERT_TRUE(opened)
+            << lfs::format_for_developer(
+                   opened.error());
+        EXPECT_TRUE(opened->checkpoint_uuids().empty());
+        ASSERT_EQ(opened->ppisp_uuids().size(), 1u);
+        const auto* ppisp =
+            opened->find_ppisp(ppisp_uuid);
+        ASSERT_NE(ppisp, nullptr);
+        EXPECT_TRUE(ppisp->is_clean_reference());
+        EXPECT_EQ(
+            copy_lazy_bytes(*ppisp, 11),
+            expected_bytes);
+
+        const auto second_save = opened->save(
+            project_path,
+            matrix_save_options(520, 700));
+        ASSERT_TRUE(second_save)
+            << lfs::format_for_developer(
+                   second_save.error());
+        EXPECT_EQ(second_save->rewritten_chunks, 1u);
+        EXPECT_EQ(second_save->reused_chunks, 5u);
+
+        auto reopened =
+            ProjectDocument::open(project_path);
+        ASSERT_TRUE(reopened)
+            << lfs::format_for_developer(
+                   reopened.error());
+        const auto* reopened_ppisp =
+            reopened->find_ppisp(ppisp_uuid);
+        ASSERT_NE(reopened_ppisp, nullptr);
+        const auto embedded_bytes =
+            copy_lazy_bytes(*reopened_ppisp, 13);
+        EXPECT_EQ(embedded_bytes, expected_bytes);
+        {
+            std::ofstream extracted(
+                extracted_path,
+                std::ios::binary |
+                    std::ios::trunc);
+            ASSERT_TRUE(extracted);
+            extracted.write(
+                reinterpret_cast<const char*>(
+                    embedded_bytes.data()),
+                static_cast<std::streamsize>(
+                    embedded_bytes.size()));
+            ASSERT_TRUE(extracted);
+        }
+
+        lfs::training::PPISP loaded(1);
+        lfs::training::PPISPControllerPool
+            loaded_controller(2, 1);
+        lfs::training::PPISPFileMetadata
+            loaded_metadata;
+        const auto loaded_sidecar =
+            lfs::training::load_ppisp_file(
+                extracted_path, loaded,
+                &loaded_controller,
+                &loaded_metadata);
+        ASSERT_TRUE(loaded_sidecar)
+            << loaded_sidecar.error();
+
+        std::set<std::string> proven;
+        const auto prove =
+            [&](const std::string_view row) {
+                EXPECT_TRUE(proven.emplace(row).second)
+                    << row;
+            };
+        struct Header {
+            std::uint32_t magic;
+            std::uint32_t version;
+            std::uint32_t num_cameras;
+            std::uint32_t num_frames;
+            std::uint32_t flags;
+            std::uint32_t reserved[3];
+        };
+        static_assert(sizeof(Header) == 32);
+        Header header{};
+        std::memcpy(
+            &header, embedded_bytes.data(),
+            sizeof(header));
+        EXPECT_EQ(
+            header.magic,
+            lfs::training::PPISP_FILE_MAGIC);
+        EXPECT_EQ(
+            header.version,
+            lfs::training::PPISP_FILE_VERSION);
+        EXPECT_EQ(header.num_cameras, 2u);
+        EXPECT_EQ(header.num_frames, 3u);
+        prove("PPIS-157");
+        EXPECT_EQ(loaded.num_cameras(), 2);
+        EXPECT_EQ(loaded.num_frames(), 3);
+        prove("PPIS-158");
+        EXPECT_EQ(
+            loaded_controller.num_cameras(), 2);
+        EXPECT_NE(header.flags & 1u, 0u);
+        prove("PPIS-159");
+        EXPECT_EQ(
+            loaded_metadata.images_folder,
+            metadata.images_folder);
+        EXPECT_EQ(
+            loaded_metadata.frame_image_names,
+            metadata.frame_image_names);
+        EXPECT_EQ(
+            loaded_metadata.frame_camera_ids,
+            metadata.frame_camera_ids);
+        EXPECT_EQ(
+            loaded_metadata.camera_ids,
+            metadata.camera_ids);
+        prove("PPIS-160");
+
+        const std::set<std::string> registered(
+            P4_PPIS_MATRIX_ROWS.begin(),
+            P4_PPIS_MATRIX_ROWS.end());
+        EXPECT_EQ(proven, registered)
+            << "Every registered PPIS row must reach an explicit "
+               "save->load->save assertion";
     }
 
 } // namespace

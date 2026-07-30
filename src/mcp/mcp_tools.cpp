@@ -469,6 +469,8 @@ namespace lfs::mcp {
                 }
 
                 auto snapshot = cc->snapshot();
+                const auto& project_capture =
+                    snapshot.project_snapshot.last;
                 return json{
                     {"iteration", snapshot.iteration},
                     {"max_iterations", snapshot.max_iterations},
@@ -476,7 +478,98 @@ namespace lfs::mcp {
                     {"loss", snapshot.loss},
                     {"is_running", snapshot.is_running},
                     {"is_paused", snapshot.is_paused},
-                    {"is_refining", snapshot.is_refining}};
+                    {"is_refining", snapshot.is_refining},
+                    {"project_snapshot",
+                     {
+                         {"completed",
+                          snapshot.project_snapshot
+                              .completed_snapshots},
+                         {"path",
+                          snapshot.project_snapshot_path},
+                         {"writer_in_flight",
+                          snapshot
+                              .project_snapshot_writer_in_flight},
+                         {"writer_error",
+                          snapshot
+                              .project_snapshot_writer_error},
+                         {"snapshot_uuid",
+                          project_capture.snapshot_uuid
+                              .to_string()},
+                         {"iteration",
+                          project_capture.iteration},
+                         {"checkpoint_bytes",
+                          project_capture.checkpoint_bytes},
+                         {"device_snapshot_bytes",
+                          project_capture.device_snapshot_bytes},
+                         {"pinned_peak_bytes",
+                          project_capture.pinned_peak_bytes},
+                         {"host_staging_bytes",
+                          project_capture.host_staging_bytes},
+                         {"host_rss_delta_bytes",
+                          project_capture.host_rss_delta_bytes},
+                         {"host_memory_available_bytes",
+                          project_capture
+                              .host_memory_available_bytes},
+                         {"host_memory_required_bytes",
+                          project_capture
+                              .host_memory_required_bytes},
+                         {"host_memory_preflight_passed",
+                          project_capture
+                              .host_memory_preflight_passed},
+                         {"host_ram_within_gate",
+                          project_capture
+                              .host_ram_within_gate},
+                         {"pause_ms",
+                          project_capture.pause_ms},
+                         {"pause_p95_ms",
+                          snapshot.project_snapshot
+                              .pause_p95_ms},
+                         {"preparation_ms",
+                          project_capture
+                              .preparation_ms},
+                         {"cold_first_snapshot",
+                          project_capture
+                              .cold_first_snapshot},
+                         {"safe_point_entry_ms",
+                          project_capture
+                              .safe_point_entry_ms},
+                         {"stream_sync_ms",
+                          project_capture.stream_sync_ms},
+                         {"cpu_state_ms",
+                          project_capture
+                              .additional_cpu_state_ms},
+                         {"serialize_and_issue_ms",
+                          project_capture
+                              .serialize_and_issue_ms},
+                         {"last_d2h_wait_ms",
+                          project_capture
+                              .last_d2h_wait_ms},
+                         {"final_drain_ms",
+                          project_capture.final_drain_ms},
+                         {"measured_pinned_d2h_bytes_per_second",
+                          project_capture
+                              .measured_pinned_d2h_bytes_per_second},
+                         {"rig_gate_ms",
+                          project_capture.rig_gate_ms},
+                         {"pause_within_rig_gate",
+                          project_capture
+                              .pause_within_rig_gate},
+                         {"consistency_proven",
+                          project_capture
+                              .consistency_proven},
+                         {"pre_snapshot_step_mean_ms",
+                          snapshot
+                              .project_snapshot_pre_step_mean_ms},
+                         {"post_resume_step_mean_ms",
+                          snapshot
+                              .project_snapshot_post_step_mean_ms},
+                         {"post_resume_step_samples",
+                          snapshot
+                              .project_snapshot_post_step_samples},
+                         {"step_regression_percent",
+                          snapshot
+                              .project_snapshot_step_regression_percent},
+                     }}};
             });
 
         registry.register_tool(

@@ -12,11 +12,15 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstring>
 #include <format>
+#include <istream>
 #include <limits>
 #include <map>
+#include <ostream>
 #include <ranges>
 #include <set>
+#include <streambuf>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -29,6 +33,21 @@ namespace lfs::io::project {
 
         constexpr std::uint16_t P3_CHUNK_VERSION = 1;
         constexpr std::uint64_t DOCUMENT_CLEAN_BASELINE = 0;
+        constexpr std::uint32_t PPISP_FILE_MAGIC =
+            0x50505349;
+        constexpr std::uint32_t PPISP_FILE_VERSION = 2;
+        constexpr std::uint32_t PPISP_FILE_KNOWN_FLAGS =
+            (1u << 0) | (1u << 1);
+
+        struct PpispFileHeader {
+            std::uint32_t magic = 0;
+            std::uint32_t version = 0;
+            std::uint32_t num_cameras = 0;
+            std::uint32_t num_frames = 0;
+            std::uint32_t flags = 0;
+            std::uint32_t reserved[3]{};
+        };
+        static_assert(sizeof(PpispFileHeader) == 32);
 
         lfs::Error document_error(const lfs::ErrorCode code,
                                   std::string message,
@@ -98,6 +117,10 @@ namespace lfs::io::project {
                    fourcc == FOURCC_SCNG || fourcc == FOURCC_SELM ||
                    fourcc == FOURCC_REFS || fourcc == FOURCC_SPLT ||
                    fourcc == FOURCC_PCLD || fourcc == FOURCC_MESH;
+        }
+
+        bool is_lazy_binary_fourcc(const Fourcc fourcc) noexcept {
+            return fourcc == FOURCC_CKPT || fourcc == FOURCC_PPIS;
         }
 
         bool is_singleton_fourcc(const Fourcc fourcc) noexcept {
@@ -210,6 +233,18 @@ namespace lfs::io::project {
             };
         }
 
+        ChunkWriteOptions lazy_binary_options(
+            const Fourcc fourcc,
+            const std::uint64_t size) {
+            return ChunkWriteOptions{
+                .chunk_version = P3_CHUNK_VERSION,
+                .compression = Compression::Stored,
+                .tensor_payload = fourcc == FOURCC_CKPT,
+                .block_crcs = size >= BLOCK_CRC_REQUIRED_AT,
+                .expected_stream_bytes = size,
+            };
+        }
+
         std::string payload_identity(const lfs::core::Uuid& node,
                                      const std::string_view fourcc) {
             return std::format("{}:{}", node.to_string(), fourcc);
@@ -239,6 +274,238 @@ namespace lfs::io::project {
         }
 
     } // namespace
+
+    namespace {
+
+        class ReadOnlyMemoryBuffer final : public std::streambuf {
+        public:
+            explicit ReadOnlyMemoryBuffer(
+                const std::span<const std::byte> bytes) {
+                auto* begin = const_cast<char*>(
+                    reinterpret_cast<const char*>(bytes.data()));
+                setg(begin, begin, begin + bytes.size());
+            }
+
+        protected:
+            pos_type seekoff(const off_type offset,
+                             const std::ios_base::seekdir direction,
+                             const std::ios_base::openmode mode) override {
+                if ((mode & std::ios_base::in) == 0) {
+                    return pos_type(off_type(-1));
+                }
+                char* base = eback();
+                char* target = nullptr;
+                if (direction == std::ios_base::beg) {
+                    target = base + offset;
+                } else if (direction == std::ios_base::cur) {
+                    target = gptr() + offset;
+                } else if (direction == std::ios_base::end) {
+                    target = egptr() + offset;
+                }
+                if (!target || target < base || target > egptr()) {
+                    return pos_type(off_type(-1));
+                }
+                setg(base, target, egptr());
+                return pos_type(target - base);
+            }
+
+            pos_type seekpos(const pos_type position,
+                             const std::ios_base::openmode mode) override {
+                return seekoff(
+                    static_cast<off_type>(position),
+                    std::ios_base::beg, mode);
+            }
+        };
+
+    } // namespace
+
+    struct LazyChunkValue::Impl {
+        std::shared_ptr<ProjectReader> reader;
+        std::optional<ChunkInfo> source;
+        std::optional<CleanProof> proof;
+        std::shared_ptr<const std::vector<std::byte>> owned;
+        lfs::core::Uuid snapshot_uuid;
+
+        [[nodiscard]] std::uint64_t size() const noexcept {
+            if (owned) {
+                return owned->size();
+            }
+            return source ? source->uncompressed_bytes : 0;
+        }
+    };
+
+    LazyChunkValue::LazyChunkValue(std::unique_ptr<Impl> impl)
+        : impl_(std::move(impl)) {}
+    LazyChunkValue::LazyChunkValue(LazyChunkValue&&) noexcept = default;
+    LazyChunkValue&
+    LazyChunkValue::operator=(LazyChunkValue&&) noexcept = default;
+    LazyChunkValue::~LazyChunkValue() = default;
+
+    lfs::Result<LazyChunkValue>
+    LazyChunkValue::from_owned(
+        std::shared_ptr<const std::vector<std::byte>> bytes,
+        const lfs::core::Uuid& snapshot_uuid) {
+        if (!bytes) {
+            return fail<LazyChunkValue>(
+                lfs::ErrorCode::InvalidArgument,
+                "The staged chapter storage is missing.",
+                "LazyChunkValue requires an immutable owned byte source",
+                "lazy_chunk.bytes");
+        }
+        if (snapshot_uuid.is_nil()) {
+            return fail<LazyChunkValue>(
+                lfs::ErrorCode::InvalidArgument,
+                "The snapshot UUID cannot be null.",
+                "Every owned training snapshot piece must carry one UUID",
+                "lazy_chunk.snapshot_uuid");
+        }
+        auto impl = std::make_unique<Impl>();
+        impl->owned = std::move(bytes);
+        impl->snapshot_uuid = snapshot_uuid;
+        return LazyChunkValue(std::move(impl));
+    }
+
+    lfs::Result<LazyChunkValue>
+    LazyChunkValue::from_owned(
+        std::vector<std::byte> bytes,
+        const lfs::core::Uuid& snapshot_uuid) {
+        return from_owned(
+            std::make_shared<const std::vector<std::byte>>(
+                std::move(bytes)),
+            snapshot_uuid);
+    }
+
+    std::uint64_t LazyChunkValue::size() const noexcept {
+        return impl_->size();
+    }
+
+    const lfs::core::Uuid&
+    LazyChunkValue::snapshot_uuid() const noexcept {
+        return impl_->snapshot_uuid;
+    }
+
+    bool LazyChunkValue::is_clean_reference() const noexcept {
+        return impl_->reader && impl_->source && impl_->proof &&
+               !impl_->owned;
+    }
+
+    bool LazyChunkValue::owns_staged_bytes() const noexcept {
+        return static_cast<bool>(impl_->owned);
+    }
+
+    lfs::Result<void>
+    LazyChunkValue::read_at(
+        const std::uint64_t offset,
+        const std::span<std::byte> destination) const {
+        const auto total = size();
+        if (offset > total ||
+            destination.size() > total - offset) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The lazy chapter window is out of bounds.",
+                std::format(
+                    "offset {} + size {} exceeds chapter size {}",
+                    offset, destination.size(), total),
+                "lazy_chunk.window");
+        }
+        if (destination.empty()) {
+            return {};
+        }
+        if (impl_->owned) {
+            std::memcpy(
+                destination.data(),
+                impl_->owned->data() + offset,
+                destination.size());
+            return {};
+        }
+        if (!impl_->reader || !impl_->source) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The lazy chapter has no byte source.",
+                "Neither clean file range nor owned storage is available",
+                "lazy_chunk.source");
+        }
+        return impl_->reader->read_stored_at(
+            *impl_->source, offset, destination);
+    }
+
+    lfs::Result<void>
+    LazyChunkValue::visit_stream(
+        const StreamVisitor& visitor) const {
+        if (!visitor) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The lazy chapter visitor is empty.",
+                "visit_stream requires a callable",
+                "lazy_chunk.visitor");
+        }
+        if (impl_->owned) {
+            ReadOnlyMemoryBuffer buffer(std::span<const std::byte>(
+                impl_->owned->data(), impl_->owned->size()));
+            std::istream stream(&buffer);
+            return visitor(stream, impl_->owned->size());
+        }
+        if (!impl_->reader || !impl_->source) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The lazy chapter has no byte source.",
+                "Neither clean file range nor owned storage is available",
+                "lazy_chunk.source");
+        }
+        auto bounded =
+            impl_->reader->open_bounded_stream(*impl_->source);
+        if (!bounded) {
+            return lfs::Result<void>::failure(
+                std::move(bounded).error());
+        }
+        return visitor(bounded->stream(), bounded->size());
+    }
+
+    lfs::Result<void>
+    LazyChunkValue::copy_to(
+        std::ostream& destination,
+        const std::size_t window_bytes) const {
+        if (window_bytes == 0) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The lazy chapter copy window cannot be zero.",
+                "copy_to requires a bounded non-zero window",
+                "lazy_chunk.window_bytes");
+        }
+        const std::size_t bounded_window = std::min<std::size_t>(
+            window_bytes,
+            static_cast<std::size_t>(
+                std::numeric_limits<std::streamsize>::max()));
+        std::vector<std::byte> window(
+            static_cast<std::size_t>(
+                std::min<std::uint64_t>(size(), bounded_window)));
+        std::uint64_t offset = 0;
+        while (offset < size()) {
+            const auto count = static_cast<std::size_t>(
+                std::min<std::uint64_t>(
+                    window.size(), size() - offset));
+            auto destination_window =
+                std::span<std::byte>(window).first(count);
+            if (auto read = read_at(offset, destination_window);
+                !read) {
+                return read;
+            }
+            destination.write(
+                reinterpret_cast<const char*>(window.data()),
+                static_cast<std::streamsize>(count));
+            if (!destination) {
+                return fail<void>(
+                    lfs::ErrorCode::DataLoss,
+                    "The lazy chapter could not be streamed.",
+                    std::format(
+                        "destination failed after {} of {} bytes",
+                        offset, size()),
+                    "lazy_chunk.destination");
+            }
+            offset += count;
+        }
+        return {};
+    }
 
     struct ProjectHydrationPlan::Impl {
         lfs::core::Scene* destination = nullptr;
@@ -274,9 +541,12 @@ namespace lfs::io::project {
         std::unordered_map<lfs::core::Uuid, SplatChapterPayload> splats;
         std::unordered_map<lfs::core::Uuid, PointCloudPayload> point_clouds;
         std::unordered_map<lfs::core::Uuid, MeshPayload> meshes;
+        std::unordered_map<lfs::core::Uuid, LazyChunkValue> checkpoints;
+        std::unordered_map<lfs::core::Uuid, LazyChunkValue> ppisp_payloads;
 
         std::optional<std::filesystem::path> source_path;
         std::map<ChunkKey, SourceRow, ChunkKeyLess> source_rows;
+        std::set<ChunkKey, ChunkKeyLess> lazy_source_keys;
         std::map<ChunkKey, Hash128, ChunkKeyLess> content_hashes;
         std::set<ChunkKey, ChunkKeyLess> dirty;
 
@@ -504,6 +774,7 @@ namespace lfs::io::project {
             };
 
             std::set<ChunkKey, ChunkKeyLess> bound_embedded;
+            std::optional<lfs::core::Uuid> bound_checkpoint;
             for (const auto& node : *nodes) {
                 const bool geometry =
                     node.type == "splat" || node.type == "pointcloud" ||
@@ -529,6 +800,20 @@ namespace lfs::io::project {
                             "Training splats bind to CKPT and never to SPLT",
                             "SCNG.training_model_uuid");
                     }
+                    if (binding.instance_uuid.is_nil() ||
+                        binding.reference_uuid ||
+                        !checkpoints.contains(binding.instance_uuid)) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "The training checkpoint payload is missing.",
+                            std::format(
+                                "SCNG training node {} binds CKPT instance {}, "
+                                "but that exact chapter is unavailable",
+                                node.uuid.to_string(),
+                                binding.instance_uuid.to_string()),
+                            "CKPT.instance_uuid");
+                    }
+                    bound_checkpoint = binding.instance_uuid;
                     continue;
                 }
 
@@ -641,7 +926,124 @@ namespace lfs::io::project {
                 !result) {
                 return result;
             }
-            return ensure_all_bound(meshes, FOURCC_MESH, "MESH");
+            if (auto result =
+                    ensure_all_bound(meshes, FOURCC_MESH, "MESH");
+                !result) {
+                return result;
+            }
+
+            if (checkpoints.size() !=
+                static_cast<std::size_t>(bound_checkpoint.has_value())) {
+                return fail<void>(
+                    lfs::ErrorCode::DataLoss,
+                    "The project contains an unbound training checkpoint.",
+                    std::format(
+                        "{} CKPT chapters exist but SCNG binds {}",
+                        checkpoints.size(),
+                        bound_checkpoint ? 1 : 0),
+                    "CKPT");
+            }
+            if (!checkpoints.empty() && !ppisp_payloads.empty()) {
+                return fail<void>(
+                    lfs::ErrorCode::DataLoss,
+                    "The project has conflicting PPISP authorities.",
+                    "PPIS is valid only for a session without CKPT; training "
+                    "PPISP and its controller live inside CKPT",
+                    "PPIS");
+            }
+            if (ppisp_payloads.size() > 1) {
+                return fail<void>(
+                    lfs::ErrorCode::DataLoss,
+                    "The project contains multiple standalone PPISP chapters.",
+                    "Only one authoritative PPIS payload is supported",
+                    "PPIS");
+            }
+            for (const auto& [uuid, payload] :
+                 ppisp_payloads) {
+                if (payload.size() <
+                    sizeof(PpispFileHeader)) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "The standalone PPISP chapter is truncated.",
+                        std::format(
+                            "PPIS instance {} has {} bytes; at least {} are required",
+                            uuid.to_string(),
+                            payload.size(),
+                            sizeof(PpispFileHeader)),
+                        "PPIS.header");
+                }
+                PpispFileHeader header{};
+                auto header_bytes = std::span<std::byte>(
+                    reinterpret_cast<std::byte*>(&header),
+                    sizeof(header));
+                if (auto read =
+                        payload.read_at(0, header_bytes);
+                    !read) {
+                    return read;
+                }
+                if (header.magic != PPISP_FILE_MAGIC ||
+                    header.version == 0 ||
+                    header.version >
+                        PPISP_FILE_VERSION ||
+                    header.num_cameras == 0 ||
+                    header.num_frames == 0 ||
+                    (header.flags &
+                     ~PPISP_FILE_KNOWN_FLAGS) != 0 ||
+                    std::ranges::any_of(
+                        header.reserved,
+                        [](const std::uint32_t value) {
+                            return value != 0;
+                        }) ||
+                    (header.version < 2 &&
+                     (header.flags & (1u << 1)) !=
+                         0)) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "The standalone PPISP header is invalid.",
+                        std::format(
+                            "PPIS instance {} header magic={:#x} version={} "
+                            "cameras={} frames={} flags={:#x}",
+                            uuid.to_string(), header.magic,
+                            header.version,
+                            header.num_cameras,
+                            header.num_frames,
+                            header.flags),
+                        "PPIS.header");
+                }
+            }
+            if (bound_checkpoint) {
+                const auto found = checkpoints.find(*bound_checkpoint);
+                assert(found != checkpoints.end());
+                std::optional<lfs::core::CheckpointHeader> header;
+                auto inspected = found->second.visit_stream(
+                    [&](std::istream& stream,
+                        const std::uint64_t bytes) -> lfs::Result<void> {
+                        auto loaded =
+                            lfs::core::load_checkpoint_header(
+                                stream, bytes);
+                        if (!loaded) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "The embedded checkpoint header is invalid.",
+                                loaded.error(),
+                                "CKPT.LFKP.header");
+                        }
+                        header = *loaded;
+                        return {};
+                    });
+                if (!inspected) {
+                    return inspected;
+                }
+                assert(header);
+                if (header->num_gaussians == 0) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "The training checkpoint has no Gaussian model.",
+                        "CKPT header num_gaussians must be non-zero",
+                        "CKPT.LFKP.num_gaussians");
+                }
+            }
+            return {};
         }
 
         [[nodiscard]] lfs::Result<void>
@@ -651,22 +1053,65 @@ namespace lfs::io::project {
             if (!reader) {
                 return lfs::Result<void>::failure(std::move(reader).error());
             }
+            auto shared_reader = std::make_shared<ProjectReader>(
+                std::move(*reader));
             std::map<ChunkKey, SourceRow, ChunkKeyLess> refreshed;
-            for (const auto& row : reader->chunks()) {
+            std::unordered_map<lfs::core::Uuid, LazyChunkValue>
+                refreshed_checkpoints;
+            std::unordered_map<lfs::core::Uuid, LazyChunkValue>
+                refreshed_ppisp;
+            for (const auto& row : shared_reader->chunks()) {
                 if (!row.is_live()) {
                     continue;
                 }
-                auto proof = reader->make_clean_proof(
+                auto proof = shared_reader->make_clean_proof(
                     row, DOCUMENT_CLEAN_BASELINE);
                 if (!proof) {
                     return lfs::Result<void>::failure(
                         std::move(proof).error());
                 }
-                refreshed.emplace(
-                    row.key,
-                    SourceRow{.info = row, .proof = std::move(*proof)});
+                if (is_lazy_binary_fourcc(row.key.fourcc)) {
+                    auto lazy = std::make_unique<LazyChunkValue::Impl>();
+                    lazy->reader = shared_reader;
+                    lazy->source = row;
+                    lazy->proof = std::move(*proof);
+                    lazy->snapshot_uuid = row.key.instance_uuid;
+                    auto& destination =
+                        row.key.fourcc == FOURCC_CKPT
+                            ? refreshed_checkpoints
+                            : refreshed_ppisp;
+                    destination.emplace(
+                        row.key.instance_uuid,
+                        LazyChunkValue(std::move(lazy)));
+                } else {
+                    refreshed.emplace(
+                        row.key,
+                        SourceRow{
+                            .info = row,
+                            .proof = std::move(*proof),
+                        });
+                }
             }
             source_rows = std::move(refreshed);
+            lazy_source_keys.clear();
+            for (const auto& [uuid, ignored] :
+                 refreshed_checkpoints) {
+                (void)ignored;
+                lazy_source_keys.insert(ChunkKey{
+                    .fourcc = FOURCC_CKPT,
+                    .instance_uuid = uuid,
+                });
+            }
+            for (const auto& [uuid, ignored] :
+                 refreshed_ppisp) {
+                (void)ignored;
+                lazy_source_keys.insert(ChunkKey{
+                    .fourcc = FOURCC_PPIS,
+                    .instance_uuid = uuid,
+                });
+            }
+            checkpoints = std::move(refreshed_checkpoints);
+            ppisp_payloads = std::move(refreshed_ppisp);
             dirty.clear();
             source_path = path;
             return {};
@@ -764,8 +1209,10 @@ namespace lfs::io::project {
         if (!reader) {
             return std::move(reader).error();
         }
+        auto shared_reader = std::make_shared<ProjectReader>(
+            std::move(*reader));
         auto impl = std::make_unique<Impl>();
-        impl->project_uuid = reader->superblock().project_uuid;
+        impl->project_uuid = shared_reader->superblock().project_uuid;
         impl->source_path = *normalized;
 
         bool have_project = false;
@@ -774,18 +1221,58 @@ namespace lfs::io::project {
         bool have_selection = false;
         bool have_parameters = false;
 
-        for (const auto& row : reader->chunks()) {
+        for (const auto& row : shared_reader->chunks()) {
             if (!row.is_live()) {
                 continue;
             }
-            auto proof = reader->make_clean_proof(
+            auto proof = shared_reader->make_clean_proof(
                 row, DOCUMENT_CLEAN_BASELINE);
             if (!proof) {
                 return std::move(proof).error();
             }
+            if (is_lazy_binary_fourcc(row.key.fourcc)) {
+                if (row.chunk_version != P3_CHUNK_VERSION ||
+                    row.compression != Compression::Stored) {
+                    return fail<ProjectDocument>(
+                        lfs::ErrorCode::Unsupported,
+                        "This project uses an unsupported binary chapter encoding.",
+                        std::format(
+                            "{} chunk version {} compression {} must be "
+                            "version 1 stored bytes",
+                            row.key.fourcc.to_string(),
+                            row.chunk_version,
+                            static_cast<unsigned>(row.compression)),
+                        "chunk.binary_encoding");
+                }
+                auto lazy = std::make_unique<LazyChunkValue::Impl>();
+                lazy->reader = shared_reader;
+                lazy->source = row;
+                lazy->proof = std::move(*proof);
+                lazy->snapshot_uuid = row.key.instance_uuid;
+                auto& destination =
+                    row.key.fourcc == FOURCC_CKPT
+                        ? impl->checkpoints
+                        : impl->ppisp_payloads;
+                if (!destination
+                         .emplace(
+                             row.key.instance_uuid,
+                             LazyChunkValue(std::move(lazy)))
+                         .second) {
+                    return fail<ProjectDocument>(
+                        lfs::ErrorCode::DataLoss,
+                        "The project contains a duplicate binary chapter.",
+                        row.key_string(),
+                        "chunk.instance_uuid");
+                }
+                impl->lazy_source_keys.insert(row.key);
+                continue;
+            }
             impl->source_rows.emplace(
                 row.key,
-                Impl::SourceRow{.info = row, .proof = std::move(*proof)});
+                Impl::SourceRow{
+                    .info = row,
+                    .proof = std::move(*proof),
+                });
             if (!is_p3_fourcc(row.key.fourcc)) {
                 continue;
             }
@@ -809,7 +1296,7 @@ namespace lfs::io::project {
                                 impl->project_uuid.to_string()),
                     "chunk.instance_uuid");
             }
-            auto bytes = reader->read_chunk(row);
+            auto bytes = shared_reader->read_chunk(row);
             if (!bytes) {
                 return std::move(bytes).error();
             }
@@ -973,6 +1460,92 @@ namespace lfs::io::project {
     ParametersChapter& ProjectDocument::edit_parameters() noexcept {
         impl_->mark(FOURCC_PRMS);
         return impl_->parameters;
+    }
+
+    const LazyChunkValue*
+    ProjectDocument::find_checkpoint(
+        const lfs::core::Uuid& instance_uuid) const noexcept {
+        const auto found = impl_->checkpoints.find(instance_uuid);
+        return found == impl_->checkpoints.end()
+                   ? nullptr
+                   : &found->second;
+    }
+
+    lfs::Result<void>
+    ProjectDocument::set_checkpoint(
+        const lfs::core::Uuid& instance_uuid,
+        LazyChunkValue payload) {
+        if (instance_uuid.is_nil() ||
+            payload.snapshot_uuid() != instance_uuid ||
+            payload.size() == 0) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The checkpoint snapshot identity is invalid.",
+                "CKPT instance UUID, snapshot UUID, and every staged piece "
+                "must share one non-null identity; payload must be non-empty",
+                "CKPT.instance_uuid");
+        }
+        impl_->checkpoints.insert_or_assign(
+            instance_uuid, std::move(payload));
+        impl_->mark(FOURCC_CKPT, instance_uuid);
+        return {};
+    }
+
+    bool ProjectDocument::remove_checkpoint(
+        const lfs::core::Uuid& instance_uuid) {
+        impl_->dirty.erase(ChunkKey{
+            .fourcc = FOURCC_CKPT,
+            .instance_uuid = instance_uuid,
+        });
+        return impl_->checkpoints.erase(instance_uuid) != 0;
+    }
+
+    std::vector<lfs::core::Uuid>
+    ProjectDocument::checkpoint_uuids() const {
+        return sorted_uuids(impl_->checkpoints);
+    }
+
+    const LazyChunkValue*
+    ProjectDocument::find_ppisp(
+        const lfs::core::Uuid& instance_uuid) const noexcept {
+        const auto found = impl_->ppisp_payloads.find(instance_uuid);
+        return found == impl_->ppisp_payloads.end()
+                   ? nullptr
+                   : &found->second;
+    }
+
+    lfs::Result<void>
+    ProjectDocument::set_ppisp(
+        const lfs::core::Uuid& instance_uuid,
+        LazyChunkValue payload) {
+        if (instance_uuid.is_nil() ||
+            payload.snapshot_uuid() != instance_uuid ||
+            payload.size() == 0) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The PPISP chapter identity is invalid.",
+                "PPIS instance UUID and staged payload UUID must match and "
+                "the payload must be non-empty",
+                "PPIS.instance_uuid");
+        }
+        impl_->ppisp_payloads.insert_or_assign(
+            instance_uuid, std::move(payload));
+        impl_->mark(FOURCC_PPIS, instance_uuid);
+        return {};
+    }
+
+    bool ProjectDocument::remove_ppisp(
+        const lfs::core::Uuid& instance_uuid) {
+        impl_->dirty.erase(ChunkKey{
+            .fourcc = FOURCC_PPIS,
+            .instance_uuid = instance_uuid,
+        });
+        return impl_->ppisp_payloads.erase(instance_uuid) != 0;
+    }
+
+    std::vector<lfs::core::Uuid>
+    ProjectDocument::ppisp_uuids() const {
+        return sorted_uuids(impl_->ppisp_payloads);
     }
 
     lfs::Result<void> ProjectDocument::set_georeference(
@@ -1189,6 +1762,22 @@ namespace lfs::io::project {
         if (commit.wallclock_unix_ns == 0) {
             commit.wallclock_unix_ns = unix_time_ns();
         }
+        if (impl_->checkpoints.size() == 1) {
+            const auto& snapshot_uuid =
+                impl_->checkpoints.begin()->first;
+            if (commit.snapshot_uuid.is_nil()) {
+                commit.snapshot_uuid = snapshot_uuid;
+            } else if (commit.snapshot_uuid != snapshot_uuid) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "The commit and checkpoint snapshot identities differ.",
+                    std::format(
+                        "commit snapshot {} must equal CKPT instance {}",
+                        commit.snapshot_uuid.to_string(),
+                        snapshot_uuid.to_string()),
+                    "commit.snapshot_uuid");
+            }
+        }
         auto staged_project =
             ProjectChapter::from_bytes(impl_->project.to_bytes());
         if (!staged_project) {
@@ -1353,10 +1942,46 @@ namespace lfs::io::project {
             desired.insert(
                 ChunkKey{.fourcc = FOURCC_MESH, .instance_uuid = uuid});
         }
+        for (const auto& [uuid, ignored] : impl_->checkpoints) {
+            (void)ignored;
+            desired.insert(
+                ChunkKey{.fourcc = FOURCC_CKPT, .instance_uuid = uuid});
+        }
+        for (const auto& [uuid, ignored] : impl_->ppisp_payloads) {
+            (void)ignored;
+            desired.insert(
+                ChunkKey{.fourcc = FOURCC_PPIS, .instance_uuid = uuid});
+        }
 
         auto planned_bytes = preflight_bytes(encoded);
         if (!planned_bytes) {
             return std::move(planned_bytes).error();
+        }
+        const auto add_lazy_preflight =
+            [&](const auto& payloads) -> lfs::Result<void> {
+            for (const auto& [uuid, payload] : payloads) {
+                (void)uuid;
+                if (payload.is_clean_reference()) {
+                    continue;
+                }
+                auto added = checked_add(
+                    *planned_bytes, payload.size(),
+                    "save.lazy_binary_bytes");
+                if (!added) {
+                    return lfs::Result<void>::failure(
+                        std::move(added).error());
+                }
+                *planned_bytes = *added;
+            }
+            return {};
+        };
+        if (auto result = add_lazy_preflight(impl_->checkpoints);
+            !result) {
+            return std::move(result).error();
+        }
+        if (auto result = add_lazy_preflight(impl_->ppisp_payloads);
+            !result) {
+            return std::move(result).error();
         }
 
         std::optional<ProjectWriter> writer;
@@ -1428,6 +2053,61 @@ namespace lfs::io::project {
                 ++report.opaque_chunks_carried;
             }
         }
+        for (const auto& key : impl_->lazy_source_keys) {
+            if (desired.contains(key)) {
+                continue;
+            }
+            if (auto result = writer->erase(key); !result) {
+                return std::move(result).error();
+            }
+            ++report.erased_chunks;
+        }
+        const auto write_lazy =
+            [&](const Fourcc fourcc,
+                const auto& payloads) -> lfs::Result<void> {
+            for (const auto& [uuid, payload] : payloads) {
+                if (payload.is_clean_reference()) {
+                    assert(payload.impl_->proof);
+                    if (auto result = writer->reuse_if_clean(
+                            *payload.impl_->proof,
+                            payload.impl_->proof->mutation_epoch());
+                        !result) {
+                        return result;
+                    }
+                    ++report.reused_chunks;
+                    continue;
+                }
+                const ChunkKey key{
+                    .fourcc = fourcc,
+                    .instance_uuid = uuid,
+                };
+                auto stream = writer->begin_chunk(
+                    key, lazy_binary_options(fourcc, payload.size()));
+                if (!stream) {
+                    return lfs::Result<void>::failure(
+                        std::move(stream).error());
+                }
+                if (auto copied = payload.copy_to(**stream);
+                    !copied) {
+                    return copied;
+                }
+                if (auto ended = writer->end_chunk(); !ended) {
+                    return ended;
+                }
+                ++report.rewritten_chunks;
+            }
+            return {};
+        };
+        if (auto result =
+                write_lazy(FOURCC_CKPT, impl_->checkpoints);
+            !result) {
+            return std::move(result).error();
+        }
+        if (auto result =
+                write_lazy(FOURCC_PPIS, impl_->ppisp_payloads);
+            !result) {
+            return std::move(result).error();
+        }
         for (const auto& [key, chunk] : encoded) {
             if (auto result =
                     writer->write_chunk(key, chunk.bytes, chunk.options);
@@ -1471,6 +2151,10 @@ namespace lfs::io::project {
                 staged_splats;
             std::unordered_map<
                 lfs::core::Uuid,
+                std::unique_ptr<lfs::core::SplatData>>
+                staged_checkpoint_splats;
+            std::unordered_map<
+                lfs::core::Uuid,
                 std::shared_ptr<lfs::core::PointCloud>>
                 staged_point_clouds;
             std::unordered_map<
@@ -1494,6 +2178,66 @@ namespace lfs::io::project {
                 }
                 staged_splats.emplace(
                     uuid, std::move(*materialized));
+            }
+
+            std::optional<lfs::core::Uuid>
+                checkpoint_uuid;
+            std::optional<lfs::core::CheckpointHeader>
+                checkpoint_header;
+            staged_checkpoint_splats.reserve(
+                impl_->checkpoints.size());
+            for (const auto& [uuid, payload] :
+                 impl_->checkpoints) {
+                std::optional<lfs::core::SplatData>
+                    materialized;
+                auto decoded = payload.visit_stream(
+                    [&](std::istream& stream,
+                        const std::uint64_t bytes)
+                        -> lfs::Result<void> {
+                        auto header =
+                            lfs::core::load_checkpoint_header(
+                                stream, bytes);
+                        if (!header) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "The embedded checkpoint header is invalid.",
+                                header.error(),
+                                "CKPT.LFKP.header");
+                        }
+                        checkpoint_header = *header;
+                        stream.clear();
+                        stream.seekg(0);
+                        if (!stream) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "The embedded checkpoint cannot be rewound.",
+                                "The bounded CKPT stream must support seek to byte zero",
+                                "CKPT.LFKP.stream");
+                        }
+                        auto model =
+                            lfs::core::load_checkpoint_splat_data(
+                                stream, bytes,
+                                splat_allocator);
+                        if (!model) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "The checkpoint display model is invalid.",
+                                model.error(),
+                                "CKPT.LFKP.model");
+                        }
+                        materialized.emplace(
+                            std::move(*model));
+                        return {};
+                    });
+                if (!decoded) {
+                    return std::move(decoded).error();
+                }
+                assert(materialized);
+                checkpoint_uuid = uuid;
+                staged_checkpoint_splats.emplace(
+                    uuid,
+                    std::make_unique<lfs::core::SplatData>(
+                        std::move(*materialized)));
             }
 
             staged_point_clouds.reserve(
@@ -1557,7 +2301,9 @@ namespace lfs::io::project {
 
             ScenePayloadResolver resolver;
             resolver.splat =
-                [&staged_splats, external_payloads](
+                [&staged_splats,
+                 &staged_checkpoint_splats,
+                 external_payloads](
                     const PayloadBinding& binding)
                 -> lfs::Result<std::unique_ptr<
                     lfs::core::SplatData>> {
@@ -1575,6 +2321,25 @@ namespace lfs::io::project {
                                 binding.instance_uuid
                                     .to_string()),
                             "SPLT.instance_uuid");
+                    }
+                    return std::move(found->second);
+                }
+                if (binding.fourcc == "CKPT") {
+                    const auto found =
+                        staged_checkpoint_splats.find(
+                            binding.instance_uuid);
+                    if (found ==
+                            staged_checkpoint_splats.end() ||
+                        !found->second) {
+                        return fail<std::unique_ptr<
+                            lfs::core::SplatData>>(
+                            lfs::ErrorCode::NotFound,
+                            "The checkpoint display model is missing.",
+                            std::format(
+                                "CKPT instance {} is unavailable or multiply bound",
+                                binding.instance_uuid
+                                    .to_string()),
+                            "CKPT.instance_uuid");
                     }
                     return std::move(found->second);
                 }
@@ -1694,6 +2459,12 @@ namespace lfs::io::project {
                         std::move(*pending),
                     .reverse_reference_index =
                         std::move(*reverse),
+                    .checkpoint_uuid =
+                        checkpoint_uuid,
+                    .checkpoint_header =
+                        checkpoint_header,
+                    .trainer_state_pending =
+                        checkpoint_uuid.has_value(),
                 };
             return ProjectHydrationPlan(std::move(plan));
         } catch (const std::bad_alloc& error) {

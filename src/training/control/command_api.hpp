@@ -4,6 +4,7 @@
 
 #include "control_boundary.hpp"
 #include "core/tensor.hpp"
+#include "training/training_snapshot_service.hpp"
 
 #include <atomic>
 #include <cstddef>
@@ -95,6 +96,14 @@ namespace lfs::training {
         bool stop_requested = false;
         TrainingPhase phase = TrainingPhase::Idle;
         Trainer* trainer = nullptr; // non-owning
+        TrainingSnapshotServiceMetrics project_snapshot;
+        std::string project_snapshot_path;
+        std::string project_snapshot_writer_error;
+        double project_snapshot_pre_step_mean_ms = 0.0;
+        double project_snapshot_post_step_mean_ms = 0.0;
+        double project_snapshot_step_regression_percent = 0.0;
+        std::size_t project_snapshot_post_step_samples = 0;
+        bool project_snapshot_writer_in_flight = false;
     };
 
     struct LossHistoryPoint {

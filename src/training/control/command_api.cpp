@@ -4,6 +4,7 @@
 #include "command_api.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
@@ -129,6 +130,32 @@ namespace lfs::training {
         snapshot_.is_running = is_running;
         snapshot_.stop_requested = stop_requested;
         snapshot_.phase = phase;
+        if (ctx.trainer) {
+            const auto project =
+                ctx.trainer
+                    ->get_project_snapshot_metrics();
+            snapshot_.project_snapshot =
+                project.capture;
+            snapshot_.project_snapshot_path =
+                lfs::core::path_to_utf8(
+                    project.last_path);
+            snapshot_.project_snapshot_writer_error =
+                project.last_writer_error;
+            snapshot_.project_snapshot_pre_step_mean_ms =
+                project.pre_snapshot_step_mean_ms;
+            snapshot_.project_snapshot_post_step_mean_ms =
+                project.post_resume_step_mean_ms;
+            snapshot_
+                .project_snapshot_step_regression_percent =
+                project
+                    .post_resume_step_regression_percent;
+            snapshot_
+                .project_snapshot_post_step_samples =
+                project.post_resume_step_samples;
+            snapshot_
+                .project_snapshot_writer_in_flight =
+                project.writer_in_flight;
+        }
 
         if (ctx.iteration > last_recorded_iteration_ && ctx.loss > 0.0f) {
             loss_history_.push_back({ctx.iteration, ctx.loss});
