@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include "py_rml.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
@@ -34,6 +36,42 @@ namespace lfs::python {
 
         void throw_attribute_error(const std::string& message) {
             throw nb::attribute_error(message.c_str());
+        }
+
+        const char* legacy_status_name(const lfs::core::LegacyGuiSettingStatus status) {
+            switch (status) {
+            case lfs::core::LegacyGuiSettingStatus::Available:
+                return "available";
+            case lfs::core::LegacyGuiSettingStatus::Migrated:
+                return "migrated";
+            case lfs::core::LegacyGuiSettingStatus::AlreadyMigrated:
+                return "already_migrated";
+            case lfs::core::LegacyGuiSettingStatus::Invalid:
+                return "invalid";
+            case lfs::core::LegacyGuiSettingStatus::DestinationInvalid:
+                return "destination_invalid";
+            }
+            return "unknown";
+        }
+
+        nb::list legacy_gui_settings_to_python() {
+            nb::list result;
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (!paths)
+                throw std::runtime_error(paths.error());
+            const auto entries = paths->inspectLegacyGuiSettings();
+            if (!entries)
+                throw std::runtime_error(entries.error());
+            for (const auto& entry : *entries) {
+                nb::dict item;
+                item["kind"] = entry.kind;
+                item["source"] = lfs::core::path_to_utf8(entry.source);
+                item["destination"] = lfs::core::path_to_utf8(entry.destination);
+                item["status"] = legacy_status_name(entry.status);
+                item["detail"] = entry.detail;
+                result.append(std::move(item));
+            }
+            return result;
         }
 
         std::string get_class_id(nb::object cls) {
@@ -634,6 +672,34 @@ namespace lfs::python {
                 return result ? std::string{} : result.error();
             },
             "Reset the saved UI layout and apply the default dock arrangement immediately.");
+
+        m.def(
+            "get_legacy_gui_settings", &legacy_gui_settings_to_python,
+            "Inspect recognized legacy GUI settings without modifying them.");
+
+        m.def(
+            "migrate_legacy_gui_settings", []() -> std::string {
+                const auto paths = lfs::core::UserPaths::resolve();
+                if (!paths)
+                    return paths.error();
+                const auto migrated = paths->migrateLegacyGuiSettings(true);
+                if (!migrated)
+                    return migrated.error();
+                return {};
+            },
+            "Migrate recognized legacy GUI settings without overwriting current settings.");
+
+        m.def(
+            "archive_legacy_gui_settings", []() -> std::string {
+                const auto paths = lfs::core::UserPaths::resolve();
+                if (!paths)
+                    return paths.error();
+                const auto archived = paths->archiveLegacyGuiSettings();
+                if (!archived)
+                    return archived.error();
+                return {};
+            },
+            "Archive recognized legacy GUI settings before removing their original files.");
 
         m.def(
             "is_panel_enabled", [](const std::string& panel_id) {

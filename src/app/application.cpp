@@ -633,13 +633,13 @@ namespace lfs::app {
                 reset_file(params->reset_preferences, "preferences", [&paths] { return paths->resetPreferences(); });
                 reset_file(params->reset_layout, "layout", [&paths] { return paths->resetLayout(); });
 
-                if (!params->safe_mode && !params->reset_layout) {
+                if (!params->safe_mode && !params->reset_layout && paths->allowsAutomaticLegacyMigration()) {
                     const auto migration = paths->migrateLegacyGuiSettings();
                     if (!migration) {
                         LOG_WARN("Legacy GUI settings migration skipped: {}", migration.error());
                     } else if (!migration->empty()) {
-                        LOG_INFO("Migrated {} legacy GUI settings file(s) into {}",
-                                 migration->size(), lfs::core::path_to_utf8(paths->configDir()));
+                        LOG_INFO("Processed {} legacy GUI setting(s); migration record saved under {}",
+                                 migration->size(), lfs::core::path_to_utf8(paths->migrationDir()));
                     }
                 } else if (params->reset_layout) {
                     LOG_INFO("Legacy layout migration skipped because --reset-layout was requested");

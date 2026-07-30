@@ -527,10 +527,10 @@ namespace lfs::python {
             []() {
                 if (!get_keymap_bindings())
                     return;
-                auto config_dir = InputBindings::getConfigDir();
-                auto saved_path = config_dir / "Default.json";
-                if (std::filesystem::exists(saved_path)) {
-                    std::filesystem::remove(saved_path);
+                if (const auto config_dir = InputBindings::getConfigDir()) {
+                    const auto saved_path = *config_dir / "Default.json";
+                    if (std::filesystem::exists(saved_path))
+                        std::filesystem::remove(saved_path);
                 }
                 get_keymap_bindings()->loadProfile("Default");
                 get_keymap_bindings()->saveProfile("Default");

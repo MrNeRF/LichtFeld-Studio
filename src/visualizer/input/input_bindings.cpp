@@ -207,8 +207,8 @@ namespace lfs::vis::input {
 
     InputBindings::InputBindings() {
         const auto config_dir = getConfigDir();
-        const auto saved_path = config_dir / "Default.json";
-        if (g_persistence_enabled.load(std::memory_order_acquire) &&
+        const auto saved_path = config_dir ? *config_dir / "Default.json" : std::filesystem::path{};
+        if (config_dir && g_persistence_enabled.load(std::memory_order_acquire) &&
             std::filesystem::exists(saved_path) && loadProfileFromFile(saved_path)) {
             return;
         }
@@ -229,8 +229,8 @@ namespace lfs::vis::input {
             return;
         }
         const auto config_dir = getConfigDir();
-        const auto path = config_dir / (name + ".json");
-        if (std::filesystem::exists(path) && loadProfileFromFile(path)) {
+        const auto path = config_dir ? *config_dir / (name + ".json") : std::filesystem::path{};
+        if (config_dir && std::filesystem::exists(path) && loadProfileFromFile(path)) {
             return;
         }
 
@@ -250,17 +250,19 @@ namespace lfs::vis::input {
         if (!g_persistence_enabled.load(std::memory_order_acquire))
             return;
         const auto config_dir = getConfigDir();
-        std::filesystem::create_directories(config_dir);
-        const auto path = config_dir / (name + ".json");
+        if (!config_dir)
+            return;
+        std::filesystem::create_directories(*config_dir);
+        const auto path = *config_dir / (name + ".json");
         saveProfileToFile(path);
     }
 
-    std::filesystem::path InputBindings::getConfigDir() {
+    std::optional<std::filesystem::path> InputBindings::getConfigDir() {
         const auto paths = lfs::core::UserPaths::resolve();
         if (paths)
             return paths->keymapDir();
-        LOG_WARN("Unable to resolve input profile path: {}; using local config directory", paths.error());
-        return std::filesystem::current_path() / "config" / "keymaps";
+        LOG_WARN("Unable to resolve input profile path: {}; profile persistence is disabled", paths.error());
+        return std::nullopt;
     }
 
     void InputBindings::setPersistenceEnabled(const bool enabled) noexcept {
@@ -451,9 +453,11 @@ namespace lfs::vis::input {
             // the migration still applies in memory.
             if (migrated > 0 && version < PROFILE_VERSION) {
                 std::error_code ec;
-                const auto config_default = getConfigDir() / "Default.json";
-                if (std::filesystem::equivalent(path, config_default, ec)) {
-                    saveProfileToFile(config_default);
+                const auto config_dir = getConfigDir();
+                if (config_dir) {
+                    const auto config_default = *config_dir / "Default.json";
+                    if (std::filesystem::equivalent(path, config_default, ec))
+                        saveProfileToFile(config_default);
                 }
             }
             notifyBindingsChanged();
@@ -613,8 +617,8 @@ namespace lfs::vis::input {
             return profiles;
 
         const auto config_dir = getConfigDir();
-        if (std::filesystem::exists(config_dir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(config_dir)) {
+        if (config_dir && std::filesystem::exists(*config_dir)) {
+            for (const auto& entry : std::filesystem::directory_iterator(*config_dir)) {
                 if (entry.path().extension() == ".json") {
                     const std::string name = lfs::core::path_to_utf8(entry.path().stem());
                     if (name != "Default") {

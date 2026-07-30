@@ -1051,9 +1051,13 @@ namespace lfs::vis {
     }
 
     namespace {
-        std::filesystem::path getThemeConfigDir() {
+        std::optional<std::filesystem::path> getThemePreferencesPath() {
             const auto paths = lfs::core::UserPaths::resolve();
-            return paths ? paths->configDir() : std::filesystem::current_path() / "config";
+            if (!paths) {
+                LOG_WARN("Unable to resolve user settings path: {}; theme preferences are disabled", paths.error());
+                return std::nullopt;
+            }
+            return paths->preferencesFile();
         }
 
         [[nodiscard]] bool preferencesDisabled() {
@@ -1063,7 +1067,10 @@ namespace lfs::vis {
         [[nodiscard]] nlohmann::json loadPreferences() {
             if (preferencesDisabled())
                 return nlohmann::json::object();
-            std::ifstream file(getThemeConfigDir() / "preferences.json");
+            const auto path = getThemePreferencesPath();
+            if (!path)
+                return nlohmann::json::object();
+            std::ifstream file(*path);
             nlohmann::json preferences;
             if (file) {
                 file >> preferences;
@@ -1074,26 +1081,16 @@ namespace lfs::vis {
         void savePreferences(nlohmann::json preferences) {
             if (preferencesDisabled())
                 return;
-            const auto path = getThemeConfigDir() / "preferences.json";
-            std::filesystem::create_directories(path.parent_path());
+            const auto path = getThemePreferencesPath();
+            if (!path)
+                return;
+            std::filesystem::create_directories(path->parent_path());
             preferences["schema_version"] = 1;
-            std::ofstream file(path);
+            std::ofstream file(*path);
             if (file)
                 file << preferences.dump(2);
         }
 
-        [[nodiscard]] std::optional<std::string> loadLegacyPreference(const char* const filename) {
-            const auto paths = lfs::core::UserPaths::resolve();
-            if (!paths)
-                return std::nullopt;
-            for (const auto& legacy_dir : paths->legacyConfigDirs()) {
-                std::ifstream file(legacy_dir / filename);
-                std::string value;
-                if (file >> value)
-                    return value;
-            }
-            return std::nullopt;
-        }
     } // namespace
 
     void saveThemePreferenceName(const std::string& theme_name) {
@@ -1116,11 +1113,6 @@ namespace lfs::vis {
             const std::string normalized = normalizeThemeIdImpl(pref);
             if (isKnownThemePresetId(normalized))
                 return normalized;
-            if (const auto legacy = loadLegacyPreference("theme_preference")) {
-                const auto legacy_normalized = normalizeThemeIdImpl(*legacy);
-                if (isKnownThemePresetId(legacy_normalized))
-                    return legacy_normalized;
-            }
         } catch (...) {
             // Silently ignore - not critical
         }
@@ -1158,8 +1150,6 @@ namespace lfs::vis {
                 if (ui_scale.is_number())
                     return ui_scale.get<float>();
             }
-            if (const auto legacy = loadLegacyPreference("ui_scale"))
-                return std::stof(*legacy);
         } catch (const std::exception& e) {
             LOG_WARN("Failed to load UI scale preference: {}", e.what());
         }

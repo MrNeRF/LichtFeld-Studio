@@ -19,12 +19,13 @@ namespace lfs::vis::gui {
         const auto paths = lfs::core::UserPaths::resolve();
         if (paths)
             return paths->configDir();
-        LOG_WARN("Unable to resolve user settings path: {}; using local config directory", paths.error());
-        return std::filesystem::current_path() / "config";
+        LOG_WARN("Unable to resolve user settings path: {}; layout persistence is disabled", paths.error());
+        return {};
     }
 
     std::filesystem::path LayoutState::getConfigPath() {
-        return getConfigDir() / "layout.json";
+        const auto config_dir = getConfigDir();
+        return config_dir.empty() ? std::filesystem::path{} : config_dir / "layout.json";
     }
 
     void LayoutState::save() const {
@@ -32,6 +33,8 @@ namespace lfs::vis::gui {
             return;
         try {
             const auto path = getConfigPath();
+            if (path.empty())
+                return;
             std::filesystem::create_directories(path.parent_path());
 
             nlohmann::json j;
@@ -92,6 +95,8 @@ namespace lfs::vis::gui {
             return;
         try {
             const auto path = getConfigPath();
+            if (path.empty())
+                return;
             if (!std::filesystem::exists(path))
                 return;
 

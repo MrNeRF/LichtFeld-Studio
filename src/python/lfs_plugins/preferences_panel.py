@@ -18,8 +18,8 @@ class PreferencesPanel(Panel):
     space = lf.ui.PanelSpace.FLOATING
     order = 100
     template = "rmlui/preferences.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (680, 0)
+    height_mode = lf.ui.PanelHeightMode.FILL
+    size = (780, 360)
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
     update_policy = "dirty"
 
@@ -38,12 +38,24 @@ class PreferencesPanel(Panel):
         ("fpv", "preferences.navigation_fpv"),
         ("drone", "preferences.navigation_drone"),
     )
+
+    EXPANDABLE_SECTIONS = (
+        "language",
+        "appearance",
+        "navigation",
+        "view_snap",
+        "interface",
+        "legacy",
+    )
+
     def __init__(self):
         self._handle = None
         self._theme_catalog = []
         self._language_catalog = []
+        self._legacy_entries = []
         self._last_state = None
         self._section = "general"
+        self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("preferences")
@@ -55,7 +67,16 @@ class PreferencesPanel(Panel):
         model.bind_func("show_appearance", lambda: self._section == "appearance")
         model.bind_func("show_input", lambda: self._section == "input")
         model.bind_func("show_interface", lambda: self._section == "interface")
+        model.bind_func("show_legacy", lambda: self._section == "legacy")
+        model.bind_func("legacy_migratable", self._legacy_migratable)
+        model.bind_func("legacy_archivable", self._legacy_archivable)
+        model.bind_func("show_section_reset", lambda: self._section != "legacy")
         model.bind_func("reset_section_label", self._reset_section_label)
+        for section in self.EXPANDABLE_SECTIONS:
+            model.bind_func(
+                f"{section}_expanded",
+                lambda section=section: section in self._expanded_sections,
+            )
         model.bind("theme_idx", self._theme_index, self._set_theme_index)
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind("language_idx", self._language_index, self._set_language_index)
@@ -70,15 +91,24 @@ class PreferencesPanel(Panel):
         model.bind_event("show_appearance", lambda *_: self._set_section("appearance"))
         model.bind_event("show_input", lambda *_: self._set_section("input"))
         model.bind_event("show_interface", lambda *_: self._set_section("interface"))
+        model.bind_event("show_legacy", lambda *_: self._set_section("legacy"))
+        model.bind_event("toggle_section", self._on_toggle_section)
+        model.bind_event("refresh_legacy", self._on_refresh_legacy)
+        model.bind_event("migrate_legacy", self._on_migrate_legacy)
+        model.bind_event("archive_legacy", self._on_archive_legacy)
         model.bind_record_list("themes")
         model.bind_record_list("scales")
         model.bind_record_list("languages")
         model.bind_record_list("navigation_modes")
+        model.bind_record_list("legacy_entries")
         self._handle = model.get_handle()
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
+        self._dirty_expanded_sections()
         self._rebuild_records()
+        self._refresh_legacy_entries()
         self._last_state = self._state()
         self._refresh_selection()
 
@@ -234,9 +264,104 @@ class PreferencesPanel(Panel):
         if self._section == section:
             return
         self._section = section
+        if section == "legacy":
+            self._refresh_legacy_entries()
         if self._handle:
-            for name in ("show_general", "show_appearance", "show_input", "show_interface", "reset_section_label"):
+            for name in ("show_general", "show_appearance", "show_input", "show_interface", "show_legacy",
+                          "show_section_reset", "reset_section_label", "legacy_migratable", "legacy_archivable"):
                 self._handle.dirty(name)
+
+    def _on_toggle_section(self, _handle, _event, args):
+        if not args:
+            return
+        section = str(args[0])
+        if section not in self.EXPANDABLE_SECTIONS:
+            return
+        if section in self._expanded_sections:
+            self._expanded_sections.remove(section)
+        else:
+            self._expanded_sections.add(section)
+        if self._handle:
+            self._handle.dirty(f"{section}_expanded")
+
+    def _dirty_expanded_sections(self):
+        if not self._handle:
+            return
+        for section in self.EXPANDABLE_SECTIONS:
+            self._handle.dirty(f"{section}_expanded")
+
+    def _refresh_legacy_entries(self):
+        try:
+            self._legacy_entries = list(lf.ui.get_legacy_gui_settings())
+        except Exception:
+            self._legacy_entries = []
+        if not self._handle:
+            return
+        self._handle.update_record_list(
+            "legacy_entries",
+            [
+                {
+                    "kind": lf.ui.tr(f"preferences.legacy_kind_{entry['kind']}"),
+                    "source": entry["source"],
+                    "destination": f"{lf.ui.tr('preferences.legacy_destination')} {entry['destination']}",
+                    "status": lf.ui.tr(f"preferences.legacy_status_{entry['status']}"),
+                }
+                for entry in self._legacy_entries
+            ],
+        )
+        self._handle.dirty("legacy_migratable")
+        self._handle.dirty("legacy_archivable")
+
+    def _legacy_migratable(self):
+        return any(entry["status"] == "available" for entry in self._legacy_entries)
+
+    def _legacy_archivable(self):
+        return any(
+            entry["status"] in ("migrated", "already_migrated")
+            for entry in self._legacy_entries
+        )
+
+    def _on_refresh_legacy(self, _handle, _event, _args):
+        self._refresh_legacy_entries()
+
+    def _on_migrate_legacy(self, _handle, _event, _args):
+        migrate_label = lf.ui.tr("preferences.migrate_legacy")
+        error = lf.ui.migrate_legacy_gui_settings()
+        if error:
+            lf.ui.message_dialog(
+                migrate_label,
+                f"{lf.ui.tr('preferences.legacy_migration_failed')} {error}",
+                "error",
+            )
+            return
+        self._refresh_legacy_entries()
+        lf.ui.message_dialog(migrate_label, lf.ui.tr("preferences.legacy_migration_success"))
+
+    def _on_archive_legacy(self, _handle, _event, _args):
+        if not self._legacy_entries:
+            return
+        archive_label = lf.ui.tr("preferences.archive_legacy")
+
+        def _on_result(button):
+            if button != archive_label:
+                return
+            error = lf.ui.archive_legacy_gui_settings()
+            if error:
+                lf.ui.message_dialog(
+                    archive_label,
+                    f"{lf.ui.tr('preferences.legacy_archive_failed')} {error}",
+                    "error",
+                )
+                return
+            self._refresh_legacy_entries()
+            lf.ui.message_dialog(archive_label, lf.ui.tr("preferences.legacy_archive_success"))
+
+        lf.ui.confirm_dialog(
+            archive_label,
+            lf.ui.tr("preferences.legacy_archive_confirmation"),
+            [lf.ui.tr("common.cancel"), archive_label],
+            _on_result,
+        )
 
     def _reset_section_label(self):
         return lf.ui.tr("preferences.reset_current_section")
