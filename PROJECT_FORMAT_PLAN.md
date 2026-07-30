@@ -185,7 +185,9 @@ older head surfaces a recovery warning — never silent. Both heads dead → exp
 | `SCNG` | Scene graph: per-node UUID/name/parent/order/type/transform/visibility/lock/training-enabled/cropbox/ellipsoid/camera + context; durable project DTO, **not** the undo snapshot shape | versioned binary |
 | `SELM` | Selection groups + per-node mask slices, keyed by node UUID | binary |
 | `REFS` | External refs: relative-preferred paths + fingerprints for dataset root, `.rad`+`.rad.meta`, bg image, env HDR, PLY-sequence dirs. Fingerprint = size+mtime+xxh3 head/tail, documented as a *heuristic*; full-hash verify on demand | JSON |
-| `SPLT` | Embedded splat payload per non-training dirty/generated node — LFSP verbatim. *P0-audit open point (matrix U1): "dirty/generated" here vs decision 9's "non-training splats = SPLT" leaves clean imported and live-RAD nodes unresolved — owner decision pending.* | binary, page-aligned |
+| `SPLT` | Embedded splat payload per non-training node — LFSP verbatim. **Scope (owner decision 2026-07-30, resolves matrix U1): every imported splat (PLY/SPZ/SOG) is always embedded**, clean or dirty — self-contained projects, no relink flow for them. **Live-RAD nodes are never embedded**: external via `REFS`, read-only; destructive edits are refused until the user explicitly bakes the node to an embedded resident splat. | binary, page-aligned |
+| `PCLD` | Point-cloud payload — distinct chunk, own versioning (owner decision 2026-07-30, resolves gap #12 / matrix U2) | binary, page-aligned |
+| `MESH` | Mesh payload — distinct chunk, own versioning (owner decision 2026-07-30, resolves gap #12 / matrix U2) | binary, page-aligned |
 | `CKPT` | The LFKP checkpoint stream embedded unchanged, via bounded windows | binary, page-aligned |
 | `PPIS` | `.ppisp` bytes — non-checkpoint sessions only (matrix rule) | binary |
 | `GUIL` | Dock/splitter dims (incl. `left_dock_width`), panel visibility/rects/stack order, active tab, window geometry/fullscreen. Framework-agnostic; zero ImGui; no theme/language/scale/HUD (user-global) | JSON |
@@ -350,8 +352,11 @@ GUI-touching phases, compute-sanitizer memcheck for CUDA-touching phases.
   pause gates FAIL on this rig for hardware reasons: independently measured raw pinned D2H =
   15.3 GiB/s (H2D 17) vs the 25 GiB/s reference assumption — 10 GiB cannot cross the bus in
   <670 ms; measured pause p95 = 1059 ms; on-reference projection ≈ 700–750 ms. OWNER DECISION
-  PENDING: bandwidth-scaled SLA (recommended) vs D2D-cloning engineering vs hard-gate+defer.
-  Bench: tools/licht_p0/snapshot_bench (contract mode, drain_threads=1, 4×128 MiB).*
+  2026-07-30: **bandwidth-scaled SLA** — the normative pause gate is
+  `p95 ≤ snapshot_bytes / measured_pinned_D2H × 1.12`, with the pinned-D2H baseline measured
+  once per rig by the production snapshot service; the absolute numbers above remain the
+  reference-rig instantiation. Bench: tools/licht_p0/snapshot_bench (contract mode,
+  drain_threads=1, 4×128 MiB).*
 - **P1 — State & serializer foundations**: node UUIDs through scene/undo/selection/sequencer;
   §5 gap fixes; field-wise Config serialization; retained-DOM chapter plumbing; delete duplicate
   authorities. Exit: every matrix row round-trips independently; no state has two writers.
@@ -468,11 +473,13 @@ folded in above. Do not reopen §1 decisions without new evidence.
    the full conformance battery; (iii) the C++ reader agrees with both Python parsers on the
    complete corpus; (iv) writer-side gates from condition (C) incl. process-kill crash matrix;
    (v) `lfs::Error`/`Result<T>` conventions + `tools/error_debt_census.py` ratchet clean.
-6. **OPEN OWNER DECISIONS** (ask before the affected phase, not before P2 start):
-   (a) snapshot pause SLA — bandwidth-scaled (recommended) vs D2D clone vs hard-gate+defer;
-   blocks P4 autosave only. (b) gap #12 point-cloud/mesh chunks — distinct `PCLD`/`MESH`
-   fourccs (recommended) vs broadened `SPLT`; blocks the P3 chunk registry freeze.
-   (c) §2.4 `SPLT` scope for imported/live-RAD nodes (matrix U1); blocks P3.
+6. ~~OPEN OWNER DECISIONS~~ **ALL RESOLVED 2026-07-30**:
+   (a) snapshot pause SLA = **bandwidth-scaled** (`p95 ≤ snapshot_bytes / measured_pinned_D2H
+   × 1.12`, per-rig baseline) — P4 unblocked. (b) gap #12 = **distinct `PCLD`/`MESH` fourccs**
+   with their own versioning — P3 chunk registry unblocked. (c) `SPLT` scope = **embed all
+   imported splats (PLY/SPZ/SOG), always**; live-RAD external + read-only, destructive edits
+   refused until explicit bake to an embedded node — P3 unblocked. Normative text updated in
+   §2.2 and the ownership matrix (U1/U2).
 7. P3..P8 in order per §7.
 
 **Working agreements:** fable plans/audits (≤2 agents, hardest judgments only), Codex/Grok

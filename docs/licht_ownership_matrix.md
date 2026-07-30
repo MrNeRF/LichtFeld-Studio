@@ -1,6 +1,6 @@
 # `.licht` project-state ownership matrix
 
-Status: **normative for format v2**, except the block explicitly marked **PROPOSED** and the items under **UNRESOLVED**. This document is the P0 ownership artifact required by `PROJECT_FORMAT_PLAN.md` decision 9. A format field is not releasable until it appears here with one semantic authority.
+Status: **normative for format v2**, except the items under **UNRESOLVED** (U1 and U2 resolved by owner decision 2026-07-30; the former PROPOSED gap-#12 block is now normative). This document is the P0 ownership artifact required by `PROJECT_FORMAT_PLAN.md` decision 9. A format field is not releasable until it appears here with one semantic authority.
 
 “Serialized where today” describes the live `licht_format` checkout; it is evidence, not permission to duplicate that state in `.licht`. A legacy value may remain physically present inside an opaque, byte-verbatim `CKPT` or `PPIS` payload while another chapter is its semantic authority. Such values must be ignored or reconciled as stated below.
 
@@ -17,7 +17,7 @@ Status: **normative for format v2**, except the block explicitly marked **PROPOS
 These rules are mandatory and take precedence over incidental duplication in today's serializers.
 
 1. **Training model and optimizer are `CKPT` only.** A project containing a checkpoint must not emit a `SPLT` instance for its training node. The training model, optimizer, scheduler, strategy state, iteration, active mathematical parameters, bilateral grid, PPISP training state, PPISP controller, and sparsity ADMM state are restored only from `CKPT`.
-2. **Non-training splats are `SPLT`.** Their resident LFSP state is never restored from `CKPT`. The live-RAD exception is not silently decided here; see UNRESOLVED U1.
+2. **Non-training splats are `SPLT`.** Their resident LFSP state is never restored from `CKPT`. Imported PLY/SPZ/SOG nodes are always embedded; live-RAD nodes are never embedded (read-only, explicit bake) — resolved U1, owner decision 2026-07-30.
 3. **Exact-resume parameters are `CKPT`; project/UI overrides are `PRMS`.** On project open, `CKPT` first hydrates the active trainer. `PRMS` then restores strategy presets and pending next-run UI values only; it must not mutate the active trainer. A later explicit user edit may go through the trainer's supported live-update path, but that is a new mutation, not load precedence. Today's blanket `ParameterManager::dirty_` application does not define format semantics.
 4. **Training PPISP is `CKPT`; `PPIS` is only for a session without `CKPT`.** A commit must not contain an authoritative `PPIS` beside an authoritative training PPISP. Viewer overrides remain `VIEW`, not PPISP model state.
 5. **Camera enablement is `SCNG`.** Load the checkpoint, build the saved scene, then apply each camera node's `training_enabled`. A legacy `TrainingParameters::disabled_camera_uids` inside LFKP is ignored for project restore and may only be used by standalone checkpoint import.
@@ -230,9 +230,9 @@ Editor execution status, LSP state, completion lists, diagnostics, output termin
 | Accumulated training time in seconds | `TrainerManager::accumulated_training_time_`, `getElapsedSeconds()` @ `src/visualizer/training/training_manager.hpp`, `src/visualizer/training/training_manager.cpp` | Runtime only | `METR` | Store elapsed duration, never a `steady_clock` time point. Running interval is captured at checkpoint safe point. | Pause/resume/stop or snapshot capture |
 | Last evaluation `{iteration,psnr,ssim}` | `TrainerManager::EvaluationMetricsSnapshot`, `last_eval_metrics_` @ `src/visualizer/training/training_manager.hpp` | Runtime only | `METR` | Rebuild `last_psnr_` and UI observables from this row. Per-image elapsed time and Gaussian count are report telemetry, not the plan's last-eval field. | Evaluation completion/clear |
 
-## PROPOSED — gap #12 point-cloud and mesh payload ownership
+## Gap #12 — point-cloud and mesh payload ownership
 
-**Status: PROPOSED; owner sign-off required before this block becomes normative.**
+**Status: NORMATIVE (owner sign-off 2026-07-30) — payloads live in distinct `PCLD`/`MESH` chunks with their own versioning; see resolved U2.**
 
 1. Expand the logical scope of `SPLT` from “splat payload” to “embedded resident geometry payload,” still keyed by scene-node UUID.
 2. Keep LFSP byte-verbatim for splats; add separately versioned inner payload formats for `PointCloud` and `MeshData` rather than pretending either is LFSP.
@@ -279,13 +279,19 @@ These fields must not appear as authoritative `.licht` project state.
 
 These are not permissions to choose opportunistically. Each needs an owner decision or schema amendment before the relevant compatibility fixture is accepted.
 
-### U1 — live RAD versus “non-training splats = SPLT”
+### ~~U1~~ — RESOLVED (owner decision 2026-07-30): SPLT scope
 
-Plan decision 9 assigns every non-training splat to `SPLT`, while the product promise and `REFS` registry keep live `.rad` external; §2.4 also narrows SPLT to “dirty/generated,” leaving a clean imported non-RAD splat unclear. Code reinforces source-backed behavior with `SplatData::lod_tree`, RAD paging, and `SceneManager::splat_paths_`. Decide the live-RAD exception, clean imported PLY/SPZ/SOG ownership, and what happens after any source-backed node is edited.
+Every imported splat node (PLY/SPZ/SOG) is **always embedded** in `SPLT`, clean or dirty —
+projects are self-contained for imported splats and no relink flow exists for them. Live-RAD
+nodes are **never embedded**: `REFS` external, read-only; destructive edits are refused until
+the user explicitly bakes the node to an embedded resident splat (the bake is a new `SPLT`-owned
+node, the RAD reference is dropped from it). `SceneManager::splat_paths_` records the original
+import source for provenance only — it is never load-bearing for restore of an embedded node.
 
-### U2 — gap #12 point-cloud/mesh payload
+### ~~U2~~ — RESOLVED (owner decision 2026-07-30): gap #12 payloads
 
-The two plausible authorities are an embedded geometry payload (the proposal above) and a `REFS` source with conditional embedding after edits. There are real resident fields but no serializer. Until the proposal is signed off, `POINTCLOUD`/`MESH` payload bytes have no normative released authority.
+Distinct `PCLD` and `MESH` chunks with their own versioning (plan §2.2). The PROPOSED
+geometry-payload block above is hereby normative with that chunk assignment.
 
 ### U3 — camera in-memory mask payload
 
