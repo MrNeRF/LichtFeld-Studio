@@ -57,22 +57,22 @@ namespace lfs::core {
             if (!std::filesystem::is_regular_file(source, error)) {
                 if (error && !isMissingPathError(error))
                     return std::unexpected(std::format("Unable to inspect legacy settings file '{}': {}",
-                                                        path_to_utf8(source), error.message()));
+                                                       path_to_utf8(source), error.message()));
                 return false;
             }
             if (std::filesystem::exists(destination, error)) {
                 if (error)
                     return std::unexpected(std::format("Unable to inspect destination settings file '{}': {}",
-                                                        path_to_utf8(destination), error.message()));
+                                                       path_to_utf8(destination), error.message()));
                 return false;
             }
             std::filesystem::create_directories(destination.parent_path(), error);
             if (error)
                 return std::unexpected(std::format("Unable to create settings directory '{}': {}",
-                                                    path_to_utf8(destination.parent_path()), error.message()));
+                                                   path_to_utf8(destination.parent_path()), error.message()));
             if (!std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error)) {
                 return std::unexpected(std::format("Unable to copy legacy settings file '{}' to '{}': {}",
-                                                    path_to_utf8(source), path_to_utf8(destination), error.message()));
+                                                   path_to_utf8(source), path_to_utf8(destination), error.message()));
             }
             return true;
         }
@@ -85,12 +85,12 @@ namespace lfs::core {
             if (!std::filesystem::exists(source, error)) {
                 if (error)
                     return std::unexpected(std::format("Unable to inspect settings file '{}': {}",
-                                                        path_to_utf8(source), error.message()));
+                                                       path_to_utf8(source), error.message()));
                 return std::nullopt;
             }
             if (!std::filesystem::is_regular_file(source, error) || error)
                 return std::unexpected(std::format("Settings reset requires a regular file '{}': {}",
-                                                    path_to_utf8(source), error.message()));
+                                                   path_to_utf8(source), error.message()));
 
             const auto now = std::chrono::system_clock::now().time_since_epoch();
             const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
@@ -98,16 +98,16 @@ namespace lfs::core {
             std::filesystem::create_directories(destination.parent_path(), error);
             if (error)
                 return std::unexpected(std::format("Unable to create reset backup directory '{}': {}",
-                                                    path_to_utf8(destination.parent_path()), error.message()));
+                                                   path_to_utf8(destination.parent_path()), error.message()));
             if (!std::filesystem::copy_file(source, destination, std::filesystem::copy_options::none, error))
                 return std::unexpected(std::format("Unable to back up settings file '{}' to '{}': {}",
-                                                    path_to_utf8(source), path_to_utf8(destination), error.message()));
+                                                   path_to_utf8(source), path_to_utf8(destination), error.message()));
             if (!std::filesystem::exists(destination, error) || error)
                 return std::unexpected(std::format("Unable to verify reset backup '{}': {}",
-                                                    path_to_utf8(destination), error.message()));
+                                                   path_to_utf8(destination), error.message()));
             if (!std::filesystem::remove(source, error) || error)
                 return std::unexpected(std::format("Backed up '{}' but could not reset it: {}",
-                                                    path_to_utf8(source), error.message()));
+                                                   path_to_utf8(source), error.message()));
             return destination;
         }
 
@@ -117,17 +117,17 @@ namespace lfs::core {
             std::filesystem::create_directories(destination.parent_path(), error);
             if (error)
                 return std::unexpected(std::format("Unable to create preferences directory '{}': {}",
-                                                    path_to_utf8(destination.parent_path()), error.message()));
+                                                   path_to_utf8(destination.parent_path()), error.message()));
 
             std::ofstream file(destination, std::ios::trunc);
             if (!file)
                 return std::unexpected(std::format("Unable to write default preferences '{}'",
-                                                    path_to_utf8(destination)));
+                                                   path_to_utf8(destination)));
             file << "{\n  \"schema_version\": 1,\n  \"theme\": \"dark\",\n  \"ui_scale\": \"auto\"\n}\n";
             file.close();
             if (!file)
                 return std::unexpected(std::format("Unable to finish writing default preferences '{}'",
-                                                    path_to_utf8(destination)));
+                                                   path_to_utf8(destination)));
             return {};
         }
 
@@ -204,7 +204,7 @@ namespace lfs::core {
             std::filesystem::create_directories(directory, error);
             if (error)
                 return std::unexpected(std::format("Unable to create user directory '{}': {}",
-                                                    path_to_utf8(directory), error.message()));
+                                                   path_to_utf8(directory), error.message()));
         }
         return {};
     }
@@ -224,7 +224,7 @@ namespace lfs::core {
             if (!std::filesystem::is_directory(legacy_profiles, error)) {
                 if (error && !isMissingPathError(error))
                     return std::unexpected(std::format("Unable to inspect legacy input profiles '{}': {}",
-                                                        path_to_utf8(legacy_profiles), error.message()));
+                                                       path_to_utf8(legacy_profiles), error.message()));
                 continue;
             }
 
@@ -248,7 +248,7 @@ namespace lfs::core {
             }
             if (error) {
                 return std::unexpected(std::format("Unable to migrate legacy input profiles '{}': {}",
-                                                    path_to_utf8(legacy_profiles), error.message()));
+                                                   path_to_utf8(legacy_profiles), error.message()));
             }
         }
         return copied;

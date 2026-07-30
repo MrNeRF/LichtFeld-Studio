@@ -3933,7 +3933,6 @@ namespace lfs::vis::gui {
         reg_panel("native.pie_menu", "Pie Menu",
                   make_panel(PieMenuPanel(&gizmo_manager_)),
                   PanelSpace::ViewportOverlay, 950);
-
     }
 
     VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent,

@@ -971,10 +971,10 @@ namespace {
                                         ppisp_sidecar_path_val = cli_option_present({"--ppisp-sidecar"}) ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
                                         headless_flag = bool(headless),
-                                         auto_train_flag = bool(auto_train),
-                                         safe_mode_flag = bool(safe_mode),
-                                         reset_preferences_flag = bool(reset_preferences),
-                                         reset_layout_flag = bool(reset_layout),
+                                        auto_train_flag = bool(auto_train),
+                                        safe_mode_flag = bool(safe_mode),
+                                        reset_preferences_flag = bool(reset_preferences),
+                                        reset_layout_flag = bool(reset_layout),
 #ifdef LFS_BUILD_PORTABLE
                                         no_splash_flag = false,
 #else

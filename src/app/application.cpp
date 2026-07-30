@@ -37,8 +37,8 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/timeline.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
-#include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/layout_state.hpp"
+#include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
@@ -617,7 +617,7 @@ namespace lfs::app {
             vis::input::InputBindings::setPersistenceEnabled(!params->safe_mode);
             if (const auto paths = lfs::core::UserPaths::resolve()) {
                 const auto reset_file = [&paths](const bool requested, const char* const label,
-                                                  const auto& reset) {
+                                                 const auto& reset) {
                     if (!requested)
                         return;
                     const auto result = reset();
