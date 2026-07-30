@@ -26,6 +26,7 @@ try:
     from .conformance_scale import run_scale_edges
     from .conformance_truncation import run_truncation_sweep
     from .conformance_verifier import run_independent_verifier
+    from .oracle_corpus import PREVIEW_CORRUPTION_CASE_COUNT
     from .run_selftest import main as selftest_main
 except ImportError:  # Direct script execution.
     from conformance_adversaries import run_semantic_adversaries
@@ -40,6 +41,7 @@ except ImportError:  # Direct script execution.
     from conformance_scale import run_scale_edges
     from conformance_truncation import run_truncation_sweep
     from conformance_verifier import run_independent_verifier
+    from oracle_corpus import PREVIEW_CORRUPTION_CASE_COUNT
     from run_selftest import main as selftest_main
 
 
@@ -69,8 +71,9 @@ def _baseline_selftest(fixture_dir: Path, oracle_cases: int) -> CategoryResult:
     return timed_result(
         "golden-oracle-baseline",
         started,
-        oracle_cases + fixture_count,
-        f"fixtures={fixture_count}, randomized_oracle={oracle_cases}",
+        oracle_cases + fixture_count + PREVIEW_CORRUPTION_CASE_COUNT,
+        f"fixtures={fixture_count}, randomized_oracle={oracle_cases}, "
+        f"preview_corruptions={PREVIEW_CORRUPTION_CASE_COUNT}",
     )
 
 

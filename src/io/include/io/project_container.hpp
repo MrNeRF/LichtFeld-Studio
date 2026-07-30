@@ -4,172 +4,349 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
-#include "io/error.hpp"
+#include "core/uuid.hpp"
 
 #include <array>
+#include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <iosfwd>
 #include <memory>
-#include <ostream>
+#include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
-// .licht TLV container: [file header][chunk]...[INDX chunk][footer].
-// Little-endian by fiat (matching every existing serializer); packed on-disk
-// structs, no endian swapping. All chunk headers start 64-byte aligned;
-// page-aligned chunks additionally place their payload on a 4096-byte
-// boundary (rule documented at chunk_payload_offset).
 namespace lfs::io::project {
 
-    constexpr std::uint32_t make_fourcc(const char a, const char b, const char c, const char d) {
-        return static_cast<std::uint32_t>(static_cast<unsigned char>(a)) |
-               (static_cast<std::uint32_t>(static_cast<unsigned char>(b)) << 8) |
-               (static_cast<std::uint32_t>(static_cast<unsigned char>(c)) << 16) |
-               (static_cast<std::uint32_t>(static_cast<unsigned char>(d)) << 24);
-    }
+    inline constexpr std::uint64_t SUPERBLOCK_BYTES = 256;
+    inline constexpr std::uint64_t HEAD_SLOT_BYTES = 4096;
+    inline constexpr std::array<std::uint64_t, 2> HEAD_SLOT_OFFSETS = {4096, 8192};
+    inline constexpr std::uint64_t APPEND_REGION_OFFSET = 65536;
+    inline constexpr std::uint64_t COMMIT_RECORD_BYTES = 256;
+    inline constexpr std::uint64_t CHUNK_HEADER_BYTES = 64;
+    inline constexpr std::uint64_t INDEX_HEADER_BYTES = 64;
+    inline constexpr std::uint64_t INDEX_ROW_BYTES = 96;
+    inline constexpr std::uint64_t BLOCK_CRC_HEADER_BYTES = 64;
+    inline constexpr std::uint64_t CHUNK_ALIGNMENT = 64;
+    inline constexpr std::uint64_t TENSOR_PAYLOAD_ALIGNMENT = 4096;
+    inline constexpr std::uint64_t BLOCK_CRC_BYTES = 4ull * 1024 * 1024;
+    inline constexpr std::uint64_t BLOCK_CRC_REQUIRED_AT = 1ull * 1024 * 1024 * 1024;
+    inline constexpr std::uint32_t MAX_PREVIEW_BYTES = 16u * 1024 * 1024;
 
-    constexpr std::uint32_t FOURCC_INDX = make_fourcc('I', 'N', 'D', 'X');
+    struct Version {
+        std::uint16_t major = 1;
+        std::uint16_t minor = 0;
 
-    constexpr std::uint32_t CONTAINER_VERSION = 1;
-    constexpr std::uint32_t CONTAINER_MIN_READER_VERSION = 1;
-
-    constexpr std::array<std::uint8_t, 8> FILE_MAGIC = {0x89, 'L', 'F', 'S', '\r', '\n', 0x1a, '\n'};
-    constexpr std::uint32_t FOOTER_MAGIC = make_fourcc('L', 'F', 'S', 'E');
-
-    constexpr std::uint64_t CHUNK_ALIGNMENT = 64;
-    constexpr std::uint64_t PAGE_ALIGNMENT = 4096;
-
-    enum ChunkFlags : std::uint8_t {
-        CHUNK_FLAG_CRITICAL = 1u << 0,
-        CHUNK_FLAG_SUPERSEDED = 1u << 1,
-        // Written by the container itself for page_align requests so a reader
-        // can recompute the payload offset from the header offset alone.
-        CHUNK_FLAG_PAGE_ALIGNED = 1u << 2,
+        friend constexpr auto operator<=>(const Version&, const Version&) = default;
     };
 
-    enum class Compression : std::uint8_t {
-        Raw = 0,
+    inline constexpr Version CURRENT_CONTAINER_VERSION{1, 0};
+
+    struct LFS_IO_API Fourcc {
+        std::array<std::uint8_t, 4> bytes{};
+
+        [[nodiscard]] constexpr bool valid() const noexcept {
+            for (const std::uint8_t byte : bytes) {
+                if (!((byte >= static_cast<std::uint8_t>('A') &&
+                       byte <= static_cast<std::uint8_t>('Z')) ||
+                      (byte >= static_cast<std::uint8_t>('0') &&
+                       byte <= static_cast<std::uint8_t>('9')))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] std::string to_string() const;
+        [[nodiscard]] static std::optional<Fourcc> from_string(std::string_view text);
+
+        friend constexpr auto operator<=>(const Fourcc&, const Fourcc&) = default;
+    };
+
+    [[nodiscard]] constexpr Fourcc make_fourcc(const char a, const char b, const char c,
+                                               const char d) noexcept {
+        return Fourcc{{
+            static_cast<std::uint8_t>(static_cast<unsigned char>(a)),
+            static_cast<std::uint8_t>(static_cast<unsigned char>(b)),
+            static_cast<std::uint8_t>(static_cast<unsigned char>(c)),
+            static_cast<std::uint8_t>(static_cast<unsigned char>(d)),
+        }};
+    }
+
+    inline constexpr Fourcc FOURCC_CKPT = make_fourcc('C', 'K', 'P', 'T');
+    inline constexpr Fourcc FOURCC_THMB = make_fourcc('T', 'H', 'M', 'B');
+
+    struct ChunkKey {
+        Fourcc fourcc;
+        lfs::core::Uuid instance_uuid;
+
+        friend bool operator==(const ChunkKey&, const ChunkKey&) = default;
+    };
+
+    struct LFS_IO_API ChunkKeyLess {
+        [[nodiscard]] bool operator()(const ChunkKey& lhs, const ChunkKey& rhs) const noexcept;
+    };
+
+    class LFS_IO_API CapabilitySet {
+    public:
+        CapabilitySet() = default;
+        explicit CapabilitySet(std::array<std::uint8_t, 16> bytes) noexcept;
+
+        [[nodiscard]] bool contains(std::uint8_t bit) const noexcept;
+        void set(std::uint8_t bit, bool enabled = true) noexcept;
+        [[nodiscard]] bool contains_all(const CapabilitySet& required) const noexcept;
+        [[nodiscard]] CapabilitySet missing_from(const CapabilitySet& supported) const noexcept;
+        [[nodiscard]] bool empty() const noexcept;
+        [[nodiscard]] const std::array<std::uint8_t, 16>& bytes() const noexcept;
+        [[nodiscard]] std::string to_hex() const;
+
+        CapabilitySet& operator|=(const CapabilitySet& other) noexcept;
+        friend CapabilitySet operator|(CapabilitySet lhs, const CapabilitySet& rhs) noexcept {
+            lhs |= rhs;
+            return lhs;
+        }
+        friend bool operator==(const CapabilitySet&, const CapabilitySet&) = default;
+
+    private:
+        std::array<std::uint8_t, 16> bytes_{};
+    };
+
+    enum CapabilityBit : std::uint8_t {
+        INDEX_ZSTD_V1 = 0,
+        CHUNK_ZSTD_V1 = 1,
+        BLOCK_CRC32C_V1 = 2,
+        INDEX_TOMBSTONES_V1 = 3,
+        SIDECAR_OVERLAY_V1 = 4,
+        OPAQUE_CHUNK_PRESERVATION = 5,
+        RETAINED_JSON_FIELDS = 6,
+        CLEAN_PROOF_REUSE = 7,
+    };
+
+    [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();
+    [[nodiscard]] LFS_IO_API CapabilitySet supported_writer_capabilities();
+
+    enum class ContainerRole : std::uint32_t {
+        Master = 0,
+        AutosaveSidecar = 1,
+    };
+
+    enum class CommitKind : std::uint32_t {
+        Explicit = 1,
+        Autosave = 2,
+        Recovered = 3,
+        Compaction = 4,
+    };
+
+    enum class Compression : std::uint16_t {
+        Stored = 0,
         Zstd = 1,
     };
 
-#pragma pack(push, 1)
-
-    // The container spec's prose says "64 bytes" but its frozen field list
-    // sums to 72; every field is kept, sizeof is 72, and the first chunk
-    // starts at the next 64-byte boundary (offset 128).
-    struct FileHeader {
-        std::uint8_t magic[8];
-        std::uint32_t container_version;
-        std::uint32_t min_reader_version;
-        std::uint64_t declared_file_size;
-        std::uint64_t index_offset;
-        std::uint64_t index_size;
-        std::uint32_t index_crc32c;
-        std::uint16_t header_flags;
-        std::uint16_t reserved;
-        std::uint64_t save_generation;
-        std::uint8_t project_uuid[16];
-    };
-    static_assert(sizeof(FileHeader) == 72);
-
-    constexpr std::uint64_t FIRST_CHUNK_OFFSET = 128;
-
-    // The frozen field list sums to 36; the trailing reserved word pads to
-    // the mandated 40 bytes. payload_crc32c covers the STORED payload bytes.
-    struct ChunkHeader {
-        std::uint32_t fourcc;
-        std::uint32_t chunk_version;
-        std::uint64_t payload_bytes;
-        std::uint64_t uncompressed_bytes;
-        std::uint32_t instance_id;
-        std::uint32_t payload_crc32c;
-        std::uint8_t compression;
-        std::uint8_t flags;
-        std::uint16_t pad;
-        std::uint32_t reserved;
-    };
-    static_assert(sizeof(ChunkHeader) == 40);
-
-    struct IndexPrologue {
-        std::uint64_t prev_index_offset;
-        std::uint32_t row_count;
-        std::uint32_t reserved;
-    };
-    static_assert(sizeof(IndexPrologue) == 16);
-
-    struct IndexRow {
-        std::uint32_t fourcc;
-        std::uint32_t instance_id;
-        std::uint32_t chunk_version;
-        std::uint32_t flags;
-        std::uint64_t offset;
-        std::uint64_t stored_size;
-        std::uint64_t uncompressed_size;
-        std::uint64_t generation;
-    };
-    static_assert(sizeof(IndexRow) == 48);
-
-    struct Footer {
-        std::uint32_t magic;
-        std::uint32_t reserved;
-        std::uint64_t index_offset;
-        std::uint64_t index_size;
-        std::uint32_t index_crc32c;
-        std::uint64_t generation;
-        std::uint32_t footer_crc32c;
-    };
-    static_assert(sizeof(Footer) == 40);
-
-#pragma pack(pop)
-
-    constexpr std::uint64_t align_up(const std::uint64_t value, const std::uint64_t alignment) {
-        return (value + alignment - 1) & ~(alignment - 1);
-    }
-
-    // Page-align rule: the writer places the payload at
-    //   payload_offset = align_up(align_up(cursor, 64) + sizeof(ChunkHeader), 4096)
-    // and the chunk header at payload_offset - 64 (64-byte aligned by
-    // construction, 24 zero bytes between header end and payload). A reader
-    // recomputes the identical payload offset from the header offset and the
-    // PAGE_ALIGNED flag; non-page-aligned payloads follow the header
-    // immediately.
-    constexpr std::uint64_t chunk_payload_offset(const std::uint64_t header_offset, const std::uint32_t flags) {
-        const std::uint64_t header_end = header_offset + sizeof(ChunkHeader);
-        return (flags & CHUNK_FLAG_PAGE_ALIGNED) ? align_up(header_end, PAGE_ALIGNMENT) : header_end;
-    }
-
-    struct ChunkOptions {
-        std::uint32_t chunk_version = 1;
-        std::uint32_t instance_id = 0;
-        Compression compression = Compression::Raw;
-        bool page_align = false;
-        std::uint8_t flags = 0;
-        std::uint64_t generation = 0;
+    enum class RowKind : std::uint8_t {
+        Live = 0,
+        Tombstone = 1,
+        SidecarBaseReference = 2,
     };
 
-    struct ChunkInfo {
-        std::uint32_t fourcc = 0;
-        std::uint32_t instance_id = 0;
-        std::uint32_t chunk_version = 0;
-        std::uint32_t flags = 0;
+    enum ChunkFlag : std::uint32_t {
+        TENSOR_PAYLOAD = 1u << 0,
+        HAS_BLOCK_CRCS = 1u << 1,
+    };
+
+    enum class OpenState {
+        Open,
+        UnsupportedNewer,
+        RepairOnly,
+        HardFail,
+    };
+
+    enum class PreviewFormat : std::uint32_t {
+        Png = 1,
+    };
+
+    struct PreviewLocator {
         std::uint64_t offset = 0;
-        std::uint64_t stored_size = 0;
-        std::uint64_t uncompressed_size = 0;
-        std::uint64_t generation = 0;
-        Compression compression = Compression::Raw;
-        std::uint32_t payload_crc32c = 0;
+        std::uint32_t bytes = 0;
+        PreviewFormat format = PreviewFormat::Png;
+
+        friend constexpr auto operator<=>(const PreviewLocator&,
+                                          const PreviewLocator&) = default;
     };
 
-    constexpr std::uint64_t chunk_payload_offset(const ChunkInfo& info) {
-        return chunk_payload_offset(info.offset, info.flags);
-    }
+    struct LFS_IO_API OpenClassification {
+        OpenState state = OpenState::HardFail;
+        std::uint64_t generation = 0;
+        std::string diagnostic;
+
+        [[nodiscard]] std::string outcome_name() const;
+    };
+
+    struct ReaderOptions {
+        Version reader_version = CURRENT_CONTAINER_VERSION;
+        CapabilitySet reader_capabilities = supported_reader_capabilities();
+        Version writer_version = CURRENT_CONTAINER_VERSION;
+        CapabilitySet writer_capabilities = supported_writer_capabilities();
+        bool allow_unsupported_inspection = false;
+    };
+
+    struct SuperblockInfo {
+        Version format;
+        ContainerRole role = ContainerRole::Master;
+        lfs::core::Uuid project_uuid;
+        lfs::core::Uuid file_uuid;
+        std::uint64_t creation_time_unix_ns = 0;
+        lfs::core::Uuid base_explicit_commit_uuid;
+        std::uint64_t autosave_sequence = 0;
+        lfs::core::Uuid sidecar_snapshot_uuid;
+        std::uint32_t crc32c = 0;
+    };
+
+    struct CommitInfo {
+        std::uint64_t offset = 0;
+        CommitKind kind = CommitKind::Explicit;
+        lfs::core::Uuid commit_uuid;
+        std::uint64_t generation = 0;
+        lfs::core::Uuid parent_commit_uuid;
+        std::uint64_t parent_commit_offset = 0;
+        lfs::core::Uuid explicit_ancestor_commit_uuid;
+        lfs::core::Uuid snapshot_uuid;
+        std::uint64_t wallclock_unix_ns = 0;
+        std::uint64_t index_offset = 0;
+        std::uint64_t index_stored_bytes = 0;
+        std::uint64_t index_uncompressed_bytes = 0;
+        std::uint32_t index_stored_crc32c = 0;
+        std::uint32_t index_uncompressed_crc32c = 0;
+        Compression index_compression = Compression::Stored;
+        std::uint64_t committed_file_end = 0;
+        Version min_reader_version;
+        Version min_safe_writer_version;
+        CapabilitySet required_reader_capabilities;
+        CapabilitySet required_writer_capabilities;
+        std::uint32_t crc32c = 0;
+    };
+
+    struct HeadInfo {
+        std::uint32_t slot_id = 0;
+        std::uint64_t head_sequence = 0;
+        std::uint64_t generation = 0;
+        lfs::core::Uuid commit_uuid;
+        std::uint64_t commit_offset = 0;
+        std::uint64_t committed_file_end = 0;
+        std::uint32_t commit_crc32c_echo = 0;
+        std::optional<PreviewLocator> preview;
+        std::uint32_t head_crc32c = 0;
+    };
+
+    struct BlockCrcTable {
+        std::uint64_t offset = 0;
+        std::uint64_t payload_offset = 0;
+        std::uint64_t stored_bytes = 0;
+        std::uint32_t block_size = 0;
+        std::vector<std::uint32_t> entries;
+        std::uint32_t entries_crc32c = 0;
+        std::uint32_t header_crc32c = 0;
+    };
+
+    struct LFS_IO_API ChunkInfo {
+        ChunkKey key;
+        std::uint16_t chunk_version = 0;
+        RowKind row_kind = RowKind::Live;
+        Compression compression = Compression::Stored;
+        std::uint32_t flags = 0;
+        std::uint64_t header_offset = 0;
+        std::uint64_t payload_offset = 0;
+        std::uint64_t stored_bytes = 0;
+        std::uint64_t uncompressed_bytes = 0;
+        std::uint64_t source_generation = 0;
+        std::uint32_t payload_crc32c = 0;
+        std::uint32_t header_crc32c = 0;
+        std::optional<BlockCrcTable> block_crc_table;
+
+        [[nodiscard]] bool is_live() const noexcept { return row_kind == RowKind::Live; }
+        [[nodiscard]] std::string key_string() const;
+    };
+
+    struct WriteCompatibility {
+        bool safe = false;
+        std::vector<std::string> reasons;
+    };
+
+    class LFS_IO_API CleanProof {
+    public:
+        CleanProof(const CleanProof&) = default;
+        CleanProof(CleanProof&&) noexcept = default;
+        CleanProof& operator=(const CleanProof&) = default;
+        CleanProof& operator=(CleanProof&&) noexcept = default;
+        ~CleanProof() = default;
+
+        [[nodiscard]] const ChunkKey& key() const noexcept { return key_; }
+        [[nodiscard]] std::uint64_t mutation_epoch() const noexcept { return mutation_epoch_; }
+
+    private:
+        friend class ProjectReader;
+        friend class ProjectWriter;
+
+        CleanProof() = default;
+
+        ChunkKey key_;
+        lfs::core::Uuid file_uuid_;
+        lfs::core::Uuid commit_uuid_;
+        std::uint64_t source_generation_ = 0;
+        std::uint32_t payload_crc32c_ = 0;
+        std::uint32_t header_crc32c_ = 0;
+        std::uint64_t mutation_epoch_ = 0;
+    };
+
+    class LFS_IO_API BoundedInputStream {
+    public:
+        BoundedInputStream(BoundedInputStream&&) noexcept;
+        BoundedInputStream& operator=(BoundedInputStream&&) noexcept;
+        BoundedInputStream(const BoundedInputStream&) = delete;
+        BoundedInputStream& operator=(const BoundedInputStream&) = delete;
+        ~BoundedInputStream();
+
+        [[nodiscard]] std::istream& stream();
+        [[nodiscard]] std::uint64_t size() const noexcept;
+
+    private:
+        friend class ProjectReader;
+        struct Impl;
+        explicit BoundedInputStream(std::unique_ptr<Impl> impl);
+        std::unique_ptr<Impl> impl_;
+    };
+
+    class LFS_IO_API MappedRegion {
+    public:
+        MappedRegion(MappedRegion&&) noexcept;
+        MappedRegion& operator=(MappedRegion&&) noexcept;
+        MappedRegion(const MappedRegion&) = delete;
+        MappedRegion& operator=(const MappedRegion&) = delete;
+        ~MappedRegion();
+
+        [[nodiscard]] std::span<const std::byte> bytes() const noexcept;
+        [[nodiscard]] std::uint64_t file_offset() const noexcept;
+
+    private:
+        friend class ProjectReader;
+        struct Impl;
+        explicit MappedRegion(std::unique_ptr<Impl> impl);
+        std::unique_ptr<Impl> impl_;
+    };
 
     class ProjectWriter;
 
     class LFS_IO_API ProjectReader {
     public:
-        [[nodiscard]] static Result<ProjectReader> open(const std::filesystem::path& path);
+        [[nodiscard]] static lfs::Result<ProjectReader>
+        open(const std::filesystem::path& path, const ReaderOptions& options = {});
+        [[nodiscard]] static OpenClassification
+        classify(const std::filesystem::path& path, const ReaderOptions& options = {});
 
         ProjectReader(ProjectReader&&) noexcept;
         ProjectReader& operator=(ProjectReader&&) noexcept;
@@ -177,76 +354,161 @@ namespace lfs::io::project {
         ProjectReader& operator=(const ProjectReader&) = delete;
         ~ProjectReader();
 
-        [[nodiscard]] const std::filesystem::path& path() const;
-        [[nodiscard]] std::uint32_t container_version() const;
-        [[nodiscard]] std::uint32_t min_reader_version() const;
-        [[nodiscard]] std::uint64_t save_generation() const;
-        [[nodiscard]] const std::array<std::uint8_t, 16>& project_uuid() const;
+        [[nodiscard]] const std::filesystem::path& path() const noexcept;
+        [[nodiscard]] std::uint64_t physical_file_size() const noexcept;
+        [[nodiscard]] OpenState open_state() const noexcept;
+        [[nodiscard]] const SuperblockInfo& superblock() const noexcept;
+        [[nodiscard]] const HeadInfo& selected_head() const noexcept;
+        [[nodiscard]] const CommitInfo& commit() const noexcept;
+        [[nodiscard]] const std::vector<ChunkInfo>& chunks() const noexcept;
+        [[nodiscard]] const std::vector<std::string>& warnings() const noexcept;
+        [[nodiscard]] const std::optional<PreviewLocator>& preview() const noexcept;
+        [[nodiscard]] WriteCompatibility write_compatibility() const;
 
-        // Rows of the newest valid INDX, current INDX excluded. Historical
-        // INDX chunks preserved for the prev_index_offset chain do appear as
-        // rows (fourcc INDX).
-        [[nodiscard]] const std::vector<ChunkInfo>& chunks() const;
-        [[nodiscard]] const ChunkInfo* find(std::uint32_t fourcc, std::uint32_t instance_id = 0) const;
-        // Synthesized info for the current INDX chunk itself, so it can be
-        // copied through to preserve this generation's index in the next file.
-        [[nodiscard]] const ChunkInfo& index_chunk_info() const;
-        [[nodiscard]] std::uint64_t prev_index_offset() const;
+        [[nodiscard]] const ChunkInfo* find(const ChunkKey& key) const noexcept;
+        [[nodiscard]] const ChunkInfo* find(Fourcc fourcc,
+                                            const lfs::core::Uuid& instance_uuid) const noexcept;
 
-        // Decompresses and CRC-verifies. A failure here is chunk-level: other
-        // chunks of the same reader stay readable.
-        [[nodiscard]] Result<std::vector<std::byte>> read_chunk(const ChunkInfo& info) const;
+        [[nodiscard]] lfs::Result<std::vector<std::byte>>
+        read_chunk(const ChunkInfo& chunk) const;
+        [[nodiscard]] lfs::Result<void>
+        read_stored_at(const ChunkInfo& chunk, std::uint64_t relative_offset,
+                       std::span<std::byte> destination) const;
+        [[nodiscard]] lfs::Result<void> verify_chunk(const ChunkInfo& chunk) const;
+        [[nodiscard]] lfs::Result<void> verify_all() const;
+        [[nodiscard]] lfs::Result<std::vector<std::byte>> read_preview() const;
+        [[nodiscard]] lfs::Result<BoundedInputStream>
+        open_bounded_stream(const ChunkInfo& chunk) const;
+        [[nodiscard]] lfs::Result<MappedRegion>
+        map_stored_range(const ChunkInfo& chunk, std::uint64_t relative_offset,
+                         std::uint64_t length) const;
 
-        // Reads a previous generation's INDX chunk at prev_offset (obtained
-        // from prev_index_offset() or a previous call's prev_out).
-        [[nodiscard]] Result<std::vector<ChunkInfo>> open_prev_index(std::uint64_t prev_offset,
-                                                                     std::uint64_t* prev_out = nullptr) const;
+        [[nodiscard]] lfs::Result<CleanProof>
+        make_clean_proof(const ChunkInfo& chunk, std::uint64_t mutation_epoch) const;
 
     private:
         friend class ProjectWriter;
         struct Impl;
-        explicit ProjectReader(std::unique_ptr<Impl> impl);
-        std::unique_ptr<Impl> impl_;
+        explicit ProjectReader(std::shared_ptr<Impl> impl);
+        std::shared_ptr<Impl> impl_;
+    };
+
+    enum class IndexCompression {
+        Zstd,
+        StoredForDeterministicTests,
+    };
+
+    enum class CommitBoundary {
+        CurrentHeadValidated = 1,
+        IdentitiesAssigned = 2,
+        PreflightComplete = 3,
+        ChunksWritten = 4,
+        IndexWritten = 5,
+        CommitWritten = 6,
+        AppendFlushed = 7,
+        HeadWritten = 8,
+        HeadFlushed = 9,
+        Committed = 10,
+    };
+
+    using CommitBoundaryObserver = std::function<void(CommitBoundary)>;
+
+    struct CreateOptions {
+        lfs::core::Uuid project_uuid;
+        lfs::core::Uuid file_uuid;
+        ContainerRole role = ContainerRole::Master;
+        lfs::core::Uuid base_explicit_commit_uuid;
+        std::uint64_t autosave_sequence = 0;
+        lfs::core::Uuid sidecar_snapshot_uuid;
+        std::uint64_t creation_time_unix_ns = 0;
+        IndexCompression index_compression = IndexCompression::Zstd;
+        std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
+        CommitBoundaryObserver boundary_observer;
+    };
+
+    struct AppendOptions {
+        ReaderOptions compatibility;
+        IndexCompression index_compression = IndexCompression::Zstd;
+        std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
+        CommitBoundaryObserver boundary_observer;
+    };
+
+    struct ChunkWriteOptions {
+        std::uint16_t chunk_version = 1;
+        Compression compression = Compression::Stored;
+        bool tensor_payload = false;
+        bool block_crcs = false;
+        std::optional<std::uint64_t> expected_stream_bytes;
+    };
+
+    struct CommitOptions {
+        CommitKind kind = CommitKind::Explicit;
+        lfs::core::Uuid commit_uuid;
+        lfs::core::Uuid snapshot_uuid;
+        std::uint64_t wallclock_unix_ns = 0;
+        Version min_reader_version = CURRENT_CONTAINER_VERSION;
+        Version min_safe_writer_version = CURRENT_CONTAINER_VERSION;
+        CapabilitySet extra_reader_capabilities;
+        CapabilitySet extra_writer_capabilities;
+    };
+
+    struct CompactionOptions {
+        ReaderOptions compatibility;
+        lfs::core::Uuid new_file_uuid;
+        lfs::core::Uuid commit_uuid;
+        lfs::core::Uuid snapshot_uuid;
+        std::uint64_t creation_time_unix_ns = 0;
+        std::uint64_t wallclock_unix_ns = 0;
+        bool keep_tombstones = false;
+        std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
+        CommitBoundaryObserver boundary_observer;
     };
 
     class LFS_IO_API ProjectWriter {
     public:
-        [[nodiscard]] static Result<ProjectWriter> create(const std::filesystem::path& path,
-                                                          std::uint64_t save_generation,
-                                                          const std::array<std::uint8_t, 16>& project_uuid,
-                                                          std::uint64_t prev_index_offset_hint = 0);
+        [[nodiscard]] static lfs::Result<ProjectWriter>
+        create(const std::filesystem::path& path, const CreateOptions& options);
+        [[nodiscard]] static lfs::Result<ProjectWriter>
+        append(const std::filesystem::path& path, const AppendOptions& options = {});
+        [[nodiscard]] static lfs::Result<void>
+        compact(const std::filesystem::path& path, const CompactionOptions& options = {});
 
         ProjectWriter(ProjectWriter&&) noexcept;
         ProjectWriter& operator=(ProjectWriter&&) noexcept;
         ProjectWriter(const ProjectWriter&) = delete;
         ProjectWriter& operator=(const ProjectWriter&) = delete;
-        // Destroying without finalize() discards the temp file; the
-        // destination is never observed torn.
         ~ProjectWriter();
 
-        [[nodiscard]] Result<void> write_chunk(std::uint32_t fourcc,
-                                               std::span<const std::byte> payload,
-                                               const ChunkOptions& options = {});
+        [[nodiscard]] lfs::Result<void>
+        plan_commit(const CommitOptions& options = {});
+        // Must be called before the first chunk mutation. The estimate covers
+        // stored payload bytes; the writer adds bounded metadata, alignment,
+        // and the configured reserve before checking the containing volume.
+        [[nodiscard]] lfs::Result<void>
+        preflight(std::uint64_t planned_stored_payload_bytes);
 
-        // Streaming protocol for payloads that must not be buffered in RAM:
-        // a placeholder header is written up front, bytes stream through a
-        // CRC32c-counting filter straight to disk, and end_chunk backpatches
-        // payload_bytes/uncompressed_bytes/payload_crc32c. Raw-only.
-        [[nodiscard]] Result<std::ostream*> begin_chunk(std::uint32_t fourcc, const ChunkOptions& options = {});
-        [[nodiscard]] Result<void> end_chunk();
+        [[nodiscard]] lfs::Result<void>
+        write_chunk(const ChunkKey& key, std::span<const std::byte> payload,
+                    const ChunkWriteOptions& options = {});
+        [[nodiscard]] lfs::Result<void>
+        set_preview(std::span<const std::byte> png_bytes);
+        [[nodiscard]] lfs::Result<std::ostream*>
+        begin_chunk(const ChunkKey& key, const ChunkWriteOptions& options = {});
+        [[nodiscard]] lfs::Result<void> end_chunk();
 
-        // Byte-exact copy of the stored payload (no decode/re-encode, CRC
-        // preserved); offset and alignment are recomputed for this file.
-        // Copying source.index_chunk_info() preserves the previous
-        // generation's index for the prev_index_offset chain. Returns the
-        // chunk's placement in this file.
-        [[nodiscard]] Result<ChunkInfo> copy_chunk(const ProjectReader& source, const ChunkInfo& info);
+        [[nodiscard]] lfs::Result<void>
+        reuse_if_clean(const CleanProof& proof, std::uint64_t current_mutation_epoch);
+        [[nodiscard]] lfs::Result<void>
+        carry_forward_opaque(const ChunkInfo& chunk, const CleanProof& proof,
+                             std::uint64_t current_mutation_epoch);
+        [[nodiscard]] lfs::Result<void> add_sidecar_base_reference(const ChunkInfo& base);
+        [[nodiscard]] lfs::Result<void> erase(const ChunkKey& key);
 
-        void set_prev_index_offset(std::uint64_t prev_index_offset);
-
-        // Writes INDX + footer, backpatches the file header, and atomically
-        // commits to the destination path.
-        [[nodiscard]] Result<void> finalize();
+        // DataLoss with field "commit.post_publish_verification" has special
+        // append semantics: the second flush completed, so the generation is
+        // already published and durable. The file is authoritative; callers
+        // must not retry the same logical save from stale in-memory state.
+        [[nodiscard]] lfs::Result<void> commit();
 
     private:
         struct Impl;

@@ -244,10 +244,13 @@ add_library(lfs_io STATIC
         # Retained-DOM JSON chapter foundation
         json_chapter_dom.cpp
 
-        # .licht project container (TLV grammar)
+        # .licht project container
         project/crc32c.hpp
         project/crc32c.cpp
+        project/project_container_internal.hpp
+        project/project_file.cpp
         project/project_container.cpp
+        project/project_writer.cpp
 
 )
 

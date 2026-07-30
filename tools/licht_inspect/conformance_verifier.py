@@ -73,7 +73,27 @@ def run_independent_verifier(
                 raise AssertionError(f"{name}: independent index generation echo mismatch")
             if head.commit.index_commit_uuid != head.commit.commit_uuid:
                 raise AssertionError(f"{name}: independent index commit UUID echo mismatch")
-            field_checks += 7
+            preview = generation.get("preview")
+            if preview is None:
+                expected_preview = (0, 0, 0)
+            else:
+                assert isinstance(preview, dict)
+                expected_preview = (
+                    int(preview["offset"]),
+                    int(preview["bytes"]),
+                    int(preview["format"]),
+                )
+            actual_preview = (
+                head.preview_offset,
+                head.preview_bytes,
+                head.preview_format,
+            )
+            if actual_preview != expected_preview:
+                raise AssertionError(
+                    f"{name}: independent preview locator mismatch: "
+                    f"{actual_preview} != {expected_preview}"
+                )
+            field_checks += 10
 
         actual, detail = classify_open(path)
         expected = str(raw_info["expected_outcome"])
@@ -102,11 +122,26 @@ def run_independent_verifier(
             raise AssertionError(f"{name}: selected parser head has no raw commit")
         if raw_head.commit.index_offset != dumped["selected"]["index_offset"]:  # type: ignore[index]
             raise AssertionError(f"{name}: parser/byte-table selected index disagreement")
+        parser_preview = container.preview
+        raw_preview = (
+            raw_head.preview_offset,
+            raw_head.preview_bytes,
+            raw_head.preview_format,
+        )
+        parser_preview_tuple = (
+            (0, 0, 0)
+            if parser_preview is None
+            else (parser_preview.offset, parser_preview.bytes, parser_preview.format)
+        )
+        if raw_preview != parser_preview_tuple:
+            raise AssertionError(
+                f"{name}: parser/byte-table preview locator disagreement"
+            )
         parser_keys = [row.key for row in container.index.rows]
         raw_keys = [row.key for row in raw_head.commit.rows]
         if parser_keys != raw_keys:
             raise AssertionError(f"{name}: parser/byte-table row-key disagreement")
-        field_checks += 5 + len(parser_keys)
+        field_checks += 8 + len(parser_keys)
 
     return timed_result(
         "independent-verifier",

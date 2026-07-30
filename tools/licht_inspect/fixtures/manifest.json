@@ -11,6 +11,8 @@
     "commit_multi_2": "00000066-0000-4000-8000-000000000066",
     "commit_oob": "0000006c-0000-4000-8000-00000000006c",
     "commit_overlap": "0000006d-0000-4000-8000-00000000006d",
+    "commit_preview_1": "00000076-0000-4000-8000-000000000076",
+    "commit_preview_2": "00000077-0000-4000-8000-000000000077",
     "commit_split_a": "0000006a-0000-4000-8000-00000000006a",
     "commit_split_b": "0000006b-0000-4000-8000-00000000006b",
     "commit_stale_base": "00000071-0000-4000-8000-000000000071",
@@ -28,6 +30,7 @@
     "file_multi": "0000000b-0000-4000-8000-00000000000b",
     "file_oob": "0000000f-0000-4000-8000-00000000000f",
     "file_overlap": "00000010-0000-4000-8000-000000000010",
+    "file_preview": "00000017-0000-4000-8000-000000000017",
     "file_split": "0000000e-0000-4000-8000-00000000000e",
     "file_tombstone": "0000000c-0000-4000-8000-00000000000c",
     "file_unsupported_higher": "00000015-0000-4000-8000-000000000015",
@@ -48,6 +51,8 @@
     "snapshot_multi_2": "000000ca-0000-4000-8000-0000000000ca",
     "snapshot_oob": "000000d0-0000-4000-8000-0000000000d0",
     "snapshot_overlap": "000000d1-0000-4000-8000-0000000000d1",
+    "snapshot_preview_1": "000000d9-0000-4000-8000-0000000000d9",
+    "snapshot_preview_2": "000000da-0000-4000-8000-0000000000da",
     "snapshot_split_a": "000000ce-0000-4000-8000-0000000000ce",
     "snapshot_split_b": "000000cf-0000-4000-8000-0000000000cf",
     "snapshot_tombstone_1": "000000cb-0000-4000-8000-0000000000cb",
@@ -81,6 +86,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -131,6 +137,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000010",
           "required_writer_capabilities": "0x000000000000000000000000000000b0",
           "rows": [
@@ -185,6 +192,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000010",
           "required_writer_capabilities": "0x000000000000000000000000000000b0",
           "rows": [
@@ -239,6 +247,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -280,6 +289,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -321,6 +331,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -352,6 +363,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000004",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -402,6 +414,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -443,6 +456,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -484,6 +498,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -511,6 +526,93 @@
       "sha256": "39832c43b1a987beafb2da121bd1008298d53a1a7f1b9a3487c8827ce0f2a8b2",
       "verify": false
     },
+    "preview-locator.licht": {
+      "bytes": 66816,
+      "expected_outcome": "open_gen_2",
+      "file": "preview-locator.licht",
+      "fixture_class": "preview_locator",
+      "generations": [
+        {
+          "commit_offset": 65856,
+          "commit_uuid": "00000076-0000-4000-8000-000000000076",
+          "committed_file_end": 66112,
+          "generation": 1,
+          "head_sequence": 1,
+          "head_slot": 0,
+          "index_bytes": 160,
+          "index_offset": 65664,
+          "min_reader_version": [
+            1,
+            0
+          ],
+          "min_safe_writer_version": [
+            1,
+            0
+          ],
+          "preview": null,
+          "required_reader_capabilities": "0x00000000000000000000000000000000",
+          "required_writer_capabilities": "0x000000000000000000000000000000a0",
+          "rows": [
+            {
+              "fourcc": "PROJ",
+              "header_offset": 65536,
+              "instance_uuid": "0000012c-0000-4000-8000-00000000012c",
+              "key": "50524f4a0000012c00004000800000000000012c",
+              "payload_offset": 65600,
+              "row_kind": 0,
+              "stored_bytes": 36
+            }
+          ]
+        },
+        {
+          "commit_offset": 66560,
+          "commit_uuid": "00000077-0000-4000-8000-000000000077",
+          "committed_file_end": 66816,
+          "generation": 2,
+          "head_sequence": 2,
+          "head_slot": 1,
+          "index_bytes": 256,
+          "index_offset": 66304,
+          "min_reader_version": [
+            1,
+            0
+          ],
+          "min_safe_writer_version": [
+            1,
+            0
+          ],
+          "preview": {
+            "bytes": 68,
+            "format": 1,
+            "offset": 66176
+          },
+          "required_reader_capabilities": "0x00000000000000000000000000000000",
+          "required_writer_capabilities": "0x000000000000000000000000000000a0",
+          "rows": [
+            {
+              "fourcc": "PROJ",
+              "header_offset": 65536,
+              "instance_uuid": "0000012c-0000-4000-8000-00000000012c",
+              "key": "50524f4a0000012c00004000800000000000012c",
+              "payload_offset": 65600,
+              "row_kind": 0,
+              "stored_bytes": 36
+            },
+            {
+              "fourcc": "THMB",
+              "header_offset": 66112,
+              "instance_uuid": "00000001-0000-4000-8000-000000000001",
+              "key": "54484d4200000001000040008000000000000001",
+              "payload_offset": 66176,
+              "row_kind": 0,
+              "stored_bytes": 68
+            }
+          ]
+        }
+      ],
+      "sha256": "d25eaad48a0d40ed2e884f1fccd023dfdd637a64f7ceb1a1017f20ba490acbcf",
+      "verify": true
+    },
     "split-brain.licht": {
       "bytes": 66688,
       "expected_outcome": "hard_fail",
@@ -534,6 +636,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -565,6 +668,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -606,6 +710,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -637,6 +742,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000008",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -678,6 +784,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -709,6 +816,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000004",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -759,6 +867,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -790,6 +899,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000100",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -840,6 +950,7 @@
             1,
             0
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
@@ -881,6 +992,7 @@
             1,
             1
           ],
+          "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
           "required_writer_capabilities": "0x000000000000000000000000000001a0",
           "rows": [

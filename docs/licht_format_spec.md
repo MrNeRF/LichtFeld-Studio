@@ -111,8 +111,35 @@ every rule below and all transitively referenced metadata validate.
 | 96 | 8 | u64 | `committed_file_end` | Equal to commit record and `commit_offset + 256`. |
 | 104 | 4 | u32 | `commit_crc32c_echo` | Equal to the referenced commit's CRC field. |
 | 108 | 4 | u32 | `head_flags` | Zero in version 1.0. |
-| 112 | 3,980 | zero | `reserved` | Zero. |
+| 112 | 8 | u64 | `preview_offset` | Zero, or the absolute offset of the selected generation's preview payload. See §4.1. |
+| 120 | 4 | u32 | `preview_bytes` | Zero iff `preview_offset` is zero; otherwise the preview payload length, at most 16,777,216. |
+| 124 | 4 | u32 | `preview_format` | Zero iff `preview_offset` is zero; `1` = PNG. Other values invalidate the slot in version 1.0. |
+| 128 | 3,964 | zero | `reserved` | Zero. |
 | 4092 | 4 | u32 | `head_crc32c` | CRC32c `[0,4092)`. |
+
+### 4.1 Preview locator and the foreign-reader contract
+
+The preview locator exists so that a thumbnailer or asset browser can extract a
+project preview without implementing the container: read the superblock, read
+both 4,096-byte head slots at their fixed offsets, CRC32c-validate each over
+`[0,4092)`, select the valid slot with the higher `head_sequence`, and read
+`preview_bytes` bytes at `preview_offset`. No index parsing and no
+decompression are required.
+
+Rules, all slot-invalidating on violation:
+
+1. An all-zero locator triple means the selected generation has no preview.
+2. When non-zero, `preview_offset` MUST be 64-byte aligned, and
+   `preview_offset + preview_bytes` MUST NOT exceed `committed_file_end`.
+3. The locator MUST reference exactly the stored payload span of a `THMB`
+   chunk row present in the selected generation's index, and that row MUST use
+   `compression = none`. The payload is the preview image verbatim.
+4. Full readers resolve `THMB` through the index like any chunk; the locator
+   is an accelerator for foreign readers, never an alternative authority.
+5. Writers that publish a generation without regenerating a preview MUST
+   either carry the prior `THMB` chunk forward and point the locator at it, or
+   publish a zero locator. A locator pointing at a span not owned by the
+   selected generation's `THMB` row is invalid.
 
 Within one file incarnation, each successful publication increments
 `head_sequence` by one and writes the inactive slot. It also increments
@@ -666,6 +693,13 @@ These decisions freeze details on which the plan was intentionally silent:
 16. The capability registry allocates core, chapter, embedded, experimental,
     and vendor ranges and assigns bits 0 through 7 above.
 17. Missing optional Python `zstandard` support does not alter the grammar.
+18. (2026-07-30, pre-release amendment — part of the 1.0 grammar, so item 15 is
+    not violated) The head slot carries a 16-byte preview locator at offset 112
+    (§4.1) so foreign readers can thumbnail a project from fixed offsets alone;
+    an all-zero locator is valid, so fixtures produced before the amendment
+    remain byte-identical. Evidence: Krita's `mergedimage.png` foreign-reader
+    surface — a post-release fourcc reservation could never deliver this
+    property precisely because of item 15.
     Golden fixtures use `STORED` indexes for deterministic stdlib-only tests;
     production indexes use `ZSTD`, and the reference parser validates them when
     the package is installed.

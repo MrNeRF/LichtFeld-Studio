@@ -94,6 +94,9 @@ class RawHead:
     commit_offset: int | None
     committed_file_end: int | None
     commit_crc32c_echo: int | None
+    preview_offset: int | None
+    preview_bytes: int | None
+    preview_format: int | None
     commit: RawCommit | None
 
 
@@ -202,7 +205,22 @@ def derive_byte_table(path: Path) -> ByteTableView:
             raw = _pread_exact(fd, offset, 4_096, f"head[{slot_id}]")
             if raw == b"\x00" * 4_096:
                 heads.append(
-                    RawHead(slot_id, True, False, None, None, None, None, None, None, None, None)
+                    RawHead(
+                        slot_id=slot_id,
+                        blank=True,
+                        head_crc_valid=False,
+                        encoded_slot_id=None,
+                        head_sequence=None,
+                        generation=None,
+                        commit_uuid=None,
+                        commit_offset=None,
+                        committed_file_end=None,
+                        commit_crc32c_echo=None,
+                        preview_offset=None,
+                        preview_bytes=None,
+                        preview_format=None,
+                        commit=None,
+                    )
                 )
                 continue
             magic_valid = raw[:8] == HEAD_MAGIC
@@ -220,6 +238,9 @@ def derive_byte_table(path: Path) -> ByteTableView:
                     commit_offset=commit_offset,
                     committed_file_end=_u64(raw, 96),
                     commit_crc32c_echo=_u32(raw, 104),
+                    preview_offset=_u64(raw, 112),
+                    preview_bytes=_u32(raw, 120),
+                    preview_format=_u32(raw, 124),
                     commit=_read_commit(fd, physical_size, commit_offset),
                 )
             )

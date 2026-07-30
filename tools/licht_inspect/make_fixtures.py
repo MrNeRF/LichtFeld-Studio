@@ -13,6 +13,7 @@ parser. Both are derived from docs/licht_format_spec.md.
 from __future__ import annotations
 
 import argparse
+import base64
 import dataclasses
 import hashlib
 import json
@@ -93,6 +94,7 @@ FIXED_UUIDS = {
     "file_unsupported_single": _fixed_uuid(20),
     "file_unsupported_higher": _fixed_uuid(21),
     "file_write_unsafe": _fixed_uuid(22),
+    "file_preview": _fixed_uuid(23),
     "commit_minimal": _fixed_uuid(100),
     "commit_multi_1": _fixed_uuid(101),
     "commit_multi_2": _fixed_uuid(102),
@@ -111,6 +113,8 @@ FIXED_UUIDS = {
     "commit_unsupported_higher_1": _fixed_uuid(115),
     "commit_unsupported_higher_2": _fixed_uuid(116),
     "commit_write_unsafe": _fixed_uuid(117),
+    "commit_preview_1": _fixed_uuid(118),
+    "commit_preview_2": _fixed_uuid(119),
     "snapshot_minimal": _fixed_uuid(200),
     "snapshot_multi_1": _fixed_uuid(201),
     "snapshot_multi_2": _fixed_uuid(202),
@@ -128,11 +132,18 @@ FIXED_UUIDS = {
     "snapshot_unsupported_higher_1": _fixed_uuid(214),
     "snapshot_unsupported_higher_2": _fixed_uuid(215),
     "snapshot_write_unsafe": _fixed_uuid(216),
+    "snapshot_preview_1": _fixed_uuid(217),
+    "snapshot_preview_2": _fixed_uuid(218),
     "instance_proj": _fixed_uuid(300),
     "instance_view": _fixed_uuid(301),
     "instance_splt": _fixed_uuid(302),
     "instance_ckpt": _fixed_uuid(303),
 }
+
+TINY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
 def _align(value: int, alignment: int) -> int:
@@ -194,6 +205,9 @@ class GenerationLayout:
     min_safe_writer_version: tuple[int, int]
     reader_capabilities: int
     writer_capabilities: int
+    preview_offset: int
+    preview_bytes: int
+    preview_format: int
     rows: tuple[RowRecord, ...]
 
 
@@ -388,6 +402,7 @@ class FixtureWriter:
         min_safe_writer_version: tuple[int, int] = (1, 0),
         extra_reader_capabilities: int = 0,
         extra_writer_capabilities: int = 0,
+        preview_key: tuple[bytes, uuid.UUID] | None = None,
     ) -> GenerationLayout:
         if generation is None:
             generation = 1 if not self.generations else self.generations[-1].generation + 1
@@ -413,6 +428,28 @@ class FixtureWriter:
             )
 
         rows = tuple(sorted(self.current_rows.values(), key=lambda row: row.key))
+        preview_offset = 0
+        preview_bytes = 0
+        preview_format = 0
+        if preview_key is not None:
+            encoded_preview_key = preview_key[0] + preview_key[1].bytes
+            preview_rows = [
+                row
+                for row in rows
+                if row.key == encoded_preview_key
+                and row.row_kind == ROW_LIVE
+                and row.fourcc == b"THMB"
+                and row.compression == 0
+            ]
+            if len(preview_rows) != 1:
+                raise ValueError(
+                    "preview_key must identify one stored live THMB row"
+                )
+            preview_offset = preview_rows[0].payload_offset
+            preview_bytes = preview_rows[0].stored_bytes
+            if not 1 <= preview_bytes <= 16 * 1024 * 1024:
+                raise ValueError("preview payload size is outside the format cap")
+            preview_format = 1
         index = self._pack_index(generation, commit_uuid, rows)
         index_offset = _align(len(self.data), 64)
         _ensure_size(self.data, index_offset + len(index))
@@ -491,6 +528,9 @@ class FixtureWriter:
             min_safe_writer_version=min_safe_writer_version,
             reader_capabilities=reader_caps,
             writer_capabilities=writer_caps,
+            preview_offset=preview_offset,
+            preview_bytes=preview_bytes,
+            preview_format=preview_format,
             rows=rows,
         )
         self.generations.append(layout)
@@ -513,6 +553,14 @@ class FixtureWriter:
         head[48:64] = self.file_uuid.bytes
         head[64:80] = layout.commit_uuid.bytes
         struct.pack_into("<QQQI", head, 80, layout.commit_offset, COMMIT_BYTES, layout.committed_file_end, commit_crc)
+        struct.pack_into(
+            "<QII",
+            head,
+            112,
+            layout.preview_offset,
+            layout.preview_bytes,
+            layout.preview_format,
+        )
         struct.pack_into("<I", head, 4092, crc32c(head[:4092]))
         offset = HEAD_OFFSETS[head_slot]
         self.data[offset : offset + HEAD_BYTES] = head
@@ -564,6 +612,15 @@ def _fixture_meta(
                 ),
                 "required_writer_capabilities": (
                     f"0x{layout.writer_capabilities:032x}"
+                ),
+                "preview": (
+                    {
+                        "offset": layout.preview_offset,
+                        "bytes": layout.preview_bytes,
+                        "format": layout.preview_format,
+                    }
+                    if layout.preview_offset
+                    else None
                 ),
                 "rows": [
                     {
@@ -637,6 +694,44 @@ def build_fixture_bytes() -> tuple[dict[str, bytes], dict[str, object]]:
     name = "multi-generation-append.licht"
     files[name] = multi_bytes
     metadata[name] = _fixture_meta(name, "multi_generation_append", multi_bytes, "open_gen_2", multi.generations, verify=True)
+
+    preview = FixtureWriter(
+        project_uuid=project, file_uuid=FIXED_UUIDS["file_preview"]
+    )
+    preview.append_generation(
+        commit_uuid=FIXED_UUIDS["commit_preview_1"],
+        snapshot_uuid=FIXED_UUIDS["snapshot_preview_1"],
+        changes=(
+            ChunkSpec(
+                b"PROJ",
+                FIXED_UUIDS["instance_proj"],
+                _json_payload("preview", 1),
+            ),
+        ),
+        head_slot=0,
+        head_sequence=1,
+    )
+    preview.append_generation(
+        commit_uuid=FIXED_UUIDS["commit_preview_2"],
+        snapshot_uuid=FIXED_UUIDS["snapshot_preview_2"],
+        changes=(
+            ChunkSpec(b"THMB", project, TINY_PNG),
+        ),
+        head_slot=1,
+        head_sequence=2,
+        preview_key=(b"THMB", project),
+    )
+    preview_bytes = preview.bytes()
+    name = "preview-locator.licht"
+    files[name] = preview_bytes
+    metadata[name] = _fixture_meta(
+        name,
+        "preview_locator",
+        preview_bytes,
+        "open_gen_2",
+        preview.generations,
+        verify=True,
+    )
 
     tombstone = FixtureWriter(project_uuid=project, file_uuid=FIXED_UUIDS["file_tombstone"])
     tombstone.append_generation(

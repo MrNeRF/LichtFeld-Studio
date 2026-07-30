@@ -49,6 +49,7 @@ ORACLE_SEEDS = (
     0x434C455F5030,
     0xC32C4D4942,
 )
+PREVIEW_CORRUPTION_CASE_COUNT = 7
 
 
 @dataclasses.dataclass(frozen=True)
@@ -99,6 +100,7 @@ CATALOG = (
     "autosave-master.licht",
     "autosave-sidecar-valid.licht.autosave",
     "autosave-sidecar-stale-base.licht.autosave",
+    "preview-locator.licht",
 )
 
 
@@ -186,6 +188,138 @@ def _refresh_commit_and_heads(
         struct.pack_into("<I", data, head_offset + 104, commit_crc)
         head_crc = crc32c(data[head_offset : head_offset + 4092])
         struct.pack_into("<I", data, head_offset + 4092, head_crc)
+
+
+def _refresh_head(data: bytearray, slot: int) -> None:
+    head_offset = HEAD_OFFSETS[slot]
+    struct.pack_into(
+        "<I",
+        data,
+        head_offset + 4092,
+        crc32c(data[head_offset : head_offset + 4092]),
+    )
+
+
+def _preview_corruption_cases(
+    fixture_dir: Path,
+    manifest: dict[str, object],
+) -> Iterator[OracleCase]:
+    fixture_meta = manifest["fixtures"]
+    assert isinstance(fixture_meta, dict)
+    name = "preview-locator.licht"
+    info = fixture_meta[name]
+    assert isinstance(info, dict)
+    source = (fixture_dir / name).read_bytes()
+    gen2 = _generation(info, 2)
+    preview = gen2["preview"]
+    assert isinstance(preview, dict)
+    preview_offset = int(preview["offset"])
+    preview_bytes = int(preview["bytes"])
+    committed_end = int(gen2["committed_file_end"])
+    head_offset = HEAD_OFFSETS[1]
+
+    cases: tuple[tuple[str, int, int, int, str], ...] = (
+        (
+            "out-of-bounds",
+            committed_end,
+            1,
+            1,
+            "locator range extends past committed_file_end",
+        ),
+        (
+            "misaligned-offset",
+            preview_offset + 1,
+            preview_bytes,
+            1,
+            "locator offset is not 64-byte aligned",
+        ),
+        (
+            "zero-offset-nonzero-bytes",
+            0,
+            1,
+            1,
+            "zero preview_offset is paired with nonzero bytes/format",
+        ),
+        (
+            "unknown-format",
+            preview_offset,
+            preview_bytes,
+            2,
+            "preview_format is unknown in version 1.0",
+        ),
+        (
+            "index-size-disagreement",
+            preview_offset,
+            preview_bytes + 1,
+            1,
+            "locator size does not equal the indexed THMB stored span",
+        ),
+    )
+    for case_id, offset, size, format_value, description in cases:
+        mutated = bytearray(source)
+        struct.pack_into("<QII", mutated, head_offset + 112, offset, size, format_value)
+        _refresh_head(mutated, 1)
+        yield OracleCase(
+            f"preview-{case_id}",
+            bytes(mutated),
+            "open_gen_1",
+            f"{description}; slot B is invalid and slot A generation 1 remains authoritative",
+            name,
+        )
+
+    proj = _row(gen2, "PROJ")
+    mutated = bytearray(source)
+    struct.pack_into(
+        "<QII",
+        mutated,
+        head_offset + 112,
+        int(proj["payload_offset"]),
+        int(proj["stored_bytes"]),
+        1,
+    )
+    _refresh_head(mutated, 1)
+    yield OracleCase(
+        "preview-non-thmb-row",
+        bytes(mutated),
+        "open_gen_1",
+        "locator exactly targets the live PROJ span rather than THMB; slot B is invalid and slot A remains",
+        name,
+    )
+
+    thmb = _row(gen2, "THMB")
+    rows = gen2["rows"]
+    assert isinstance(rows, list)
+    thmb_row_index = next(
+        index
+        for index, row in enumerate(rows)
+        if isinstance(row, dict) and row["fourcc"] == "THMB"
+    )
+    index_offset = int(gen2["index_offset"])
+    index_bytes = int(gen2["index_bytes"])
+    commit_offset = int(gen2["commit_offset"])
+    header_offset = int(thmb["header_offset"])
+    mutated = bytearray(source)
+    mutated[index_offset + INDEX_HEADER_BYTES + thmb_row_index * 96 + 7] = 1
+    struct.pack_into("<H", mutated, header_offset + 28, 1)
+    header_crc = crc32c(mutated[header_offset : header_offset + 60])
+    struct.pack_into("<I", mutated, header_offset + 60, header_crc)
+    struct.pack_into(
+        "<I",
+        mutated,
+        index_offset + INDEX_HEADER_BYTES + thmb_row_index * 96 + 76,
+        header_crc,
+    )
+    index_crc = crc32c(mutated[index_offset : index_offset + index_bytes])
+    struct.pack_into("<II", mutated, commit_offset + 160, index_crc, index_crc)
+    mutated[commit_offset + 192] |= 1 << 1
+    _refresh_commit_and_heads(mutated, commit_offset, (1,))
+    yield OracleCase(
+        "preview-zstd-thmb",
+        bytes(mutated),
+        "open_gen_1",
+        "locator targets a structurally valid zstd THMB row instead of stored bytes; slot B is invalid and slot A remains",
+        name,
+    )
 
 
 def _random_cases(
@@ -500,6 +634,7 @@ def iter_oracle_cases(
     manifest = _load_manifest(root)
     if include_catalog:
         yield from _catalog_cases(root, manifest)
+        yield from _preview_corruption_cases(root, manifest)
     yield from _random_cases(root, manifest, random_cases)
 
 

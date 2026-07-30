@@ -196,8 +196,10 @@ older head surfaces a recovery warning — never silent. Both heads dead → exp
 | `SEQR` | `Timeline::saveToJson` inline + PLY-sequence clips + playhead/loop/speed (KEYFRAME nodes regenerate via `KeyframeSceneSync`) | JSON |
 | `METR` | Loss/PSNR history, accumulated training time, last eval — resume shows a populated graph | binary |
 
-Deferred beyond v1: `THMB` thumbnail, zstd archive-save mode, ZIP export, RNG chunk, tensor-native
-zero-copy layout. Deleted outright: `CKPX`, sections-only backup sidecar, `auto0/auto1` rotation,
+| `THMB` | Bounded project preview (PNG, ≤256px long edge app policy; ≤16 MiB hard format cap), stored uncompressed and reachable via the fixed-offset head-slot locator so foreign tools thumbnail a `.licht` without a container parser — spec §4.1 (decision 2026-07-30, Krita `mergedimage.png` evidence: fourcc reservation alone does not buy the 160-line-reader property, and fixed offsets freeze within major 1). Autosave/sidecar publishes never regenerate it. | binary |
+
+Deferred beyond v1: full-resolution `SUMM` render (fourcc reserved), zstd archive-save mode,
+ZIP export, RNG chunk, tensor-native zero-copy layout. Deleted outright: `CKPX`, sections-only backup sidecar, `auto0/auto1` rotation,
 `SUPERSEDED` flag, in-container CKPT retention (rollback comes from append generations until
 compaction).
 

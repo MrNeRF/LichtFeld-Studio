@@ -41,6 +41,10 @@ INDEX_ROW_BYTES = 96
 BLOCK_HEADER_BYTES = 64
 BLOCK_SIZE = 4 * 1024 * 1024
 BLOCK_REQUIRED_AT = 1024 * 1024 * 1024
+MAX_PREVIEW_BYTES = 16 * 1024 * 1024
+MAX_INDEX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+MAX_INDEX_STORED_BYTES = 520 * 1024 * 1024
+MAX_BLOCK_TABLE_BYTES = 512 * 1024 * 1024
 
 SUPER_MAGIC = b"\x89LFS\r\n\x1a\n"
 HEAD_MAGIC = b"LFSHEAD\x00"
@@ -192,6 +196,10 @@ def _checked_end(
     if end < offset or end > 0xFFFFFFFFFFFFFFFF:
         raise FormatError(path, offset, field, "u64 range without overflow", (offset, size))
     return end
+
+
+def _align(value: int, alignment: int) -> int:
+    return (value + alignment - 1) & ~(alignment - 1)
 
 
 def _require(
@@ -388,6 +396,17 @@ class Index:
 
 
 @dataclasses.dataclass(frozen=True)
+class PreviewLocator:
+    offset: int
+    bytes: int
+    format: int
+
+    @property
+    def format_name(self) -> str:
+        return "png" if self.format == 1 else f"unknown({self.format})"
+
+
+@dataclasses.dataclass(frozen=True)
 class Head:
     slot_id: int
     offset: int
@@ -400,6 +419,7 @@ class Head:
     commit_bytes: int
     committed_file_end: int
     commit_crc32c_echo: int
+    preview: PreviewLocator | None
     head_crc32c: int
     commit: Commit
     index: Index
@@ -452,6 +472,10 @@ class Container:
     @property
     def index(self) -> Index:
         return self.selected_head.index
+
+    @property
+    def preview(self) -> PreviewLocator | None:
+        return self.selected_head.preview
 
     @property
     def write_compatibility(self) -> WriteCompatibility:
@@ -643,13 +667,17 @@ def _parse_commit_record(
     _require(generation >= 1, reader.path, offset + 64, "commit.generation", ">= 1", generation)
     _require(snapshot_uuid != NULL_UUID, reader.path, offset + 112, "commit.snapshot_uuid", "non-null UUID", str(snapshot_uuid))
     _require(index_offset >= APPEND_OFFSET and index_offset % 64 == 0, reader.path, offset + 136, "commit.index_offset", ">= 0x10000 and 64-byte aligned", f"0x{index_offset:x}")
-    _require(index_stored_bytes > 0, reader.path, offset + 144, "commit.index_stored_bytes", "> 0", index_stored_bytes)
-    _require(index_uncompressed_bytes >= INDEX_HEADER_BYTES, reader.path, offset + 152, "commit.index_uncompressed_bytes", f">= {INDEX_HEADER_BYTES}", index_uncompressed_bytes)
+    _require(0 < index_stored_bytes <= MAX_INDEX_STORED_BYTES, reader.path, offset + 144, "commit.index_stored_bytes", f"between 1 and {MAX_INDEX_STORED_BYTES}", index_stored_bytes)
+    _require(INDEX_HEADER_BYTES <= index_uncompressed_bytes <= MAX_INDEX_UNCOMPRESSED_BYTES, reader.path, offset + 152, "commit.index_uncompressed_bytes", f"between {INDEX_HEADER_BYTES} and {MAX_INDEX_UNCOMPRESSED_BYTES}", index_uncompressed_bytes)
     _require(index_compression in COMPRESSION_NAMES, reader.path, offset + 168, "commit.index_compression", "0 or 1", index_compression)
+    if index_compression == COMPRESSION_STORED:
+        _require(index_stored_bytes == index_uncompressed_bytes, reader.path, offset + 144, "commit.index_sizes", "equal in stored mode", (index_stored_bytes, index_uncompressed_bytes))
     _require(_u32(data, 172) == 0, reader.path, offset + 172, "commit.commit_flags", 0, _u32(data, 172))
     _require(committed_end == offset + COMMIT_BYTES, reader.path, offset + 176, "commit.committed_file_end", f"0x{offset + COMMIT_BYTES:x}", f"0x{committed_end:x}")
     index_end = _checked_end(reader.path, index_offset, index_stored_bytes, "commit.index_range")
     _require(index_end <= offset, reader.path, offset + 136, "commit.index_range", f"end <= commit_offset 0x{offset:x}", f"[0x{index_offset:x},0x{index_end:x})")
+    expected_commit_offset = _align(index_end, 64)
+    _require(offset == expected_commit_offset, reader.path, offset + 136, "commit.index_to_commit_padding", f"first 64-byte boundary 0x{expected_commit_offset:x}", f"0x{offset:x}")
     if index_end < offset:
         padding = reader.read_exact(index_end, offset - index_end, "commit.index_to_commit_padding", authority_end=authority_end)
         _require_zero(padding, 0, len(padding), reader.path, index_end, "commit.index_to_commit_padding")
@@ -783,6 +811,9 @@ def _parse_block_table(
     _require(count == expected_count and count >= 1, reader.path, table_offset + 40, "block_table.block_count", expected_count, count)
     _require_zero(header, 52, 60, reader.path, table_offset, "block_table.reserved_1")
     entry_bytes = _checked_end(reader.path, 0, count * 4, "block_table.entries_size")
+    _require(entry_bytes <= MAX_BLOCK_TABLE_BYTES, reader.path, table_offset + 40, "block_table.entries_size", f"<= {MAX_BLOCK_TABLE_BYTES}", entry_bytes)
+    table_end = _checked_end(reader.path, table_offset + BLOCK_HEADER_BYTES, entry_bytes, "block_table.entries_range")
+    _require(table_end <= row.payload_offset, reader.path, table_offset + 40, "block_table.entries_range", f"end <= payload_offset 0x{row.payload_offset:x}", f"0x{table_end:x}")
     entries_data = reader.read_exact(table_offset + BLOCK_HEADER_BYTES, entry_bytes, "block_table.entries", authority_end=authority_end)
     entries_crc = _u32(header, 48)
     expected_entries_crc = crc32c(entries_data)
@@ -1044,6 +1075,9 @@ def _parse_head(reader: FileReader, sb: Superblock, slot_id: int, raw: bytes) ->
     commit_bytes = _u64(raw, 88)
     committed_end = _u64(raw, 96)
     commit_crc_echo = _u32(raw, 104)
+    preview_offset = _u64(raw, 112)
+    preview_bytes = _u32(raw, 120)
+    preview_format = _u32(raw, 124)
     _require(sequence >= 1, reader.path, offset + 16, f"head[{slot_id}].head_sequence", ">= 1", sequence)
     _require(generation >= 1, reader.path, offset + 24, f"head[{slot_id}].generation", ">= 1", generation)
     _require(project_uuid == sb.project_uuid, reader.path, offset + 32, f"head[{slot_id}].project_uuid", str(sb.project_uuid), str(project_uuid))
@@ -1054,7 +1088,19 @@ def _parse_head(reader: FileReader, sb: Superblock, slot_id: int, raw: bytes) ->
     _require(committed_end == commit_offset + COMMIT_BYTES, reader.path, offset + 96, f"head[{slot_id}].committed_file_end", f"0x{commit_offset + COMMIT_BYTES:x}", f"0x{committed_end:x}")
     _require(committed_end <= reader.size, reader.path, offset + 96, f"head[{slot_id}].committed_file_end", f"<= physical_size 0x{reader.size:x}", f"0x{committed_end:x}")
     _require(_u32(raw, 108) == 0, reader.path, offset + 108, f"head[{slot_id}].head_flags", 0, _u32(raw, 108))
-    _require_zero(raw, 112, 4092, reader.path, offset, f"head[{slot_id}].reserved")
+    preview: PreviewLocator | None
+    if preview_offset == 0:
+        _require(preview_bytes == 0, reader.path, offset + 120, f"head[{slot_id}].preview_bytes", "0 when preview_offset is zero", preview_bytes)
+        _require(preview_format == 0, reader.path, offset + 124, f"head[{slot_id}].preview_format", "0 when preview_offset is zero", preview_format)
+        preview = None
+    else:
+        _require(1 <= preview_bytes <= MAX_PREVIEW_BYTES, reader.path, offset + 120, f"head[{slot_id}].preview_bytes", f"between 1 and {MAX_PREVIEW_BYTES}", preview_bytes)
+        _require(preview_format == 1, reader.path, offset + 124, f"head[{slot_id}].preview_format", "1 (PNG)", preview_format)
+        _require(preview_offset % 64 == 0, reader.path, offset + 112, f"head[{slot_id}].preview_offset", "64-byte aligned", f"0x{preview_offset:x}")
+        preview_end = _checked_end(reader.path, preview_offset, preview_bytes, f"head[{slot_id}].preview_range")
+        _require(preview_end <= committed_end, reader.path, offset + 112, f"head[{slot_id}].preview_range", f"end <= committed_file_end 0x{committed_end:x}", f"[0x{preview_offset:x},0x{preview_end:x})")
+        preview = PreviewLocator(preview_offset, preview_bytes, preview_format)
+    _require_zero(raw, 128, 4092, reader.path, offset, f"head[{slot_id}].reserved")
 
     commit = _parse_commit_record(reader, sb, commit_offset, committed_end)
     _require(commit.commit_uuid == commit_uuid, reader.path, offset + 64, f"head[{slot_id}].commit_uuid", str(commit.commit_uuid), str(commit_uuid))
@@ -1063,6 +1109,17 @@ def _parse_head(reader: FileReader, sb: Superblock, slot_id: int, raw: bytes) ->
     _require(commit.crc32c == commit_crc_echo, reader.path, offset + 104, f"head[{slot_id}].commit_crc32c_echo", _fmt_u32(commit.crc32c), _fmt_u32(commit_crc_echo))
     lineage = _validate_lineage(reader, sb, commit)
     index = _parse_index(reader, sb, commit, lineage)
+    if preview is not None:
+        matching_rows = [
+            row
+            for row in index.rows
+            if row.row_kind == ROW_LIVE
+            and row.fourcc == b"THMB"
+            and row.payload_offset == preview.offset
+            and row.stored_bytes == preview.bytes
+        ]
+        _require(len(matching_rows) == 1, reader.path, offset + 112, f"head[{slot_id}].preview_locator", "exact stored span of one live THMB index row", f"offset=0x{preview.offset:x}, bytes={preview.bytes}")
+        _require(matching_rows[0].compression == COMPRESSION_STORED, reader.path, offset + 112, f"head[{slot_id}].preview_compression", "stored (none)", COMPRESSION_NAMES.get(matching_rows[0].compression, matching_rows[0].compression))
     return Head(
         slot_id=slot_id,
         offset=offset,
@@ -1075,6 +1132,7 @@ def _parse_head(reader: FileReader, sb: Superblock, slot_id: int, raw: bytes) ->
         commit_bytes=commit_bytes,
         committed_file_end=committed_end,
         commit_crc32c_echo=commit_crc_echo,
+        preview=preview,
         head_crc32c=got_head_crc,
         commit=commit,
         index=index,
@@ -1565,6 +1623,16 @@ def _row_to_dict(row: IndexRow) -> dict[str, object]:
     return result
 
 
+def _preview_to_dict(preview: PreviewLocator | None) -> dict[str, object] | None:
+    if preview is None:
+        return None
+    return {
+        "offset": preview.offset,
+        "bytes": preview.bytes,
+        "format": preview.format_name,
+    }
+
+
 def container_to_dict(container: Container) -> dict[str, object]:
     sb = container.superblock
     commit = container.commit
@@ -1590,6 +1658,7 @@ def container_to_dict(container: Container) -> dict[str, object]:
                 "commit_uuid": str(attempt.head.commit_uuid),
                 "commit_offset": attempt.head.commit_offset,
                 "committed_file_end": attempt.head.committed_file_end,
+                "preview": _preview_to_dict(attempt.head.preview),
                 "head_crc32c": _fmt_u32(attempt.head.head_crc32c),
             }
             if attempt.compatibility_error is not None:
@@ -1624,6 +1693,7 @@ def container_to_dict(container: Container) -> dict[str, object]:
             "snapshot_uuid": str(commit.snapshot_uuid),
             "commit_offset": commit.offset,
             "committed_file_end": commit.committed_file_end,
+            "preview": _preview_to_dict(container.preview),
             "index_offset": commit.index_offset,
             "index_stored_bytes": commit.index_stored_bytes,
             "index_uncompressed_bytes": commit.index_uncompressed_bytes,
@@ -1674,6 +1744,15 @@ def _print_human(container: Container) -> None:
         else:
             print(f"head {attempt['slot_id']}: invalid: {attempt['error']}")
     print(f"selected: slot={selected['slot_id']} sequence={selected['head_sequence']} generation={selected['generation']} kind={selected['commit_kind']} commit={selected['commit_uuid']}")
+    if selected["preview"] is None:
+        print("preview: absent")
+    else:
+        preview = selected["preview"]
+        assert isinstance(preview, dict)
+        print(
+            f"preview: format={preview['format']} offset=0x{preview['offset']:x} "
+            f"bytes={preview['bytes']}"
+        )
     print(f"index: offset=0x{selected['index_offset']:x} rows={len(container.index.rows)} compression={selected['index_compression']}")
     for row in container.index.rows:
         print(f"  {row.key_text} kind={row.kind_name} version={row.chunk_version} header=0x{row.header_offset:x} payload=0x{row.payload_offset:x} stored={row.stored_bytes} crc={_fmt_u32(row.payload_crc32c)}")
@@ -1708,6 +1787,16 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument("--output", "-o", required=True)
     extract_parser.add_argument("--stored", action="store_true", help="write stored bytes instead of decoded payload")
     extract_parser.add_argument("--force", action="store_true", help="replace an existing output file")
+
+    preview_parser = subparsers.add_parser(
+        "preview",
+        help="extract the selected PNG preview through the index-free foreign-reader path",
+    )
+    preview_parser.add_argument("file")
+    preview_parser.add_argument("--output", "-o", required=True)
+    preview_parser.add_argument(
+        "--force", action="store_true", help="replace an existing output file"
+    )
 
     recovery_parser = subparsers.add_parser("recovery", help="evaluate sidecar candidates against the current master head")
     recovery_parser.add_argument("master")
@@ -1760,6 +1849,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             with output_path.open(mode) as output:
                 written = extract_payload(container, row, output, stored=args.stored)
             print(f"extracted {written} byte(s) from {row.key_text} to {output_path}")
+            return 0
+        if args.command == "preview":
+            try:
+                from .foreign_preview import extract_foreign_preview
+            except ImportError:
+                from foreign_preview import extract_foreign_preview
+
+            preview = extract_foreign_preview(
+                args.file, args.output, force=args.force
+            )
+            print(
+                f"extracted {preview.bytes} PNG byte(s) from generation "
+                f"{preview.generation} at 0x{preview.offset:x} to {args.output}"
+            )
             return 0
         if args.command == "recovery":
             decision = evaluate_recovery(args.master, args.sidecars)

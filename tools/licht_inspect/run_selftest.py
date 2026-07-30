@@ -29,8 +29,9 @@ try:
         verify_container,
     )
     from .make_fixtures import build_fixture_bytes
-    from .oracle_corpus import iter_oracle_cases
+    from .oracle_corpus import PREVIEW_CORRUPTION_CASE_COUNT, iter_oracle_cases
     from .crc32c import crc32c
+    from .foreign_preview import read_foreign_preview
 except ImportError:  # Direct script execution.
     from licht_inspect import (
         FormatError,
@@ -47,8 +48,9 @@ except ImportError:  # Direct script execution.
         verify_container,
     )
     from make_fixtures import build_fixture_bytes
-    from oracle_corpus import iter_oracle_cases
+    from oracle_corpus import PREVIEW_CORRUPTION_CASE_COUNT, iter_oracle_cases
     from crc32c import crc32c
+    from foreign_preview import read_foreign_preview
 
 
 BYTE_ERROR_RE = re.compile(r": 0x[0-9a-f]{16} [^:]+: expected .+, got .+")
@@ -202,6 +204,19 @@ def _fixture_check(
         if not any(row.kind_name == "tombstone" for row in container.index.rows):
             raise AssertionError("selected index lacks tombstone row")
         reports.append("tombstone_encoding=yes")
+    if info["fixture_class"] == "preview_locator":
+        if container.preview is None:
+            raise AssertionError("preview fixture has no selected locator")
+        foreign_locator, foreign_bytes = read_foreign_preview(path)
+        if (
+            foreign_locator.offset != container.preview.offset
+            or foreign_locator.bytes != container.preview.bytes
+            or not foreign_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+        ):
+            raise AssertionError(
+                "foreign preview path disagrees with the full reader"
+            )
+        reports.append("foreign_preview=yes")
     return f"{outcome}; " + ", ".join(reports)
 
 
@@ -239,9 +254,11 @@ def _cli_surface_check(fixture_dir: Path) -> str:
 
     unsupported = fixture_dir / "unsupported-newer-single-head.licht"
     write_unsafe = fixture_dir / "write-unsafe.licht"
+    preview_source = fixture_dir / "preview-locator.licht"
 
     with tempfile.TemporaryDirectory(prefix="licht-selftest-cli-") as temp_dir:
         output = Path(temp_dir) / "proj.json"
+        preview_output = Path(temp_dir) / "preview.png"
         sink = io.StringIO()
         with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
             inspect_rc = cli_main(["inspect", str(source), "--json"])
@@ -258,18 +275,31 @@ def _cli_surface_check(fixture_dir: Path) -> str:
                     str(output),
                 ]
             )
+            preview_rc = cli_main(
+                [
+                    "preview",
+                    str(preview_source),
+                    "--output",
+                    str(preview_output),
+                ]
+            )
             unsupported_start = sink.tell()
             unsupported_rc = cli_main(["inspect", str(unsupported), "--json"])
             unsupported_dump = sink.getvalue()[unsupported_start:]
             write_unsafe_start = sink.tell()
             write_unsafe_rc = cli_main(["inspect", str(write_unsafe), "--json"])
             write_unsafe_dump = sink.getvalue()[write_unsafe_start:]
-        if (inspect_rc, verify_rc, extract_rc) != (0, 0, 0):
+        if (inspect_rc, verify_rc, extract_rc, preview_rc) != (0, 0, 0, 0):
             raise AssertionError(
-                f"CLI return codes {(inspect_rc, verify_rc, extract_rc)}: {sink.getvalue()}"
+                "CLI return codes "
+                f"{(inspect_rc, verify_rc, extract_rc, preview_rc)}: "
+                f"{sink.getvalue()}"
             )
         if output.read_bytes() != decoded.getvalue():
             raise AssertionError("CLI extraction differs from API extraction")
+        _, preview_bytes = read_foreign_preview(preview_source)
+        if preview_output.read_bytes() != preview_bytes:
+            raise AssertionError("CLI foreign preview extraction differs")
         if unsupported_rc != 4:
             raise AssertionError(
                 f"unsupported inspect expected rc 4, got {unsupported_rc}: {unsupported_dump}"
@@ -290,7 +320,7 @@ def _cli_surface_check(fixture_dir: Path) -> str:
         if not isinstance(write_compatibility, dict) or write_compatibility.get("safe") is not False:
             raise AssertionError("inspect did not classify the file write-unsafe")
     return (
-        "inspect, extract, verify, unsupported-newer dump, and write-unsafe "
+        "inspect, extract, verify, foreign preview, unsupported-newer dump, and write-unsafe "
         "classification passed"
     )
 
@@ -424,7 +454,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         )
     test.check("sidecar-recovery-predicate", lambda: _recovery_check(fixture_dir))
-    test.check("CLI inspect/extract/verify", lambda: _cli_surface_check(fixture_dir))
+    test.check(
+        "CLI inspect/extract/verify/preview",
+        lambda: _cli_surface_check(fixture_dir),
+    )
     test.check(
         "spec-oracle-corpus",
         lambda: _oracle_check(fixture_dir, args.oracle_sample),
@@ -435,7 +468,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     print(
         f"SELFTEST PASS: {len(fixtures)} fixture classes + recovery + CLI + "
-        f"{args.oracle_sample + len(fixtures)} oracle cases"
+        f"{args.oracle_sample + len(fixtures) + PREVIEW_CORRUPTION_CASE_COUNT} "
+        "oracle cases"
     )
     return 0
 
