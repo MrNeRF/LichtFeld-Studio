@@ -3,9 +3,8 @@
 Status: **normative** for the chunk payloads named `PCLD` and `MESH` (owner decision 2026-07-30,
 matrix gap #12). The container grammar (`docs/licht_format_spec.md`) treats these bytes as an
 opaque chunk payload; this document defines what is inside. Field ownership is
-`docs/licht_ownership_matrix.md`. Design provenance: point-cloud interchange study R1/R3
-(`format_study/pointcloud.md`) — self-describing property tables in the RAD shape, explicitly
-not LAS's closed record formats.
+`docs/licht_ownership_matrix.md`. Design rationale: self-describing property tables in the RAD shape — extensible by value, not
+by record format — explicitly avoiding LAS-style closed record layouts.
 
 Common rules (both payloads):
 

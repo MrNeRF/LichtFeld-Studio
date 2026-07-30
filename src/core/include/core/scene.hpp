@@ -59,6 +59,11 @@ namespace lfs::core {
         PLY_SEQUENCE    // Container for ordered PLY sequence frames
     };
 
+    enum class SelectionDomain : uint8_t {
+        Splat = 1,
+        PointCloud = 2,
+    };
+
     struct CropBoxData {
         glm::vec3 min{-1.0f, -1.0f, -1.0f};
         glm::vec3 max{1.0f, 1.0f, 1.0f};
@@ -76,6 +81,14 @@ namespace lfs::core {
         glm::vec3 color{1.0f, 1.0f, 0.0f};
         float line_width = 2.0f;
         float flash_intensity = 0.0f;
+    };
+
+    struct GeoreferencePose {
+        glm::dquat rotation{1.0, 0.0, 0.0, 0.0};
+        glm::dvec3 translation{0.0};
+
+        friend bool operator==(const GeoreferencePose&,
+                               const GeoreferencePose&) = default;
     };
 
     inline constexpr float DEFAULT_KEYFRAME_FOCAL_MM = 35.0f;
@@ -128,6 +141,7 @@ namespace lfs::core {
         // In-memory payload no longer matches the source file (edited, generated,
         // pasted, ...); drives the embed-vs-reference decision on project save.
         bool payload_diverged = false;
+        std::optional<GeoreferencePose> georef_pose;
 
         std::string image_path;
         std::string mask_path;
@@ -173,6 +187,12 @@ namespace lfs::core {
             std::string name;
             NodeId parent = NULL_NODE;
             size_t gaussian_count = 0;
+            glm::mat4 local_transform{1.0f};
+            bool visible = true;
+            bool locked = false;
+            bool training_enabled = true;
+            bool payload_diverged = false;
+            std::optional<GeoreferencePose> georef_pose;
 
             std::unique_ptr<lfs::core::SplatData> model;
             std::shared_ptr<lfs::core::PointCloud> point_cloud;
@@ -181,6 +201,16 @@ namespace lfs::core {
             std::unique_ptr<EllipsoidData> ellipsoid;
             std::shared_ptr<lfs::core::Camera> camera;
             std::unique_ptr<KeyframeData> keyframe;
+        };
+
+        struct RestoreSelectionState {
+            std::shared_ptr<lfs::core::Tensor> splat_mask;
+            std::shared_ptr<lfs::core::Tensor> point_cloud_mask;
+            std::vector<SelectionGroup> groups;
+            uint8_t active_group_id = 0;
+            uint8_t next_group_id = 1;
+            bool has_splat_selection = false;
+            bool has_point_cloud_selection = false;
         };
 
         enum class MutationType : uint32_t {
@@ -256,6 +286,15 @@ namespace lfs::core {
         // Identity-preserving insert for history and future SCNG hydration only.
         // Rejects nil/live-duplicate UUIDs and never mints a replacement UUID.
         [[nodiscard]] NodeId restoreNodeWithUuid(RestoreNodeDesc desc);
+        // A restore stage owns a complete replacement scene but binds node
+        // observables to target. Building and populating it is fallible and
+        // must happen before commit. commitRestoreStage is a move-only,
+        // allocation-free state exchange and therefore cannot fail.
+        [[nodiscard]] static std::unique_ptr<Scene>
+        createRestoreStage(Scene& target);
+        void installRestoreSelectionState(
+            RestoreSelectionState state) noexcept;
+        void commitRestoreStage(std::unique_ptr<Scene> staged) noexcept;
         void removeKeyframeNodes();
         [[nodiscard]] bool reparent(NodeId node, NodeId new_parent);
         [[nodiscard]] bool moveNode(NodeId node, NodeId new_parent, int index);
@@ -374,10 +413,22 @@ namespace lfs::core {
         [[nodiscard]] std::vector<bool> getSelectedNodeMask(const std::vector<std::string>& selected_node_names) const;
 
         std::shared_ptr<lfs::core::Tensor> getSelectionMask() const;
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor>
+        getSelectionMask(SelectionDomain domain) const;
+        [[nodiscard]] size_t
+        getSelectionCapacity(SelectionDomain domain) const;
         [[nodiscard]] PerNodeSelectionSlices capturePerNodeSelectionSlices() const;
+        [[nodiscard]] PerNodeSelectionSlices
+        capturePerNodeSelectionSlices(SelectionDomain domain) const;
         void applyPerNodeSelectionSlices(const PerNodeSelectionSlices& slices);
+        void applyPerNodeSelectionSlices(
+            SelectionDomain domain,
+            const PerNodeSelectionSlices& slices);
         void setSelection(const std::vector<size_t>& selected_indices);
         void setSelectionMask(std::shared_ptr<lfs::core::Tensor> mask);
+        void setSelectionMask(
+            SelectionDomain domain,
+            std::shared_ptr<lfs::core::Tensor> mask);
         void setSelectionMaskWithGroupCounts(std::shared_ptr<lfs::core::Tensor> mask,
                                              size_t selected_count,
                                              const SelectionGroupCounts& group_counts);
@@ -468,6 +519,9 @@ namespace lfs::core {
         size_t applyDeleted();
 
     private:
+        struct RestoreStageTag {};
+        explicit Scene(RestoreStageTag, Scene& target) noexcept;
+
         std::vector<std::unique_ptr<SceneNode>> nodes_;
         std::unordered_map<NodeId, size_t> id_to_index_;
         std::unordered_map<std::string, NodeId> name_to_id_;
@@ -479,7 +533,9 @@ namespace lfs::core {
         void flushMutations();
         void removeConsolidatedNodeData(NodeId id);
         void rebuildConsolidatedTransformIndices() const;
-        [[nodiscard]] NodeId insertNode(std::unique_ptr<SceneNode> node);
+        [[nodiscard]] NodeId insertNode(
+            std::unique_ptr<SceneNode> node,
+            bool allow_duplicate_name = false);
         mutable std::shared_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_visible_selection_indices_;
@@ -497,7 +553,10 @@ namespace lfs::core {
 
         mutable std::shared_mutex selection_mutex_;
         mutable std::shared_ptr<lfs::core::Tensor> selection_mask_;
+        mutable std::shared_ptr<lfs::core::Tensor>
+            point_cloud_selection_mask_;
         mutable bool has_selection_ = false;
+        mutable bool has_point_cloud_selection_ = false;
 
         std::vector<SelectionGroup> selection_groups_;
         uint8_t active_selection_group_ = 1;
@@ -512,6 +571,11 @@ namespace lfs::core {
         void removeNodeInternal(NodeId id, bool keep_children);
         void validateConsolidatedSelectionTopology() const;
         [[nodiscard]] size_t currentSelectionCapacity() const;
+        [[nodiscard]] size_t
+        currentSelectionCapacity(SelectionDomain domain) const;
+        [[nodiscard]] size_t
+        nodeSelectionCapacity(const SceneNode& node,
+                              SelectionDomain domain) const;
         [[nodiscard]] lfs::core::Tensor liveSelectionMask(size_t expected_size,
                                                           Device device,
                                                           DataType dtype) const;
@@ -520,6 +584,9 @@ namespace lfs::core {
             size_t expected_size,
             size_t* selected_count = nullptr) const;
         void resizeSelectionIfSizeMismatch(size_t expected_size);
+        void resizeSelectionIfSizeMismatch(
+            SelectionDomain domain,
+            size_t expected_size);
 
         SelectionGroup* findGroup(uint8_t id);
         const SelectionGroup* findGroup(uint8_t id) const;
@@ -534,6 +601,9 @@ namespace lfs::core {
         // Derived display label retained for additive name-based APIs. UUID is
         // the sole authority for resolving the training node.
         std::string training_model_node_;
+
+        Scene* restore_target_ = nullptr;
+        bool restore_staging_ = false;
     };
 
 } // namespace lfs::core

@@ -112,7 +112,8 @@ namespace lfs::io {
                 .scene_center = Tensor::zeros({3}, Device::CPU, DataType::Float32),
                 .loader_used = name(),
                 .load_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time),
-                .warnings = {"Validation mode - point cloud not loaded"}};
+                .warnings = {"Validation mode - point cloud not loaded"},
+                .georeference = std::nullopt};
         }
 
         // Load the dataset
@@ -294,7 +295,9 @@ namespace lfs::io {
             }
 
             // Centralize scene
-            scene_center = centralize_scene(cameras, point_cloud, options.centralize, scene_center);
+            auto centralization =
+                centralize_scene(cameras, point_cloud, options.centralize, scene_center);
+            scene_center = std::move(centralization.scene_center);
 
             if (options.progress) {
                 options.progress(100.0f, "Blender/NeRF loading complete");
@@ -317,7 +320,8 @@ namespace lfs::io {
                 .images_have_alpha = images_have_alpha,
                 .loader_used = name(),
                 .load_time = load_time,
-                .warnings = std::move(warnings)};
+                .warnings = std::move(warnings),
+                .georeference = std::move(centralization.georeference)};
 
             LOG_INFO("Blender/NeRF dataset loaded successfully in {}ms", load_time.count());
             LOG_INFO("  - {} cameras", num_cameras);

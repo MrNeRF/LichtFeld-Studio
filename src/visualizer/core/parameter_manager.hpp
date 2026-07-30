@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 #include <atomic>
@@ -11,6 +12,10 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+
+namespace lfs::io::project {
+    struct ParameterManagerSnapshot;
+}
 
 namespace lfs::vis {
 
@@ -56,6 +61,14 @@ namespace lfs::vis {
             const std::filesystem::path& output_path) const;
 
         [[nodiscard]] bool isLoaded() const { return loaded_; }
+
+        [[nodiscard]] lfs::Result<lfs::io::project::ParameterManagerSnapshot>
+        capturePendingProjectState() const;
+        // Restores only ParameterManager's role-qualified next-run/session
+        // values. It deliberately has no TrainerManager dependency and cannot
+        // alter an active trainer.
+        lfs::Result<void> restorePendingProjectState(
+            const lfs::io::project::ParameterManagerSnapshot& snapshot);
 
         void markDirty() { dirty_.store(true, std::memory_order_release); }
         bool consumeDirty() { return dirty_.exchange(false, std::memory_order_acq_rel); }

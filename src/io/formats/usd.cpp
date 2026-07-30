@@ -64,6 +64,21 @@ namespace lfs::io {
     using lfs::core::Tensor;
 
     namespace {
+        lfs::Error usd_project_error(std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = {},
+                .native = std::nullopt,
+            });
+        }
+
         constexpr int MAX_SUPPORTED_SH_DEGREE = 3;
         constexpr float SCENE_SCALE = 0.5f;
         constexpr float MIN_SCALE = 1e-12f;
@@ -438,7 +453,8 @@ namespace lfs::io {
             return extension;
         }
 
-        std::expected<SplatData, std::string> load_particlefield_prim(const pxr::UsdPrim& prim) {
+        std::expected<SplatData, std::string> load_particlefield_prim(
+            const pxr::UsdPrim& prim, const bool apply_stage_units) {
             std::optional<std::vector<float>> positions;
             std::optional<std::vector<float>> rotations;
             std::optional<std::vector<float>> scales;
@@ -609,7 +625,9 @@ namespace lfs::io {
                 SCENE_SCALE);
 
             maybe_apply_world_transform(prim, splat_data);
-            maybe_apply_stage_linear_units(prim.GetStage(), splat_data);
+            if (apply_stage_units) {
+                maybe_apply_stage_linear_units(prim.GetStage(), splat_data);
+            }
             return splat_data;
         }
 
@@ -714,7 +732,38 @@ namespace lfs::io {
                  particlefield_prim->GetPath().GetString(),
                  particlefield_prim->GetTypeName().GetString());
 
-        return load_particlefield_prim(*particlefield_prim);
+        return load_particlefield_prim(*particlefield_prim, true);
+    }
+
+    lfs::Result<UsdProjectUnitLoad> load_usd_project_units(
+        const std::filesystem::path& filepath) {
+        LOG_INFO("Loading USD file in authored project units: {}",
+                 lfs::core::path_to_utf8(filepath));
+        const auto stage = pxr::UsdStage::Open(lfs::core::path_to_utf8(filepath));
+        if (!stage) {
+            return usd_project_error(std::format(
+                "Failed to open USD stage: {}",
+                lfs::core::path_to_utf8(filepath)));
+        }
+        const auto particlefield_prim = find_particlefield_prim(stage);
+        if (!particlefield_prim) {
+            return usd_project_error(std::format(
+                "{}: {}", lfs::core::path_to_utf8(filepath),
+                particlefield_prim.error()));
+        }
+        auto data = load_particlefield_prim(*particlefield_prim, false);
+        if (!data) {
+            return usd_project_error(std::move(data).error());
+        }
+        const double meters_per_unit = pxr::UsdGeomGetStageMetersPerUnit(stage);
+        if (!std::isfinite(meters_per_unit) || meters_per_unit <= 0.0) {
+            return usd_project_error(std::format(
+                "USD stage has invalid metersPerUnit {}", meters_per_unit));
+        }
+        return UsdProjectUnitLoad{
+            .data = std::move(*data),
+            .meters_per_unit = meters_per_unit,
+        };
     }
 
     std::expected<void, std::string> validate_usd(const std::filesystem::path& filepath) {

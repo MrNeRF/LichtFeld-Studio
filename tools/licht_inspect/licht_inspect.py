@@ -21,8 +21,10 @@ from typing import BinaryIO, Iterable, Iterator, Sequence
 
 try:
     from .crc32c import crc32c
+    from .geometry_payloads import decode_geometry_payload
 except ImportError:  # Direct script execution.
     from crc32c import crc32c
+    from geometry_payloads import decode_geometry_payload
 
 try:
     import zstandard as _zstd
@@ -1768,6 +1770,43 @@ def _print_human(container: Container) -> None:
         print(f"warning: {warning}")
 
 
+def _print_geometry_human(decoded: dict[str, object]) -> None:
+    fourcc = decoded["fourcc"]
+    if fourcc == "PCLD":
+        print(
+            f"PCLD v{decoded['payload_version']}: "
+            f"points={decoded['point_count']} "
+            f"properties={decoded['property_count']} "
+            f"coordinates={decoded['coord_encoding']}"
+        )
+        if "attribute_names" in decoded:
+            print(
+                "attribute_names: "
+                + ", ".join(str(item) for item in decoded["attribute_names"])  # type: ignore[union-attr]
+            )
+    else:
+        print(
+            f"MESH v{decoded['payload_version']}: "
+            f"vertices={decoded['vertex_count']} "
+            f"indices={decoded['index_count']} "
+            f"triangles={decoded['triangle_count']} "
+            f"submeshes={decoded['submesh_count']} "
+            f"materials={decoded['material_count']} "
+            f"textures={decoded['texture_count']}"
+        )
+    properties = decoded["properties"]
+    assert isinstance(properties, list)
+    for prop in properties:
+        assert isinstance(prop, dict)
+        status = "known" if prop["known"] else "opaque"
+        print(
+            f"  {prop['name']}: components={prop['components']} "
+            f"dtype={prop['dtype']} encoding={prop['encoding']} "
+            f"offset=0x{prop['byte_offset']:x} "
+            f"bytes={prop['byte_length']} {status}"
+        )
+
+
 def _build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1787,6 +1826,15 @@ def _build_argument_parser() -> argparse.ArgumentParser:
     extract_parser.add_argument("--output", "-o", required=True)
     extract_parser.add_argument("--stored", action="store_true", help="write stored bytes instead of decoded payload")
     extract_parser.add_argument("--force", action="store_true", help="replace an existing output file")
+
+    decode_parser = subparsers.add_parser(
+        "decode",
+        help="decode and validate one PCLD or MESH payload",
+    )
+    decode_parser.add_argument("file")
+    decode_parser.add_argument("--fourcc", required=True, choices=("PCLD", "MESH"))
+    decode_parser.add_argument("--uuid", required=True, dest="instance_uuid")
+    decode_parser.add_argument("--json", action="store_true")
 
     preview_parser = subparsers.add_parser(
         "preview",
@@ -1849,6 +1897,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             with output_path.open(mode) as output:
                 written = extract_payload(container, row, output, stored=args.stored)
             print(f"extracted {written} byte(s) from {row.key_text} to {output_path}")
+            return 0
+        if args.command == "decode":
+            instance_uuid = uuid.UUID(args.instance_uuid)
+            container = open_container(args.file)
+            row = container.find_row(args.fourcc, instance_uuid)
+            output = io.BytesIO()
+            extract_payload(container, row, output)
+            decoded = decode_geometry_payload(
+                output.getvalue(),
+                args.fourcc,
+                path=container.path,
+                base_offset=row.payload_offset,
+            )
+            if args.json:
+                print(json.dumps(decoded, indent=2, sort_keys=True))
+            else:
+                _print_geometry_human(decoded)
             return 0
         if args.command == "preview":
             try:

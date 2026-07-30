@@ -146,6 +146,11 @@ set(TEST_FILES
     test_atomic_output.cpp
     test_json_chapter_dom.cpp
     test_project_container.cpp
+    test_geometry_payload.cpp
+    test_selection_chapter.cpp
+    test_project_chapters.cpp
+    test_project_document.cpp
+    test_p3_matrix_proof.cpp
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp

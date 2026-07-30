@@ -1262,7 +1262,8 @@ namespace lfs::core {
 
         Tensor loaded_deleted;
         if (has_deleted) {
-            Tensor deleted_cuda = std::move(deleted).cuda();
+            Tensor deleted_cuda =
+                std::move(deleted).to(DataType::Bool).cuda();
             if (deleted_cuda.sum_scalar() != 0.0f)
                 loaded_deleted = std::move(deleted_cuda);
         }

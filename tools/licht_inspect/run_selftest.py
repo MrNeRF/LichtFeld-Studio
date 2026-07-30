@@ -399,7 +399,10 @@ def _oracle_check(fixture_dir: Path, random_sample: int) -> str:
 
 
 def _independence_check(tool_dir: Path) -> str:
-    parser_text = (tool_dir / "licht_inspect.py").read_text(encoding="utf-8")
+    parser_text = "\n".join(
+        (tool_dir / name).read_text(encoding="utf-8")
+        for name in ("licht_inspect.py", "geometry_payloads.py")
+    )
     forbidden = ("make_fixtures", "src.io", "project_container", "checkpoint_format")
     hits = [token for token in forbidden if token in parser_text]
     if hits:

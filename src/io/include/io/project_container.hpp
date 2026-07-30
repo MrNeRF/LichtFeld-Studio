@@ -79,6 +79,14 @@ namespace lfs::io::project {
         }};
     }
 
+    inline constexpr Fourcc FOURCC_PROJ = make_fourcc('P', 'R', 'O', 'J');
+    inline constexpr Fourcc FOURCC_PRMS = make_fourcc('P', 'R', 'M', 'S');
+    inline constexpr Fourcc FOURCC_SCNG = make_fourcc('S', 'C', 'N', 'G');
+    inline constexpr Fourcc FOURCC_SELM = make_fourcc('S', 'E', 'L', 'M');
+    inline constexpr Fourcc FOURCC_REFS = make_fourcc('R', 'E', 'F', 'S');
+    inline constexpr Fourcc FOURCC_SPLT = make_fourcc('S', 'P', 'L', 'T');
+    inline constexpr Fourcc FOURCC_PCLD = make_fourcc('P', 'C', 'L', 'D');
+    inline constexpr Fourcc FOURCC_MESH = make_fourcc('M', 'E', 'S', 'H');
     inline constexpr Fourcc FOURCC_CKPT = make_fourcc('C', 'K', 'P', 'T');
     inline constexpr Fourcc FOURCC_THMB = make_fourcc('T', 'H', 'M', 'B');
 

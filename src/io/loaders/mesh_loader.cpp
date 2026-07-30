@@ -453,7 +453,8 @@ namespace lfs::io {
             .scene_center = Tensor::zeros({3}, Device::CPU),
             .loader_used = name(),
             .load_time = load_time,
-            .warnings = {}};
+            .warnings = {},
+            .georeference = std::nullopt};
 
         return result;
     }

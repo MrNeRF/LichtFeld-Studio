@@ -44,10 +44,9 @@ namespace lfs::io {
     // supported: empty segments and keys containing '.' cannot be addressed
     // through this API. Such keys are still retained and serialized unchanged.
     class LFS_IO_API JsonChapterDom {
-    private:
+    public:
         using Json = nlohmann::ordered_json;
 
-    public:
         class ConstElement;
 
         // Locator-backed mutable view of one UUID-addressed array element.
@@ -71,6 +70,8 @@ namespace lfs::io {
 
             [[nodiscard]] lfs::Result<bool> remove(std::string_view path);
             [[nodiscard]] bool exists() const;
+            [[nodiscard]] std::optional<Json> get_json(std::string_view path) const;
+            [[nodiscard]] lfs::Result<void> set_json(std::string_view path, Json value);
 
         private:
             friend class JsonChapterDom;
@@ -95,6 +96,7 @@ namespace lfs::io {
             }
 
             [[nodiscard]] bool exists() const;
+            [[nodiscard]] std::optional<Json> get_json(std::string_view path) const;
 
         private:
             friend class JsonChapterDom;
@@ -140,6 +142,8 @@ namespace lfs::io {
         }
 
         [[nodiscard]] lfs::Result<bool> remove(std::string_view path);
+        [[nodiscard]] std::optional<Json> get_json(std::string_view path) const;
+        [[nodiscard]] lfs::Result<void> set_json(std::string_view path, Json value);
 
         // UUIDs use the exact canonical textual form
         // xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx with lowercase hex digits.
@@ -148,6 +152,8 @@ namespace lfs::io {
                                                              std::string_view uuid) const;
         [[nodiscard]] lfs::Result<Element> array_upsert(std::string_view path, std::string_view uuid);
         [[nodiscard]] lfs::Result<bool> array_remove(std::string_view path, std::string_view uuid);
+        [[nodiscard]] lfs::Result<std::vector<std::string>>
+        array_uuids(std::string_view path) const;
 
     private:
         explicit JsonChapterDom(Json root)

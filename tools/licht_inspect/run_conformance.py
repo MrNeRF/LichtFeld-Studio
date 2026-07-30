@@ -22,6 +22,7 @@ try:
         timed_result,
     )
     from .conformance_fuzz import run_mutation_fuzzer
+    from .conformance_geometry import run_geometry_payloads
     from .conformance_lifecycle import run_append_lifecycle
     from .conformance_scale import run_scale_edges
     from .conformance_truncation import run_truncation_sweep
@@ -37,6 +38,7 @@ except ImportError:  # Direct script execution.
         timed_result,
     )
     from conformance_fuzz import run_mutation_fuzzer
+    from conformance_geometry import run_geometry_payloads
     from conformance_lifecycle import run_append_lifecycle
     from conformance_scale import run_scale_edges
     from conformance_truncation import run_truncation_sweep
@@ -163,6 +165,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _run_category(
                     "semantic-adversaries",
                     lambda: run_semantic_adversaries(config),
+                )
+            )
+            results.append(
+                _run_category(
+                    "geometry-payloads",
+                    lambda: run_geometry_payloads(config),
                 )
             )
             results.append(

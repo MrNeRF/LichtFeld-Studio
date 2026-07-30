@@ -298,6 +298,11 @@ Each is silent data loss today and blocks fidelity regardless of container outco
 
 ## 6. Explicit non-goals / documented semantics
 
+- **Undo history is not project state** (owner decision 2026-07-30, options weighed incl. a
+  bounded HIST chapter): reopening a project restores the exact saved state with an empty undo
+  stack. The undo substrate must never become a serialization target of this format, and
+  autosave never serializes undo entries. Opening or partially opening a project clears live
+  undo history; replay against changed topology stays fail-closed (throws, never mis-applies).
 - **Statistical resume, not bit-exact**: no RNG state exists today; the format documents
   statistical-resume semantics (optional RNG chunk is future work). Strategy caches rebuild via
   `initialize()` — one-window behavioral discontinuity, as today.

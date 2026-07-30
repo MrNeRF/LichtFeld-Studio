@@ -4,6 +4,7 @@
 
 #include "parameter_manager.hpp"
 #include "core/logger.hpp"
+#include "io/project_chapters.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -12,6 +13,22 @@ namespace lfs::vis {
 
     namespace {
         constexpr size_t BASE_IMAGE_COUNT = 300;
+
+        lfs::Error parameter_project_error(const lfs::ErrorCode code,
+                                           std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::App,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = {},
+                .native = std::nullopt,
+            });
+        }
 
         void apply_scaler_to_params(lfs::core::param::OptimizationParameters& p, const float new_scaler) {
             const float prev = p.steps_scaler;
@@ -38,6 +55,93 @@ namespace lfs::vis {
         dataset_config_.loading_params = lfs::core::param::LoadingParams{};
 
         loaded_ = true;
+        return {};
+    }
+
+    lfs::Result<lfs::io::project::ParameterManagerSnapshot>
+    ParameterManager::capturePendingProjectState() const {
+        std::lock_guard lock(params_mutex_);
+        if (!loaded_) {
+            return parameter_project_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "ParameterManager is not loaded");
+        }
+        return lfs::io::project::ParameterManagerSnapshot{
+            .active_strategy = active_strategy_,
+            .mcmc_session = mcmc_session_,
+            .mrnf_session = mrnf_session_,
+            .igs_session = igs_session_,
+            .mcmc_current = mcmc_current_,
+            .mrnf_current = mrnf_current_,
+            .igs_current = igs_current_,
+            .mcmc_session_references = {},
+            .mrnf_session_references = {},
+            .igs_session_references = {},
+            .mcmc_current_references = {},
+            .mrnf_current_references = {},
+            .igs_current_references = {},
+            .dataset = dataset_config_,
+        };
+    }
+
+    lfs::Result<void> ParameterManager::restorePendingProjectState(
+        const lfs::io::project::ParameterManagerSnapshot& snapshot) {
+        if (!lfs::core::param::is_valid_strategy_name(snapshot.active_strategy)) {
+            return lfs::Result<void>::failure(parameter_project_error(
+                lfs::ErrorCode::InvalidArgument,
+                "Pending project strategy is invalid"));
+        }
+        const std::array params{
+            &snapshot.mcmc_session,
+            &snapshot.mrnf_session,
+            &snapshot.igs_session,
+            &snapshot.mcmc_current,
+            &snapshot.mrnf_current,
+            &snapshot.igs_current,
+        };
+        for (const auto* value : params) {
+            if (const std::string error = value->validate(); !error.empty()) {
+                return lfs::Result<void>::failure(parameter_project_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "Pending project parameters are invalid: " + error));
+            }
+        }
+        const bool role_mismatch =
+            snapshot.mcmc_session.strategy !=
+                lfs::core::param::kStrategyMCMC ||
+            snapshot.mcmc_current.strategy !=
+                lfs::core::param::kStrategyMCMC ||
+            !lfs::core::param::is_mrnf_strategy(
+                snapshot.mrnf_session.strategy) ||
+            !lfs::core::param::is_mrnf_strategy(
+                snapshot.mrnf_current.strategy) ||
+            snapshot.igs_session.strategy !=
+                lfs::core::param::kStrategyIGSPlus ||
+            snapshot.igs_current.strategy !=
+                lfs::core::param::kStrategyIGSPlus;
+        if (role_mismatch) {
+            return lfs::Result<void>::failure(parameter_project_error(
+                lfs::ErrorCode::InvalidArgument,
+                "Pending project preset is stored under the wrong strategy role"));
+        }
+        if (const std::string error = snapshot.dataset.validate(); !error.empty()) {
+            return lfs::Result<void>::failure(parameter_project_error(
+                lfs::ErrorCode::InvalidArgument,
+                "Pending project dataset parameters are invalid: " + error));
+        }
+
+        std::lock_guard lock(params_mutex_);
+        active_strategy_ = std::string(
+            lfs::core::param::canonical_strategy_name(snapshot.active_strategy));
+        mcmc_session_ = snapshot.mcmc_session;
+        mrnf_session_ = snapshot.mrnf_session;
+        igs_session_ = snapshot.igs_session;
+        mcmc_current_ = snapshot.mcmc_current;
+        mrnf_current_ = snapshot.mrnf_current;
+        igs_current_ = snapshot.igs_current;
+        dataset_config_ = snapshot.dataset;
+        loaded_ = true;
+        dirty_.store(false, std::memory_order_release);
         return {};
     }
 
