@@ -12,6 +12,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include <ft2build.h>
@@ -3781,17 +3782,19 @@ namespace lfs::vis::gui {
             dev_resource_watch_.scan_future.wait();
 
         panel_layout_.saveState(window_states_);
-        if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr) {
-            const auto window = window_manager->persistentWindowState();
-            LayoutState state;
-            state.load(false);
-            state.window_state_saved = true;
-            state.window_x = window.x;
-            state.window_y = window.y;
-            state.window_width = window.width;
-            state.window_height = window.height;
-            state.window_maximized = window.maximized;
-            state.save();
+        if (!reset_window_geometry_on_next_start_) {
+            if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr) {
+                const auto window = window_manager->persistentWindowState();
+                LayoutState state;
+                state.load(false);
+                state.window_state_saved = true;
+                state.window_x = window.x;
+                state.window_y = window.y;
+                state.window_width = window.width;
+                state.window_height = window.height;
+                state.window_maximized = window.maximized;
+                state.save();
+            }
         }
 
         if (video_widget_)
@@ -6607,6 +6610,35 @@ namespace lfs::vis::gui {
 
     void GuiManager::showWindow(const std::string& name, bool show) {
         window_states_[name] = show;
+    }
+
+    std::expected<void, std::string> GuiManager::resetLayout() {
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (!paths)
+            return std::unexpected(paths.error());
+
+        const auto backup = paths->resetLayout();
+        if (!backup)
+            return std::unexpected(backup.error());
+
+        const LayoutState defaults;
+        panel_layout_.applyState(defaults);
+        window_states_.clear();
+        window_states_["scene_panel"] = true;
+        window_states_["system_console"] = false;
+        window_states_["training_tab"] = false;
+        window_states_["export_dialog"] = false;
+        window_states_["python_console"] = false;
+        PanelRegistry::instance().reset_floating_panel_layouts();
+        rml_viewport_overlay_.resetVramHudLayout();
+        reset_window_geometry_on_next_start_ = true;
+        panel_layout_.saveState(window_states_);
+
+        if (backup->has_value())
+            LOG_INFO("Layout reset; backed up previous state to {}", backup->value().string());
+        else
+            LOG_INFO("Layout reset; no existing layout file required a backup");
+        return {};
     }
 
     void GuiManager::enqueueModal(lfs::core::ModalRequest request) {

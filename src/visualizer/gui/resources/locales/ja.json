@@ -772,7 +772,12 @@
   "preferences": {
     "title": "環境設定",
     "language": "言語:",
-    "select_language": "言語を選択"
+    "select_language": "言語を選択",
+    "interface": "インターフェース",
+    "reset_layout": "レイアウトをリセット",
+    "reset_layout_confirmation": "ドックのサイズ、フローティングパネルの配置、タブ、ウィンドウの表示状態、VRAM HUD のレイアウトをリセットしますか？現在のレイアウトのバックアップが作成されます。",
+    "reset_layout_success": "レイアウトを直ちにリセットしました。",
+    "reset_layout_failed": "レイアウトをリセットできませんでした。"
   },
   "main_panel": {
     "windows": "ウィンドウ",

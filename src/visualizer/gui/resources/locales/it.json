@@ -772,7 +772,12 @@
   "preferences": {
     "title": "Preferenze",
     "language": "Lingua:",
-    "select_language": "Seleziona Lingua"
+    "select_language": "Seleziona Lingua",
+    "interface": "Interfaccia",
+    "reset_layout": "Reimposta layout",
+    "reset_layout_confirmation": "Reimpostare dimensioni dei pannelli, posizione delle finestre mobili, schede, visibilità delle finestre e layout del pannello VRAM? Verrà creato un backup del layout attuale.",
+    "reset_layout_success": "Layout reimpostato immediatamente.",
+    "reset_layout_failed": "Impossibile reimpostare il layout."
   },
   "main_panel": {
     "windows": "Finestre",

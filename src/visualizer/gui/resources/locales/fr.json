@@ -772,7 +772,12 @@
   "preferences": {
     "title": "Préférences",
     "language": "Langue :",
-    "select_language": "Sélectionner la Langue"
+    "select_language": "Sélectionner la Langue",
+    "interface": "Interface",
+    "reset_layout": "Réinitialiser la disposition",
+    "reset_layout_confirmation": "Réinitialiser les tailles des volets, la position des panneaux flottants, les onglets, la visibilité des fenêtres et la disposition du HUD VRAM ? Une sauvegarde de la disposition actuelle sera créée.",
+    "reset_layout_success": "Disposition réinitialisée immédiatement.",
+    "reset_layout_failed": "Impossible de réinitialiser la disposition."
   },
   "main_panel": {
     "windows": "Fenêtres",

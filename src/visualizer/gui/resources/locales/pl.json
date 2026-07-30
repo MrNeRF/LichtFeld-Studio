@@ -772,7 +772,12 @@
   "preferences": {
     "title": "Preferencje",
     "language": "Język:",
-    "select_language": "Wybierz Język"
+    "select_language": "Wybierz Język",
+    "interface": "Interfejs",
+    "reset_layout": "Resetuj układ",
+    "reset_layout_confirmation": "Zresetować rozmiary doków, położenie pływających paneli, karty, widoczność okien i układ HUD VRAM? Zostanie utworzona kopia zapasowa bieżącego układu.",
+    "reset_layout_success": "Układ został zresetowany natychmiast.",
+    "reset_layout_failed": "Nie można zresetować układu."
   },
   "main_panel": {
     "windows": "Okna",

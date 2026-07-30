@@ -232,7 +232,12 @@
   "preferences": {
     "title": "Preferencias",
     "language": "Idioma:",
-    "select_language": "Seleccionar idioma"
+    "select_language": "Seleccionar idioma",
+    "interface": "Interfaz",
+    "reset_layout": "Restablecer diseño",
+    "reset_layout_confirmation": "¿Restablecer tamaños de paneles, posición de paneles flotantes, pestañas, visibilidad de ventanas y diseño del HUD de VRAM? Se creará una copia de seguridad del diseño actual.",
+    "reset_layout_success": "Diseño restablecido inmediatamente.",
+    "reset_layout_failed": "No se pudo restablecer el diseño."
   },
   "startup": {
     "supported_by": "Con el apoyo de",

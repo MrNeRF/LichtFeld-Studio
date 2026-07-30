@@ -772,7 +772,12 @@
   "preferences": {
     "title": "Voorkeuren",
     "language": "Taal:",
-    "select_language": "Selecteer Taal"
+    "select_language": "Selecteer Taal",
+    "interface": "Interface",
+    "reset_layout": "Indeling resetten",
+    "reset_layout_confirmation": "Paneelgrootten, plaatsing van zwevende panelen, tabbladen, vensterzichtbaarheid en de VRAM-HUD-indeling resetten? Er wordt een back-up van de huidige indeling gemaakt.",
+    "reset_layout_success": "Indeling onmiddellijk gereset.",
+    "reset_layout_failed": "De indeling kan niet worden gereset."
   },
   "main_panel": {
     "windows": "Vensters",

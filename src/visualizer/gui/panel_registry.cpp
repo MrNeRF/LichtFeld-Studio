@@ -1176,6 +1176,25 @@ namespace lfs::vis::gui {
             lfs::vis::publish_viewport_toolbar_generation();
     }
 
+    void PanelRegistry::reset_floating_panel_layouts() {
+        {
+            std::lock_guard lock(mutex_);
+            for (auto& panel : panels_) {
+                if (panel.space != PanelSpace::Floating)
+                    continue;
+                panel.float_x = NAN;
+                panel.float_y = NAN;
+                panel.float_auto_center = true;
+                panel.float_dragging = false;
+                panel.float_resizing = false;
+                panel.float_last_bounds_valid = false;
+                panel.float_stack_order = 0;
+                resetFloatingPanelSize(panel, floatingUiScale());
+            }
+        }
+        lfs::vis::publish_viewport_toolbar_generation();
+    }
+
     bool PanelRegistry::bring_panel_to_front(const std::string& id) {
         std::lock_guard lock(mutex_);
         for (auto& p : panels_) {

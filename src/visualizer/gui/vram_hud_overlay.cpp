@@ -774,6 +774,30 @@ namespace lfs::vis::gui {
         apply();
     }
 
+    void VramHudOverlay::resetLayout() {
+        pos_x_ = -1.0f;
+        pos_y_ = -1.0f;
+        size_w_ = -1.0f;
+        size_h_ = -1.0f;
+        active_tab_ = "overview";
+        collapsed_paths_.clear();
+        default_collapse_applied_ = false;
+        dragging_header_ = false;
+        dragging_resize_ = false;
+        pointer_captured_ = false;
+        persistence_dirty_ = false;
+
+        if (root_) {
+            root_->SetProperty("left", "auto");
+            root_->SetProperty("right", "16dp");
+            root_->SetProperty("top", "16dp");
+            root_->SetProperty("width", "620dp");
+            root_->SetProperty("height", "72%");
+        }
+        refreshTabClasses();
+        apply();
+    }
+
     bool VramHudOverlay::isDueForProcessSample(std::chrono::milliseconds interval) {
         const auto now = std::chrono::steady_clock::now();
         if (last_process_sample_ == std::chrono::steady_clock::time_point{} ||

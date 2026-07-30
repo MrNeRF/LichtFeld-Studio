@@ -48,6 +48,7 @@ class PreferencesPanel(Panel):
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind_event("close", self._on_close)
+        model.bind_event("reset_layout", self._on_reset_layout)
         model.bind_record_list("themes")
         model.bind_record_list("scales")
         model.bind_record_list("languages")
@@ -166,6 +167,32 @@ class PreferencesPanel(Panel):
 
     def _on_close(self, _handle, _event, _args):
         lf.ui.set_panel_enabled(self.id, False)
+
+    def _on_reset_layout(self, _handle, _event, _args):
+        reset_label = lf.ui.tr("preferences.reset_layout")
+
+        def _on_result(button):
+            if button != reset_label:
+                return
+            error = lf.ui.reset_layout()
+            if error:
+                lf.ui.message_dialog(
+                    reset_label,
+                    f"{lf.ui.tr('preferences.reset_layout_failed')} {error}",
+                    "error",
+                )
+                return
+            lf.ui.message_dialog(
+                reset_label,
+                lf.ui.tr("preferences.reset_layout_success"),
+            )
+
+        lf.ui.confirm_dialog(
+            reset_label,
+            lf.ui.tr("preferences.reset_layout_confirmation"),
+            [lf.ui.tr("common.cancel"), reset_label],
+            _on_result,
+        )
 
     def _refresh_selection(self):
         self._last_state = self._state()

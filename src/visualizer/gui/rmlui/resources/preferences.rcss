@@ -37,6 +37,11 @@ body.floating-panel {
     margin-left: auto;
 }
 
+.preferences-reset-row {
+    display: flex;
+    justify-content: flex-end;
+}
+
 .preferences-actions {
     display: flex;
     justify-content: flex-end;

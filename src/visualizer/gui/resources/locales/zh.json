@@ -779,7 +779,12 @@
   "preferences": {
     "title": "偏好设置",
     "language": "语言：",
-    "select_language": "选择语言"
+    "select_language": "选择语言",
+    "interface": "界面",
+    "reset_layout": "重置布局",
+    "reset_layout_confirmation": "要重置停靠区域大小、浮动面板位置、标签页、窗口可见性和 VRAM HUD 布局吗？将创建当前布局的备份。",
+    "reset_layout_success": "布局已立即重置。",
+    "reset_layout_failed": "无法重置布局。"
   },
   "main_panel": {
     "windows": "窗口",

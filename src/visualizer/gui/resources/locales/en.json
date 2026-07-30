@@ -772,7 +772,12 @@
   "preferences": {
     "title": "Preferences",
     "language": "Language:",
-    "select_language": "Select Language"
+    "select_language": "Select Language",
+    "interface": "Interface",
+    "reset_layout": "Reset Layout",
+    "reset_layout_confirmation": "Reset dock sizes, floating-panel placement, tabs, window visibility, and the VRAM HUD layout? A backup of the current layout will be created.",
+    "reset_layout_success": "Layout reset immediately.",
+    "reset_layout_failed": "Unable to reset the layout."
   },
   "main_panel": {
     "windows": "Windows",

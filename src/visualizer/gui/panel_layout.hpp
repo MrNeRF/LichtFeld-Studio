@@ -72,6 +72,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] LayoutState loadState();
         void saveState(const std::unordered_map<std::string, bool>& window_visibility) const;
+        void applyState(const LayoutState& state);
 
         void renderRightPanel(const UIContext& ctx, const PanelDrawContext& draw_ctx,
                               bool show_main_panel, bool ui_hidden,

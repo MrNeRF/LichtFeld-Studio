@@ -34,6 +34,15 @@
 
   <div class="separator"></div>
 
+  <div class="preferences-section">
+    <span class="preferences-section-title">@tr:preferences.interface</span>
+    <div class="preferences-reset-row">
+      <button class="btn" data-event-click="reset_layout">@tr:preferences.reset_layout</button>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
   <div class="preferences-actions">
     <button class="btn btn--primary" data-event-click="close">@tr:common.ok</button>
   </div>

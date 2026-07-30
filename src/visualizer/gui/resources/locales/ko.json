@@ -772,7 +772,12 @@
   "preferences": {
     "title": "환경설정",
     "language": "언어:",
-    "select_language": "언어 선택"
+    "select_language": "언어 선택",
+    "interface": "인터페이스",
+    "reset_layout": "레이아웃 재설정",
+    "reset_layout_confirmation": "도크 크기, 플로팅 패널 위치, 탭, 창 표시 상태 및 VRAM HUD 레이아웃을 재설정할까요? 현재 레이아웃의 백업이 생성됩니다.",
+    "reset_layout_success": "레이아웃을 즉시 재설정했습니다.",
+    "reset_layout_failed": "레이아웃을 재설정할 수 없습니다."
   },
   "main_panel": {
     "windows": "창",

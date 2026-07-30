@@ -430,6 +430,13 @@ namespace lfs::vis::gui {
             markRenderNeeded(RenderReason::VramHud);
     }
 
+    void RmlViewportOverlay::resetVramHudLayout() {
+        if (!vram_hud_)
+            return;
+        vram_hud_->resetLayout();
+        markRenderNeeded(RenderReason::VramHud);
+    }
+
     void RmlViewportOverlay::bindReactiveStore() {
         auto& store = lfs::vis::app_store();
         gt_metrics_config_ = store.gt_metrics_overlay_config.get();

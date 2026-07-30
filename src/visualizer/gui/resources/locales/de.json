@@ -772,7 +772,12 @@
   "preferences": {
     "title": "Einstellungen",
     "language": "Sprache:",
-    "select_language": "Sprache auswählen"
+    "select_language": "Sprache auswählen",
+    "interface": "Oberfläche",
+    "reset_layout": "Layout zurücksetzen",
+    "reset_layout_confirmation": "Dock-Größen, Positionen schwebender Fenster, Tabs, Fenstersichtbarkeit und VRAM-HUD-Layout zurücksetzen? Eine Sicherung des aktuellen Layouts wird erstellt.",
+    "reset_layout_success": "Layout sofort zurückgesetzt.",
+    "reset_layout_failed": "Das Layout konnte nicht zurückgesetzt werden."
   },
   "main_panel": {
     "windows": "Fenster",

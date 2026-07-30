@@ -37,6 +37,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <future>
 #include <limits>
@@ -108,6 +109,7 @@ namespace lfs::vis {
 
             // Window visibility
             void showWindow(const std::string& name, bool show = true);
+            [[nodiscard]] std::expected<void, std::string> resetLayout();
 
             // Viewport region access
             glm::vec2 getViewportPos() const;
@@ -252,6 +254,7 @@ namespace lfs::vis {
             // UI state only
             std::unordered_map<std::string, bool> window_states_;
             bool show_main_panel_ = true;
+            bool reset_window_geometry_on_next_start_ = false;
             bool show_vram_hud_ = false;
             bool perf_hud_expanded_ = true;
             bool vram_hud_visible_published_ = false;
