@@ -3742,7 +3742,6 @@ namespace lfs::training {
         const std::uint64_t request_id,
         const std::string_view message) {
         if (request_id == 0) {
-            last_project_writer_error_ = message;
             return;
         }
         if (last_completed_project_request_id_ >=
