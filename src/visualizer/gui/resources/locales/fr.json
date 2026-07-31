@@ -567,6 +567,8 @@
     "keyframe_easing.ease_out": "Deceleration douce",
     "keyframe_easing.ease_in_out": "Acceleration/Deceleration douce",
     "keyframe_label": "Image cle {index}  ({time:.2f}s)",
+    "ply_sequence_label": "{}  ({} images)",
+    "keyframe_node_label": "Image cle {}  ({:.2f}s)",
     "search": "Rechercher",
     "show_in_file_manager": "Afficher dans le gestionnaire de fichiers",
     "go_to_image": "Aller à l'image",
@@ -1360,6 +1362,7 @@
     "view_section": "VUE",
     "view": "Affichage",
     "navigate": "Navigation",
+    "zoom_shortcut": "+ − / Défiler",
     "fit_to_window": "Ajuster à la Fenêtre",
     "show_info_panel": "Afficher le Panneau d'Infos",
     "show_mask_overlay": "Afficher la Superposition de Masque",
@@ -1456,7 +1459,11 @@
     "name": "Nom",
     "version": "Version",
     "path": "Chemin",
-    "no_packages": "Aucun paquet installé"
+    "no_packages": "Aucun paquet installé",
+    "format_error": "[Formatage] {}",
+    "cleanup_error": "[Nettoyage] {}",
+    "open_failed": "Impossible d’ouvrir : {}",
+    "save_failed": "Impossible d’enregistrer : {}"
   },
   "watch_dirs": {
     "title": "Répertoires surveillés",
@@ -1666,7 +1673,8 @@
     "loop_point_tooltip": "Point de boucle @ {} (retour au debut)",
     "keyframe_tooltip": "Image cle @ {} (double-clic pour editer)",
     "playback_time": "Lecture {:.2f}s",
-    "keyframe_preview": "Aperçu Keyframe {}"
+    "keyframe_preview": "Aperçu Keyframe {}",
+    "edit_delta": "{:.3f}m  {:.1f}{}"
   },
   "rendering_panel": {
     "fov_format": "FOV : {hfov:.1f}° H / {vfov:.1f}° V",
@@ -1975,6 +1983,11 @@
     "solid_color": "Couleur unie",
     "equirectangular_hdri": "HDRI équirectangulaire",
     "off": "Désactivé",
+    "grid_plane_yz": "YZ (droite)",
+    "grid_plane_xz": "XZ (haut)",
+    "grid_plane_xy": "XY (avant)",
+    "psnr": "PSNR",
+    "psnr_ssim": "PSNR + SSIM",
     "manual": "Manuel",
     "auto_controller": "Auto (contrôleur)",
     "path": "Chemin",
@@ -2088,6 +2101,8 @@
     "video_gui_manager_unavailable": "Le gestionnaire d’interface est indisponible",
     "video_no_keyframes": "Aucune image clé à exporter",
     "video_rendering_engine_unavailable": "Le moteur de rendu est indisponible",
+    "video_splat_preparation_failed": "Impossible de préparer les tenseurs splat pour l'exportation vidéo : ",
+    "video_no_renderable_content": "Aucun contenu rendu ne peut être exporté",
     "rendered_point_cloud_invalid": "L’image rendue du nuage de points n’est pas valide",
     "scene_manager_not_initialized": "Le gestionnaire de scènes n’est pas initialisé",
     "import_failed_detail": "Échec de l’importation avec une exception : {}",

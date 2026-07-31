@@ -567,6 +567,8 @@
     "keyframe_easing.ease_out": "Langzaam uit",
     "keyframe_easing.ease_in_out": "Langzaam in/uit",
     "keyframe_label": "Keyframe {index}  ({time:.2f}s)",
+    "ply_sequence_label": "{}  ({} frames)",
+    "keyframe_node_label": "Keyframe {}  ({:.2f}s)",
     "search": "Zoeken",
     "show_in_file_manager": "Tonen in bestandsbeheer",
     "go_to_image": "Ga naar afbeelding",
@@ -1360,6 +1362,7 @@
     "view_section": "WEERGAVE",
     "view": "Weergave",
     "navigate": "Navigeren",
+    "zoom_shortcut": "+ − / Scrollen",
     "fit_to_window": "Aanpassen aan Venster",
     "show_info_panel": "Toon Info Paneel",
     "show_mask_overlay": "Toon Masker Overlay",
@@ -1456,7 +1459,11 @@
     "name": "Naam",
     "version": "Versie",
     "path": "Pad",
-    "no_packages": "Geen pakketten geïnstalleerd"
+    "no_packages": "Geen pakketten geïnstalleerd",
+    "format_error": "[Opmaak] {}",
+    "cleanup_error": "[Opschonen] {}",
+    "open_failed": "Openen mislukt: {}",
+    "save_failed": "Opslaan mislukt: {}"
   },
   "watch_dirs": {
     "title": "Bewaakte mappen",
@@ -1666,7 +1673,8 @@
     "loop_point_tooltip": "Luspunt @ {} (keert terug naar begin)",
     "keyframe_tooltip": "Keyframe @ {} (dubbelklik om te bewerken)",
     "playback_time": "Afspelen {:.2f}s",
-    "keyframe_preview": "Keyframe {} voorbeeld"
+    "keyframe_preview": "Keyframe {} voorbeeld",
+    "edit_delta": "{:.3f}m  {:.1f}{}"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -1975,6 +1983,11 @@
     "solid_color": "Effen kleur",
     "equirectangular_hdri": "Equirectangulaire HDRI",
     "off": "Uit",
+    "grid_plane_yz": "YZ (rechts)",
+    "grid_plane_xz": "XZ (boven)",
+    "grid_plane_xy": "XY (voor)",
+    "psnr": "PSNR",
+    "psnr_ssim": "PSNR + SSIM",
     "manual": "Handmatig",
     "auto_controller": "Automatisch (controller)",
     "path": "Pad",
@@ -2088,6 +2101,8 @@
     "video_gui_manager_unavailable": "GUI-beheerder is niet beschikbaar",
     "video_no_keyframes": "Geen keyframes om te exporteren",
     "video_rendering_engine_unavailable": "Renderingengine is niet beschikbaar",
+    "video_splat_preparation_failed": "Splat-tensors voor video-export voorbereiden is mislukt: ",
+    "video_no_renderable_content": "Geen renderbare inhoud om te exporteren",
     "rendered_point_cloud_invalid": "Gerenderd puntwolkframe is ongeldig",
     "scene_manager_not_initialized": "Scènebeheerder is niet geïnitialiseerd",
     "import_failed_detail": "Import mislukt met uitzondering: {}",

@@ -567,6 +567,8 @@
     "keyframe_easing.ease_out": "Lagodne wyjscie",
     "keyframe_easing.ease_in_out": "Lagodne wejscie/wyjscie",
     "keyframe_label": "Klatka kluczowa {index}  ({time:.2f}s)",
+    "ply_sequence_label": "{}  ({} klatek)",
+    "keyframe_node_label": "Klatka kluczowa {}  ({:.2f}s)",
     "search": "Szukaj",
     "show_in_file_manager": "Pokaż w menedżerze plików",
     "go_to_image": "Przejdź do obrazu",
@@ -1360,6 +1362,7 @@
     "view_section": "WIDOK",
     "view": "Widok",
     "navigate": "Nawiguj",
+    "zoom_shortcut": "+ − / Przewijanie",
     "fit_to_window": "Dopasuj do Okna",
     "show_info_panel": "Pokaż Panel Informacji",
     "show_mask_overlay": "Pokaż Nakładkę Maski",
@@ -1456,7 +1459,11 @@
     "name": "Nazwa",
     "version": "Wersja",
     "path": "Ścieżka",
-    "no_packages": "Nie zainstalowano pakietów"
+    "no_packages": "Nie zainstalowano pakietów",
+    "format_error": "[Formatowanie] {}",
+    "cleanup_error": "[Czyszczenie] {}",
+    "open_failed": "Nie udało się otworzyć: {}",
+    "save_failed": "Nie udało się zapisać: {}"
   },
   "watch_dirs": {
     "title": "Obserwowane katalogi",
@@ -1666,7 +1673,8 @@
     "loop_point_tooltip": "Punkt petli @ {} (powrot do poczatku)",
     "keyframe_tooltip": "Klatka kluczowa @ {} (kliknij dwukrotnie, aby edytowac)",
     "playback_time": "Odtwarzanie {:.2f}s",
-    "keyframe_preview": "Podgląd klatki kluczowej {}"
+    "keyframe_preview": "Podgląd klatki kluczowej {}",
+    "edit_delta": "{:.3f}m  {:.1f}{}"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -1975,6 +1983,11 @@
     "solid_color": "Jednolity kolor",
     "equirectangular_hdri": "Equirectangular HDRI",
     "off": "Wył.",
+    "grid_plane_yz": "YZ (prawa)",
+    "grid_plane_xz": "XZ (góra)",
+    "grid_plane_xy": "XY (przód)",
+    "psnr": "PSNR",
+    "psnr_ssim": "PSNR + SSIM",
     "manual": "Ręcznie",
     "auto_controller": "Automatycznie (kontroler)",
     "path": "Ścieżka",
@@ -2088,6 +2101,8 @@
     "video_gui_manager_unavailable": "Menedżer GUI jest niedostępny",
     "video_no_keyframes": "Brak klatek kluczowych do wyeksportowania",
     "video_rendering_engine_unavailable": "Silnik renderowania jest niedostępny",
+    "video_splat_preparation_failed": "Nie udało się przygotować tensorów splat do eksportu wideo: ",
+    "video_no_renderable_content": "Brak renderowalnej zawartości do wyeksportowania",
     "rendered_point_cloud_invalid": "Wyrenderowana klatka chmury punktów jest nieprawidłowa",
     "scene_manager_not_initialized": "Menedżer scen nie został zainicjowany",
     "import_failed_detail": "Import zakończył się wyjątkiem: {}",

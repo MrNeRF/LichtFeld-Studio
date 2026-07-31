@@ -101,9 +101,9 @@
         <span class="setting-row__label-col">{{label_grid_plane}}</span>
         <div class="setting-row__control-col setting-row__control-col--fill">
           <select data-value="grid_plane">
-            <option value="0" data-tooltip="tooltip.opt.grid_plane.yz">YZ (Right)</option>
-            <option value="1" data-tooltip="tooltip.opt.grid_plane.xz">XZ (Top)</option>
-            <option value="2" data-tooltip="tooltip.opt.grid_plane.xy">XY (Front)</option>
+            <option value="0" data-tooltip="tooltip.opt.grid_plane.yz">@tr:ui.grid_plane_yz</option>
+            <option value="1" data-tooltip="tooltip.opt.grid_plane.xz">@tr:ui.grid_plane_xz</option>
+            <option value="2" data-tooltip="tooltip.opt.grid_plane.xy">@tr:ui.grid_plane_xy</option>
           </select>
         </div>
       </div>
@@ -188,8 +188,8 @@
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="camera_metrics_mode">
           <option value="OFF" data-tooltip="tooltip.opt.camera_metrics.off">@tr:ui.off</option>
-          <option value="PSNR" data-tooltip="tooltip.opt.camera_metrics.psnr">PSNR</option>
-          <option value="PSNR_SSIM" data-tooltip="tooltip.opt.camera_metrics.psnr_ssim">PSNR + SSIM</option>
+          <option value="PSNR" data-tooltip="tooltip.opt.camera_metrics.psnr">@tr:ui.psnr</option>
+          <option value="PSNR_SSIM" data-tooltip="tooltip.opt.camera_metrics.psnr_ssim">@tr:ui.psnr_ssim</option>
         </select>
       </div>
     </div>

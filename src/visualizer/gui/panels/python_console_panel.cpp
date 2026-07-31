@@ -84,7 +84,7 @@ namespace {
         if (!result.success) {
             editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
-                state.addError("[Format] " + result.error);
+                state.addError(std::format(LOC(lichtfeld::Strings::PythonConsole::FORMAT_ERROR), result.error));
             }
             return;
         }
@@ -108,7 +108,7 @@ namespace {
         if (!result.success) {
             editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
-                state.addError("[Cleanup] " + result.error);
+                state.addError(std::format(LOC(lichtfeld::Strings::PythonConsole::CLEANUP_ERROR), result.error));
             }
             return;
         }
@@ -1375,7 +1375,8 @@ namespace {
     bool load_script(const std::filesystem::path& path, lfs::vis::gui::panels::PythonConsoleState& state) {
         std::ifstream file;
         if (!lfs::core::open_file_for_read(path, file)) {
-            state.addError("Failed to open: " + lfs::core::path_to_utf8(path));
+            state.addError(std::format(LOC(lichtfeld::Strings::PythonConsole::OPEN_FAILED),
+                                       lfs::core::path_to_utf8(path)));
             return false;
         }
 
@@ -1400,7 +1401,8 @@ namespace {
 
         std::ofstream file;
         if (!lfs::core::open_file_for_write(path, file)) {
-            state.addError("Failed to save: " + lfs::core::path_to_utf8(path));
+            state.addError(std::format(LOC(lichtfeld::Strings::PythonConsole::SAVE_FAILED),
+                                       lfs::core::path_to_utf8(path)));
             return false;
         }
 

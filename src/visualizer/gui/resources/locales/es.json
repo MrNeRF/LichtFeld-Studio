@@ -124,6 +124,8 @@
     "keyframe_easing.ease_out": "Desaceleración suave",
     "keyframe_easing.ease_in_out": "Aceleración/Desaceleración suave",
     "keyframe_label": "Fotograma clave {index}  ({time:.2f}s)",
+    "ply_sequence_label": "{}  ({} fotogramas)",
+    "keyframe_node_label": "Fotograma clave {}  ({:.2f}s)",
     "search": "Buscar",
     "show_in_file_manager": "Mostrar en el gestor de archivos",
     "go_to_image": "Ir a la imagen",
@@ -263,7 +265,11 @@
     "name": "Nombre",
     "version": "Versión",
     "path": "Ruta",
-    "no_packages": "No hay paquetes instalados"
+    "no_packages": "No hay paquetes instalados",
+    "format_error": "[Formato] {}",
+    "cleanup_error": "[Limpieza] {}",
+    "open_failed": "No se pudo abrir: {}",
+    "save_failed": "No se pudo guardar: {}"
   },
   "watch_dirs": {
     "title": "Directorios supervisados",
@@ -1542,6 +1548,7 @@
     "view_section": "VISTA",
     "view": "Vista",
     "navigate": "Navegar",
+    "zoom_shortcut": "+ − / Desplazar",
     "fit_to_window": "Ajustar a la Ventana",
     "show_info_panel": "Mostrar el Panel de Información",
     "show_mask_overlay": "Mostrar la Superposición de Máscara",
@@ -1768,7 +1775,8 @@
     "loop_point_tooltip": "Punto de bucle @ {} (vuelve al inicio)",
     "keyframe_tooltip": "Fotograma clave @ {} (doble clic para editar)",
     "playback_time": "Reproducción {:.2f}s",
-    "keyframe_preview": "Vista previa del Fotograma Clave {}"
+    "keyframe_preview": "Vista previa del Fotograma Clave {}",
+    "edit_delta": "{:.3f}m  {:.1f}{}"
   },
   "file_association": {
     "title": "Establecer como Aplicación Predeterminada",
@@ -1975,6 +1983,11 @@
     "solid_color": "Color sólido",
     "equirectangular_hdri": "HDRI equirectangular",
     "off": "Desactivado",
+    "grid_plane_yz": "YZ (derecha)",
+    "grid_plane_xz": "XZ (arriba)",
+    "grid_plane_xy": "XY (frontal)",
+    "psnr": "PSNR",
+    "psnr_ssim": "PSNR + SSIM",
     "manual": "Manual",
     "auto_controller": "Automático (controlador)",
     "path": "Ruta",
@@ -2088,6 +2101,8 @@
     "video_gui_manager_unavailable": "El gestor de GUI no está disponible",
     "video_no_keyframes": "No hay fotogramas clave para exportar",
     "video_rendering_engine_unavailable": "El motor de renderizado no está disponible",
+    "video_splat_preparation_failed": "No se pudieron preparar los tensores splat para la exportación de vídeo: ",
+    "video_no_renderable_content": "No hay contenido renderizable para exportar",
     "rendered_point_cloud_invalid": "El fotograma de la nube de puntos renderizado no es válido",
     "scene_manager_not_initialized": "El gestor de escenas no está inicializado",
     "import_failed_detail": "La importación falló con una excepción: {}",

@@ -567,6 +567,8 @@
     "keyframe_easing.ease_out": "점진적 종료",
     "keyframe_easing.ease_in_out": "점진적 시작/종료",
     "keyframe_label": "키프레임 {index}  ({time:.2f}s)",
+    "ply_sequence_label": "{}  ({}프레임)",
+    "keyframe_node_label": "키프레임 {}  ({:.2f}s)",
     "search": "검색",
     "show_in_file_manager": "파일 관리자에서 표시",
     "go_to_image": "이미지로 이동",
@@ -1360,6 +1362,7 @@
     "view_section": "보기",
     "view": "보기",
     "navigate": "탐색",
+    "zoom_shortcut": "+ − / 스크롤",
     "fit_to_window": "창에 맞추기",
     "show_info_panel": "정보 패널 표시",
     "show_mask_overlay": "마스크 오버레이 표시",
@@ -1456,7 +1459,11 @@
     "name": "이름",
     "version": "버전",
     "path": "경로",
-    "no_packages": "설치된 패키지가 없습니다"
+    "no_packages": "설치된 패키지가 없습니다",
+    "format_error": "[서식] {}",
+    "cleanup_error": "[정리] {}",
+    "open_failed": "열지 못했습니다: {}",
+    "save_failed": "저장하지 못했습니다: {}"
   },
   "watch_dirs": {
     "title": "감시 중인 디렉터리",
@@ -1666,7 +1673,8 @@
     "loop_point_tooltip": "반복 지점 @ {} (시작으로 돌아감)",
     "keyframe_tooltip": "키프레임 @ {} (더블클릭으로 편집)",
     "playback_time": "재생 {:.2f}초",
-    "keyframe_preview": "키프레임 {} 미리보기"
+    "keyframe_preview": "키프레임 {} 미리보기",
+    "edit_delta": "{:.3f}m  {:.1f}{}"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -1975,6 +1983,11 @@
     "solid_color": "단색",
     "equirectangular_hdri": "등각원통 HDRI",
     "off": "끔",
+    "grid_plane_yz": "YZ (오른쪽)",
+    "grid_plane_xz": "XZ (위)",
+    "grid_plane_xy": "XY (앞)",
+    "psnr": "PSNR",
+    "psnr_ssim": "PSNR + SSIM",
     "manual": "수동",
     "auto_controller": "자동(컨트롤러)",
     "path": "경로",
@@ -2088,6 +2101,8 @@
     "video_gui_manager_unavailable": "GUI 관리자를 사용할 수 없습니다",
     "video_no_keyframes": "내보낼 키프레임이 없습니다",
     "video_rendering_engine_unavailable": "렌더링 엔진을 사용할 수 없습니다",
+    "video_splat_preparation_failed": "비디오 내보내기를 위한 스플랫 텐서를 준비하지 못했습니다: ",
+    "video_no_renderable_content": "내보낼 렌더링 가능 콘텐츠가 없습니다",
     "rendered_point_cloud_invalid": "렌더링된 포인트 클라우드 프레임이 올바르지 않습니다",
     "scene_manager_not_initialized": "씬 관리자가 초기화되지 않았습니다",
     "import_failed_detail": "예외로 인해 가져오기에 실패했습니다: {}",

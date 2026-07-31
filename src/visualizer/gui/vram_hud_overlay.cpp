@@ -6,6 +6,7 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "gui/layout_state.hpp"
+#include "gui/string_keys.hpp"
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Element.h>
@@ -992,7 +993,8 @@ namespace lfs::vis::gui {
         const auto process_total = bestProcessTotal(s);
 
         if (iteration_label_) {
-            setText(iteration_label_, cached_iteration_text_, std::format("iter {}", s.iteration));
+            setText(iteration_label_, cached_iteration_text_,
+                    std::format("{} {}", LOC(lichtfeld::Strings::Status::ITERATION), s.iteration));
         }
 
         if (throughput_label_) {

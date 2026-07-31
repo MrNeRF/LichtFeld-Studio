@@ -574,6 +574,8 @@
     "keyframe_easing.ease_out": "缓出",
     "keyframe_easing.ease_in_out": "缓入缓出",
     "keyframe_label": "关键帧 {index}  ({time:.2f}s)",
+    "ply_sequence_label": "{}（{} 帧）",
+    "keyframe_node_label": "关键帧 {}（{:.2f}秒）",
     "search": "搜索",
     "show_in_file_manager": "在文件管理器中显示",
     "go_to_image": "转到图像",
@@ -1379,6 +1381,7 @@
     "view_section": "视图",
     "view": "视图",
     "navigate": "导航",
+    "zoom_shortcut": "+ − / 滚动",
     "fit_to_window": "适应窗口",
     "show_info_panel": "显示信息面板",
     "show_mask_overlay": "显示掩码叠加",
@@ -1475,7 +1478,11 @@
     "name": "名称",
     "version": "版本",
     "path": "路径",
-    "no_packages": "未安装任何包"
+    "no_packages": "未安装任何包",
+    "format_error": "[格式化] {}",
+    "cleanup_error": "[清理] {}",
+    "open_failed": "无法打开：{}",
+    "save_failed": "无法保存：{}"
   },
   "watch_dirs": {
     "title": "监视的目录",
@@ -1775,7 +1782,8 @@
     "loop_point_tooltip": "循环点 @ {}（返回起点）",
     "keyframe_tooltip": "关键帧 @ {}（双击编辑）",
     "playback_time": "播放 {:.2f} 秒",
-    "keyframe_preview": "关键帧 {} 预览"
+    "keyframe_preview": "关键帧 {} 预览",
+    "edit_delta": "{:.3f}米  {:.1f}{}"
   },
   "file_association": {
     "title": "设为默认应用程序",
@@ -1982,6 +1990,11 @@
     "solid_color": "纯色",
     "equirectangular_hdri": "等距圆柱 HDRI",
     "off": "关闭",
+    "grid_plane_yz": "YZ（右）",
+    "grid_plane_xz": "XZ（上）",
+    "grid_plane_xy": "XY（前）",
+    "psnr": "PSNR",
+    "psnr_ssim": "PSNR + SSIM",
     "manual": "手动",
     "auto_controller": "自动（控制器）",
     "path": "路径",
@@ -2095,6 +2108,8 @@
     "video_gui_manager_unavailable": "GUI 管理器不可用",
     "video_no_keyframes": "没有可导出的关键帧",
     "video_rendering_engine_unavailable": "渲染引擎不可用",
+    "video_splat_preparation_failed": "无法为视频导出准备 splat 张量：",
+    "video_no_renderable_content": "没有可导出的可渲染内容",
     "rendered_point_cloud_invalid": "渲染的点云帧无效",
     "scene_manager_not_initialized": "场景管理器未初始化",
     "import_failed_detail": "导入因异常而失败：{}",

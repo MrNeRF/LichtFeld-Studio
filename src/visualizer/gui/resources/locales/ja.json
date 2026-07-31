@@ -567,6 +567,8 @@
     "keyframe_easing.ease_out": "イーズアウト",
     "keyframe_easing.ease_in_out": "イーズインアウト",
     "keyframe_label": "キーフレーム {index}  ({time:.2f}s)",
+    "ply_sequence_label": "{}  ({} フレーム)",
+    "keyframe_node_label": "キーフレーム {}  ({:.2f}s)",
     "search": "検索",
     "show_in_file_manager": "ファイルマネージャーで表示",
     "go_to_image": "画像を表示",
@@ -1360,6 +1362,7 @@
     "view_section": "表示",
     "view": "表示",
     "navigate": "ナビゲート",
+    "zoom_shortcut": "+ − / スクロール",
     "fit_to_window": "ウィンドウに合わせる",
     "show_info_panel": "情報パネルを表示",
     "show_mask_overlay": "マスクオーバーレイを表示",
@@ -1456,7 +1459,11 @@
     "name": "名前",
     "version": "バージョン",
     "path": "パス",
-    "no_packages": "インストールされているパッケージはありません"
+    "no_packages": "インストールされているパッケージはありません",
+    "format_error": "[整形] {}",
+    "cleanup_error": "[クリーンアップ] {}",
+    "open_failed": "開けませんでした: {}",
+    "save_failed": "保存できませんでした: {}"
   },
   "watch_dirs": {
     "title": "監視フォルダー",
@@ -1666,7 +1673,8 @@
     "loop_point_tooltip": "ループポイント @ {} (開始位置に戻る)",
     "keyframe_tooltip": "キーフレーム @ {} (ダブルクリックで編集)",
     "playback_time": "再生 {:.2f}秒",
-    "keyframe_preview": "キーフレーム {} プレビュー"
+    "keyframe_preview": "キーフレーム {} プレビュー",
+    "edit_delta": "{:.3f}m  {:.1f}{}"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -1975,6 +1983,11 @@
     "solid_color": "単色",
     "equirectangular_hdri": "正距円筒HDRI",
     "off": "オフ",
+    "grid_plane_yz": "YZ（右）",
+    "grid_plane_xz": "XZ（上）",
+    "grid_plane_xy": "XY（前）",
+    "psnr": "PSNR",
+    "psnr_ssim": "PSNR + SSIM",
     "manual": "手動",
     "auto_controller": "自動（コントローラー）",
     "path": "パス",
@@ -2088,6 +2101,8 @@
     "video_gui_manager_unavailable": "GUI マネージャーを利用できません",
     "video_no_keyframes": "エクスポートするキーフレームがありません",
     "video_rendering_engine_unavailable": "レンダリングエンジンを利用できません",
+    "video_splat_preparation_failed": "動画エクスポート用のスプラットテンソルを準備できませんでした: ",
+    "video_no_renderable_content": "エクスポート可能なレンダリング内容がありません",
     "rendered_point_cloud_invalid": "レンダリングされた点群フレームが無効です",
     "scene_manager_not_initialized": "シーンマネージャーが初期化されていません",
     "import_failed_detail": "例外によりインポートに失敗しました: {}",

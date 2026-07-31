@@ -852,7 +852,7 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::PLY_SEQUENCE: {
                 const size_t frame_count = node->gaussian_count.load(std::memory_order_acquire);
-                snapshot.label = std::format("{}  ({} frames)",
+                snapshot.label = std::format(tr(string_keys::Scene::PLY_SEQUENCE_LABEL),
                                              node->name,
                                              formatWithThousands(frame_count > 0 ? frame_count : node->children.size()));
                 break;
@@ -864,7 +864,7 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::KEYFRAME:
                 if (node->keyframe)
-                    snapshot.label = std::format("Keyframe {}  ({:.2f}s)",
+                    snapshot.label = std::format(tr(string_keys::Scene::KEYFRAME_NODE_LABEL),
                                                  node->keyframe->keyframe_index + 1,
                                                  node->keyframe->time);
                 else

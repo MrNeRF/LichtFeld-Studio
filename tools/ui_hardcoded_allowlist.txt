@@ -10,3 +10,10 @@ re:failed to create RmlUi Vulkan layer.*
 # Asset names and external handles retain their canonical spelling.
 Kloofendal Pure Sky
 Alps Field
+
+# Python LSP startup state is internal-only: the status field has no UI consumer.
+No Python language server configured
+Starting Python completions...
+Python completions unavailable
+Restarting Python completions...
+Python completions ready

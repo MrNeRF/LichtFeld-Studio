@@ -79,6 +79,8 @@ def is_candidate(text: str, allowlist: set[str], allow_patterns: list[re.Pattern
         return False
     if text.startswith(("@tr:", "@")) or (text.startswith("&") and text.endswith(";")):
         return False
+    if re.fullmatch(r"(?:\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|\\x[0-9a-fA-F]{2})+", text):
+        return False
     if re.fullmatch(r"(?:\d+(?:\.\d+)?(?:x|\s*fps|\s*FPS|p)?|\d+x\d+|\{:[^}]+\}%?)", text):
         return False
     if TECHNICAL_LITERAL.fullmatch(text):
@@ -92,7 +94,10 @@ def scan_source(path: Path, allowlist: set[str], allow_patterns: list[re.Pattern
         if IGNORE_LINE.search(line) or not UI_SINK.search(line) or "LOC(" in line:
             continue
         for match in STRING_LITERAL.finditer(line):
-            text = bytes(match.group(1), "utf-8").decode("unicode_escape")
+            # Keep UTF-8 literals intact. Decoding the UTF-8 byte sequence with
+            # ``unicode_escape`` turns symbols such as ° into ``Â°``, which then
+            # looks like a textual candidate to the heuristic.
+            text = match.group(1)
             if is_candidate(text, allowlist, allow_patterns):
                 findings.append(Finding(path, line_number, text, "source"))
     return findings

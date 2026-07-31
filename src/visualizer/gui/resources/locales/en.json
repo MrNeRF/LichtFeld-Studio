@@ -567,6 +567,8 @@
     "keyframe_easing.ease_out": "Ease Out",
     "keyframe_easing.ease_in_out": "Ease In-Out",
     "keyframe_label": "Keyframe {index}  ({time:.2f}s)",
+    "ply_sequence_label": "{}  ({} frames)",
+    "keyframe_node_label": "Keyframe {}  ({:.2f}s)",
     "search": "Search",
     "show_in_file_manager": "Show in File Manager",
     "history": "History",
@@ -1372,6 +1374,7 @@
     "view_section": "VIEW",
     "view": "View",
     "navigate": "Navigate",
+    "zoom_shortcut": "+ − / Scroll",
     "fit_to_window": "Fit to Window",
     "show_info_panel": "Show Info Panel",
     "show_mask_overlay": "Show Mask Overlay",
@@ -1468,7 +1471,11 @@
     "name": "Name",
     "version": "Version",
     "path": "Path",
-    "no_packages": "No packages installed"
+    "no_packages": "No packages installed",
+    "format_error": "[Format] {}",
+    "cleanup_error": "[Cleanup] {}",
+    "open_failed": "Failed to open: {}",
+    "save_failed": "Failed to save: {}"
   },
   "watch_dirs": {
     "title": "Watched Directories",
@@ -1768,7 +1775,8 @@
     "loop_point_tooltip": "Loop Point @ {} (returns to start)",
     "keyframe_tooltip": "Keyframe @ {} (double-click to edit)",
     "playback_time": "Playback {:.2f}s",
-    "keyframe_preview": "Keyframe {} Preview"
+    "keyframe_preview": "Keyframe {} Preview",
+    "edit_delta": "{:.3f}m  {:.1f}{}"
   },
   "file_association": {
     "title": "Set as Default Application",
@@ -1975,6 +1983,11 @@
     "solid_color": "Solid Color",
     "equirectangular_hdri": "Equirectangular HDRI",
     "off": "Off",
+    "grid_plane_yz": "YZ (Right)",
+    "grid_plane_xz": "XZ (Top)",
+    "grid_plane_xy": "XY (Front)",
+    "psnr": "PSNR",
+    "psnr_ssim": "PSNR + SSIM",
     "manual": "Manual",
     "auto_controller": "Auto (Controller)",
     "path": "Path",
@@ -2088,6 +2101,8 @@
     "video_gui_manager_unavailable": "GUI manager is not available",
     "video_no_keyframes": "No keyframes to export",
     "video_rendering_engine_unavailable": "Rendering engine is not available",
+    "video_splat_preparation_failed": "Failed to prepare splat tensors for video export: ",
+    "video_no_renderable_content": "No renderable content to export",
     "rendered_point_cloud_invalid": "Rendered point cloud frame is invalid",
     "scene_manager_not_initialized": "Scene manager not initialized",
     "import_failed_detail": "Import failed with exception: {}",

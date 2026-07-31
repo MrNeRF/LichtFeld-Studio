@@ -303,6 +303,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* KEYFRAME_EASING_EASE_IN = "scene.keyframe_easing.ease_in";
         inline constexpr const char* KEYFRAME_EASING_EASE_OUT = "scene.keyframe_easing.ease_out";
         inline constexpr const char* KEYFRAME_EASING_EASE_IN_OUT = "scene.keyframe_easing.ease_in_out";
+        inline constexpr const char* PLY_SEQUENCE_LABEL = "scene.ply_sequence_label";
+        inline constexpr const char* KEYFRAME_NODE_LABEL = "scene.keyframe_node_label";
         inline constexpr const char* SAVE_ASSET = "scene.save_asset";
         inline constexpr const char* SAVE_ASSET_AS = "scene.save_asset_as";
         inline constexpr const char* SAVE_TO_DISK = "scene.save_to_disk";
@@ -854,6 +856,10 @@ namespace lichtfeld::Strings {
         inline constexpr const char* VERSION = "python_console.version";
         inline constexpr const char* PATH = "python_console.path";
         inline constexpr const char* NO_PACKAGES = "python_console.no_packages";
+        inline constexpr const char* FORMAT_ERROR = "python_console.format_error";
+        inline constexpr const char* CLEANUP_ERROR = "python_console.cleanup_error";
+        inline constexpr const char* OPEN_FAILED = "python_console.open_failed";
+        inline constexpr const char* SAVE_FAILED = "python_console.save_failed";
     } // namespace PythonConsole
 
     namespace Axis {
@@ -975,6 +981,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* KEYFRAME_TOOLTIP = "sequencer.keyframe_tooltip";
         inline constexpr const char* PLAYBACK_TIME = "sequencer.playback_time";
         inline constexpr const char* KEYFRAME_PREVIEW = "sequencer.keyframe_preview";
+        inline constexpr const char* EDIT_DELTA = "sequencer.edit_delta";
     } // namespace Sequencer
 
     namespace DiskSpaceDialog {
@@ -1077,6 +1084,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* VIDEO_GUI_MANAGER_UNAVAILABLE = "runtime.video_gui_manager_unavailable";
         inline constexpr const char* VIDEO_NO_KEYFRAMES = "runtime.video_no_keyframes";
         inline constexpr const char* VIDEO_RENDERING_ENGINE_UNAVAILABLE = "runtime.video_rendering_engine_unavailable";
+        inline constexpr const char* VIDEO_SPLAT_PREPARATION_FAILED = "runtime.video_splat_preparation_failed";
+        inline constexpr const char* VIDEO_NO_RENDERABLE_CONTENT = "runtime.video_no_renderable_content";
         inline constexpr const char* RENDERED_POINT_CLOUD_INVALID = "runtime.rendered_point_cloud_invalid";
         inline constexpr const char* SCENE_MANAGER_NOT_INITIALIZED = "runtime.scene_manager_not_initialized";
         inline constexpr const char* IMPORT_FAILED_DETAIL = "runtime.import_failed_detail";

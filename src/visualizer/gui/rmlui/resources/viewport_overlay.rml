@@ -1017,7 +1017,7 @@
                 <span class="vram-hud-title">VRAM</span>
                 <span class="vram-hud-header-meta">
                     <span id="vram-hud-throughput" class="vram-hud-throughput hidden"></span>
-                    <span id="vram-hud-iteration" class="vram-hud-iteration">iter 0</span>
+                    <span id="vram-hud-iteration" class="vram-hud-iteration"></span>
                 </span>
             </div>
             <div id="vram-hud-tabs" class="vram-hud-tabs">

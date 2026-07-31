@@ -567,6 +567,8 @@
     "keyframe_easing.ease_out": "Uscita morbida",
     "keyframe_easing.ease_in_out": "Ingresso/Uscita morbidi",
     "keyframe_label": "Fotogramma chiave {index}  ({time:.2f}s)",
+    "ply_sequence_label": "{}  ({} fotogrammi)",
+    "keyframe_node_label": "Fotogramma chiave {}  ({:.2f}s)",
     "search": "Cerca",
     "show_in_file_manager": "Mostra nel file manager",
     "go_to_image": "Vai all'immagine",
@@ -1360,6 +1362,7 @@
     "view_section": "VISTA",
     "view": "Visualizza",
     "navigate": "Naviga",
+    "zoom_shortcut": "+ − / Scorri",
     "fit_to_window": "Adatta alla Finestra",
     "show_info_panel": "Mostra Pannello Info",
     "show_mask_overlay": "Mostra Sovrapposizione Maschera",
@@ -1456,7 +1459,11 @@
     "name": "Nome",
     "version": "Versione",
     "path": "Percorso",
-    "no_packages": "Nessun pacchetto installato"
+    "no_packages": "Nessun pacchetto installato",
+    "format_error": "[Formattazione] {}",
+    "cleanup_error": "[Pulizia] {}",
+    "open_failed": "Impossibile aprire: {}",
+    "save_failed": "Impossibile salvare: {}"
   },
   "watch_dirs": {
     "title": "Cartelle monitorate",
@@ -1666,7 +1673,8 @@
     "loop_point_tooltip": "Punto di ciclo @ {} (torna all'inizio)",
     "keyframe_tooltip": "Fotogramma chiave @ {} (doppio clic per modificare)",
     "playback_time": "Riproduzione {:.2f}s",
-    "keyframe_preview": "Anteprima Keyframe {}"
+    "keyframe_preview": "Anteprima Keyframe {}",
+    "edit_delta": "{:.3f}m  {:.1f}{}"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
@@ -1975,6 +1983,11 @@
     "solid_color": "Colore uniforme",
     "equirectangular_hdri": "HDRI equirettangolare",
     "off": "Disattivato",
+    "grid_plane_yz": "YZ (destra)",
+    "grid_plane_xz": "XZ (alto)",
+    "grid_plane_xy": "XY (fronte)",
+    "psnr": "PSNR",
+    "psnr_ssim": "PSNR + SSIM",
     "manual": "Manuale",
     "auto_controller": "Automatico (controller)",
     "path": "Percorso",
@@ -2088,6 +2101,8 @@
     "video_gui_manager_unavailable": "Il gestore GUI non è disponibile",
     "video_no_keyframes": "Nessun fotogramma chiave da esportare",
     "video_rendering_engine_unavailable": "Il motore di rendering non è disponibile",
+    "video_splat_preparation_failed": "Impossibile preparare i tensori splat per l'esportazione video: ",
+    "video_no_renderable_content": "Nessun contenuto renderizzabile da esportare",
     "rendered_point_cloud_invalid": "Il fotogramma della nuvola di punti renderizzato non è valido",
     "scene_manager_not_initialized": "Il gestore della scena non è inizializzato",
     "import_failed_detail": "Importazione non riuscita con eccezione: {}",
