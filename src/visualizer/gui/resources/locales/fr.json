@@ -2050,6 +2050,14 @@
     "checkpoint_save_failed": "Failed to save checkpoint at iteration {}:\\n\\n{}",
     "lod_enabled_no_tree": "Enabled, no tree",
     "lod_disabled": "No RAD LOD",
-    "lod_scale": "LOD scale x{:.1f}"
+    "lod_scale": "LOD scale x{:.1f}",
+    "task_initializing": "Initialisation...",
+    "task_starting": "Démarrage",
+    "task_starting_ellipsis": "Démarrage...",
+    "task_complete": "Terminé",
+    "task_failed": "Échec",
+    "task_cancelled": "Annulé",
+    "task_cancelling": "Annulation",
+    "task_applying": "Application..."
   }
 }

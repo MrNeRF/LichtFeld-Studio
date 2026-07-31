@@ -1039,4 +1039,15 @@ namespace lichtfeld::Strings {
         inline constexpr const char* STOP_RENDERER = "error_actions.stop_renderer";
     } // namespace ErrorActions
 
+    namespace Runtime {
+        inline constexpr const char* TASK_INITIALIZING = "runtime.task_initializing";
+        inline constexpr const char* TASK_STARTING = "runtime.task_starting";
+        inline constexpr const char* TASK_STARTING_ELLIPSIS = "runtime.task_starting_ellipsis";
+        inline constexpr const char* TASK_COMPLETE = "runtime.task_complete";
+        inline constexpr const char* TASK_FAILED = "runtime.task_failed";
+        inline constexpr const char* TASK_CANCELLED = "runtime.task_cancelled";
+        inline constexpr const char* TASK_CANCELLING = "runtime.task_cancelling";
+        inline constexpr const char* TASK_APPLYING = "runtime.task_applying";
+    } // namespace Runtime
+
 } // namespace lichtfeld::Strings

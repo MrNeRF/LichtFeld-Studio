@@ -2050,6 +2050,14 @@
     "checkpoint_save_failed": "Nie można zapisać punktu kontrolnego w iteracji {}:\\n\\n{}",
     "lod_enabled_no_tree": "Włączone, brak drzewa",
     "lod_disabled": "Brak RAD LOD",
-    "lod_scale": "Skala LOD x{:.1f}"
+    "lod_scale": "Skala LOD x{:.1f}",
+    "task_initializing": "Inicjalizacja...",
+    "task_starting": "Uruchamianie",
+    "task_starting_ellipsis": "Uruchamianie...",
+    "task_complete": "Ukończono",
+    "task_failed": "Niepowodzenie",
+    "task_cancelled": "Anulowano",
+    "task_cancelling": "Anulowanie",
+    "task_applying": "Stosowanie..."
   }
 }

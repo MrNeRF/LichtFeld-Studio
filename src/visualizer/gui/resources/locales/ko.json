@@ -2050,6 +2050,14 @@
     "checkpoint_save_failed": "반복 {}에서 체크포인트를 저장할 수 없습니다:\\n\\n{}",
     "lod_enabled_no_tree": "활성화됨, 트리 없음",
     "lod_disabled": "RAD LOD 없음",
-    "lod_scale": "LOD 배율 x{:.1f}"
+    "lod_scale": "LOD 배율 x{:.1f}",
+    "task_initializing": "초기화 중...",
+    "task_starting": "시작 중",
+    "task_starting_ellipsis": "시작 중...",
+    "task_complete": "완료",
+    "task_failed": "실패",
+    "task_cancelled": "취소됨",
+    "task_cancelling": "취소 중",
+    "task_applying": "적용 중..."
   }
 }

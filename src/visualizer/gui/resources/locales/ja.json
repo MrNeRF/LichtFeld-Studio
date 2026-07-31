@@ -2050,6 +2050,14 @@
     "checkpoint_save_failed": "反復{}でチェックポイントを保存できませんでした：\\n\\n{}",
     "lod_enabled_no_tree": "有効（ツリーなし）",
     "lod_disabled": "RAD LODなし",
-    "lod_scale": "LODスケール x{:.1f}"
+    "lod_scale": "LODスケール x{:.1f}",
+    "task_initializing": "初期化中...",
+    "task_starting": "開始中",
+    "task_starting_ellipsis": "開始中...",
+    "task_complete": "完了",
+    "task_failed": "失敗",
+    "task_cancelled": "キャンセル済み",
+    "task_cancelling": "キャンセル中",
+    "task_applying": "適用中..."
   }
 }

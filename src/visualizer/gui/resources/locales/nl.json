@@ -2050,6 +2050,14 @@
     "checkpoint_save_failed": "Kan checkpoint bij iteratie {} niet opslaan:\\n\\n{}",
     "lod_enabled_no_tree": "Ingeschakeld, geen boom",
     "lod_disabled": "Geen RAD LOD",
-    "lod_scale": "LOD-schaal x{:.1f}"
+    "lod_scale": "LOD-schaal x{:.1f}",
+    "task_initializing": "Initialiseren...",
+    "task_starting": "Starten",
+    "task_starting_ellipsis": "Starten...",
+    "task_complete": "Voltooid",
+    "task_failed": "Mislukt",
+    "task_cancelled": "Geannuleerd",
+    "task_cancelling": "Annuleren",
+    "task_applying": "Toepassen..."
   }
 }
