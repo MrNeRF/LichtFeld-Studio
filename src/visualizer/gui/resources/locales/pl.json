@@ -2092,6 +2092,14 @@
     "scene_manager_not_initialized": "Menedżer scen nie został zainicjowany",
     "import_failed_detail": "Import zakończył się wyjątkiem: {}",
     "import_unknown_exception": "Import zakończył się nieznanym wyjątkiem",
-    "training_unknown_error": "Podczas trenowania wystąpił nieznany błąd."
+    "training_unknown_error": "Podczas trenowania wystąpił nieznany błąd.",
+    "colmap_overwrite_message": "Eksport COLMAP nadpisze istniejące dane rzadkiej rekonstrukcji w:",
+    "folder_label": "Folder",
+    "file_load_failed_body": "Nie udało się wczytać <b>{}</b>:",
+    "cuda_driver_unsupported": "Wersja sterownika CUDA ({}.{}) nie jest obsługiwana.\n\nLichtFeld Studio wymaga CUDA {}.{} lub nowszej\n(sterownik NVIDIA 570+).\n\nZaktualizuj sterownik NVIDIA, aby uzyskać pełną funkcjonalność.",
+    "viewer_shutting_down": "Zamykanie przeglądarki",
+    "viewer_work_failed": "Zadanie przeglądarki nie powiodło się",
+    "colmap_min_track_length": "min-track-length nie może być użyte z --init; filtrowanie rzadkich punktów COLMAP nie zostanie zastosowane, ponieważ inicjalizacja używa '{}'",
+    "no_splat_node_named": "Brak węzła splat o nazwie '{}'"
   }
 }

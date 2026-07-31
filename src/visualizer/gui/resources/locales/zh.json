@@ -2099,6 +2099,14 @@
     "scene_manager_not_initialized": "场景管理器未初始化",
     "import_failed_detail": "导入因异常而失败：{}",
     "import_unknown_exception": "导入因未知异常而失败",
-    "training_unknown_error": "训练期间发生未知错误。"
+    "training_unknown_error": "训练期间发生未知错误。",
+    "colmap_overwrite_message": "COLMAP 导出将覆盖以下位置中现有的稀疏重建数据：",
+    "folder_label": "文件夹",
+    "file_load_failed_body": "无法加载 <b>{}</b>：",
+    "cuda_driver_unsupported": "不支持您的 CUDA 驱动程序版本 ({}.{})。\n\nLichtFeld Studio 需要 CUDA {}.{} 或更高版本\n（NVIDIA 驱动程序 570+）。\n\n请更新 NVIDIA 驱动程序以使用全部功能。",
+    "viewer_shutting_down": "正在关闭查看器",
+    "viewer_work_failed": "查看器操作失败",
+    "colmap_min_track_length": "min-track-length 不能与 --init 一起使用；由于初始化使用 '{}'，不会应用 COLMAP 稀疏点过滤",
+    "no_splat_node_named": "没有名为 '{}' 的 splat 节点"
   }
 }

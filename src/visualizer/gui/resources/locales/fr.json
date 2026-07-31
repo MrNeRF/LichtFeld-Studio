@@ -2092,6 +2092,14 @@
     "scene_manager_not_initialized": "Le gestionnaire de scènes n’est pas initialisé",
     "import_failed_detail": "Échec de l’importation avec une exception : {}",
     "import_unknown_exception": "Échec de l’importation avec une exception inconnue",
-    "training_unknown_error": "Une erreur inconnue est survenue pendant l’entraînement."
+    "training_unknown_error": "Une erreur inconnue est survenue pendant l’entraînement.",
+    "colmap_overwrite_message": "L’exportation COLMAP écrasera les données de reconstruction éparse existantes dans :",
+    "folder_label": "Dossier",
+    "file_load_failed_body": "Impossible de charger <b>{}</b> :",
+    "cuda_driver_unsupported": "Votre version du pilote CUDA ({}.{}) n’est pas prise en charge.\n\nLichtFeld Studio nécessite CUDA {}.{} ou une version ultérieure\n(pilote NVIDIA 570+).\n\nVeuillez mettre à jour votre pilote NVIDIA.",
+    "viewer_shutting_down": "Fermeture du visualiseur",
+    "viewer_work_failed": "Échec d’une opération du visualiseur",
+    "colmap_min_track_length": "min-track-length ne peut pas être utilisé avec --init ; le filtrage des points épars COLMAP ne sera pas appliqué car l’initialisation utilise '{}'",
+    "no_splat_node_named": "Aucun nœud splat nommé '{}'"
   }
 }

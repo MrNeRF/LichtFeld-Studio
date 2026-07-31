@@ -2092,6 +2092,14 @@
     "scene_manager_not_initialized": "Il gestore della scena non è inizializzato",
     "import_failed_detail": "Importazione non riuscita con eccezione: {}",
     "import_unknown_exception": "Importazione non riuscita con un’eccezione sconosciuta",
-    "training_unknown_error": "Si è verificato un errore sconosciuto durante il training."
+    "training_unknown_error": "Si è verificato un errore sconosciuto durante il training.",
+    "colmap_overwrite_message": "L’esportazione COLMAP sovrascriverà i dati della ricostruzione sparsa esistente in:",
+    "folder_label": "Cartella",
+    "file_load_failed_body": "Impossibile caricare <b>{}</b>:",
+    "cuda_driver_unsupported": "La versione del driver CUDA ({}.{}) non è supportata.\n\nLichtFeld Studio richiede CUDA {}.{} o successiva\n(driver NVIDIA 570+).\n\nAggiorna il driver NVIDIA per la piena funzionalità.",
+    "viewer_shutting_down": "Chiusura del visualizzatore in corso",
+    "viewer_work_failed": "Operazione del visualizzatore non riuscita",
+    "colmap_min_track_length": "min-track-length non può essere usato con --init; il filtraggio dei punti sparsi COLMAP non verrà applicato perché l’inizializzazione usa '{}'",
+    "no_splat_node_named": "Nessun nodo splat denominato '{}'"
   }
 }

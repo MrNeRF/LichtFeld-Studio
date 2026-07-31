@@ -2092,6 +2092,14 @@
     "scene_manager_not_initialized": "Scènebeheerder is niet geïnitialiseerd",
     "import_failed_detail": "Import mislukt met uitzondering: {}",
     "import_unknown_exception": "Import mislukt met een onbekende uitzondering",
-    "training_unknown_error": "Er is een onbekende fout opgetreden tijdens de training."
+    "training_unknown_error": "Er is een onbekende fout opgetreden tijdens de training.",
+    "colmap_overwrite_message": "COLMAP-export overschrijft bestaande sparse-reconstructiegegevens in:",
+    "folder_label": "Map",
+    "file_load_failed_body": "Laden van <b>{}</b> mislukt:",
+    "cuda_driver_unsupported": "Uw CUDA-stuurprogrammaversie ({}.{}) wordt niet ondersteund.\n\nLichtFeld Studio vereist CUDA {}.{} of nieuwer\n(NVIDIA-stuurprogramma 570+).\n\nWerk uw NVIDIA-stuurprogramma bij voor volledige functionaliteit.",
+    "viewer_shutting_down": "Viewer wordt afgesloten",
+    "viewer_work_failed": "Viewer-taak mislukt",
+    "colmap_min_track_length": "min-track-length kan niet met --init worden gebruikt; COLMAP-sparsepuntfiltering wordt niet toegepast omdat de initialisatie '{}' gebruikt",
+    "no_splat_node_named": "Geen splat-knooppunt met de naam '{}'"
   }
 }

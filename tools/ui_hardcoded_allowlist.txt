@@ -1,0 +1,12 @@
+# Exact reviewed strings intentionally excluded from check_ui_hardcoded.py.
+# Add an explanatory comment beside every new entry.
+
+# Renderer/backend diagnostics: API names are developer diagnostics, not UI copy.
+re:\[Vulkan\].*
+re:failed to (?:vk|vma).*
+re:failed to create saved RmlUi layer.*
+re:failed to create RmlUi Vulkan layer.*
+
+# Asset names and external handles retain their canonical spelling.
+Kloofendal Pure Sky
+Alps Field

@@ -2092,6 +2092,14 @@
     "scene_manager_not_initialized": "El gestor de escenas no está inicializado",
     "import_failed_detail": "La importación falló con una excepción: {}",
     "import_unknown_exception": "La importación falló con una excepción desconocida",
-    "training_unknown_error": "Se produjo un error desconocido durante el entrenamiento."
+    "training_unknown_error": "Se produjo un error desconocido durante el entrenamiento.",
+    "colmap_overwrite_message": "La exportación COLMAP sobrescribirá los datos de reconstrucción dispersa existentes en:",
+    "folder_label": "Carpeta",
+    "file_load_failed_body": "No se pudo cargar <b>{}</b>:",
+    "cuda_driver_unsupported": "La versión del controlador CUDA ({}.{}) no es compatible.\n\nLichtFeld Studio requiere CUDA {}.{} o posterior\n(controlador NVIDIA 570+).\n\nActualiza el controlador NVIDIA para disfrutar de toda la funcionalidad.",
+    "viewer_shutting_down": "Cerrando el visor",
+    "viewer_work_failed": "El trabajo del visor falló",
+    "colmap_min_track_length": "min-track-length no se puede usar con --init; no se aplicará el filtrado de puntos dispersos de COLMAP porque la inicialización usa '{}'",
+    "no_splat_node_named": "No hay ningún nodo splat llamado '{}'"
   }
 }

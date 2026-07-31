@@ -2092,6 +2092,14 @@
     "scene_manager_not_initialized": "Scene manager not initialized",
     "import_failed_detail": "Import failed with exception: {}",
     "import_unknown_exception": "Import failed with an unknown exception",
-    "training_unknown_error": "Unknown error occurred during training."
+    "training_unknown_error": "Unknown error occurred during training.",
+    "colmap_overwrite_message": "COLMAP export will overwrite existing sparse reconstruction data in:",
+    "folder_label": "Folder",
+    "file_load_failed_body": "Could not load <b>{}</b>:",
+    "cuda_driver_unsupported": "Your CUDA driver version ({}.{}) is not supported.\n\nLichtFeld Studio requires CUDA {}.{} or later\n(NVIDIA driver 570+).\n\nPlease update your NVIDIA driver for full functionality.",
+    "viewer_shutting_down": "Viewer is shutting down",
+    "viewer_work_failed": "Viewer work failed",
+    "colmap_min_track_length": "min-track-length cannot be used with --init; COLMAP sparse point filtering will not be applied because initialization uses '{}'",
+    "no_splat_node_named": "No splat node named '{}'"
   }
 }

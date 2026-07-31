@@ -2092,6 +2092,14 @@
     "scene_manager_not_initialized": "シーンマネージャーが初期化されていません",
     "import_failed_detail": "例外によりインポートに失敗しました: {}",
     "import_unknown_exception": "不明な例外によりインポートに失敗しました",
-    "training_unknown_error": "トレーニング中に不明なエラーが発生しました。"
+    "training_unknown_error": "トレーニング中に不明なエラーが発生しました。",
+    "colmap_overwrite_message": "COLMAP エクスポートは既存のスパース再構成データを次の場所に上書きします:",
+    "folder_label": "フォルダー",
+    "file_load_failed_body": "<b>{}</b> を読み込めませんでした:",
+    "cuda_driver_unsupported": "CUDA ドライバーのバージョン ({}.{}) はサポートされていません。\n\nLichtFeld Studio には CUDA {}.{} 以降が必要です\n(NVIDIA ドライバー 570+)。\n\n完全な機能を利用するには NVIDIA ドライバーを更新してください。",
+    "viewer_shutting_down": "ビューアーを終了しています",
+    "viewer_work_failed": "ビューアーの処理に失敗しました",
+    "colmap_min_track_length": "min-track-length は --init と併用できません。初期化で '{}' を使用するため、COLMAP スパースポイントのフィルタリングは適用されません",
+    "no_splat_node_named": "'{}' という名前のスプラットノードがありません"
   }
 }

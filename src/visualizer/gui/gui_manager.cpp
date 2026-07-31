@@ -6321,11 +6321,12 @@ namespace lfs::vis::gui {
 
         state::SplatFileLoadFailed::when([this](const auto& e) {
             lfs::core::ModalRequest req;
-            req.title = "Failed to load file";
+            req.title = LOC(lichtfeld::Strings::ErrorModal::FILE_OPEN_FAILED);
             req.body_rml = std::format(
-                "<div>Could not load <b>{}</b>:</div>"
+                "<div>{}</div>"
                 "<div class=\"content-row error-text\" style=\"margin-top: 8dp;\">{}</div>",
-                lfs::core::path_to_utf8(e.path.filename()),
+                std::format(LOC(lichtfeld::Strings::Runtime::FILE_LOAD_FAILED_BODY),
+                            lfs::core::path_to_utf8(e.path.filename())),
                 e.error);
             req.style = lfs::core::ModalStyle::Error;
             req.width_dp = 520;

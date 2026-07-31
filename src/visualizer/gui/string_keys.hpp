@@ -1082,6 +1082,14 @@ namespace lichtfeld::Strings {
         inline constexpr const char* IMPORT_FAILED_DETAIL = "runtime.import_failed_detail";
         inline constexpr const char* IMPORT_UNKNOWN_EXCEPTION = "runtime.import_unknown_exception";
         inline constexpr const char* TRAINING_UNKNOWN_ERROR = "runtime.training_unknown_error";
+        inline constexpr const char* COLMAP_OVERWRITE_MESSAGE = "runtime.colmap_overwrite_message";
+        inline constexpr const char* FOLDER_LABEL = "runtime.folder_label";
+        inline constexpr const char* FILE_LOAD_FAILED_BODY = "runtime.file_load_failed_body";
+        inline constexpr const char* CUDA_DRIVER_UNSUPPORTED = "runtime.cuda_driver_unsupported";
+        inline constexpr const char* VIEWER_SHUTTING_DOWN = "runtime.viewer_shutting_down";
+        inline constexpr const char* VIEWER_WORK_FAILED = "runtime.viewer_work_failed";
+        inline constexpr const char* COLMAP_MIN_TRACK_LENGTH = "runtime.colmap_min_track_length";
+        inline constexpr const char* NO_SPLAT_NODE_NAMED = "runtime.no_splat_node_named";
     } // namespace Runtime
 
 } // namespace lichtfeld::Strings

@@ -217,8 +217,8 @@ namespace lfs::vis::gui {
     template <typename F>
     auto postToViewerAndWait(VisualizerImpl* viewer, F&& fn) -> std::invoke_result_t<F> {
         using ResultT = std::invoke_result_t<F>;
-        constexpr std::string_view shutdown_error = "Viewer is shutting down";
-        constexpr std::string_view task_error = "Viewer work failed";
+        const std::string shutdown_error = LOC(lichtfeld::Strings::Runtime::VIEWER_SHUTTING_DOWN);
+        const std::string task_error = LOC(lichtfeld::Strings::Runtime::VIEWER_WORK_FAILED);
 
         if (viewer->isOnViewerThread()) {
             if (!viewer->acceptsPostedWork()) {
@@ -935,7 +935,7 @@ namespace lfs::vis::gui {
                         }
                     }
                 } catch (const std::exception& e) {
-                    error_msg = std::string("COLMAP export crashed with exception: ") + e.what();
+                    error_msg = std::format(LOC(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL), e.what());
                 } catch (...) {
                     error_msg = LOC(lichtfeld::Strings::Runtime::COLMAP_UNKNOWN_EXCEPTION);
                 }
@@ -1206,7 +1206,7 @@ namespace lfs::vis::gui {
                     }
 
                 } catch (const std::exception& e) {
-                    error_msg = std::string("Export crashed with exception: ") + e.what();
+                    error_msg = std::format(LOC(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL), e.what());
                     LOG_ERROR("{}", error_msg);
                 } catch (...) {
                     error_msg = LOC(lichtfeld::Strings::Runtime::EXPORT_UNKNOWN_EXCEPTION);
@@ -1564,7 +1564,7 @@ namespace lfs::vis::gui {
                         local_params.init_path.has_value() &&
                         !local_params.init_path->empty()) {
                         LOG_WARN(
-                            "min-track-length cannot be used with --init; COLMAP sparse point filtering will not be applied because initialization uses '{}'",
+                            LOC(lichtfeld::Strings::Runtime::COLMAP_MIN_TRACK_LENGTH),
                             *local_params.init_path);
                         effective_min_track_length = 0;
                     }
@@ -1953,7 +1953,7 @@ namespace lfs::vis::gui {
                         {
                             std::lock_guard lock(video_export_state_.mutex);
                             video_export_state_.error = std::format(
-                                "Failed to render frame {}: {}", frame + 1, frame_tensor.error());
+                                LOC(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL), frame_tensor.error());
                             video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_RENDER_ERROR);
                         }
                         publishVideoExportOverlayState();
@@ -2234,7 +2234,7 @@ namespace lfs::vis::gui {
 
                 const auto* const node = scene_manager->getScene().getNode(source_name);
                 if (!node || node->type != core::NodeType::SPLAT || !node->model) {
-                    return std::unexpected(std::format("No splat node named '{}'", source_name));
+                    return std::unexpected(std::format(LOC(lichtfeld::Strings::Runtime::NO_SPLAT_NODE_NAMED), source_name));
                 }
 
                 const auto input_count = static_cast<int64_t>(node->model->size());
@@ -2305,7 +2305,8 @@ namespace lfs::vis::gui {
                 {
                     const std::lock_guard lock(splat_simplify_state_.mutex);
                     splat_simplify_state_.error = cancelled ? std::string{} : result.error();
-                    splat_simplify_state_.stage = cancelled ? "Cancelled" : "Failed";
+                    splat_simplify_state_.stage = cancelled ? LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED)
+                                                            : LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
                 }
                 splat_simplify_state_.active.store(false);
                 publishSplatSimplifyState();

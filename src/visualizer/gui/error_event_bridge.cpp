@@ -181,12 +181,8 @@ namespace lfs::vis::gui {
 
     std::optional<lfs::ErrorNotification>
     translateCudaVersionUnsupported(const state::CudaVersionUnsupported& e) {
-        std::string message = std::format(
-            "Your CUDA driver version ({}.{}) is not supported.\n\n"
-            "LichtFeld Studio requires CUDA {}.{} or later\n"
-            "(NVIDIA driver 570+).\n\n"
-            "Please update your NVIDIA driver for full functionality.",
-            e.major, e.minor, e.min_major, e.min_minor);
+        std::string message = std::format(LOC(lichtfeld::Strings::Runtime::CUDA_DRIVER_UNSUPPORTED),
+                                          e.major, e.minor, e.min_major, e.min_minor);
         return makeNotification(lfs::ErrorCode::FailedPrecondition, lfs::ErrorDomain::CUDA,
                                 lfs::Severity::Warning, std::move(message), error_op::kCudaCheck,
                                 LFS_SOURCE_SITE_CURRENT(), lfs::ErrorSurface::Toast, /*actions=*/{});

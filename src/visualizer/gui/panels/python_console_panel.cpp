@@ -459,7 +459,8 @@ namespace {
         std::vector<lfs::vis::gui::ContextMenuItem> items;
         if (has_selection) {
             items.push_back(lfs::vis::gui::ContextMenuItem{
-                .label = lfs::event::LocalizationManager::getInstance().get("common.copy"), .action = "copy"});
+                .label = lfs::event::LocalizationManager::getInstance().get("common.copy"),
+                .action = "copy"});
         }
         items.push_back(lfs::vis::gui::ContextMenuItem{
             .label = lfs::event::LocalizationManager::getInstance().get("common.copy_all"),
@@ -1096,9 +1097,9 @@ namespace {
 
         std::string status;
         if (pane.packages_loading)
-            status = "Loading...";
+            status = LOC("common.loading");
         else if (!pane.packages_error.empty())
-            status = "Error";
+            status = LOC("common.error");
         else if (pane.packages_search_filter.empty())
             status = std::format("({})", pane.packages.size());
         else
@@ -1502,7 +1503,7 @@ namespace lfs::vis::gui::panels {
 
     void PythonConsoleState::runScriptAsync(const std::string& code) {
         if (script_running_.load()) {
-            addError("A script is already running");
+            addError(LOC("python_console.running"));
             return;
         }
 

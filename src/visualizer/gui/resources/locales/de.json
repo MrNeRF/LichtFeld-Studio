@@ -2092,6 +2092,14 @@
     "scene_manager_not_initialized": "Szenenverwaltung nicht initialisiert",
     "import_failed_detail": "Import mit Ausnahme fehlgeschlagen: {}",
     "import_unknown_exception": "Import mit unbekannter Ausnahme fehlgeschlagen",
-    "training_unknown_error": "Während des Trainings ist ein unbekannter Fehler aufgetreten."
+    "training_unknown_error": "Während des Trainings ist ein unbekannter Fehler aufgetreten.",
+    "colmap_overwrite_message": "Der COLMAP-Export überschreibt vorhandene Sparse-Rekonstruktionsdaten in:",
+    "folder_label": "Ordner",
+    "file_load_failed_body": "<b>{}</b> konnte nicht geladen werden:",
+    "cuda_driver_unsupported": "Ihre CUDA-Treiberversion ({}.{}) wird nicht unterstützt.\n\nLichtFeld Studio benötigt CUDA {}.{} oder höher\n(NVIDIA-Treiber 570+).\n\nBitte aktualisieren Sie Ihren NVIDIA-Treiber.",
+    "viewer_shutting_down": "Viewer wird beendet",
+    "viewer_work_failed": "Viewer-Aufgabe fehlgeschlagen",
+    "colmap_min_track_length": "min-track-length kann nicht mit --init verwendet werden; die COLMAP-Sparsepunktfilterung wird nicht angewendet, da die Initialisierung '{}' verwendet",
+    "no_splat_node_named": "Kein Splat-Knoten namens '{}'"
   }
 }

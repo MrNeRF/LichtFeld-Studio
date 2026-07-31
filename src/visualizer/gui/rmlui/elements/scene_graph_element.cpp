@@ -2409,13 +2409,12 @@ namespace lfs::vis::gui {
 
             const std::string export_button = "Overwrite";
             lfs::core::ModalRequest request;
-            request.title = "Export COLMAP sparse";
+            request.title = LOC(lichtfeld::Strings::Window::EXPORT);
             request.style = lfs::core::ModalStyle::Warning;
             request.width_dp = 560;
             request.body_rml =
-                std::string("<div>COLMAP export will overwrite existing sparse reconstruction data in:</div>") +
-                "<div class=\"content-row\" style=\"margin-top: 8dp;\">"
-                "<span class=\"dim-text\">Folder </span>" +
+                std::format("<div>{}</div>", LOC(lichtfeld::Strings::Runtime::COLMAP_OVERWRITE_MESSAGE)) +
+                "<div class=\"content-row\" style=\"margin-top: 8dp;\">" std::format("<span class=\"dim-text\">{} </span>", LOC(lichtfeld::Strings::Runtime::FOLDER_LABEL)) +
                 encode(output_path_text) +
                 "</div>"
                 "<div class=\"warning-text\" style=\"margin-top: 8dp;\">"
