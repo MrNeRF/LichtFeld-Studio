@@ -30,13 +30,18 @@ Every shipped locale must have exactly the same keys as `en.json`, even when a
 translation is temporarily the English fallback. The runtime fallback keeps the
 UI readable, but CI rejects missing and obsolete keys. Translated strings must
 also preserve the `std::format` placeholders from English; named placeholders
-may be reordered to suit the target language.
+may be reordered to suit the target language. The check also enforces the
+locale-file convention of one JSON key per line, so translations remain
+reviewable and line-oriented diffs stay clear.
 
 Before submitting localization changes, run:
 
 ```bash
 python tools/check_locale_completeness.py
 ```
+
+If it reports multiple keys on one line, reformat that JSON object so each key
+and value has its own line; do not silence the report with an allowlist.
 
 To audit values that are still identical to English without failing the check:
 
@@ -53,6 +58,36 @@ python tools/check_locale_completeness.py --fail-on-identical
 
 The Locale Completeness GitHub Actions workflow runs the default check for pull
 requests and pushes to `master`; the identical-value audit remains opt-in.
+
+### Hardcoded UI text audit
+
+In addition to checking locale bundles, scan the native GUI, RML templates, and
+Python UI plugins for likely user-facing text that bypasses localization:
+
+```bash
+python tools/check_ui_hardcoded.py
+```
+
+The scanner covers common native and Python UI sinks, RML text nodes, and
+Python `bind_func` labels. It is intentionally heuristic: its output is a
+review queue, not proof that every reported literal is visible UI text. Fix
+user-facing findings by moving the text to `en.json` and all shipped locales;
+retain English in a locale only when that is the intended product wording.
+
+For a reviewed non-UI or technical exception, add either an exact string or a
+carefully scoped `re:` pattern to `tools/ui_hardcoded_allowlist.txt`, with a
+comment explaining why it is safe to exclude. Do not use the allowlist to hide
+ordinary interface text. Once the current baseline is intentionally clean, CI
+or a local contract check can enforce the audit with:
+
+```bash
+python tools/check_ui_hardcoded.py --fail-on-candidates
+```
+
+When changing text generated from cached records, toolbars, or data models,
+make the cache invalidation depend on `RuntimeState.language_generation` (or
+the equivalent native language-generation signal). Otherwise the text can stay
+in the previous language until an unrelated interaction rebuilds the UI.
 
 ## Code Style
 
