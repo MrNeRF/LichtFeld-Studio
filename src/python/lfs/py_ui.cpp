@@ -4839,6 +4839,8 @@ namespace lfs::python {
                         if (auto* const gui_manager = get_gui_manager())
                             gui_manager->ensureCjkFontsLoaded();
                     lfs::vis::publish_language_generation();
+                    if (auto* const gui_manager = get_gui_manager())
+                        gui_manager->requestLocalizationUiRefresh();
                 }
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");

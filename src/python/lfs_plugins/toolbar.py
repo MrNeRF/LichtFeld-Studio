@@ -499,7 +499,7 @@ class _GizmoToolbarController:
             "tool",
             display_button["value"],
             display_button["icon_src"],
-            tooltip_key="ui.transform_tools",
+            tooltip_key="toolbar.transform_tools",
             tooltip_text="Transform Tools",
             action_id=display_button["action_id"],
             shortcut_text=display_button["shortcut_text"],
@@ -1087,10 +1087,10 @@ class _UtilityToolbarController:
     _INPUT_SETTINGS_PANEL_ID = "lfs.input_settings"
     _PLUGIN_MARKETPLACE_PANEL_ID = "lfs.plugin_marketplace"
     _CAMERA_MODE_SPECS = (
-        ("camera-orbit", "orbit", "ui.orbit_camera", "Orbit Camera"),
-        ("world", "trackball", "ui.free_orbit_camera", "Free Orbit Camera"),
-        ("camera-fpv", "fpv", "ui.fly_camera", "Fly Camera"),
-        ("drone", "drone", "ui.drone_camera", "Drone Camera"),
+        ("camera-orbit", "orbit", "toolbar.orbit_camera", "Orbit Camera"),
+        ("world", "trackball", "toolbar.free_orbit_camera", "Free Orbit Camera"),
+        ("camera-fpv", "fpv", "toolbar.fly_camera", "Fly Camera"),
+        ("drone", "drone", "toolbar.drone_camera", "Drone Camera"),
     )
     _PRIMARY_ACTIONS = {
         "home": "CAMERA_RESET_HOME",
@@ -1647,6 +1647,10 @@ class _ViewportToolbarController:
             trainer_state = RuntimeState.trainer_state.value
         except Exception:
             trainer_state = ""
+        try:
+            language_generation = RuntimeState.language_generation.value
+        except Exception:
+            language_generation = 0
 
         def call(default, getter, *args):
             if not callable(getter):
@@ -1712,6 +1716,7 @@ class _ViewportToolbarController:
             )
         )
         return (
+            language_generation,
             trainer_state,
             active_tool,
             active_submode,

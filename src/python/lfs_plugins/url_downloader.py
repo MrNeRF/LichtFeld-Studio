@@ -285,9 +285,9 @@ def _download_http(
             
             if on_progress:
                 if total_size:
-            on_progress(0.0, f"{lf.ui.tr('asset_manager.import_button_downloading')} 0% (0 / {_format_bytes(total_size)})")
+                    on_progress(0.0, f"{lf.ui.tr('asset_manager.import_button_downloading')} 0% (0 / {_format_bytes(total_size)})")
                 else:
-            on_progress(0.0, f"{lf.ui.tr('asset_manager.import_button_downloading')} (size unknown)")
+                    on_progress(0.0, f"{lf.ui.tr('asset_manager.import_button_downloading')} (size unknown)")
             
             _download_with_progress(
                 resp,

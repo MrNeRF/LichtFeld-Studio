@@ -197,6 +197,7 @@
     "status.select_item": "세부정보를 보려면 항목을 선택하세요",
     "status.one_item_selected": "1개 항목 선택됨",
     "status.multi_items_selected": "{count}개 항목 선택됨",
+    "status.showing_assets": "{count}개 에셋 표시 중",
     "title": "에셋 매니저",
     "panel_title": "에셋 관리자",
     "import_button": "가져오기",
@@ -765,7 +766,9 @@
     "theme_vignette": "비네팅",
     "theme_vignette_intensity": "비네팅 강도",
     "theme_vignette_radius": "비네팅 반경",
-    "theme_vignette_softness": "비네팅 부드러움"
+    "theme_vignette_softness": "비네팅 부드러움",
+    "environment": "환경",
+    "preset": "프리셋"
   },
   "toolbar": {
     "selection": "선택",
@@ -1640,7 +1643,9 @@
     "confirm_uninstall_no": "아니요",
     "load_on_startup": "시작 시 로드",
     "view.grid": "그리드 보기",
-    "view.list": "목록 보기"
+    "view.list": "목록 보기",
+    "registry_loaded": "레지스트리를 불러왔습니다: 마켓플레이스 카탈로그에 플러그인 {count}개가 있습니다.",
+    "registry_unavailable": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다."
   },
   "sequencer": {
     "edit_focal_length": "초점 거리 편집...",
@@ -1678,7 +1683,11 @@
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_lod": "Level of Detail",
+    "section_viewport": "뷰포트",
+    "section_camera": "카메라 및 투영",
+    "section_selection": "선택 및 오버레이",
+    "section_post_process": "후처리",
+    "section_lod": "세부 수준 (LOD)",
     "lod_enabled": "Level of Detail 사용",
     "lod_max_splats": "최대 스플랫",
     "lod_page_pool_splats": "LOD 캐시 예산",
@@ -1750,6 +1759,7 @@
     "description": "설명",
     "status": "상태",
     "status_not_loaded": "로드되지 않음",
+    "status_active": "활성",
     "error.enter_github_url": "GitHub URL을 입력하세요",
     "status.installed": "설치됨: {}",
     "status.install_failed": "설치 실패",

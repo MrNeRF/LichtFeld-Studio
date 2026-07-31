@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_menu_bar.hpp"
-#include "core/events.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
@@ -723,10 +723,10 @@ namespace lfs::vis::gui {
                 std::string tooltip;
             };
             const NavButtonSpec kNavButtons[] = {
-                {NavMode::Orbit, "camera-orbit", lfs::event::LocalizationManager::getInstance().get("ui.orbit_camera")},
-                {NavMode::Trackball, "world", lfs::event::LocalizationManager::getInstance().get("ui.free_orbit_camera")},
-                {NavMode::FPV, "camera-fpv", lfs::event::LocalizationManager::getInstance().get("ui.fly_camera")},
-                {NavMode::Drone, "drone", lfs::event::LocalizationManager::getInstance().get("ui.drone_camera")},
+                {NavMode::Orbit, "camera-orbit", lfs::event::LocalizationManager::getInstance().get("toolbar.orbit_camera")},
+                {NavMode::Trackball, "world", lfs::event::LocalizationManager::getInstance().get("toolbar.free_orbit_camera")},
+                {NavMode::FPV, "camera-fpv", lfs::event::LocalizationManager::getInstance().get("toolbar.fly_camera")},
+                {NavMode::Drone, "drone", lfs::event::LocalizationManager::getInstance().get("toolbar.drone_camera")},
             };
             const auto mode = ic->cameraNavigationMode();
             for (const auto& spec : kNavButtons) {
@@ -994,7 +994,7 @@ namespace lfs::vis::gui {
                 menu_window_split_view_->SetClass("selected", split_view);
                 menu_window_split_view_->SetAttribute(
                     "title", lfs::event::LocalizationManager::getInstance().get(
-                                  split_view ? "ui.exit_independent_split_view" : "ui.independent_split_view"));
+                                 split_view ? "ui.exit_independent_split_view" : "ui.independent_split_view"));
                 last_window_split_view_ = split_view;
                 render_needed_ = true;
             }
@@ -1018,7 +1018,7 @@ namespace lfs::vis::gui {
                 menu_window_maximize_->SetClass("maximized", maximized);
                 menu_window_maximize_->SetAttribute(
                     "title", lfs::event::LocalizationManager::getInstance().get(
-                                  maximized ? "ui.restore_window" : "ui.maximize_window"));
+                                 maximized ? "ui.restore_window" : "ui.maximize_window"));
                 last_window_maximized_ = maximized;
                 render_needed_ = true;
             }

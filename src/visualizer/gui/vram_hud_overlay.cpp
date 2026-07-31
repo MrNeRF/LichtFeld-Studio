@@ -726,7 +726,7 @@ namespace lfs::vis::gui {
             auto empty_ptr = document_->CreateElement("div");
             empty_ptr->SetAttribute("class", "vram-hud-empty");
             empty_ptr->SetInnerRML(
-                lfs::event::LocalizationManager::getInstance().get("common.waiting_training_diagnostics"));
+                lfs::event::LocalizationManager::getInstance().get("toolbar.waiting_training_diagnostics"));
             empty_row_ = rows_root_->AppendChild(std::move(empty_ptr));
         }
 

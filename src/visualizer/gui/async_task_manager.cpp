@@ -935,7 +935,7 @@ namespace lfs::vis::gui {
                         }
                     }
                 } catch (const std::exception& e) {
-                    error_msg = std::format(LOC(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL), e.what());
+                    error_msg = LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, e.what());
                 } catch (...) {
                     error_msg = LOC(lichtfeld::Strings::Runtime::COLMAP_UNKNOWN_EXCEPTION);
                 }
@@ -1206,7 +1206,7 @@ namespace lfs::vis::gui {
                     }
 
                 } catch (const std::exception& e) {
-                    error_msg = std::format(LOC(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL), e.what());
+                    error_msg = LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, e.what());
                     LOG_ERROR("{}", error_msg);
                 } catch (...) {
                     error_msg = LOC(lichtfeld::Strings::Runtime::EXPORT_UNKNOWN_EXCEPTION);
@@ -1508,7 +1508,7 @@ namespace lfs::vis::gui {
 
                     try {
                         const std::string message = detail && *detail
-                                                        ? std::format(LOC(lichtfeld::Strings::Runtime::IMPORT_FAILED_DETAIL), detail)
+                                                        ? LOCF(lichtfeld::Strings::Runtime::IMPORT_FAILED_DETAIL, detail)
                                                         : LOC(lichtfeld::Strings::Runtime::IMPORT_UNKNOWN_EXCEPTION);
                         {
                             const std::lock_guard lock(import_state_.mutex);
@@ -1563,9 +1563,8 @@ namespace lfs::vis::gui {
                     if (effective_min_track_length > 0 &&
                         local_params.init_path.has_value() &&
                         !local_params.init_path->empty()) {
-                        LOG_WARN(
-                            LOC(lichtfeld::Strings::Runtime::COLMAP_MIN_TRACK_LENGTH),
-                            *local_params.init_path);
+                        LOG_WARN("{}", LOCF(lichtfeld::Strings::Runtime::COLMAP_MIN_TRACK_LENGTH,
+                                            *local_params.init_path));
                         effective_min_track_length = 0;
                     }
                     const lfs::io::LoadOptions load_options{
@@ -1913,8 +1912,7 @@ namespace lfs::vis::gui {
                     {
                         std::lock_guard lock(video_export_state_.mutex);
                         video_export_state_.error = result.error();
-                        video_export_state_.stage = std::format(LOC(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL),
-                                                                result.error());
+                        video_export_state_.stage = LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, result.error());
                     }
                     LOG_ERROR("Failed to open encoder: {}", result.error());
                     lfs::core::events::state::VideoExportFailed{
@@ -1952,8 +1950,7 @@ namespace lfs::vis::gui {
                         LOG_ERROR("Failed to render frame {}: {}", frame, frame_tensor.error());
                         {
                             std::lock_guard lock(video_export_state_.mutex);
-                            video_export_state_.error = std::format(
-                                LOC(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL), frame_tensor.error());
+                            video_export_state_.error = LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, frame_tensor.error());
                             video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_RENDER_ERROR);
                         }
                         publishVideoExportOverlayState();
@@ -1987,8 +1984,7 @@ namespace lfs::vis::gui {
                         static_cast<float>(frame + 1) / static_cast<float>(total_frames));
                     {
                         std::lock_guard lock(video_export_state_.mutex);
-                        video_export_state_.stage = std::format(
-                            LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODING_FRAME), frame + 1, total_frames);
+                        video_export_state_.stage = LOCF(lichtfeld::Strings::Runtime::VIDEO_ENCODING_FRAME, frame + 1, total_frames);
                     }
                     publishVideoExportOverlayState();
                 }
@@ -2234,7 +2230,7 @@ namespace lfs::vis::gui {
 
                 const auto* const node = scene_manager->getScene().getNode(source_name);
                 if (!node || node->type != core::NodeType::SPLAT || !node->model) {
-                    return std::unexpected(std::format(LOC(lichtfeld::Strings::Runtime::NO_SPLAT_NODE_NAMED), source_name));
+                    return std::unexpected(LOCF(lichtfeld::Strings::Runtime::NO_SPLAT_NODE_NAMED, source_name));
                 }
 
                 const auto input_count = static_cast<int64_t>(node->model->size());

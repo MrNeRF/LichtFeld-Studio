@@ -661,7 +661,11 @@
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_lod": "Level of Detail",
+    "section_viewport": "Vista",
+    "section_camera": "Cámara y proyección",
+    "section_selection": "Selección y superposiciones",
+    "section_post_process": "Posprocesamiento",
+    "section_lod": "Nivel de detalle (LOD)",
     "lod_enabled": "Habilitar Level of Detail",
     "lod_max_splats": "Splats máximos",
     "lod_page_pool_splats": "Presupuesto de caché LOD",
@@ -805,6 +809,7 @@
     "status.select_item": "Seleccione un elemento para ver detalles",
     "status.one_item_selected": "1 elemento seleccionado",
     "status.multi_items_selected": "{count} elementos seleccionados",
+    "status.showing_assets": "Mostrando {count} recursos",
     "toolbar.import": "Importar",
     "toolbar.search_icon": "Buscar",
     "toolbar.search_placeholder": "Buscar activos...",
@@ -1452,7 +1457,9 @@
     "theme_vignette": "Viñeteado",
     "theme_vignette_intensity": "Intensidad del viñeteado",
     "theme_vignette_radius": "Radio del viñeteado",
-    "theme_vignette_softness": "Suavidad del viñeteado"
+    "theme_vignette_softness": "Suavidad del viñeteado",
+    "environment": "Entorno",
+    "preset": "Preajuste"
   },
   "ellipsoid": {
     "title": "Elipsoide",
@@ -1696,6 +1703,7 @@
     "description": "Descripción",
     "status": "Estado",
     "status_not_loaded": "no cargado",
+    "status_active": "activo",
     "error.enter_github_url": "Introduce una URL de GitHub",
     "status.installed": "Instalado: {}",
     "status.install_failed": "Error de instalación",
@@ -1742,7 +1750,9 @@
     "confirm_uninstall_no": "No",
     "load_on_startup": "Cargar al Iniciar",
     "view.grid": "Vista de cuadrícula",
-    "view.list": "Vista de lista"
+    "view.list": "Vista de lista",
+    "registry_loaded": "Registro cargado: {count} plugins en el catálogo del marketplace.",
+    "registry_unavailable": "Registro no disponible: mostrando {count} plugins de respaldo."
   },
   "sequencer": {
     "edit_focal_length": "Editar la Longitud Focal...",

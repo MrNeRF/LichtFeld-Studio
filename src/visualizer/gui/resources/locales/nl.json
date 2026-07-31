@@ -197,6 +197,7 @@
     "status.select_item": "Selecteer een item om details te bekijken",
     "status.one_item_selected": "1 item geselecteerd",
     "status.multi_items_selected": "{count} items geselecteerd",
+    "status.showing_assets": "{count} assets weergegeven",
     "title": "Assetbeheer",
     "toolbar.import": "Importeren",
     "toolbar.search_icon": "Zoeken",
@@ -765,7 +766,9 @@
     "theme_vignette": "Vignettering",
     "theme_vignette_intensity": "Vignet-intensiteit",
     "theme_vignette_radius": "Vignetstraal",
-    "theme_vignette_softness": "Vignetzachtheid"
+    "theme_vignette_softness": "Vignetzachtheid",
+    "environment": "Omgeving",
+    "preset": "Voorinstelling"
   },
   "toolbar": {
     "selection": "Selectie",
@@ -1640,7 +1643,9 @@
     "confirm_uninstall_no": "Nee",
     "load_on_startup": "Laden bij opstarten",
     "view.grid": "Rasterweergave",
-    "view.list": "Lijstweergave"
+    "view.list": "Lijstweergave",
+    "registry_loaded": "Register geladen: {count} plugins in de marketplacecatalogus.",
+    "registry_unavailable": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven."
   },
   "sequencer": {
     "edit_focal_length": "Brandpuntsafstand bewerken...",
@@ -1678,7 +1683,11 @@
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_lod": "Level of Detail",
+    "section_viewport": "Viewport",
+    "section_camera": "Camera en projectie",
+    "section_selection": "Selectie en overlays",
+    "section_post_process": "Nabewerking",
+    "section_lod": "Detailniveau (LOD)",
     "lod_enabled": "Level of Detail inschakelen",
     "lod_max_splats": "Max. splats",
     "lod_page_pool_splats": "LOD-cachebudget",
@@ -1750,6 +1759,7 @@
     "description": "Beschrijving",
     "status": "Status",
     "status_not_loaded": "niet geladen",
+    "status_active": "actief",
     "error.enter_github_url": "Voer een GitHub-URL in",
     "status.installed": "Geïnstalleerd: {}",
     "status.install_failed": "Installatie mislukt",

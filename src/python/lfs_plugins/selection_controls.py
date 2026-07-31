@@ -7,6 +7,7 @@ import math
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .ui import RuntimeState
 
 try:
     from .ui import native_value as _native_store_value
@@ -286,6 +287,7 @@ class SelectionControlsController:
 
     def _state_items(self):
         return (
+            ("language_generation", RuntimeState.language_generation.value),
             ("active_tool", self._active_tool),
             ("active_mode", self._active_mode),
             ("has_scene", self._has_scene),

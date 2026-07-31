@@ -19,19 +19,25 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GUI_ROOT = PROJECT_ROOT / "src" / "visualizer" / "gui"
-SOURCE_SUFFIXES = {".cpp", ".hpp", ".h"}
+PYTHON_GUI_ROOT = PROJECT_ROOT / "src" / "python" / "lfs_plugins"
+SOURCE_SUFFIXES = {".cpp", ".hpp", ".h", ".py"}
 RML_SUFFIXES = {".rml"}
 STRING_LITERAL = re.compile(r'"((?:\\.|[^"\\])*)"')
 RML_TEXT = re.compile(r">([^<>{}][^<>{}]*[A-Za-z][^<>{}]*)<")
 UI_SINK = re.compile(
-    r"\b(SetText|SetInnerRML|body_rml|\.title\s*=|\.label\s*=|"
-    r"\.stage\s*=|\.error\s*=|\bstatus\s*=|addError\(|fail_start\(|std::unexpected\()"
+    r"\b(SetText|SetInnerRML|body_rml|\.title\s*=|\.label\s*=|bind_func\(|"
+    r"\.stage\s*=|\.error\s*=|\bstatus\s*=|addError\(|fail_start\(|std::unexpected\(|"
+    r"set_text\(|set_inner_rml\(|message_dialog\()"
 )
 IGNORE_LINE = re.compile(r"\b(LOG_(?:TRACE|DEBUG|INFO|WARN|ERROR)|#include)\b")
 TECHNICAL_LITERAL = re.compile(
     r"^(?:[A-Za-z_][A-Za-z0-9_./:-]*|[A-Z0-9_]{2,}|"
     r"(?:PLY|SOG|SPZ|USDZ?|RAD|COLMAP|HTML|CUDA|GPU|RML|LSP))$"
 )
+FORMAT_ONLY_LITERAL = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*:[^{}]+\}$")
+INTERPOLATION_ONLY_LITERAL = re.compile(r"^[^A-Za-z{}]*\{[^{}]+\}[^A-Za-z{}]*$")
+STYLE_INTERPOLATION_LITERAL = re.compile(r"^\{[^{}]+\}(?:dp|px)$")
+DYNAMIC_MODEL_FIELD_LITERAL = re.compile(r"^_?label_\{[^{}]+\}$")
 
 
 @dataclass(frozen=True)
@@ -44,7 +50,13 @@ class Finding:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=GUI_ROOT, help="GUI source root to scan")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        action="append",
+        default=None,
+        help="GUI source root to scan (repeatable; defaults to native GUI and Python GUI plugins)",
+    )
     parser.add_argument(
         "--allowlist",
         type=Path,
@@ -75,6 +87,12 @@ def is_candidate(text: str, allowlist: set[str], allow_patterns: list[re.Pattern
     text = text.strip()
     if not text or text in allowlist or "LOC(" in text:
         return False
+    # Numeric format specifications and composed status lines that already call
+    # the localization API do not introduce user-facing hardcoded copy.
+    if (FORMAT_ONLY_LITERAL.fullmatch(text) or INTERPOLATION_ONLY_LITERAL.fullmatch(text)
+            or STYLE_INTERPOLATION_LITERAL.fullmatch(text)
+            or DYNAMIC_MODEL_FIELD_LITERAL.fullmatch(text) or "lf.ui.tr(" in text):
+        return False
     if any(pattern.fullmatch(text) for pattern in allow_patterns):
         return False
     if text.startswith(("@tr:", "@")) or (text.startswith("&") and text.endswith(";")):
@@ -91,7 +109,8 @@ def is_candidate(text: str, allowlist: set[str], allow_patterns: list[re.Pattern
 def scan_source(path: Path, allowlist: set[str], allow_patterns: list[re.Pattern[str]]) -> list[Finding]:
     findings: list[Finding] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if IGNORE_LINE.search(line) or not UI_SINK.search(line) or "LOC(" in line:
+        if (IGNORE_LINE.search(line) or not UI_SINK.search(line) or "LOC(" in line
+                or any(marker in line for marker in ("_ui_label(", "_tr(", "_trf(", "_format_ui_label("))):
             continue
         for match in STRING_LITERAL.finditer(line):
             # Keep UTF-8 literals intact. Decoding the UTF-8 byte sequence with
@@ -117,13 +136,15 @@ def main() -> int:
     args = parse_args()
     allowlist, allow_patterns = load_allowlist(args.allowlist)
     findings: list[Finding] = []
-    for path in sorted(args.root.rglob("*")):
-        if not path.is_file():
-            continue
-        if path.suffix in SOURCE_SUFFIXES:
-            findings.extend(scan_source(path, allowlist, allow_patterns))
-        elif path.suffix in RML_SUFFIXES:
-            findings.extend(scan_rml(path, allowlist, allow_patterns))
+    roots = args.root or [GUI_ROOT, PYTHON_GUI_ROOT]
+    for root in roots:
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.suffix in SOURCE_SUFFIXES:
+                findings.extend(scan_source(path, allowlist, allow_patterns))
+            elif path.suffix in RML_SUFFIXES:
+                findings.extend(scan_rml(path, allowlist, allow_patterns))
 
     if findings:
         print(f"Likely hardcoded UI strings: {len(findings)}")

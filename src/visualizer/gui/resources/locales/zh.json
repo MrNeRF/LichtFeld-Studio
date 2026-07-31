@@ -205,6 +205,7 @@
     "status.select_item": "选择文件夹以查看详情",
     "status.one_item_selected": "已选择 1 个文件夹",
     "status.multi_items_selected": "已选择 {count} 个文件夹",
+    "status.showing_assets": "正在显示 {count} 个资源",
     "status.scanning": "正在搜索",
     "status.updated": "已更新",
     "batch.load_selected": "加载选中",
@@ -772,7 +773,9 @@
     "theme_vignette": "暗角",
     "theme_vignette_intensity": "暗角强度",
     "theme_vignette_radius": "暗角半径",
-    "theme_vignette_softness": "暗角柔和度"
+    "theme_vignette_softness": "暗角柔和度",
+    "environment": "环境",
+    "preset": "预设"
   },
   "toolbar": {
     "selection": "选择",
@@ -1631,7 +1634,11 @@
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_lod": "Level of Detail",
+    "section_viewport": "视口",
+    "section_camera": "相机和投影",
+    "section_selection": "选择和叠加层",
+    "section_post_process": "后处理",
+    "section_lod": "细节层级 (LOD)",
     "lod_enabled": "启用Level of Detail",
     "lod_max_splats": "最大Splat数",
     "lod_page_pool_splats": "LOD缓存预算",
@@ -1703,6 +1710,7 @@
     "description": "描述",
     "status": "状态",
     "status_not_loaded": "未加载",
+    "status_active": "已激活",
     "error.enter_github_url": "请输入 GitHub URL",
     "status.installed": "已安装：{}",
     "status.install_failed": "安装失败",
@@ -1749,7 +1757,9 @@
     "confirm_uninstall_no": "否",
     "load_on_startup": "启动时加载",
     "view.grid": "网格视图",
-    "view.list": "列表视图"
+    "view.list": "列表视图",
+    "registry_loaded": "注册表已加载：市场目录中有 {count} 个插件。",
+    "registry_unavailable": "注册表不可用：正在显示 {count} 个备用插件。"
   },
   "sequencer": {
     "edit_focal_length": "编辑焦距...",

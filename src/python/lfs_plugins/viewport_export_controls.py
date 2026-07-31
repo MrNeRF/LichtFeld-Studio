@@ -9,6 +9,7 @@ import time
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .ui import RuntimeState
 
 
 _DEFAULT_FORMAT = "jpg"
@@ -81,6 +82,10 @@ def _normalize_resolution(value):
 class ViewportExportControlsController:
     _DIRTY_FIELDS = (
         "viewport_export_tool_label",
+        "ui_resolution_label",
+        "ui_viewport_label",
+        "ui_custom_label",
+        "ui_alpha_label",
         "viewport_export_format_value",
         "viewport_export_resolution_value",
         "viewport_export_has_scene",
@@ -124,11 +129,15 @@ class ViewportExportControlsController:
             "viewport_export_tool_label",
             lambda: _ui_label("toolbar.viewport_export", "Viewport Export"),
         )
+        model.bind_func("ui_resolution_label", lambda: _ui_label("ui.resolution", "Resolution"))
+        model.bind_func("ui_viewport_label", lambda: _ui_label("ui.viewport", "Viewport"))
+        model.bind_func("ui_custom_label", lambda: _ui_label("ui.custom", "Custom"))
+        model.bind_func("ui_alpha_label", lambda: _ui_label("ui.alpha", "Alpha"))
         model.bind_func("viewport_export_has_scene", lambda: self._has_scene)
         model.bind_func("viewport_export_can_export", lambda: self._has_scene and not self._is_exporting)
         model.bind_func("viewport_export_show_transparency", lambda: self._format == "png")
         model.bind_func("viewport_export_show_custom_size", lambda: self._resolution == "custom")
-        model.bind_func("viewport_export_export_label", lambda: "Export")
+        model.bind_func("viewport_export_export_label", lambda: _ui_label("export.export", "Export"))
         model.bind_func("viewport_export_status_text", lambda: self._status_text)
         model.bind_func("viewport_export_has_status", lambda: bool(self._status_text))
         model.bind(
@@ -247,6 +256,7 @@ class ViewportExportControlsController:
 
     def _state_key(self):
         return (
+            RuntimeState.language_generation.value,
             self._visible,
             self._has_scene,
             self._is_exporting,

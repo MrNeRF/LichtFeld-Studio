@@ -205,6 +205,7 @@
     "status.select_item": "Select an item to view details",
     "status.one_item_selected": "1 item selected",
     "status.multi_items_selected": "{count} items selected",
+    "status.showing_assets": "Showing {count} assets",
     "status.scanning": "Searching",
     "status.updated": "Updated",
     "batch.load_selected": "Load Selected",
@@ -765,7 +766,9 @@
     "theme_vignette": "Vignette",
     "theme_vignette_intensity": "Vignette Intensity",
     "theme_vignette_radius": "Vignette Radius",
-    "theme_vignette_softness": "Vignette Softness"
+    "theme_vignette_softness": "Vignette Softness",
+    "environment": "Environment",
+    "preset": "Preset"
   },
   "toolbar": {
     "selection": "Selection",
@@ -1624,6 +1627,10 @@
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
+    "section_viewport": "Viewport",
+    "section_camera": "Camera & Projection",
+    "section_selection": "Selection & Overlays",
+    "section_post_process": "Post Processing",
     "section_lod": "Level of Detail",
     "lod_enabled": "Enable Level of Detail",
     "lod_max_splats": "LOD Budget",
@@ -1696,6 +1703,7 @@
     "description": "Description",
     "status": "Status",
     "status_not_loaded": "not loaded",
+    "status_active": "active",
     "error.enter_github_url": "Please enter a GitHub URL",
     "status.installed": "Installed: {}",
     "status.install_failed": "Install failed",
@@ -1742,7 +1750,9 @@
     "confirm_uninstall_no": "No",
     "load_on_startup": "Load on Startup",
     "view.grid": "Grid view",
-    "view.list": "List view"
+    "view.list": "List view",
+    "registry_loaded": "Registry loaded: {count} plugins in the marketplace catalog.",
+    "registry_unavailable": "Registry unavailable: showing {count} fallback plugins."
   },
   "sequencer": {
     "edit_focal_length": "Edit Focal Length...",

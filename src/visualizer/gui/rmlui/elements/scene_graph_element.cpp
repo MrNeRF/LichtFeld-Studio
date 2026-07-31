@@ -852,9 +852,9 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::PLY_SEQUENCE: {
                 const size_t frame_count = node->gaussian_count.load(std::memory_order_acquire);
-                snapshot.label = std::format(tr(string_keys::Scene::PLY_SEQUENCE_LABEL),
-                                             node->name,
-                                             formatWithThousands(frame_count > 0 ? frame_count : node->children.size()));
+                snapshot.label = LOCF(string_keys::Scene::PLY_SEQUENCE_LABEL,
+                                      node->name,
+                                      formatWithThousands(frame_count > 0 ? frame_count : node->children.size()));
                 break;
             }
             case core::NodeType::CAMERA_GROUP:
@@ -864,9 +864,9 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::KEYFRAME:
                 if (node->keyframe)
-                    snapshot.label = std::format(tr(string_keys::Scene::KEYFRAME_NODE_LABEL),
-                                                 node->keyframe->keyframe_index + 1,
-                                                 node->keyframe->time);
+                    snapshot.label = LOCF(string_keys::Scene::KEYFRAME_NODE_LABEL,
+                                          node->keyframe->keyframe_index + 1,
+                                          node->keyframe->time);
                 else
                     snapshot.label = node->name;
                 break;
@@ -2414,7 +2414,8 @@ namespace lfs::vis::gui {
             request.width_dp = 560;
             request.body_rml =
                 std::format("<div>{}</div>", LOC(lichtfeld::Strings::Runtime::COLMAP_OVERWRITE_MESSAGE)) +
-                "<div class=\"content-row\" style=\"margin-top: 8dp;\">" std::format("<span class=\"dim-text\">{} </span>", LOC(lichtfeld::Strings::Runtime::FOLDER_LABEL)) +
+                "<div class=\"content-row\" style=\"margin-top: 8dp;\">" +
+                std::format("<span class=\"dim-text\">{} </span>", LOC(lichtfeld::Strings::Runtime::FOLDER_LABEL)) +
                 encode(output_path_text) +
                 "</div>"
                 "<div class=\"warning-text\" style=\"margin-top: 8dp;\">"

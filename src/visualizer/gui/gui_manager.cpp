@@ -273,8 +273,7 @@ namespace lfs::vis::gui {
                                                  formatLodFloat(stats.min_pixel_scale));
             state.render_text = stats.full_quality_reference
                                     ? "leaf-only reference"
-                                    : std::vformat(LOC("runtime.lod_scale"),
-                                                   std::make_format_args(stats.lod_render_scale));
+                                    : LOCF("runtime.lod_scale", stats.lod_render_scale);
             state.foveation_text = stats.gpu_selection
                                        ? std::format("cone {:.0f}/{:.0f} deg | edge x{:.2f} | behind x{:.2f}",
                                                      stats.cone_inner_degrees,
@@ -3690,6 +3689,10 @@ namespace lfs::vis::gui {
             rendering->markDirty(DirtyFlag::OVERLAY);
     }
 
+    void GuiManager::requestLocalizationUiRefresh() {
+        pending_localization_ui_refresh_ = true;
+    }
+
     bool GuiManager::shouldDeferDevResourceHotReload() const {
         if (rmlui_manager_.wantsTextInput() || rmlui_manager_.anyItemActive())
             return true;
@@ -4551,6 +4554,12 @@ namespace lfs::vis::gui {
         if (should_poll_dev_resources) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.dev_resource_poll", 0.25);
             pollDevResourceHotReload();
+        }
+
+        if (pending_localization_ui_refresh_ && !rmlui_manager_.wantsTextInput() &&
+            !rmlui_manager_.anyItemActive()) {
+            pending_localization_ui_refresh_ = false;
+            reloadRmlResources();
         }
 
         // Hot-reload themes (check once per second)
@@ -6325,8 +6334,7 @@ namespace lfs::vis::gui {
             req.body_rml = std::format(
                 "<div>{}</div>"
                 "<div class=\"content-row error-text\" style=\"margin-top: 8dp;\">{}</div>",
-                std::format(LOC(lichtfeld::Strings::Runtime::FILE_LOAD_FAILED_BODY),
-                            lfs::core::path_to_utf8(e.path.filename())),
+                LOCF(lichtfeld::Strings::Runtime::FILE_LOAD_FAILED_BODY, lfs::core::path_to_utf8(e.path.filename())),
                 e.error);
             req.style = lfs::core::ModalStyle::Error;
             req.width_dp = 520;

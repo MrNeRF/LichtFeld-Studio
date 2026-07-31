@@ -207,8 +207,7 @@ namespace lfs::vis::gui {
             const std::string name = history.activeTransactionName().empty()
                                          ? "Grouped changes"
                                          : history.activeTransactionName();
-            return std::vformat(LOC("runtime.transaction_active"),
-                                std::make_format_args(name, history.transactionDepth()));
+            return LOCF("runtime.transaction_active", name, history.transactionDepth());
         }
 
         [[nodiscard]] std::string historyRowsHtml(const std::vector<op::UndoStackItem>& items,
@@ -233,14 +232,11 @@ namespace lfs::vis::gui {
                     item.metadata.label.empty() ? std::string("Untitled Change") : item.metadata.label;
                 const bool is_next = index == 0;
                 const std::string stack_line = is_next
-                                                   ? std::vformat(LOC("runtime.history_next"),
-                                                                  std::make_format_args(kind == "undo" ? "UNDO" : "REDO"))
+                                                   ? LOCF("runtime.history_next", kind == "undo" ? "UNDO" : "REDO")
                                                    : std::format("{} · {}", scope, source);
                 const std::string detail_line = is_next
-                                                    ? std::vformat(LOC("runtime.history_detail"),
-                                                                   std::make_format_args(scope, source, size_meta))
-                                                    : std::vformat(LOC("runtime.history_size"),
-                                                                   std::make_format_args(size_meta));
+                                                    ? LOCF("runtime.history_detail", scope, source, size_meta)
+                                                    : LOCF("runtime.history_size", size_meta);
                 const std::string row_classes = std::format(
                     "btn btn--ghost history-row{}{}",
                     kind == "redo" ? " history-row--redo" : "",
@@ -315,16 +311,13 @@ namespace lfs::vis::gui {
                                                        const core::LogLevel level) {
             const std::string level_label(logLevelLabel(level));
             if (entry_count == 0)
-                return std::vformat(LOC("runtime.cli_no_logs"), std::make_format_args(level_label));
+                return LOCF("runtime.cli_no_logs", level_label);
             if (displayed_entry_count < entry_count) {
-                return std::vformat(LOC("runtime.cli_logs_latest"),
-                                    std::make_format_args(entry_count,
-                                                          entry_count == 1 ? "entry" : "entries",
-                                                          displayed_entry_count, level_label));
+                return LOCF("runtime.cli_logs_latest", entry_count,
+                            entry_count == 1 ? "entry" : "entries", displayed_entry_count, level_label);
             }
-            return std::vformat(LOC("runtime.cli_logs_summary"),
-                                std::make_format_args(entry_count,
-                                                      entry_count == 1 ? "entry" : "entries", level_label));
+            return LOCF("runtime.cli_logs_summary", entry_count,
+                        entry_count == 1 ? "entry" : "entries", level_label);
         }
 
         [[nodiscard]] int optionalMetricMilli(const std::optional<float>& value) {
@@ -843,8 +836,7 @@ namespace lfs::vis::gui {
         changed |= setCachedText(logging_export_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_EXPORT));
         changed |= setCachedText(logging_copy_btn_el_, LOC(lichtfeld::Strings::Scene::LOG_COPY));
         changed |= setCachedText(logging_note_el_,
-                                 std::vformat(LOC(lichtfeld::Strings::Scene::LOG_NOTE),
-                                              std::make_format_args(MAX_RENDERED_LOG_ENTRIES)));
+                                 LOCF(lichtfeld::Strings::Scene::LOG_NOTE, MAX_RENDERED_LOG_ENTRIES));
         changed |= setCachedText(logging_empty_el_, LOC(lichtfeld::Strings::Scene::NO_LOGS));
         const std::array log_option_keys{
             lichtfeld::Strings::Scene::LOG_TRACE, lichtfeld::Strings::Scene::LOG_DEBUG,
@@ -890,8 +882,7 @@ namespace lfs::vis::gui {
         const bool show_filter = !tree_el_->filterText().empty();
         changed |= setCachedText(summary_filter_chip_el_,
                                  show_filter
-                                     ? std::vformat(LOC("runtime.scene_filter"),
-                                                    std::make_format_args(tree_el_->filterText()))
+                                     ? LOCF("runtime.scene_filter", tree_el_->filterText())
                                      : std::string{});
         changed |= setCachedProperty(summary_filter_chip_el_, "display",
                                      show_filter ? "inline-block" : "none");
@@ -1033,8 +1024,7 @@ namespace lfs::vis::gui {
         const core::LogLevel selected_level =
             logLevelFromSelection(logging_level_select_el_->GetSelection());
         core::Logger::get().set_level(selected_level);
-        setLoggingFeedback(std::vformat(LOC("runtime.log_level_set"),
-                                        std::make_format_args(logLevelLabel(selected_level))),
+        setLoggingFeedback(LOCF("runtime.log_level_set", logLevelLabel(selected_level)),
                            FeedbackTone::Success);
     }
 
@@ -1048,9 +1038,8 @@ namespace lfs::vis::gui {
 
         const std::string log_text = logger.buffered_logs_as_text();
         SDL_SetClipboardText(log_text.c_str());
-        setLoggingFeedback(std::vformat(LOC("runtime.logs_copied"),
-                                        std::make_format_args(entry_count,
-                                                              entry_count == 1 ? "entry" : "entries")),
+        setLoggingFeedback(LOCF("runtime.logs_copied", entry_count,
+                                entry_count == 1 ? "entry" : "entries"),
                            FeedbackTone::Success);
     }
 
@@ -1080,11 +1069,9 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const std::string exported_count = std::vformat(
-            entry_count == 1 ? LOC("runtime.log_entry_count") : LOC("runtime.log_entries_count"),
-            std::make_format_args(entry_count));
-        setLoggingFeedback(std::vformat(LOC("runtime.logs_exported"),
-                                        std::make_format_args(exported_count, path.filename().string())),
+        const std::string exported_count = LOCF(
+            entry_count == 1 ? "runtime.log_entry_count" : "runtime.log_entries_count", entry_count);
+        setLoggingFeedback(LOCF("runtime.logs_exported", exported_count, path.filename().string()),
                            FeedbackTone::Success);
     }
 

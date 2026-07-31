@@ -107,8 +107,7 @@ namespace lfs::vis::gui {
 
     std::optional<lfs::ErrorNotification>
     translateConfigLoadFailed(const state::ConfigLoadFailed& e) {
-        std::string message = std::vformat(LOC("runtime.config_load_failed"),
-                                           std::make_format_args(lfs::core::path_to_utf8(e.path.filename()), e.error));
+        std::string message = LOCF("runtime.config_load_failed", lfs::core::path_to_utf8(e.path.filename()), e.error);
         return makeNotification(lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::App,
                                 lfs::Severity::Error, std::move(message), error_op::kLoadConfig,
                                 LFS_SOURCE_SITE_CURRENT());
@@ -123,21 +122,21 @@ namespace lfs::vis::gui {
                                     lfs::ErrorSurface::StatusOnly, /*actions=*/{});
         }
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
-                                std::vformat(LOC("runtime.export_failed"), std::make_format_args(e.error)), error_op::kExport,
+                                LOCF("runtime.export_failed", e.error), error_op::kExport,
                                 LFS_SOURCE_SITE_CURRENT());
     }
 
     std::optional<lfs::ErrorNotification>
     translateVideoExportFailed(const state::VideoExportFailed& e) {
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
-                                std::vformat(LOC("runtime.video_export_failed"), std::make_format_args(e.error)),
+                                LOCF("runtime.video_export_failed", e.error),
                                 error_op::kExportVideo, LFS_SOURCE_SITE_CURRENT());
     }
 
     std::optional<lfs::ErrorNotification>
     translateMesh2SplatFailed(const state::Mesh2SplatFailed& e) {
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::Rendering,
-                                lfs::Severity::Error, std::vformat(LOC("runtime.conversion_failed"), std::make_format_args(e.error)),
+                                lfs::Severity::Error, LOCF("runtime.conversion_failed", e.error),
                                 error_op::kMesh2Splat, LFS_SOURCE_SITE_CURRENT());
     }
 
@@ -181,8 +180,8 @@ namespace lfs::vis::gui {
 
     std::optional<lfs::ErrorNotification>
     translateCudaVersionUnsupported(const state::CudaVersionUnsupported& e) {
-        std::string message = std::format(LOC(lichtfeld::Strings::Runtime::CUDA_DRIVER_UNSUPPORTED),
-                                          e.major, e.minor, e.min_major, e.min_minor);
+        std::string message = LOCF(lichtfeld::Strings::Runtime::CUDA_DRIVER_UNSUPPORTED,
+                                   e.major, e.minor, e.min_major, e.min_minor);
         return makeNotification(lfs::ErrorCode::FailedPrecondition, lfs::ErrorDomain::CUDA,
                                 lfs::Severity::Warning, std::move(message), error_op::kCudaCheck,
                                 LFS_SOURCE_SITE_CURRENT(), lfs::ErrorSurface::Toast, /*actions=*/{});
@@ -195,8 +194,8 @@ namespace lfs::vis::gui {
         }
         std::string message =
             e.is_checkpoint
-                ? std::vformat(LOC("runtime.checkpoint_save_failed"), std::make_format_args(e.iteration, e.error))
-                : std::vformat(LOC("runtime.export_failed"), std::make_format_args(e.error));
+                ? LOCF("runtime.checkpoint_save_failed", e.iteration, e.error)
+                : LOCF("runtime.export_failed", e.error);
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
                                 std::move(message), error_op::kSave, LFS_SOURCE_SITE_CURRENT());
     }

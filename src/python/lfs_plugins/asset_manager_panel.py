@@ -1275,9 +1275,7 @@ class AssetManagerPanel(Panel):
         total = self._last_asset_match_count
         if total <= 0:
             return ""
-        if total == 1:
-            return "Showing 1 asset"
-        return f"Showing {total:,} assets"
+        return tr("asset_manager.status.showing_assets").format(count=total)
 
     def _asset_scroll_container(self, doc=None):
         root = doc or self._doc

@@ -5,6 +5,7 @@
 
 #include "event_bridge.hpp"
 
+#include <format>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -53,6 +54,12 @@ namespace lfs::event {
         mutable std::unordered_map<std::string, std::string> overrides_;
     };
 
-#define LOC(key) lfs::event::LocalizationManager::getInstance().get(key)
+    template <typename... Args>
+    [[nodiscard]] inline std::string formatLocalized(const std::string_view key, Args&&... args) {
+        return std::vformat(LocalizationManager::getInstance().get(key), std::make_format_args(args...));
+    }
+
+#define LOC(key)       lfs::event::LocalizationManager::getInstance().get(key)
+#define LOCF(key, ...) lfs::event::formatLocalized(key, __VA_ARGS__)
 
 } // namespace lfs::event

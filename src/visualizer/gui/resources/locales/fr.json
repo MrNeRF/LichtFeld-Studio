@@ -197,6 +197,7 @@
     "status.select_item": "Sélectionnez un élément pour voir les détails",
     "status.one_item_selected": "1 élément sélectionné",
     "status.multi_items_selected": "{count} éléments sélectionnés",
+    "status.showing_assets": "Affichage de {count} ressources",
     "title": "Gestionnaire d'actifs",
     "toolbar.import": "Importer",
     "toolbar.search_icon": "Rechercher",
@@ -765,7 +766,9 @@
     "theme_vignette": "Vignette",
     "theme_vignette_intensity": "Intensité du vignettage",
     "theme_vignette_radius": "Rayon du vignettage",
-    "theme_vignette_softness": "Douceur du vignettage"
+    "theme_vignette_softness": "Douceur du vignettage",
+    "environment": "Environnement",
+    "preset": "Préréglage"
   },
   "toolbar": {
     "selection": "Sélection",
@@ -1640,7 +1643,9 @@
     "confirm_uninstall_no": "Non",
     "load_on_startup": "Charger au démarrage",
     "view.grid": "Vue en grille",
-    "view.list": "Vue en liste"
+    "view.list": "Vue en liste",
+    "registry_loaded": "Registre chargé : {count} plugins dans le catalogue du marketplace.",
+    "registry_unavailable": "Registre indisponible : affichage de {count} plugins de secours."
   },
   "sequencer": {
     "edit_focal_length": "Modifier la longueur focale...",
@@ -1678,6 +1683,10 @@
   },
   "rendering_panel": {
     "fov_format": "FOV : {hfov:.1f}° H / {vfov:.1f}° V",
+    "section_viewport": "Vue",
+    "section_camera": "Caméra et projection",
+    "section_selection": "Sélection et superpositions",
+    "section_post_process": "Post-traitement",
     "section_lod": "Niveau de détail (LOD)",
     "lod_enabled": "Activer le niveau de détail (LOD)",
     "lod_max_splats": "Splats max",
@@ -1750,6 +1759,7 @@
     "description": "Description",
     "status": "Statut",
     "status_not_loaded": "non chargé",
+    "status_active": "actif",
     "error.enter_github_url": "Veuillez entrer une URL GitHub",
     "status.installed": "Installé : {}",
     "status.install_failed": "Échec de l'installation",

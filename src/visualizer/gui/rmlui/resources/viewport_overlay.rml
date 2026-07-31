@@ -658,7 +658,7 @@
                  data-if="selection_depth_mode_active"
                  data-tooltip="tooltip.selection_depth_range">
                 <div class="viewport-transform-axis viewport-selection-depth-axis" data-tooltip="tooltip.selection_depth_near">
-                    <span class="viewport-transform-axis-label">@tr:ui.near</span>
+                    <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                     <input type="range"
                            class="setting-slider viewport-selection-slider"
                            min="0"
@@ -675,7 +675,7 @@
                            data-attrif-disabled="!selection_has_scene" />
                 </div>
                 <div class="viewport-transform-axis viewport-selection-depth-axis" data-tooltip="tooltip.selection_depth_far">
-                    <span class="viewport-transform-axis-label">@tr:ui.far</span>
+                    <span class="viewport-transform-axis-label">{{ui_far_label}}</span>
                     <input type="range"
                            class="setting-slider viewport-selection-slider"
                            min="0"
@@ -704,14 +704,14 @@
                             data-value="depth_view_mode_value"
                             data-tooltip="tooltip.depth_view_mode"
                             data-attrif-disabled="!depth_view_has_scene">
-                        <option value="palette">@tr:ui.color</option>
-                        <option value="gray">@tr:ui.gray</option>
+                        <option value="palette">{{ui_color_label}}</option>
+                        <option value="gray">{{ui_gray_label}}</option>
                     </select>
                 </div>
 
                 <div class="viewport-selection-depth-fields viewport-depth-fields" data-tooltip="tooltip.depth_view_range">
                     <div class="viewport-transform-axis viewport-selection-depth-axis viewport-depth-axis" data-tooltip="tooltip.depth_view_near">
-                        <span class="viewport-transform-axis-label">@tr:ui.near</span>
+                        <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                         <input type="range"
                                class="setting-slider viewport-selection-slider viewport-depth-slider"
                                min="0"
@@ -729,7 +729,7 @@
                                 data-attrif-disabled="!depth_view_has_scene">+</button>
                     </div>
                     <div class="viewport-transform-axis viewport-selection-depth-axis viewport-depth-axis" data-tooltip="tooltip.depth_view_far">
-                        <span class="viewport-transform-axis-label">@tr:ui.far</span>
+                        <span class="viewport-transform-axis-label">{{ui_far_label}}</span>
                         <input type="range"
                                class="setting-slider viewport-selection-slider viewport-depth-slider"
                                min="0"
@@ -797,11 +797,11 @@
 
                 <div class="viewport-export-fields" data-tooltip="tooltip.viewport_export_settings">
                     <div class="viewport-transform-axis viewport-export-axis" data-tooltip="tooltip.viewport_export_resolution">
-                        <span class="viewport-transform-axis-label">@tr:ui.resolution</span>
+                        <span class="viewport-transform-axis-label">{{ui_resolution_label}}</span>
                         <select class="viewport-export-resolution-select"
                                 data-value="viewport_export_resolution_value"
                                 data-attrif-disabled="!viewport_export_has_scene">
-                        <option value="viewport">@tr:ui.viewport</option>
+                        <option value="viewport">{{ui_viewport_label}}</option>
                             <option value="1080p">1080p</option>
                             <option value="4k">4K</option>
                             <option value="8k">8K</option>
@@ -811,7 +811,7 @@
                             <option value="24k">24K</option>
                             <option value="28k">28K</option>
                             <option value="32k">32K</option>
-                        <option value="custom">@tr:ui.custom</option>
+                        <option value="custom">{{ui_custom_label}}</option>
                         </select>
                     </div>
 
@@ -836,7 +836,7 @@
                         <input type="checkbox"
                                data-checked="viewport_export_transparency"
                                data-attrif-disabled="!viewport_export_has_scene" />
-                        <span>@tr:ui.alpha</span>
+                        <span>{{ui_alpha_label}}</span>
                     </label>
                 </div>
 

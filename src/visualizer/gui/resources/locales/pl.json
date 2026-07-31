@@ -197,6 +197,7 @@
     "status.select_item": "Wybierz element, aby wyświetlić szczegóły",
     "status.one_item_selected": "1 element wybrany",
     "status.multi_items_selected": "{count} elementów wybranych",
+    "status.showing_assets": "Wyświetlono {count} zasobów",
     "title": "Menedżer zasobów",
     "toolbar.import": "Importuj",
     "toolbar.search_icon": "Szukaj",
@@ -765,7 +766,9 @@
     "theme_vignette": "Winietowanie",
     "theme_vignette_intensity": "Intensywność winietowania",
     "theme_vignette_radius": "Promień winietowania",
-    "theme_vignette_softness": "Miękkość winietowania"
+    "theme_vignette_softness": "Miękkość winietowania",
+    "environment": "Środowisko",
+    "preset": "Ustawienie wstępne"
   },
   "toolbar": {
     "selection": "Zaznaczenie",
@@ -1640,7 +1643,9 @@
     "confirm_uninstall_no": "Nie",
     "load_on_startup": "Ładuj przy starcie",
     "view.grid": "Widok siatki",
-    "view.list": "Widok listy"
+    "view.list": "Widok listy",
+    "registry_loaded": "Rejestr załadowany: {count} wtyczek w katalogu marketplace.",
+    "registry_unavailable": "Rejestr niedostępny: wyświetlono {count} zastępczych wtyczek."
   },
   "sequencer": {
     "edit_focal_length": "Edytuj ogniskowa...",
@@ -1678,7 +1683,11 @@
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_lod": "Level of Detail",
+    "section_viewport": "Widok",
+    "section_camera": "Kamera i projekcja",
+    "section_selection": "Wybór i nakładki",
+    "section_post_process": "Postprodukcja",
+    "section_lod": "Poziom szczegółowości (LOD)",
     "lod_enabled": "Włącz Level of Detail",
     "lod_max_splats": "Maks. splatów",
     "lod_page_pool_splats": "Budżet pamięci LOD",
@@ -1750,6 +1759,7 @@
     "description": "Opis",
     "status": "Stan",
     "status_not_loaded": "niezaładowany",
+    "status_active": "aktywny",
     "error.enter_github_url": "Wpisz URL GitHub",
     "status.installed": "Zainstalowano: {}",
     "status.install_failed": "Instalacja nie powiodła się",

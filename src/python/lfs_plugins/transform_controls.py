@@ -9,6 +9,7 @@ from typing import List
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .ui import RuntimeState
 
 try:
     from .ui import native_value as _native_store_value
@@ -438,6 +439,7 @@ class TransformControlsController:
 
     def _display_state_key(self):
         return (
+            RuntimeState.language_generation.value,
             self._active_tool,
             tuple(self._selected),
             self._transform_space,

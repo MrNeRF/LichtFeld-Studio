@@ -5,7 +5,7 @@
 <body id="body" class="docked-panel">
     <div id="panel">
         <div id="floating-header" class="hidden">
-            <span id="floating-title">@tr:window.sequencer</span>
+            <span id="floating-title">@tr:toolbar.sequencer</span>
             <div id="floating-actions">
                 <div id="btn-close-panel" class="transport-btn text wide floating-header-action" data-tooltip="common.close">
                     <span id="close-panel-label" class="transport-label">@tr:common.close</span>

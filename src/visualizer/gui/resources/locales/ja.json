@@ -197,6 +197,7 @@
     "status.select_item": "詳細を表示するには項目を選択してください",
     "status.one_item_selected": "1 項目選択中",
     "status.multi_items_selected": "{count} 項目選択中",
+    "status.showing_assets": "{count} 件のアセットを表示中",
     "title": "アセットマネージャー",
     "panel_title": "アセットマネージャー",
     "import_button": "インポート",
@@ -765,7 +766,9 @@
     "theme_vignette": "ビネット",
     "theme_vignette_intensity": "ビネット強度",
     "theme_vignette_radius": "ビネット半径",
-    "theme_vignette_softness": "ビネットの柔らかさ"
+    "theme_vignette_softness": "ビネットの柔らかさ",
+    "environment": "環境",
+    "preset": "プリセット"
   },
   "toolbar": {
     "selection": "選択",
@@ -1640,7 +1643,9 @@
     "confirm_uninstall_no": "いいえ",
     "load_on_startup": "起動時に読み込む",
     "view.grid": "グリッド表示",
-    "view.list": "リスト表示"
+    "view.list": "リスト表示",
+    "registry_loaded": "レジストリを読み込みました: マーケットプレイスカタログに {count} 件のプラグインがあります。",
+    "registry_unavailable": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。"
   },
   "sequencer": {
     "edit_focal_length": "焦点距離を編集...",
@@ -1678,7 +1683,11 @@
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
-    "section_lod": "Level of Detail",
+    "section_viewport": "ビューポート",
+    "section_camera": "カメラと投影",
+    "section_selection": "選択とオーバーレイ",
+    "section_post_process": "後処理",
+    "section_lod": "詳細レベル (LOD)",
     "lod_enabled": "Level of Detailを有効化",
     "lod_max_splats": "最大スプラット数",
     "lod_page_pool_splats": "LODキャッシュ容量",
@@ -1750,6 +1759,7 @@
     "description": "説明",
     "status": "状態",
     "status_not_loaded": "未ロード",
+    "status_active": "有効",
     "error.enter_github_url": "GitHub URL を入力してください",
     "status.installed": "インストール済み: {}",
     "status.install_failed": "インストール失敗",

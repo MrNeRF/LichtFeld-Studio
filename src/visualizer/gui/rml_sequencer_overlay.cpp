@@ -490,7 +490,7 @@ namespace lfs::vis::gui {
         const size_t kf_num = selected + 1;
         el_edit_label_->SetInnerRML(
             fmt::format(fmt::runtime(LOC(lichtfeld::Strings::Sequencer::EDITING_KEYFRAME)), kf_num));
-        el_edit_delta_->SetInnerRML(fmt::format(LOC(lichtfeld::Strings::Sequencer::EDIT_DELTA),
+        el_edit_delta_->SetInnerRML(fmt::format(fmt::runtime(LOC(lichtfeld::Strings::Sequencer::EDIT_DELTA)),
                                                 pos_delta,
                                                 rot_delta,
                                                 DEG_SIGN));
