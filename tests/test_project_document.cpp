@@ -5,6 +5,7 @@
 
 #include "io/loaders/loader_utils.hpp"
 #include "io/project_document.hpp"
+#include "project/session_state.hpp"
 #include "training/checkpoint.hpp"
 #include "training/strategies/mcmc.hpp"
 
@@ -13,13 +14,17 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <glm/gtc/type_ptr.hpp>
+#include <iostream>
 #include <memory>
 #include <ranges>
 #include <span>
@@ -27,6 +32,11 @@
 #include <string>
 #include <tuple>
 #include <vector>
+
+#if defined(__linux__)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -186,6 +196,82 @@ namespace {
             std::memcpy(
                 result.data(), cpu.data_ptr(), result.size());
         }
+        return result;
+    }
+
+    std::vector<std::byte> one_pixel_png() {
+        constexpr std::array<std::uint8_t, 67> bytes{
+            0x89,
+            0x50,
+            0x4e,
+            0x47,
+            0x0d,
+            0x0a,
+            0x1a,
+            0x0a,
+            0x00,
+            0x00,
+            0x00,
+            0x0d,
+            0x49,
+            0x48,
+            0x44,
+            0x52,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x08,
+            0x06,
+            0x00,
+            0x00,
+            0x00,
+            0x1f,
+            0x15,
+            0xc4,
+            0x89,
+            0x00,
+            0x00,
+            0x00,
+            0x0a,
+            0x49,
+            0x44,
+            0x41,
+            0x54,
+            0x78,
+            0x9c,
+            0x63,
+            0x60,
+            0x00,
+            0x00,
+            0x00,
+            0x02,
+            0x00,
+            0x01,
+            0xe5,
+            0x27,
+            0xd4,
+            0xa2,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x49,
+            0x45,
+            0x4e,
+            0x44,
+            0xae,
+            0x42,
+            0x60,
+            0x82,
+        };
+        std::vector<std::byte> result(bytes.size());
+        std::memcpy(
+            result.data(), bytes.data(), bytes.size());
         return result;
     }
 
@@ -735,6 +821,819 @@ namespace {
             ASSERT_FALSE(staged);
             EXPECT_TRUE(witness_scene(live) == before);
         }
+    }
+
+    TEST(ProjectDocumentTest,
+         DeferredShellExposesUnloadedUnitsAndCommitsHydrationPerNodeUuid) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "partial-hydration.licht";
+        write_phase_a_fixture(path);
+
+        auto document = ProjectDocument::open(
+            path,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            });
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        ASSERT_EQ(document->payload_states().size(), 3u);
+        EXPECT_TRUE(std::ranges::all_of(
+            document->payload_states(),
+            [](const auto& state) {
+                return !state.loaded;
+            }));
+
+        Scene live;
+        auto shell = document->stage_shell(live);
+        ASSERT_TRUE(shell)
+            << lfs::format_for_developer(
+                   shell.error());
+        live.commitRestoreStage(std::move(*shell));
+        ASSERT_EQ(live.getSelectionGroups().size(), 1u);
+        EXPECT_EQ(live.getSelectionGroups().front().id, 4u);
+        EXPECT_EQ(
+            live.getSelectionGroups().front().name,
+            "Fixture");
+        EXPECT_EQ(live.getActiveSelectionGroup(), 4u);
+        EXPECT_EQ(live.getSelectionMask(), nullptr);
+        for (const auto uuid :
+             {fixed_uuid(952), fixed_uuid(953),
+              fixed_uuid(954)}) {
+            const auto* node =
+                live.getNodeByUuid(uuid);
+            ASSERT_NE(node, nullptr);
+            EXPECT_EQ(
+                node->payload_hydration,
+                lfs::core::
+                    PayloadHydrationState::
+                        Unloaded);
+        }
+
+        auto staged =
+            document->stage_hydration(live);
+        ASSERT_TRUE(staged)
+            << lfs::format_for_developer(
+                   staged.error());
+
+        glm::mat4 edited_transform{1.0f};
+        edited_transform[3] =
+            glm::vec4(7.0f, 8.0f, 9.0f, 1.0f);
+        live.setNodeTransform(
+            live.getNodeIdByUuid(fixed_uuid(952)),
+            edited_transform);
+        live.removeNodeById(
+            live.getNodeIdByUuid(fixed_uuid(953)));
+
+        const auto report =
+            ProjectDocument::commit_partial_hydration(
+                live, std::move(*staged), true);
+        EXPECT_EQ(report.hydrated_payload_units, 2u);
+        EXPECT_EQ(report.invalidated_payload_units, 1u);
+        EXPECT_FALSE(report.selection_installed);
+        EXPECT_EQ(
+            live.getNodeIdByUuid(fixed_uuid(953)),
+            lfs::core::NULL_NODE);
+
+        const auto* splat =
+            live.getNodeByUuid(fixed_uuid(952));
+        ASSERT_NE(splat, nullptr);
+        ASSERT_NE(splat->model, nullptr);
+        EXPECT_EQ(splat->model->size(), 3);
+        EXPECT_EQ(
+            splat->payload_hydration,
+            lfs::core::PayloadHydrationState::Loaded);
+        EXPECT_EQ(
+            splat->local_transform.get(),
+            edited_transform);
+
+        const auto* mesh =
+            live.getNodeByUuid(fixed_uuid(954));
+        ASSERT_NE(mesh, nullptr);
+        ASSERT_NE(mesh->mesh, nullptr);
+        EXPECT_EQ(
+            mesh->payload_hydration,
+            lfs::core::PayloadHydrationState::Loaded);
+    }
+
+    TEST(ProjectDocumentTest,
+         SaveBeforeHydrationCarriesEveryUnloadedPayloadSpanForward) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "partial-save.licht";
+        write_phase_a_fixture(path);
+
+        auto first_reader =
+            ProjectReader::open(path);
+        ASSERT_TRUE(first_reader)
+            << lfs::format_for_developer(
+                   first_reader.error());
+        const std::array payload_keys{
+            ChunkKey{FOURCC_SPLT, fixed_uuid(952)},
+            ChunkKey{FOURCC_PCLD, fixed_uuid(953)},
+            ChunkKey{FOURCC_MESH, fixed_uuid(954)},
+        };
+        std::array<ChunkInfo, 3> first_rows;
+        std::array<std::vector<std::byte>, 3>
+            first_payloads;
+        for (std::size_t index = 0;
+             index < payload_keys.size(); ++index) {
+            const auto* row = first_reader->find(
+                payload_keys[index].fourcc,
+                payload_keys[index].instance_uuid);
+            ASSERT_NE(row, nullptr);
+            first_rows[index] = *row;
+            auto bytes =
+                first_reader->read_chunk(*row);
+            ASSERT_TRUE(bytes);
+            first_payloads[index] =
+                std::move(*bytes);
+        }
+
+        auto document = ProjectDocument::open(
+            path,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            });
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        document->edit_metrics()
+            .accumulated_training_seconds = 1.0;
+        auto saved =
+            document->save(
+                path, save_options(980, 300));
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+        EXPECT_EQ(saved->generation, 2u);
+
+        auto second_reader =
+            ProjectReader::open(path);
+        ASSERT_TRUE(second_reader)
+            << lfs::format_for_developer(
+                   second_reader.error());
+        for (std::size_t index = 0;
+             index < payload_keys.size(); ++index) {
+            const auto* row = second_reader->find(
+                payload_keys[index].fourcc,
+                payload_keys[index].instance_uuid);
+            ASSERT_NE(row, nullptr);
+            EXPECT_EQ(
+                row->header_offset,
+                first_rows[index].header_offset);
+            EXPECT_EQ(row->source_generation, 1u);
+            auto bytes =
+                second_reader->read_chunk(*row);
+            ASSERT_TRUE(bytes);
+            EXPECT_EQ(*bytes, first_payloads[index]);
+        }
+    }
+
+    TEST(ProjectDocumentTest,
+         ExplicitPreviewRegeneratesWhileAutomaticSaveCarriesItForward) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "preview-policy.licht";
+        auto document =
+            ProjectDocument::create(
+                fixed_uuid(990), 100);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        const auto preview = one_pixel_png();
+        auto first_options =
+            save_options(991, 200);
+        first_options.preview_png =
+            std::span<const std::byte>(preview);
+        auto first =
+            document->save(path, first_options);
+        ASSERT_TRUE(first)
+            << lfs::format_for_developer(
+                   first.error());
+
+        auto first_reader =
+            ProjectReader::open(path);
+        ASSERT_TRUE(first_reader);
+        ASSERT_TRUE(first_reader->preview());
+        const auto first_locator =
+            *first_reader->preview();
+        auto first_bytes =
+            first_reader->read_preview();
+        ASSERT_TRUE(first_bytes);
+        EXPECT_EQ(*first_bytes, preview);
+
+        auto reopened =
+            ProjectDocument::open(path);
+        ASSERT_TRUE(reopened);
+        reopened->edit_metrics()
+            .accumulated_training_seconds = 1.0;
+        auto second =
+            reopened->save(
+                path, save_options(994, 300));
+        ASSERT_TRUE(second)
+            << lfs::format_for_developer(
+                   second.error());
+        auto second_reader =
+            ProjectReader::open(path);
+        ASSERT_TRUE(second_reader);
+        ASSERT_TRUE(second_reader->preview());
+        EXPECT_EQ(
+            *second_reader->preview(),
+            first_locator);
+        auto second_bytes =
+            second_reader->read_preview();
+        ASSERT_TRUE(second_bytes);
+        EXPECT_EQ(*second_bytes, preview);
+
+        auto invalid_options =
+            save_options(997, 400);
+        invalid_options.commit.kind =
+            CommitKind::Autosave;
+        invalid_options.preview_png =
+            std::span<const std::byte>(preview);
+        auto invalid =
+            reopened->save(
+                path, invalid_options);
+        ASSERT_FALSE(invalid);
+        EXPECT_EQ(
+            invalid.error().code(),
+            lfs::ErrorCode::
+                FailedPrecondition);
+    }
+
+    TEST(ProjectDocumentTest,
+         RemovingUnloadedNodePayloadCreatesADeletionTombstone) {
+        TemporaryDirectory temporary;
+        const auto path =
+            temporary.path / "partial-delete.licht";
+        write_phase_a_fixture(path);
+        auto document = ProjectDocument::open(
+            path,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            });
+        ASSERT_TRUE(document);
+
+        EXPECT_TRUE(
+            document->remove_splat(
+                fixed_uuid(952)));
+        auto removed_node =
+            document->edit_scene_graph()
+                .remove_node(fixed_uuid(952));
+        ASSERT_TRUE(removed_node);
+        EXPECT_TRUE(*removed_node);
+        auto point_node =
+            document->edit_scene_graph().find(
+                fixed_uuid(953));
+        ASSERT_TRUE(point_node);
+        ASSERT_TRUE(*point_node);
+        point_node->value().child_order = 0;
+        require_status(
+            document->edit_scene_graph().upsert_node(
+                point_node->value()));
+        auto mesh_node =
+            document->edit_scene_graph().find(
+                fixed_uuid(954));
+        ASSERT_TRUE(mesh_node);
+        ASSERT_TRUE(*mesh_node);
+        mesh_node->value().child_order = 1;
+        require_status(
+            document->edit_scene_graph().upsert_node(
+                mesh_node->value()));
+        EXPECT_TRUE(document->dirty());
+        const auto dirty_chapters =
+            document->dirty_chapters();
+        EXPECT_NE(
+            std::ranges::find(
+                dirty_chapters,
+                "SPLT"),
+            dirty_chapters.end());
+        auto saved =
+            document->save(
+                path, save_options(1000, 500));
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+        auto reader = ProjectReader::open(path);
+        ASSERT_TRUE(reader);
+        const auto* deleted =
+            reader->find(
+                FOURCC_SPLT, fixed_uuid(952));
+        ASSERT_NE(deleted, nullptr);
+        EXPECT_EQ(
+            deleted->row_kind,
+            RowKind::Tombstone);
+        EXPECT_NE(
+            reader->find(
+                FOURCC_PCLD, fixed_uuid(953)),
+            nullptr);
+        auto reopened =
+            ProjectDocument::open(path);
+        ASSERT_TRUE(reopened);
+        const auto reopened_splats =
+            reopened->splat_uuids();
+        EXPECT_EQ(
+            std::ranges::find(
+                reopened_splats,
+                fixed_uuid(952)),
+            reopened_splats.end());
+    }
+
+    TEST(ProjectDocumentTest,
+         SaveAsAtomicallyRebindsAndPreservesUnloadedPayloads) {
+        TemporaryDirectory temporary;
+        const auto source =
+            temporary.path / "source.licht";
+        const auto destination =
+            temporary.path / "destination.licht";
+        write_phase_a_fixture(source);
+        {
+            std::ofstream existing(
+                destination,
+                std::ios::binary |
+                    std::ios::trunc);
+            existing << "replace me";
+        }
+
+        auto document = ProjectDocument::open(
+            source,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            });
+        ASSERT_TRUE(document);
+        const auto project_uuid =
+            document->project_uuid();
+        auto saved = document->save_as(
+            destination, save_options(1010, 600));
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+        ASSERT_TRUE(document->source_path());
+        EXPECT_EQ(
+            *document->source_path(),
+            std::filesystem::absolute(
+                destination)
+                .lexically_normal());
+
+        auto reader =
+            ProjectReader::open(destination);
+        ASSERT_TRUE(reader)
+            << lfs::format_for_developer(
+                   reader.error());
+        EXPECT_EQ(
+            reader->superblock().project_uuid,
+            project_uuid);
+        EXPECT_NE(
+            reader->find(
+                FOURCC_SPLT, fixed_uuid(952)),
+            nullptr);
+        EXPECT_NE(
+            reader->find(
+                FOURCC_PCLD, fixed_uuid(953)),
+            nullptr);
+        EXPECT_NE(
+            reader->find(
+                FOURCC_MESH, fixed_uuid(954)),
+            nullptr);
+        EXPECT_TRUE(
+            std::filesystem::is_regular_file(
+                source));
+    }
+
+    TEST(ProjectDocumentPerformanceGate,
+         MultiGigabyteCkptColdShellRestoreAndPartialSave) {
+        const char* source_text =
+            std::getenv(
+                "LFS_P6_P4_PROJECT_FIXTURE");
+        const char* output_text =
+            std::getenv(
+                "LFS_P6_LARGE_PROJECT_PATH");
+        if (!source_text || !output_text) {
+            GTEST_SKIP()
+                << "Set LFS_P6_P4_PROJECT_FIXTURE and "
+                   "LFS_P6_LARGE_PROJECT_PATH to run the P6 "
+                   "multi-gigabyte shell-restore gate.";
+        }
+
+        const fs::path source(source_text);
+        const fs::path output(output_text);
+        const bool reuse_large_project =
+            std::getenv(
+                "LFS_P6_REUSE_LARGE_PROJECT") !=
+            nullptr;
+        ASSERT_TRUE(fs::is_regular_file(source));
+        if (!reuse_large_project) {
+            std::error_code filesystem_error;
+            fs::create_directories(
+                output.parent_path(),
+                filesystem_error);
+            ASSERT_FALSE(filesystem_error)
+                << filesystem_error.message();
+            fs::copy_file(
+                source, output,
+                fs::copy_options::
+                    overwrite_existing,
+                filesystem_error);
+            ASSERT_FALSE(filesystem_error)
+                << filesystem_error.message();
+        } else {
+            ASSERT_TRUE(
+                fs::is_regular_file(output));
+        }
+
+        ChunkInfo source_checkpoint;
+        std::vector<CleanProof>
+            carry_proofs;
+        {
+            auto reader =
+                ProjectReader::open(output);
+            ASSERT_TRUE(reader)
+                << lfs::format_for_developer(
+                       reader.error());
+            const auto row =
+                std::ranges::find_if(
+                    reader->chunks(),
+                    [](const ChunkInfo& candidate) {
+                        return candidate.key.fourcc ==
+                                   FOURCC_CKPT &&
+                               candidate.row_kind ==
+                                   RowKind::Live;
+                    });
+            ASSERT_NE(row, reader->chunks().end());
+            ASSERT_EQ(
+                row->compression,
+                Compression::Stored);
+            source_checkpoint = *row;
+            for (const auto& candidate :
+                 reader->chunks()) {
+                if (!candidate.is_live() ||
+                    candidate.key ==
+                        source_checkpoint.key) {
+                    continue;
+                }
+                auto proof =
+                    reader->make_clean_proof(
+                        candidate, 1);
+                ASSERT_TRUE(proof)
+                    << lfs::format_for_developer(
+                           proof.error());
+                carry_proofs.push_back(
+                    std::move(*proof));
+            }
+        }
+
+        constexpr std::uint64_t TARGET_CKPT_BYTES =
+            2ull * 1024 * 1024 * 1024 +
+            256ull * 1024 * 1024;
+        ASSERT_GT(
+            source_checkpoint.stored_bytes,
+            0u);
+        const std::uint64_t repeats =
+            (TARGET_CKPT_BYTES +
+             source_checkpoint.stored_bytes - 1) /
+            source_checkpoint.stored_bytes;
+        const std::uint64_t expanded_bytes =
+            reuse_large_project
+                ? source_checkpoint.stored_bytes
+                : repeats *
+                      source_checkpoint.stored_bytes;
+        ASSERT_GT(
+            expanded_bytes,
+            2ull * 1024 * 1024 * 1024);
+
+        double publish_ms = 0.0;
+        if (!reuse_large_project) {
+            const auto publish_started =
+                std::chrono::steady_clock::now();
+            auto writer =
+                ProjectWriter::append(
+                    output,
+                    AppendOptions{
+                        .compatibility = {},
+                        .index_compression =
+                            IndexCompression::Zstd,
+                        .disk_reserve_bytes = 0,
+                        .boundary_observer = {},
+                    });
+            ASSERT_TRUE(writer)
+                << lfs::format_for_developer(
+                       writer.error());
+            require_status(
+                writer->plan_commit(
+                    CommitOptions{
+                        .kind = CommitKind::Explicit,
+                        .commit_uuid =
+                            lfs::core::
+                                generate_uuid_v4(),
+                        .snapshot_uuid =
+                            source_checkpoint
+                                .key.instance_uuid,
+                        .wallclock_unix_ns = 1,
+                    }));
+            require_status(
+                writer->preflight(
+                    expanded_bytes));
+            for (const auto& proof :
+                 carry_proofs) {
+                require_status(
+                    writer->reuse_if_clean(
+                        proof, 1));
+            }
+            auto destination =
+                writer->begin_chunk(
+                    source_checkpoint.key,
+                    ChunkWriteOptions{
+                        .chunk_version =
+                            source_checkpoint
+                                .chunk_version,
+                        .compression =
+                            Compression::Stored,
+                        .tensor_payload = true,
+                        .block_crcs = true,
+                        .expected_stream_bytes =
+                            expanded_bytes,
+                    });
+            ASSERT_TRUE(destination)
+                << lfs::format_for_developer(
+                       destination.error());
+
+            std::ifstream source_stream(
+                source, std::ios::binary);
+            ASSERT_TRUE(source_stream);
+            std::vector<char> buffer(
+                8ull * 1024 * 1024);
+            for (std::uint64_t repeat = 0;
+                 repeat < repeats; ++repeat) {
+                source_stream.clear();
+                source_stream.seekg(
+                    static_cast<std::streamoff>(
+                        source_checkpoint
+                            .payload_offset));
+                ASSERT_TRUE(source_stream);
+                std::uint64_t remaining =
+                    source_checkpoint
+                        .stored_bytes;
+                while (remaining != 0) {
+                    const auto requested =
+                        static_cast<
+                            std::streamsize>(
+                            std::min<
+                                std::uint64_t>(
+                                remaining,
+                                buffer.size()));
+                    source_stream.read(
+                        buffer.data(), requested);
+                    ASSERT_EQ(
+                        source_stream.gcount(),
+                        requested);
+                    (*destination)->write(buffer.data(), requested);
+                    ASSERT_TRUE(**destination);
+                    remaining -=
+                        static_cast<
+                            std::uint64_t>(
+                            requested);
+                }
+            }
+            require_status(writer->end_chunk());
+            require_status(writer->commit());
+            publish_ms =
+                std::chrono::duration<
+                    double, std::milli>(
+                    std::chrono::
+                        steady_clock::now() -
+                    publish_started)
+                    .count();
+        }
+
+        {
+            auto reader =
+                ProjectReader::open(output);
+            ASSERT_TRUE(reader)
+                << lfs::format_for_developer(
+                       reader.error());
+            const auto* checkpoint =
+                reader->find(
+                    source_checkpoint.key);
+            ASSERT_NE(checkpoint, nullptr);
+            EXPECT_EQ(
+                checkpoint->stored_bytes,
+                expanded_bytes);
+            EXPECT_EQ(
+                checkpoint->row_kind,
+                RowKind::Live);
+        }
+
+        const auto drop_file_cache =
+            [&output] {
+#if defined(__linux__)
+                const int file =
+                    ::open(
+                        output.c_str(), O_RDONLY);
+                ASSERT_GE(file, 0);
+                EXPECT_EQ(
+                    ::posix_fadvise(
+                        file, 0, 0,
+                        POSIX_FADV_DONTNEED),
+                    0);
+                EXPECT_EQ(::close(file), 0);
+#endif
+            };
+
+        std::vector<double> cold_shell_ms;
+        std::vector<double> cold_open_ms;
+        for (int sample = 0; sample < 5;
+             ++sample) {
+            drop_file_cache();
+            const auto started =
+                std::chrono::steady_clock::now();
+            auto document =
+                ProjectDocument::open(
+                    output,
+                    ProjectDocumentOpenOptions{
+                        .reader = {},
+                        .geometry = {},
+                        .defer_geometry_payloads =
+                            true,
+                    });
+            ASSERT_TRUE(document)
+                << lfs::format_for_developer(
+                       document.error());
+            cold_open_ms.push_back(
+                std::chrono::duration<
+                    double, std::milli>(
+                    std::chrono::
+                        steady_clock::now() -
+                    started)
+                    .count());
+            auto session =
+                lfs::vis::project::
+                    prepareGuiSessionRestore(
+                        {
+                            .gui_layout =
+                                document
+                                    ->gui_layout(),
+                            .editor =
+                                document->editor(),
+                            .view =
+                                document->view(),
+                            .sequencer =
+                                document
+                                    ->sequencer(),
+                            .metrics =
+                                document
+                                    ->metrics(),
+                        });
+            ASSERT_TRUE(session)
+                << lfs::format_for_developer(
+                       session.error());
+            auto parameters =
+                document->parameters()
+                    .snapshot();
+            ASSERT_TRUE(parameters)
+                << lfs::format_for_developer(
+                       parameters.error());
+            Scene shell_scene;
+            auto shell =
+                lfs::io::project::
+                    stage_scene_shell(
+                        document
+                            ->scene_graph(),
+                        shell_scene);
+            ASSERT_TRUE(shell)
+                << lfs::format_for_developer(
+                       shell.error());
+            cold_shell_ms.push_back(
+                std::chrono::duration<
+                    double, std::milli>(
+                    std::chrono::
+                        steady_clock::now() -
+                    started)
+                    .count());
+        }
+        std::ranges::sort(cold_shell_ms);
+        std::ranges::sort(cold_open_ms);
+        const double p50_shell_ms =
+            cold_shell_ms[cold_shell_ms.size() / 2];
+        const double max_shell_ms =
+            cold_shell_ms.back();
+        const auto join_samples =
+            [](const std::vector<double>& samples) {
+                std::ostringstream result;
+                for (std::size_t index = 0;
+                     index < samples.size();
+                     ++index) {
+                    if (index != 0) {
+                        result << ',';
+                    }
+                    result << samples[index];
+                }
+                return result.str();
+            };
+        std::cout
+            << "P6_SHELL_SAMPLES"
+            << " open_cold_ms="
+            << join_samples(cold_open_ms)
+            << " shell_cold_ms="
+            << join_samples(cold_shell_ms)
+            << '\n';
+        EXPECT_LT(max_shell_ms, 100.0);
+
+        auto partial =
+            ProjectDocument::open(
+                output,
+                ProjectDocumentOpenOptions{
+                    .reader = {},
+                    .geometry = {},
+                    .defer_geometry_payloads =
+                        true,
+                });
+        ASSERT_TRUE(partial)
+            << lfs::format_for_developer(
+                   partial.error());
+        partial->edit_metrics()
+            .accumulated_training_seconds += 1.0;
+        const auto save_started =
+            std::chrono::steady_clock::now();
+        auto partial_save_options =
+            save_options(1100, 600);
+        partial_save_options.commit
+            .commit_uuid =
+            lfs::core::generate_uuid_v4();
+        partial_save_options.commit
+            .snapshot_uuid =
+            source_checkpoint
+                .key.instance_uuid;
+        partial_save_options.commit
+            .wallclock_unix_ns =
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<
+                    std::chrono::nanoseconds>(
+                    std::chrono::
+                        system_clock::now()
+                            .time_since_epoch())
+                    .count());
+        auto saved =
+            partial->save(
+                output,
+                partial_save_options);
+        if (!saved) {
+            for (const auto& suppressed :
+                 saved.error().suppressed()) {
+                std::cerr
+                    << "P6_SAVE_SUPPRESSED\n"
+                    << lfs::format_for_developer(
+                           suppressed);
+            }
+        }
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+        const double partial_save_ms =
+            std::chrono::duration<
+                double, std::milli>(
+                std::chrono::
+                    steady_clock::now() -
+                save_started)
+                .count();
+        EXPECT_LT(partial_save_ms, 250.0);
+        EXPECT_GT(saved->reused_chunks, 0u);
+
+        std::cout
+            << "P6_PERF"
+            << " ckpt_bytes="
+            << expanded_bytes
+            << " publish_ms=" << publish_ms
+            << " open_cold_ms=";
+        for (std::size_t index = 0;
+             index < cold_open_ms.size();
+             ++index) {
+            if (index != 0) {
+                std::cout << ',';
+            }
+            std::cout
+                << cold_open_ms[index];
+        }
+        std::cout
+            << " shell_cold_ms=";
+        for (std::size_t index = 0;
+             index < cold_shell_ms.size();
+             ++index) {
+            if (index != 0) {
+                std::cout << ',';
+            }
+            std::cout
+                << cold_shell_ms[index];
+        }
+        std::cout
+            << " shell_p50_ms="
+            << p50_shell_ms
+            << " shell_max_ms="
+            << max_shell_ms
+            << " partial_save_ms="
+            << partial_save_ms
+            << '\n';
     }
 
     TEST(ProjectDocumentTest,

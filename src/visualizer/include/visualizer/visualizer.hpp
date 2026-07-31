@@ -4,14 +4,17 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace lfs::core {
     class Scene;
@@ -29,6 +32,37 @@ namespace lfs::vis {
         Vulkan,
     };
 
+    enum class ProjectSwitchDisposition {
+        RequireClean,
+        DiscardChanges,
+    };
+
+    struct LFS_VIS_API ProjectPayloadInfo {
+        std::string chapter;
+        std::string node_uuid;
+        std::string hydration_state;
+    };
+
+    struct LFS_VIS_API ProjectRecentInfo {
+        std::string project_uuid;
+        std::filesystem::path last_known_path;
+    };
+
+    struct LFS_VIS_API ProjectInfo {
+        std::optional<std::filesystem::path> path;
+        std::string project_uuid;
+        std::uint64_t generation = 0;
+        bool dirty = false;
+        std::vector<std::string> dirty_chapters;
+        std::string hydration_state = "empty";
+        std::vector<ProjectPayloadInfo> payloads;
+        bool contains_embedded_secrets = false;
+        bool reopen_last_project = true;
+        bool auto_save_on_close = true;
+        std::string hydration_error;
+        std::vector<ProjectRecentInfo> recent_projects;
+    };
+
     struct LFS_VIS_API ViewerOptions {
         std::string title = "LichtFeld Studio";
         int width = 1280;
@@ -41,6 +75,11 @@ namespace lfs::vis {
         int monitor_y = 0;
         int monitor_width = 0;
         int monitor_height = 0;
+        std::optional<std::filesystem::path> startup_project;
+        // Embedders and tests may isolate lifecycle settings from the
+        // platform user-config directory.
+        std::optional<std::filesystem::path>
+            project_lifecycle_settings_path;
     };
 
     class LFS_VIS_API Visualizer {
@@ -69,8 +108,18 @@ namespace lfs::vis {
         [[nodiscard]] virtual bool acceptsPostedWork() const { return true; }
         virtual void setShutdownRequestedCallback(std::function<void()> callback) = 0;
         virtual std::expected<void, std::string> startTraining() = 0;
-        virtual std::expected<std::filesystem::path, std::string> saveCheckpoint(
-            const std::optional<std::filesystem::path>& path = std::nullopt) = 0;
+        virtual lfs::Result<void>
+        projectSave(bool regenerate_preview = true) = 0;
+        virtual lfs::Result<void>
+        projectSaveAs(const std::filesystem::path& path,
+                      bool regenerate_preview = true) = 0;
+        virtual lfs::Result<void>
+        projectOpen(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition =
+                ProjectSwitchDisposition::RequireClean) = 0;
+        virtual lfs::Result<ProjectInfo>
+        projectGetInfo() = 0;
 
         virtual ~Visualizer() = default;
     };

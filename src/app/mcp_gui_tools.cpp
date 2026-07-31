@@ -122,6 +122,176 @@ namespace lfs::app {
             return total;
         }
 
+        json project_info_json(
+            const vis::ProjectInfo& info) {
+            json payloads = json::array();
+            for (const auto& payload : info.payloads) {
+                payloads.push_back({
+                    {"chapter", payload.chapter},
+                    {"node_uuid", payload.node_uuid},
+                    {"hydration_state",
+                     payload.hydration_state},
+                });
+            }
+            json recent = json::array();
+            for (const auto& entry :
+                 info.recent_projects) {
+                recent.push_back({
+                    {"project_uuid",
+                     entry.project_uuid},
+                    {"last_known_path",
+                     core::path_to_utf8(
+                         entry.last_known_path)},
+                });
+            }
+            return json{
+                {"success", true},
+                {"path",
+                 info.path
+                     ? json(core::path_to_utf8(
+                           *info.path))
+                     : json(nullptr)},
+                {"project_uuid", info.project_uuid},
+                {"generation", info.generation},
+                {"dirty", info.dirty},
+                {"dirty_chapters",
+                 info.dirty_chapters},
+                {"hydration_state",
+                 info.hydration_state},
+                {"payloads", std::move(payloads)},
+                {"contains_embedded_secrets",
+                 info.contains_embedded_secrets},
+                {"reopen_last_project",
+                 info.reopen_last_project},
+                {"auto_save_on_close",
+                 info.auto_save_on_close},
+                {"hydration_error",
+                 info.hydration_error.empty()
+                     ? json(nullptr)
+                     : json(info.hydration_error)},
+                {"recent_projects",
+                 std::move(recent)},
+            };
+        }
+
+        json project_error_json(
+            const lfs::Error& error) {
+            return json{
+                {"error",
+                 {
+                     {"code",
+                      lfs::to_string(error.code())},
+                     {"user_message",
+                      std::string(
+                          error.user_message())},
+                     {"detail",
+                      std::string(error.detail())},
+                 }},
+            };
+        }
+
+        json project_error_json(
+            const lfs::ErrorCode code,
+            std::string user_message,
+            std::string detail) {
+            return project_error_json(
+                lfs::make_error(
+                    lfs::ErrorInit{
+                        .code = code,
+                        .domain =
+                            lfs::ErrorDomain::MCP,
+                        .severity =
+                            lfs::Severity::Error,
+                        .retryability =
+                            lfs::Retryability::
+                                NotRetryable,
+                        .operation_id = {},
+                        .user_message =
+                            std::move(user_message),
+                        .detail =
+                            std::move(detail),
+                        .detection =
+                            LFS_SOURCE_SITE_CURRENT(),
+                        .fields = {},
+                        .native = std::nullopt,
+                    }));
+        }
+
+        lfs::Result<vis::ProjectInfo>
+        wait_for_project_generation(
+            vis::Visualizer* viewer,
+            const std::uint64_t previous_generation,
+            const std::filesystem::path&
+                expected_path,
+            const bool require_newer_generation) {
+            constexpr auto TIMEOUT =
+                std::chrono::minutes(2);
+            constexpr auto POLL_INTERVAL =
+                std::chrono::milliseconds(25);
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                TIMEOUT;
+            std::uint64_t last_generation =
+                previous_generation;
+            do {
+                auto latest = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                if (!latest) {
+                    return std::move(latest).error();
+                }
+                last_generation =
+                    latest->generation;
+                if (latest->path &&
+                    latest->path->lexically_normal() ==
+                        expected_path
+                            .lexically_normal() &&
+                    (!require_newer_generation ||
+                     latest->generation >
+                         previous_generation)) {
+                    return latest;
+                }
+                std::this_thread::sleep_for(
+                    POLL_INTERVAL);
+            } while (
+                std::chrono::steady_clock::now() <
+                deadline);
+            return lfs::make_error(
+                lfs::ErrorInit{
+                    .code =
+                        lfs::ErrorCode::
+                            DeadlineExceeded,
+                    .domain =
+                        lfs::ErrorDomain::MCP,
+                    .severity =
+                        lfs::Severity::Error,
+                    .retryability =
+                        lfs::Retryability::
+                            RetryableWithBackoff,
+                    .operation_id = {},
+                    .user_message =
+                        "The project save did not publish before the MCP deadline.",
+                    .detail = std::format(
+                        "Timed out waiting for the explicit .licht generation at '{}' (last generation {})",
+                        core::path_to_utf8(
+                            expected_path),
+                        last_generation),
+                    .detection =
+                        LFS_SOURCE_SITE_CURRENT(),
+                    .fields =
+                        lfs::SmallFields{}
+                            .add(
+                                "path",
+                                core::path_to_utf8(
+                                    expected_path))
+                            .add(
+                                "last_generation",
+                                last_generation),
+                    .native = std::nullopt,
+                });
+        }
+
         std::expected<std::string, std::string> render_scene_to_base64(
             core::Scene& scene,
             int camera_index = 0,
@@ -2065,6 +2235,207 @@ namespace lfs::app {
                 return json{{"success", true}, {"path", core::path_to_utf8(path)}};
             });
 
+        registry.register_tool(
+            McpTool{
+                .name = "project_save",
+                .description = "Append one explicit generation to the active .licht project",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json::object(),
+                    .required = {}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
+            [viewer, viewer_impl](const json&) -> json {
+                auto before = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                if (!before) {
+                    return project_error_json(
+                        before.error());
+                }
+                if (!before->path) {
+                    return project_error_json(
+                        lfs::ErrorCode::
+                            FailedPrecondition,
+                        "The active project has no path.",
+                        "Use project_save_as with a .licht destination.");
+                }
+                const auto expected_path =
+                    before->path->lexically_normal();
+                auto result = post_render_and_wait(
+                    viewer_impl, [viewer] {
+                        return viewer->projectSave(
+                            true);
+                    });
+                if (!result) {
+                    return project_error_json(
+                        result.error());
+                }
+                auto info =
+                    wait_for_project_generation(
+                        viewer,
+                        before->generation,
+                        expected_path, true);
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "project_save_as",
+                .description = "Save the active project to a new .licht path and bind that path as the master",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{
+                                     {"type", "string"},
+                                     {"description", "Destination .licht path"}}}},
+                    .required = {"path"}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
+            [viewer, viewer_impl](const json& args) -> json {
+                const auto path =
+                    core::utf8_to_path(
+                        args.at("path")
+                            .get<std::string>());
+                auto before = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                if (!before) {
+                    return project_error_json(
+                        before.error());
+                }
+                std::error_code path_error;
+                const auto expected_path =
+                    std::filesystem::absolute(
+                        path, path_error)
+                        .lexically_normal();
+                if (path_error) {
+                    return project_error_json(
+                        lfs::ErrorCode::
+                            InvalidArgument,
+                        "The destination path could not be resolved.",
+                        path_error.message());
+                }
+                auto result = post_render_and_wait(
+                    viewer_impl, [viewer, path] {
+                        return viewer->projectSaveAs(
+                            path, true);
+                    });
+                if (!result) {
+                    return project_error_json(
+                        result.error());
+                }
+                auto info =
+                    wait_for_project_generation(
+                        viewer,
+                        before->generation,
+                        expected_path,
+                        before->path &&
+                            before->path
+                                    ->lexically_normal() ==
+                                expected_path);
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "project_open",
+                .description = "Transactionally open a .licht project and return once its interactive shell is ready",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{
+                                     {"type", "string"},
+                                     {"description", "Existing .licht project path"}}},
+                        {"discard_changes", json{{"type", "boolean"}, {"default", false}, {"description", "Explicitly authorize discarding unsaved changes only after the candidate passes Phase A"}}}},
+                    .required = {"path"}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
+            [viewer](const json& args) -> json {
+                const auto path =
+                    core::utf8_to_path(
+                        args.at("path")
+                            .get<std::string>());
+                const auto disposition =
+                    args.value(
+                        "discard_changes", false)
+                        ? vis::
+                              ProjectSwitchDisposition::
+                                  DiscardChanges
+                        : vis::
+                              ProjectSwitchDisposition::
+                                  RequireClean;
+                auto result = post_and_wait(
+                    viewer,
+                    [viewer, path, disposition] {
+                        return viewer->projectOpen(
+                            path, disposition);
+                    });
+                if (!result) {
+                    return project_error_json(
+                        result.error());
+                }
+                auto info = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "project_get_info",
+                .description = "Read the active project path, identity, generation, dirty chapters, and hydration state",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json::object(),
+                    .required = {}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "query",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer](const json&) -> json {
+                auto info = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
         mcp::register_shared_scene_tools(mcp::SharedSceneToolBackend{
             .runtime = "gui",
             .thread_affinity = "gui_thread",
@@ -2084,13 +2455,6 @@ namespace lfs::app {
                         return viewer->loadCheckpointForTraining(path);
                     });
                 },
-            .save_checkpoint =
-                [viewer](const std::optional<std::filesystem::path>& path)
-                -> std::expected<std::filesystem::path, std::string> {
-                return post_and_wait(viewer, [viewer, path]() {
-                    return viewer->saveCheckpoint(path);
-                });
-            },
             .save_ply =
                 [viewer](const std::filesystem::path& path) {
                     return post_and_wait(viewer, [viewer, path]() -> std::expected<void, std::string> {

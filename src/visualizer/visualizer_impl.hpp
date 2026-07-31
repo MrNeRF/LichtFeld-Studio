@@ -14,6 +14,7 @@
 #include "input/input_controller.hpp"
 #include "internal/viewport.hpp"
 #include "ipc/view_context.hpp"
+#include "project/project_lifecycle.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -80,8 +81,18 @@ namespace lfs::vis {
         }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         std::expected<void, std::string> startTraining() override;
-        std::expected<std::filesystem::path, std::string> saveCheckpoint(
-            const std::optional<std::filesystem::path>& path = std::nullopt) override;
+        lfs::Result<void>
+        projectSave(bool regenerate_preview = true) override;
+        lfs::Result<void>
+        projectSaveAs(const std::filesystem::path& path,
+                      bool regenerate_preview = true) override;
+        lfs::Result<void>
+        projectOpen(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition =
+                ProjectSwitchDisposition::RequireClean) override;
+        lfs::Result<ProjectInfo>
+        projectGetInfo() override;
 
         // Getters for GUI (delegating to state manager)
         lfs::training::Trainer* getTrainer() const { return trainer_manager_->getTrainer(); }
@@ -113,6 +124,12 @@ namespace lfs::vis {
         [[nodiscard]] lfs::Result<void>
         stageProjectSessionRestore(
             lfs::io::project::ProjectSessionChapters chapters);
+        void stagePreparedProjectSessionRestore(
+            project::PreparedGuiSessionRestore prepared);
+        [[nodiscard]] bool
+        isProjectSessionRestorePending() const noexcept {
+            return gui_session_restore_.hasPending();
+        }
         [[nodiscard]] const std::vector<
             project::CameraBookmarkProjectState>&
         cameraBookmarks() const noexcept {
@@ -166,6 +183,12 @@ namespace lfs::vis {
         DataLoadingService* getDataLoader() {
             return data_loader_.get();
         }
+        ParameterManager* getParameterManager() {
+            return parameter_manager_.get();
+        }
+        const ParameterManager* getParameterManager() const {
+            return parameter_manager_.get();
+        }
 
         EditorContext& getEditorContext() { return editor_context_; }
         const EditorContext& getEditorContext() const { return editor_context_; }
@@ -177,7 +200,12 @@ namespace lfs::vis {
         // GUI manager
         std::unique_ptr<gui::GuiManager> gui_manager_;
         friend class gui::GuiManager;
+        friend class project::ProjectLifecycle;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
+        friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
+        friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
+        friend class VisualizerImplResetTest_FileExitRoutesThroughCloseSaveStateMachine_Test;
+        friend class VisualizerImplResetTest_CancelExitAndNextWindowAttemptRecoverFromFailedCloseSave_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;
@@ -213,8 +241,10 @@ namespace lfs::vis {
         void setupComponentConnections();
         void handleTrainingCompleted(const lfs::core::events::state::TrainingCompleted& event);
         void handleLoadConfigFile(const std::filesystem::path& path);
-        void handleNewProject();
-        void performNewProject();
+        void handleNewProject(
+            ProjectSwitchDisposition disposition);
+        void performNewProject(
+            ProjectSwitchDisposition disposition);
         void schedulePendingTrainingAction();
         void performPendingTrainingAction();
         void requestApplicationClose();
@@ -348,9 +378,14 @@ namespace lfs::vis {
         };
         PendingTrainingAction pending_training_action_ = PendingTrainingAction::None;
         bool pending_training_action_posted_ = false;
+        ProjectSwitchDisposition
+            pending_new_project_disposition_ =
+                ProjectSwitchDisposition::RequireClean;
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
         bool startup_plugin_preload_started_ = false;
+        bool startup_project_open_attempted_ = false;
+        bool close_save_notice_posted_ = false;
         bool gui_panels_ready_emitted_ = false;
         std::uint64_t startup_plugin_load_status_revision_ = 0;
         bool plugin_preload_timing_active_ = false;
@@ -368,6 +403,8 @@ namespace lfs::vis {
         std::vector<
             project::CameraBookmarkProjectState>
             camera_bookmarks_;
+        std::unique_ptr<project::ProjectLifecycle>
+            project_lifecycle_;
     };
 
 } // namespace lfs::vis

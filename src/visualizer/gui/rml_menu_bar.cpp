@@ -40,6 +40,8 @@ namespace lfs::vis::gui {
             case MenuItemDesc::Type::Operator:
                 view.action = "operator";
                 view.operator_id = item.operator_id;
+                view.has_shortcut = !item.shortcut.empty();
+                view.shortcut = item.shortcut;
                 break;
             case MenuItemDesc::Type::Toggle:
                 view.action = "callback";

@@ -47,8 +47,8 @@
     <div data-if="show_ctrl_stopping">
       <span class="status-text status-muted">{{label_status_stopping}}</span>
     </div>
-    <button class="btn btn--primary btn--full" data-tooltip="training.tooltip.btn_save_checkpoint" data-if="show_checkpoint" data-event-click="action('save_checkpoint')">{{label_save_checkpoint}}</button>
-    <span class="status-text status-success" data-if="show_checkpoint_saved">{{label_checkpoint_saved}}</span>
+    <button class="btn btn--primary btn--full" data-tooltip="training.tooltip.btn_save_project" data-if="show_project_save" data-event-click="action('save_project')">{{label_save_project}}</button>
+    <span class="status-text status-success" data-if="show_project_saved">{{label_project_saved}}</span>
   </div>
 
   <!-- ── Training Parameters ── -->

@@ -5,10 +5,11 @@
 
 /**
  * @file checkpoint.hpp
- * @brief Training checkpoint save/load (.resume files)
+ * @brief Embedded checkpoint serialization and legacy .resume import
  *
  * Format types and read-only functions live in core/checkpoint_format.hpp.
- * This header provides save/load that depend on training types (IStrategy, BilateralGrid, PPISP).
+ * This header provides embedded serialization and import-only loading that
+ * depend on training types (IStrategy, BilateralGrid, PPISP).
  */
 
 #include "core/checkpoint_format.hpp"
@@ -24,19 +25,6 @@
 
 namespace lfs::training {
 
-    inline constexpr std::string_view kCheckpointDirectoryName = "checkpoints";
-    inline constexpr std::string_view kCheckpointFilename = "checkpoint.resume";
-
-    [[nodiscard]] inline std::filesystem::path checkpoint_directory(
-        const std::filesystem::path& output_path) {
-        return output_path / kCheckpointDirectoryName;
-    }
-
-    [[nodiscard]] inline std::filesystem::path checkpoint_output_path(
-        const std::filesystem::path& output_path) {
-        return checkpoint_directory(output_path) / kCheckpointFilename;
-    }
-
     class IStrategy;
     class BilateralGrid;
     class PPISP;
@@ -48,9 +36,8 @@ namespace lfs::training {
         std::uint64_t bytes = 0;
     };
 
-    // Serialize the exact LFKP stream to a seekable destination. This is shared
-    // by the legacy .resume writer and the .licht snapshot service so the CKPT
-    // chapter is byte-for-byte the existing checkpoint format.
+    // Serialize the exact LFKP stream to a seekable destination for embedding
+    // in a .licht CKPT chapter.
     [[nodiscard]] lfs::Result<CheckpointStreamResult>
     serialize_checkpoint(
         std::ostream& destination,
@@ -62,18 +49,7 @@ namespace lfs::training {
         const PPISPControllerPool* ppisp_controller_pool,
         const ADMMSparsityOptimizer* sparsity_optimizer);
 
-    /// Save complete training checkpoint
-    std::expected<void, std::string> save_checkpoint(
-        const std::filesystem::path& path,
-        int iteration,
-        const IStrategy& strategy,
-        const lfs::core::param::TrainingParameters& params,
-        const BilateralGrid* bilateral_grid,
-        const PPISP* ppisp,
-        const PPISPControllerPool* ppisp_controller_pool,
-        const ADMMSparsityOptimizer* sparsity_optimizer);
-
-    /// Load complete training checkpoint (strategy + optional appearance components)
+    /// Import a standalone legacy checkpoint.
     std::expected<int, std::string> load_checkpoint(
         const std::filesystem::path& path,
         IStrategy& strategy,

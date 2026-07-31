@@ -4,6 +4,7 @@
 
 #include "gui/async_task_manager.hpp"
 #include "core/data_loading_service.hpp"
+#include "core/error_bus.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
@@ -816,6 +817,45 @@ namespace lfs::vis::gui {
                                          bool rad_streamable) {
         if (isExporting())
             return;
+
+        if (viewer_) {
+            if (auto info =
+                    viewer_->projectGetInfo();
+                info &&
+                info->contains_embedded_secrets) {
+                lfs::ErrorBus::instance().publish(
+                    lfs::ErrorNotification{
+                        .error = lfs::make_error(
+                            lfs::ErrorInit{
+                                .code =
+                                    lfs::ErrorCode::
+                                        FailedPrecondition,
+                                .domain =
+                                    lfs::ErrorDomain::App,
+                                .severity =
+                                    lfs::Severity::Warning,
+                                .retryability =
+                                    lfs::Retryability::
+                                        NotRetryable,
+                                .operation_id = {},
+                                .user_message =
+                                    "This project contains unsaved editor buffers marked as potentially secret.",
+                                .detail =
+                                    "Review the embedded EDTR content before sharing the project or derived exports.",
+                                .detection =
+                                    LFS_SOURCE_SITE_CURRENT(),
+                                .fields = {},
+                                .native = std::nullopt,
+                            }),
+                        .surface =
+                            lfs::ErrorSurface::Toast,
+                        .actions = {},
+                        .operation_id =
+                            lfs::OperationId::
+                                generate(),
+                    });
+            }
+        }
 
         if (format == ExportFormat::COLMAP) {
             startColmapExport(path);

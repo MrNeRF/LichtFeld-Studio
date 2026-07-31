@@ -2161,7 +2161,10 @@ def on_show_resume_checkpoint_popup(callback: object) -> None:
     """Register callback for ShowResumeCheckpointPopup event"""
 
 def on_request_exit(callback: object) -> None:
-    """Register callback for RequestExit event"""
+    """Register callback for the close-decision prompt"""
+
+def on_project_switch_confirmation(callback: object) -> None:
+    """Register callback for a dirty project-switch decision"""
 
 def on_open_camera_preview(callback: object) -> None:
     """Register callback for OpenCameraPreview event"""

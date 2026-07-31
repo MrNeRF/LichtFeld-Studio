@@ -112,6 +112,17 @@ namespace lfs::core {
 
     class Scene;
 
+    // Project payload hydration is tracked at the chapter/node boundary. A
+    // geometry node may exist in the interactive scene shell before its heavy
+    // payload has been decoded.
+    enum class PayloadHydrationState : std::uint8_t {
+        NotApplicable,
+        Unloaded,
+        Hydrating,
+        Loaded,
+        Failed,
+    };
+
     class LFS_CORE_API SceneNode {
     public:
         SceneNode() = default;
@@ -141,6 +152,8 @@ namespace lfs::core {
         // In-memory payload no longer matches the source file (edited, generated,
         // pasted, ...); drives the embed-vs-reference decision on project save.
         bool payload_diverged = false;
+        PayloadHydrationState payload_hydration =
+            PayloadHydrationState::NotApplicable;
         std::optional<GeoreferencePose> georef_pose;
 
         std::string image_path;
@@ -192,6 +205,8 @@ namespace lfs::core {
             bool locked = false;
             bool training_enabled = true;
             bool payload_diverged = false;
+            PayloadHydrationState payload_hydration =
+                PayloadHydrationState::NotApplicable;
             std::optional<GeoreferencePose> georef_pose;
 
             std::unique_ptr<lfs::core::SplatData> model;
@@ -211,6 +226,12 @@ namespace lfs::core {
             uint8_t next_group_id = 1;
             bool has_splat_selection = false;
             bool has_point_cloud_selection = false;
+        };
+
+        struct PayloadHydrationCommitReport {
+            std::size_t hydrated_units = 0;
+            std::size_t invalidated_units = 0;
+            bool selection_installed = false;
         };
 
         enum class MutationType : uint32_t {
@@ -258,6 +279,8 @@ namespace lfs::core {
         // just a pointer swap + MODEL_CHANGED. Used by the PLY-sequence streaming player.
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> swapNodeModel(
             const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
+        [[nodiscard]] bool setPayloadHydrationState(
+            const Uuid& uuid, PayloadHydrationState state);
         void setNodeVisibility(const std::string& name, bool visible);
         void setNodeVisibility(NodeId id, bool visible);
         void setNodeLocked(const std::string& name, bool locked);
@@ -295,6 +318,14 @@ namespace lfs::core {
         void installRestoreSelectionState(
             RestoreSelectionState state) noexcept;
         void commitRestoreStage(std::unique_ptr<Scene> staged) noexcept;
+        // Attach staged heavy payloads by stable node UUID without replacing
+        // the live shell. Deleted/replaced/previously hydrated nodes are
+        // invalidated independently, so an edit to one unit cannot discard
+        // hydration for unrelated units.
+        [[nodiscard]] PayloadHydrationCommitReport
+        commitPayloadHydrationStage(
+            std::unique_ptr<Scene> staged,
+            bool install_selection) noexcept;
         void removeKeyframeNodes();
         [[nodiscard]] bool reparent(NodeId node, NodeId new_parent);
         [[nodiscard]] bool moveNode(NodeId node, NodeId new_parent, int index);

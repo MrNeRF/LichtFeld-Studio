@@ -355,25 +355,6 @@ namespace lfs::mcp {
         return {};
     }
 
-    std::expected<void, std::string> TrainingContext::save_checkpoint(
-        const std::filesystem::path& path) {
-
-        std::lock_guard lock(mutex_);
-
-        if (!trainer_) {
-            return std::unexpected("No training session to save");
-        }
-
-        auto result = trainer_->save_checkpoint_to(path, trainer_->get_current_iteration());
-
-        if (!result) {
-            return std::unexpected(result.error());
-        }
-
-        LOG_INFO("MCP: Saved checkpoint to {}", core::path_to_utf8(path));
-        return {};
-    }
-
     std::expected<void, std::string> TrainingContext::save_ply(
         const std::filesystem::path& path) {
 
@@ -513,35 +494,6 @@ namespace lfs::mcp {
                 [](const std::filesystem::path& path) {
                     return TrainingContext::instance().load_checkpoint(path);
                 },
-            .save_checkpoint =
-                [](const std::optional<std::filesystem::path>& path)
-                -> std::expected<std::filesystem::path, std::string> {
-                auto& ctx = TrainingContext::instance();
-                auto trainer = ctx.trainer();
-                if (!trainer)
-                    return std::unexpected("No training session to save");
-
-                const bool training_active = ctx.is_training();
-                if (training_active) {
-                    if (path) {
-                        return std::unexpected(
-                            "Custom checkpoint output paths are not supported while training is active");
-                    }
-                    return std::unexpected(
-                        "Cannot report checkpoint save success while training is active; "
-                        "use the async training checkpoint action or stop training first");
-                }
-
-                if (path) {
-                    if (auto result = ctx.save_checkpoint(*path); !result)
-                        return std::unexpected(result.error());
-                    return *path;
-                }
-
-                if (auto result = trainer->save_checkpoint(trainer->get_current_iteration()); !result)
-                    return std::unexpected(result.error());
-                return trainer->get_output_path();
-            },
             .save_ply =
                 [](const std::filesystem::path& path) {
                     return TrainingContext::instance().save_ply(path);

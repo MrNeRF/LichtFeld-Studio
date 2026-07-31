@@ -112,6 +112,8 @@ namespace lfs::vis {
         public:
             [[nodiscard]] lfs::Result<void> stage(
                 lfs::io::project::ProjectSessionChapters chapters);
+            void stagePrepared(
+                PreparedGuiSessionRestore prepared);
             void onFirstGuiFrame();
             void onPanelsReady(std::uint64_t registration_revision);
             [[nodiscard]] bool ready() const noexcept;

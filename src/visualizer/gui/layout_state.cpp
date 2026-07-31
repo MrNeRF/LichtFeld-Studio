@@ -14,31 +14,25 @@ namespace lfs::vis::gui {
         return lfs::core::user_config_dir();
     }
 
-    std::filesystem::path LayoutState::getConfigPath() {
+    std::filesystem::path LayoutState::getLegacyConfigPath() {
         return getConfigDir() / "layout.json";
     }
 
-    void LayoutState::save() const {
+    std::filesystem::path
+    LayoutState::getUserPreferencesPath() {
+        return getConfigDir() /
+               "ui_preferences.json";
+    }
+
+    void LayoutState::saveUserPreferences() const {
         try {
-            const auto path = getConfigPath();
+            const auto path =
+                getUserPreferencesPath();
             std::filesystem::create_directories(path.parent_path());
 
             nlohmann::json j;
-            j["right_panel_width"] = right_panel_width;
-            j["scene_panel_ratio"] = scene_panel_ratio;
-            j["python_console_width"] = python_console_width;
-            j["bottom_dock_height"] = bottom_dock_height;
-            j["left_dock_width"] = left_dock_width;
-            j["show_sequencer"] = show_sequencer;
-
             if (!file_association.empty())
                 j["file_association"] = file_association;
-
-            nlohmann::json windows;
-            for (const auto& [name, visible] : window_visibility) {
-                windows[name] = visible;
-            }
-            j["windows"] = windows;
 
             nlohmann::json vram_hud;
             vram_hud["x"] = vram_hud_x;
@@ -54,58 +48,94 @@ namespace lfs::vis::gui {
                 file << j.dump(2);
             }
         } catch (const std::exception& e) {
-            LOG_WARN("Failed to save layout state: {}", e.what());
+            LOG_WARN("Failed to save user UI preferences: {}", e.what());
         } catch (...) {
-            LOG_WARN("Failed to save layout state: unknown error");
+            LOG_WARN("Failed to save user UI preferences: unknown error");
         }
     }
 
     void LayoutState::load() {
         try {
-            const auto path = getConfigPath();
-            if (!std::filesystem::exists(path))
-                return;
+            const auto load_file =
+                [this](const std::filesystem::path& path,
+                       const bool legacy_layout) {
+                    if (!std::filesystem::exists(path))
+                        return;
+                    std::ifstream file(path);
+                    if (!file)
+                        return;
+                    const auto j =
+                        nlohmann::json::parse(file);
 
-            std::ifstream file(path);
-            if (!file)
-                return;
-
-            const auto j = nlohmann::json::parse(file);
-            right_panel_width = j.value("right_panel_width", right_panel_width);
-            scene_panel_ratio = j.value("scene_panel_ratio", scene_panel_ratio);
-            python_console_width = j.value("python_console_width", python_console_width);
-            bottom_dock_height = j.value("bottom_dock_height", bottom_dock_height);
-            left_dock_width = j.value("left_dock_width", left_dock_width);
-            show_sequencer = j.value("show_sequencer", show_sequencer);
-            file_association = j.value("file_association", file_association);
-
-            if (j.contains("windows") && j["windows"].is_object()) {
-                for (const auto& [key, val] : j["windows"].items()) {
-                    if (val.is_boolean()) {
-                        window_visibility[key] = val.get<bool>();
+                    if (legacy_layout) {
+                        right_panel_width = j.value(
+                            "right_panel_width",
+                            right_panel_width);
+                        scene_panel_ratio = j.value(
+                            "scene_panel_ratio",
+                            scene_panel_ratio);
+                        python_console_width = j.value(
+                            "python_console_width",
+                            python_console_width);
+                        bottom_dock_height = j.value(
+                            "bottom_dock_height",
+                            bottom_dock_height);
+                        left_dock_width = j.value(
+                            "left_dock_width",
+                            left_dock_width);
+                        show_sequencer = j.value(
+                            "show_sequencer",
+                            show_sequencer);
+                        if (j.contains("windows") &&
+                            j["windows"].is_object()) {
+                            for (const auto& [key, val] :
+                                 j["windows"].items()) {
+                                if (val.is_boolean()) {
+                                    window_visibility[key] =
+                                        val.get<bool>();
+                                }
+                            }
+                        }
                     }
-                }
-            }
 
-            if (j.contains("vram_hud") && j["vram_hud"].is_object()) {
-                const auto& vh = j["vram_hud"];
-                vram_hud_x = vh.value("x", vram_hud_x);
-                vram_hud_y = vh.value("y", vram_hud_y);
-                vram_hud_width = vh.value("width", vram_hud_width);
-                vram_hud_height = vh.value("height", vram_hud_height);
-                vram_hud_active_tab = vh.value("active_tab", vram_hud_active_tab);
-                if (vh.contains("collapsed") && vh["collapsed"].is_array()) {
-                    vram_hud_collapsed_paths.clear();
-                    for (const auto& entry : vh["collapsed"]) {
-                        if (entry.is_string())
-                            vram_hud_collapsed_paths.push_back(entry.get<std::string>());
+                    file_association = j.value(
+                        "file_association",
+                        file_association);
+                    if (j.contains("vram_hud") &&
+                        j["vram_hud"].is_object()) {
+                        const auto& vh =
+                            j["vram_hud"];
+                        vram_hud_x =
+                            vh.value("x", vram_hud_x);
+                        vram_hud_y =
+                            vh.value("y", vram_hud_y);
+                        vram_hud_width = vh.value(
+                            "width", vram_hud_width);
+                        vram_hud_height = vh.value(
+                            "height", vram_hud_height);
+                        vram_hud_active_tab = vh.value(
+                            "active_tab",
+                            vram_hud_active_tab);
+                        if (vh.contains("collapsed") &&
+                            vh["collapsed"].is_array()) {
+                            vram_hud_collapsed_paths.clear();
+                            for (const auto& entry :
+                                 vh["collapsed"]) {
+                                if (entry.is_string()) {
+                                    vram_hud_collapsed_paths.push_back(
+                                        entry.get<std::string>());
+                                }
+                            }
+                        }
                     }
-                }
-            }
+                };
 
-            LOG_INFO("Layout state loaded from {}", path.string());
+            // layout.json is import-only. New writes contain only user-global
+            // fields and go to ui_preferences.json.
+            load_file(getLegacyConfigPath(), true);
+            load_file(getUserPreferencesPath(), false);
         } catch (const std::exception& e) {
-            LOG_WARN("Failed to load layout state: {}", e.what());
+            LOG_WARN("Failed to load UI state: {}", e.what());
         }
     }
 

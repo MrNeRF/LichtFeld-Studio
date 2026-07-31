@@ -420,14 +420,17 @@ namespace lfs::vis {
                const std::any& old_value,
                const std::any& new_value,
                std::function<void(const std::any&)> applier) {
-                if (!services().sceneOrNull()) {
+                auto* const scene_manager =
+                    services().sceneOrNull();
+                if (!scene_manager) {
                     return;
                 }
                 op::undoHistory().push(std::make_unique<op::PropertyChangeUndoEntry>(
                     property_path,
                     old_value,
                     new_value,
-                    std::move(applier)));
+                    std::move(applier),
+                    scene_manager));
             });
         setupEventHandlers();
         python::set_application_scene(&scene_);

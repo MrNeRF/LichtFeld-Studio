@@ -2384,7 +2384,17 @@ namespace lfs::io::project {
                     "authority tuple",
                     "commit.validation"));
             }
-            return reader->verify_all();
+            for (const ChunkInfo& row : reader->chunks()) {
+                if (!row.is_live() ||
+                    row.source_generation != impl_->generation) {
+                    continue;
+                }
+                if (auto verified = reader->verify_chunk(row);
+                    !verified) {
+                    return verified;
+                }
+            }
+            return {};
         };
 
         if (auto validation = validate_path(impl_->active_path);

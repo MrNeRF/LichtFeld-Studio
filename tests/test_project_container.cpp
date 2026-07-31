@@ -433,6 +433,65 @@ namespace {
     }
 
     TEST(ProjectContainerReader,
+         BoundedStreamValidatesOnlyTouchedBlockCrcRanges) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "partial-stream-crc.licht";
+        const std::size_t payload_bytes =
+            static_cast<std::size_t>(BLOCK_CRC_BYTES * 2);
+        std::vector<std::byte> payload(payload_bytes);
+        for (std::size_t index = 0; index < payload.size(); ++index) {
+            payload[index] = static_cast<std::byte>(index * 113u);
+        }
+        {
+            ProjectWriter writer = require_result(ProjectWriter::create(
+                path, fixture_create_options(814)));
+            require_status(writer.plan_commit(
+                fixture_commit_options(815, 816, 1)));
+            require_status(writer.preflight(payload.size()));
+            ChunkWriteOptions options{
+                .chunk_version = 1,
+                .compression = Compression::Stored,
+                .tensor_payload = false,
+                .block_crcs = true,
+            };
+            require_status(writer.write_chunk(fixed_key("SPLT", 817), payload,
+                                              options));
+            require_status(writer.commit());
+        }
+
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        ASSERT_EQ(reader.chunks().size(), 1u);
+        const ChunkInfo& chunk = reader.chunks().front();
+        ASSERT_TRUE(chunk.block_crc_table.has_value());
+        const std::uint64_t corrupt_offset =
+            chunk.payload_offset + BLOCK_CRC_BYTES + 23;
+        const std::array corruption = {std::byte{0xff}};
+        write_file_range(path, corrupt_offset, corruption);
+
+        auto bounded = reader.open_bounded_stream(chunk);
+        ASSERT_TRUE(bounded) << lfs::format_for_developer(bounded.error());
+        std::array<std::byte, 64> untouched{};
+        bounded->stream().read(
+            reinterpret_cast<char*>(untouched.data()),
+            static_cast<std::streamsize>(untouched.size()));
+        ASSERT_EQ(bounded->stream().gcount(),
+                  static_cast<std::streamsize>(untouched.size()));
+        EXPECT_TRUE(std::equal(untouched.begin(), untouched.end(),
+                               payload.begin()));
+
+        bounded->stream().seekg(
+            static_cast<std::streamoff>(BLOCK_CRC_BYTES + 8),
+            std::ios::beg);
+        ASSERT_TRUE(bounded->stream());
+        std::array<std::byte, 64> corrupt{};
+        bounded->stream().read(
+            reinterpret_cast<char*>(corrupt.data()),
+            static_cast<std::streamsize>(corrupt.size()));
+        EXPECT_TRUE(bounded->stream().fail());
+        EXPECT_EQ(bounded->stream().gcount(), 0);
+    }
+
+    TEST(ProjectContainerReader,
          RejectsHostileStoredSizesAndSparsePaddingBeforeAllocation) {
         TemporaryDirectory temporary;
         const fs::path huge_index_path = temporary.path / "huge-index.licht";

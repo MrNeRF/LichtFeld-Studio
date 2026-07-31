@@ -736,12 +736,12 @@ namespace lfs::vis {
         }
     }
 
-    void TrainerManager::requestSaveCheckpoint() {
+    void TrainerManager::requestSaveProject() {
         if (trainer_ && isTrainingActive()) {
-            trainer_->request_save();
-            LOG_INFO("Checkpoint save requested at iteration {}", getCurrentIteration());
+            trainer_->request_project_save();
+            LOG_INFO("Project save requested at iteration {}", getCurrentIteration());
         } else {
-            LOG_WARN("Cannot save checkpoint - training not active");
+            LOG_WARN("Cannot save project snapshot - training not active");
         }
     }
 
@@ -1300,10 +1300,6 @@ namespace lfs::vis {
 
         cmd::StopTraining::when([this](const auto&) {
             stopTraining();
-        });
-
-        cmd::SaveCheckpoint::when([this](const auto&) {
-            requestSaveCheckpoint();
         });
 
         // Listen for training progress events - update loss buffer

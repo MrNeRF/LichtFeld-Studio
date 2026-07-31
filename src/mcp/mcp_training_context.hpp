@@ -41,9 +41,6 @@ namespace lfs::mcp {
         std::expected<void, std::string> load_checkpoint(
             const std::filesystem::path& path);
 
-        std::expected<void, std::string> save_checkpoint(
-            const std::filesystem::path& path);
-
         std::expected<void, std::string> save_ply(
             const std::filesystem::path& path);
 

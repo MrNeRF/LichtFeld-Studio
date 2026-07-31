@@ -978,6 +978,10 @@ namespace lfs::app {
             });
 
             constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
+            const auto startup_project =
+                params->project_path
+                    ? params->project_path
+                    : params->resume_project;
             auto viewer = vis::Visualizer::create({
                 .title = "LichtFeld Studio",
                 .width = 1280,
@@ -986,6 +990,7 @@ namespace lfs::app {
                 .show_startup_overlay = !disable_splash,
                 .gut = params->optimization.gut,
                 .graphics_backend = graphics_backend,
+                .startup_project = startup_project,
             });
 
             viewer->setParameters(*params);
@@ -1001,7 +1006,9 @@ namespace lfs::app {
                 return 1;
             }
 
-            if (params->import_cameras_path || params->resume_checkpoint) {
+            if (params->import_cameras_path ||
+                params->resume_checkpoint ||
+                startup_project) {
                 if (auto& fut = cudaWarmupFuture(); fut.valid())
                     fut.wait();
             }

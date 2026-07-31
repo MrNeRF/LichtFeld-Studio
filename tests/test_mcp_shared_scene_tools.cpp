@@ -16,10 +16,9 @@ namespace {
 
     using json = nlohmann::json;
 
-    constexpr std::array<const char*, 6> kSharedSceneToolNames = {
+    constexpr std::array<const char*, 5> kSharedSceneToolNames = {
         "scene.load_dataset",
         "scene.load_checkpoint",
-        "scene.save_checkpoint",
         "scene.save_ply",
         "training.start",
         "training.get_last_error",
@@ -61,11 +60,6 @@ namespace {
                 .load_checkpoint =
                     [](const std::filesystem::path&) -> std::expected<void, std::string> {
                     return {};
-                },
-                .save_checkpoint =
-                    [](const std::optional<std::filesystem::path>& path)
-                    -> std::expected<std::filesystem::path, std::string> {
-                    return path.value_or(std::filesystem::path{"/tmp/output"});
                 },
                 .save_ply =
                     [](const std::filesystem::path&) -> std::expected<void, std::string> {

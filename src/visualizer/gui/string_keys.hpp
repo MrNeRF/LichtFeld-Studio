@@ -220,7 +220,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* BTN_STOP = "training.tooltip.btn_stop";
             inline constexpr const char* BTN_RESET = "training.tooltip.btn_reset";
             inline constexpr const char* BTN_CLEAR = "training.tooltip.btn_clear";
-            inline constexpr const char* BTN_SAVE_CHECKPOINT = "training.tooltip.btn_save_checkpoint";
+            inline constexpr const char* BTN_SAVE_PROJECT = "training.tooltip.btn_save_project";
             inline constexpr const char* SAVE_STEP_INPUT = "training.tooltip.save_step_input";
             inline constexpr const char* SAVE_STEP_ADD = "training.tooltip.save_step_add";
             inline constexpr const char* SAVE_STEP_REMOVE = "training.tooltip.save_step_remove";
@@ -248,7 +248,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* STOP = "training.button.stop";
             inline constexpr const char* RESET = "training.button.reset";
             inline constexpr const char* CLEAR = "training.button.clear";
-            inline constexpr const char* SAVE_CHECKPOINT = "training.button.save_checkpoint";
+            inline constexpr const char* SAVE_PROJECT = "training.button.save_project";
             inline constexpr const char* SWITCH_EDIT_MODE = "training.button.switch_edit_mode";
             inline constexpr const char* ADD = "training.button.add";
             inline constexpr const char* REMOVE = "training.button.remove";
@@ -572,8 +572,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* RESET = "training_panel.reset";
         inline constexpr const char* CLEAR = "training_panel.clear";
         inline constexpr const char* SWITCH_EDIT_MODE = "training_panel.switch_edit_mode";
-        inline constexpr const char* SAVE_CHECKPOINT = "training_panel.save_checkpoint";
-        inline constexpr const char* CHECKPOINT_SAVED = "training_panel.checkpoint_saved";
+        inline constexpr const char* SAVE_PROJECT = "training_panel.save_project";
+        inline constexpr const char* PROJECT_SAVED = "training_panel.project_saved";
         inline constexpr const char* IDLE = "training_panel.idle";
         inline constexpr const char* RUNNING = "training_panel.running";
         inline constexpr const char* FINISHED = "training_panel.finished";
@@ -621,6 +621,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TITLE = "exit_popup.title";
         inline constexpr const char* MESSAGE = "exit_popup.message";
         inline constexpr const char* UNSAVED_WARNING = "exit_popup.unsaved_warning";
+        inline constexpr const char* DISCARD = "exit_popup.discard";
         inline constexpr const char* EXIT = "exit_popup.exit";
     } // namespace ExitPopup
 

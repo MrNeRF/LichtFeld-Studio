@@ -5,6 +5,7 @@
 
 #include "io/project_document.hpp"
 #include "p5_matrix_rows.hpp"
+#include "ppisp_fixture.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/bilateral_grid.hpp"
 #include "training/components/ppisp.hpp"
@@ -2583,7 +2584,7 @@ namespace {
             .camera_ids = {10, 20},
         };
         const auto saved_sidecar =
-            lfs::training::save_ppisp_file(
+            lfs::test::write_ppisp_fixture(
                 sidecar_path, source,
                 &source_controller, &metadata);
         ASSERT_TRUE(saved_sidecar)

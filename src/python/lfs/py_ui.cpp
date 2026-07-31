@@ -239,6 +239,8 @@ namespace lfs::python {
         nb::object g_show_dataset_popup_callback;
         nb::object g_show_resume_popup_callback;
         nb::object g_request_exit_callback;
+        nb::object
+            g_project_switch_confirmation_callback;
         nb::object g_open_camera_preview_callback;
         nb::object g_save_asset_callback;
 
@@ -3131,7 +3133,8 @@ namespace lfs::python {
                     self.image_uv(tex.texture_id(), size, {0.0f, 0.0f}, tex.uv1(), std::move(tint));
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& self, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -3687,7 +3690,7 @@ namespace lfs::python {
             "on_request_exit",
             [](nb::object callback) {
                 g_request_exit_callback = callback;
-                lfs::core::events::cmd::RequestExit::when([](const auto&) {
+                lfs::core::events::cmd::ShowExitConfirmation::when([](const auto&) {
                     if (g_request_exit_callback && !g_request_exit_callback.is_none()) {
                         nb::gil_scoped_acquire guard;
                         try {
@@ -3699,7 +3702,39 @@ namespace lfs::python {
                 });
             },
             nb::arg("callback"),
-            "Register callback for RequestExit event");
+            "Register callback for the close-decision prompt");
+
+        m.def(
+            "on_project_switch_confirmation",
+            [](nb::object callback) {
+                g_project_switch_confirmation_callback =
+                    callback;
+                lfs::core::events::cmd::
+                    ShowProjectSwitchConfirmation::
+                        when([](const auto& event) {
+                            if (g_project_switch_confirmation_callback &&
+                                !g_project_switch_confirmation_callback
+                                     .is_none()) {
+                                nb::gil_scoped_acquire
+                                    guard;
+                                try {
+                                    g_project_switch_confirmation_callback(
+                                        event.new_project,
+                                        lfs::core::
+                                            path_to_utf8(
+                                                event.path));
+                                } catch (
+                                    const std::
+                                        exception& error) {
+                                    LOG_ERROR(
+                                        "Project switch confirmation callback error: {}",
+                                        error.what());
+                                }
+                            }
+                        });
+            },
+            nb::arg("callback"),
+            "Register callback for a dirty project-switch decision");
 
         m.def(
             "on_open_camera_preview",
@@ -4943,6 +4978,8 @@ namespace lfs::python {
             g_show_dataset_popup_callback = nb::object();
             g_show_resume_popup_callback = nb::object();
             g_request_exit_callback = nb::object();
+            g_project_switch_confirmation_callback =
+                nb::object();
             g_open_camera_preview_callback = nb::object();
         };
         set_bridge(bridge);

@@ -54,7 +54,11 @@ def menu_submenu(label: str, items: list[dict[str, Any]]) -> dict[str, Any]:
     return {"type": "submenu", "label": label, "items": list(items)}
 
 
-def menu_operator(operator_cls_or_id: Any, label: str = "") -> dict[str, Any]:
+def menu_operator(
+    operator_cls_or_id: Any,
+    label: str = "",
+    shortcut: str = "",
+) -> dict[str, Any]:
     """Create an operator-backed menu entry.
 
     Accepts either an operator class or an operator id string.
@@ -67,11 +71,14 @@ def menu_operator(operator_cls_or_id: Any, label: str = "") -> dict[str, Any]:
         if not resolved_label:
             resolved_label = lf.ui.tr(getattr(operator_cls_or_id, "label", operator_id))
 
-    return {
+    entry = {
         "type": "operator",
         "operator_id": str(operator_id),
         "label": resolved_label,
     }
+    if shortcut:
+        entry["shortcut"] = shortcut
+    return entry
 
 
 def menu_action(label: str, callback: Any, shortcut: str = "", enabled: bool = True) -> dict[str, Any]:

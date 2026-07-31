@@ -68,7 +68,7 @@ namespace lfs::vis {
         void pauseTraining();
         void resumeTraining();
         void stopTraining();
-        void requestSaveCheckpoint();
+        void requestSaveProject();
 
         // Temporary pause (for camera movement - doesn't change UI state)
         struct TemporaryPauseResult {

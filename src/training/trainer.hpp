@@ -160,9 +160,11 @@ namespace lfs::training {
         // Control methods for GUI interaction
         void request_pause() { pause_requested_ = true; }
         void request_resume() { pause_requested_ = false; }
-        void request_save() { save_requested_ = true; }
         void request_project_save(
-            std::filesystem::path path = {});
+            std::filesystem::path path = {},
+            std::vector<std::byte> preview_png = {},
+            std::optional<ProjectSnapshotDocumentContext>
+                document_context = std::nullopt);
         void request_stop() { stop_requested_ = true; }
 
         bool is_paused() const { return is_paused_.load(); }
@@ -264,9 +266,11 @@ namespace lfs::training {
         std::unique_ptr<PPISP> takePPISP() { return std::move(ppisp_); }
         std::unique_ptr<PPISPControllerPool> takePPISPControllerPool() { return std::move(ppisp_controller_pool_); }
 
-        // Checkpoint methods
-        std::expected<void, std::string> save_checkpoint(int iteration);
-        std::expected<void, std::string> save_checkpoint_to(const std::filesystem::path& output_path, int iteration);
+        // Project persistence. Standalone LFKP files are import-only; saves
+        // always publish a .licht generation.
+        [[nodiscard]] std::filesystem::path default_project_path() const;
+        std::expected<std::filesystem::path, std::string>
+        save_project_to(const std::filesystem::path& path, int iteration);
         std::expected<int, std::string> load_checkpoint(const std::filesystem::path& checkpoint_path);
         CheckpointLoadResult load_checkpoint(
             std::istream& source,
@@ -274,7 +278,7 @@ namespace lfs::training {
             std::string_view source_name = "embedded CKPT");
         [[nodiscard]] ProjectSnapshotRuntimeMetrics
         get_project_snapshot_metrics() const;
-        void save_final_ply_and_checkpoint(int iteration);
+        void save_final_project(int iteration);
 
         // Orderly shutdown - GPU sync, wait for async saves, release resources. Idempotent.
         void shutdown();
@@ -453,7 +457,8 @@ namespace lfs::training {
         void handle_control_requests(int iter, std::stop_token stop_token = {});
         void prepare_project_snapshot_at_safe_point(
             int capture_iteration,
-            const std::filesystem::path& path);
+            const std::filesystem::path& path,
+            std::vector<std::byte> preview_png = {});
         [[nodiscard]] lfs::Result<
             std::shared_ptr<ProjectSnapshotChapters>>
         reserve_project_snapshot_chapters() const;
@@ -471,11 +476,6 @@ namespace lfs::training {
             const lfs::core::param::TrainingParameters& params,
             bool background_image_path_changed);
 
-        std::expected<void, std::string> save_ply(const std::filesystem::path& save_path,
-                                                  const std::string& filename,
-                                                  int iter_num,
-                                                  bool join_threads = true,
-                                                  bool save_checkpoint = true);
         void updateGTLoadConfigSnapshot();
         void clearActiveImageLoader();
 
@@ -561,6 +561,8 @@ namespace lfs::training {
         std::shared_ptr<ProjectSnapshotChapters>
             prestaged_project_chapters_;
         std::filesystem::path prepared_project_path_;
+        std::vector<std::byte>
+            prepared_project_preview_png_;
         int prepared_project_iteration_ = 0;
         lfs::core::Uuid project_uuid_;
         std::jthread project_writer_thread_;
@@ -569,6 +571,8 @@ namespace lfs::training {
         mutable std::mutex project_snapshot_mutex_;
         std::optional<std::filesystem::path>
             requested_project_path_;
+        std::vector<std::byte>
+            requested_project_preview_png_;
         TrainingStepRegressionTracker
             project_step_regression_;
         std::filesystem::path last_project_snapshot_path_;
@@ -630,7 +634,6 @@ namespace lfs::training {
 
         // Control flags for thread communication
         std::atomic<bool> pause_requested_{false};
-        std::atomic<bool> save_requested_{false};
         std::atomic<bool> stop_requested_{false};
         std::atomic<bool> is_paused_{false};
         std::atomic<bool> is_running_{false};

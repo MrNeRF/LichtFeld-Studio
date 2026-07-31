@@ -15,6 +15,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -90,19 +91,20 @@ namespace {
         fs::remove_all(root, ec);
     }
 
-    TEST(LayoutStatePersistence, RoundTripsLeftDockWidth) {
-        const auto root = makeTempConfigRoot("layout");
+    TEST(LayoutStatePersistence, ImportsLegacyLayoutWithoutWritingIt) {
+        const auto root =
+            makeTempConfigRoot("layout_import");
         {
             const ScopedXdgConfigHome xdg(root);
-
-            lfs::vis::gui::LayoutState saved;
-            saved.left_dock_width = 417.0f;
-            saved.bottom_dock_height = 222.0f;
-            saved.scene_panel_ratio = 0.61f;
-            saved.show_sequencer = true;
-            saved.save();
-
-            ASSERT_TRUE(fs::exists(root / "LichtFeldStudio" / "layout.json"));
+            const auto legacy =
+                root / "LichtFeldStudio" /
+                "layout.json";
+            fs::create_directories(
+                legacy.parent_path());
+            std::ofstream output(legacy);
+            output
+                << R"({"left_dock_width":417.0,"bottom_dock_height":222.0,"scene_panel_ratio":0.61,"show_sequencer":true})";
+            output.close();
 
             lfs::vis::gui::LayoutState loaded;
             loaded.load();
@@ -110,6 +112,47 @@ namespace {
             EXPECT_FLOAT_EQ(loaded.bottom_dock_height, 222.0f);
             EXPECT_FLOAT_EQ(loaded.scene_panel_ratio, 0.61f);
             EXPECT_TRUE(loaded.show_sequencer);
+            EXPECT_EQ(
+                fs::file_size(legacy),
+                std::string_view(
+                    R"({"left_dock_width":417.0,"bottom_dock_height":222.0,"scene_panel_ratio":0.61,"show_sequencer":true})")
+                    .size());
+        }
+        std::error_code ec;
+        fs::remove_all(root, ec);
+    }
+
+    TEST(LayoutStatePersistence, WritesOnlyUserGlobalUiPreferences) {
+        const auto root =
+            makeTempConfigRoot("ui_preferences");
+        {
+            const ScopedXdgConfigHome xdg(root);
+            lfs::vis::gui::LayoutState saved;
+            saved.left_dock_width = 417.0f;
+            saved.file_association = "declined";
+            saved.vram_hud_x = 23.0f;
+            saved.saveUserPreferences();
+
+            const auto config =
+                root / "LichtFeldStudio";
+            EXPECT_FALSE(
+                fs::exists(
+                    config / "layout.json"));
+            ASSERT_TRUE(
+                fs::exists(
+                    config /
+                    "ui_preferences.json"));
+
+            lfs::vis::gui::LayoutState loaded;
+            loaded.load();
+            EXPECT_EQ(
+                loaded.file_association,
+                "declined");
+            EXPECT_FLOAT_EQ(
+                loaded.vram_hud_x, 23.0f);
+            EXPECT_FLOAT_EQ(
+                loaded.left_dock_width,
+                320.0f);
         }
         std::error_code ec;
         fs::remove_all(root, ec);
@@ -130,6 +173,8 @@ namespace {
             const ScopedXdgConfigHome xdg(root / "config");
             auto& manager = lfs::event::LocalizationManager::getInstance();
             ASSERT_TRUE(manager.initialize(locales.string()));
+            EXPECT_TRUE(manager.contains("test.value"));
+            EXPECT_FALSE(manager.contains("session.licht"));
             ASSERT_TRUE(manager.setLanguage("de"));
             EXPECT_EQ(manager.getCurrentLanguage(), "de");
 

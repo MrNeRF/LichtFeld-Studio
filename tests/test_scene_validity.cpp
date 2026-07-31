@@ -27,6 +27,7 @@
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
+#include "ppisp_fixture.hpp"
 #include "python/python_runtime.hpp"
 #include "training/components/bilateral_grid.hpp"
 #include "training/components/ppisp.hpp"
@@ -1154,7 +1155,9 @@ namespace lfs::python {
         training::PPISP source(1);
         source.register_frame(0, 0);
         source.finalize();
-        const auto saved = training::save_ppisp_file(path, source);
+        const auto saved =
+            test::write_ppisp_fixture(
+                path, source);
         ASSERT_TRUE(saved.has_value()) << saved.error();
 
         lfs::vis::SceneManager scene_manager;

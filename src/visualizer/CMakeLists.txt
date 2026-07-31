@@ -27,6 +27,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Project session chapters
         project/session_state.cpp
+        project/project_lifecycle.cpp
 
         # Window management
         window/window_manager.cpp

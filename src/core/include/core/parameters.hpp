@@ -305,6 +305,9 @@ namespace lfs::core {
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
 
+            // Project to open as the GUI lifecycle document.
+            std::optional<std::filesystem::path> project_path = std::nullopt;
+
             // Embedded CKPT project to resume training from. The display model
             // is hydrated first; full trainer state must be loaded before
             // train() is allowed to start.

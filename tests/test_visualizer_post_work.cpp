@@ -9,6 +9,8 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "input/input_controller.hpp"
+#include "io/project_document.hpp"
+#include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "visualizer/core/data_loading_service.hpp"
 #include "visualizer/include/visualizer/visualizer.hpp"
@@ -26,6 +28,17 @@
 #include <vector>
 
 namespace {
+
+    class NoopUndoEntry final
+        : public lfs::vis::op::UndoEntry {
+    public:
+        void undo() override {}
+        void redo() override {}
+        [[nodiscard]] std::string name()
+            const override {
+            return "test.noop";
+        }
+    };
 
     lfs::Error posted_work_cancelled_error() {
         return lfs::make_error(lfs::ErrorInit{
@@ -75,9 +88,19 @@ namespace {
         [[nodiscard]] bool acceptsPostedWork() const override { return accepts_work_; }
         void setShutdownRequestedCallback(std::function<void()>) override {}
         std::expected<void, std::string> startTraining() override { return {}; }
-        std::expected<std::filesystem::path, std::string> saveCheckpoint(
-            const std::optional<std::filesystem::path>&) override {
-            return std::filesystem::path{};
+        lfs::Result<void> projectSave(bool) override { return {}; }
+        lfs::Result<void> projectSaveAs(
+            const std::filesystem::path&, bool) override {
+            return {};
+        }
+        lfs::Result<void> projectOpen(
+            const std::filesystem::path&,
+            lfs::vis::ProjectSwitchDisposition) override {
+            return {};
+        }
+        lfs::Result<lfs::vis::ProjectInfo>
+        projectGetInfo() override {
+            return lfs::vis::ProjectInfo{};
         }
 
         void rejectPostedWork() { accepts_work_ = false; }
@@ -181,9 +204,11 @@ protected:
         lfs::event::EventBridge::instance().clear_all();
         lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
+        lfs::vis::op::undoHistory().clear();
     }
 
     void TearDown() override {
+        lfs::vis::op::undoHistory().clear();
         lfs::vis::services().clear();
         lfs::core::event::bus().clear_all();
         lfs::event::EventBridge::instance().clear_all();
@@ -248,6 +273,148 @@ namespace {
 )");
     }
 
+    void write_empty_project(
+        const std::filesystem::path& path,
+        const std::optional<float>
+            focal_length_mm = std::nullopt) {
+        auto document =
+            lfs::io::project::ProjectDocument::create(
+                lfs::core::generate_uuid_v4(), 1);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        if (focal_length_mm) {
+            const auto updated =
+                document->edit_view().dom().set_json(
+                    "render_settings.focal_length_mm",
+                    *focal_length_mm);
+            ASSERT_TRUE(updated)
+                << lfs::format_for_developer(
+                       updated.error());
+        }
+        auto saved = document->save(
+            path,
+            lfs::io::project::
+                ProjectDocumentSaveOptions{
+                    .commit =
+                        {
+                            .kind =
+                                lfs::io::project::
+                                    CommitKind::Explicit,
+                            .commit_uuid =
+                                lfs::core::
+                                    generate_uuid_v4(),
+                            .snapshot_uuid = {},
+                            .wallclock_unix_ns = 2,
+                        },
+                    .file_uuid =
+                        lfs::core::generate_uuid_v4(),
+                    .index_compression =
+                        lfs::io::project::
+                            IndexCompression::
+                                StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                });
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+    }
+
+    void write_invalid_phase_a_project(
+        const std::filesystem::path& path,
+        const bool corrupt_session) {
+        write_empty_project(path);
+        auto reader =
+            lfs::io::project::ProjectReader::open(
+                path);
+        ASSERT_TRUE(reader)
+            << lfs::format_for_developer(
+                   reader.error());
+        auto writer =
+            lfs::io::project::ProjectWriter::append(
+                path,
+                {
+                    .compatibility = {},
+                    .index_compression =
+                        lfs::io::project::
+                            IndexCompression::
+                                StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                    .boundary_observer = {},
+                });
+        ASSERT_TRUE(writer)
+            << lfs::format_for_developer(
+                   writer.error());
+        ASSERT_TRUE(writer->plan_commit(
+            {
+                .kind =
+                    lfs::io::project::
+                        CommitKind::Explicit,
+                .commit_uuid =
+                    lfs::core::
+                        generate_uuid_v4(),
+                .snapshot_uuid = {},
+                .wallclock_unix_ns = 3,
+            }));
+
+        const std::string invalid_json =
+            corrupt_session
+                ? R"({"version":1,"render_settings":{"focal_length_mm":"invalid"}})"
+                : R"({"version":1,"active_strategy":"not-a-strategy","presets":{},"dataset":{}})";
+        const auto invalid_bytes =
+            std::as_bytes(
+                std::span(invalid_json));
+        ASSERT_TRUE(writer->preflight(
+            invalid_bytes.size()));
+        const std::string target =
+            corrupt_session ? "VIEW" : "PRMS";
+        bool replaced = false;
+        for (const auto& chunk :
+             reader->chunks()) {
+            if (!chunk.is_live()) {
+                continue;
+            }
+            if (chunk.key.fourcc.to_string() ==
+                target) {
+                replaced = true;
+                const auto written =
+                    writer->write_chunk(
+                        chunk.key,
+                        invalid_bytes,
+                        {
+                            .chunk_version =
+                                chunk.chunk_version,
+                            .compression =
+                                lfs::io::project::
+                                    Compression::
+                                        Stored,
+                        });
+                ASSERT_TRUE(written)
+                    << lfs::format_for_developer(
+                           written.error());
+                continue;
+            }
+            auto proof =
+                reader->make_clean_proof(
+                    chunk, 1);
+            ASSERT_TRUE(proof)
+                << lfs::format_for_developer(
+                       proof.error());
+            const auto reused =
+                writer->reuse_if_clean(
+                    *proof, 1);
+            ASSERT_TRUE(reused)
+                << lfs::format_for_developer(
+                       reused.error());
+        }
+        ASSERT_TRUE(replaced);
+        const auto committed =
+            writer->commit();
+        ASSERT_TRUE(committed)
+            << lfs::format_for_developer(
+                   committed.error());
+    }
+
 } // namespace
 
 namespace lfs::vis {
@@ -266,6 +433,545 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::event::EventBridge::instance().handler_count(
                       typeid(lfs::core::events::cmd::ResetTraining)),
                   0u);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           SuccessfulProjectOpenClearsUndoHistory) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p6-open-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto project_path =
+            temporary / "empty.licht";
+        write_empty_project(project_path);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_NE(
+                viewer.getScene().addGroup("Current"),
+                lfs::core::NULL_NODE);
+            op::undoHistory().push(
+                std::make_unique<NoopUndoEntry>());
+            ASSERT_EQ(
+                op::undoHistory().undoCount(), 1u);
+
+            const auto opened =
+                viewer.projectOpen(
+                    project_path,
+                    ProjectSwitchDisposition::
+                        DiscardChanges);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            EXPECT_EQ(
+                op::undoHistory().undoCount(), 0u);
+            EXPECT_EQ(
+                viewer.getScene().getNodeCount(), 0u);
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           FailedOpenOverOpenPreservesCurrentSceneAndUndoHistory) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p6-switch-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto project_path =
+            temporary / "first.licht";
+        write_empty_project(project_path);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.projectOpen(project_path));
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Current after first open"),
+                lfs::core::NULL_NODE);
+            op::undoHistory().push(
+                std::make_unique<NoopUndoEntry>());
+
+            const auto failed = viewer.projectOpen(
+                temporary / "missing.licht",
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_FALSE(failed);
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Current after first open"),
+                nullptr);
+            EXPECT_EQ(
+                op::undoHistory().undoCount(), 1u);
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           PhaseAParameterAndSessionFailuresPreserveCurrentProject) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p6-phase-a-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto bad_parameters =
+            temporary / "bad-parameters.licht";
+        const auto bad_session =
+            temporary / "bad-session.licht";
+        write_invalid_phase_a_project(
+            bad_parameters, false);
+        write_invalid_phase_a_project(
+            bad_session, true);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Current survives Phase A"),
+                lfs::core::NULL_NODE);
+            op::undoHistory().push(
+                std::make_unique<NoopUndoEntry>());
+
+            for (const auto& candidate :
+                 {bad_parameters, bad_session}) {
+                const auto failed =
+                    viewer.projectOpen(
+                        candidate,
+                        ProjectSwitchDisposition::
+                            DiscardChanges);
+                ASSERT_FALSE(failed);
+                EXPECT_NE(
+                    viewer.getScene().getNode(
+                        "Current survives Phase A"),
+                    nullptr);
+                EXPECT_EQ(
+                    op::undoHistory().undoCount(),
+                    1u);
+            }
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           DirtyProjectSwitchRequiresExplicitDiscardAuthorization) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p6-dirty-switch-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto project_path =
+            temporary / "candidate.licht";
+        write_empty_project(project_path);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Unsaved current project"),
+                lfs::core::NULL_NODE);
+
+            bool drag_drop_prompted = false;
+            std::filesystem::path prompted_path;
+            lfs::core::events::cmd::
+                ShowProjectSwitchConfirmation::
+                    when([&](const auto& event) {
+                        drag_drop_prompted = true;
+                        prompted_path =
+                            event.path;
+                    });
+            lfs::core::events::cmd::
+                ProjectOpen{
+                    .path = project_path}
+                    .emit();
+            EXPECT_TRUE(drag_drop_prompted);
+            EXPECT_EQ(
+                prompted_path, project_path);
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Unsaved current project"),
+                nullptr);
+
+            const auto blocked =
+                viewer.projectOpen(project_path);
+            ASSERT_FALSE(blocked);
+            EXPECT_EQ(
+                blocked.error().code(),
+                lfs::ErrorCode::
+                    FailedPrecondition);
+            EXPECT_EQ(
+                blocked.error().user_message(),
+                "The current project has unsaved changes.");
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Unsaved current project"),
+                nullptr);
+
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            EXPECT_EQ(
+                viewer.getScene().getNodeCount(),
+                0u);
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           NewProjectDirtyGateRunsBelowEveryCommandEntry) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p6-dirty-new-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Unsaved current project"),
+                lfs::core::NULL_NODE);
+
+            lfs::core::events::cmd::
+                NewProject{}
+                    .emit();
+            EXPECT_NE(
+                viewer.getScene().getNode(
+                    "Unsaved current project"),
+                nullptr);
+
+            lfs::core::events::cmd::
+                NewProject{
+                    .discard_changes = true}
+                    .emit();
+            EXPECT_EQ(
+                viewer.getScene().getNodeCount(),
+                0u);
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           FileExitRoutesThroughCloseSaveStateMachine) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p6-file-exit-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto project_path =
+            temporary / "session.licht";
+        constexpr float restored_focal_length =
+            73.0f;
+        write_empty_project(
+            project_path, restored_focal_length);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            const auto opened =
+                viewer.projectOpen(project_path);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(
+                       opened.error());
+            ASSERT_TRUE(
+                viewer
+                    .isProjectSessionRestorePending());
+            const auto before =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(before);
+            EXPECT_FALSE(before->dirty);
+
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Unsaved before File Exit"),
+                lfs::core::NULL_NODE);
+            auto dirty = viewer.projectGetInfo();
+            ASSERT_TRUE(dirty);
+            ASSERT_TRUE(dirty->dirty);
+
+            lfs::core::events::cmd::
+                RequestExit{}
+                    .emit();
+            ASSERT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            ASSERT_FALSE(
+                viewer.getGuiManager()
+                    ->isForceExit());
+
+            EXPECT_FALSE(viewer.allowclose());
+            EXPECT_FALSE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            EXPECT_EQ(
+                viewer.project_lifecycle_
+                    ->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::Saving);
+
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (!viewer.getWindowManager()
+                        ->shouldClose() &&
+                   std::chrono::steady_clock::now() <
+                       deadline) {
+                std::vector<Visualizer::WorkItem>
+                    work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            ASSERT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            ASSERT_EQ(
+                viewer.project_lifecycle_
+                    ->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::Succeeded);
+
+            const auto after =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(after);
+            EXPECT_GT(
+                after->generation,
+                before->generation);
+            EXPECT_FALSE(after->dirty);
+            EXPECT_TRUE(viewer.allowclose());
+
+            auto reopened =
+                lfs::io::project::
+                    ProjectDocument::open(
+                        project_path);
+            ASSERT_TRUE(reopened)
+                << lfs::format_for_developer(
+                       reopened.error());
+            const auto focal_length =
+                reopened->view().dom().get_json(
+                    "render_settings.focal_length_mm");
+            ASSERT_TRUE(focal_length);
+            ASSERT_TRUE(
+                focal_length->is_number());
+            EXPECT_FLOAT_EQ(
+                focal_length->get<float>(),
+                restored_focal_length);
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           CancelExitAndNextWindowAttemptRecoverFromFailedCloseSave) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p6-close-retry-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto project_path =
+            temporary / "session.licht";
+        const auto backup_path =
+            temporary / "session.backup";
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            ASSERT_NE(
+                viewer.getScene().addGroup("Saved"),
+                lfs::core::NULL_NODE);
+            const auto initial_save =
+                viewer.projectSaveAs(
+                    project_path, false);
+            ASSERT_TRUE(initial_save)
+                << lfs::format_for_developer(
+                       initial_save.error());
+            std::filesystem::rename(
+                project_path, backup_path);
+            std::filesystem::create_directory(
+                project_path);
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Unsaved before failed close"),
+                lfs::core::NULL_NODE);
+
+            lfs::core::events::cmd::
+                RequestExit{}
+                    .emit();
+            ASSERT_FALSE(viewer.allowclose());
+
+            const auto drain_until_close =
+                [&viewer] {
+                    const auto deadline =
+                        std::chrono::
+                            steady_clock::now() +
+                        std::chrono::seconds(10);
+                    while (!viewer
+                                .getWindowManager()
+                                ->shouldClose() &&
+                           std::chrono::
+                                   steady_clock::now() <
+                               deadline) {
+                        std::vector<
+                            Visualizer::WorkItem>
+                            work;
+                        {
+                            std::lock_guard lock(
+                                viewer
+                                    .work_queue_mutex_);
+                            work.swap(
+                                viewer.work_queue_);
+                        }
+                        for (auto& item : work) {
+                            if (item.run) {
+                                item.run();
+                            }
+                        }
+                        std::this_thread::sleep_for(
+                            std::chrono::
+                                milliseconds(2));
+                    }
+                };
+            drain_until_close();
+            ASSERT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            ASSERT_EQ(
+                viewer.project_lifecycle_
+                    ->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::Failed);
+
+            std::filesystem::remove_all(
+                project_path);
+            std::filesystem::rename(
+                backup_path, project_path);
+            lfs::core::events::cmd::
+                CancelExit{}
+                    .emit();
+            EXPECT_FALSE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+
+            viewer.getWindowManager()
+                ->requestClose();
+            EXPECT_FALSE(viewer.allowclose());
+            EXPECT_EQ(
+                viewer.project_lifecycle_
+                    ->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::Saving);
+
+            drain_until_close();
+            ASSERT_TRUE(
+                viewer.getWindowManager()
+                    ->shouldClose());
+            EXPECT_EQ(
+                viewer.project_lifecycle_
+                    ->beginOrPollCloseSave(),
+                project::ProjectLifecycle::
+                    CloseSaveStatus::Succeeded);
+            EXPECT_TRUE(viewer.allowclose());
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest, ResetTrainingPreservesExplicitInitPath) {

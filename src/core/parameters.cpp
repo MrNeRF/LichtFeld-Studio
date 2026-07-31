@@ -360,8 +360,10 @@ namespace lfs::core {
                 return std::format("freeze_lr_scale must be within [0, 1] (got {})", freeze_lr_scale);
             }
             if (!add_splat_paths.empty()) {
-                if (resume_checkpoint.has_value() || resume_project.has_value()) {
-                    return "--add-splat cannot be used together with --resume";
+                if (resume_checkpoint.has_value() ||
+                    resume_project.has_value() ||
+                    project_path.has_value()) {
+                    return "--add-splat cannot be used together with --resume or --project";
                 }
                 if (!add_splat_freeze.empty() && add_splat_freeze.size() != add_splat_paths.size()) {
                     return "--add-splat freeze metadata is inconsistent";
@@ -378,6 +380,14 @@ namespace lfs::core {
             }
             if (resume_checkpoint && resume_project) {
                 return "Only one resume source may be active";
+            }
+            if (project_path &&
+                (resume_checkpoint || resume_project)) {
+                return "--project and --resume are mutually exclusive";
+            }
+            if (project_path &&
+                project_path->extension() != ".licht") {
+                return "--project must reference a .licht file";
             }
             if (save_project_at_iteration && *save_project_at_iteration == 0) {
                 return "--save-project-at-iter must be positive";

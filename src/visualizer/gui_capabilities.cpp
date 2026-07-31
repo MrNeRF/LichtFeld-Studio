@@ -1084,7 +1084,8 @@ namespace lfs::vis::cap {
                 if (!current_node || !current_node->model)
                     return nullptr;
                 return resolve_gaussian_field(*current_node->model, canonical_field_name);
-            });
+            },
+            &scene_manager);
         entry->captureAfter();
         if (entry->hasChanges())
             vis::op::undoHistory().push(std::move(entry));

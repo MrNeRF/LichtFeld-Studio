@@ -30,7 +30,6 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/cuda/image_format_kernels.cuh"
-#include "io/exporter.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/project_document.hpp"
 #include "io/scene_chapter_adapter.hpp"
@@ -393,62 +392,6 @@ namespace lfs::training {
             const bool forced = forced_space != "auto";
             result.usable = forced || result.score >= kMinAcceptScore;
             return result;
-        }
-
-        [[nodiscard]] std::unique_ptr<lfs::core::SplatData> make_ply_export_model(
-            const lfs::core::SplatData& model,
-            const bool exclude_frozen_ranges) {
-            if (!exclude_frozen_ranges || !model.has_frozen_ranges()) {
-                return nullptr;
-            }
-
-            const size_t count = model.size();
-            if (count == 0) {
-                return nullptr;
-            }
-
-            std::vector<bool> keep(count, true);
-            size_t excluded_count = 0;
-            for (const auto& range : model.frozen_ranges()) {
-                if (range.count == 0 || range.start >= count) {
-                    continue;
-                }
-                const size_t remaining = count - range.start;
-                const size_t end = range.start + std::min(range.count, remaining);
-                for (size_t idx = range.start; idx < end; ++idx) {
-                    if (keep[idx]) {
-                        keep[idx] = false;
-                        ++excluded_count;
-                    }
-                }
-            }
-
-            if (excluded_count == 0) {
-                return nullptr;
-            }
-            if (excluded_count == count) {
-                LOG_WARN("Skipping frozen-add-splat export exclusion because it would remove all {} Gaussians",
-                         count);
-                return nullptr;
-            }
-
-            auto keep_mask = lfs::core::Tensor::from_vector(
-                keep,
-                lfs::core::TensorShape({count}),
-                model.means_raw().device());
-            auto filtered = std::make_unique<lfs::core::SplatData>(
-                lfs::core::extract_by_mask(model, keep_mask));
-            if (!filtered->means_raw().is_valid() || filtered->size() == 0) {
-                LOG_WARN("Failed to build frozen-add-splat filtered export model; exporting full model");
-                return nullptr;
-            }
-
-            LOG_INFO("Excluding {} frozen added Gaussian{} from PLY export ({} -> {})",
-                     excluded_count,
-                     excluded_count == 1 ? "" : "s",
-                     count,
-                     filtered->size());
-            return filtered;
         }
 
         constexpr float kDepthLossFinalScale = 0.02f;
@@ -1221,6 +1164,10 @@ namespace lfs::training {
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
+            prepared_project_path_.clear();
+            prepared_project_preview_png_.clear();
+            requested_project_path_.reset();
+            requested_project_preview_png_.clear();
             project_step_regression_.reset();
         }
 
@@ -1245,7 +1192,6 @@ namespace lfs::training {
 
         // Reset flags
         pause_requested_ = false;
-        save_requested_ = false;
         stop_requested_ = false;
         is_paused_ = false;
         {
@@ -3510,7 +3456,13 @@ namespace lfs::training {
     }
 
     void Trainer::request_project_save(
-        std::filesystem::path path) {
+        std::filesystem::path path,
+        std::vector<std::byte> preview_png,
+        std::optional<ProjectSnapshotDocumentContext>
+            document_context) {
+        if (path.empty()) {
+            path = default_project_path();
+        }
         auto chapters =
             reserve_project_snapshot_chapters();
         std::lock_guard lock(project_snapshot_mutex_);
@@ -3524,11 +3476,15 @@ namespace lfs::training {
                 message);
             return;
         }
+        (*chapters)->document_context =
+            std::move(document_context);
         // Coalesce to the newest destination. The next post-step safe point
         // consumes this request.
         prestaged_project_chapters_ =
             std::move(*chapters);
         requested_project_path_ = std::move(path);
+        requested_project_preview_png_ =
+            std::move(preview_png);
     }
 
     lfs::Result<void>
@@ -3659,7 +3615,8 @@ namespace lfs::training {
 
     void Trainer::prepare_project_snapshot_at_safe_point(
         const int capture_iteration,
-        const std::filesystem::path& requested_path) {
+        const std::filesystem::path& requested_path,
+        std::vector<std::byte> preview_png) {
         join_finished_project_writer();
         if (!project_snapshot_service_ || !strategy_ ||
             !scene_) {
@@ -3676,16 +3633,14 @@ namespace lfs::training {
                 capture_iteration);
             std::lock_guard lock(project_snapshot_mutex_);
             requested_project_path_ = requested_path;
+            requested_project_preview_png_ =
+                std::move(preview_png);
             return;
         }
 
         auto path = requested_path;
         if (path.empty()) {
-            const auto params = getParams();
-            path = params.dataset.output_path /
-                   std::format(
-                       "snapshot_{}.licht",
-                       capture_iteration);
+            path = default_project_path();
         }
         if (path.extension() != ".licht") {
             LOG_ERROR(
@@ -3762,6 +3717,8 @@ namespace lfs::training {
         prepared_project_snapshot_.emplace(
             std::move(*prepared));
         prepared_project_path_ = std::move(path);
+        prepared_project_preview_png_ =
+            std::move(preview_png);
         prepared_project_iteration_ =
             capture_iteration;
         LOG_INFO(
@@ -3805,6 +3762,9 @@ namespace lfs::training {
                 "Snapshot UUID was not reserved";
             requested_project_path_ =
                 prepared_project_path_;
+            requested_project_preview_png_ =
+                std::move(
+                    prepared_project_preview_png_);
             prepared_project_snapshot_.reset();
             prepared_project_path_.clear();
             prepared_project_iteration_ = 0;
@@ -3833,6 +3793,9 @@ namespace lfs::training {
                 chapters;
             requested_project_path_ =
                 prepared_project_path_;
+            requested_project_preview_png_ =
+                std::move(
+                    prepared_project_preview_png_);
             prepared_project_snapshot_.reset();
             prepared_project_path_.clear();
             prepared_project_iteration_ = 0;
@@ -3892,6 +3855,9 @@ namespace lfs::training {
 
         const auto path =
             std::move(prepared_project_path_);
+        auto preview_png =
+            std::move(
+                prepared_project_preview_png_);
         prepared_project_iteration_ = 0;
         if (!pending) {
             const auto message =
@@ -3923,6 +3889,8 @@ namespace lfs::training {
                 // layout. Coalesce and replan at the next post-step point.
                 if (!requested_project_path_) {
                     requested_project_path_ = path;
+                    requested_project_preview_png_ =
+                        std::move(preview_png);
                     prestaged_project_chapters_ =
                         chapters;
                 }
@@ -3954,6 +3922,8 @@ namespace lfs::training {
 
         project_writer_thread_ = std::jthread(
             [this, path, chapters,
+             preview_png =
+                 std::move(preview_png),
              pending = std::move(*pending)](
                 std::stop_token) mutable {
 #if defined(__linux__)
@@ -4018,12 +3988,43 @@ namespace lfs::training {
                         lfs::io::project::
                             ProjectDocument>
                         document;
-                    if (std::filesystem::exists(
+                    const auto* const
+                        document_context =
+                            chapters
+                                    ->document_context
+                                ? &*chapters
+                                        ->document_context
+                                : nullptr;
+                    std::optional<
+                        std::filesystem::path>
+                        source_path;
+                    if (document_context &&
+                        document_context
+                            ->source_path) {
+                        source_path =
+                            *document_context
+                                 ->source_path;
+                    } else if (
+                        !document_context &&
+                        std::filesystem::exists(
                             path)) {
+                        source_path = path;
+                    }
+                    bool save_as =
+                        !source_path &&
+                        std::filesystem::exists(
+                            path);
+                    if (source_path) {
                         auto opened =
                             lfs::io::project::
                                 ProjectDocument::open(
-                                    path);
+                                    *source_path,
+                                    {
+                                        .reader = {},
+                                        .geometry = {},
+                                        .defer_geometry_payloads =
+                                            true,
+                                    });
                         if (!opened) {
                             return std::move(opened)
                                 .error()
@@ -4031,6 +4032,11 @@ namespace lfs::training {
                                     "open training project for snapshot append",
                                     LFS_SOURCE_SITE_CURRENT());
                         }
+                        save_as =
+                            source_path
+                                ->lexically_normal() !=
+                            path
+                                .lexically_normal();
                         document.emplace(
                             std::move(*opened));
                     } else {
@@ -4048,7 +4054,10 @@ namespace lfs::training {
                         auto created =
                             lfs::io::project::
                                 ProjectDocument::create(
-                                    project_uuid_,
+                                    document_context
+                                        ? document_context
+                                              ->project_uuid
+                                        : project_uuid_,
                                     created_ns);
                         if (!created) {
                             return std::move(created)
@@ -4061,6 +4070,27 @@ namespace lfs::training {
                             std::move(*created));
                     }
 
+                    if (document_context) {
+                        document->edit_project() =
+                            document_context->project;
+                        document->edit_references() =
+                            document_context
+                                ->references;
+                        document->edit_gui_layout() =
+                            document_context
+                                ->gui_layout;
+                        document->edit_view() =
+                            document_context->view;
+                        document->edit_editor() =
+                            document_context
+                                ->editor;
+                        document->edit_sequencer() =
+                            document_context
+                                ->sequencer;
+                        document->edit_metrics() =
+                            document_context
+                                ->metrics;
+                    }
                     document->edit_scene_graph() =
                         std::move(
                             chapters->scene_graph);
@@ -4128,10 +4158,9 @@ namespace lfs::training {
                                             now()
                                                 .time_since_epoch())
                                     .count());
-                    auto saved = document->save(
-                        path,
-                        lfs::io::project::
-                            ProjectDocumentSaveOptions{
+                    const lfs::io::project::
+                        ProjectDocumentSaveOptions
+                            save_options{
                                 .commit =
                                     {
                                         .kind =
@@ -4150,7 +4179,19 @@ namespace lfs::training {
                                 .file_uuid =
                                     lfs::core::
                                         generate_uuid_v4(),
-                            });
+                                .preview_png =
+                                    std::span<
+                                        const std::byte>(
+                                        preview_png),
+                            };
+                    auto saved =
+                        save_as
+                            ? document->save_as(
+                                  path,
+                                  save_options)
+                            : document->save(
+                                  path,
+                                  save_options);
                     if (!saved) {
                         return std::move(saved)
                             .error()
@@ -4281,25 +4322,6 @@ namespace lfs::training {
                     get_progress_phase(iter));
             }
             LOG_INFO("Training resumed at iteration {}", iter);
-        }
-
-        if (save_requested_.exchange(false)) {
-            LOG_INFO("Saving checkpoint and PLY at iteration {}...", iter);
-            const auto params = getParams();
-            if (auto ply_result = save_ply(
-                    params.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
-                !ply_result) {
-                LOG_ERROR("Failed to save PLY: {}", ply_result.error());
-            }
-            auto result = save_checkpoint(iter);
-            if (result) {
-                const auto checkpoint_path = lfs::training::checkpoint_output_path(params.dataset.output_path);
-                LOG_INFO("Checkpoint and PLY saved to {} (checkpoint: {})",
-                         lfs::core::path_to_utf8(params.dataset.output_path),
-                         lfs::core::path_to_utf8(checkpoint_path));
-            } else {
-                LOG_ERROR("Failed to save checkpoint: {}", result.error());
-            }
         }
 
         // Handle stop request - this permanently stops training
@@ -6258,26 +6280,20 @@ namespace lfs::training {
                                                            iter == get_sparsity_boundary_iteration();
                     current_phase = StepPhase::TerminalCleanup;
                     if (save_regular_phase_output) {
-                        LOG_INFO("Saving regular-phase checkpoint and PLY at iteration {} before sparsification", iter);
-                        if (auto ply_result = save_ply(
-                                params_.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
-                            !ply_result) {
-                            LOG_WARN("Failed to save regular-phase PLY at iteration {}: {}", iter, ply_result.error());
-                        }
-                        if (auto result = save_checkpoint(iter); !result) {
-                            LOG_WARN("Failed to save regular-phase checkpoint at iteration {}: {}", iter, result.error());
-                        }
+                        LOG_INFO(
+                            "Queuing regular-phase .licht generation at iteration {} before sparsification",
+                            iter);
+                        request_project_save(default_project_path());
                     }
 
-                    // Save checkpoint at specified steps unless the sparsity boundary save already handled it
+                    // Publish a project generation at specified steps unless
+                    // the sparsity-boundary save already handled it.
                     for (size_t save_step : params_.optimization.save_steps) {
                         if (iter == static_cast<int>(save_step) &&
                             iter != get_total_iterations() &&
                             !save_regular_phase_output) {
-                            auto result = save_checkpoint(iter);
-                            if (!result) {
-                                LOG_WARN("Failed to save checkpoint at iteration {}: {}", iter, result.error());
-                            }
+                            request_project_save(
+                                default_project_path());
                         }
                     }
 
@@ -6338,6 +6354,8 @@ namespace lfs::training {
                 join_finished_project_writer();
                 std::optional<std::filesystem::path>
                     requested_project_path;
+                std::vector<std::byte>
+                    requested_project_preview_png;
                 {
                     std::lock_guard lock(
                         project_snapshot_mutex_);
@@ -6346,11 +6364,16 @@ namespace lfs::training {
                             std::move(
                                 *requested_project_path_);
                         requested_project_path_.reset();
+                        requested_project_preview_png =
+                            std::move(
+                                requested_project_preview_png_);
                     }
                 }
                 if (requested_project_path) {
                     prepare_project_snapshot_at_safe_point(
-                        iter, *requested_project_path);
+                        iter, *requested_project_path,
+                        std::move(
+                            requested_project_preview_png));
                     capture_project_snapshot_at_safe_point(
                         iter);
                 }
@@ -6907,19 +6930,14 @@ namespace lfs::training {
 
         const int terminal_iteration = current_iteration_.load();
         const bool user_stopped = stop_requested_.load() || stop_token.stop_requested();
-        const bool rotate_checkpoint = get_active_sparsify_steps() == 0;
         apply_pending_params_at_safe_point();
-        const auto terminal_params = getParams();
         try {
-            LOG_INFO("Saving {} model at iteration {}...",
+            LOG_INFO("Saving {} project at iteration {}...",
                      terminal_error ? "recovery" : (user_stopped ? "stopped" : "final"),
                      terminal_iteration);
-            if (auto save_result = save_ply(
-                    terminal_params.dataset.output_path,
-                    terminal_params.dataset.output_name,
-                    terminal_iteration,
-                    /*join=*/true,
-                    /*save_checkpoint=*/rotate_checkpoint);
+            if (auto save_result = save_project_to(
+                    default_project_path(),
+                    terminal_iteration);
                 !save_result) {
                 append_terminal_error(lfs::make_error(lfs::ErrorInit{
                     .code = lfs::ErrorCode::Internal,
@@ -7006,112 +7024,66 @@ namespace lfs::training {
         return {};
     }
 
-    std::expected<void, std::string> Trainer::save_ply(const std::filesystem::path& save_path,
-                                                       const std::string& filename,
-                                                       const int iter_num,
-                                                       const bool join_threads,
-                                                       const bool save_checkpoint_file) {
-
-        std::filesystem::path ply_output_path = filename.empty() ? save_path / ("splat_" + std::to_string(iter_num) + ".ply") : save_path / (filename + ".ply");
-
-        const lfs::io::PlySaveOptions ply_options{
-            .output_path = ply_output_path,
-            .binary = true,
-            .async = !join_threads};
-
-        const auto& model = strategy_->get_model();
-        const auto export_model = make_ply_export_model(
-            model,
-            params_.exclude_frozen_add_splats_from_export);
-        const auto& model_for_export = export_model ? *export_model : model;
-        const auto ply_result = lfs::io::save_ply(model_for_export, ply_options);
-        std::vector<std::string> errors;
-        if (!ply_result) {
-            if (ply_result.error().code == lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE) {
-                lfs::core::events::state::DiskSpaceSaveFailed{
-                    .iteration = iter_num,
-                    .path = ply_options.output_path,
-                    .error = ply_result.error().message,
-                    .required_bytes = ply_result.error().required_bytes,
-                    .available_bytes = ply_result.error().available_bytes,
-                    .is_disk_space_error = true,
-                    .is_checkpoint = false}
-                    .emit();
-            }
-            LOG_WARN("Failed to save PLY: {}", ply_result.error().message);
-            errors.push_back("PLY: " + ply_result.error().message);
-        }
-
-        PPISPControllerPool* controller_to_save = controller_pool_for_save(iter_num);
-
-        if (save_checkpoint_file) {
-            auto ckpt_result = lfs::training::save_checkpoint(save_path, iter_num, *strategy_,
-                                                              params_for_checkpoint_save(),
-                                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save,
-                                                              dynamic_cast<const ADMMSparsityOptimizer*>(sparsity_optimizer_.get()));
-            if (!ckpt_result) {
-                LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
-                errors.push_back("checkpoint: " + ckpt_result.error());
-            }
-        }
-
-        if (ppisp_) {
-            const auto ppisp_path = get_ppisp_companion_path(ply_options.output_path);
-            std::optional<PPISPFileMetadata> metadata;
-            if (auto metadata_result = build_ppisp_sidecar_metadata(); metadata_result) {
-                metadata = std::move(*metadata_result);
-            } else {
-                LOG_WARN("Failed to build PPISP sidecar metadata for '{}': {}. Saving sidecar without metadata.",
-                         lfs::core::path_to_utf8(ppisp_path), metadata_result.error());
-            }
-            const auto ppisp_result = save_ppisp_file(ppisp_path, *ppisp_, controller_to_save,
-                                                      metadata ? &*metadata : nullptr);
-            if (!ppisp_result) {
-                LOG_WARN("Failed to save PPISP file: {}", ppisp_result.error());
-                errors.push_back("PPISP: " + ppisp_result.error());
-            }
-        }
-
-        LOG_DEBUG("PLY save initiated: {} (sync={})", lfs::core::path_to_utf8(save_path), join_threads);
-        if (!errors.empty()) {
-            std::string message;
-            for (const auto& error : errors) {
-                if (!message.empty()) {
-                    message += "; ";
-                }
-                message += error;
-            }
-            return std::unexpected(std::move(message));
-        }
-        return {};
+    std::filesystem::path
+    Trainer::default_project_path() const {
+        return getParams().dataset.output_path /
+               "project.licht";
     }
 
-    std::expected<void, std::string> Trainer::save_checkpoint(int iteration) {
-        if (!strategy_) {
-            return std::unexpected("Cannot save checkpoint: no strategy initialized");
+    std::expected<std::filesystem::path, std::string>
+    Trainer::save_project_to(
+        const std::filesystem::path& requested_path,
+        const int iteration) {
+        if (!strategy_ || !scene_) {
+            return std::unexpected(
+                "Cannot save project: no initialized training scene");
+        }
+        if (iteration < 0) {
+            return std::unexpected(
+                "Cannot save project: iteration is negative");
         }
 
-        PPISPControllerPool* controller_to_save = controller_pool_for_save(iteration);
-
-        const auto params = getParams();
-        return lfs::training::save_checkpoint(params.dataset.output_path, iteration, *strategy_,
-                                              params_for_checkpoint_save(),
-                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save,
-                                              dynamic_cast<const ADMMSparsityOptimizer*>(sparsity_optimizer_.get()));
-    }
-
-    std::expected<void, std::string> Trainer::save_checkpoint_to(const std::filesystem::path& output_path,
-                                                                 int iteration) {
-        if (!strategy_) {
-            return std::unexpected("Cannot save checkpoint: no strategy initialized");
+        const auto path =
+            requested_path.empty()
+                ? default_project_path()
+                : requested_path;
+        if (path.extension() != ".licht") {
+            return std::unexpected(
+                "Project destination must end in .licht");
         }
 
-        PPISPControllerPool* controller_to_save = controller_pool_for_save(iteration);
+        finish_project_writer();
+        auto chapters =
+            reserve_project_snapshot_chapters();
+        if (!chapters) {
+            return std::unexpected(
+                lfs::format_for_developer(
+                    chapters.error()));
+        }
+        {
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            prestaged_project_chapters_ =
+                std::move(*chapters);
+            last_project_writer_error_.clear();
+        }
 
-        return lfs::training::save_checkpoint(output_path, iteration, *strategy_,
-                                              params_for_checkpoint_save(),
-                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save,
-                                              dynamic_cast<const ADMMSparsityOptimizer*>(sparsity_optimizer_.get()));
+        prepare_project_snapshot_at_safe_point(
+            iteration, path);
+        capture_project_snapshot_at_safe_point(
+            iteration);
+        finish_project_writer();
+
+        std::lock_guard lock(project_snapshot_mutex_);
+        if (!last_project_writer_error_.empty()) {
+            return std::unexpected(
+                last_project_writer_error_);
+        }
+        if (last_project_snapshot_path_ != path) {
+            return std::unexpected(
+                "Project snapshot did not publish the requested destination");
+        }
+        return path;
     }
 
     lfs::core::Tensor Trainer::applyPPISPForViewport(const lfs::core::Tensor& rgb, const int camera_uid,
@@ -7181,15 +7153,14 @@ namespace lfs::training {
         return params;
     }
 
-    void Trainer::save_final_ply_and_checkpoint(const int iteration) {
-        const auto params = getParams();
-        if (auto result = save_ply(params.dataset.output_path, params.dataset.output_name, iteration, /*join=*/true,
-                                   /*save_checkpoint=*/false);
+    void Trainer::save_final_project(
+        const int iteration) {
+        if (auto result = save_project_to(
+                default_project_path(), iteration);
             !result) {
-            LOG_WARN("Failed to save final PLY: {}", result.error());
-        }
-        if (auto result = save_checkpoint(iteration); !result) {
-            LOG_WARN("Failed to save checkpoint: {}", result.error());
+            LOG_WARN(
+                "Failed to save final project: {}",
+                result.error());
         }
     }
 

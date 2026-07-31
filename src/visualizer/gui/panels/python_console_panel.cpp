@@ -1263,8 +1263,6 @@ namespace {
             new_script(state);
         } else if (has_key(*input, SDL_SCANCODE_O)) {
             open_script_dialog(state);
-        } else if (has_key(*input, SDL_SCANCODE_S)) {
-            save_current_script(state);
         } else if (input->key_shift && has_key(*input, SDL_SCANCODE_F)) {
             format_editor_script(state);
         } else if (input->key_shift && has_key(*input, SDL_SCANCODE_I)) {

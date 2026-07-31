@@ -148,34 +148,6 @@ namespace lfs::mcp {
 
         registry.register_tool(
             McpTool{
-                .name = "scene.save_checkpoint",
-                .description = "Save current training state. The path is a base directory; checkpoints are saved as checkpoints/checkpoint.resume inside it. Omit path to use the current output path.",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Base output directory; checkpoint files are written to <path>/checkpoints/checkpoint.resume"}}}},
-                    .required = {}},
-                .metadata = command_metadata(backend, "scene", false, true)},
-            [backend](const json& args) -> json {
-                const std::optional<std::filesystem::path> requested_path =
-                    args.contains("path")
-                        ? std::optional<std::filesystem::path>(args["path"].get<std::string>())
-                        : std::nullopt;
-
-                auto result = backend.save_checkpoint(requested_path);
-                if (!result)
-                    return json{{"error", result.error()}};
-
-                return json{
-                    {"success", true},
-                    {"path", core::path_to_utf8(*result)},
-                    {"output_path", core::path_to_utf8(*result)},
-                    {"used_default_path", !requested_path.has_value()},
-                };
-            });
-
-        registry.register_tool(
-            McpTool{
                 .name = "scene.save_ply",
                 .description = "Save current model as a PLY file",
                 .input_schema = {

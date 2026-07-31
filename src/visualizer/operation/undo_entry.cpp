@@ -1467,6 +1467,117 @@ namespace lfs::vis::op {
                 scene_manager.selectNodesById(selected_node_ids);
             }
         }
+
+        [[nodiscard]] SceneTopologyProof
+        captureTopologyProof(
+            const lfs::core::Scene& scene) {
+            SceneTopologyProof proof;
+            proof.training_model_uuid =
+                scene.getTrainingModelNodeUuid();
+            proof.consolidated =
+                scene.isConsolidated();
+            proof.consolidated_extent =
+                scene.getTotalGaussianCount();
+
+            const auto nodes = scene.getNodes();
+            proof.nodes.reserve(nodes.size());
+            for (const auto* node : nodes) {
+                if (!node) {
+                    continue;
+                }
+                SceneTopologyNodeProof item{
+                    .uuid = node->uuid,
+                    .parent_uuid = {},
+                    .type = node->type,
+                    .primary_extent = 0,
+                    .secondary_extent = 0,
+                    .children = {},
+                };
+                if (const auto* parent =
+                        scene.getNodeById(
+                            node->parent_id)) {
+                    item.parent_uuid =
+                        parent->uuid;
+                }
+
+                switch (node->type) {
+                case lfs::core::NodeType::SPLAT:
+                    item.primary_extent =
+                        node->model
+                            ? static_cast<std::size_t>(
+                                  node->model->size())
+                            : node->gaussian_count.load(
+                                  std::memory_order_relaxed);
+                    break;
+                case lfs::core::NodeType::POINTCLOUD:
+                    item.primary_extent =
+                        node->point_cloud
+                            ? static_cast<std::size_t>(
+                                  node->point_cloud->size())
+                            : node->gaussian_count.load(
+                                  std::memory_order_relaxed);
+                    break;
+                case lfs::core::NodeType::MESH:
+                    if (node->mesh) {
+                        item.primary_extent =
+                            static_cast<std::size_t>(
+                                node->mesh
+                                    ->vertex_count());
+                        item.secondary_extent =
+                            static_cast<std::size_t>(
+                                node->mesh
+                                    ->face_count());
+                    }
+                    break;
+                default:
+                    break;
+                }
+
+                item.children.reserve(
+                    node->children.size());
+                for (const auto child_id :
+                     node->children) {
+                    if (const auto* child =
+                            scene.getNodeById(
+                                child_id)) {
+                        item.children.push_back(
+                            child->uuid);
+                    }
+                }
+                proof.nodes.push_back(
+                    std::move(item));
+            }
+
+            std::ranges::sort(
+                proof.nodes,
+                [](const auto& lhs,
+                   const auto& rhs) {
+                    return std::lexicographical_compare(
+                        lhs.uuid.bytes.begin(),
+                        lhs.uuid.bytes.end(),
+                        rhs.uuid.bytes.begin(),
+                        rhs.uuid.bytes.end());
+                });
+            return proof;
+        }
+
+        void requireTopologyProof(
+            const lfs::core::Scene& scene,
+            const SceneTopologyProof& expected,
+            const std::string_view entry_name,
+            const SceneTopologyProof* allowed_compound_transition = nullptr) {
+            const SceneTopologyProof current =
+                captureTopologyProof(scene);
+            if (current == expected ||
+                (allowed_compound_transition &&
+                 current == *allowed_compound_transition)) {
+                return;
+            }
+            throw HistoryCorruptionError(
+                "Cannot replay undo entry '" +
+                std::string(entry_name) +
+                "' after scene topology changed");
+        }
     } // namespace
 
     SceneGraphNodeSnapshot::SceneGraphNodeSnapshot() = default;
@@ -1547,7 +1658,11 @@ namespace lfs::vis::op {
 
     SceneSnapshot::SceneSnapshot(SceneManager& scene, std::string name)
         : scene_(scene),
-          name_(std::move(name)) {}
+          name_(std::move(name)),
+          topology_before_(
+              captureTopologyProof(
+                  scene.getScene())),
+          expected_topology_(topology_before_) {}
 
     void SceneSnapshot::setSelectionChangeHint(const bool changed, const bool prefer_dense_storage) {
         selection_change_known_ = true;
@@ -1768,6 +1883,9 @@ namespace lfs::vis::op {
         if (hasFlag(captured_, ModifiesFlag::TOPOLOGY)) {
             compactTopology();
         }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
     }
 
     bool SceneSnapshot::hasChanges() const {
@@ -1802,19 +1920,11 @@ namespace lfs::vis::op {
 
         auto current_selection = scene_.getScene().getSelectionMask();
         const size_t current_total = scene_.getScene().getSelectionGaussianCount();
-        if (selection_mask_storage_.mode == TensorSwapStorageMode::SPARSE &&
-            current_total != selection_mask_storage_.total_size) {
-            LOG_WARN("Clearing stale sparse selection history after topology changed: scene has {}, history has {}",
-                     current_total,
-                     selection_mask_storage_.total_size);
-
-            lfs::core::Scene::SelectionStateSnapshot snapshot;
-            snapshot.groups = target_metadata.groups;
-            snapshot.active_group_id = target_metadata.active_group_id;
-            snapshot.next_group_id = target_metadata.next_group_id;
-            snapshot.has_selection = false;
-            scene_.getScene().restoreSelectionState(snapshot);
-            return;
+        if (selection_mask_storage_.hasChanges() &&
+            current_total !=
+                selection_mask_storage_.total_size) {
+            throw HistoryCorruptionError(
+                "Cannot replay selection history after scene topology changed");
         }
 
         const size_t total_size = std::max({selection_mask_storage_.total_size,
@@ -1923,6 +2033,12 @@ namespace lfs::vis::op {
     }
 
     void SceneSnapshot::undo() {
+        requireTopologyProof(
+            scene_.getScene(),
+            expected_topology_, name_,
+            hasFlag(captured_, ModifiesFlag::TOPOLOGY)
+                ? &topology_before_
+                : nullptr);
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
             applySelection(true);
         }
@@ -1936,9 +2052,15 @@ namespace lfs::vis::op {
         if (hasFlag(captured_, ModifiesFlag::TOPOLOGY)) {
             applyTopology(true);
         }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
     }
 
     void SceneSnapshot::redo() {
+        requireTopologyProof(
+            scene_.getScene(),
+            expected_topology_, name_);
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
             applySelection(false);
         }
@@ -1952,6 +2074,9 @@ namespace lfs::vis::op {
         if (hasFlag(captured_, ModifiesFlag::TOPOLOGY)) {
             applyTopology(false);
         }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
     }
 
     size_t SceneSnapshot::estimatedBytes() const {
@@ -2031,12 +2156,19 @@ namespace lfs::vis::op {
                                      UndoMetadata metadata,
                                      std::string target_name,
                                      lfs::core::Tensor before,
-                                     TensorAccessor accessor)
+                                     TensorAccessor accessor,
+                                     SceneManager* scene)
         : name_(std::move(name)),
           metadata_(std::move(metadata)),
           target_name_(std::move(target_name)),
           accessor_(std::move(accessor)),
-          before_(std::move(before)) {
+          before_(std::move(before)),
+          scene_(scene) {
+        if (scene_) {
+            expected_topology_ =
+                captureTopologyProof(
+                    scene_->getScene());
+        }
         if (!metadata_.label.size()) {
             metadata_.label = name_;
         }
@@ -2055,6 +2187,11 @@ namespace lfs::vis::op {
 
     void TensorUndoEntry::captureAfter() {
         captured_after_ = true;
+        if (scene_) {
+            expected_topology_ =
+                captureTopologyProof(
+                    scene_->getScene());
+        }
         auto* current = accessor_ ? accessor_() : nullptr;
         if (!before_.is_valid() || !current || !current->is_valid()) {
             LOG_WARN("Tensor undo capture skipped for '{}': missing tensor target '{}'",
@@ -2091,6 +2228,11 @@ namespace lfs::vis::op {
     }
 
     void TensorUndoEntry::apply() {
+        if (scene_ && expected_topology_) {
+            requireTopologyProof(
+                scene_->getScene(),
+                *expected_topology_, name_);
+        }
         auto* current = accessor_ ? accessor_() : nullptr;
         if (!current || !current->is_valid()) {
             throw std::runtime_error("Missing tensor target for undo entry '" + target_name_ + "'");
@@ -2106,6 +2248,11 @@ namespace lfs::vis::op {
         auto flat = current->contiguous().reshape({flat_size});
         applyTensorSwapStorage(flat, storage_);
         *current = flat.reshape(tensor_shape_).contiguous();
+        if (scene_) {
+            expected_topology_ =
+                captureTopologyProof(
+                    scene_->getScene());
+        }
     }
 
     void TensorUndoEntry::undo() {
@@ -2134,6 +2281,14 @@ namespace lfs::vis::op {
           transform_before_(transform_before),
           show_before_(show_before),
           use_before_(use_before) {
+        if (const auto* node =
+                scene_.getScene().getNode(
+                    node_name_)) {
+            node_uuid_ = node->uuid;
+        }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
         captureAfter();
     }
 
@@ -2154,33 +2309,57 @@ namespace lfs::vis::op {
     }
 
     void CropBoxUndoEntry::undo() {
-        auto* node = scene_.getScene().getMutableNode(node_name_);
-        if (node && node->cropbox) {
-            *node->cropbox = before_;
-            scene_.setNodeTransform(node_name_, transform_before_);
-            scene_.setNodeVisibility(node->id, show_before_);
+        requireTopologyProof(
+            scene_.getScene(),
+            expected_topology_, name());
+        auto* node =
+            scene_.getScene().getNodeByUuid(
+                node_uuid_);
+        if (!node || !node->cropbox) {
+            throw HistoryCorruptionError(
+                "Cannot replay crop-box history after its node changed");
         }
+        *node->cropbox = before_;
+        scene_.setNodeTransform(
+            node->name, transform_before_);
+        scene_.setNodeVisibility(
+            node->id, show_before_);
         if (rendering_manager_) {
             auto settings = rendering_manager_->getSettings();
             settings.show_crop_box = show_before_;
             settings.use_crop_box = before_.enabled;
             rendering_manager_->updateSettings(settings);
         }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
     }
 
     void CropBoxUndoEntry::redo() {
-        auto* node = scene_.getScene().getMutableNode(node_name_);
-        if (node && node->cropbox) {
-            *node->cropbox = after_;
-            scene_.setNodeTransform(node_name_, transform_after_);
-            scene_.setNodeVisibility(node->id, show_after_);
+        requireTopologyProof(
+            scene_.getScene(),
+            expected_topology_, name());
+        auto* node =
+            scene_.getScene().getNodeByUuid(
+                node_uuid_);
+        if (!node || !node->cropbox) {
+            throw HistoryCorruptionError(
+                "Cannot replay crop-box history after its node changed");
         }
+        *node->cropbox = after_;
+        scene_.setNodeTransform(
+            node->name, transform_after_);
+        scene_.setNodeVisibility(
+            node->id, show_after_);
         if (rendering_manager_) {
             auto settings = rendering_manager_->getSettings();
             settings.show_crop_box = show_after_;
             settings.use_crop_box = after_.enabled;
             rendering_manager_->updateSettings(settings);
         }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
     }
 
     bool CropBoxUndoEntry::hasChanges() const {
@@ -2217,6 +2396,14 @@ namespace lfs::vis::op {
           transform_before_(transform_before),
           show_before_(show_before),
           use_before_(use_before) {
+        if (const auto* node =
+                scene_.getScene().getNode(
+                    node_name_)) {
+            node_uuid_ = node->uuid;
+        }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
         captureAfter();
     }
 
@@ -2237,33 +2424,57 @@ namespace lfs::vis::op {
     }
 
     void EllipsoidUndoEntry::undo() {
-        auto* node = scene_.getScene().getMutableNode(node_name_);
-        if (node && node->ellipsoid) {
-            *node->ellipsoid = before_;
-            scene_.setNodeTransform(node_name_, transform_before_);
-            scene_.setNodeVisibility(node->id, show_before_);
+        requireTopologyProof(
+            scene_.getScene(),
+            expected_topology_, name());
+        auto* node =
+            scene_.getScene().getNodeByUuid(
+                node_uuid_);
+        if (!node || !node->ellipsoid) {
+            throw HistoryCorruptionError(
+                "Cannot replay ellipsoid history after its node changed");
         }
+        *node->ellipsoid = before_;
+        scene_.setNodeTransform(
+            node->name, transform_before_);
+        scene_.setNodeVisibility(
+            node->id, show_before_);
         if (rendering_manager_) {
             auto settings = rendering_manager_->getSettings();
             settings.show_ellipsoid = show_before_;
             settings.use_ellipsoid = before_.enabled;
             rendering_manager_->updateSettings(settings);
         }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
     }
 
     void EllipsoidUndoEntry::redo() {
-        auto* node = scene_.getScene().getMutableNode(node_name_);
-        if (node && node->ellipsoid) {
-            *node->ellipsoid = after_;
-            scene_.setNodeTransform(node_name_, transform_after_);
-            scene_.setNodeVisibility(node->id, show_after_);
+        requireTopologyProof(
+            scene_.getScene(),
+            expected_topology_, name());
+        auto* node =
+            scene_.getScene().getNodeByUuid(
+                node_uuid_);
+        if (!node || !node->ellipsoid) {
+            throw HistoryCorruptionError(
+                "Cannot replay ellipsoid history after its node changed");
         }
+        *node->ellipsoid = after_;
+        scene_.setNodeTransform(
+            node->name, transform_after_);
+        scene_.setNodeVisibility(
+            node->id, show_after_);
         if (rendering_manager_) {
             auto settings = rendering_manager_->getSettings();
             settings.show_ellipsoid = show_after_;
             settings.use_ellipsoid = after_.enabled;
             rendering_manager_->updateSettings(settings);
         }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
     }
 
     bool EllipsoidUndoEntry::hasChanges() const {
@@ -2289,21 +2500,49 @@ namespace lfs::vis::op {
     PropertyChangeUndoEntry::PropertyChangeUndoEntry(std::string property_path,
                                                      std::any before,
                                                      std::any after,
-                                                     std::function<void(const std::any&)> applier)
+                                                     std::function<void(const std::any&)> applier,
+                                                     SceneManager* scene)
         : property_path_(std::move(property_path)),
           label_(propertyUndoLabel(property_path_)),
           before_(std::move(before)),
           after_(std::move(after)),
           applier_(std::move(applier)),
           estimated_bytes_(estimateAnyBytes(before_) + estimateAnyBytes(after_)),
-          updated_at_(std::chrono::steady_clock::now()) {}
+          updated_at_(std::chrono::steady_clock::now()),
+          scene_(scene) {
+        if (scene_) {
+            expected_topology_ =
+                captureTopologyProof(
+                    scene_->getScene());
+        }
+    }
 
     void PropertyChangeUndoEntry::undo() {
+        if (scene_ && expected_topology_) {
+            requireTopologyProof(
+                scene_->getScene(),
+                *expected_topology_, name());
+        }
         applier_(before_);
+        if (scene_) {
+            expected_topology_ =
+                captureTopologyProof(
+                    scene_->getScene());
+        }
     }
 
     void PropertyChangeUndoEntry::redo() {
+        if (scene_ && expected_topology_) {
+            requireTopologyProof(
+                scene_->getScene(),
+                *expected_topology_, name());
+        }
         applier_(after_);
+        if (scene_) {
+            expected_topology_ =
+                captureTopologyProof(
+                    scene_->getScene());
+        }
     }
 
     UndoMetadata PropertyChangeUndoEntry::metadata() const {
@@ -2320,6 +2559,10 @@ namespace lfs::vis::op {
         if (!next || next->property_path_ != property_path_ || next->updated_at_ < updated_at_) {
             return false;
         }
+        if (expected_topology_ !=
+            next->expected_topology_) {
+            return false;
+        }
 
         if ((next->updated_at_ - updated_at_) > PROPERTY_COALESCE_WINDOW) {
             return false;
@@ -2328,6 +2571,8 @@ namespace lfs::vis::op {
         after_ = next->after_;
         updated_at_ = next->updated_at_;
         estimated_bytes_ = estimateAnyBytes(before_) + estimateAnyBytes(after_);
+        expected_topology_ =
+            next->expected_topology_;
         return true;
     }
 
@@ -2360,9 +2605,15 @@ namespace lfs::vis::op {
         : scene_(scene),
           name_(std::move(name)),
           diffs_(std::move(diffs)),
-          updated_at_(std::chrono::steady_clock::now()) {}
+          updated_at_(std::chrono::steady_clock::now()),
+          expected_topology_(
+              captureTopologyProof(
+                  scene.getScene())) {}
 
     void SceneGraphMetadataEntry::apply(const bool use_after_state) {
+        requireTopologyProof(
+            scene_.getScene(),
+            expected_topology_, name_);
         lfs::core::Scene::Transaction txn(scene_.getScene());
 
         struct AppliedMetadataSnapshot {
@@ -2410,6 +2661,9 @@ namespace lfs::vis::op {
 
             applied.push_back(std::move(rollback_state));
         }
+        expected_topology_ =
+            captureTopologyProof(
+                scene_.getScene());
     }
 
     void SceneGraphMetadataEntry::undo() {
@@ -2461,6 +2715,8 @@ namespace lfs::vis::op {
             diffs_[i].after = next->diffs_[i].after;
         }
         updated_at_ = next->updated_at_;
+        expected_topology_ =
+            next->expected_topology_;
         return true;
     }
 
@@ -2575,10 +2831,16 @@ namespace lfs::vis::op {
         : scene_(scene),
           name_(std::move(name)),
           before_(std::move(before)),
-          after_(std::move(after)) {}
+          after_(std::move(after)),
+          expected_topology_(
+              captureTopologyProof(
+                  scene.getScene())) {}
 
     void SceneGraphPatchEntry::applyState(const SceneGraphStateSnapshot& desired,
                                           const SceneGraphStateSnapshot& current) {
+        requireTopologyProof(
+            scene_.getScene(),
+            expected_topology_, name_);
         auto& scene = scene_.getScene();
         const auto uuids_to_remove = uuidsToRemove(desired, current);
 
@@ -2657,6 +2919,8 @@ namespace lfs::vis::op {
         if (stateHasCamera(desired) || stateHasCamera(current)) {
             scene_.publishLiveCameraCount();
         }
+        expected_topology_ =
+            captureTopologyProof(scene);
     }
 
     void SceneGraphPatchEntry::undo() {

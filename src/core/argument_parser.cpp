@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <args.hxx>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
@@ -198,6 +199,7 @@ namespace {
             ::args::HelpFlag help(mode_group, "help", "Display help menu", {'h', "help"});
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
             ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
+            ::args::ValueFlag<std::string> project_file(mode_group, "path", "Open a .licht project", {"project"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from a .resume checkpoint or .licht project", {"resume"});
             ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
             ::args::CompletionFlag completion(parser, {"complete"});
@@ -557,8 +559,38 @@ namespace {
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
             }
 
+            if (project_file) {
+                const auto project_path = lfs::core::utf8_to_path(
+                    ::args::get(project_file));
+                if (!std::filesystem::exists(project_path)) {
+                    return std::unexpected(std::format(
+                        "Project file does not exist: {}",
+                        lfs::core::path_to_utf8(project_path)));
+                }
+                auto extension = project_path.extension().string();
+                std::ranges::transform(
+                    extension, extension.begin(),
+                    [](const unsigned char character) {
+                        return static_cast<char>(
+                            std::tolower(character));
+                    });
+                if (extension != ".licht") {
+                    return std::unexpected(
+                        "--project requires a .licht file");
+                }
+                if (headless) {
+                    params.resume_project = project_path;
+                } else {
+                    params.project_path = project_path;
+                }
+            }
+
             // Check for resume mode
             if (resume_checkpoint) {
+                if (project_file) {
+                    return std::unexpected(
+                        "--project and --resume are mutually exclusive");
+                }
                 const auto ckpt_path_str = ::args::get(resume_checkpoint);
                 if (!ckpt_path_str.empty()) {
                     const auto ckpt_path = lfs::core::utf8_to_path(ckpt_path_str);

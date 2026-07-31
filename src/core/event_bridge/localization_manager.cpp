@@ -118,6 +118,13 @@ namespace lfs::event {
         return setLanguage(has_default ? DEFAULT_LANGUAGE : available_languages_[0]);
     }
 
+    bool LocalizationManager::contains(const std::string_view key) const {
+        const std::string key_str(key);
+        return overrides_.contains(key_str) ||
+               current_strings_.contains(key_str) ||
+               fallback_strings_.contains(key_str);
+    }
+
     const char* LocalizationManager::get(std::string_view key) const {
         const std::string key_str(key);
 

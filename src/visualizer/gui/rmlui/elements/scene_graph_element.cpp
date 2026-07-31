@@ -863,6 +863,20 @@ namespace lfs::vis::gui {
                 snapshot.label = node->name;
                 break;
             }
+            switch (node->payload_hydration) {
+            case core::PayloadHydrationState::Unloaded:
+                snapshot.label += "  [Unloaded]";
+                break;
+            case core::PayloadHydrationState::Hydrating:
+                snapshot.label += "  [Loading...]";
+                break;
+            case core::PayloadHydrationState::Failed:
+                snapshot.label += "  [Load failed]";
+                break;
+            case core::PayloadHydrationState::NotApplicable:
+            case core::PayloadHydrationState::Loaded:
+                break;
+            }
 
             snapshots.emplace(snapshot.id, std::move(snapshot));
             if (node->parent_id == core::NULL_NODE)

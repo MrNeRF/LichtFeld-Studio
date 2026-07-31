@@ -26,27 +26,16 @@ namespace {
 } // namespace
 
 TEST(ApplicationStartupTest,
-     GuiProjectResumeFailsLoudlyWithTypedLifecycleError) {
+     GuiProjectResumeRoutesIntoLifecycleValidation) {
     lfs::core::param::TrainingParameters params;
     params.resume_project = "session.licht";
     params.optimization.headless = false;
 
     auto result =
         lfs::app::validate_application_startup(params);
-    ASSERT_FALSE(result);
-    EXPECT_EQ(
-        result.error().code(),
-        lfs::ErrorCode::Unsupported);
-    EXPECT_EQ(
-        result.error().domain(),
-        lfs::ErrorDomain::App);
-    EXPECT_EQ(
-        result.error().user_message(),
-        "This .licht project cannot be resumed in the GUI yet.");
-    EXPECT_NE(
-        result.error().detail().find(
-            "lifecycle phase"),
-        std::string_view::npos);
+    EXPECT_TRUE(result)
+        << lfs::format_for_developer(
+               result.error());
 }
 
 TEST(ApplicationStartupTest,
@@ -64,6 +53,80 @@ TEST(ApplicationStartupTest,
     EXPECT_TRUE(
         lfs::app::validate_application_startup(
             params));
+}
+
+TEST(ArgumentParserTest,
+     GuiProjectAndResumeLichtSelectProjectOpenFlow) {
+    const auto directory =
+        make_test_path("lfs_arg_parser_project");
+    const auto project =
+        std::filesystem::path(directory) /
+        "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+
+    const char* project_argv[] = {
+        "LichtFeld-Studio",
+        "--project",
+        project_text.c_str(),
+    };
+    auto project_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(
+                std::size(project_argv)),
+            project_argv);
+    ASSERT_TRUE(project_parsed)
+        << project_parsed.error();
+    EXPECT_EQ(
+        (*project_parsed)->project_path,
+        project);
+    EXPECT_FALSE(
+        (*project_parsed)->resume_project);
+
+    const char* resume_argv[] = {
+        "LichtFeld-Studio",
+        "--resume",
+        project_text.c_str(),
+    };
+    auto resume_parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(
+                std::size(resume_argv)),
+            resume_argv);
+    ASSERT_TRUE(resume_parsed)
+        << resume_parsed.error();
+    EXPECT_EQ(
+        (*resume_parsed)->resume_project,
+        project);
+    EXPECT_FALSE(
+        (*resume_parsed)->resume_checkpoint);
+}
+
+TEST(ArgumentParserTest,
+     HeadlessProjectSelectsEmbeddedCheckpointResumeFlow) {
+    const auto directory =
+        make_test_path(
+            "lfs_arg_parser_headless_project");
+    const auto project =
+        std::filesystem::path(directory) /
+        "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--project",
+        project_text.c_str(),
+    };
+
+    auto parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)),
+            argv);
+    ASSERT_TRUE(parsed)
+        << parsed.error();
+    EXPECT_EQ((*parsed)->resume_project, project);
+    EXPECT_FALSE((*parsed)->project_path);
 }
 
 TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {

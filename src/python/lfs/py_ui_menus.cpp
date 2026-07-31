@@ -186,6 +186,7 @@ namespace lfs::python {
                 if (is_operator_item(item)) {
                     desc.type = vis::gui::MenuItemDesc::Type::Operator;
                     desc.operator_id = object_to_string(dict_get(item, "operator_id"));
+                    desc.shortcut = object_to_string(dict_get(item, "shortcut"));
                 } else {
                     desc.type = callback_item_type(item);
                     desc.shortcut = object_to_string(dict_get(item, "shortcut"));

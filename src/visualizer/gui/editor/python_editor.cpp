@@ -3181,6 +3181,14 @@ namespace lfs::vis::editor {
             const std::string text = impl_->getText();
             const CursorLocation cursor = impl_->getCursorLocation(text);
 
+            if (key == Rml::Input::KI_S &&
+                modifiers == Zep::ModifierKey::Ctrl) {
+                // Ctrl+S belongs to the application-level .licht save. Do not
+                // let the embedded editor also attempt to save its untitled
+                // buffer after the project command has already run.
+                event.StopPropagation();
+                return;
+            }
             if ((modifiers & Zep::ModifierKey::Ctrl) != 0 &&
                 (key == Rml::Input::KI_RETURN || key == Rml::Input::KI_NUMPADENTER)) {
                 execute_requested_ = true;

@@ -217,6 +217,30 @@ namespace lfs::vis {
         EXPECT_EQ(toggle_split_count, 0);
     }
 
+    TEST_F(InputControllerFocusTest, ProjectSaveShortcutRemainsGlobalDuringTextEntry) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        lfs::event::ScopedHandler handlers;
+        int project_save_count = 0;
+        handlers.subscribe<core::events::cmd::ProjectSave>(
+            [&](const auto&) { ++project_save_count; });
+
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.want_text_input = true;
+        focus.any_item_active = true;
+
+        controller.handleKey(
+            input::KEY_S, input::ACTION_PRESS,
+            input::KEYMOD_CTRL);
+
+        EXPECT_EQ(project_save_count, 1);
+    }
+
     TEST_F(InputControllerFocusTest, ViewportClickDuringTextEntryDoesNotStartCameraGesture) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);

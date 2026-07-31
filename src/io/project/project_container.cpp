@@ -3027,12 +3027,23 @@ namespace lfs::io::project {
 
         class PositionalStreambuf final : public std::streambuf {
         public:
-            PositionalStreambuf(std::shared_ptr<detail::NativeFile> file,
-                                const std::uint64_t start,
-                                const std::uint64_t size)
+            PositionalStreambuf(
+                std::shared_ptr<detail::NativeFile> file,
+                const std::uint64_t start,
+                const std::uint64_t size,
+                std::optional<BlockCrcTable> block_crc_table)
                 : file_(std::move(file)),
                   start_(start),
-                  size_(size) {
+                  size_(size),
+                  block_crc_table_(std::move(block_crc_table)),
+                  buffer_(
+                      static_cast<std::size_t>(
+                          block_crc_table_
+                              ? std::min<std::uint64_t>(
+                                    block_crc_table_->block_size,
+                                    size_)
+                              : std::min<std::uint64_t>(
+                                    64 * 1024, size_))) {
                 setg(buffer_.data(), buffer_.data(), buffer_.data());
             }
 
@@ -3045,19 +3056,47 @@ namespace lfs::io::project {
                 if (position_ >= size_) {
                     return traits_type::eof();
                 }
-                const std::uint64_t remaining = size_ - position_;
+                const std::uint64_t read_position =
+                    block_crc_table_
+                        ? (position_ / block_crc_table_->block_size) *
+                              block_crc_table_->block_size
+                        : position_;
+                const std::uint64_t remaining = size_ - read_position;
                 const std::size_t count = static_cast<std::size_t>(
                     std::min<std::uint64_t>(remaining, buffer_.size()));
                 auto destination =
                     std::span<std::byte>(reinterpret_cast<std::byte*>(buffer_.data()),
                                          count);
-                if (auto read = file_->read_exact(start_ + position_, destination);
+                if (auto read = file_->read_exact(
+                        start_ + read_position, destination);
                     !read) {
                     failed_ = true;
                     return traits_type::eof();
                 }
-                buffer_start_ = position_;
-                setg(buffer_.data(), buffer_.data(), buffer_.data() + count);
+                if (block_crc_table_) {
+                    const std::size_t block_index =
+                        static_cast<std::size_t>(
+                            read_position /
+                            block_crc_table_->block_size);
+                    if (block_index >=
+                            block_crc_table_->entries.size() ||
+                        crc32c(
+                            0, destination.data(),
+                            destination.size()) !=
+                            block_crc_table_
+                                ->entries[block_index]) {
+                        failed_ = true;
+                        return traits_type::eof();
+                    }
+                }
+                const auto offset =
+                    static_cast<std::ptrdiff_t>(
+                        position_ - read_position);
+                buffer_start_ = read_position;
+                setg(
+                    buffer_.data(),
+                    buffer_.data() + offset,
+                    buffer_.data() + count);
                 return traits_type::to_int_type(*gptr());
             }
 
@@ -3122,16 +3161,22 @@ namespace lfs::io::project {
             std::uint64_t size_ = 0;
             std::uint64_t position_ = 0;
             std::uint64_t buffer_start_ = 0;
-            std::array<char, 64 * 1024> buffer_{};
+            std::optional<BlockCrcTable> block_crc_table_;
+            std::vector<char> buffer_;
             bool failed_ = false;
         };
 
     } // namespace
 
     struct BoundedInputStream::Impl {
-        Impl(std::shared_ptr<detail::NativeFile> file, const std::uint64_t start,
-             const std::uint64_t size)
-            : buffer(std::move(file), start, size),
+        Impl(
+            std::shared_ptr<detail::NativeFile> file,
+            const std::uint64_t start,
+            const std::uint64_t size,
+            std::optional<BlockCrcTable> block_crc_table)
+            : buffer(
+                  std::move(file), start, size,
+                  std::move(block_crc_table)),
               input(&buffer),
               size_bytes(size) {}
 
@@ -3169,12 +3214,15 @@ namespace lfs::io::project {
                 std::format("{} is zstd-compressed", (*resolved)->key_string()), path(),
                 (*resolved)->payload_offset, "bounded_stream.compression");
         }
-        if (auto verified = verify_chunk(**resolved); !verified) {
-            return std::move(verified).error();
+        if (!(*resolved)->block_crc_table.has_value()) {
+            if (auto verified = verify_chunk(**resolved); !verified) {
+                return std::move(verified).error();
+            }
         }
         return BoundedInputStream(std::make_unique<BoundedInputStream::Impl>(
             impl_->state->file, (*resolved)->payload_offset,
-            (*resolved)->stored_bytes));
+            (*resolved)->stored_bytes,
+            (*resolved)->block_crc_table));
     }
 
     struct MappedRegion::Impl {

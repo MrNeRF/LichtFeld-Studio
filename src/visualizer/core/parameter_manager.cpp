@@ -84,7 +84,8 @@ namespace lfs::vis {
         };
     }
 
-    lfs::Result<void> ParameterManager::restorePendingProjectState(
+    lfs::Result<void>
+    ParameterManager::validatePendingProjectState(
         const lfs::io::project::ParameterManagerSnapshot& snapshot) {
         if (!lfs::core::param::is_valid_strategy_name(snapshot.active_strategy)) {
             return lfs::Result<void>::failure(parameter_project_error(
@@ -129,7 +130,11 @@ namespace lfs::vis {
                 lfs::ErrorCode::InvalidArgument,
                 "Pending project dataset parameters are invalid: " + error));
         }
+        return {};
+    }
 
+    void ParameterManager::installValidatedPendingProjectState(
+        const lfs::io::project::ParameterManagerSnapshot& snapshot) {
         std::lock_guard lock(params_mutex_);
         active_strategy_ = std::string(
             lfs::core::param::canonical_strategy_name(snapshot.active_strategy));
@@ -142,6 +147,16 @@ namespace lfs::vis {
         dataset_config_ = snapshot.dataset;
         loaded_ = true;
         dirty_.store(false, std::memory_order_release);
+    }
+
+    lfs::Result<void> ParameterManager::restorePendingProjectState(
+        const lfs::io::project::ParameterManagerSnapshot& snapshot) {
+        if (auto valid =
+                validatePendingProjectState(snapshot);
+            !valid) {
+            return valid;
+        }
+        installValidatedPendingProjectState(snapshot);
         return {};
     }
 

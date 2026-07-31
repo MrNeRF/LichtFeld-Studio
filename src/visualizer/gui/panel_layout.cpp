@@ -41,18 +41,6 @@ namespace lfs::vis::gui {
         show_sequencer_ = false;
     }
 
-    void PanelLayoutManager::saveState() const {
-        LayoutState state;
-        state.load();
-        // right_panel_width not saved — always start at default
-        state.scene_panel_ratio = scene_panel_ratio_;
-        state.python_console_width = python_console_width_;
-        state.bottom_dock_height = bottom_dock_height_;
-        state.left_dock_width = left_dock_width_;
-        state.show_sequencer = show_sequencer_;
-        state.save();
-    }
-
     PanelLayoutProjectState
     PanelLayoutManager::captureProjectState() const {
         return {

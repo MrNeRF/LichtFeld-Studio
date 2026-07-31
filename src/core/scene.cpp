@@ -479,6 +479,7 @@ namespace lfs::core {
             node->model = std::move(model);
             node->gaussian_count.store(gaussian_count, std::memory_order_release);
             node->centroid = centroid;
+            node->payload_hydration = PayloadHydrationState::Loaded;
             notifyMutation(MutationType::MODEL_CHANGED);
         } else {
             LOG_WARN("replaceNodeModel: node '{}' not found", name);
@@ -499,8 +500,28 @@ namespace lfs::core {
         node->model = std::move(model);
         node->gaussian_count.store(gaussian_count, std::memory_order_release);
         node->centroid = centroid;
+        node->payload_hydration =
+            node->model ? PayloadHydrationState::Loaded
+                        : PayloadHydrationState::Unloaded;
         notifyMutation(MutationType::MODEL_CHANGED);
         return previous;
+    }
+
+    bool Scene::setPayloadHydrationState(
+        const Uuid& uuid,
+        const PayloadHydrationState state) {
+        const auto id = getNodeIdByUuid(uuid);
+        const auto found = id_to_index_.find(id);
+        if (found == id_to_index_.end()) {
+            return false;
+        }
+        auto& node = nodes_[found->second];
+        if (node->payload_hydration == state) {
+            return true;
+        }
+        node->payload_hydration = state;
+        notifyMutation(MutationType::MODEL_CHANGED);
+        return true;
     }
 
     void Scene::setNodeVisibility(const std::string& name, const bool visible) {
@@ -2576,6 +2597,7 @@ namespace lfs::core {
         node->type = NodeType::SPLAT;
         node->name = name;
         node->gaussian_count.store(0, std::memory_order_release);
+        node->payload_hydration = PayloadHydrationState::Unloaded;
 
         const NodeId id = insertNode(std::move(node));
         if (id != NULL_NODE)
@@ -2604,6 +2626,7 @@ namespace lfs::core {
         node->model = std::move(model);
         node->gaussian_count.store(gaussian_count, std::memory_order_release);
         node->centroid = centroid;
+        node->payload_hydration = PayloadHydrationState::Loaded;
 
         const NodeId id = insertNode(std::move(node));
         if (id != NULL_NODE)
@@ -2639,6 +2662,7 @@ namespace lfs::core {
         node->point_cloud = std::move(point_cloud);
         node->gaussian_count.store(point_count, std::memory_order_release);
         node->centroid = centroid;
+        node->payload_hydration = PayloadHydrationState::Loaded;
 
         const NodeId id = insertNode(std::move(node));
         if (id != NULL_NODE)
@@ -2676,6 +2700,7 @@ namespace lfs::core {
         node->mesh = std::move(mesh_data);
         node->gaussian_count.store(static_cast<size_t>(nv), std::memory_order_release);
         node->centroid = centroid;
+        node->payload_hydration = PayloadHydrationState::Loaded;
 
         const NodeId id = insertNode(std::move(node));
         if (id != NULL_NODE)
@@ -2860,21 +2885,29 @@ namespace lfs::core {
         node->locked.set(desc.locked, false);
         node->training_enabled = desc.training_enabled;
         node->payload_diverged = desc.payload_diverged;
+        node->payload_hydration = desc.payload_hydration;
         node->georef_pose = std::move(desc.georef_pose);
 
         switch (desc.type) {
         case NodeType::SPLAT:
+            if (!desc.model &&
+                desc.payload_hydration == PayloadHydrationState::Loaded) {
+                LOG_ERROR("Cannot restore splat node '{}': payload is missing", node->name);
+                return NULL_NODE;
+            }
             node->model = std::move(desc.model);
             break;
         case NodeType::POINTCLOUD:
-            if (!desc.point_cloud) {
+            if (!desc.point_cloud &&
+                desc.payload_hydration == PayloadHydrationState::Loaded) {
                 LOG_ERROR("Cannot restore point-cloud node '{}': payload is missing", node->name);
                 return NULL_NODE;
             }
             node->point_cloud = std::move(desc.point_cloud);
             break;
         case NodeType::MESH:
-            if (!desc.mesh) {
+            if (!desc.mesh &&
+                desc.payload_hydration == PayloadHydrationState::Loaded) {
                 LOG_ERROR("Cannot restore mesh node '{}': payload is missing", node->name);
                 return NULL_NODE;
             }
@@ -2920,6 +2953,13 @@ namespace lfs::core {
         case NodeType::KEYFRAME_GROUP:
         case NodeType::PLY_SEQUENCE:
             break;
+        }
+        if (node->payload_hydration ==
+                PayloadHydrationState::NotApplicable &&
+            ((node->type == NodeType::SPLAT && node->model) ||
+             (node->type == NodeType::POINTCLOUD && node->point_cloud) ||
+             (node->type == NodeType::MESH && node->mesh))) {
+            node->payload_hydration = PayloadHydrationState::Loaded;
         }
 
         const std::string restored_name = node->name;
@@ -3025,6 +3065,172 @@ namespace lfs::core {
 
         pending_mutations_ = 0;
         transaction_depth_ = 0;
+    }
+
+    Scene::PayloadHydrationCommitReport
+    Scene::commitPayloadHydrationStage(
+        std::unique_ptr<Scene> staged,
+        const bool install_selection) noexcept {
+        assert(staged);
+        assert(staged->restore_staging_);
+        assert(staged->restore_target_ == this);
+        assert(!restore_staging_);
+        assert(transaction_depth_ == 0);
+
+        PayloadHydrationCommitReport report;
+        for (auto& staged_node : staged->nodes_) {
+            if (!staged_node) {
+                continue;
+            }
+            const bool is_payload_unit =
+                staged_node->type == NodeType::SPLAT ||
+                staged_node->type == NodeType::POINTCLOUD ||
+                staged_node->type == NodeType::MESH;
+            if (!is_payload_unit) {
+                continue;
+            }
+
+            auto* live = getNodeByUuid(staged_node->uuid);
+            if (!live ||
+                live->type != staged_node->type ||
+                live->payload_hydration !=
+                    PayloadHydrationState::Unloaded) {
+                ++report.invalidated_units;
+                continue;
+            }
+
+            bool has_payload = false;
+            switch (staged_node->type) {
+            case NodeType::SPLAT:
+                has_payload = static_cast<bool>(
+                    staged_node->model);
+                if (has_payload) {
+                    live->model =
+                        std::move(staged_node->model);
+                    live->gaussian_count.store(
+                        static_cast<std::size_t>(
+                            live->model->size()),
+                        std::memory_order_release);
+                }
+                break;
+            case NodeType::POINTCLOUD:
+                has_payload = static_cast<bool>(
+                    staged_node->point_cloud);
+                if (has_payload) {
+                    live->point_cloud =
+                        std::move(
+                            staged_node->point_cloud);
+                    live->gaussian_count.store(
+                        static_cast<std::size_t>(
+                            live->point_cloud->size()),
+                        std::memory_order_release);
+                }
+                break;
+            case NodeType::MESH:
+                has_payload = static_cast<bool>(
+                    staged_node->mesh);
+                if (has_payload) {
+                    live->mesh =
+                        std::move(staged_node->mesh);
+                    live->gaussian_count.store(
+                        static_cast<std::size_t>(
+                            live->mesh->vertex_count()),
+                        std::memory_order_release);
+                }
+                break;
+            default:
+                break;
+            }
+            if (!has_payload) {
+                ++report.invalidated_units;
+                continue;
+            }
+            live->centroid = staged_node->centroid;
+            live->payload_hydration =
+                PayloadHydrationState::Loaded;
+            ++report.hydrated_units;
+        }
+
+        if (report.hydrated_units > 0) {
+            if (consolidated_) {
+                consolidated_ = false;
+                consolidated_node_slots_.clear();
+                ++consolidated_generation_;
+            }
+            cached_combined_.reset();
+            single_node_model_ = nullptr;
+            invalidateCache();
+        }
+
+        std::size_t point_count = 0;
+        for (const auto& node : nodes_) {
+            if (node &&
+                node->type ==
+                    NodeType::POINTCLOUD &&
+                node->point_cloud) {
+                point_count +=
+                    static_cast<std::size_t>(
+                        node->point_cloud->size());
+            }
+        }
+        const auto mask_matches =
+            [](const std::shared_ptr<Tensor>& mask,
+               const std::size_t expected) {
+                return !mask ||
+                       (mask->is_valid() &&
+                        mask->ndim() == 1 &&
+                        mask->numel() == expected);
+            };
+        const bool can_install_selection =
+            install_selection &&
+            mask_matches(
+                staged->selection_mask_,
+                getSelectionGaussianCount()) &&
+            mask_matches(
+                staged->point_cloud_selection_mask_,
+                point_count);
+        if (can_install_selection) {
+            selection_mask_.swap(
+                staged->selection_mask_);
+            point_cloud_selection_mask_.swap(
+                staged->point_cloud_selection_mask_);
+            selection_groups_.swap(
+                staged->selection_groups_);
+            active_selection_group_ =
+                staged->active_selection_group_;
+            next_group_id_ =
+                staged->next_group_id_;
+            has_selection_ =
+                staged->has_selection_;
+            has_point_cloud_selection_ =
+                staged->has_point_cloud_selection_;
+            selection_group_counts_dirty_ =
+                staged->selection_group_counts_dirty_;
+            report.selection_installed = true;
+        } else {
+            const auto clear_mismatched =
+                [](std::shared_ptr<Tensor>& mask,
+                   bool& has_selection,
+                   const std::size_t expected) {
+                    if (mask &&
+                        (!mask->is_valid() ||
+                         mask->ndim() != 1 ||
+                         mask->numel() != expected)) {
+                        mask.reset();
+                        has_selection = false;
+                    }
+                };
+            clear_mismatched(
+                selection_mask_,
+                has_selection_,
+                getSelectionGaussianCount());
+            clear_mismatched(
+                point_cloud_selection_mask_,
+                has_point_cloud_selection_,
+                point_count);
+            selection_group_counts_dirty_ = true;
+        }
+        return report;
     }
 
     void Scene::removeKeyframeNodes() {

@@ -181,8 +181,8 @@ LOCALE_KEYS = {
     "no_trainer": "training_panel.no_trainer_loaded",
     "no_params": "training_panel.parameters_unavailable",
     "no_save_steps": "training_panel.no_save_steps",
-    "save_checkpoint": "training_panel.save_checkpoint",
-    "checkpoint_saved": "training_panel.checkpoint_saved",
+    "save_project": "training_panel.save_project",
+    "project_saved": "training_panel.project_saved",
     "add": "common.add",
     "remove": "common.remove",
     "bg_browse": "training_params.bg_image_browse",
@@ -407,7 +407,7 @@ class TrainingPanel(Panel):
 
     def __init__(self):
         self._handle = None
-        self._checkpoint_saved_time = 0.0
+        self._project_saved_time = 0.0
         self._new_save_step = 7000
         self._auto_scaled_for_cameras = 0
         self._auto_scale_steps_locked = True
@@ -430,7 +430,7 @@ class TrainingPanel(Panel):
         self._step_repeat_start = 0.0
         self._step_repeat_last = 0.0
         self._text_bufs = {}
-        self._last_checkpoint_saved_visible = False
+        self._last_project_saved_visible = False
         self._last_loss_signature = None
         self._psnr_graph_el = None
         self._last_psnr_signature = None
@@ -565,12 +565,12 @@ class TrainingPanel(Panel):
         model.bind_func(
             "show_reset_ready", lambda: _state() == "ready" and _iteration() > 0
         )
-        model.bind_func("show_checkpoint", lambda: _state() in ("running", "paused"))
+        model.bind_func("show_project_save", lambda: _state() in ("running", "paused"))
         model.bind_func(
-            "show_checkpoint_saved",
+            "show_project_saved",
             lambda: (
                 _state() in ("running", "paused")
-                and time.time() - self._checkpoint_saved_time < 2.0
+                and time.time() - self._project_saved_time < 2.0
             ),
         )
 
@@ -1381,11 +1381,11 @@ class TrainingPanel(Panel):
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
 
-    def _mark_checkpoint_saved(self):
-        self._checkpoint_saved_time = time.time()
-        self._last_checkpoint_saved_visible = True
+    def _mark_project_saved(self):
+        self._project_saved_time = time.time()
+        self._last_project_saved_visible = True
         if self._handle:
-            self._handle.dirty("show_checkpoint_saved")
+            self._handle.dirty("show_project_saved")
         self._schedule_deferred_update(2.05)
 
     def on_update(self, doc):
@@ -1418,13 +1418,13 @@ class TrainingPanel(Panel):
                 self._handle.dirty("status_gaussians")
                 dirty = True
 
-            checkpoint_visible = (
-                self._checkpoint_saved_time > 0.0
-                and time.time() - self._checkpoint_saved_time < 2.0
+            project_saved_visible = (
+                self._project_saved_time > 0.0
+                and time.time() - self._project_saved_time < 2.0
             )
-            if checkpoint_visible != self._last_checkpoint_saved_visible:
-                self._last_checkpoint_saved_visible = checkpoint_visible
-                self._handle.dirty("show_checkpoint_saved")
+            if project_saved_visible != self._last_project_saved_visible:
+                self._last_project_saved_visible = project_saved_visible
+                self._handle.dirty("show_project_saved")
                 dirty = True
 
         if state == "ready" and RuntimeState.iteration.value == 0:
@@ -2166,9 +2166,9 @@ class TrainingPanel(Panel):
             lf.new_project()
         elif action == "switch_edit":
             lf.switch_to_edit_mode()
-        elif action == "save_checkpoint":
-            lf.save_checkpoint()
-            self._mark_checkpoint_saved()
+        elif action == "save_project":
+            lf.project_save()
+            self._mark_project_saved()
         elif action == "browse_bg":
             selected = lf.ui.open_image_dialog("")
             if selected:

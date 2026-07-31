@@ -58,7 +58,6 @@ namespace lfs::core {
             EVENT(ResumeTraining, );
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
-            EVENT(SaveCheckpoint, std::optional<int> iteration;);
             EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path; std::filesystem::path init_path; std::string centralize_dataset; std::optional<int> max_width; std::optional<int> min_track_length; bool apply_auto_crop = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
             EVENT(ImportColmapCameras, std::filesystem::path sparse_path;);
@@ -66,8 +65,18 @@ namespace lfs::core {
             EVENT(ShowDatasetLoadPopup, std::filesystem::path dataset_path;);
             EVENT(ShowVideoExtractor, std::filesystem::path video_path;);
             EVENT(ShowResumeCheckpointPopup, std::filesystem::path checkpoint_path;);
-            EVENT(NewProject, );
+            EVENT(NewProject, bool discard_changes = false;);
+            EVENT(ProjectSave, );
+            EVENT(ProjectSaveAs, std::filesystem::path path;);
+            EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false;);
+            EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path;);
+            EVENT(SetReopenLastProject, bool enabled;);
+            EVENT(SetAutoSaveOnClose, bool enabled;);
             EVENT(RequestExit, );
+            EVENT(ShowExitConfirmation, );
+            EVENT(SaveAndExit, );
+            EVENT(SaveAsAndExit, );
+            EVENT(CancelExit, );
             EVENT(ForceExit, );
             EVENT(SwitchToEditMode, );
             EVENT(ResetCamera, );

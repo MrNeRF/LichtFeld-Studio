@@ -488,7 +488,8 @@ namespace lfs::io::project {
 
         lfs::Result<void> populate_scene_stage(
             const SceneGraphChapter& chapter, lfs::core::Scene& scene,
-            const ScenePayloadResolver& resolver) {
+            const ScenePayloadResolver& resolver,
+            const bool defer_geometry_payloads) {
             auto nodes = chapter.nodes();
             if (!nodes) {
                 return lfs::Result<void>::failure(std::move(nodes).error());
@@ -574,6 +575,12 @@ namespace lfs::io::project {
                     .locked = record.locked,
                     .training_enabled = record.training_enabled,
                     .payload_diverged = record.payload_diverged,
+                    .payload_hydration =
+                        is_geometry
+                            ? (defer_geometry_payloads
+                                   ? lfs::core::PayloadHydrationState::Unloaded
+                                   : lfs::core::PayloadHydrationState::Loaded)
+                            : lfs::core::PayloadHydrationState::NotApplicable,
                     .georef_pose = std::nullopt,
                     .model = nullptr,
                     .point_cloud = nullptr,
@@ -639,6 +646,10 @@ namespace lfs::io::project {
                             "A saved camera could not be constructed.", error.what(),
                             record.uuid);
                     }
+                }
+                if (defer_geometry_payloads && is_geometry) {
+                    staged.push_back(StagedNode{record, std::move(desc)});
+                    continue;
                 }
                 if (*type == lfs::core::NodeType::SPLAT) {
                     if (!record.payload || !resolver.splat) {
@@ -752,7 +763,22 @@ namespace lfs::io::project {
             lfs::core::Scene::createRestoreStage(target);
         if (auto populated =
                 populate_scene_stage(
-                    chapter, *staged, resolver);
+                    chapter, *staged, resolver, false);
+            !populated) {
+            return std::move(populated).error();
+        }
+        return staged;
+    }
+
+    lfs::Result<std::unique_ptr<lfs::core::Scene>>
+    stage_scene_shell(
+        const SceneGraphChapter& chapter,
+        lfs::core::Scene& target) {
+        auto staged =
+            lfs::core::Scene::createRestoreStage(target);
+        if (auto populated =
+                populate_scene_stage(
+                    chapter, *staged, {}, true);
             !populated) {
             return std::move(populated).error();
         }

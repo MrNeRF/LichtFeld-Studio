@@ -27,6 +27,12 @@ namespace lfs::app {
         template <typename T>
         struct is_string_expected<std::expected<T, std::string>> : std::true_type {};
 
+        template <typename T>
+        struct is_lfs_result : std::false_type {};
+
+        template <typename T>
+        struct is_lfs_result<lfs::Result<T>> : std::true_type {};
+
     } // namespace detail
 
     template <typename R>
@@ -35,6 +41,31 @@ namespace lfs::app {
             return nlohmann::json{{"error", error}};
         } else if constexpr (detail::is_string_expected<R>::value) {
             return std::unexpected(error);
+        } else if constexpr (detail::is_lfs_result<R>::value) {
+            auto typed_error = lfs::make_error(
+                lfs::ErrorInit{
+                    .code = lfs::ErrorCode::Unavailable,
+                    .domain = lfs::ErrorDomain::MCP,
+                    .severity = lfs::Severity::Error,
+                    .retryability =
+                        lfs::Retryability::NotRetryable,
+                    .operation_id = {},
+                    .user_message = error,
+                    .detail =
+                        "The GUI work queue rejected the MCP request",
+                    .detection =
+                        LFS_SOURCE_SITE_CURRENT(),
+                    .fields = {},
+                    .native = std::nullopt,
+                });
+            if constexpr (
+                std::same_as<
+                    typename R::value_type, void>) {
+                return R::failure(
+                    std::move(typed_error));
+            } else {
+                return R(std::move(typed_error));
+            }
         } else {
             static_assert(detail::dependent_false<R>::value, "Unsupported post_and_wait return type");
         }

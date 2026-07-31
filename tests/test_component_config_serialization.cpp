@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include "checkpoint_fixture.hpp"
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
@@ -513,7 +514,7 @@ namespace {
         source_ppisp.finalize();
         lfs::training::PPISPControllerPool source_controller(1, 100, controller);
 
-        const auto saved = lfs::training::save_checkpoint(
+        const auto saved = lfs::test::write_checkpoint_fixture(
             temp_dir.path(),
             17,
             source_strategy,
@@ -524,7 +525,7 @@ namespace {
             nullptr);
         ASSERT_TRUE(saved.has_value()) << saved.error();
 
-        const auto checkpoint = lfs::training::checkpoint_output_path(temp_dir.path());
+        const auto checkpoint = lfs::test::checkpoint_fixture_path(temp_dir.path());
         const auto header = lfs::core::load_checkpoint_header(checkpoint);
         ASSERT_TRUE(header.has_value()) << header.error();
         EXPECT_EQ(header->version, lfs::core::CHECKPOINT_VERSION_FIELDWISE_CONFIGS);

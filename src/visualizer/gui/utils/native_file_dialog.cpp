@@ -454,6 +454,10 @@ namespace lfs::vis::gui {
             return {makeFilter("PPISP Sidecar Files", {".ppisp"})};
         }
 
+        [[nodiscard]] std::vector<DialogFilter> projectFilters() {
+            return {makeFilter("LichtFeld Projects", {".licht"})};
+        }
+
         [[nodiscard]] std::vector<DialogFilter> jsonFilters() {
             return {makeFilter("JSON Files", {".json"})};
         }
@@ -625,6 +629,12 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenPPISPFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(ppispFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path OpenProjectFileDialog(const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest(projectFilters(), defaultPath), result);
         return result;
     }
 
@@ -831,6 +841,13 @@ namespace lfs::vis::gui {
                                                const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeSaveFileRequest(pythonFilters(), defaultPath, defaultName, ".py"), result);
+        return result;
+    }
+
+    std::filesystem::path SaveProjectFileDialog(const std::string& defaultName,
+                                                const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(projectFilters(), defaultPath, defaultName, ".licht"), result);
         return result;
     }
 

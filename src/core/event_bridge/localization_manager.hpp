@@ -18,6 +18,7 @@ namespace lfs::event {
         static LocalizationManager& getInstance();
 
         bool initialize(const std::string& locales_dir);
+        [[nodiscard]] bool contains(std::string_view key) const;
         const char* get(std::string_view key) const;
         const char* operator[](std::string_view key) const { return get(key); }
 

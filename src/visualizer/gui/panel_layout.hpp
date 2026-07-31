@@ -81,7 +81,6 @@ namespace lfs::vis::gui {
         PanelLayoutManager();
 
         void loadState();
-        void saveState() const;
         [[nodiscard]] PanelLayoutProjectState captureProjectState() const;
         void applyProjectState(const PanelLayoutProjectState& state);
 

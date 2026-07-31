@@ -53,6 +53,33 @@ namespace lfs::vis::op {
         using std::runtime_error::runtime_error;
     };
 
+    struct SceneTopologyNodeProof {
+        lfs::core::Uuid uuid;
+        lfs::core::Uuid parent_uuid;
+        lfs::core::NodeType type =
+            lfs::core::NodeType::GROUP;
+        std::size_t primary_extent = 0;
+        std::size_t secondary_extent = 0;
+        std::vector<lfs::core::Uuid> children;
+
+        friend bool operator==(
+            const SceneTopologyNodeProof&,
+            const SceneTopologyNodeProof&) =
+            default;
+    };
+
+    struct SceneTopologyProof {
+        std::vector<SceneTopologyNodeProof> nodes;
+        lfs::core::Uuid training_model_uuid;
+        bool consolidated = false;
+        std::size_t consolidated_extent = 0;
+
+        friend bool operator==(
+            const SceneTopologyProof&,
+            const SceneTopologyProof&) =
+            default;
+    };
+
     class LFS_VIS_API UndoEntry {
     public:
         virtual ~UndoEntry() = default;
@@ -198,6 +225,8 @@ namespace lfs::vis::op {
         TensorSwapStorage combined_deleted_storage_;
 
         ModifiesFlag captured_ = ModifiesFlag::NONE;
+        SceneTopologyProof topology_before_;
+        SceneTopologyProof expected_topology_;
 
         void captureDeletedMasks(std::unordered_map<lfs::core::Uuid, TensorPresenceSnapshot>& target);
         void compactSelection();
@@ -219,7 +248,8 @@ namespace lfs::vis::op {
                         UndoMetadata metadata,
                         std::string target_name,
                         lfs::core::Tensor before,
-                        TensorAccessor accessor);
+                        TensorAccessor accessor,
+                        SceneManager* scene = nullptr);
 
         void captureAfter();
         [[nodiscard]] bool hasChanges() const;
@@ -247,6 +277,9 @@ namespace lfs::vis::op {
         size_t element_count_ = 0;
         lfs::core::DataType dtype_ = lfs::core::DataType::Float32;
         bool captured_after_ = false;
+        SceneManager* scene_ = nullptr;
+        std::optional<SceneTopologyProof>
+            expected_topology_;
     };
 
     class LFS_VIS_API CropBoxUndoEntry : public UndoEntry {
@@ -273,6 +306,8 @@ namespace lfs::vis::op {
         SceneManager& scene_;
         RenderingManager* rendering_manager_ = nullptr;
         std::string node_name_;
+        lfs::core::Uuid node_uuid_;
+        SceneTopologyProof expected_topology_;
         lfs::core::CropBoxData before_;
         lfs::core::CropBoxData after_;
         glm::mat4 transform_before_;
@@ -307,6 +342,8 @@ namespace lfs::vis::op {
         SceneManager& scene_;
         RenderingManager* rendering_manager_ = nullptr;
         std::string node_name_;
+        lfs::core::Uuid node_uuid_;
+        SceneTopologyProof expected_topology_;
         lfs::core::EllipsoidData before_;
         lfs::core::EllipsoidData after_;
         glm::mat4 transform_before_;
@@ -322,7 +359,8 @@ namespace lfs::vis::op {
         PropertyChangeUndoEntry(std::string property_path,
                                 std::any before,
                                 std::any after,
-                                std::function<void(const std::any&)> applier);
+                                std::function<void(const std::any&)> applier,
+                                SceneManager* scene = nullptr);
 
         void undo() override;
         void redo() override;
@@ -340,6 +378,9 @@ namespace lfs::vis::op {
         std::function<void(const std::any&)> applier_;
         size_t estimated_bytes_ = 0;
         std::chrono::steady_clock::time_point updated_at_;
+        SceneManager* scene_ = nullptr;
+        std::optional<SceneTopologyProof>
+            expected_topology_;
     };
 
     enum class SceneGraphCaptureMode : uint8_t {
@@ -468,6 +509,7 @@ namespace lfs::vis::op {
         std::string name_;
         std::vector<SceneGraphNodeMetadataDiff> diffs_;
         std::chrono::steady_clock::time_point updated_at_;
+        SceneTopologyProof expected_topology_;
     };
 
     class LFS_VIS_API SceneGraphPatchEntry : public UndoEntry {
@@ -499,6 +541,7 @@ namespace lfs::vis::op {
         std::string name_;
         SceneGraphStateSnapshot before_;
         SceneGraphStateSnapshot after_;
+        SceneTopologyProof expected_topology_;
     };
 
 } // namespace lfs::vis::op

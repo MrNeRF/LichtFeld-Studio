@@ -6,11 +6,8 @@
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "components/sparsity_optimizer.hpp"
-#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "io/atomic_output.hpp"
-#include "io/error.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "strategies/istrategy.hpp"
 #include "strategies/strategy_factory.hpp"
@@ -43,20 +40,6 @@ namespace lfs::training {
                 }
                 return allocator(std::move(shape), capacity, dtype, name);
             };
-        }
-
-        [[nodiscard]] size_t checked_add_checkpoint_bytes(const size_t lhs, const size_t rhs) {
-            if (rhs > std::numeric_limits<size_t>::max() - lhs) {
-                throw std::runtime_error("Checkpoint size estimate overflows");
-            }
-            return lhs + rhs;
-        }
-
-        [[nodiscard]] size_t checked_multiply_checkpoint_bytes(const size_t lhs, const size_t rhs) {
-            if (lhs != 0 && rhs > std::numeric_limits<size_t>::max() / lhs) {
-                throw std::runtime_error("Checkpoint size estimate overflows");
-            }
-            return lhs * rhs;
         }
 
         [[nodiscard]] ADMMSparsityOptimizer::Config sparsity_config_from_params(
@@ -129,6 +112,14 @@ namespace lfs::training {
             const bool save_sparsity =
                 sparsity_optimizer &&
                 sparsity_optimizer->is_initialized();
+            if (save_sparsity) {
+                // The legacy standalone writer used its byte estimate to
+                // validate this invariant before serialization. CKPT is now
+                // embedded directly, so the stream serializer must own the
+                // validation itself.
+                (void)sparsity_optimizer->checkpoint_size_bytes(
+                    model.size());
+            }
 
             CheckpointHeader header{};
             header.iteration = iteration;
@@ -305,162 +296,6 @@ namespace lfs::training {
                 std::string("Serialize checkpoint failed: ") +
                     error.what(),
                 LFS_SOURCE_SITE_CURRENT());
-        }
-    }
-
-    std::expected<void, std::string> save_checkpoint(
-        const std::filesystem::path& path,
-        const int iteration,
-        const IStrategy& strategy,
-        const lfs::core::param::TrainingParameters& params,
-        const BilateralGrid* bilateral_grid,
-        const PPISP* ppisp,
-        const PPISPControllerPool* ppisp_controller_pool,
-        const ADMMSparsityOptimizer* sparsity_optimizer) {
-
-        try {
-            // Validate input path
-            if (path.empty()) {
-                return std::unexpected("Cannot save checkpoint: output path is empty");
-            }
-            if (!params.add_splat_paths.empty() && !params.add_splat_freeze.empty() &&
-                params.add_splat_paths.size() != params.add_splat_freeze.size()) {
-                return std::unexpected(
-                    "Cannot save checkpoint: add_splat_freeze count does not match add_splat_paths");
-            }
-
-            const auto checkpoint_dir = checkpoint_directory(path);
-            const auto checkpoint_path = checkpoint_output_path(path);
-            lfs::io::ScopedAtomicOutputFile atomic_checkpoint(
-                checkpoint_path,
-                lfs::io::AtomicOutputTempName::AppendSuffix,
-                lfs::io::AtomicOutputDurability::Durable);
-            const auto& temp_checkpoint_path = atomic_checkpoint.temp_path();
-
-            // Create checkpoint directory with error checking
-            std::error_code ec;
-            std::filesystem::create_directories(checkpoint_dir, ec);
-            if (ec) {
-                return std::unexpected("Failed to create checkpoint directory '" +
-                                       lfs::core::path_to_utf8(checkpoint_dir) + "': " + ec.message());
-            }
-
-            const auto& model = strategy.get_model();
-            const bool save_sparsity = sparsity_optimizer && sparsity_optimizer->is_initialized();
-            const size_t sparsity_bytes = save_sparsity
-                                              ? sparsity_optimizer->checkpoint_size_bytes(model.size())
-                                              : 0;
-
-            // Model tensors
-            size_t model_bytes = 0;
-            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.means().bytes());
-            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.sh0().bytes());
-            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.scaling_raw().bytes());
-            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.rotation_raw().bytes());
-            model_bytes = checked_add_checkpoint_bytes(model_bytes, model.opacity_raw().bytes());
-            if (model.shN().is_valid()) {
-                model_bytes = checked_add_checkpoint_bytes(model_bytes, model.shN().bytes());
-            }
-            if (model.deleted().is_valid()) {
-                model_bytes = checked_add_checkpoint_bytes(model_bytes, model.deleted().bytes());
-            }
-            if (model._densification_info.is_valid()) {
-                model_bytes = checked_add_checkpoint_bytes(model_bytes, model._densification_info.bytes());
-            }
-
-            // Optimizer: 2x model (Adam m & v)
-            const size_t optimizer_bytes = checked_multiply_checkpoint_bytes(model_bytes, 2);
-
-            // Bilateral grid: 3x (grids + Adam state)
-            size_t bilateral_grid_bytes = 0;
-            if (bilateral_grid) {
-                bilateral_grid_bytes = checked_multiply_checkpoint_bytes(bilateral_grid->grids().bytes(), 3);
-            }
-
-            // PPISP: estimate based on num_cameras and num_frames
-            size_t ppisp_bytes = 0;
-            if (ppisp) {
-                // exposure + vignetting + color + crf, each with params + 2x Adam state
-                const size_t exp_size = checked_multiply_checkpoint_bytes(ppisp->num_frames(), sizeof(float) * 3);
-                const size_t vig_size = checked_multiply_checkpoint_bytes(ppisp->num_cameras(), 3 * 5 * sizeof(float) * 3);
-                const size_t color_size = checked_multiply_checkpoint_bytes(ppisp->num_frames(), 8 * sizeof(float) * 3);
-                const size_t crf_size = checked_multiply_checkpoint_bytes(ppisp->num_cameras(), 3 * 4 * sizeof(float) * 3);
-                ppisp_bytes = checked_add_checkpoint_bytes(exp_size, vig_size);
-                ppisp_bytes = checked_add_checkpoint_bytes(ppisp_bytes, color_size);
-                ppisp_bytes = checked_add_checkpoint_bytes(ppisp_bytes, crf_size);
-            }
-
-            constexpr size_t OVERHEAD_BYTES = 64 * 1024;
-
-            size_t estimated_size = checked_add_checkpoint_bytes(sizeof(CheckpointHeader), model_bytes);
-            estimated_size = checked_add_checkpoint_bytes(estimated_size, optimizer_bytes);
-            estimated_size = checked_add_checkpoint_bytes(estimated_size, bilateral_grid_bytes);
-            estimated_size = checked_add_checkpoint_bytes(estimated_size, ppisp_bytes);
-            estimated_size = checked_add_checkpoint_bytes(estimated_size, sparsity_bytes);
-            estimated_size = checked_add_checkpoint_bytes(estimated_size, OVERHEAD_BYTES);
-
-            if (auto space_check = lfs::io::check_disk_space(checkpoint_path, estimated_size, 1.1f);
-                !space_check) {
-                const auto& error = space_check.error();
-                const bool is_disk_space = error.is(lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE);
-
-                lfs::core::events::state::DiskSpaceSaveFailed{
-                    .iteration = iteration,
-                    .path = checkpoint_path,
-                    .error = error.format(),
-                    .required_bytes = estimated_size,
-                    .available_bytes = error.available_bytes,
-                    .is_disk_space_error = is_disk_space}
-                    .emit();
-
-                return std::unexpected(error.format());
-            }
-
-            std::ofstream file;
-            if (!lfs::core::open_file_for_write(temp_checkpoint_path, std::ios::binary, file)) {
-                return std::unexpected("Failed to open checkpoint file: " +
-                                       lfs::core::path_to_utf8(temp_checkpoint_path));
-            }
-
-            auto serialized = serialize_checkpoint(
-                file, iteration, strategy, params, bilateral_grid,
-                ppisp, ppisp_controller_pool, sparsity_optimizer);
-            if (!serialized) {
-                return std::unexpected(
-                    lfs::format_for_developer(
-                        serialized.error()));
-            }
-            file.close();
-            if (!file) {
-                return std::unexpected("Failed to finalize checkpoint file: " +
-                                       lfs::core::path_to_utf8(temp_checkpoint_path));
-            }
-
-            if (auto replace_result = atomic_checkpoint.commit(); !replace_result) {
-                return std::unexpected(replace_result.error().format());
-            }
-
-            std::string extras;
-            if (bilateral_grid)
-                extras += ", +bilateral";
-            if (ppisp)
-                extras += ", +ppisp";
-            if (ppisp_controller_pool)
-                extras += ", +ppisp_ctrl(" + std::to_string(ppisp_controller_pool->num_cameras()) + ")";
-            if (save_sparsity)
-                extras += ", +sparsity";
-            LOG_INFO("Checkpoint saved: {} ({} Gaussians, iter {}{})",
-                     lfs::core::path_to_utf8(checkpoint_path),
-                     serialized->header.num_gaussians, iteration,
-                     extras);
-            lfs::core::events::state::CheckpointSaved{
-                .iteration = iteration,
-                .path = checkpoint_path}
-                .emit();
-            return {};
-
-        } catch (const std::exception& e) {
-            return std::unexpected(std::string("Save checkpoint failed: ") + e.what());
         }
     }
 

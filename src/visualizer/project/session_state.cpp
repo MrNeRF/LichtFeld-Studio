@@ -1522,6 +1522,11 @@ namespace lfs::vis::project {
         return {};
     }
 
+    void GuiSessionRestoreCoordinator::stagePrepared(
+        PreparedGuiSessionRestore prepared) {
+        pending_ = std::move(prepared);
+    }
+
     void GuiSessionRestoreCoordinator::
         onFirstGuiFrame() {
         first_gui_frame_ready_ = true;
@@ -3401,6 +3406,11 @@ namespace lfs::vis::project {
         // keep the event callback noexcept if memory corruption intervenes.
         if (!gui || !editor || !view || !sequencer)
             return;
+
+        // Panel registration can finish before a newly-visible console has
+        // rendered its first frame. Materialize the session owner now so
+        // GUIL console settings and EDTR are never consumed by a null owner.
+        (void)gui::panels::PythonConsoleState::getInstance();
 
         // VIEW runs after SCNG/CKPT/PPIS hydration. GUIL then applies only at
         // the panels-ready boundary that delivered this prepared bundle.

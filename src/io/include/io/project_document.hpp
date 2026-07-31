@@ -23,7 +23,9 @@
 #include <iosfwd>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace lfs::io {
@@ -78,6 +80,9 @@ namespace lfs::io::project {
     struct ProjectDocumentOpenOptions {
         ReaderOptions reader;
         GeometryDecodeOptions geometry;
+        // Decode the KB-scale shell chapters only. Embedded scene payloads
+        // remain clean source spans until stage_hydration() consumes them.
+        bool defer_geometry_payloads = false;
     };
 
     struct ProjectDocumentSaveOptions {
@@ -85,6 +90,15 @@ namespace lfs::io::project {
         lfs::core::Uuid file_uuid;
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
+        // Explicit GUI saves may replace THMB. An empty span means carry the
+        // current preview forward without regenerating it.
+        std::span<const std::byte> preview_png;
+    };
+
+    struct ProjectDocumentPayloadState {
+        Fourcc fourcc;
+        lfs::core::Uuid instance_uuid;
+        bool loaded = true;
     };
 
     struct ProjectDocumentSaveReport {
@@ -106,6 +120,9 @@ namespace lfs::io::project {
         bool trainer_state_pending = false;
         ProjectSessionChapters pending_session;
         bool gui_session_pending = true;
+        std::size_t hydrated_payload_units = 0;
+        std::size_t invalidated_payload_units = 0;
+        bool selection_installed = false;
     };
 
     class LFS_IO_API ProjectHydrationPlan {
@@ -150,6 +167,12 @@ namespace lfs::io::project {
 
         [[nodiscard]] const std::optional<std::filesystem::path>&
         source_path() const noexcept;
+        [[nodiscard]] const lfs::core::Uuid& project_uuid() const noexcept;
+        [[nodiscard]] std::uint64_t generation() const noexcept;
+        [[nodiscard]] bool dirty() const noexcept;
+        [[nodiscard]] std::vector<std::string> dirty_chapters() const;
+        [[nodiscard]] std::vector<ProjectDocumentPayloadState>
+        payload_states() const;
 
         [[nodiscard]] const ProjectChapter& project() const noexcept;
         [[nodiscard]] ProjectChapter& edit_project() noexcept;
@@ -231,6 +254,17 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
         save(const std::filesystem::path& path,
              const ProjectDocumentSaveOptions& options = {});
+        // Publishes a compacted sibling with a new file UUID, preserving the
+        // project UUID and all clean/unloaded payloads. An existing
+        // destination is atomically replaced only after staged verification.
+        [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
+        save_as(const std::filesystem::path& path,
+                const ProjectDocumentSaveOptions& options = {});
+
+        // Phase-A interactive shell. Heavy geometry and selection masks stay
+        // deferred, while nodes and selection-group metadata are coherent.
+        [[nodiscard]] lfs::Result<std::unique_ptr<lfs::core::Scene>>
+        stage_shell(lfs::core::Scene& destination) const;
 
         // Strict Phase A. Every project chapter, payload, node, selection
         // tensor, and five-chapter GUI session bundle is decoded and validated
@@ -247,6 +281,13 @@ namespace lfs::io::project {
         commit_hydration(
             lfs::core::Scene& destination,
             ProjectHydrationPlan&& staged) noexcept;
+        // Phase B for an already interactive shell. Payloads are attached at
+        // the node/chapter boundary; live edits invalidate only their UUID.
+        [[nodiscard]] static ProjectDocumentHydrationReport
+        commit_partial_hydration(
+            lfs::core::Scene& destination,
+            ProjectHydrationPlan&& staged,
+            bool install_selection) noexcept;
 
         // Convenience wrapper around the two explicit phases. PRMS remains
         // pending and is never applied to a running trainer.

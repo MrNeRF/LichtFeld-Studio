@@ -251,11 +251,38 @@ def stop_training() -> None:
 def reset_training() -> None:
     """Reset training state to initial"""
 
-def save_checkpoint() -> None:
-    """Save a training checkpoint to disk"""
-
-def new_project() -> None:
+def new_project(discard_changes: bool = False) -> None:
     """Clear all project state and start a new project"""
+
+def project_save() -> None:
+    """Save the active .licht project, prompting for a path when needed"""
+
+def project_save_as(path: str = '') -> None:
+    """Save the active project to a new .licht path"""
+
+def project_open(path: str = '', discard_changes: bool = False) -> None:
+    """Open a .licht project"""
+
+def project_is_dirty() -> bool:
+    """Return whether the active project has unsaved chapters"""
+
+def project_has_path() -> bool:
+    """Return whether the active project has a bound .licht path"""
+
+def project_recent_files() -> list[str]:
+    """Return the most-recently-used .licht project paths"""
+
+def project_reopen_last_enabled() -> bool:
+    """Return whether the last project is reopened at startup"""
+
+def project_set_reopen_last(enabled: bool) -> None:
+    """Enable or disable reopening the last project at startup"""
+
+def project_auto_save_on_close_enabled() -> bool:
+    """Return whether dirty projects are saved automatically on close"""
+
+def project_set_auto_save_on_close(enabled: bool) -> None:
+    """Enable or disable automatic project save on close"""
 
 def clear_scene() -> None:
     """Remove all nodes from the scene"""
@@ -277,8 +304,19 @@ def load_checkpoint_for_training(checkpoint_path: str, dataset_path: str, output
 def request_exit() -> None:
     """Request application exit (shows confirmation if needed)."""
 
+def save_and_exit() -> None:
+    """Save the named project explicitly and exit after the save succeeds."""
+
+def save_as_and_exit() -> None:
+    """
+    Choose a project path, save explicitly, and exit after the save succeeds.
+    """
+
+def cancel_exit() -> None:
+    """Cancel the pending application exit."""
+
 def force_exit() -> None:
-    """Force immediate application exit (bypasses confirmation)."""
+    """Explicitly discard unsaved changes and exit."""
 
 def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True) -> None:
     """

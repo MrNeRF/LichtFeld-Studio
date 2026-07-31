@@ -64,10 +64,17 @@ namespace lfs::vis {
 
         [[nodiscard]] lfs::Result<lfs::io::project::ParameterManagerSnapshot>
         capturePendingProjectState() const;
+        [[nodiscard]] static lfs::Result<void>
+        validatePendingProjectState(
+            const lfs::io::project::ParameterManagerSnapshot& snapshot);
         // Restores only ParameterManager's role-qualified next-run/session
         // values. It deliberately has no TrainerManager dependency and cannot
         // alter an active trainer.
         lfs::Result<void> restorePendingProjectState(
+            const lfs::io::project::ParameterManagerSnapshot& snapshot);
+        // Phase-B install for a snapshot already accepted by
+        // validatePendingProjectState during transactional project-open Phase A.
+        void installValidatedPendingProjectState(
             const lfs::io::project::ParameterManagerSnapshot& snapshot);
 
         void markDirty() { dirty_.store(true, std::memory_order_release); }

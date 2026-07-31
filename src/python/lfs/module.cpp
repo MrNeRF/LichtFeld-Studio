@@ -785,14 +785,133 @@ NB_MODULE(lichtfeld, m) {
         },
         "Reset training state to initial");
     m.def(
-        "save_checkpoint", []() { lfs::core::events::cmd::SaveCheckpoint{}.emit(); },
-        "Save a training checkpoint to disk");
-    m.def(
-        "new_project", []() {
+        "new_project", [](const bool discard_changes) {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::NewProject{}.emit();
+            lfs::core::events::cmd::NewProject{
+                .discard_changes =
+                    discard_changes}
+                .emit();
         },
-        "Clear all project state and start a new project");
+        nb::arg("discard_changes") = false, "Clear all project state and start a new project");
+    m.def(
+        "project_save", []() {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::ProjectSave{}.emit();
+        },
+        "Save the active .licht project, prompting for a path when needed");
+    m.def(
+        "project_save_as", [](const std::string& path) {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::ProjectSaveAs{
+                .path = python_utf8_path(path)}
+                .emit();
+        },
+        nb::arg("path") = "", "Save the active project to a new .licht path");
+    m.def(
+        "project_open",
+        [](const std::string& path,
+           const bool discard_changes) {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::ProjectOpen{
+                .path = python_utf8_path(path),
+                .discard_changes =
+                    discard_changes}
+                .emit();
+        },
+        nb::arg("path") = "",
+        nb::arg("discard_changes") = false,
+        "Open a .licht project");
+    m.def(
+        "project_is_dirty", []() {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            auto info = viewer->projectGetInfo();
+            return info && info->dirty;
+        },
+        "Return whether the active project has unsaved chapters");
+    m.def(
+        "project_has_path", []() {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return false;
+            }
+            auto info = viewer->projectGetInfo();
+            return info && info->path.has_value();
+        },
+        "Return whether the active project has a bound .licht path");
+    m.def(
+        "project_recent_files", []() {
+            std::vector<std::string> paths;
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return paths;
+            }
+            auto info = viewer->projectGetInfo();
+            if (!info) {
+                return paths;
+            }
+            paths.reserve(
+                info->recent_projects.size());
+            for (const auto& recent :
+                 info->recent_projects) {
+                paths.push_back(
+                    lfs::core::path_to_utf8(
+                        recent.last_known_path));
+            }
+            return paths;
+        },
+        "Return the most-recently-used .licht project paths");
+    m.def(
+        "project_reopen_last_enabled", []() {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return true;
+            }
+            auto info = viewer->projectGetInfo();
+            return !info ||
+                   info->reopen_last_project;
+        },
+        "Return whether the last project is reopened at startup");
+    m.def(
+        "project_set_reopen_last",
+        [](const bool enabled) {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::
+                SetReopenLastProject{
+                    .enabled = enabled}
+                    .emit();
+        },
+        nb::arg("enabled"),
+        "Enable or disable reopening the last project at startup");
+    m.def(
+        "project_auto_save_on_close_enabled", []() {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return true;
+            }
+            auto info = viewer->projectGetInfo();
+            return !info ||
+                   info->auto_save_on_close;
+        },
+        "Return whether dirty projects are saved automatically on close");
+    m.def(
+        "project_set_auto_save_on_close",
+        [](const bool enabled) {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::
+                SetAutoSaveOnClose{
+                    .enabled = enabled}
+                    .emit();
+        },
+        nb::arg("enabled"),
+        "Enable or disable automatic project save on close");
     m.def(
         "clear_scene", []() {
             nb::gil_scoped_release release;
@@ -859,8 +978,20 @@ NB_MODULE(lichtfeld, m) {
         "Request application exit (shows confirmation if needed).");
 
     m.def(
+        "save_and_exit", []() { lfs::core::events::cmd::SaveAndExit{}.emit(); },
+        "Save the named project explicitly and exit after the save succeeds.");
+
+    m.def(
+        "save_as_and_exit", []() { lfs::core::events::cmd::SaveAsAndExit{}.emit(); },
+        "Choose a project path, save explicitly, and exit after the save succeeds.");
+
+    m.def(
+        "cancel_exit", []() { lfs::core::events::cmd::CancelExit{}.emit(); },
+        "Cancel the pending application exit.");
+
+    m.def(
         "force_exit", []() { lfs::core::events::cmd::ForceExit{}.emit(); },
-        "Force immediate application exit (bypasses confirmation).");
+        "Explicitly discard unsaved changes and exit.");
 
     m.def(
         "export_scene",

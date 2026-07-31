@@ -44,6 +44,13 @@ namespace lfs::io::project {
                           lfs::core::Scene& target,
                           const ScenePayloadResolver& resolver);
 
+    // Phase-A shell restore. Geometry nodes are restored as named, visible
+    // unloaded units; no heavy payload resolver is invoked.
+    [[nodiscard]] LFS_IO_API
+        lfs::Result<std::unique_ptr<lfs::core::Scene>>
+        stage_scene_shell(const SceneGraphChapter& chapter,
+                          lfs::core::Scene& target);
+
     // Transactional convenience wrapper for SCNG alone.
     [[nodiscard]] LFS_IO_API lfs::Result<void>
     hydrate_scene_graph(const SceneGraphChapter& chapter, lfs::core::Scene& scene,

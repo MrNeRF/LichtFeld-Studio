@@ -3071,7 +3071,7 @@ namespace lfs::vis::gui {
             } else {
                 return;
             }
-            ls.save();
+            ls.saveUserPreferences();
         };
 
         enqueueModal(std::move(req));
@@ -3761,8 +3761,6 @@ namespace lfs::vis::gui {
 
         if (dev_resource_watch_.scan_future.valid())
             dev_resource_watch_.scan_future.wait();
-
-        panel_layout_.saveState();
 
         if (video_widget_)
             video_widget_->shutdown();
@@ -6283,10 +6281,10 @@ namespace lfs::vis::gui {
                             if (tm->isFinished() || !tm->isTrainingActive()) {
                                 if (auto* trainer = tm->getTrainer()) {
                                     LOG_INFO("Retrying save at iteration {}", iteration);
-                                    trainer->save_final_ply_and_checkpoint(iteration);
+                                    trainer->save_final_project(iteration);
                                 }
                             } else {
-                                tm->requestSaveCheckpoint();
+                                tm->requestSaveProject();
                             }
                         }
                     }
@@ -6300,9 +6298,9 @@ namespace lfs::vis::gui {
                                 trainer->setParams(params);
                                 LOG_INFO("Output path changed to: {}", lfs::core::path_to_utf8(new_location));
                                 if (tm->isFinished() || !tm->isTrainingActive())
-                                    trainer->save_final_ply_and_checkpoint(iteration);
+                                    trainer->save_final_project(iteration);
                                 else
-                                    tm->requestSaveCheckpoint();
+                                    tm->requestSaveProject();
                             }
                         }
                     } else if (!new_location.empty()) {
@@ -6647,7 +6645,9 @@ namespace lfs::vis::gui {
 
     void GuiManager::requestExitConfirmation() {
         startup_overlay_.dismiss();
-        lfs::core::events::cmd::RequestExit{}.emit();
+        lfs::core::events::cmd::
+            ShowExitConfirmation{}
+                .emit();
     }
 
     bool GuiManager::isExitConfirmationPending() const {

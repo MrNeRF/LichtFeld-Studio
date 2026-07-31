@@ -21,6 +21,7 @@
 #include "gui/panels/tools_panel.hpp"
 #include "gui/panels/windows_console_utils.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "ipc/render_settings_convert.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
@@ -90,6 +91,47 @@ namespace lfs::vis {
                 .actions = std::move(actions),
                 .operation_id = lfs::OperationId::generate(),
             };
+        }
+
+        template <typename T>
+        [[nodiscard]] lfs::Result<T> visualizerFailure(
+            const lfs::ErrorCode code,
+            std::string user_message,
+            std::string detail,
+            const std::string_view field) {
+            auto error = lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::App,
+                .severity = lfs::Severity::Error,
+                .retryability =
+                    lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message =
+                    std::move(user_message),
+                .detail = std::move(detail),
+                .detection =
+                    LFS_SOURCE_SITE_CURRENT(),
+                .fields =
+                    lfs::SmallFields{}.add(
+                        "field", field),
+                .native = std::nullopt,
+            });
+            if constexpr (std::same_as<T, void>) {
+                return lfs::Status::failure(
+                    std::move(error));
+            } else {
+                return error;
+            }
+        }
+
+        [[nodiscard]] bool
+        isDirtyProjectSwitchError(
+            const lfs::Error& error) noexcept {
+            return error.code() ==
+                       lfs::ErrorCode::
+                           FailedPrecondition &&
+                   error.user_message() ==
+                       "The current project has unsaved changes.";
         }
 
         void wakeEventLoopViaServices() {
@@ -232,6 +274,11 @@ namespace lfs::vis {
 
         // Create parameter manager (lazy-loads JSON files on first use)
         parameter_manager_ = std::make_unique<ParameterManager>();
+
+        project_lifecycle_ =
+            std::make_unique<project::ProjectLifecycle>(
+                *this,
+                options_.project_lifecycle_settings_path);
 
         // Create main loop
         main_loop_ = std::make_unique<MainLoop>();
@@ -1111,7 +1158,7 @@ namespace lfs::vis {
                 tryApplyProjectSessionRestore();
             });
 
-        // NOTE: Training control commands (Start/Pause/Resume/Stop/SaveCheckpoint)
+        // NOTE: Training control and project-save commands
         // are now handled by TrainerManager::setupEventHandlers()
 
         cmd::ResetTraining::when([this](const auto&) {
@@ -1132,9 +1179,263 @@ namespace lfs::vis {
             performReset();
         });
 
-        cmd::NewProject::when([this](const auto&) {
-            handleNewProject();
+        cmd::NewProject::when([this](const auto& command) {
+            handleNewProject(
+                command.discard_changes
+                    ? ProjectSwitchDisposition::
+                          DiscardChanges
+                    : ProjectSwitchDisposition::
+                          RequireClean);
         });
+
+        const auto publish_project_error =
+            [](std::string action, std::string detail) {
+                LOG_ERROR("{} failed: {}", action, detail);
+                lfs::ErrorBus::instance().publish(
+                    makeFrameNotification(
+                        lfs::ErrorCode::Unavailable,
+                        lfs::ErrorDomain::App,
+                        lfs::Severity::Error,
+                        lfs::ErrorSurface::Toast,
+                        std::format("{} failed.", action),
+                        std::move(detail),
+                        {},
+                        LFS_SOURCE_SITE_CURRENT()));
+            };
+
+        cmd::ProjectSave::when(
+            [this, publish_project_error](const auto&) {
+                auto info = projectGetInfo();
+                if (!info) {
+                    publish_project_error(
+                        "Save Project",
+                        lfs::format_for_developer(
+                            info.error()));
+                    return;
+                }
+                if (!info->path) {
+                    const auto path =
+                        gui::SaveProjectFileDialog();
+                    if (path.empty()) {
+                        return;
+                    }
+                    if (auto saved =
+                            projectSaveAs(path, true);
+                        !saved) {
+                        publish_project_error(
+                            "Save Project",
+                            lfs::format_for_developer(
+                                saved.error()));
+                    }
+                    return;
+                }
+                if (auto saved = projectSave(true);
+                    !saved) {
+                    publish_project_error(
+                        "Save Project",
+                        lfs::format_for_developer(
+                            saved.error()));
+                }
+            });
+
+        cmd::ProjectSaveAs::when(
+            [this, publish_project_error](
+                const auto& command) {
+                auto path = command.path;
+                if (path.empty()) {
+                    std::string default_name =
+                        "project.licht";
+                    std::filesystem::path
+                        default_directory;
+                    if (auto info = projectGetInfo();
+                        info && info->path) {
+                        default_name =
+                            info->path->filename().string();
+                        default_directory =
+                            info->path->parent_path();
+                    }
+                    path =
+                        gui::SaveProjectFileDialog(
+                            default_name,
+                            default_directory);
+                }
+                if (path.empty()) {
+                    return;
+                }
+                if (auto saved =
+                        projectSaveAs(path, true);
+                    !saved) {
+                    publish_project_error(
+                        "Save Project As",
+                        lfs::format_for_developer(
+                            saved.error()));
+                }
+            });
+
+        cmd::ProjectOpen::when(
+            [this, publish_project_error](
+                const auto& command) {
+                auto path = command.path;
+                if (path.empty()) {
+                    path =
+                        gui::OpenProjectFileDialog();
+                }
+                if (path.empty()) {
+                    return;
+                }
+                if (auto opened = projectOpen(
+                        path,
+                        command.discard_changes
+                            ? ProjectSwitchDisposition::
+                                  DiscardChanges
+                            : ProjectSwitchDisposition::
+                                  RequireClean);
+                    !opened) {
+                    if (isDirtyProjectSwitchError(
+                            opened.error())) {
+                        cmd::
+                            ShowProjectSwitchConfirmation{
+                                .new_project =
+                                    false,
+                                .path = path}
+                                .emit();
+                        return;
+                    }
+                    publish_project_error(
+                        "Open Project",
+                        lfs::format_for_developer(
+                            opened.error()));
+                }
+            });
+
+        cmd::RequestExit::when([this](const auto&) {
+            if (project_lifecycle_) {
+                project_lifecycle_
+                    ->resetCloseSaveAttempt();
+            }
+            close_save_notice_posted_ = false;
+            if (gui_manager_) {
+                gui_manager_->setForceExit(false);
+            }
+            requestApplicationClose();
+        });
+
+        cmd::SaveAndExit::when(
+            [this, publish_project_error](
+                const auto&) {
+                auto info = projectGetInfo();
+                if (!info) {
+                    publish_project_error(
+                        "Save Project",
+                        lfs::format_for_developer(
+                            info.error()));
+                    return;
+                }
+                if (!info->path) {
+                    publish_project_error(
+                        "Save Project",
+                        "The project has no path; use Save As.");
+                    return;
+                }
+                if (auto saved = projectSave(true);
+                    !saved) {
+                    publish_project_error(
+                        "Save Project",
+                        lfs::format_for_developer(
+                            saved.error()));
+                    return;
+                }
+                requestApplicationClose();
+            });
+
+        cmd::SaveAsAndExit::when(
+            [this, publish_project_error](
+                const auto&) {
+                const auto path =
+                    gui::SaveProjectFileDialog();
+                if (path.empty()) {
+                    if (project_lifecycle_) {
+                        project_lifecycle_
+                            ->resetCloseSaveAttempt();
+                    }
+                    close_save_notice_posted_ =
+                        false;
+                    return;
+                }
+                if (auto saved =
+                        projectSaveAs(path, true);
+                    !saved) {
+                    publish_project_error(
+                        "Save Project As",
+                        lfs::format_for_developer(
+                            saved.error()));
+                    return;
+                }
+                requestApplicationClose();
+            });
+
+        cmd::CancelExit::when([this](const auto&) {
+            if (project_lifecycle_) {
+                project_lifecycle_
+                    ->resetCloseSaveAttempt();
+            }
+            close_save_notice_posted_ = false;
+            if (gui_manager_) {
+                gui_manager_->setForceExit(false);
+            }
+            if (window_manager_) {
+                window_manager_->cancelClose();
+            }
+        });
+
+        cmd::ForceExit::when([this](const auto&) {
+            if (gui_manager_) {
+                gui_manager_->setForceExit(true);
+            }
+            requestApplicationClose();
+        });
+
+        cmd::SetReopenLastProject::when(
+            [this, publish_project_error](
+                const auto& command) {
+                if (!project_lifecycle_) {
+                    publish_project_error(
+                        "Update Project Settings",
+                        "Project lifecycle is unavailable.");
+                    return;
+                }
+                if (auto saved =
+                        project_lifecycle_
+                            ->setReopenLastProject(
+                                command.enabled);
+                    !saved) {
+                    publish_project_error(
+                        "Update Project Settings",
+                        lfs::format_for_developer(
+                            saved.error()));
+                }
+            });
+
+        cmd::SetAutoSaveOnClose::when(
+            [this, publish_project_error](
+                const auto& command) {
+                if (!project_lifecycle_) {
+                    publish_project_error(
+                        "Update Project Settings",
+                        "Project lifecycle is unavailable.");
+                    return;
+                }
+                if (auto saved =
+                        project_lifecycle_
+                            ->setAutoSaveOnClose(
+                                command.enabled);
+                    !saved) {
+                    publish_project_error(
+                        "Update Project Settings",
+                        lfs::format_for_developer(
+                            saved.error()));
+                }
+            });
 
         // Undo/Redo commands (require command_history_ which lives here)
         cmd::Undo::when([this](const auto&) { undo(); });
@@ -1147,6 +1448,10 @@ namespace lfs::vis {
         state::SceneChanged::when([this](const auto& event) {
             python::set_scene_mutation_flags(event.mutation_flags);
             python::bump_scene_generation();
+            if (project_lifecycle_) {
+                project_lifecycle_->markSceneMutation(
+                    event.mutation_flags);
+            }
             wakeMainLoop();
         });
 
@@ -1211,17 +1516,6 @@ namespace lfs::vis {
         // File loading commands
         cmd::LoadConfigFile::when([this](const auto& cmd) {
             handleLoadConfigFile(cmd.path);
-        });
-
-        // RequestExit handled by Python file_menu.py
-
-        cmd::ForceExit::when([this](const auto&) {
-            if (gui_manager_) {
-                gui_manager_->setForceExit(true);
-            }
-            if (window_manager_) {
-                window_manager_->requestClose();
-            }
         });
 
         // Signal bridge event handlers
@@ -1390,6 +1684,13 @@ namespace lfs::vis {
         }
 
         fully_initialized_ = true;
+        if (!startup_project_open_attempted_) {
+            startup_project_open_attempted_ = true;
+            if (project_lifecycle_) {
+                project_lifecycle_->openStartupProject(
+                    options_.startup_project);
+            }
+        }
         return true;
     }
 
@@ -1883,18 +2184,11 @@ namespace lfs::vis {
             return true;
         };
 
-        if (!gui_manager_) {
-            if (defer_close_for_training()) {
-                return false;
-            }
-            beginShutdown();
-            return true;
+        if (defer_close_for_training()) {
+            return false;
         }
 
-        if (gui_manager_->isForceExit()) {
-            if (defer_close_for_training()) {
-                return false;
-            }
+        const auto finish_close = [this] {
             beginShutdown();
 #ifdef WIN32
             const HWND hwnd = GetConsoleWindow();
@@ -1907,8 +2201,75 @@ namespace lfs::vis {
             }
 #endif
             return true;
+        };
+
+        // ForceExit is emitted only after the user confirms the
+        // fallback discard path. It deliberately bypasses another
+        // automatic-save attempt.
+        if (gui_manager_ &&
+            gui_manager_->isForceExit()) {
+            return finish_close();
         }
 
+        if (project_lifecycle_) {
+            const auto close_save =
+                project_lifecycle_
+                    ->beginOrPollCloseSave();
+            switch (close_save) {
+            case project::ProjectLifecycle::
+                CloseSaveStatus::NotDirty:
+            case project::ProjectLifecycle::
+                CloseSaveStatus::Succeeded:
+                return finish_close();
+            case project::ProjectLifecycle::
+                CloseSaveStatus::Saving:
+                if (!close_save_notice_posted_) {
+                    close_save_notice_posted_ = true;
+                    lfs::ErrorBus::instance().publish(
+                        makeFrameNotification(
+                            lfs::ErrorCode::Unavailable,
+                            lfs::ErrorDomain::App,
+                            lfs::Severity::Info,
+                            lfs::ErrorSurface::
+                                StatusOnly,
+                            "Saving project before exit...",
+                            "The window will close after the durable .licht head is published.",
+                            {},
+                            LFS_SOURCE_SITE_CURRENT()));
+                }
+                window_manager_->cancelClose();
+                return false;
+            case project::ProjectLifecycle::
+                CloseSaveStatus::Failed: {
+                const auto detail =
+                    project_lifecycle_
+                        ->closeSaveError();
+                lfs::ErrorBus::instance().publish(
+                    makeFrameNotification(
+                        lfs::ErrorCode::Unavailable,
+                        lfs::ErrorDomain::IO,
+                        lfs::Severity::Error,
+                        lfs::ErrorSurface::Toast,
+                        "The project could not be saved before exit.",
+                        detail,
+                        {},
+                        LFS_SOURCE_SITE_CURRENT()));
+                break;
+            }
+            case project::ProjectLifecycle::
+                CloseSaveStatus::NeedsPrompt:
+                break;
+            }
+        } else {
+            return finish_close();
+        }
+
+        if (!gui_manager_) {
+            LOG_ERROR(
+                "A dirty project could not be saved and no GUI prompt is available; refusing to close");
+            window_manager_->cancelClose();
+            return false;
+        }
         if (!gui_manager_->isExitConfirmationPending()) {
             gui_manager_->requestExitConfirmation();
         }
@@ -2048,8 +2409,32 @@ namespace lfs::vis {
         return std::unexpected("Scene clear request was rejected");
     }
 
-    void VisualizerImpl::handleNewProject() {
+    void VisualizerImpl::handleNewProject(
+        const ProjectSwitchDisposition disposition) {
         if (pending_training_action_ == PendingTrainingAction::Close) {
+            return;
+        }
+        if (!project_lifecycle_) {
+            return;
+        }
+        if (auto preflight =
+                project_lifecycle_
+                    ->preflightSwitch(
+                        disposition);
+            !preflight) {
+            if (isDirtyProjectSwitchError(
+                    preflight.error())) {
+                lfs::core::events::cmd::
+                    ShowProjectSwitchConfirmation{
+                        .new_project = true,
+                        .path = {}}
+                        .emit();
+                return;
+            }
+            LOG_ERROR(
+                "New Project preflight failed: {}",
+                lfs::format_for_developer(
+                    preflight.error()));
             return;
         }
         if (gui_manager_) {
@@ -2067,6 +2452,8 @@ namespace lfs::vis {
             (!trainer_manager_->canPerform(TrainingAction::ClearScene) ||
              trainer_manager_->isCompletionPending())) {
             pending_training_action_ = PendingTrainingAction::NewProject;
+            pending_new_project_disposition_ =
+                disposition;
             if (trainer_manager_->canStop()) {
                 trainer_manager_->stopTraining();
             }
@@ -2074,14 +2461,23 @@ namespace lfs::vis {
         }
 
         pending_training_action_ = PendingTrainingAction::None;
-        performNewProject();
+        performNewProject(disposition);
     }
 
-    void VisualizerImpl::performNewProject() {
-        if (!data_loader_ || !data_loader_->clearScene()) {
+    void VisualizerImpl::performNewProject(
+        const ProjectSwitchDisposition disposition) {
+        if (!project_lifecycle_) {
             return;
         }
-        resetProjectState();
+        if (auto created =
+                project_lifecycle_->newProject(
+                    disposition);
+            !created) {
+            LOG_ERROR(
+                "New Project failed: {}",
+                lfs::format_for_developer(
+                    created.error()));
+        }
     }
 
     void VisualizerImpl::resetProjectState() {
@@ -2098,6 +2494,8 @@ namespace lfs::vis {
         pending_auto_train_ = false;
         pending_training_action_ = PendingTrainingAction::None;
         pending_training_action_posted_ = false;
+        pending_new_project_disposition_ =
+            ProjectSwitchDisposition::RequireClean;
         gui_session_restore_.clear();
         retained_project_session_ = {};
         camera_bookmarks_.clear();
@@ -2125,6 +2523,15 @@ namespace lfs::vis {
         }
         tryApplyProjectSessionRestore();
         return {};
+    }
+
+    void VisualizerImpl::
+        stagePreparedProjectSessionRestore(
+            project::PreparedGuiSessionRestore
+                prepared) {
+        gui_session_restore_.stagePrepared(
+            std::move(prepared));
+        tryApplyProjectSessionRestore();
     }
 
     void VisualizerImpl::
@@ -2193,32 +2600,60 @@ namespace lfs::vis {
         return {};
     }
 
-    std::expected<std::filesystem::path, std::string> VisualizerImpl::saveCheckpoint(
-        const std::optional<std::filesystem::path>& path) {
-        if (!trainer_manager_ || !trainer_manager_->getTrainer())
-            return std::unexpected("No active training session");
-
-        auto* const trainer = trainer_manager_->getTrainer();
-        if (trainer_manager_->isTrainingActive()) {
-            if (path) {
-                return std::unexpected(
-                    "Custom checkpoint output paths are not supported while training is active");
-            }
-            return std::unexpected(
-                "Cannot report checkpoint save success while training is active; "
-                "use the async training checkpoint action or stop training first");
+    lfs::Result<void>
+    VisualizerImpl::projectSave(
+        const bool regenerate_preview) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
         }
+        return project_lifecycle_->save(
+            regenerate_preview);
+    }
 
-        const int iteration = trainer->get_current_iteration();
-        if (path) {
-            if (auto result = trainer->save_checkpoint_to(*path, iteration); !result)
-                return std::unexpected(result.error());
-            return *path;
+    lfs::Result<void>
+    VisualizerImpl::projectSaveAs(
+        const std::filesystem::path& path,
+        const bool regenerate_preview) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
         }
+        return project_lifecycle_->saveAs(
+            path, regenerate_preview);
+    }
 
-        if (auto result = trainer->save_checkpoint(iteration); !result)
-            return std::unexpected(result.error());
-        return trainer->get_output_path();
+    lfs::Result<void>
+    VisualizerImpl::projectOpen(
+        const std::filesystem::path& path,
+        const ProjectSwitchDisposition disposition) {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->open(
+            path, disposition);
+    }
+
+    lfs::Result<ProjectInfo>
+    VisualizerImpl::projectGetInfo() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<ProjectInfo>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->info();
     }
 
     void VisualizerImpl::performReset() {
@@ -2328,7 +2763,11 @@ namespace lfs::vis {
             performReset();
             break;
         case PendingTrainingAction::NewProject:
-            performNewProject();
+            performNewProject(
+                pending_new_project_disposition_);
+            pending_new_project_disposition_ =
+                ProjectSwitchDisposition::
+                    RequireClean;
             break;
         case PendingTrainingAction::Close:
             requestApplicationClose();
@@ -2339,9 +2778,6 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::requestApplicationClose() {
-        if (gui_manager_) {
-            gui_manager_->setForceExit(true);
-        }
         if (window_manager_) {
             window_manager_->requestClose();
         }
