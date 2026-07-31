@@ -1783,7 +1783,7 @@
     "keyframe_tooltip": "关键帧 @ {}（双击编辑）",
     "playback_time": "播放 {:.2f} 秒",
     "keyframe_preview": "关键帧 {} 预览",
-    "edit_delta": "{:.3f}米  {:.1f}{}"
+    "edit_delta": "{:.3f}m  {:.1f}{}"
   },
   "file_association": {
     "title": "设为默认应用程序",
