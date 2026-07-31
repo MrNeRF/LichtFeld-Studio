@@ -2156,7 +2156,7 @@ namespace lfs::training {
                     ? "PASS"
                     : "FAIL");
             LOG_INFO(
-                "Training snapshot {} CPU chapters in safe point: "
+                "Training snapshot {} CPU value capture in safe point: "
                 "SCNG={:.3f}ms SELM={:.3f}ms PRMS={:.3f}ms total={:.3f}ms",
                 pending->metrics.snapshot_uuid
                     .to_string(),

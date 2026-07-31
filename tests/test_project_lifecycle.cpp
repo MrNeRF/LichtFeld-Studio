@@ -39,6 +39,15 @@ namespace {
             << lfs::format_for_developer(loaded.error());
         EXPECT_TRUE(loaded->reopen_last_project);
         EXPECT_TRUE(loaded->auto_save_on_close);
+        EXPECT_EQ(
+            loaded->autosave_interval_seconds,
+            5u * 60u);
+        EXPECT_EQ(
+            loaded->autosave_dirty_epoch_threshold,
+            20u);
+        EXPECT_EQ(
+            loaded->compaction_idle_seconds,
+            30u);
         EXPECT_TRUE(loaded->mru.empty());
     }
 
@@ -55,6 +64,9 @@ namespace {
         ProjectLifecycleSettings settings;
         settings.reopen_last_project = false;
         settings.auto_save_on_close = false;
+        settings.autosave_interval_seconds = 17;
+        settings.autosave_dirty_epoch_threshold = 9;
+        settings.compaction_idle_seconds = 41;
         rememberProject(
             settings, first_uuid,
             temporary.path / "old" / "first.licht");

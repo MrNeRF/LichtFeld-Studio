@@ -162,9 +162,12 @@ namespace {
             const std::filesystem::path&, bool) override {
             return {};
         }
-        lfs::Result<void> projectOpen(
+        lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
             const std::filesystem::path&,
             lfs::vis::ProjectSwitchDisposition) override {
+            return project_open_outcome;
+        }
+        lfs::Result<void> projectCompact() override {
             return {};
         }
         lfs::Result<lfs::vis::ProjectInfo>
@@ -197,6 +200,9 @@ namespace {
         bool accepts_posted_work = true;
         bool queue_posted_work = false;
         int post_work_calls = 0;
+        lfs::vis::ProjectOpenOutcome
+            project_open_outcome =
+                lfs::vis::ProjectOpenOutcome::Opened;
 
     private:
         lfs::core::Scene scene_;
@@ -867,6 +873,26 @@ result_values = [float(viewport.image.cpu().sum().item())]
     EXPECT_EQ(result.shape[0], 1);
     ASSERT_EQ(result.values.size(), static_cast<size_t>(1));
     EXPECT_GT(result.values[0], 0.0f);
+    EXPECT_EQ(viewer.post_work_calls, 1);
+}
+
+TEST_F(PythonIntegrationTest,
+       ProjectOpenSurfacesRecoveryPromptPendingOutcome) {
+    TestVisualizer viewer;
+    viewer.project_open_outcome =
+        lfs::vis::ProjectOpenOutcome::
+            RecoveryPromptPending;
+    const ScopedVisualizer scoped_viewer(&viewer);
+
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+outcome = lf.project_open("pending.licht", discard_changes=True)
+result_shape = (1,)
+result_values = [1.0 if outcome is lf.ProjectOpenOutcome.RECOVERY_PROMPT_PENDING else 0.0]
+)PY");
+
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
     EXPECT_EQ(viewer.post_work_calls, 1);
 }
 

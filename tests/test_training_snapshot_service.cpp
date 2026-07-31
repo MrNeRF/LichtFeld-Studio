@@ -22,7 +22,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <format>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -105,6 +107,29 @@ namespace {
         std::fill_n(
             result.ptr<std::uint8_t>(), count, value);
         return result;
+    }
+
+    std::shared_ptr<lfs::core::Camera>
+    make_snapshot_test_camera(const int uid) {
+        const auto empty_distortion =
+            lfs::core::Tensor::zeros(
+                {0}, lfs::core::Device::CPU,
+                lfs::core::DataType::Float32);
+        auto camera =
+            std::make_shared<lfs::core::Camera>(
+                lfs::core::Tensor::eye(
+                    3, lfs::core::Device::CPU),
+                lfs::core::Tensor::zeros(
+                    {3}, lfs::core::Device::CPU),
+                1000.0f, 1000.0f, 960.0f, 540.0f,
+                empty_distortion, empty_distortion,
+                lfs::core::CameraModelType::PINHOLE,
+                std::format("camera_{:04}.png", uid),
+                std::filesystem::path{},
+                std::filesystem::path{},
+                1920, 1080, uid, uid);
+        camera->set_image_dimensions(1920, 1080);
+        return camera;
     }
 
     bool cuda_device_available() {
@@ -372,6 +397,8 @@ namespace {
         const auto model_uuid =
             scene.getNodeUuid(model_id);
         ASSERT_FALSE(model_uuid.is_nil());
+        const std::array selected_node_uuids{
+            model_uuid};
         auto* model_node =
             scene.getNodeById(model_id);
         ASSERT_NE(model_node, nullptr);
@@ -401,6 +428,8 @@ namespace {
             lfs::core::generate_uuid_v4();
         lfs::training::ProjectSnapshotChapters
             chapters;
+        lfs::training::ProjectSnapshotCpuState
+            cpu_state;
         lfs::training::TrainingSnapshotCaptureRequest
             request{
                 .iteration = SAVED_ITERATION,
@@ -410,10 +439,11 @@ namespace {
                 .capture_additional_cpu_state =
                     [&](const lfs::core::Uuid& uuid) {
                         return lfs::training::
-                            capture_project_snapshot_cpu_chapters(
+                            capture_project_snapshot_cpu_state(
                                 scene, params, uuid,
                                 SAVED_ITERATION,
-                                chapters);
+                                cpu_state,
+                                selected_node_uuids);
                     },
             };
         auto initialized = service.initialize(request);
@@ -466,6 +496,13 @@ namespace {
         ASSERT_TRUE(pending)
             << lfs::format_for_developer(
                    pending.error());
+        auto materialized =
+            lfs::training::
+                materialize_project_snapshot_cpu_chapters(
+                    std::move(cpu_state), chapters);
+        ASSERT_TRUE(materialized)
+            << lfs::format_for_developer(
+                   materialized.error());
         auto captured = pending->wait();
         ASSERT_TRUE(captured)
             << lfs::format_for_developer(
@@ -530,6 +567,11 @@ namespace {
         EXPECT_EQ(
             chapters.parameters.dataset.images,
             saved_name);
+        EXPECT_EQ(
+            chapters.selection
+                .selected_node_uuids(),
+            std::vector<lfs::core::Uuid>{
+                model_uuid});
 
         const std::string checkpoint_string(
             reinterpret_cast<const char*>(
@@ -549,6 +591,125 @@ namespace {
         EXPECT_TRUE(
             captured->metrics
                 .pause_within_rig_gate);
+    }
+
+    TEST(TrainingSnapshotServiceTest,
+         RepresentativeSceneValueCaptureStaysUnderTenMilliseconds) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+
+        constexpr std::size_t GAUSSIAN_COUNT =
+            1'300'000;
+        constexpr int CAMERA_COUNT = 200;
+        constexpr int SAVED_ITERATION = 42;
+
+        lfs::core::Scene scene;
+        const auto model_id = scene.addSplat(
+            "representative_model",
+            make_snapshot_test_splat(
+                GAUSSIAN_COUNT));
+        ASSERT_NE(model_id, lfs::core::NULL_NODE);
+        scene.setTrainingModelNode(model_id);
+        const auto model_uuid =
+            scene.getNodeUuid(model_id);
+        ASSERT_FALSE(model_uuid.is_nil());
+        const std::array selected_node_uuids{
+            model_uuid};
+
+        const auto camera_group =
+            scene.addGroup("Cameras");
+        for (int index = 0;
+             index < CAMERA_COUNT; ++index) {
+            const auto name =
+                std::format(
+                    "camera_{:04}.png", index);
+            ASSERT_NE(
+                scene.addCamera(
+                    name, camera_group,
+                    make_snapshot_test_camera(index)),
+                lfs::core::NULL_NODE);
+        }
+
+        const auto selection_group =
+            scene.addSelectionGroup(
+                "representative",
+                {0.25f, 0.5f, 0.75f});
+        ASSERT_NE(selection_group, 0);
+        scene.setActiveSelectionGroup(
+            selection_group);
+        scene.applyPerNodeSelectionSlices(
+            lfs::core::SelectionDomain::Splat,
+            {{model_uuid,
+              selection_mask(
+                  GAUSSIAN_COUNT,
+                  selection_group)}});
+
+        auto params =
+            make_snapshot_test_params(
+                GAUSSIAN_COUNT);
+        const auto snapshot_uuid =
+            lfs::core::generate_uuid_v4();
+        lfs::training::ProjectSnapshotCpuState
+            cpu_state;
+        const auto started =
+            std::chrono::steady_clock::now();
+        auto metrics =
+            lfs::training::
+                capture_project_snapshot_cpu_state(
+                    scene, params, snapshot_uuid,
+                    SAVED_ITERATION, cpu_state,
+                    selected_node_uuids);
+        const double capture_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() -
+                started)
+                .count();
+        std::cout
+            << "[ P7 METRIC ] representative CPU value capture: "
+            << capture_ms << " ms (SCNG="
+            << (metrics ? metrics->scng_ms : 0.0)
+            << " ms, SELM="
+            << (metrics ? metrics->selm_ms : 0.0)
+            << " ms, PRMS="
+            << (metrics ? metrics->prms_ms : 0.0)
+            << " ms)\n";
+        ASSERT_TRUE(metrics)
+            << lfs::format_for_developer(
+                   metrics.error());
+        EXPECT_EQ(cpu_state.snapshot_uuid,
+                  snapshot_uuid);
+        EXPECT_EQ(cpu_state.iteration,
+                  SAVED_ITERATION);
+        EXPECT_EQ(
+            cpu_state.scene_graph.nodes.size(),
+            static_cast<std::size_t>(
+                CAMERA_COUNT + 2));
+        EXPECT_LT(capture_ms, 10.0)
+            << "representative safe-point CPU capture "
+            << "SCNG=" << metrics->scng_ms
+            << "ms SELM=" << metrics->selm_ms
+            << "ms PRMS=" << metrics->prms_ms
+            << "ms";
+
+        lfs::training::ProjectSnapshotChapters
+            chapters;
+        auto materialized =
+            lfs::training::
+                materialize_project_snapshot_cpu_chapters(
+                    std::move(cpu_state), chapters);
+        ASSERT_TRUE(materialized)
+            << lfs::format_for_developer(
+                   materialized.error());
+        EXPECT_EQ(chapters.snapshot_uuid,
+                  snapshot_uuid);
+        EXPECT_EQ(chapters.iteration,
+                  SAVED_ITERATION);
+        EXPECT_EQ(
+            chapters.selection
+                .selected_node_uuids(),
+            std::vector<lfs::core::Uuid>{
+                model_uuid});
     }
 
     TEST(TrainingStepRegressionTrackerTest,

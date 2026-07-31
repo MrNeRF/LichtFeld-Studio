@@ -9,6 +9,8 @@
 #include "core/parameters.hpp"
 #include "core/uuid.hpp"
 #include "io/project_chapters.hpp"
+#include "io/project_container.hpp"
+#include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
 #include "io/session_chapters.hpp"
 #include "training_snapshot_service.hpp"
@@ -16,6 +18,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace lfs::core {
     class Scene;
@@ -41,6 +44,16 @@ namespace lfs::training {
         lfs::io::project::SequencerSessionChapter
             sequencer;
         lfs::io::project::MetricsChapter metrics;
+        std::vector<lfs::core::Uuid>
+            selected_node_uuids;
+        lfs::io::project::ParameterManagerSnapshot
+            parameters;
+        lfs::io::project::CommitKind
+            durable_commit_kind =
+                lfs::io::project::CommitKind::Explicit;
+        std::optional<
+            lfs::io::project::WriterLockLease>
+            writer_lock_lease = std::nullopt;
     };
 
     struct ProjectSnapshotChapters {
@@ -53,9 +66,53 @@ namespace lfs::training {
             document_context;
     };
 
-    // Captures all CPU-owned training-project chapters transactionally inside
-    // the optimizer safe-point window. Nothing in `output` is published until
-    // SCNG, SELM, and PRMS have all succeeded for the same UUID/iteration.
+    // Detached source of truth captured inside the optimizer safe-point.
+    // JSON/DOM assembly is deliberately absent; only owned value state and
+    // selection bytes are copied while the optimizer is quiescent.
+    struct ProjectSnapshotCpuState {
+        lfs::core::Uuid snapshot_uuid;
+        int iteration = 0;
+        lfs::io::project::CapturedSceneGraphState
+            scene_graph;
+        lfs::io::project::CapturedSelectionState
+            selection;
+        lfs::io::project::ParameterManagerSnapshot
+            parameters;
+    };
+
+    [[nodiscard]] lfs::Result<TrainingSnapshotCpuStateMetrics>
+    capture_project_snapshot_cpu_state(
+        const lfs::core::Scene& scene,
+        const lfs::io::project::ParameterManagerSnapshot&
+            parameters,
+        const lfs::core::Uuid& snapshot_uuid,
+        int iteration,
+        ProjectSnapshotCpuState& output,
+        std::span<const lfs::core::Uuid>
+            selected_node_uuids = {});
+
+    // Fallback for callers without a live ParameterManager (for example,
+    // headless periodic checkpoint saves). GUI training saves must use the
+    // full role-qualified snapshot overload above.
+    [[nodiscard]] lfs::Result<TrainingSnapshotCpuStateMetrics>
+    capture_project_snapshot_cpu_state(
+        const lfs::core::Scene& scene,
+        const lfs::core::param::TrainingParameters&
+            checkpoint_params,
+        const lfs::core::Uuid& snapshot_uuid,
+        int iteration,
+        ProjectSnapshotCpuState& output,
+        std::span<const lfs::core::Uuid>
+            selected_node_uuids = {});
+
+    // Builds JSON/DOM-backed chapters exclusively from a detached safe-point
+    // copy. This may run after the optimizer is allowed to mutate again.
+    [[nodiscard]] lfs::Result<void>
+    materialize_project_snapshot_cpu_chapters(
+        ProjectSnapshotCpuState state,
+        ProjectSnapshotChapters& output);
+
+    // Convenience wrapper for non-latency-sensitive callers and tests.
     [[nodiscard]] lfs::Result<TrainingSnapshotCpuStateMetrics>
     capture_project_snapshot_cpu_chapters(
         const lfs::core::Scene& scene,

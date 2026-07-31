@@ -10,8 +10,11 @@
 #include "core/services.hpp"
 #include "input/input_controller.hpp"
 #include "io/project_document.hpp"
+#include "io/project_recovery.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "training/components/ppisp_file.hpp"
+#include "training/trainer.hpp"
 #include "visualizer/core/data_loading_service.hpp"
 #include "visualizer/include/visualizer/visualizer.hpp"
 #include "visualizer/post_work_utils.hpp"
@@ -19,12 +22,14 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <gtest/gtest.h>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -93,9 +98,12 @@ namespace {
             const std::filesystem::path&, bool) override {
             return {};
         }
-        lfs::Result<void> projectOpen(
+        lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
             const std::filesystem::path&,
             lfs::vis::ProjectSwitchDisposition) override {
+            return lfs::vis::ProjectOpenOutcome::Opened;
+        }
+        lfs::Result<void> projectCompact() override {
             return {};
         }
         lfs::Result<lfs::vis::ProjectInfo>
@@ -247,6 +255,31 @@ namespace {
         ASSERT_TRUE(out.good()) << "Failed to write " << path;
     }
 
+    bool cuda_device_available() {
+        int count = 0;
+        return cudaGetDeviceCount(&count) ==
+                   cudaSuccess &&
+               count > 0;
+    }
+
+    std::shared_ptr<lfs::core::Camera>
+    make_project_request_test_camera() {
+        const auto empty_distortion =
+            lfs::core::Tensor::zeros(
+                {0}, lfs::core::Device::CPU,
+                lfs::core::DataType::Float32);
+        return std::make_shared<lfs::core::Camera>(
+            lfs::core::Tensor::eye(
+                3, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros(
+                {3}, lfs::core::Device::CPU),
+            100.0F, 100.0F, 32.0F, 32.0F,
+            empty_distortion, empty_distortion,
+            lfs::core::CameraModelType::PINHOLE,
+            "camera.png", std::filesystem::path{},
+            std::filesystem::path{}, 64, 64, 0);
+    }
+
     void write_minimal_transforms_dataset(const std::filesystem::path& dataset_path) {
         write_png(dataset_path / "frame_0001.png");
         write_text_file(
@@ -318,6 +351,103 @@ namespace {
         ASSERT_TRUE(saved)
             << lfs::format_for_developer(
                    saved.error());
+    }
+
+    void write_recoverable_project(
+        const std::filesystem::path& path,
+        const std::string& marker =
+            "autosaved",
+        lfs::core::Uuid* checkpoint_uuid_out =
+            nullptr) {
+        write_empty_project(path);
+        auto document =
+            lfs::io::project::ProjectDocument::open(
+                path);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        const auto payload_uuid =
+            lfs::core::generate_uuid_v4();
+        const lfs::training::PPISPFileHeader header{
+            .num_cameras = 1,
+            .num_frames = 1,
+        };
+        std::vector<std::byte> payload_bytes(
+            sizeof(header));
+        std::memcpy(payload_bytes.data(), &header,
+                    sizeof(header));
+        auto payload =
+            lfs::io::project::LazyChunkValue::
+                from_owned(
+                    std::move(payload_bytes),
+                    payload_uuid);
+        ASSERT_TRUE(payload)
+            << lfs::format_for_developer(
+                   payload.error());
+        ASSERT_TRUE(document->set_ppisp(
+            payload_uuid, std::move(*payload)));
+        auto checkpoint_saved = document->save(
+            path,
+            lfs::io::project::
+                ProjectDocumentSaveOptions{
+                    .commit =
+                        {
+                            .kind =
+                                lfs::io::project::
+                                    CommitKind::Explicit,
+                            .commit_uuid =
+                                lfs::core::
+                                    generate_uuid_v4(),
+                            .snapshot_uuid = {},
+                            .wallclock_unix_ns = 3,
+                        },
+                    .file_uuid =
+                        lfs::core::generate_uuid_v4(),
+                    .index_compression =
+                        lfs::io::project::
+                            IndexCompression::
+                                StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                });
+        ASSERT_TRUE(checkpoint_saved)
+            << lfs::format_for_developer(
+                   checkpoint_saved.error());
+        auto base =
+            lfs::io::project::ProjectReader::open(
+                path);
+        ASSERT_TRUE(base)
+            << lfs::format_for_developer(
+                   base.error());
+        const auto updated =
+            document->edit_view().dom().set(
+                "recovery_marker", marker);
+        ASSERT_TRUE(updated)
+            << lfs::format_for_developer(
+                   updated.error());
+        auto saved = document->save_autosave(
+            lfs::io::project::
+                autosave_sidecar_path(path),
+            {
+                .file_uuid =
+                    lfs::core::generate_uuid_v4(),
+                .base_explicit_commit_uuid =
+                    base->commit().commit_uuid,
+                .autosave_sequence = 1,
+                .snapshot_uuid =
+                    lfs::core::generate_uuid_v4(),
+                .index_compression =
+                    lfs::io::project::
+                        IndexCompression::
+                            StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(
+                   saved.error());
+        if (checkpoint_uuid_out) {
+            *checkpoint_uuid_out =
+                payload_uuid;
+        }
     }
 
     void write_invalid_phase_a_project(
@@ -479,6 +609,1456 @@ namespace lfs::vis {
         std::error_code ignored;
         std::filesystem::remove_all(
             temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-recovery-decline-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto project_path =
+            temporary / "decline.licht";
+        const auto other_path =
+            temporary / "other.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_recoverable_project(project_path);
+        write_empty_project(other_path);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui =
+                viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            gui->rml_modal_overlay_ =
+                std::make_unique<
+                    gui::RmlModalOverlay>(
+                    &gui->rmlui_manager_);
+
+            auto before_prompt =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(before_prompt);
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(*pending,
+                      ProjectOpenOutcome::
+                          RecoveryPromptPending);
+            auto still_pending = viewer.projectOpen(
+                other_path,
+                ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(still_pending);
+            EXPECT_EQ(*still_pending,
+                      ProjectOpenOutcome::
+                          RecoveryPromptPending);
+            auto while_pending =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(while_pending);
+            EXPECT_EQ(while_pending->path,
+                      before_prompt->path);
+            EXPECT_EQ(while_pending->project_uuid,
+                      before_prompt->project_uuid);
+            lfs::core::ModalRequest request;
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                ASSERT_EQ(overlay.queue_.size(),
+                          1u);
+                request = std::move(
+                    overlay.queue_.front());
+                overlay.queue_.pop_front();
+            }
+            ASSERT_EQ(
+                request.title,
+                "Recover Autosaved Project?");
+            ASSERT_TRUE(request.on_cancel);
+            request.on_cancel();
+            auto after_cancel =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(after_cancel);
+            EXPECT_EQ(after_cancel->path,
+                      before_prompt->path);
+            EXPECT_EQ(after_cancel->project_uuid,
+                      before_prompt->project_uuid);
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->recovery_prompt_pending_);
+            EXPECT_EQ(viewer.project_lifecycle_
+                          ->autosave_sequence_,
+                      before_prompt
+                          ->autosave_sequence);
+
+            pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(*pending,
+                      ProjectOpenOutcome::
+                          RecoveryPromptPending);
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                ASSERT_EQ(overlay.queue_.size(),
+                          1u);
+                request = std::move(
+                    overlay.queue_.front());
+                overlay.queue_.pop_front();
+            }
+            ASSERT_TRUE(request.on_result);
+            request.on_result(
+                lfs::core::ModalResult{
+                    .button_label =
+                        "Open Saved"});
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+
+            auto reopened = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(reopened);
+            EXPECT_EQ(*reopened,
+                      ProjectOpenOutcome::Opened);
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                EXPECT_TRUE(
+                    overlay.queue_.empty());
+            }
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Explicit after decline"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(
+                viewer.projectSave(false));
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       deadline) {
+                std::vector<Visualizer::WorkItem>
+                    work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_FALSE(
+                std::filesystem::exists(sidecar));
+            auto master =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(master);
+            EXPECT_EQ(master->commit().kind,
+                      lfs::io::project::
+                          CommitKind::Explicit);
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RecoveredPublishUsesRecoveredCommitKind) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-recovered-commit-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto project_path =
+            temporary / "recover.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_recoverable_project(project_path);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            auto* const gui =
+                viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            gui->rml_modal_overlay_ =
+                std::make_unique<
+                    gui::RmlModalOverlay>(
+                    &gui->rmlui_manager_);
+
+            auto pending = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges);
+            ASSERT_TRUE(pending);
+            EXPECT_EQ(*pending,
+                      ProjectOpenOutcome::
+                          RecoveryPromptPending);
+            lfs::core::ModalRequest request;
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                ASSERT_EQ(overlay.queue_.size(),
+                          1u);
+                request = std::move(
+                    overlay.queue_.front());
+                overlay.queue_.pop_front();
+            }
+            ASSERT_TRUE(request.on_result);
+            request.on_result(
+                lfs::core::ModalResult{
+                    .button_label = "Recover"});
+            auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            EXPECT_TRUE(info->recovery_session);
+            ASSERT_TRUE(
+                std::filesystem::remove(sidecar));
+            ASSERT_TRUE(
+                std::filesystem::create_directory(
+                    sidecar));
+            {
+                std::ofstream blocker(
+                    sidecar / "cleanup-blocker");
+                ASSERT_TRUE(blocker);
+                blocker << "force post-publish cleanup warning";
+            }
+            ASSERT_TRUE(
+                viewer.projectSave(false));
+
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       deadline) {
+                std::vector<Visualizer::WorkItem>
+                    work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            auto master =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(master)
+                << lfs::format_for_developer(
+                       master.error());
+            EXPECT_EQ(master->commit().kind,
+                      lfs::io::project::
+                          CommitKind::Recovered);
+            auto saved_info = viewer.projectGetInfo();
+            ASSERT_TRUE(saved_info);
+            EXPECT_TRUE(
+                saved_info->project_write_error.empty());
+            EXPECT_TRUE(
+                std::filesystem::is_directory(
+                    sidecar));
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RecoveredProjectSwitchDeletesTempOnlyAfterReplacement) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-recovery-switch-" +
+             lfs::core::generate_uuid_v4().to_string());
+        std::filesystem::create_directories(temporary);
+        const auto recovered_path =
+            temporary / "recovered.licht";
+        const auto replacement_path =
+            temporary / "replacement.licht";
+        lfs::core::Uuid checkpoint_uuid;
+        write_recoverable_project(
+            recovered_path, "switch",
+            &checkpoint_uuid);
+        write_empty_project(replacement_path);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            gui->rml_modal_overlay_ =
+                std::make_unique<gui::RmlModalOverlay>(
+                    &gui->rmlui_manager_);
+            auto offered = viewer.projectOpen(
+                recovered_path,
+                ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(offered);
+            ASSERT_EQ(*offered,
+                      ProjectOpenOutcome::
+                          RecoveryPromptPending);
+            lfs::core::ModalRequest request;
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                ASSERT_EQ(overlay.queue_.size(), 1u);
+                request = std::move(
+                    overlay.queue_.front());
+                overlay.queue_.pop_front();
+            }
+            request.on_result({.button_label = "Recover"});
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_path_);
+            const auto recovery_temp =
+                *viewer.project_lifecycle_
+                     ->recovery_session_path_;
+            ASSERT_TRUE(std::filesystem::is_regular_file(
+                recovery_temp));
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_);
+            EXPECT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_
+                            ->document_attached());
+
+            const auto* checkpoint =
+                viewer.project_lifecycle_
+                    ->document_->find_ppisp(
+                        checkpoint_uuid);
+            ASSERT_NE(checkpoint, nullptr);
+            std::array<std::byte, 4> marker{};
+            auto read = checkpoint->read_at(0, marker);
+            ASSERT_TRUE(read)
+                << lfs::format_for_developer(
+                       read.error());
+            EXPECT_EQ(marker[0], std::byte{0x49});
+
+            auto switched = viewer.projectOpen(
+                replacement_path,
+                ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(switched)
+                << lfs::format_for_developer(
+                       switched.error());
+            EXPECT_EQ(*switched,
+                      ProjectOpenOutcome::Opened);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->document_->source_path());
+            EXPECT_EQ(viewer.project_lifecycle_
+                          ->document_->source_path()
+                          ->lexically_normal(),
+                      replacement_path.lexically_normal());
+            EXPECT_FALSE(std::filesystem::exists(
+                recovery_temp));
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->recovery_session_);
+        }
+        std::error_code ignored;
+        std::filesystem::remove_all(temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           FailedNewProjectKeepsRecoveredSessionTemp) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-recovery-new-fail-" +
+             lfs::core::generate_uuid_v4().to_string());
+        std::filesystem::create_directories(temporary);
+        const auto project_path =
+            temporary / "recovered.licht";
+        lfs::core::Uuid checkpoint_uuid;
+        write_recoverable_project(
+            project_path, "failed-new",
+            &checkpoint_uuid);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            gui->rml_modal_overlay_ =
+                std::make_unique<gui::RmlModalOverlay>(
+                    &gui->rmlui_manager_);
+            auto offered = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(offered)
+                << lfs::format_for_developer(
+                       offered.error());
+            ASSERT_EQ(*offered,
+                      ProjectOpenOutcome::
+                          RecoveryPromptPending);
+            lfs::core::ModalRequest request;
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                request = std::move(
+                    overlay.queue_.front());
+                overlay.queue_.pop_front();
+            }
+            request.on_result({.button_label = "Recover"});
+            const auto recovery_temp =
+                *viewer.project_lifecycle_
+                     ->recovery_session_path_;
+            auto data_loader =
+                std::move(viewer.data_loader_);
+            auto failed = viewer.project_lifecycle_
+                              ->newProject(
+                                  ProjectSwitchDisposition::
+                                      DiscardChanges);
+            viewer.data_loader_ =
+                std::move(data_loader);
+            ASSERT_FALSE(failed);
+            EXPECT_TRUE(std::filesystem::is_regular_file(
+                recovery_temp));
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_);
+            EXPECT_TRUE(viewer.project_lifecycle_
+                            ->recovery_session_
+                            ->document_attached());
+            const auto* checkpoint =
+                viewer.project_lifecycle_
+                    ->document_->find_ppisp(
+                        checkpoint_uuid);
+            ASSERT_NE(checkpoint, nullptr);
+            std::array<std::byte, 4> marker{};
+            ASSERT_TRUE(checkpoint->read_at(0, marker));
+            EXPECT_EQ(marker[0], std::byte{0x49});
+        }
+        std::error_code ignored;
+        std::filesystem::remove_all(temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           RecoveredCloseDeletesTempAfterDocumentTeardown) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-recovery-close-" +
+             lfs::core::generate_uuid_v4().to_string());
+        std::filesystem::create_directories(temporary);
+        const auto project_path =
+            temporary / "recovered.licht";
+        write_recoverable_project(
+            project_path, "close");
+        std::filesystem::path recovery_temp;
+        {
+            ViewerOptions options;
+            options.show_startup_overlay = false;
+            options.project_lifecycle_settings_path =
+                temporary / "lifecycle.json";
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
+            gui->rml_modal_overlay_ =
+                std::make_unique<gui::RmlModalOverlay>(
+                    &gui->rmlui_manager_);
+            auto offered = viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges);
+            ASSERT_TRUE(offered)
+                << lfs::format_for_developer(
+                       offered.error());
+            ASSERT_EQ(*offered,
+                      ProjectOpenOutcome::
+                          RecoveryPromptPending);
+            lfs::core::ModalRequest request;
+            {
+                auto& overlay =
+                    *gui->rml_modal_overlay_;
+                std::lock_guard lock(
+                    overlay.queue_mutex_);
+                request = std::move(
+                    overlay.queue_.front());
+                overlay.queue_.pop_front();
+            }
+            request.on_result({.button_label = "Recover"});
+            recovery_temp =
+                *viewer.project_lifecycle_
+                     ->recovery_session_path_;
+            ASSERT_TRUE(std::filesystem::is_regular_file(
+                recovery_temp));
+        }
+        EXPECT_FALSE(std::filesystem::exists(
+            recovery_temp));
+        std::error_code ignored;
+        std::filesystem::remove_all(temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           AutosaveStartsAfterFirstSaveAsWithoutReopen) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-autosave-first-save-as-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto project_path =
+            temporary / "first-save.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(
+                viewer.getParameterManager()
+                    ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr,
+                    viewer.getViewport());
+            auto untitled = viewer.projectGetInfo();
+            ASSERT_TRUE(untitled);
+            ASSERT_EQ(untitled->hydration_state,
+                      "empty");
+            ASSERT_FALSE(untitled->path.has_value());
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_EQ(viewer.project_lifecycle_
+                          ->autosave_sequence_,
+                      0u);
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "First explicit save"),
+                lfs::core::NULL_NODE);
+            auto saved = viewer.projectSaveAs(
+                project_path, false);
+            ASSERT_TRUE(saved)
+                << lfs::format_for_developer(
+                       saved.error());
+            const auto save_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       save_deadline) {
+                std::vector<Visualizer::WorkItem>
+                    work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(
+                        viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            ASSERT_FALSE(
+                viewer.jobs().anyRunning(
+                    JobType::ProjectWrite));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    project_path));
+            auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            EXPECT_EQ(info->hydration_state,
+                      "empty");
+
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty after first save"),
+                lfs::core::NULL_NODE);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            const auto autosave_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       autosave_deadline) {
+                std::vector<Visualizer::WorkItem>
+                    work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(
+                        viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            EXPECT_FALSE(
+                viewer.jobs().anyRunning(
+                    JobType::ProjectWrite));
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           AutosaveSkipsWhileManualProjectWriteJobIsRunning) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-autosave-exclusive-" +
+             lfs::core::generate_uuid_v4()
+                 .to_string());
+        std::filesystem::create_directories(
+            temporary);
+        const auto project_path =
+            temporary / "exclusive.licht";
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(project_path);
+        write_empty_project(project_path);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::
+                    DiscardChanges));
+            const auto hydration_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (std::chrono::steady_clock::now() <
+                   hydration_deadline) {
+                std::vector<Visualizer::WorkItem>
+                    work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                auto info = viewer.projectGetInfo();
+                ASSERT_TRUE(info);
+                if (info->hydration_state ==
+                    "complete") {
+                    break;
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            auto hydrated =
+                viewer.projectGetInfo();
+            ASSERT_TRUE(hydrated);
+            ASSERT_EQ(hydrated->hydration_state,
+                      "complete");
+            ASSERT_NE(
+                viewer.getScene().addGroup(
+                    "Dirty for autosave"),
+                lfs::core::NULL_NODE);
+
+            auto manual = viewer.jobs().init(
+                JobType::ProjectWrite,
+                "Manual save held open");
+            ASSERT_TRUE(manual);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            EXPECT_FALSE(
+                std::filesystem::exists(sidecar));
+            EXPECT_TRUE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->project_write_job_
+                             .has_value());
+
+            std::jthread worker([&] {
+                viewer.jobs().work(*manual);
+                viewer.jobs().finishWork(
+                    *manual, false);
+            });
+            worker.join();
+            auto completion =
+                viewer.jobs().update(*manual);
+            ASSERT_TRUE(completion);
+            ASSERT_EQ(
+                completion->status,
+                JobStatus::CompletionPending);
+            viewer.jobs().completed(*manual);
+            viewer.jobs().free(*manual);
+
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startAutosave());
+            const auto autosave_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       autosave_deadline) {
+                std::vector<Visualizer::WorkItem>
+                    work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_TRUE(
+                std::filesystem::is_regular_file(
+                    sidecar));
+        }
+
+        std::error_code ignored;
+        std::filesystem::remove_all(
+            temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ProjectWriteSettlementCompletesBeforeNextDocumentWrite) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-settle-order-" +
+             lfs::core::generate_uuid_v4().to_string());
+        std::filesystem::create_directories(temporary);
+        const auto first_path =
+            temporary / "first.licht";
+        const auto second_path =
+            temporary / "second.licht";
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            viewer.input_controller_ =
+                std::make_unique<InputController>(
+                    nullptr, viewer.getViewport());
+            ASSERT_NE(viewer.getScene().addGroup(
+                          "Settlement ordering"),
+                      lfs::core::NULL_NODE);
+            std::vector<std::string> sequence;
+            ASSERT_TRUE(viewer.projectSaveAs(
+                first_path, false));
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->project_write_job_);
+            const auto first_job =
+                *viewer.project_lifecycle_
+                     ->project_write_job_;
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (std::chrono::steady_clock::now() <
+                   deadline) {
+                const auto snapshot =
+                    viewer.jobs().peek(first_job);
+                if (snapshot &&
+                    snapshot->status ==
+                        JobStatus::CompletionPending) {
+                    break;
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            auto pending =
+                viewer.jobs().peek(first_job);
+            ASSERT_TRUE(pending);
+            ASSERT_EQ(pending->status,
+                      JobStatus::CompletionPending);
+            sequence.emplace_back(
+                "settlement_queued");
+
+            auto blocked = viewer.projectSaveAs(
+                second_path, false);
+            ASSERT_FALSE(blocked);
+            sequence.emplace_back(
+                "new_write_blocked");
+
+            std::vector<Visualizer::WorkItem> work;
+            {
+                std::lock_guard lock(
+                    viewer.work_queue_mutex_);
+                work.swap(viewer.work_queue_);
+            }
+            for (auto& item : work) {
+                if (item.run) {
+                    item.run();
+                }
+            }
+            ASSERT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            sequence.emplace_back("settled");
+
+            ASSERT_TRUE(viewer.projectSaveAs(
+                second_path, false));
+            sequence.emplace_back(
+                "new_write_started");
+            const auto second_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       second_deadline) {
+                work.clear();
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_EQ(sequence,
+                      (std::vector<std::string>{
+                          "settlement_queued",
+                          "new_write_blocked",
+                          "settled",
+                          "new_write_started"}));
+        }
+        std::error_code ignored;
+        std::filesystem::remove_all(temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           TrainingSnapshotCleanupTerminalizesProjectWrite) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-request-cleanup-" +
+             lfs::core::generate_uuid_v4().to_string());
+        std::filesystem::create_directories(temporary);
+        const auto project_path =
+            temporary / "cleanup.licht";
+        write_empty_project(project_path);
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()
+                            ->ensureLoaded());
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges));
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Request cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Request model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            ASSERT_NE(trainer, nullptr);
+            auto base =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(base);
+            const auto request_id =
+                trainer->request_project_autosave(
+                    project_path,
+                    base->commit().commit_uuid, 1);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startTrainingWrite(
+                                project::ProjectLifecycle::
+                                    ProjectWritePurpose::
+                                        TrainingAutosave,
+                                request_id,
+                                project_path,
+                                viewer.project_lifecycle_
+                                    ->document_->dirty_epoch(),
+                                1));
+            viewer.project_lifecycle_
+                ->project_write_autosave_sequence_ = 1;
+
+            trainer->cleanup();
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(2);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       deadline) {
+                std::vector<Visualizer::WorkItem> work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_EQ(viewer.project_lifecycle_
+                          ->autosave_sequence_,
+                      0u);
+            const auto metrics =
+                trainer->get_project_snapshot_metrics();
+            EXPECT_GE(metrics.last_failed_request_id,
+                      request_id);
+
+            scene.setTrainingModelNode(
+                lfs::core::NULL_NODE);
+            ASSERT_NE(scene.addGroup(
+                          "Explicit after cleanup"),
+                      lfs::core::NULL_NODE);
+            auto explicit_save =
+                viewer.projectSave(false);
+            ASSERT_TRUE(explicit_save)
+                << lfs::format_for_developer(
+                       explicit_save.error());
+            const auto save_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       save_deadline) {
+                std::vector<Visualizer::WorkItem> work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            EXPECT_TRUE(info->project_write_error.empty());
+        }
+        std::error_code ignored;
+        std::filesystem::remove_all(temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           TrainingSnapshotPrepareFailureTerminalizesProjectWrite) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-request-prepare-" +
+             lfs::core::generate_uuid_v4().to_string());
+        std::filesystem::create_directories(temporary);
+        const auto project_path =
+            temporary / "prepare.licht";
+        write_empty_project(project_path);
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges));
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Prepare cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Prepare model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            auto base =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(base);
+            const auto request_id =
+                trainer->request_project_autosave(
+                    project_path,
+                    base->commit().commit_uuid, 1);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startTrainingWrite(
+                                project::ProjectLifecycle::
+                                    ProjectWritePurpose::
+                                        TrainingAutosave,
+                                request_id,
+                                project_path, 0, 0));
+
+            std::filesystem::path dequeued_path;
+            std::vector<std::byte> preview;
+            lfs::training::Trainer::
+                ProjectSnapshotWriteKind write_kind;
+            lfs::core::Uuid base_uuid;
+            std::uint64_t sequence = 0;
+            {
+                std::lock_guard lock(
+                    trainer->project_snapshot_mutex_);
+                dequeued_path = std::move(
+                    *trainer->requested_project_path_);
+                trainer->requested_project_path_.reset();
+                preview = std::move(
+                    trainer->requested_project_preview_png_);
+                trainer->requested_project_request_id_.reset();
+                write_kind = std::exchange(
+                    trainer->requested_project_write_kind_,
+                    lfs::training::Trainer::
+                        ProjectSnapshotWriteKind::Explicit);
+                base_uuid = std::exchange(
+                    trainer->requested_project_base_commit_uuid_,
+                    lfs::core::Uuid{});
+                sequence = std::exchange(
+                    trainer->requested_project_autosave_sequence_,
+                    0);
+            }
+            trainer->prepare_project_snapshot_at_safe_point(
+                0, dequeued_path, std::move(preview),
+                request_id, write_kind, base_uuid,
+                sequence);
+
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(2);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       deadline) {
+                std::vector<Visualizer::WorkItem> work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_GE(trainer->get_project_snapshot_metrics()
+                          .last_failed_request_id,
+                      request_id);
+
+            scene.setTrainingModelNode(
+                lfs::core::NULL_NODE);
+            ASSERT_NE(scene.addGroup(
+                          "Explicit after prepare failure"),
+                      lfs::core::NULL_NODE);
+            auto explicit_save =
+                viewer.projectSave(false);
+            ASSERT_TRUE(explicit_save)
+                << lfs::format_for_developer(
+                       explicit_save.error());
+            const auto save_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       save_deadline) {
+                std::vector<Visualizer::WorkItem> work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            auto info = viewer.projectGetInfo();
+            ASSERT_TRUE(info);
+            EXPECT_TRUE(
+                info->project_write_error.empty());
+        }
+        std::error_code ignored;
+        std::filesystem::remove_all(temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-request-supersede-" +
+             lfs::core::generate_uuid_v4().to_string());
+        std::filesystem::create_directories(temporary);
+        const auto project_path =
+            temporary / "supersede.licht";
+        write_empty_project(project_path);
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges));
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Supersede cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Supersede model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            auto base =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(base);
+            const auto first_id =
+                trainer->request_project_autosave(
+                    project_path,
+                    base->commit().commit_uuid, 1);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startTrainingWrite(
+                                project::ProjectLifecycle::
+                                    ProjectWritePurpose::
+                                        TrainingAutosave,
+                                first_id,
+                                project_path, 0, 0));
+            const auto second_id =
+                trainer->request_project_autosave(
+                    project_path,
+                    base->commit().commit_uuid, 2);
+            ASSERT_GT(second_id, first_id);
+
+            auto drain = [&] {
+                const auto deadline =
+                    std::chrono::steady_clock::now() +
+                    std::chrono::seconds(2);
+                while (viewer.jobs().anyRunning(
+                           JobType::ProjectWrite) &&
+                       std::chrono::steady_clock::now() <
+                           deadline) {
+                    std::vector<Visualizer::WorkItem> work;
+                    {
+                        std::lock_guard lock(
+                            viewer.work_queue_mutex_);
+                        work.swap(viewer.work_queue_);
+                    }
+                    for (auto& item : work) {
+                        if (item.run) {
+                            item.run();
+                        }
+                    }
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(2));
+                }
+            };
+            drain();
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_GE(trainer->get_project_snapshot_metrics()
+                          .last_failed_request_id,
+                      first_id);
+
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startTrainingWrite(
+                                project::ProjectLifecycle::
+                                    ProjectWritePurpose::
+                                        TrainingAutosave,
+                                second_id,
+                                project_path, 0, 0));
+            viewer.project_lifecycle_
+                ->project_write_autosave_sequence_ = 2;
+            {
+                std::lock_guard lock(
+                    trainer->project_snapshot_mutex_);
+                trainer->last_completed_project_request_id_ =
+                    std::max(
+                        trainer->last_completed_project_request_id_,
+                        second_id);
+                trainer->last_project_writer_error_.clear();
+                trainer->requested_project_path_.reset();
+                trainer->requested_project_request_id_.reset();
+                trainer->prestaged_project_chapters_.reset();
+                trainer->prestaged_project_request_id_ = 0;
+            }
+            drain();
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            EXPECT_GE(trainer->get_project_snapshot_metrics()
+                          .last_completed_request_id,
+                      second_id);
+            EXPECT_EQ(viewer.project_lifecycle_
+                          ->autosave_sequence_,
+                      2u);
+        }
+        std::error_code ignored;
+        std::filesystem::remove_all(temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           TrainingSnapshotCancelTerminalizesBeforeSettlement) {
+        const auto temporary =
+            std::filesystem::temp_directory_path() /
+            ("lfs-p7-request-cancel-" +
+             lfs::core::generate_uuid_v4().to_string());
+        std::filesystem::create_directories(temporary);
+        const auto project_path =
+            temporary / "cancel.licht";
+        write_empty_project(project_path);
+
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary / "lifecycle.json";
+        {
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.projectOpen(
+                project_path,
+                ProjectSwitchDisposition::DiscardChanges));
+            auto& scene = viewer.getScene();
+            const auto cameras =
+                scene.addGroup("Canceled snapshot cameras");
+            scene.addCamera(
+                "camera.png", cameras,
+                make_project_request_test_camera());
+            const auto model =
+                scene.addGroup("Canceled snapshot model");
+            scene.setTrainingModelNode(model);
+            viewer.getTrainerManager()->setTrainer(
+                std::make_unique<
+                    lfs::training::Trainer>(scene));
+            auto* const trainer = viewer.getTrainer();
+            auto base =
+                lfs::io::project::ProjectReader::open(
+                    project_path);
+            ASSERT_TRUE(base)
+                << lfs::format_for_developer(
+                       base.error());
+            const auto request_id =
+                trainer->request_project_autosave(
+                    project_path,
+                    base->commit().commit_uuid, 1);
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->startTrainingWrite(
+                                project::ProjectLifecycle::
+                                    ProjectWritePurpose::
+                                        TrainingAutosave,
+                                request_id,
+                                project_path, 0, 0));
+            ASSERT_TRUE(viewer.project_lifecycle_
+                            ->project_write_job_);
+            const auto handle =
+                *viewer.project_lifecycle_
+                     ->project_write_job_;
+            viewer.jobs().requestCancel(handle);
+
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(2);
+            while (viewer.project_lifecycle_
+                       ->project_write_job_ &&
+                   std::chrono::steady_clock::now() <
+                       deadline) {
+                std::vector<Visualizer::WorkItem>
+                    work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+
+            EXPECT_FALSE(viewer.project_lifecycle_
+                             ->project_write_job_);
+            EXPECT_FALSE(viewer.jobs().peek(handle));
+            EXPECT_FALSE(viewer.jobs().anyRunning(
+                JobType::ProjectWrite));
+            const auto metrics =
+                trainer->get_project_snapshot_metrics();
+            EXPECT_GE(metrics.last_failed_request_id,
+                      request_id);
+            EXPECT_NE(metrics.last_writer_error.find(
+                          "Cancelled"),
+                      std::string::npos);
+        }
+        std::error_code ignored;
+        std::filesystem::remove_all(temporary, ignored);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           ImportWorkerFailureSettlesFailed) {
+        ViewerOptions options;
+        options.show_startup_overlay = false;
+        VisualizerImpl viewer(options);
+        auto* const gui = viewer.getGuiManager();
+        ASSERT_NE(gui, nullptr);
+        auto& tasks = gui->asyncTasks();
+        const auto handle = viewer.jobs().init(
+            JobType::Import, "Loading test dataset");
+        ASSERT_TRUE(handle);
+        tasks.import_state_.job = *handle;
+        {
+            const std::lock_guard lock(
+                tasks.import_state_.mutex);
+            tasks.import_state_.success = false;
+        }
+
+        std::jthread worker([&] {
+            viewer.jobs().work(*handle);
+            viewer.jobs().report(
+                *handle, std::nullopt, "Failed",
+                "injected import failure");
+            viewer.jobs().finishWork(
+                *handle, false,
+                "injected import failure");
+        });
+        worker.join();
+        tasks.import_state_.load_complete.store(
+            true, std::memory_order_release);
+        tasks.checkAsyncImportCompletion();
+
+        const auto failed =
+            viewer.jobs().update(*handle);
+        ASSERT_TRUE(failed);
+        EXPECT_EQ(failed->status,
+                  JobStatus::Failed);
+        EXPECT_FALSE(failed->running());
+        EXPECT_FALSE(viewer.jobs().anyRunning(
+            JobType::Import));
+        EXPECT_EQ(failed->error,
+                  "injected import failure");
+        viewer.jobs().free(*handle);
+        tasks.import_state_.job = {};
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -881,6 +2461,34 @@ namespace lfs::vis {
             ASSERT_TRUE(initial_save)
                 << lfs::format_for_developer(
                        initial_save.error());
+            const auto initial_save_deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::seconds(10);
+            while (viewer.jobs().anyRunning(
+                       JobType::ProjectWrite) &&
+                   std::chrono::steady_clock::now() <
+                       initial_save_deadline) {
+                std::vector<Visualizer::WorkItem>
+                    work;
+                {
+                    std::lock_guard lock(
+                        viewer.work_queue_mutex_);
+                    work.swap(viewer.work_queue_);
+                }
+                for (auto& item : work) {
+                    if (item.run) {
+                        item.run();
+                    }
+                }
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(2));
+            }
+            ASSERT_FALSE(
+                viewer.jobs().anyRunning(
+                    JobType::ProjectWrite));
+            ASSERT_TRUE(
+                std::filesystem::is_regular_file(
+                    project_path));
             std::filesystem::rename(
                 project_path, backup_path);
             std::filesystem::create_directory(

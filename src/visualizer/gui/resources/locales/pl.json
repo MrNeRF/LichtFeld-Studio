@@ -7,6 +7,7 @@
     "file.open_recent": "Ostatnie projekty",
     "file.save_project": "Zapisz projekt",
     "file.save_project_as": "Zapisz projekt jako...",
+    "file.compact_project": "Kompaktuj projekt",
     "file.reopen_last_project": "Otwórz ponownie ostatni projekt",
     "file.auto_save_on_close": "Automatycznie zapisuj przy zamykaniu",
     "file.no_recent_projects": "Brak ostatnich projektów",

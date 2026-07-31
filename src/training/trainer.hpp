@@ -14,6 +14,7 @@
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "dataset.hpp"
+#include "io/project_recovery.hpp"
 #include "kernels/depth_loss.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "losses/photometric_loss.hpp"
@@ -43,6 +44,12 @@
 namespace lfs::core {
     class Scene;
 }
+
+namespace lfs::vis {
+    class VisualizerImplResetTest_TrainingSnapshotCleanupTerminalizesProjectWrite_Test;
+    class VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
+    class VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
+} // namespace lfs::vis
 
 namespace lfs::training {
     class AdamOptimizer;
@@ -120,6 +127,20 @@ namespace lfs::training {
             bool step_regression_gate_evaluated = false;
             bool step_regression_within_gate = false;
             bool writer_in_flight = false;
+            bool request_pending = false;
+            std::uint64_t
+                last_completed_request_id = 0;
+            std::uint64_t
+                last_failed_request_id = 0;
+            std::uint64_t
+                last_autosave_sequence = 0;
+            bool last_completed_was_autosave =
+                false;
+        };
+
+        enum class ProjectSnapshotWriteKind {
+            Explicit,
+            Autosave,
         };
 
         // Legacy constructor - takes ownership of strategy and shares datasets
@@ -160,11 +181,30 @@ namespace lfs::training {
         // Control methods for GUI interaction
         void request_pause() { pause_requested_ = true; }
         void request_resume() { pause_requested_ = false; }
-        void request_project_save(
+        [[nodiscard]] std::uint64_t
+        request_project_save(
             std::filesystem::path path = {},
             std::vector<std::byte> preview_png = {},
             std::optional<ProjectSnapshotDocumentContext>
                 document_context = std::nullopt);
+        [[nodiscard]] std::uint64_t
+        request_project_autosave(
+            std::filesystem::path master_path,
+            lfs::core::Uuid
+                base_explicit_commit_uuid,
+            std::uint64_t autosave_sequence,
+            std::optional<
+                ProjectSnapshotDocumentContext>
+                document_context =
+                    std::nullopt);
+        void cancel_project_snapshot_request(
+            std::uint64_t request_id,
+            const lfs::Error& reason);
+        void set_recovery_session(
+            lfs::io::project::RecoverySession session) {
+            recovery_session_.emplace(
+                std::move(session));
+        }
         void request_stop() { stop_requested_ = true; }
 
         bool is_paused() const { return is_paused_.load(); }
@@ -284,6 +324,9 @@ namespace lfs::training {
         void shutdown();
 
     private:
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotCleanupTerminalizesProjectWrite_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
         friend struct TrainerRetryTestAccess;
 
         // Helper for deferred event emission to prevent deadlocks
@@ -458,7 +501,13 @@ namespace lfs::training {
         void prepare_project_snapshot_at_safe_point(
             int capture_iteration,
             const std::filesystem::path& path,
-            std::vector<std::byte> preview_png = {});
+            std::vector<std::byte> preview_png = {},
+            std::uint64_t request_id = 0,
+            ProjectSnapshotWriteKind write_kind =
+                ProjectSnapshotWriteKind::Explicit,
+            lfs::core::Uuid
+                base_explicit_commit_uuid = {},
+            std::uint64_t autosave_sequence = 0);
         [[nodiscard]] lfs::Result<
             std::shared_ptr<ProjectSnapshotChapters>>
         reserve_project_snapshot_chapters() const;
@@ -471,6 +520,12 @@ namespace lfs::training {
             bool topology_changed);
         void join_finished_project_writer();
         void finish_project_writer();
+        void fail_project_request_locked(
+            std::uint64_t request_id,
+            std::string_view message);
+        void abandon_pending_project_requests(
+            std::string_view reason);
+        void clear_prepared_project_request();
         void apply_pending_params_at_safe_point();
         void apply_param_side_effects(
             const lfs::core::param::TrainingParameters& params,
@@ -560,10 +615,22 @@ namespace lfs::training {
             prepared_project_snapshot_;
         std::shared_ptr<ProjectSnapshotChapters>
             prestaged_project_chapters_;
+        std::uint64_t
+            prestaged_project_request_id_ = 0;
         std::filesystem::path prepared_project_path_;
         std::vector<std::byte>
             prepared_project_preview_png_;
         int prepared_project_iteration_ = 0;
+        std::uint64_t
+            prepared_project_request_id_ = 0;
+        ProjectSnapshotWriteKind
+            prepared_project_write_kind_ =
+                ProjectSnapshotWriteKind::
+                    Explicit;
+        lfs::core::Uuid
+            prepared_project_base_commit_uuid_;
+        std::uint64_t
+            prepared_project_autosave_sequence_ = 0;
         lfs::core::Uuid project_uuid_;
         std::jthread project_writer_thread_;
         std::atomic<bool> project_writer_done_{true};
@@ -573,6 +640,30 @@ namespace lfs::training {
             requested_project_path_;
         std::vector<std::byte>
             requested_project_preview_png_;
+        std::optional<std::uint64_t>
+            requested_project_request_id_;
+        ProjectSnapshotWriteKind
+            requested_project_write_kind_ =
+                ProjectSnapshotWriteKind::
+                    Explicit;
+        lfs::core::Uuid
+            requested_project_base_commit_uuid_;
+        std::uint64_t
+            requested_project_autosave_sequence_ = 0;
+        std::uint64_t
+            next_project_snapshot_request_id_ = 1;
+        std::uint64_t
+            last_completed_project_request_id_ =
+                0;
+        std::uint64_t
+            last_failed_project_request_id_ = 0;
+        std::uint64_t
+            last_completed_autosave_sequence_ = 0;
+        std::optional<
+            lfs::io::project::RecoverySession>
+            recovery_session_;
+        bool last_completed_was_autosave_ =
+            false;
         TrainingStepRegressionTracker
             project_step_regression_;
         std::filesystem::path last_project_snapshot_path_;

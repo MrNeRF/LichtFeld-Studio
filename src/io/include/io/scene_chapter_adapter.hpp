@@ -12,7 +12,9 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace lfs::io::project {
 
@@ -30,6 +32,22 @@ namespace lfs::io::project {
             const PayloadBinding&)>
             mesh;
     };
+
+    // Detached value-only scene state. Capturing this does not allocate or
+    // mutate a JSON DOM, so it is safe to use in a bounded optimizer
+    // safe-point before chapter materialization resumes off the live scene.
+    struct CapturedSceneGraphState {
+        std::optional<lfs::core::Uuid> training_model_uuid;
+        std::vector<SceneNodeRecord> nodes;
+    };
+
+    [[nodiscard]] LFS_IO_API lfs::Result<CapturedSceneGraphState>
+    capture_scene_graph_state(
+        const lfs::core::Scene& scene,
+        const ScenePayloadBindings& payload_bindings);
+
+    [[nodiscard]] LFS_IO_API lfs::Result<SceneGraphChapter>
+    materialize_scene_graph_chapter(CapturedSceneGraphState state);
 
     [[nodiscard]] LFS_IO_API lfs::Result<SceneGraphChapter>
     capture_scene_graph(const lfs::core::Scene& scene,

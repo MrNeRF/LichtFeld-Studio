@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "io/project_container.hpp"
+
 #include "project_container_internal.hpp"
 
 #include "core/path_utils.hpp"
@@ -13,6 +15,7 @@
 #include <cstring>
 #include <format>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <system_error>
 #include <utility>
@@ -30,6 +33,90 @@
 #include <sys/statvfs.h>
 #include <unistd.h>
 #endif
+
+namespace lfs::io::project {
+
+    namespace {
+
+        [[nodiscard]] std::filesystem::path
+        normalized_lock_anchor(
+            const std::filesystem::path& path) noexcept {
+            std::error_code error;
+            auto absolute =
+                std::filesystem::absolute(path, error);
+            return (error ? path : absolute)
+                .lexically_normal();
+        }
+
+    } // namespace
+
+    struct WriterLockLease::Impl {
+        Impl(detail::WriterLock lock_in,
+             std::filesystem::path anchor_in)
+            : lock(std::move(lock_in)),
+              anchor(std::move(anchor_in)) {}
+
+        mutable std::mutex mutex;
+        std::optional<detail::WriterLock> lock;
+        std::filesystem::path anchor;
+    };
+
+    WriterLockLease::WriterLockLease() noexcept = default;
+    WriterLockLease::WriterLockLease(
+        const WriterLockLease&) noexcept = default;
+    WriterLockLease& WriterLockLease::operator=(
+        const WriterLockLease&) noexcept = default;
+    WriterLockLease::WriterLockLease(
+        WriterLockLease&&) noexcept = default;
+    WriterLockLease& WriterLockLease::operator=(
+        WriterLockLease&&) noexcept = default;
+    WriterLockLease::~WriterLockLease() = default;
+
+    WriterLockLease::WriterLockLease(
+        std::shared_ptr<Impl> impl) noexcept
+        : impl_(std::move(impl)) {}
+
+    lfs::Result<WriterLockLease>
+    WriterLockLease::acquire(
+        const std::filesystem::path& project_path) {
+        auto lock =
+            detail::WriterLock::acquire(project_path);
+        if (!lock) {
+            return std::move(lock).error();
+        }
+        return WriterLockLease(std::make_shared<Impl>(
+            std::move(*lock),
+            normalized_lock_anchor(project_path)));
+    }
+
+    bool WriterLockLease::valid() const noexcept {
+        if (!impl_) {
+            return false;
+        }
+        const std::lock_guard lock(impl_->mutex);
+        return impl_->lock.has_value();
+    }
+
+    bool WriterLockLease::owns(
+        const std::filesystem::path& project_path) const noexcept {
+        if (!impl_) {
+            return false;
+        }
+        const std::lock_guard lock(impl_->mutex);
+        return impl_->lock.has_value() &&
+               impl_->anchor ==
+                   normalized_lock_anchor(project_path);
+    }
+
+    void WriterLockLease::release() noexcept {
+        if (!impl_) {
+            return;
+        }
+        const std::lock_guard lock(impl_->mutex);
+        impl_->lock.reset();
+    }
+
+} // namespace lfs::io::project
 
 namespace lfs::io::project::detail {
 

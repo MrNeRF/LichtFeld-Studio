@@ -69,9 +69,11 @@ namespace lfs::core {
             EVENT(ProjectSave, );
             EVENT(ProjectSaveAs, std::filesystem::path path;);
             EVENT(ProjectOpen, std::filesystem::path path; bool discard_changes = false;);
+            EVENT(ProjectCompact, );
             EVENT(ShowProjectSwitchConfirmation, bool new_project = false; std::filesystem::path path;);
             EVENT(SetReopenLastProject, bool enabled;);
             EVENT(SetAutoSaveOnClose, bool enabled;);
+            EVENT(SetProjectAutosaveInterval, std::uint64_t seconds;);
             EVENT(RequestExit, );
             EVENT(ShowExitConfirmation, );
             EVENT(SaveAndExit, );

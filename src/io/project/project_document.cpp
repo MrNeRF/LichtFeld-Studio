@@ -688,6 +688,7 @@ namespace lfs::io::project {
         std::set<ChunkKey, ChunkKeyLess> deferred_geometry_keys;
         std::map<ChunkKey, Hash128, ChunkKeyLess> content_hashes;
         std::set<ChunkKey, ChunkKeyLess> dirty;
+        std::uint64_t dirty_epoch = 0;
 
         [[nodiscard]] ChunkKey key(const Fourcc fourcc) const {
             return singleton_key(fourcc, project_uuid);
@@ -695,6 +696,7 @@ namespace lfs::io::project {
 
         void mark(const Fourcc fourcc) {
             dirty.insert(key(fourcc));
+            ++dirty_epoch;
         }
 
         void mark(const Fourcc fourcc, const lfs::core::Uuid& instance_uuid) {
@@ -702,6 +704,7 @@ namespace lfs::io::project {
                 .fourcc = fourcc,
                 .instance_uuid = instance_uuid,
             });
+            ++dirty_epoch;
         }
 
         [[nodiscard]] bool dirty_or_new(const ChunkKey& chunk_key) const {
@@ -1707,6 +1710,10 @@ namespace lfs::io::project {
         return impl_->generation;
     }
 
+    std::uint64_t ProjectDocument::dirty_epoch() const noexcept {
+        return impl_->dirty_epoch;
+    }
+
     bool ProjectDocument::dirty() const noexcept {
         if (!impl_->source_path) {
             return true;
@@ -1928,7 +1935,7 @@ namespace lfs::io::project {
         const bool removed =
             impl_->checkpoints.erase(instance_uuid) != 0;
         if (removed) {
-            impl_->dirty.insert(key);
+            impl_->mark(key.fourcc, key.instance_uuid);
         }
         return removed;
     }
@@ -1976,7 +1983,7 @@ namespace lfs::io::project {
         const bool removed =
             impl_->ppisp_payloads.erase(instance_uuid) != 0;
         if (removed) {
-            impl_->dirty.insert(key);
+            impl_->mark(key.fourcc, key.instance_uuid);
         }
         return removed;
     }
@@ -2066,7 +2073,7 @@ namespace lfs::io::project {
             impl_->deferred_geometry_keys.erase(key) != 0;
         const bool removed = removed_loaded || removed_deferred;
         if (removed) {
-            impl_->dirty.insert(key);
+            impl_->mark(key.fourcc, key.instance_uuid);
         }
         return removed;
     }
@@ -2125,7 +2132,7 @@ namespace lfs::io::project {
             impl_->deferred_geometry_keys.erase(key) != 0;
         const bool removed = removed_loaded || removed_deferred;
         if (removed) {
-            impl_->dirty.insert(key);
+            impl_->mark(key.fourcc, key.instance_uuid);
         }
         return removed;
     }
@@ -2181,7 +2188,7 @@ namespace lfs::io::project {
             impl_->deferred_geometry_keys.erase(key) != 0;
         const bool removed = removed_loaded || removed_deferred;
         if (removed) {
-            impl_->dirty.insert(key);
+            impl_->mark(key.fourcc, key.instance_uuid);
         }
         return removed;
     }
@@ -2229,8 +2236,63 @@ namespace lfs::io::project {
     lfs::Result<ProjectDocumentSaveReport>
     ProjectDocument::save(const std::filesystem::path& path,
                           const ProjectDocumentSaveOptions& options) {
+        return save_impl(path, options, nullptr);
+    }
+
+    lfs::Result<ProjectDocumentSaveReport>
+    ProjectDocument::save_autosave(
+        const std::filesystem::path& sidecar_path,
+        const ProjectDocumentAutosaveOptions& options) {
+        ProjectDocumentSaveOptions save_options;
+        save_options.commit = CommitOptions{
+            .kind = CommitKind::Autosave,
+            .commit_uuid =
+                lfs::core::generate_uuid_v4(),
+            .snapshot_uuid = options.snapshot_uuid,
+            .wallclock_unix_ns = unix_time_ns(),
+            .min_reader_version =
+                impl_->source_reader
+                    ? impl_->source_reader
+                          ->commit()
+                          .min_reader_version
+                    : CURRENT_CONTAINER_VERSION,
+            .min_safe_writer_version =
+                impl_->source_reader
+                    ? impl_->source_reader
+                          ->commit()
+                          .min_safe_writer_version
+                    : CURRENT_CONTAINER_VERSION,
+            .extra_reader_capabilities =
+                impl_->source_reader
+                    ? impl_->source_reader
+                          ->commit()
+                          .required_reader_capabilities
+                    : CapabilitySet{},
+            .extra_writer_capabilities =
+                impl_->source_reader
+                    ? impl_->source_reader
+                          ->commit()
+                          .required_writer_capabilities
+                    : CapabilitySet{},
+        };
+        save_options.file_uuid = options.file_uuid;
+        save_options.index_compression =
+            options.index_compression;
+        save_options.disk_reserve_bytes =
+            options.disk_reserve_bytes;
+        return save_impl(
+            sidecar_path, save_options, &options);
+    }
+
+    lfs::Result<ProjectDocumentSaveReport>
+    ProjectDocument::save_impl(
+        const std::filesystem::path& path,
+        const ProjectDocumentSaveOptions& options,
+        const ProjectDocumentAutosaveOptions* autosave) {
+        const bool is_autosave = autosave != nullptr;
         if (!options.preview_png.empty() &&
-            options.commit.kind != CommitKind::Explicit) {
+            (options.commit.kind != CommitKind::Explicit ||
+             is_autosave)) {
             return fail<ProjectDocumentSaveReport>(
                 lfs::ErrorCode::FailedPrecondition,
                 "Only an explicit project save may regenerate the preview.",
@@ -2241,7 +2303,8 @@ namespace lfs::io::project {
         if (!normalized) {
             return std::move(normalized).error();
         }
-        if (impl_->source_path && *impl_->source_path != *normalized) {
+        if (!is_autosave && impl_->source_path &&
+            *impl_->source_path != *normalized) {
             return fail<ProjectDocumentSaveReport>(
                 lfs::ErrorCode::FailedPrecondition,
                 "Saving an opened project to another path is not part of the "
@@ -2250,7 +2313,44 @@ namespace lfs::io::project {
                 "to the opened source path",
                 "project.path");
         }
-        if (!impl_->source_path) {
+        if (is_autosave) {
+            if (!impl_->source_path ||
+                !impl_->source_reader ||
+                autosave->base_explicit_commit_uuid.is_nil() ||
+                autosave->autosave_sequence == 0 ||
+                autosave->snapshot_uuid.is_nil()) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "The autosave has no durable explicit base.",
+                    "sidecar publication requires an opened master, "
+                    "base commit UUID, positive sequence, and snapshot UUID",
+                    "autosave.binding");
+            }
+            auto expected_sidecar = *impl_->source_path;
+            expected_sidecar += ".autosave";
+            auto expected_normalized =
+                normalized_absolute_path(
+                    expected_sidecar);
+            if (!expected_normalized ||
+                *expected_normalized != *normalized) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::InvalidArgument,
+                    "Autosave uses one bounded project sidecar.",
+                    std::format(
+                        "expected '{}'",
+                        expected_sidecar.string()),
+                    "autosave.path");
+            }
+            if (impl_->source_reader->commit().commit_uuid !=
+                autosave->base_explicit_commit_uuid) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "The autosave base is no longer current.",
+                    "the document source head differs from the requested "
+                    "base explicit commit UUID",
+                    "autosave.base_commit_uuid");
+            }
+        } else if (!impl_->source_path) {
             std::error_code error;
             if (std::filesystem::exists(*normalized, error)) {
                 return fail<ProjectDocumentSaveReport>(
@@ -2541,7 +2641,50 @@ namespace lfs::io::project {
         }
 
         std::optional<ProjectWriter> writer;
-        if (impl_->source_path) {
+        if (is_autosave) {
+            auto created =
+                staged_project->created_at_unix_ns();
+            if (!created) {
+                return std::move(created).error();
+            }
+            auto result = ProjectWriter::create(
+                *normalized,
+                CreateOptions{
+                    .project_uuid =
+                        impl_->project_uuid,
+                    .file_uuid =
+                        autosave->file_uuid,
+                    .role =
+                        ContainerRole::
+                            AutosaveSidecar,
+                    .base_explicit_commit_uuid =
+                        autosave
+                            ->base_explicit_commit_uuid,
+                    .autosave_sequence =
+                        autosave->autosave_sequence,
+                    .sidecar_snapshot_uuid =
+                        autosave->snapshot_uuid,
+                    .creation_time_unix_ns =
+                        *created,
+                    .index_compression =
+                        autosave->index_compression,
+                    .disk_reserve_bytes =
+                        autosave
+                            ->disk_reserve_bytes,
+                    .boundary_observer =
+                        autosave
+                            ->boundary_observer,
+                    .writer_lock_anchor_compatibility =
+                        impl_->source_reader
+                            ->reader_options(),
+                    .writer_lock_anchor =
+                        *impl_->source_path,
+                });
+            if (!result) {
+                return std::move(result).error();
+            }
+            writer.emplace(std::move(*result));
+        } else if (impl_->source_path) {
             auto result = ProjectWriter::append(
                 *normalized,
                 AppendOptions{
@@ -2549,6 +2692,8 @@ namespace lfs::io::project {
                     .index_compression = options.index_compression,
                     .disk_reserve_bytes = options.disk_reserve_bytes,
                     .boundary_observer = {},
+                    .writer_lock_lease =
+                        options.writer_lock_lease,
                 });
             if (!result) {
                 return std::move(result).error();
@@ -2572,6 +2717,10 @@ namespace lfs::io::project {
                     .index_compression = options.index_compression,
                     .disk_reserve_bytes = options.disk_reserve_bytes,
                     .boundary_observer = {},
+                    .writer_lock_anchor =
+                        std::nullopt,
+                    .writer_lock_lease =
+                        options.writer_lock_lease,
                 });
             if (!result) {
                 return std::move(result).error();
@@ -2602,16 +2751,45 @@ namespace lfs::io::project {
                 if (encoded.contains(key)) {
                     continue;
                 }
-                if (auto result = source.reuse(*writer);
-                    !result) {
+                auto result = is_autosave
+                                  ? writer
+                                        ->add_sidecar_base_reference(
+                                            source.info)
+                                  : source.reuse(*writer);
+                if (!result) {
                     return std::move(result).error();
                 }
                 ++report.reused_chunks;
+            } else if (
+                is_autosave &&
+                is_project_managed_fourcc(
+                    key.fourcc)) {
+                if (auto seeded =
+                        writer
+                            ->add_sidecar_base_reference(
+                                source.info);
+                    !seeded) {
+                    return std::move(seeded).error();
+                }
+                if (auto result = writer->erase(key);
+                    !result) {
+                    return std::move(result).error();
+                }
+                ++report.erased_chunks;
             } else if (is_project_managed_fourcc(key.fourcc)) {
                 if (auto result = writer->erase(key); !result) {
                     return std::move(result).error();
                 }
                 ++report.erased_chunks;
+            } else if (is_autosave) {
+                if (auto result =
+                        writer
+                            ->add_sidecar_base_reference(
+                                source.info);
+                    !result) {
+                    return std::move(result).error();
+                }
+                ++report.opaque_chunks_carried;
             } else {
                 if (auto result = source.carry_opaque(*writer);
                     !result) {
@@ -2624,6 +2802,31 @@ namespace lfs::io::project {
             if (desired.contains(key)) {
                 continue;
             }
+            if (is_autosave) {
+                const auto* const base =
+                    impl_->source_reader
+                        ? impl_->source_reader->find(
+                              key)
+                        : nullptr;
+                if (!base) {
+                    return fail<
+                        ProjectDocumentSaveReport>(
+                        lfs::ErrorCode::DataLoss,
+                        "The autosave base payload is missing.",
+                        std::format(
+                            "{} instance {} has no live base row",
+                            key.fourcc.to_string(),
+                            key.instance_uuid.to_string()),
+                        "autosave.completeness");
+                }
+                if (auto seeded =
+                        writer
+                            ->add_sidecar_base_reference(
+                                *base);
+                    !seeded) {
+                    return std::move(seeded).error();
+                }
+            }
             if (auto result = writer->erase(key); !result) {
                 return std::move(result).error();
             }
@@ -2635,10 +2838,17 @@ namespace lfs::io::project {
             for (const auto& [uuid, payload] : payloads) {
                 if (payload.is_clean_reference()) {
                     assert(payload.impl_->proof);
-                    if (auto result = writer->reuse_if_clean(
-                            *payload.impl_->proof,
-                            payload.impl_->proof->mutation_epoch());
-                        !result) {
+                    auto result =
+                        is_autosave
+                            ? writer
+                                  ->add_sidecar_base_reference(
+                                      *payload.impl_
+                                           ->source)
+                            : writer->reuse_if_clean(
+                                  *payload.impl_->proof,
+                                  payload.impl_->proof
+                                      ->mutation_epoch());
+                    if (!result) {
                         return result;
                     }
                     ++report.reused_chunks;
@@ -2688,6 +2898,28 @@ namespace lfs::io::project {
         }
         writer.reset();
 
+        if (is_autosave) {
+            auto reader =
+                ProjectReader::open(
+                    *normalized,
+                    impl_->source_reader
+                        ->reader_options());
+            if (!reader) {
+                return std::move(reader).error();
+            }
+            if (auto verified = reader->verify_all();
+                !verified) {
+                return std::move(verified).error();
+            }
+            report.generation =
+                reader->commit().generation;
+            report.commit_uuid =
+                reader->commit().commit_uuid;
+            report.snapshot_uuid =
+                reader->commit().snapshot_uuid;
+            return report;
+        }
+
         impl_->project = std::move(*staged_project);
         impl_->content_hashes = std::move(hashes);
         if (auto refreshed = impl_->refresh_source_rows(*normalized);
@@ -2717,6 +2949,28 @@ namespace lfs::io::project {
         }
         if (*impl_->source_path == *normalized) {
             return save(*normalized, options);
+        }
+
+        std::optional<detail::WriterLock>
+            destination_lock;
+        if (options.writer_lock_lease) {
+            if (!options.writer_lock_lease->owns(
+                    *normalized)) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "The retained recovery lock does not own the Save As destination.",
+                    normalized->string(),
+                    "writer_lock");
+            }
+        } else {
+            auto acquired =
+                detail::WriterLock::acquire(
+                    *normalized);
+            if (!acquired) {
+                return std::move(acquired).error();
+            }
+            destination_lock.emplace(
+                std::move(*acquired));
         }
 
         std::error_code error;
@@ -2839,7 +3093,9 @@ namespace lfs::io::project {
             return std::move(rebound).error();
         }
 
-        auto saved = save(temporary, options);
+        auto staging_options = options;
+        staging_options.writer_lock_lease.reset();
+        auto saved = save(temporary, staging_options);
         if (!saved) {
             auto save_error = std::move(saved).error();
             auto restored =

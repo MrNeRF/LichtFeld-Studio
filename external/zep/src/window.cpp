@@ -1315,6 +1315,19 @@ namespace Zep {
         return std::min((long)m_windowLines.size(), GetMaxDisplayLines());
     }
 
+    NVec2f ZepWindow::GetScrollOffsetPx() const {
+        return {m_textOffsetXPx, m_textOffsetPx};
+    }
+
+    void ZepWindow::SetScrollOffsetPx(const NVec2f& offset) {
+        m_textOffsetXPx = std::max(0.0f, offset.x);
+        m_textOffsetPx = std::max(0.0f, offset.y);
+        // A cursor move normally recentres the viewport on the next layout.
+        // Restoring a session supplies both values, so the saved scroll wins.
+        m_cursorMoved = false;
+        GetEditor().RequestRefresh();
+    }
+
     void ZepWindow::SetBufferCursor(GlyphIterator location) {
         if (m_pBuffer != nullptr && location.Valid() && m_pBuffer->IsByteHiddenByFold(location.Index())) {
             location = GlyphIterator(m_pBuffer, m_pBuffer->GetVisibleByteForFoldedByte(location.Index()));

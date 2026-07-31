@@ -3,12 +3,14 @@
 
 #include "io/project/crc32c.hpp"
 #include "io/project_container.hpp"
+#include "io/project_recovery.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +19,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <ostream>
 #include <span>
@@ -121,6 +124,22 @@ namespace {
                                     std::istreambuf_iterator<char>()};
         std::vector<std::byte> bytes(raw.size());
         std::memcpy(bytes.data(), raw.data(), raw.size());
+        return bytes;
+    }
+
+    std::vector<std::byte> read_file_range(const fs::path& path,
+                                           const std::uint64_t offset,
+                                           const std::size_t count) {
+        std::ifstream input(path, std::ios::binary);
+        input.seekg(static_cast<std::streamoff>(offset));
+        std::vector<std::byte> bytes(count);
+        input.read(reinterpret_cast<char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+        if (!input) {
+            throw std::runtime_error(
+                std::format("failed to read {} bytes from {} at 0x{:x}",
+                            count, path.string(), offset));
+        }
         return bytes;
     }
 
@@ -262,6 +281,49 @@ namespace {
         require_status(writer.write_chunk(key, payload));
         require_status(writer.commit());
         return read_file_bytes(path);
+    }
+
+    void publish_complete_sidecar(
+        const fs::path& master_path,
+        const fs::path& sidecar_path,
+        const std::uint64_t sequence,
+        const std::uint64_t file_tag,
+        const std::uint64_t commit_tag,
+        const std::uint64_t snapshot_tag,
+        CommitOptions commit = {},
+        CommitBoundaryObserver observer = {}) {
+        ProjectReader master =
+            require_result(ProjectReader::open(master_path));
+        const auto snapshot_uuid = fixed_uuid(snapshot_tag);
+        ProjectWriter writer = require_result(ProjectWriter::create(
+            sidecar_path,
+            CreateOptions{
+                .project_uuid = master.superblock().project_uuid,
+                .file_uuid = fixed_uuid(file_tag),
+                .role = ContainerRole::AutosaveSidecar,
+                .base_explicit_commit_uuid = master.commit().commit_uuid,
+                .autosave_sequence = sequence,
+                .sidecar_snapshot_uuid = snapshot_uuid,
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + sequence,
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+                .boundary_observer = std::move(observer),
+                .writer_lock_anchor = master_path,
+            }));
+        if (commit.commit_uuid.is_nil()) {
+            commit = fixture_commit_options(commit_tag, snapshot_tag, 1);
+        }
+        commit.kind = CommitKind::Autosave;
+        commit.snapshot_uuid = snapshot_uuid;
+        require_status(writer.plan_commit(commit));
+        require_status(writer.preflight(0));
+        for (const ChunkInfo& row : master.chunks()) {
+            if (row.row_kind == RowKind::Live) {
+                require_status(writer.add_sidecar_base_reference(row));
+            }
+        }
+        require_status(writer.commit());
     }
 
     struct FixtureOutcome {
@@ -876,6 +938,12 @@ namespace {
         generated["autosave-master.licht"] = read_file_bytes(master_path);
         ProjectReader master =
             require_result(ProjectReader::open(master_path));
+        const fs::path stale_anchor_path =
+            temporary.path / "stale-anchor.licht";
+        create_single_chunk_fixture(
+            stale_anchor_path, 118, 113, 218,
+            fixed_key("PROJ", 319),
+            R"({"fixture":"stale-anchor"})");
 
         auto create_sidecar = [&](const fs::path& path,
                                   const std::uint64_t file_tag,
@@ -895,6 +963,10 @@ namespace {
                 .index_compression =
                     IndexCompression::StoredForDeterministicTests,
                 .disk_reserve_bytes = 0,
+                .writer_lock_anchor =
+                    base_commit == master.commit().commit_uuid
+                        ? master_path
+                        : stale_anchor_path,
             };
             ProjectWriter writer =
                 require_result(ProjectWriter::create(path, create));
@@ -1408,6 +1480,642 @@ namespace {
                   lfs::ErrorCode::FailedPrecondition);
     }
 
+    TEST(ProjectContainerWriter,
+         AutosaveCreateReplacesTornAndWrongMagicStableSidecars) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "disposable-sidecar.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        create_single_chunk_fixture(
+            master, 840, 841, 842, fixed_key("PROJ", 843),
+            R"({"master":"unchanged"})");
+        const auto master_before = read_file_bytes(master);
+
+        publish_complete_sidecar(master, sidecar, 1, 844, 845, 846);
+        fs::resize_file(sidecar, SUPERBLOCK_BYTES / 2);
+        ASSERT_FALSE(ProjectReader::open(sidecar));
+        publish_complete_sidecar(master, sidecar, 2, 847, 848, 849);
+        {
+            ProjectReader replacement =
+                require_result(ProjectReader::open(sidecar));
+            EXPECT_EQ(replacement.superblock().autosave_sequence, 2u);
+            require_status(replacement.verify_all());
+        }
+
+        auto wrong_magic = read_file_bytes(sidecar);
+        ASSERT_GE(wrong_magic.size(), 8u);
+        wrong_magic[0] ^= std::byte{0xff};
+        write_file_bytes(sidecar, wrong_magic);
+        ASSERT_FALSE(ProjectReader::open(sidecar));
+        publish_complete_sidecar(master, sidecar, 3, 850, 851, 852);
+        ProjectReader replacement =
+            require_result(ProjectReader::open(sidecar));
+        EXPECT_EQ(replacement.superblock().autosave_sequence, 3u);
+        require_status(replacement.verify_all());
+        EXPECT_EQ(read_file_bytes(master), master_before);
+    }
+
+    TEST(ProjectContainerWriter,
+         AutosaveCreateReplacesValidSidecarWithFutureWriteRequirements) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "future-sidecar.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        create_single_chunk_fixture(
+            master, 853, 854, 855, fixed_key("PROJ", 856),
+            R"({"master":"future-sidecar-base"})");
+
+        CommitOptions future = fixture_commit_options(857, 858, 1);
+        future.min_reader_version = Version{1, 1};
+        future.min_safe_writer_version = Version{1, 1};
+        future.extra_reader_capabilities.set(100);
+        future.extra_writer_capabilities.set(101);
+        publish_complete_sidecar(master, sidecar, 1, 859, 857, 858,
+                                 future);
+        const auto classification = ProjectReader::classify(sidecar);
+        EXPECT_EQ(classification.state, OpenState::UnsupportedNewer);
+
+        publish_complete_sidecar(master, sidecar, 2, 860, 861, 862);
+        ProjectReader replacement =
+            require_result(ProjectReader::open(sidecar));
+        EXPECT_EQ(replacement.open_state(), OpenState::Open);
+        EXPECT_EQ(replacement.superblock().autosave_sequence, 2u);
+        require_status(replacement.verify_all());
+    }
+
+    TEST(ProjectContainerWriter,
+         MasterCreateStillRefusesCorruptAndWriteUnsafeDestinations) {
+        TemporaryDirectory temporary;
+        const fs::path corrupt = temporary.path / "corrupt-master.licht";
+        const auto corrupt_bytes = byte_vector("not a licht project");
+        write_file_bytes(corrupt, corrupt_bytes);
+        auto corrupt_create =
+            ProjectWriter::create(corrupt, fixture_create_options(863));
+        ASSERT_FALSE(corrupt_create);
+        EXPECT_EQ(read_file_bytes(corrupt), corrupt_bytes);
+
+        const fs::path unsafe = temporary.path / "unsafe-master.licht";
+        fs::copy_file(FIXTURES / "write-unsafe.licht", unsafe);
+        const auto unsafe_bytes = read_file_bytes(unsafe);
+        auto unsafe_create =
+            ProjectWriter::create(unsafe, fixture_create_options(864));
+        ASSERT_FALSE(unsafe_create);
+        EXPECT_EQ(unsafe_create.error().code(), lfs::ErrorCode::Unsupported);
+        EXPECT_EQ(read_file_bytes(unsafe), unsafe_bytes);
+    }
+
+    TEST(ProjectContainerWriter,
+         BackupCleanupFailureAfterValidatedReplaceReportsSuccessAndNote) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "cleanup-note.licht";
+        create_single_chunk_fixture(
+            path, 865, 866, 867, fixed_key("PROJ", 868),
+            R"({"generation":"old"})");
+        bool backup_removed = false;
+        auto options = fixture_create_options(869);
+        options.boundary_observer = [&](const CommitBoundary boundary) {
+            if (boundary != CommitBoundary::ReplacementValidated) {
+                return;
+            }
+            for (const auto& entry :
+                 fs::directory_iterator(temporary.path)) {
+                const auto name = entry.path().filename().string();
+                if (name.starts_with(path.stem().string()) &&
+                    name.find(".replace-backup.") != std::string::npos) {
+                    backup_removed = fs::remove(entry.path());
+                }
+            }
+        };
+        ProjectWriter writer =
+            require_result(ProjectWriter::create(path, options));
+        const auto payload = byte_vector(R"({"generation":"new"})");
+        require_status(
+            writer.plan_commit(fixture_commit_options(870, 871, 1)));
+        require_status(writer.preflight(payload.size()));
+        require_status(
+            writer.write_chunk(fixed_key("PROJ", 872), payload));
+        auto published = writer.commit();
+        ASSERT_TRUE(published)
+            << lfs::format_for_developer(published.error());
+        EXPECT_TRUE(backup_removed);
+        ASSERT_TRUE(writer.post_publish_note().has_value());
+        EXPECT_NE(lfs::format_for_developer(*writer.post_publish_note())
+                      .find("commit.post_publish_verification"),
+                  std::string::npos);
+
+        ProjectReader reopened = require_result(ProjectReader::open(path));
+        EXPECT_EQ(reopened.commit().commit_uuid, fixed_uuid(870));
+        const ChunkInfo* row = reopened.find(fixed_key("PROJ", 872));
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(require_result(reopened.read_chunk(*row)), payload);
+    }
+
+    TEST(ProjectContainerWriter,
+         StorageStatsMatchesCompactedKnownLayoutWithinTwoPercent) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "storage-stats.licht";
+        const ChunkKey key = fixed_key("SPLT", 873);
+        const std::vector<std::byte> old_payload(
+            9 * 1024 * 1024 + 137, std::byte{0x31});
+        const std::vector<std::byte> live_payload(
+            7 * 1024 * 1024 + 79, std::byte{0x52});
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::create(path, fixture_create_options(874)));
+            require_status(
+                writer.plan_commit(fixture_commit_options(875, 876, 1)));
+            require_status(writer.preflight(old_payload.size()));
+            require_status(writer.write_chunk(
+                key, old_payload,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::Stored,
+                    .tensor_payload = true,
+                    .block_crcs = true,
+                }));
+            require_status(writer.commit());
+        }
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::append(path, fixture_append_options()));
+            require_status(
+                writer.plan_commit(fixture_commit_options(877, 878, 2)));
+            require_status(writer.preflight(live_payload.size()));
+            require_status(writer.write_chunk(
+                key, live_payload,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::Stored,
+                    .tensor_payload = true,
+                    .block_crcs = true,
+                }));
+            require_status(writer.commit());
+        }
+
+        const ProjectStorageStats stats =
+            require_result(project_storage_stats(path));
+        const auto physical_before = fs::file_size(path);
+        require_status(ProjectWriter::compact(
+            path,
+            CompactionOptions{
+                .new_file_uuid = fixed_uuid(879),
+                .commit_uuid = fixed_uuid(880),
+                .snapshot_uuid = fixed_uuid(881),
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 40,
+                .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + 40,
+                .disk_reserve_bytes = 0,
+            }));
+        const auto compacted_bytes = fs::file_size(path);
+        const double compacted_oracle =
+            static_cast<double>(physical_before - compacted_bytes) /
+            static_cast<double>(physical_before);
+        std::cout << std::format(
+            "P7_STORAGE_STATS_KNOWN physical_bytes={} compacted_bytes={} "
+            "estimated_live_bytes={} dead_bytes={} stats_ratio={:.6f} "
+            "oracle_ratio={:.6f} absolute_error={:.6f}\n",
+            physical_before, compacted_bytes, stats.estimated_live_bytes,
+            stats.dead_bytes, stats.dead_ratio, compacted_oracle,
+            std::abs(stats.dead_ratio - compacted_oracle));
+        EXPECT_LT(std::abs(stats.dead_ratio - compacted_oracle), 0.02)
+            << "stats=" << stats.dead_ratio
+            << " compacted_oracle=" << compacted_oracle;
+    }
+
+    TEST(ProjectContainerWriter,
+         StorageStatsCrossesSuggestionThresholdAtGenuineHalfDeadLayout) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "half-dead.licht";
+        constexpr std::size_t ROWS = 8;
+        const std::vector<std::byte> old_payload(
+            4 * 1024 * 1024 + 512 * 1024,
+            std::byte{0x63});
+        const std::vector<std::byte> live_payload(
+            4 * 1024 * 1024, std::byte{0x74});
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::create(path, fixture_create_options(882)));
+            require_status(
+                writer.plan_commit(fixture_commit_options(883, 884, 1)));
+            require_status(writer.preflight(ROWS * old_payload.size()));
+            for (std::size_t index = 0; index < ROWS; ++index) {
+                require_status(writer.write_chunk(
+                    fixed_key("SPLT", 10'000 + index), old_payload,
+                    ChunkWriteOptions{
+                        .chunk_version = 1,
+                        .compression = Compression::Stored,
+                        .tensor_payload = true,
+                        .block_crcs = true,
+                    }));
+            }
+            require_status(writer.commit());
+        }
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::append(path, fixture_append_options()));
+            require_status(
+                writer.plan_commit(fixture_commit_options(885, 886, 2)));
+            require_status(writer.preflight(ROWS * live_payload.size()));
+            for (std::size_t index = 0; index < ROWS; ++index) {
+                require_status(writer.write_chunk(
+                    fixed_key("SPLT", 10'000 + index), live_payload,
+                    ChunkWriteOptions{
+                        .chunk_version = 1,
+                        .compression = Compression::Stored,
+                        .tensor_payload = true,
+                        .block_crcs = true,
+                    }));
+            }
+            require_status(writer.commit());
+        }
+
+        const ProjectStorageStats stats =
+            require_result(project_storage_stats(path));
+        const auto physical_before = fs::file_size(path);
+        require_status(ProjectWriter::compact(
+            path,
+            CompactionOptions{
+                .new_file_uuid = fixed_uuid(887),
+                .commit_uuid = fixed_uuid(888),
+                .snapshot_uuid = fixed_uuid(889),
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 41,
+                .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + 41,
+                .disk_reserve_bytes = 0,
+            }));
+        const auto compacted_bytes = fs::file_size(path);
+        const double compacted_oracle =
+            static_cast<double>(physical_before - compacted_bytes) /
+            static_cast<double>(physical_before);
+        std::cout << std::format(
+            "P7_STORAGE_STATS_THRESHOLD physical_bytes={} compacted_bytes={} "
+            "estimated_live_bytes={} dead_bytes={} stats_ratio={:.6f} "
+            "oracle_ratio={:.6f} absolute_error={:.6f}\n",
+            physical_before, compacted_bytes, stats.estimated_live_bytes,
+            stats.dead_bytes, stats.dead_ratio, compacted_oracle,
+            std::abs(stats.dead_ratio - compacted_oracle));
+        EXPECT_GE(compacted_oracle, 0.50);
+        EXPECT_LE(compacted_oracle, 0.54);
+        EXPECT_LT(std::abs(stats.dead_ratio - compacted_oracle), 0.02);
+        EXPECT_GE(stats.dead_ratio, 0.50)
+            << "the lifecycle's 50% compaction suggestion must fire";
+    }
+
+    TEST(ProjectContainerWriter,
+         CompactionRefusesCurrentBoundSidecarUntilExplicitHeadAdvances) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "compact-bound.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        const ChunkKey key = fixed_key("PROJ", 890);
+        create_single_chunk_fixture(
+            master, 891, 892, 893, key, R"({"generation":1})");
+        publish_complete_sidecar(master, sidecar, 1, 894, 895, 896);
+
+        const CompactionOptions first_options{
+            .new_file_uuid = fixed_uuid(897),
+            .commit_uuid = fixed_uuid(898),
+            .snapshot_uuid = fixed_uuid(899),
+            .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 42,
+            .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + 42,
+            .disk_reserve_bytes = 0,
+        };
+        auto refused = ProjectWriter::compact(master, first_options);
+        ASSERT_FALSE(refused);
+        EXPECT_EQ(refused.error().code(),
+                  lfs::ErrorCode::FailedPrecondition);
+        EXPECT_NE(lfs::format_for_developer(refused.error())
+                      .find("compaction.autosave_binding"),
+                  std::string::npos);
+        EXPECT_TRUE(fs::exists(sidecar));
+
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::append(master, fixture_append_options()));
+            const auto payload = byte_vector(R"({"generation":2})");
+            require_status(
+                writer.plan_commit(fixture_commit_options(900, 901, 2)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(key, payload));
+            require_status(writer.commit());
+        }
+        auto stale = inspect_autosave_recovery(master);
+        ASSERT_TRUE(stale)
+            << lfs::format_for_developer(stale.error());
+        EXPECT_EQ(stale->disposition, RecoveryDisposition::StaleDeleted);
+        EXPECT_FALSE(fs::exists(sidecar));
+
+        require_status(ProjectWriter::compact(
+            master,
+            CompactionOptions{
+                .new_file_uuid = fixed_uuid(902),
+                .commit_uuid = fixed_uuid(903),
+                .snapshot_uuid = fixed_uuid(904),
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 43,
+                .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + 43,
+                .disk_reserve_bytes = 0,
+            }));
+        ProjectReader compacted =
+            require_result(ProjectReader::open(master));
+        EXPECT_EQ(compacted.commit().kind, CommitKind::Compaction);
+    }
+
+    TEST(ProjectContainerWriter,
+         RecoveryInspectionOfMultiGigabyteShapedMasterReadsNoPayload) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "open-cost.licht";
+        constexpr std::size_t PAYLOAD_BYTES = 8 * 1024 * 1024;
+        const std::vector<std::byte> payload(PAYLOAD_BYTES,
+                                             std::byte{0x45});
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::create(master, fixture_create_options(905)));
+            require_status(
+                writer.plan_commit(fixture_commit_options(906, 907, 1)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(
+                fixed_key("SPLT", 908), payload,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::Stored,
+                    .tensor_payload = true,
+                    .block_crcs = true,
+                }));
+            require_status(writer.commit());
+        }
+
+        ProjectReader seed = require_result(ProjectReader::open(master));
+        ASSERT_EQ(seed.chunks().size(), 1u);
+        const ChunkInfo& seed_row = seed.chunks().front();
+        ASSERT_TRUE(seed_row.block_crc_table.has_value());
+
+        constexpr std::uint64_t SHAPED_PAYLOAD_BYTES =
+            3ull * 1024 * 1024 * 1024 + 17;
+        const std::uint64_t block_count =
+            SHAPED_PAYLOAD_BYTES / BLOCK_CRC_BYTES +
+            (SHAPED_PAYLOAD_BYTES % BLOCK_CRC_BYTES != 0 ? 1 : 0);
+        ASSERT_LT(block_count * sizeof(std::uint32_t),
+                  seed_row.payload_offset -
+                      (seed_row.block_crc_table->offset +
+                       BLOCK_CRC_HEADER_BYTES));
+
+        auto chunk_header =
+            read_file_range(master, seed_row.header_offset,
+                            CHUNK_HEADER_BYTES);
+        put_u64(chunk_header, 32, SHAPED_PAYLOAD_BYTES);
+        put_u64(chunk_header, 40, SHAPED_PAYLOAD_BYTES);
+        const std::uint32_t chunk_header_crc =
+            crc_range(chunk_header, 0, 60);
+        put_u32(chunk_header, 60, chunk_header_crc);
+
+        auto block_header = read_file_range(
+            master, seed_row.block_crc_table->offset,
+            BLOCK_CRC_HEADER_BYTES);
+        std::vector<std::byte> block_entries(
+            static_cast<std::size_t>(block_count * sizeof(std::uint32_t)));
+        const std::vector<std::byte> zero_block(
+            static_cast<std::size_t>(BLOCK_CRC_BYTES));
+        const std::vector<std::byte> zero_tail(static_cast<std::size_t>(
+            SHAPED_PAYLOAD_BYTES % BLOCK_CRC_BYTES));
+        const std::uint32_t zero_block_crc =
+            crc32c(0, zero_block.data(), zero_block.size());
+        for (std::uint64_t block_index = 0; block_index < block_count;
+             ++block_index) {
+            std::uint32_t block_crc = zero_block_crc;
+            if (block_index < PAYLOAD_BYTES / BLOCK_CRC_BYTES) {
+                block_crc = crc32c(
+                    0,
+                    payload.data() + block_index * BLOCK_CRC_BYTES,
+                    static_cast<std::size_t>(BLOCK_CRC_BYTES));
+            } else if (block_index + 1 == block_count &&
+                       !zero_tail.empty()) {
+                block_crc =
+                    crc32c(0, zero_tail.data(), zero_tail.size());
+            }
+            put_u32(block_entries,
+                    static_cast<std::size_t>(block_index) *
+                        sizeof(std::uint32_t),
+                    block_crc);
+        }
+        put_u64(block_header, 32, SHAPED_PAYLOAD_BYTES);
+        put_u64(block_header, 40, block_count);
+        put_u32(block_header, 48,
+                crc32c(0, block_entries.data(), block_entries.size()));
+        put_u32(block_header, 60, crc_range(block_header, 0, 60));
+
+        auto index = read_file_range(
+            master, seed.commit().index_offset,
+            static_cast<std::size_t>(seed.commit().index_stored_bytes));
+        constexpr std::size_t ROW_OFFSET = INDEX_HEADER_BYTES;
+        put_u64(index, ROW_OFFSET + 48, SHAPED_PAYLOAD_BYTES);
+        put_u64(index, ROW_OFFSET + 56, SHAPED_PAYLOAD_BYTES);
+        put_u32(index, ROW_OFFSET + 76, chunk_header_crc);
+
+        const auto align_chunk = [](const std::uint64_t value) {
+            return (value + CHUNK_ALIGNMENT - 1) &
+                   ~(CHUNK_ALIGNMENT - 1);
+        };
+        const std::uint64_t shaped_index_offset = align_chunk(
+            seed_row.payload_offset + SHAPED_PAYLOAD_BYTES);
+        const std::uint64_t shaped_commit_offset = align_chunk(
+            shaped_index_offset + index.size());
+        const std::uint64_t shaped_file_end =
+            shaped_commit_offset + COMMIT_RECORD_BYTES;
+
+        auto commit = read_file_range(master, seed.commit().offset,
+                                      COMMIT_RECORD_BYTES);
+        put_u64(commit, 136, shaped_index_offset);
+        const std::uint32_t index_crc =
+            crc32c(0, index.data(), index.size());
+        put_u32(commit, 160, index_crc);
+        put_u32(commit, 164, index_crc);
+        put_u64(commit, 176, shaped_file_end);
+        const std::uint32_t commit_crc = crc_range(commit, 0, 252);
+        put_u32(commit, 252, commit_crc);
+
+        auto head = read_file_range(
+            master, HEAD_SLOT_OFFSETS[seed.selected_head().slot_id],
+            HEAD_SLOT_BYTES);
+        put_u64(head, 80, shaped_commit_offset);
+        put_u64(head, 96, shaped_file_end);
+        put_u32(head, 104, commit_crc);
+        put_u32(head, 4092, crc_range(head, 0, 4092));
+
+        fs::resize_file(master, shaped_file_end);
+        write_file_range(master, seed_row.header_offset, chunk_header);
+        write_file_range(master, seed_row.block_crc_table->offset,
+                         block_header);
+        write_file_range(
+            master,
+            seed_row.block_crc_table->offset + BLOCK_CRC_HEADER_BYTES,
+            block_entries);
+        write_file_range(master, shaped_index_offset, index);
+        write_file_range(master, shaped_commit_offset, commit);
+        write_file_range(
+            master, HEAD_SLOT_OFFSETS[seed.selected_head().slot_id], head);
+
+        auto payload_reads = std::make_shared<std::atomic_uint64_t>(0);
+        ReaderOptions options;
+        options.payload_bytes_read = payload_reads;
+        auto inspection = inspect_autosave_recovery(master, options);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(inspection.error());
+        EXPECT_EQ(inspection->disposition, RecoveryDisposition::None);
+        EXPECT_EQ(payload_reads->load(), 0u);
+
+        ProjectReader instrumented =
+            require_result(ProjectReader::open(master, options));
+        ASSERT_EQ(instrumented.chunks().size(), 1u);
+        EXPECT_EQ(instrumented.chunks().front().stored_bytes,
+                  SHAPED_PAYLOAD_BYTES);
+        EXPECT_EQ(instrumented.commit().committed_file_end,
+                  shaped_file_end);
+        std::array<std::byte, 1> probe{};
+        require_status(instrumented.read_stored_at(
+            instrumented.chunks().front(), SHAPED_PAYLOAD_BYTES - 1,
+            probe));
+        EXPECT_EQ(payload_reads->load(), probe.size());
+    }
+
+    TEST(ProjectContainerWriter,
+         RecoverySessionTempHygienePreservesLiveLockedSession) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "recovery-lock.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        create_single_chunk_fixture(
+            master, 909, 910, 911, fixed_key("PROJ", 912),
+            R"({"master":"recovery-lock"})");
+        publish_complete_sidecar(master, sidecar, 1, 913, 914, 915);
+
+        const fs::path orphan = recovery_session_temp_path(master);
+        write_file_bytes(orphan, byte_vector("killed recovery session"));
+        auto hygiene = inspect_autosave_recovery(master);
+        ASSERT_TRUE(hygiene)
+            << lfs::format_for_developer(hygiene.error());
+        EXPECT_FALSE(fs::exists(orphan));
+        EXPECT_NE(std::ranges::find(hygiene->deleted_paths, orphan),
+                  hygiene->deleted_paths.end());
+
+        RecoverySession session =
+            require_result(begin_recovery_session(master, sidecar));
+        const fs::path live_temp = recovery_session_temp_path(master);
+        require_status(materialize_recovered_project(
+            master, sidecar, live_temp, session));
+        ASSERT_TRUE(fs::exists(live_temp));
+        auto concurrent_inspection = inspect_autosave_recovery(master);
+        ASSERT_FALSE(concurrent_inspection);
+        EXPECT_EQ(concurrent_inspection.error().code(),
+                  lfs::ErrorCode::Unavailable);
+        EXPECT_TRUE(fs::exists(live_temp));
+        auto concurrent_writer = ProjectWriter::append(master);
+        ASSERT_FALSE(concurrent_writer);
+        EXPECT_EQ(concurrent_writer.error().code(),
+                  lfs::ErrorCode::Unavailable);
+
+        {
+            ProjectReader locked_base =
+                require_result(ProjectReader::open(master));
+            ASSERT_EQ(locked_base.chunks().size(), 1u);
+            CleanProof proof = require_result(
+                locked_base.make_clean_proof(
+                    locked_base.chunks().front(), 1));
+            AppendOptions append = fixture_append_options();
+            append.writer_lock_lease = session.writer_lock();
+            ProjectWriter writer = require_result(
+                ProjectWriter::append(master, append));
+            const auto payload = byte_vector("recovered merge marker");
+            CommitOptions commit = fixture_commit_options(916, 917, 2);
+            commit.kind = CommitKind::Recovered;
+            require_status(writer.plan_commit(commit));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.reuse_if_clean(proof, 1));
+            require_status(writer.write_chunk(
+                fixed_key("VIEW", 918), payload));
+            require_status(writer.commit());
+        }
+        require_status(session.release());
+        EXPECT_FALSE(fs::exists(live_temp));
+        auto stale = inspect_autosave_recovery(master);
+        ASSERT_TRUE(stale)
+            << lfs::format_for_developer(stale.error());
+        EXPECT_EQ(stale->disposition, RecoveryDisposition::StaleDeleted);
+    }
+
+    TEST(ProjectContainerWriter,
+         AutosaveSequenceMustExceedEveryValidBoundCandidate) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "sequence.licht";
+        const fs::path stable = autosave_sidecar_path(master);
+        const fs::path candidate =
+            temporary.path / "sequence.licht.project-write.candidate.tmp.autosave";
+        create_single_chunk_fixture(
+            master, 919, 920, 921, fixed_key("PROJ", 922),
+            R"({"master":"sequence"})");
+        publish_complete_sidecar(master, stable, 5, 923, 924, 925);
+        publish_complete_sidecar(master, candidate, 7, 926, 927, 928);
+
+        ProjectReader base = require_result(ProjectReader::open(master));
+        auto attempt = [&](const std::uint64_t sequence) {
+            return ProjectWriter::create(
+                stable,
+                CreateOptions{
+                    .project_uuid = base.superblock().project_uuid,
+                    .file_uuid = fixed_uuid(929 + sequence),
+                    .role = ContainerRole::AutosaveSidecar,
+                    .base_explicit_commit_uuid = base.commit().commit_uuid,
+                    .autosave_sequence = sequence,
+                    .sidecar_snapshot_uuid = fixed_uuid(940 + sequence),
+                    .creation_time_unix_ns = FIXED_CREATION_TIME_NS + sequence,
+                    .index_compression =
+                        IndexCompression::StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                    .writer_lock_anchor = master,
+                });
+        };
+        auto lower = attempt(6);
+        ASSERT_FALSE(lower);
+        EXPECT_EQ(lower.error().code(),
+                  lfs::ErrorCode::FailedPrecondition);
+        auto equal = attempt(7);
+        ASSERT_FALSE(equal);
+        EXPECT_EQ(equal.error().code(),
+                  lfs::ErrorCode::FailedPrecondition);
+        EXPECT_EQ(require_result(ProjectReader::open(stable))
+                      .superblock()
+                      .autosave_sequence,
+                  5u);
+
+        publish_complete_sidecar(master, stable, 8, 950, 951, 952);
+        EXPECT_EQ(require_result(ProjectReader::open(stable))
+                      .superblock()
+                      .autosave_sequence,
+                  8u);
+    }
+
+    TEST(ProjectContainerWriter,
+         AutosaveSidecarCreateRequiresMasterWriterLockAnchor) {
+        TemporaryDirectory temporary;
+        const fs::path sidecar =
+            temporary.path / "raw.licht.autosave";
+        auto created = ProjectWriter::create(
+            sidecar,
+            CreateOptions{
+                .project_uuid = fixed_uuid(953),
+                .file_uuid = fixed_uuid(954),
+                .role = ContainerRole::AutosaveSidecar,
+                .base_explicit_commit_uuid =
+                    fixed_uuid(955),
+                .autosave_sequence = 1,
+                .sidecar_snapshot_uuid =
+                    fixed_uuid(956),
+                .creation_time_unix_ns =
+                    FIXED_CREATION_TIME_NS,
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_FALSE(created);
+        EXPECT_EQ(created.error().code(),
+                  lfs::ErrorCode::FailedPrecondition);
+        EXPECT_FALSE(fs::exists(sidecar));
+    }
+
     TEST(ProjectContainerWriter, RefuseWriteMatrixMutatesNoProjectBytes) {
         TemporaryDirectory temporary;
         const fs::path path = temporary.path / "write-unsafe.licht";
@@ -1624,6 +2332,400 @@ namespace {
         }
     }
 
+    TEST(ProjectContainerWriter,
+         CompactionPreservesUnknownAndNewerKnownChunksByteForByte) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "opaque-compaction.licht";
+        const std::array keys = {
+            fixed_key("X7Q9", 711), fixed_key("X7Q9", 712),
+            fixed_key("SCNG", 713), fixed_key("SCNG", 714)};
+        std::vector<std::vector<std::byte>> payloads(4);
+        payloads[0].resize(11 * 1024 * 1024 + 37);
+        payloads[1] = byte_vector("unknown fourcc without a block table");
+        payloads[2].resize(5 * 1024 * 1024 + 19);
+        payloads[3] = byte_vector(
+            R"({"future_scene_graph_version":100,"block_table":false})");
+        for (const std::size_t payload_index : {0u, 2u}) {
+            for (std::size_t index = 0;
+                 index < payloads[payload_index].size(); ++index) {
+                payloads[payload_index][index] = static_cast<std::byte>(
+                    (index * 131u + payload_index * 17u + 19u) & 0xffu);
+            }
+        }
+        const std::array options = {
+            ChunkWriteOptions{
+                .chunk_version = 77,
+                .compression = Compression::Stored,
+                .tensor_payload = true,
+                .block_crcs = true,
+            },
+            ChunkWriteOptions{
+                .chunk_version = 78,
+                .compression = Compression::Zstd,
+                .tensor_payload = false,
+                .block_crcs = false,
+            },
+            ChunkWriteOptions{
+                .chunk_version = 99,
+                .compression = Compression::Stored,
+                .tensor_payload = false,
+                .block_crcs = true,
+            },
+            ChunkWriteOptions{
+                .chunk_version = 100,
+                .compression = Compression::Zstd,
+                .tensor_payload = false,
+                .block_crcs = false,
+            }};
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::create(path, fixture_create_options(410)));
+            require_status(writer.plan_commit(
+                fixture_commit_options(510, 610, 1)));
+            std::uint64_t planned_bytes = 0;
+            for (const auto& payload : payloads) {
+                planned_bytes += payload.size();
+            }
+            require_status(writer.preflight(planned_bytes));
+            for (std::size_t index = 0; index < keys.size(); ++index) {
+                require_status(writer.write_chunk(
+                    keys[index], payloads[index], options[index]));
+            }
+            require_status(writer.commit());
+        }
+
+        ProjectReader before = require_result(ProjectReader::open(path));
+        struct StoredSnapshot {
+            ChunkInfo metadata;
+            std::vector<std::byte> payload;
+        };
+        std::vector<StoredSnapshot> snapshots;
+        for (std::size_t index = 0; index < keys.size(); ++index) {
+            const ChunkInfo* row = before.find(keys[index]);
+            ASSERT_NE(row, nullptr);
+            EXPECT_EQ(row->block_crc_table.has_value(),
+                      index == 0 || index == 2);
+            std::vector<std::byte> stored(row->stored_bytes);
+            require_status(before.read_stored_at(*row, 0, stored));
+            snapshots.push_back({.metadata = *row, .payload = std::move(stored)});
+        }
+
+        require_status(ProjectWriter::compact(
+            path,
+            CompactionOptions{
+                .new_file_uuid = fixed_uuid(411),
+                .commit_uuid = fixed_uuid(511),
+                .snapshot_uuid = fixed_uuid(611),
+                .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 30,
+                .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + 30,
+                .disk_reserve_bytes = 0,
+            }));
+
+        ProjectReader after = require_result(ProjectReader::open(path));
+        require_status(after.verify_all());
+        for (std::size_t index = 0; index < keys.size(); ++index) {
+            const ChunkInfo* row = after.find(keys[index]);
+            ASSERT_NE(row, nullptr);
+            const ChunkInfo& original = snapshots[index].metadata;
+            EXPECT_EQ(row->key, original.key);
+            EXPECT_EQ(row->chunk_version, original.chunk_version);
+            EXPECT_EQ(row->compression, original.compression);
+            EXPECT_EQ(row->flags, original.flags);
+            EXPECT_EQ(row->stored_bytes, original.stored_bytes);
+            EXPECT_EQ(row->uncompressed_bytes, original.uncompressed_bytes);
+            EXPECT_EQ(row->payload_crc32c, original.payload_crc32c);
+            EXPECT_EQ(row->block_crc_table.has_value(),
+                      original.block_crc_table.has_value());
+            std::vector<std::byte> stored(row->stored_bytes);
+            require_status(after.read_stored_at(*row, 0, stored));
+            EXPECT_EQ(stored, snapshots[index].payload);
+        }
+    }
+
+    TEST(ProjectContainerWriter,
+         AcceleratedTwentyFourHourAutosaveScaleSimulation) {
+        const char* enabled =
+            std::getenv(
+                "LFS_RUN_P7_SCALE_SIM");
+        if (enabled == nullptr ||
+            std::string_view(enabled) != "1") {
+            GTEST_SKIP()
+                << "set LFS_RUN_P7_SCALE_SIM=1 for the 288-cycle real-scale gate";
+        }
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path /
+            "p7-scale-master.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        constexpr std::uint64_t
+            CHECKPOINT_BYTES =
+                224ull * 1024 * 1024;
+        constexpr std::uint64_t
+            CYCLES = 24 * 60 / 5;
+        constexpr std::size_t
+            STREAM_WINDOW_BYTES =
+                5 * 1024 * 1024;
+        const ChunkKey checkpoint_key =
+            fixed_key("CKPT", 1700);
+
+        auto stream_checkpoint =
+            [&](ProjectWriter& writer,
+                const std::uint64_t cycle) {
+                std::ostream* stream =
+                    require_result(
+                        writer.begin_chunk(
+                            checkpoint_key,
+                            ChunkWriteOptions{
+                                .chunk_version =
+                                    1,
+                                .compression =
+                                    Compression::
+                                        Stored,
+                                .tensor_payload =
+                                    true,
+                                .block_crcs =
+                                    true,
+                                .expected_stream_bytes =
+                                    CHECKPOINT_BYTES,
+                            }));
+                std::vector<std::byte> window(
+                    STREAM_WINDOW_BYTES);
+                for (std::size_t index = 0;
+                     index < window.size();
+                     ++index) {
+                    window[index] =
+                        static_cast<std::byte>(
+                            (index * 131u + 29u) &
+                            0xffu);
+                }
+                std::uint64_t offset = 0;
+                while (offset <
+                       CHECKPOINT_BYTES) {
+                    const auto count =
+                        static_cast<std::size_t>(
+                            std::min<
+                                std::uint64_t>(
+                                window.size(),
+                                CHECKPOINT_BYTES -
+                                    offset));
+                    const auto marker =
+                        cycle ^ offset;
+                    std::memcpy(
+                        window.data(), &marker,
+                        std::min(
+                            sizeof(marker),
+                            count));
+                    stream->write(
+                        reinterpret_cast<
+                            const char*>(
+                            window.data()),
+                        static_cast<
+                            std::streamsize>(
+                            count));
+                    if (!*stream) {
+                        throw std::runtime_error(
+                            "scale-sim checkpoint stream failed");
+                    }
+                    offset += count;
+                }
+                require_status(
+                    writer.end_chunk());
+            };
+
+        {
+            ProjectWriter writer =
+                require_result(
+                    ProjectWriter::create(
+                        master,
+                        fixture_create_options(
+                            1701)));
+            require_status(
+                writer.plan_commit(
+                    fixture_commit_options(
+                        1702, 1703, 1)));
+            require_status(
+                writer.preflight(
+                    CHECKPOINT_BYTES));
+            stream_checkpoint(writer, 0);
+            require_status(writer.commit());
+        }
+        ProjectReader base =
+            require_result(
+                ProjectReader::open(master));
+        require_status(base.verify_all());
+        const std::uint64_t master_bytes =
+            fs::file_size(master);
+
+        const auto artifact_bytes =
+            [&]() -> std::uint64_t {
+            std::uint64_t total = 0;
+            for (const auto& entry :
+                 fs::directory_iterator(
+                     temporary.path)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                const auto name =
+                    entry.path()
+                        .filename()
+                        .string();
+                if (!name.starts_with(
+                        master.stem()
+                            .string()) ||
+                    name.ends_with(
+                        ".lock")) {
+                    continue;
+                }
+                total +=
+                    entry.file_size();
+            }
+            return total;
+        };
+
+        std::uint64_t transient_peak =
+            master_bytes;
+        std::uint64_t steady_peak =
+            master_bytes;
+        std::uint64_t autosave_min =
+            std::numeric_limits<
+                std::uint64_t>::max();
+        std::uint64_t autosave_max = 0;
+        const auto started =
+            std::chrono::steady_clock::now();
+        for (std::uint64_t cycle = 1;
+             cycle <= CYCLES; ++cycle) {
+            const auto snapshot_uuid =
+                lfs::core::
+                    generate_uuid_v4();
+            ProjectWriter writer =
+                require_result(
+                    ProjectWriter::create(
+                        sidecar,
+                        CreateOptions{
+                            .project_uuid =
+                                base
+                                    .superblock()
+                                    .project_uuid,
+                            .file_uuid =
+                                lfs::core::
+                                    generate_uuid_v4(),
+                            .role =
+                                ContainerRole::
+                                    AutosaveSidecar,
+                            .base_explicit_commit_uuid =
+                                base.commit()
+                                    .commit_uuid,
+                            .autosave_sequence =
+                                cycle,
+                            .sidecar_snapshot_uuid =
+                                snapshot_uuid,
+                            .creation_time_unix_ns =
+                                FIXED_CREATION_TIME_NS +
+                                cycle,
+                            .index_compression =
+                                IndexCompression::
+                                    Zstd,
+                            .disk_reserve_bytes =
+                                0,
+                            .boundary_observer =
+                                [&](const CommitBoundary) {
+                                    transient_peak =
+                                        std::max(
+                                            transient_peak,
+                                            artifact_bytes());
+                                },
+                            .writer_lock_anchor =
+                                master,
+                        }));
+            require_status(
+                writer.plan_commit(
+                    CommitOptions{
+                        .kind =
+                            CommitKind::
+                                Autosave,
+                        .commit_uuid =
+                            lfs::core::
+                                generate_uuid_v4(),
+                        .snapshot_uuid =
+                            snapshot_uuid,
+                        .wallclock_unix_ns =
+                            FIXED_COMMIT_TIME_NS +
+                            cycle,
+                    }));
+            require_status(
+                writer.preflight(
+                    CHECKPOINT_BYTES));
+            stream_checkpoint(
+                writer, cycle);
+            require_status(writer.commit());
+
+            const auto current_autosave =
+                fs::file_size(sidecar);
+            autosave_min =
+                std::min(
+                    autosave_min,
+                    current_autosave);
+            autosave_max =
+                std::max(
+                    autosave_max,
+                    current_autosave);
+            const auto steady =
+                artifact_bytes();
+            steady_peak =
+                std::max(
+                    steady_peak, steady);
+            EXPECT_EQ(
+                steady,
+                master_bytes +
+                    current_autosave);
+        }
+        auto recovery =
+            inspect_autosave_recovery(
+                master);
+        ASSERT_TRUE(recovery)
+            << lfs::format_for_developer(
+                   recovery.error());
+        EXPECT_EQ(
+            recovery->disposition,
+            RecoveryDisposition::Offer);
+        EXPECT_EQ(
+            recovery->autosave_sequence,
+            CYCLES);
+        const auto elapsed =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::
+                    now() -
+                started)
+                .count();
+        constexpr std::uint64_t EPSILON =
+            2ull * 1024 * 1024;
+        EXPECT_LE(
+            steady_peak,
+            master_bytes +
+                autosave_max);
+        EXPECT_LE(
+            transient_peak,
+            master_bytes +
+                2 * autosave_max +
+                EPSILON);
+        std::cout
+            << std::format(
+                   "P7_AUTOSAVE_SCALE cycles={} checkpoint_bytes={} "
+                   "master_bytes={} autosave_min_bytes={} "
+                   "autosave_max_bytes={} steady_peak_bytes={} "
+                   "transient_peak_bytes={} transient_bound_bytes={} "
+                   "elapsed_seconds={:.3f}\n",
+                   CYCLES, CHECKPOINT_BYTES,
+                   master_bytes, autosave_min,
+                   autosave_max, steady_peak,
+                   transient_peak,
+                   master_bytes +
+                       2 * autosave_max +
+                       EPSILON,
+                   elapsed);
+    }
+
 #ifndef _WIN32
     TEST(ProjectContainerWriter, ProcessKillCrashMatrixPublishesOnlyOldOrNew) {
         TemporaryDirectory temporary;
@@ -1699,6 +2801,148 @@ namespace {
         }
     }
 
+    TEST(ProjectContainerWriter,
+         CompactionSigkillAtEveryBoundaryPublishesOnlyOldOrVerifiedNew) {
+        TemporaryDirectory temporary;
+        for (int boundary_value =
+                 static_cast<int>(
+                     CommitBoundary::
+                         CurrentHeadValidated);
+             boundary_value <=
+             static_cast<int>(
+                 CommitBoundary::Committed);
+             ++boundary_value) {
+            const auto target =
+                static_cast<CommitBoundary>(
+                    boundary_value);
+            SCOPED_TRACE(std::format(
+                "compaction boundary {}",
+                boundary_value));
+            const fs::path path =
+                temporary.path /
+                std::format(
+                    "compact-crash-{}.licht",
+                    boundary_value);
+            fs::copy_file(
+                FIXTURES /
+                    "multi-generation-append.licht",
+                path);
+            const auto prior_bytes =
+                read_file_bytes(path);
+            const auto commit_uuid =
+                fixed_uuid(
+                    1200 + boundary_value);
+
+            const pid_t child = ::fork();
+            ASSERT_GE(child, 0);
+            if (child == 0) {
+                try {
+                    auto compacted =
+                        ProjectWriter::compact(
+                            path,
+                            CompactionOptions{
+                                .compatibility =
+                                    {},
+                                .new_file_uuid =
+                                    fixed_uuid(
+                                        1300 +
+                                        boundary_value),
+                                .commit_uuid =
+                                    commit_uuid,
+                                .snapshot_uuid =
+                                    fixed_uuid(
+                                        1400 +
+                                        boundary_value),
+                                .creation_time_unix_ns =
+                                    FIXED_CREATION_TIME_NS +
+                                    static_cast<
+                                        std::uint64_t>(
+                                        boundary_value),
+                                .wallclock_unix_ns =
+                                    FIXED_COMMIT_TIME_NS +
+                                    static_cast<
+                                        std::uint64_t>(
+                                        boundary_value),
+                                .keep_tombstones =
+                                    false,
+                                .disk_reserve_bytes =
+                                    0,
+                                .boundary_observer =
+                                    [target](
+                                        const CommitBoundary
+                                            reached) {
+                                        if (reached ==
+                                            target) {
+                                            ::kill(
+                                                ::getpid(),
+                                                SIGKILL);
+                                        }
+                                    },
+                            });
+                    (void)compacted;
+                } catch (...) {
+                    ::_exit(111);
+                }
+                ::_exit(112);
+            }
+
+            int status = 0;
+            ASSERT_EQ(
+                ::waitpid(child, &status, 0),
+                child);
+            ASSERT_TRUE(WIFSIGNALED(status));
+            EXPECT_EQ(
+                WTERMSIG(status), SIGKILL);
+            ProjectReader surviving =
+                require_result(
+                    ProjectReader::open(path));
+            require_status(
+                surviving.verify_all());
+            const auto after_bytes =
+                read_file_bytes(path);
+            if (after_bytes != prior_bytes) {
+                EXPECT_EQ(
+                    surviving.commit().kind,
+                    CommitKind::Compaction);
+                EXPECT_EQ(
+                    surviving.commit()
+                        .commit_uuid,
+                    commit_uuid);
+                EXPECT_EQ(
+                    surviving.commit()
+                        .generation,
+                    1u);
+            }
+
+            auto hygiene =
+                inspect_autosave_recovery(
+                    path);
+            ASSERT_TRUE(hygiene)
+                << lfs::format_for_developer(
+                       hygiene.error());
+            for (const auto& entry :
+                 fs::directory_iterator(
+                     temporary.path)) {
+                const auto name =
+                    entry.path()
+                        .filename()
+                        .string();
+                if (!name.starts_with(
+                        path.stem()
+                            .string())) {
+                    continue;
+                }
+                EXPECT_EQ(
+                    name.find(".compact."),
+                    std::string::npos);
+                EXPECT_EQ(
+                    name.find(
+                        ".replace-backup."),
+                    std::string::npos);
+            }
+        }
+    }
+
     TEST(ProjectContainerWriter, RealEnospcTmpfsChild) {
         const char* enabled = std::getenv("LFS_RUN_ENOSPC_CHILD");
         if (enabled == nullptr || std::string_view(enabled) != "1") {
@@ -1706,7 +2950,7 @@ namespace {
         }
         TemporaryDirectory mountpoint;
         ASSERT_EQ(::mount("tmpfs", mountpoint.path.c_str(), "tmpfs", 0,
-                          "size=16m,mode=0700"),
+                          "size=80m,mode=0700"),
                   0)
             << std::strerror(errno);
         struct UnmountGuard {
@@ -1731,7 +2975,7 @@ namespace {
                 fixture_commit_options(902, 1002, 2)));
             require_status(writer.preflight(0));
             require_status(writer.reuse_if_clean(proof, 3));
-            const std::vector<std::byte> payload(32 * 1024 * 1024,
+            const std::vector<std::byte> payload(96 * 1024 * 1024,
                                                  std::byte{0x5a});
             auto write =
                 writer.write_chunk(fixed_key("VIEW", 802), payload);
@@ -1756,6 +3000,230 @@ namespace {
                 require_result(ProjectReader::open(path));
             require_status(intact.verify_all());
         }
+        fs::remove(path);
+
+        const fs::path sidecar_master =
+            mountpoint.path /
+            "sidecar-disk-full.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(
+                sidecar_master);
+        fs::copy_file(
+            FIXTURES /
+                "autosave-master.licht",
+            sidecar_master);
+        fs::copy_file(
+            FIXTURES /
+                "autosave-sidecar-valid.licht.autosave",
+            sidecar);
+        const auto master_before =
+            read_file_bytes(sidecar_master);
+        const auto sidecar_before =
+            read_file_bytes(sidecar);
+        {
+            ProjectReader master =
+                require_result(
+                    ProjectReader::open(
+                        sidecar_master));
+            ProjectReader prior_sidecar =
+                require_result(
+                    ProjectReader::open(
+                        sidecar));
+            require_status(
+                prior_sidecar.verify_all());
+            ProjectWriter writer =
+                require_result(
+                    ProjectWriter::create(
+                        sidecar,
+                        CreateOptions{
+                            .project_uuid =
+                                master
+                                    .superblock()
+                                    .project_uuid,
+                            .file_uuid =
+                                fixed_uuid(1500),
+                            .role =
+                                ContainerRole::
+                                    AutosaveSidecar,
+                            .base_explicit_commit_uuid =
+                                master.commit()
+                                    .commit_uuid,
+                            .autosave_sequence =
+                                prior_sidecar
+                                    .superblock()
+                                    .autosave_sequence +
+                                1,
+                            .sidecar_snapshot_uuid =
+                                fixed_uuid(1501),
+                            .creation_time_unix_ns =
+                                FIXED_CREATION_TIME_NS,
+                            .index_compression =
+                                IndexCompression::
+                                    StoredForDeterministicTests,
+                            .disk_reserve_bytes =
+                                0,
+                            .boundary_observer =
+                                {},
+                            .writer_lock_anchor =
+                                sidecar_master,
+                        }));
+            CommitOptions commit =
+                fixture_commit_options(
+                    1502, 1501, 1);
+            commit.kind =
+                CommitKind::Autosave;
+            require_status(
+                writer.plan_commit(commit));
+            // Deliberately model space disappearing after a successful
+            // preflight so the failure occurs while the new sidecar temp is
+            // being written.
+            require_status(
+                writer.preflight(0));
+            const std::vector<std::byte>
+                payload(
+                    96 * 1024 * 1024,
+                    std::byte{0x6b});
+            auto write =
+                writer.write_chunk(
+                    fixed_key("VIEW", 1503),
+                    payload);
+            ASSERT_FALSE(write);
+            EXPECT_EQ(
+                write.error().code(),
+                lfs::ErrorCode::
+                    ResourceExhausted);
+        }
+        EXPECT_EQ(
+            read_file_bytes(sidecar_master),
+            master_before);
+        EXPECT_EQ(
+            read_file_bytes(sidecar),
+            sidecar_before);
+        {
+            ProjectReader intact_master =
+                require_result(
+                    ProjectReader::open(
+                        sidecar_master));
+            ProjectReader intact_sidecar =
+                require_result(
+                    ProjectReader::open(
+                        sidecar));
+            require_status(
+                intact_master.verify_all());
+            require_status(
+                intact_sidecar.verify_all());
+        }
+        fs::remove(sidecar);
+        fs::remove(sidecar_master);
+
+        const fs::path compact_path =
+            mountpoint.path /
+            "compact-disk-full.licht";
+        {
+            ProjectWriter writer =
+                require_result(
+                    ProjectWriter::create(
+                        compact_path,
+                        fixture_create_options(
+                            1600)));
+            const std::vector<std::byte>
+                payload(
+                    28 * 1024 * 1024,
+                    std::byte{0x7c});
+            require_status(
+                writer.plan_commit(
+                    fixture_commit_options(
+                        1601, 1602, 1)));
+            require_status(
+                writer.preflight(
+                    payload.size()));
+            require_status(
+                writer.write_chunk(
+                    fixed_key("X7Q9", 1603),
+                    payload,
+                    ChunkWriteOptions{
+                        .chunk_version =
+                            88,
+                        .compression =
+                            Compression::Stored,
+                        .tensor_payload =
+                            true,
+                        .block_crcs =
+                            true,
+                        .expected_stream_bytes =
+                            std::nullopt,
+                    }));
+            require_status(writer.commit());
+        }
+        const auto compact_before =
+            read_file_bytes(compact_path);
+        const fs::path filler =
+            mountpoint.path / "filler.bin";
+        bool filled = false;
+        auto compacted =
+            ProjectWriter::compact(
+                compact_path,
+                CompactionOptions{
+                    .compatibility = {},
+                    .new_file_uuid =
+                        fixed_uuid(1604),
+                    .commit_uuid =
+                        fixed_uuid(1605),
+                    .snapshot_uuid =
+                        fixed_uuid(1606),
+                    .creation_time_unix_ns =
+                        FIXED_CREATION_TIME_NS +
+                        1,
+                    .wallclock_unix_ns =
+                        FIXED_COMMIT_TIME_NS +
+                        1,
+                    .keep_tombstones =
+                        false,
+                    .disk_reserve_bytes =
+                        0,
+                    .boundary_observer =
+                        [&](const CommitBoundary
+                                boundary) {
+                            if (boundary !=
+                                    CommitBoundary::
+                                        PreflightComplete ||
+                                filled) {
+                                return;
+                            }
+                            filled = true;
+                            std::ofstream output(
+                                filler,
+                                std::ios::binary |
+                                    std::ios::trunc);
+                            const std::vector<char>
+                                block(
+                                    1024 * 1024,
+                                    '\x55');
+                            while (output) {
+                                output.write(
+                                    block.data(),
+                                    static_cast<
+                                        std::streamsize>(
+                                        block.size()));
+                            }
+                        },
+                });
+        ASSERT_TRUE(filled);
+        ASSERT_FALSE(compacted);
+        EXPECT_EQ(
+            compacted.error().code(),
+            lfs::ErrorCode::
+                ResourceExhausted);
+        fs::remove(filler);
+        EXPECT_EQ(
+            read_file_bytes(compact_path),
+            compact_before);
+        ProjectReader compact_intact =
+            require_result(
+                ProjectReader::open(
+                    compact_path));
+        require_status(
+            compact_intact.verify_all());
     }
 
     TEST(ProjectContainerWriter, RealEnospcUsesIsolatedTmpfs) {

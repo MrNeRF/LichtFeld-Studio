@@ -6,6 +6,7 @@
 
 #include "crc32c.hpp"
 #include "project_container_internal.hpp"
+#include "project_recovery_internal.hpp"
 
 #include <zstd.h>
 
@@ -702,6 +703,7 @@ namespace lfs::io::project {
         std::filesystem::path destination_path;
         std::filesystem::path active_path;
         std::optional<detail::WriterLock> lock;
+        std::optional<WriterLockLease> lock_lease;
         std::shared_ptr<detail::NativeFile> file;
         std::optional<ProjectReader> prior_reader;
         SuperblockInfo superblock;
@@ -729,6 +731,7 @@ namespace lfs::io::project {
         bool keep_temporary = false;
         bool used_clean_proof_reuse = false;
         bool used_opaque_carry_forward = false;
+        std::optional<lfs::Error> post_publish_note;
 
         ~Impl() {
             if (mode == Mode::Create && !committed && !keep_temporary &&
@@ -764,6 +767,29 @@ namespace lfs::io::project {
                                 static_cast<unsigned>(boundary)),
                     "commit_boundary_observer"));
             }
+        }
+
+        void record_post_publish_note(
+            lfs::Error cause,
+            const std::string_view operation) {
+            if (post_publish_note) {
+                post_publish_note =
+                    std::move(*post_publish_note)
+                        .with_suppressed(
+                            std::move(cause));
+                return;
+            }
+            auto note = writer_error(
+                lfs::ErrorCode::Internal,
+                destination_path,
+                "The project was published, but post-publication cleanup reported a problem.",
+                std::format(
+                    "{} failed after the destination authority was independently validated; the published commit remains successful",
+                    operation),
+                "commit.post_publish_verification");
+            post_publish_note =
+                std::move(note).with_suppressed(
+                    std::move(cause));
         }
 
         [[nodiscard]] lfs::Result<void> require_ready() const {
@@ -990,8 +1016,7 @@ namespace lfs::io::project {
                 return std::move(table_offset).error();
             }
             const bool with_blocks =
-                (source_row.flags & HAS_BLOCK_CRCS) != 0 ||
-                source_row.stored_bytes >= BLOCK_CRC_REQUIRED_AT;
+                (source_row.flags & HAS_BLOCK_CRCS) != 0;
             const std::uint64_t block_count =
                 with_blocks
                     ? source_row.stored_bytes / BLOCK_CRC_BYTES +
@@ -1109,8 +1134,7 @@ namespace lfs::io::project {
                 .chunk_version = source_row.chunk_version,
                 .row_kind = RowKind::Live,
                 .compression = source_row.compression,
-                .flags = source_row.flags |
-                         (with_blocks ? HAS_BLOCK_CRCS : 0u),
+                .flags = source_row.flags,
                 .header_offset = *header_offset,
                 .payload_offset = *payload_offset,
                 .stored_bytes = source_row.stored_bytes,
@@ -1161,6 +1185,11 @@ namespace lfs::io::project {
     ProjectWriter& ProjectWriter::operator=(ProjectWriter&&) noexcept = default;
     ProjectWriter::~ProjectWriter() = default;
 
+    const std::optional<lfs::Error>&
+    ProjectWriter::post_publish_note() const noexcept {
+        return impl_->post_publish_note;
+    }
+
     lfs::Result<ProjectWriter>
     ProjectWriter::create(const std::filesystem::path& path,
                           const CreateOptions& options) {
@@ -1170,41 +1199,137 @@ namespace lfs::io::project {
                                 "create requires a destination path",
                                 "project.path");
         }
+        if (options.role ==
+                ContainerRole::AutosaveSidecar &&
+            !options.writer_lock_anchor) {
+            return writer_error(
+                lfs::ErrorCode::FailedPrecondition,
+                path,
+                "An autosave sidecar requires its master writer-lock anchor.",
+                "role AUTOSAVE_SIDECAR must bind publication to a held master authority",
+                "writer_lock_anchor");
+        }
         if (auto parent = detail::ensure_parent_directory(path); !parent) {
             return std::move(parent).error();
         }
-        auto lock_result = detail::WriterLock::acquire(path);
-        if (!lock_result) {
-            return std::move(lock_result).error();
+        const auto& lock_anchor =
+            options.writer_lock_anchor
+                ? *options.writer_lock_anchor
+                : path;
+        std::optional<detail::WriterLock> held_lock;
+        std::optional<WriterLockLease> held_lease;
+        if (options.writer_lock_lease) {
+            if (!options.writer_lock_lease->owns(
+                    lock_anchor)) {
+                return writer_error(
+                    lfs::ErrorCode::FailedPrecondition,
+                    lock_anchor,
+                    "The supplied project writer lock is not held for this destination.",
+                    "writer_lock_lease must own the selected lock anchor",
+                    "writer_lock");
+            }
+            held_lease =
+                *options.writer_lock_lease;
+        } else {
+            auto lock_result =
+                detail::WriterLock::acquire(
+                    lock_anchor);
+            if (!lock_result) {
+                return std::move(lock_result)
+                    .error();
+            }
+            held_lock.emplace(
+                std::move(*lock_result));
         }
 
-        std::error_code exists_error;
-        const bool destination_exists =
-            std::filesystem::exists(path, exists_error);
-        if (exists_error) {
-            return writer_error(
-                lfs::ErrorCode::PermissionDenied, path,
-                "The existing project could not be inspected.",
-                std::format("filesystem::exists failed: {}",
-                            exists_error.message()),
-                "project.path");
-        }
-        if (destination_exists) {
-            auto existing = ProjectReader::open(path);
-            if (!existing) {
-                return std::move(existing).error();
+        if (options.role ==
+                ContainerRole::AutosaveSidecar &&
+            options.writer_lock_anchor) {
+            auto master = ProjectReader::open(
+                lock_anchor,
+                options.writer_lock_anchor_compatibility);
+            if (!master) {
+                return std::move(master).error();
             }
-            const WriteCompatibility compatibility =
-                existing->write_compatibility();
-            if (!compatibility.safe) {
+            if (master->superblock().role !=
+                    ContainerRole::Master ||
+                master->superblock().project_uuid !=
+                    options.project_uuid ||
+                master->commit().commit_uuid !=
+                    options.base_explicit_commit_uuid) {
                 return writer_error(
-                    lfs::ErrorCode::Unsupported, path,
-                    "This project is read-only in the current LichtFeld version.",
-                    std::format("replacement refused before writing project bytes: {}",
-                                compatibility.reasons.empty()
-                                    ? std::string{"unknown writer incompatibility"}
-                                    : compatibility.reasons.front()),
-                    "commit.write_compatibility");
+                    lfs::ErrorCode::FailedPrecondition,
+                    lock_anchor,
+                    "The autosave base changed before publication.",
+                    "the held master authority no longer matches the "
+                    "sidecar project/base binding",
+                    "superblock.sidecar_binding");
+            }
+            auto valid =
+                detail::valid_bound_autosaves_locked(
+                    lock_anchor, *master);
+            if (!valid) {
+                return std::move(valid).error();
+            }
+            const auto highest =
+                std::ranges::max_element(
+                    *valid, {},
+                    &detail::ValidBoundAutosave::sequence);
+            if (highest != valid->end() &&
+                options.autosave_sequence <=
+                    highest->sequence) {
+                return writer_error(
+                    lfs::ErrorCode::FailedPrecondition,
+                    path,
+                    "The autosave sequence is not newer than the current recovery candidate.",
+                    std::format(
+                        "requested sequence {} must be greater than held candidate sequence {}",
+                        options.autosave_sequence,
+                        highest->sequence),
+                    "autosave.sequence");
+            }
+        }
+
+        if (options.role == ContainerRole::Master) {
+            std::error_code exists_error;
+            const bool destination_exists =
+                std::filesystem::exists(
+                    path, exists_error);
+            if (exists_error) {
+                return writer_error(
+                    lfs::ErrorCode::PermissionDenied,
+                    path,
+                    "The existing project could not be inspected.",
+                    std::format(
+                        "filesystem::exists failed: {}",
+                        exists_error.message()),
+                    "project.path");
+            }
+            if (destination_exists) {
+                auto existing =
+                    ProjectReader::open(path);
+                if (!existing) {
+                    return std::move(existing)
+                        .error();
+                }
+                const WriteCompatibility
+                    compatibility =
+                        existing
+                            ->write_compatibility();
+                if (!compatibility.safe) {
+                    return writer_error(
+                        lfs::ErrorCode::Unsupported,
+                        path,
+                        "This project is read-only in the current LichtFeld version.",
+                        std::format(
+                            "replacement refused before writing project bytes: {}",
+                            compatibility.reasons
+                                    .empty()
+                                ? std::string{
+                                      "unknown writer incompatibility"}
+                                : compatibility.reasons.front()),
+                        "commit.write_compatibility");
+                }
             }
         }
 
@@ -1246,7 +1371,9 @@ namespace lfs::io::project {
         impl->destination_path = path;
         impl->active_path =
             detail::make_sibling_temp_path(path, "project-write");
-        impl->lock.emplace(std::move(*lock_result));
+        impl->lock = std::move(held_lock);
+        impl->lock_lease =
+            std::move(held_lease);
         impl->superblock = SuperblockInfo{
             .format = CURRENT_CONTAINER_VERSION,
             .role = options.role,
@@ -1304,9 +1431,28 @@ namespace lfs::io::project {
                                 "append requires a destination path",
                                 "project.path");
         }
-        auto lock_result = detail::WriterLock::acquire(path);
-        if (!lock_result) {
-            return std::move(lock_result).error();
+        std::optional<detail::WriterLock> held_lock;
+        std::optional<WriterLockLease> held_lease;
+        if (options.writer_lock_lease) {
+            if (!options.writer_lock_lease->owns(path)) {
+                return writer_error(
+                    lfs::ErrorCode::FailedPrecondition,
+                    path,
+                    "The supplied project writer lock is not held for this destination.",
+                    "writer_lock_lease must own the append destination",
+                    "writer_lock");
+            }
+            held_lease =
+                *options.writer_lock_lease;
+        } else {
+            auto lock_result =
+                detail::WriterLock::acquire(path);
+            if (!lock_result) {
+                return std::move(lock_result)
+                    .error();
+            }
+            held_lock.emplace(
+                std::move(*lock_result));
         }
         auto reader_result = ProjectReader::open(path, options.compatibility);
         if (!reader_result) {
@@ -1369,7 +1515,9 @@ namespace lfs::io::project {
         impl->mode = Impl::Mode::Append;
         impl->destination_path = path;
         impl->active_path = path;
-        impl->lock.emplace(std::move(*lock_result));
+        impl->lock = std::move(held_lock);
+        impl->lock_lease =
+            std::move(held_lease);
         impl->file = *file_result;
         impl->superblock = reader_result->superblock();
         impl->generation = reader_result->commit().generation + 1;
@@ -2062,6 +2210,56 @@ namespace lfs::io::project {
         return {};
     }
 
+    lfs::Result<void>
+    ProjectWriter::copy_chunk_verbatim(
+        const ProjectReader& source,
+        const ChunkInfo& chunk) {
+        if (auto ready = impl_->require_ready(); !ready) {
+            return ready;
+        }
+        if (chunk.row_kind != RowKind::Live) {
+            return status_failure(writer_error(
+                lfs::ErrorCode::InvalidArgument,
+                impl_->destination_path,
+                "Only a live chunk can be copied verbatim.",
+                "tombstones and base references have no stored payload",
+                "chunk.row_kind"));
+        }
+        if (impl_->rows.contains(chunk.key) ||
+            impl_->touched.contains(chunk.key)) {
+            return status_failure(writer_error(
+                lfs::ErrorCode::AlreadyExists,
+                impl_->destination_path,
+                "The project chunk was resolved more than once.",
+                "verbatim copy requires one untouched logical key",
+                "chunk_key"));
+        }
+        auto copied =
+            impl_->copy_stored_chunk(source, chunk);
+        if (!copied) {
+            impl_->poisoned = true;
+            return status_failure(
+                std::move(copied).error());
+        }
+        if (source.preview().has_value() &&
+            chunk.key.fourcc == FOURCC_THMB &&
+            chunk.payload_offset ==
+                source.preview()->offset &&
+            chunk.stored_bytes ==
+                source.preview()->bytes) {
+            impl_->preview_locator = PreviewLocator{
+                .offset = copied->payload_offset,
+                .bytes = static_cast<std::uint32_t>(
+                    copied->stored_bytes),
+                .format = PreviewFormat::Png,
+            };
+        }
+        impl_->rows[copied->key] =
+            std::move(*copied);
+        impl_->touched.insert(chunk.key);
+        return {};
+    }
+
     lfs::Result<void> ProjectWriter::erase(const ChunkKey& key) {
         if (auto ready = impl_->require_ready(); !ready) {
             return ready;
@@ -2423,12 +2621,28 @@ namespace lfs::io::project {
         }
         if (impl_->mode == Impl::Mode::Create) {
             impl_->file.reset();
+            if (auto boundary =
+                    impl_->notify(
+                        CommitBoundary::
+                            ReplacementReady);
+                !boundary) {
+                return boundary;
+            }
             auto replacement =
                 detail::atomic_replace(impl_->active_path,
                                        impl_->destination_path);
             if (!replacement) {
                 impl_->keep_temporary = true;
                 return status_failure(std::move(replacement).error());
+            }
+            if (auto boundary =
+                    impl_->notify(
+                        CommitBoundary::
+                            ReplacementPublished);
+                !boundary) {
+                impl_->record_post_publish_note(
+                    std::move(boundary).error(),
+                    "replacement-published observer");
             }
             if (auto validation =
                     validate_path(impl_->destination_path);
@@ -2443,10 +2657,23 @@ namespace lfs::io::project {
                 }
                 return validation;
             }
+            impl_->committed = true;
+            impl_->cursor = *committed_end;
+            if (auto boundary =
+                    impl_->notify(
+                        CommitBoundary::
+                            ReplacementValidated);
+                !boundary) {
+                impl_->record_post_publish_note(
+                    std::move(boundary).error(),
+                    "replacement-validated observer");
+            }
             if (auto finish = detail::finish_atomic_replace(
                     *replacement, impl_->destination_path);
                 !finish) {
-                return finish;
+                impl_->record_post_publish_note(
+                    std::move(finish).error(),
+                    "replacement backup cleanup");
             }
         }
 
@@ -2454,7 +2681,9 @@ namespace lfs::io::project {
         impl_->cursor = *committed_end;
         if (auto boundary = impl_->notify(CommitBoundary::Committed);
             !boundary) {
-            return boundary;
+            impl_->record_post_publish_note(
+                std::move(boundary).error(),
+                "committed observer");
         }
         return {};
     }
@@ -2503,6 +2732,25 @@ namespace lfs::io::project {
                 "Autosave sidecars are replaced, not compacted.",
                 "compaction creates a master COMPACTION root",
                 "superblock.container_role"));
+        }
+        auto bound_autosaves =
+            detail::valid_bound_autosaves_locked(
+                path, *source_result);
+        if (!bound_autosaves) {
+            return status_failure(
+                std::move(bound_autosaves).error());
+        }
+        if (!bound_autosaves->empty()) {
+            return status_failure(writer_error(
+                lfs::ErrorCode::FailedPrecondition,
+                path,
+                "A current autosave must be merged or discarded before compaction.",
+                std::format(
+                    "{} valid autosave candidate(s) bind to master head {}",
+                    bound_autosaves->size(),
+                    source_result->commit()
+                        .commit_uuid.to_string()),
+                "compaction.autosave_binding"));
         }
         if (auto verify = source_result->verify_all(); !verify) {
             return verify;

@@ -1530,7 +1530,7 @@ Deprecated raw dataset-camera properties are still available on `Camera`:
 | `resume_training()`        | `None`           | Resume                        |
 | `stop_training()`          | `None`           | Stop                          |
 | `reset_training()`         | `None`           | Reset to iteration 0          |
-| `save_checkpoint()`        | `None`           | Save checkpoint               |
+| `project_save()`           | `None`           | Save the active `.licht` project |
 | `switch_to_edit_mode()`    | `None`           | Enter edit mode               |
 | `has_trainer()`            | `bool`           | Trainer loaded                |
 | `trainer_state()`          | `str`            | State string                  |

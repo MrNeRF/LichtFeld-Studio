@@ -9,6 +9,7 @@
 #include "core/uuid.hpp"
 
 #include <array>
+#include <atomic>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -207,6 +208,10 @@ namespace lfs::io::project {
         Version writer_version = CURRENT_CONTAINER_VERSION;
         CapabilitySet writer_capabilities = supported_writer_capabilities();
         bool allow_unsupported_inspection = false;
+        // Optional read telemetry. Structural open-time reads are deliberately
+        // excluded; only chunk payload bytes increment this counter.
+        std::shared_ptr<std::atomic_uint64_t>
+            payload_bytes_read = {};
     };
 
     struct SuperblockInfo {
@@ -377,6 +382,7 @@ namespace lfs::io::project {
         [[nodiscard]] const std::vector<ChunkInfo>& chunks() const noexcept;
         [[nodiscard]] const std::vector<std::string>& warnings() const noexcept;
         [[nodiscard]] const std::optional<PreviewLocator>& preview() const noexcept;
+        [[nodiscard]] const ReaderOptions& reader_options() const noexcept;
         [[nodiscard]] WriteCompatibility write_compatibility() const;
 
         [[nodiscard]] const ChunkInfo* find(const ChunkKey& key) const noexcept;
@@ -422,10 +428,39 @@ namespace lfs::io::project {
         AppendFlushed = 7,
         HeadWritten = 8,
         HeadFlushed = 9,
-        Committed = 10,
+        ReplacementReady = 10,
+        ReplacementPublished = 11,
+        ReplacementValidated = 12,
+        Committed = 13,
     };
 
     using CommitBoundaryObserver = std::function<void(CommitBoundary)>;
+
+    // A copyable lease for one held project writer lock. Recovery sessions use
+    // it to keep the original master exclusive while a staging document is
+    // open, and pass the same OS lock through the eventual merge writer.
+    class LFS_IO_API WriterLockLease {
+    public:
+        WriterLockLease() noexcept;
+        WriterLockLease(const WriterLockLease&) noexcept;
+        WriterLockLease& operator=(const WriterLockLease&) noexcept;
+        WriterLockLease(WriterLockLease&&) noexcept;
+        WriterLockLease& operator=(WriterLockLease&&) noexcept;
+        ~WriterLockLease();
+
+        [[nodiscard]] static lfs::Result<WriterLockLease>
+        acquire(const std::filesystem::path& project_path);
+        [[nodiscard]] bool valid() const noexcept;
+        [[nodiscard]] bool owns(
+            const std::filesystem::path& project_path) const noexcept;
+        // Invalidates every copy of this lease and releases the OS lock.
+        void release() noexcept;
+
+    private:
+        struct Impl;
+        explicit WriterLockLease(std::shared_ptr<Impl> impl) noexcept;
+        std::shared_ptr<Impl> impl_;
+    };
 
     struct CreateOptions {
         lfs::core::Uuid project_uuid;
@@ -438,6 +473,12 @@ namespace lfs::io::project {
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         CommitBoundaryObserver boundary_observer;
+        // Sidecars use the master path here so creation, replacement, and
+        // recovery cleanup all share the master's exclusive writer lock.
+        ReaderOptions writer_lock_anchor_compatibility = {};
+        std::optional<std::filesystem::path> writer_lock_anchor;
+        std::optional<WriterLockLease> writer_lock_lease =
+            std::nullopt;
     };
 
     struct AppendOptions {
@@ -445,6 +486,8 @@ namespace lfs::io::project {
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         CommitBoundaryObserver boundary_observer;
+        std::optional<WriterLockLease> writer_lock_lease =
+            std::nullopt;
     };
 
     struct ChunkWriteOptions {
@@ -515,6 +558,12 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         carry_forward_opaque(const ChunkInfo& chunk, const CleanProof& proof,
                              std::uint64_t current_mutation_epoch);
+        // Copies the exact stored representation through bounded windows.
+        // Used by compaction/recovery so unknown fourccs and newer known
+        // chapter versions remain byte-for-byte opaque.
+        [[nodiscard]] lfs::Result<void>
+        copy_chunk_verbatim(const ProjectReader& source,
+                            const ChunkInfo& chunk);
         [[nodiscard]] lfs::Result<void> add_sidecar_base_reference(const ChunkInfo& base);
         [[nodiscard]] lfs::Result<void> erase(const ChunkKey& key);
 
@@ -522,7 +571,11 @@ namespace lfs::io::project {
         // append semantics: the second flush completed, so the generation is
         // already published and durable. The file is authoritative; callers
         // must not retry the same logical save from stale in-memory state.
+        // Create-mode cleanup failures after validated atomic publication do
+        // not fail commit(); they are exposed through post_publish_note().
         [[nodiscard]] lfs::Result<void> commit();
+        [[nodiscard]] const std::optional<lfs::Error>&
+        post_publish_note() const noexcept;
 
     private:
         struct Impl;

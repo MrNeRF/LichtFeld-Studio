@@ -5,10 +5,14 @@
 
 #include "project_lifecycle.hpp"
 
+#include "core/assert.hpp"
 #include "core/config_paths.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/modal_request.hpp"
+#include "gui/gui_manager.hpp"
+#include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
 #include "operation/undo_history.hpp"
@@ -90,16 +94,40 @@ namespace lfs::vis::project {
             return lfs::format_for_developer(error);
         }
 
+        [[nodiscard]] std::vector<lfs::core::Uuid>
+        selectedNodeUuids(VisualizerImpl& viewer);
+
         [[nodiscard]] lfs::Result<
             lfs::training::
                 ProjectSnapshotDocumentContext>
         captureTrainingDocumentContext(
             VisualizerImpl& viewer,
-            const ProjectDocument& document) {
+            const ProjectDocument& document,
+            const lfs::io::project::CommitKind
+                durable_commit_kind,
+            std::optional<
+                lfs::io::project::WriterLockLease>
+                writer_lock_lease =
+                    std::nullopt) {
             auto session =
                 viewer.captureProjectSession();
             if (!session) {
                 return std::move(session).error();
+            }
+            auto* const parameter_manager =
+                viewer.getParameterManager();
+            if (!parameter_manager) {
+                return fail<lfs::training::
+                                ProjectSnapshotDocumentContext>(
+                    lfs::ErrorCode::Unavailable,
+                    "The parameter manager is unavailable.",
+                    "Training project snapshots require live role-qualified parameters",
+                    "project.parameters");
+            }
+            auto parameters = parameter_manager
+                                  ->capturePendingProjectState();
+            if (!parameters) {
+                return std::move(parameters).error();
             }
             return lfs::training::
                 ProjectSnapshotDocumentContext{
@@ -122,6 +150,15 @@ namespace lfs::vis::project {
                             session->sequencer),
                     .metrics =
                         std::move(session->metrics),
+                    .selected_node_uuids =
+                        selectedNodeUuids(viewer),
+                    .parameters =
+                        std::move(*parameters),
+                    .durable_commit_kind =
+                        durable_commit_kind,
+                    .writer_lock_lease =
+                        std::move(
+                            writer_lock_lease),
                 };
         }
 
@@ -336,6 +373,21 @@ namespace lfs::vis::project {
                 json.value("reopen_last_project", true);
             settings.auto_save_on_close =
                 json.value("auto_save_on_close", true);
+            settings.autosave_interval_seconds =
+                json.value(
+                    "autosave_interval_seconds",
+                    std::uint64_t{5 * 60});
+            settings
+                .autosave_dirty_epoch_threshold =
+                std::max<std::uint64_t>(
+                    1,
+                    json.value(
+                        "autosave_dirty_epoch_threshold",
+                        std::uint64_t{20}));
+            settings.compaction_idle_seconds =
+                json.value(
+                    "compaction_idle_seconds",
+                    std::uint64_t{30});
             const auto entries = json.find("mru");
             if (entries != json.end()) {
                 if (!entries->is_array()) {
@@ -409,6 +461,15 @@ namespace lfs::vis::project {
                  settings.reopen_last_project},
                 {"auto_save_on_close",
                  settings.auto_save_on_close},
+                {"autosave_interval_seconds",
+                 settings
+                     .autosave_interval_seconds},
+                {"autosave_dirty_epoch_threshold",
+                 settings
+                     .autosave_dirty_epoch_threshold},
+                {"compaction_idle_seconds",
+                 settings
+                     .compaction_idle_seconds},
                 {"mru", std::move(entries)},
             };
             const auto temporary =
@@ -497,6 +558,7 @@ namespace lfs::vis::project {
               settings_path.value_or(
                   lfs::core::user_config_dir() /
                   "project_lifecycle.json")) {
+        resetMaintenanceClocks();
         if (auto loaded =
                 loadProjectLifecycleSettings(
                     settings_path_);
@@ -523,10 +585,26 @@ namespace lfs::vis::project {
 
     ProjectLifecycle::~ProjectLifecycle() {
         epoch_.fetch_add(1, std::memory_order_acq_rel);
-        std::lock_guard lock(thread_mutex_);
-        for (auto& thread : hydration_threads_) {
-            thread.request_stop();
+        project_write_thread_.request_stop();
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
         }
+        stopHydrationThreads();
+        document_.reset();
+        cleanupRecoverySession();
+    }
+
+    void ProjectLifecycle::stopHydrationThreads() {
+        std::vector<std::jthread> hydration_threads;
+        {
+            std::lock_guard lock(thread_mutex_);
+            for (auto& thread : hydration_threads_) {
+                thread.request_stop();
+            }
+            hydration_threads.swap(
+                hydration_threads_);
+        }
+        hydration_threads.clear();
     }
 
     std::string ProjectLifecycle::hydrationName(
@@ -563,6 +641,14 @@ namespace lfs::vis::project {
                 "The current project is still being saved.",
                 "Project switching is blocked until the close save finishes",
                 "project.save");
+        }
+        if (viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "A project write is still running.",
+                "Project switching waits for save, autosave, or compaction",
+                "project.job");
         }
         if (disposition ==
                 ProjectSwitchDisposition::RequireClean &&
@@ -608,8 +694,1105 @@ namespace lfs::vis::project {
         return {};
     }
 
+    lfs::Result<void>
+    ProjectLifecycle::setAutosaveIntervalSeconds(
+        const std::uint64_t seconds) {
+        const auto previous =
+            settings_.autosave_interval_seconds;
+        settings_.autosave_interval_seconds =
+            seconds;
+        if (auto saved = persistSettings(); !saved) {
+            settings_.autosave_interval_seconds =
+                previous;
+            return saved;
+        }
+        last_autosave_at_ =
+            std::chrono::steady_clock::now();
+        return {};
+    }
+
+    void ProjectLifecycle::resetMaintenanceClocks() {
+        const auto now =
+            std::chrono::steady_clock::now();
+        last_autosave_at_ = now;
+        last_mutation_at_ = now;
+        next_storage_check_at_ = now;
+        if (document_) {
+            last_autosaved_dirty_epoch_ =
+                document_->dirty_epoch();
+        }
+        last_autosaved_scene_serial_ =
+            scene_mutation_serial_.load(
+                std::memory_order_acquire);
+    }
+
+    void ProjectLifecycle::cleanupRecoverySession() {
+        if (recovery_session_) {
+            const bool document_still_sources_temporary =
+                recovery_session_path_ && document_ &&
+                document_->source_path() &&
+                document_->source_path()
+                        ->lexically_normal() ==
+                    recovery_session_path_
+                        ->lexically_normal();
+            LFS_DEBUG_ASSERT_MSG(
+                !document_still_sources_temporary,
+                "Recovery cleanup requires document replacement or durable rebinding first");
+            if (document_still_sources_temporary) {
+                LOG_ERROR(
+                    "Refusing to release recovered-session staging file {} while the live project document still sources it",
+                    lfs::core::path_to_utf8(
+                        *recovery_session_path_));
+                return;
+            }
+            recovery_session_->detach_document();
+            if (auto released =
+                    recovery_session_->release();
+                !released) {
+                LOG_WARN(
+                    "Could not release recovered-session staging file: {}",
+                    developerError(
+                        released.error()));
+            }
+            recovery_session_.reset();
+        } else if (recovery_session_path_) {
+            std::error_code error;
+            std::filesystem::remove(
+                *recovery_session_path_, error);
+            if (error) {
+                LOG_WARN(
+                    "Could not remove recovered-session staging file {}: {}",
+                    lfs::core::path_to_utf8(
+                        *recovery_session_path_),
+                    error.message());
+            }
+        }
+        recovery_session_path_.reset();
+        recovered_master_path_.reset();
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::startDocumentWrite(
+        const ProjectWritePurpose purpose,
+        std::shared_ptr<ProjectDocument> document,
+        std::filesystem::path destination,
+        ProjectDocumentSaveOptions options,
+        std::optional<
+            lfs::io::project::
+                ProjectDocumentAutosaveOptions>
+            autosave) {
+        if (!cached_project_info_) {
+            cached_project_info_ =
+                ProjectInfo{
+                    .path =
+                        recovered_master_path_
+                            ? recovered_master_path_
+                            : document
+                                  ->source_path(),
+                    .project_uuid =
+                        document
+                            ->project_uuid()
+                            .to_string(),
+                    .generation =
+                        document->generation(),
+                    .dirty =
+                        document->dirty(),
+                    .dirty_chapters =
+                        document
+                            ->dirty_chapters(),
+                    .hydration_state =
+                        hydrationName(
+                            hydration_.load(
+                                std::memory_order_acquire)),
+                    .payloads = {},
+                    .contains_embedded_secrets =
+                        containsEmbeddedSecrets(),
+                    .reopen_last_project =
+                        settings_
+                            .reopen_last_project,
+                    .auto_save_on_close =
+                        settings_
+                            .auto_save_on_close,
+                    .autosave_interval_seconds =
+                        settings_
+                            .autosave_interval_seconds,
+                    .autosave_dirty_epoch_threshold =
+                        settings_
+                            .autosave_dirty_epoch_threshold,
+                    .project_write_running =
+                        true,
+                    .project_write_stage =
+                        autosave
+                            ? "Preparing autosave"
+                            : "Preparing project save",
+                    .project_write_progress =
+                        0.0F,
+                    .project_write_error =
+                        {},
+                    .autosave_sequence =
+                        autosave_sequence_,
+                    .recovery_session =
+                        recovered_master_path_
+                            .has_value(),
+                    .compaction_suggested =
+                        compaction_suggested_,
+                    .physical_bytes =
+                        storage_stats_
+                            .physical_bytes,
+                    .estimated_live_bytes =
+                        storage_stats_
+                            .estimated_live_bytes,
+                    .dead_bytes =
+                        storage_stats_.dead_bytes,
+                    .dead_ratio =
+                        storage_stats_.dead_ratio,
+                    .hydration_error =
+                        hydration_error_,
+                    .recent_projects =
+                        {},
+                };
+        }
+        auto& jobs = viewer_.jobs();
+        auto handle = jobs.init(
+            JobType::ProjectWrite,
+            autosave ? "Preparing autosave"
+                     : "Preparing project save");
+        if (!handle) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Another project write is already running.",
+                "Project save, autosave, and compaction share one exclusive job slot",
+                "project.job");
+        }
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+        }
+        project_write_job_ = *handle;
+        project_write_purpose_ = purpose;
+        project_write_destination_ =
+            destination;
+        last_project_write_error_.clear();
+        std::vector<std::byte> owned_preview(
+            options.preview_png.begin(),
+            options.preview_png.end());
+        try {
+            project_write_thread_ =
+                std::jthread(
+                    [this, handle = *handle,
+                     document =
+                         std::move(document),
+                     destination =
+                         std::move(destination),
+                     options =
+                         std::move(options),
+                     owned_preview =
+                         std::move(
+                             owned_preview),
+                     autosave =
+                         std::move(autosave)](
+                        const std::stop_token stop) mutable {
+                        auto& registry =
+                            viewer_.jobs();
+                        options.preview_png =
+                            owned_preview;
+                        registry.work(handle);
+                        registry.report(
+                            handle, 0.05F,
+                            autosave
+                                ? "Writing autosave sidecar"
+                                : "Writing project");
+                        const std::lock_guard
+                            document_lock(
+                                document_access_mutex_);
+                        lfs::Result<
+                            lfs::io::project::
+                                ProjectDocumentSaveReport>
+                            saved =
+                                autosave
+                                    ? document
+                                          ->save_autosave(
+                                              destination,
+                                              *autosave)
+                                    : (document
+                                                   ->source_path() &&
+                                               document
+                                                       ->source_path()
+                                                       ->lexically_normal() ==
+                                                   destination
+                                                       .lexically_normal()
+                                           ? document
+                                                 ->save(
+                                                     destination,
+                                                     options)
+                                           : document
+                                                 ->save_as(
+                                                     destination,
+                                                     options));
+                        std::string error;
+                        if (!saved) {
+                            error =
+                                developerError(
+                                    saved.error());
+                        } else {
+                            registry.report(
+                                handle, 0.95F,
+                                "Verifying published project");
+                        }
+                        registry.finishWork(
+                            handle,
+                            stop.stop_requested(),
+                            std::move(error));
+                        queueProjectWriteSettlement(
+                            handle);
+                    });
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): thread construction failure is returned as a typed job error.
+            jobs.failed(
+                *handle, error.what());
+            jobs.free(*handle);
+            project_write_job_.reset();
+            project_write_purpose_ =
+                ProjectWritePurpose::None;
+            return fail<void>(
+                lfs::ErrorCode::Unavailable,
+                "The project writer could not start.",
+                error.what(), "project.job");
+        }
+        return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::startTrainingWrite(
+        const ProjectWritePurpose purpose,
+        const std::uint64_t request_id,
+        std::filesystem::path master_path,
+        const std::uint64_t dirty_epoch,
+        const std::uint64_t scene_serial) {
+        auto* const trainer =
+            viewer_.getTrainer();
+        if (!trainer || request_id == 0) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The training snapshot request could not start.",
+                "Trainer and nonzero request identity are required",
+                "project.training_snapshot");
+        }
+        auto handle = viewer_.jobs().init(
+            JobType::ProjectWrite,
+            purpose ==
+                    ProjectWritePurpose::
+                        TrainingAutosave
+                ? "Waiting for training autosave safe point"
+                : "Waiting for training save safe point");
+        if (!handle) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Another project write is already running.",
+                "Training snapshots share project-write exclusivity",
+                "project.job");
+        }
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+        }
+        project_write_job_ = *handle;
+        project_write_purpose_ = purpose;
+        project_write_destination_ =
+            std::move(master_path);
+        project_write_dirty_epoch_ =
+            dirty_epoch;
+        project_write_scene_serial_ =
+            scene_serial;
+        last_project_write_error_.clear();
+        try {
+            project_write_thread_ =
+                std::jthread(
+                    [this, trainer,
+                     handle = *handle,
+                     request_id](
+                        const std::stop_token stop) {
+                        auto& jobs =
+                            viewer_.jobs();
+                        jobs.work(handle);
+                        std::string error;
+                        bool canceled = false;
+                        while (true) {
+                            if (stop.stop_requested() ||
+                                jobs.cancelRequested(
+                                    handle)) {
+                                canceled = true;
+                                auto cancellation =
+                                    lifecycleError(
+                                        lfs::ErrorCode::
+                                            Cancelled,
+                                        "The training snapshot wait was canceled.",
+                                        std::format(
+                                            "Lifecycle cancellation terminalized trainer request {} before settlement",
+                                            request_id),
+                                        "project.training_snapshot");
+                                trainer
+                                    ->cancel_project_snapshot_request(
+                                        request_id,
+                                        cancellation);
+                                error = developerError(
+                                    cancellation);
+                                break;
+                            }
+                            const auto metrics =
+                                trainer
+                                    ->get_project_snapshot_metrics();
+                            if (metrics
+                                    .last_failed_request_id >=
+                                request_id) {
+                                error =
+                                    metrics
+                                            .last_writer_error
+                                            .empty()
+                                        ? "The training snapshot request was superseded or failed"
+                                        : metrics
+                                              .last_writer_error;
+                                break;
+                            }
+                            if (metrics
+                                    .last_completed_request_id >=
+                                request_id) {
+                                break;
+                            }
+                            jobs.report(
+                                handle,
+                                metrics
+                                        .writer_in_flight
+                                    ? 0.7F
+                                    : 0.25F,
+                                metrics
+                                        .writer_in_flight
+                                    ? "Writing captured training snapshot"
+                                    : "Waiting for training safe point");
+                            std::this_thread::
+                                sleep_for(
+                                    std::chrono::
+                                        milliseconds(
+                                            5));
+                        }
+                        jobs.finishWork(
+                            handle,
+                            canceled,
+                            std::move(error));
+                        queueProjectWriteSettlement(
+                            handle);
+                    });
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): thread construction failure is returned as a typed job error.
+            viewer_.jobs().failed(
+                *handle, error.what());
+            viewer_.jobs().free(*handle);
+            project_write_job_.reset();
+            project_write_purpose_ =
+                ProjectWritePurpose::None;
+            return fail<void>(
+                lfs::ErrorCode::Unavailable,
+                "The training snapshot monitor could not start.",
+                error.what(),
+                "project.training_snapshot");
+        }
+        return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::startAutosave() {
+        if (!document_ ||
+            !document_->source_path() ||
+            recovered_master_path_) {
+            return {};
+        }
+        if (viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            return {};
+        }
+        const auto hydration = hydration_.load(
+            std::memory_order_acquire);
+        if (hydration != Hydration::Empty &&
+            hydration != Hydration::Complete) {
+            return {};
+        }
+
+        const bool training =
+            viewer_.getTrainer() &&
+            viewer_.getTrainerManager() &&
+            viewer_.getTrainerManager()
+                ->isTrainingActive();
+        if (training) {
+            auto context =
+                captureTrainingDocumentContext(
+                    viewer_, *document_,
+                    lfs::io::project::
+                        CommitKind::Explicit);
+            if (!context) {
+                return lfs::Status::failure(
+                    std::move(context).error());
+            }
+            auto base =
+                lfs::io::project::
+                    ProjectReader::open(
+                        *document_
+                             ->source_path());
+            if (!base) {
+                return lfs::Status::failure(
+                    std::move(base).error());
+            }
+            const auto sequence =
+                autosave_sequence_ + 1;
+            const auto dirty_epoch =
+                document_->dirty_epoch();
+            const auto scene_serial =
+                scene_mutation_serial_.load(
+                    std::memory_order_acquire);
+            const auto request_id =
+                viewer_.getTrainer()
+                    ->request_project_autosave(
+                        *document_
+                             ->source_path(),
+                        base->commit()
+                            .commit_uuid,
+                        sequence,
+                        std::move(*context));
+            auto started =
+                startTrainingWrite(
+                    ProjectWritePurpose::
+                        TrainingAutosave,
+                    request_id,
+                    *document_
+                         ->source_path(),
+                    dirty_epoch,
+                    scene_serial);
+            if (!started) {
+                return started;
+            }
+            project_write_autosave_sequence_ =
+                sequence;
+            return {};
+        }
+        if (auto synchronized =
+                synchronizeDocumentFromViewer();
+            !synchronized) {
+            return synchronized;
+        }
+        if (!document_->dirty()) {
+            last_autosave_at_ =
+                std::chrono::steady_clock::now();
+            return {};
+        }
+
+        auto base = lfs::io::project::
+            ProjectReader::open(
+                *document_->source_path());
+        if (!base) {
+            return lfs::Status::failure(
+                std::move(base).error());
+        }
+        const auto sequence =
+            autosave_sequence_ + 1;
+        const auto dirty_epoch =
+            document_->dirty_epoch();
+        const auto scene_serial =
+            scene_mutation_serial_.load(
+                std::memory_order_acquire);
+        const auto sidecar =
+            lfs::io::project::
+                autosave_sidecar_path(
+                    *document_->source_path());
+        auto started = startDocumentWrite(
+            ProjectWritePurpose::Autosave,
+            document_, sidecar, {},
+            lfs::io::project::
+                ProjectDocumentAutosaveOptions{
+                    .file_uuid =
+                        lfs::core::
+                            generate_uuid_v4(),
+                    .base_explicit_commit_uuid =
+                        base->commit()
+                            .commit_uuid,
+                    .autosave_sequence =
+                        sequence,
+                    .snapshot_uuid =
+                        lfs::core::
+                            generate_uuid_v4(),
+                    .index_compression =
+                        lfs::io::project::
+                            IndexCompression::Zstd,
+                    .disk_reserve_bytes =
+                        64ull * 1024 * 1024,
+                    .boundary_observer =
+                        {},
+                });
+        if (!started) {
+            return started;
+        }
+        project_write_autosave_sequence_ =
+            sequence;
+        project_write_dirty_epoch_ =
+            dirty_epoch;
+        project_write_scene_serial_ =
+            scene_serial;
+        return {};
+    }
+
+    void ProjectLifecycle::refreshStorageStats() {
+        const auto path =
+            recovered_master_path_
+                ? recovered_master_path_
+                : (document_
+                       ? document_
+                             ->source_path()
+                       : std::nullopt);
+        if (!path) {
+            storage_stats_ = {};
+            compaction_suggested_ = false;
+            return;
+        }
+        auto stats =
+            lfs::io::project::
+                project_storage_stats(*path);
+        if (!stats) {
+            LOG_WARN(
+                "Could not inspect .licht dead bytes: {}",
+                developerError(stats.error()));
+            return;
+        }
+        storage_stats_ = *stats;
+        compaction_suggested_ =
+            storage_stats_.dead_ratio >= 0.50;
+        if (compaction_suggested_ &&
+            !compaction_suggestion_reported_) {
+            compaction_suggestion_reported_ =
+                true;
+            LOG_INFO(
+                "Project compaction suggested: {} dead bytes ({:.1f}%)",
+                storage_stats_.dead_bytes,
+                storage_stats_.dead_ratio *
+                    100.0);
+        }
+        if (!compaction_suggested_) {
+            compaction_suggestion_reported_ =
+                false;
+        }
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::startCompaction(
+        const bool automatic) {
+        if (!document_ ||
+            !document_->source_path()) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "This project has no durable master to compact.",
+                "Save the project before compacting it",
+                "project.path");
+        }
+        if (recovered_master_path_) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Save or discard the recovered state before compacting.",
+                "Compaction cannot make the recovery base unreachable",
+                "project.recovery");
+        }
+        if (viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Another project write is already running.",
+                "Project save, autosave, and compaction are exclusive",
+                "project.job");
+        }
+        if (hasDirtyProject()) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Save the project before compacting it.",
+                "Compaction only rewrites a durable clean head",
+                "project.dirty");
+        }
+        auto recovery =
+            lfs::io::project::
+                inspect_autosave_recovery(
+                    *document_->source_path());
+        if (!recovery) {
+            return lfs::Status::failure(
+                std::move(recovery).error());
+        }
+        if (recovery->disposition ==
+            lfs::io::project::
+                RecoveryDisposition::Offer) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Recover or discard the autosave before compacting.",
+                "The sidecar base must remain reachable until a recovery decision is made",
+                "project.recovery");
+        }
+        auto handle = viewer_.jobs().init(
+            JobType::ProjectWrite,
+            automatic ? "Idle project compaction"
+                      : "Compacting project");
+        if (!handle) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Another project write is already running.",
+                "Project-write exclusivity was lost before compaction",
+                "project.job");
+        }
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+        }
+        const auto path =
+            *document_->source_path();
+        project_write_job_ = *handle;
+        project_write_purpose_ =
+            ProjectWritePurpose::Compaction;
+        project_write_destination_ = path;
+        project_write_automatic_ =
+            automatic;
+        last_project_write_error_.clear();
+        try {
+            project_write_thread_ =
+                std::jthread(
+                    [this, handle = *handle,
+                     path](
+                        const std::stop_token stop) {
+                        auto& jobs =
+                            viewer_.jobs();
+                        jobs.work(handle);
+                        auto compacted =
+                            lfs::io::project::
+                                ProjectWriter::compact(
+                                    path,
+                                    lfs::io::project::
+                                        CompactionOptions{
+                                            .compatibility =
+                                                {},
+                                            .new_file_uuid =
+                                                lfs::core::
+                                                    generate_uuid_v4(),
+                                            .commit_uuid =
+                                                lfs::core::
+                                                    generate_uuid_v4(),
+                                            .snapshot_uuid =
+                                                {},
+                                            .creation_time_unix_ns =
+                                                unixTimeNs(),
+                                            .wallclock_unix_ns =
+                                                unixTimeNs(),
+                                            .disk_reserve_bytes =
+                                                64ull *
+                                                1024 *
+                                                1024,
+                                            .boundary_observer =
+                                                [this, handle](
+                                                    const lfs::io::project::
+                                                        CommitBoundary
+                                                            boundary) {
+                                                    const auto value =
+                                                        static_cast<float>(
+                                                            static_cast<int>(
+                                                                boundary));
+                                                    viewer_.jobs().report(
+                                                        handle,
+                                                        value /
+                                                            static_cast<
+                                                                float>(
+                                                                static_cast<
+                                                                    int>(
+                                                                    lfs::io::project::
+                                                                        CommitBoundary::
+                                                                            Committed)),
+                                                        "Building and verifying compact project");
+                                                },
+                                        });
+                        jobs.finishWork(
+                            handle,
+                            stop.stop_requested(),
+                            compacted
+                                ? std::string{}
+                                : developerError(
+                                      compacted
+                                          .error()));
+                        queueProjectWriteSettlement(
+                            handle);
+                    });
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): thread construction failure is returned as a typed job error.
+            viewer_.jobs().failed(
+                *handle, error.what());
+            viewer_.jobs().free(*handle);
+            project_write_job_.reset();
+            project_write_purpose_ =
+                ProjectWritePurpose::None;
+            return fail<void>(
+                lfs::ErrorCode::Unavailable,
+                "The compaction worker could not start.",
+                error.what(), "project.job");
+        }
+        return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::compact() {
+        return startCompaction(false);
+    }
+
+    void ProjectLifecycle::queueProjectWriteSettlement(
+        const JobHandle handle) {
+        const auto settle =
+            [this, handle] {
+                if (project_write_job_ &&
+                    *project_write_job_ == handle) {
+                    settleProjectWrite();
+                }
+            };
+        if (!viewer_.postWork({
+                .run = settle,
+                .cancel = settle,
+            })) {
+            viewer_.wakeMainLoop();
+        }
+    }
+
+    void ProjectLifecycle::settleProjectWrite() {
+        if (!project_write_job_) {
+            return;
+        }
+        auto& jobs = viewer_.jobs();
+        const auto snapshot =
+            jobs.update(*project_write_job_);
+        if (!snapshot ||
+            snapshot->status !=
+                JobStatus::CompletionPending) {
+            return;
+        }
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+        }
+
+        std::string error = snapshot->error;
+        if (snapshot->worker_canceled &&
+            error.empty()) {
+            error =
+                "The project write was canceled.";
+        }
+        if (error.empty() &&
+            (project_write_purpose_ ==
+                 ProjectWritePurpose::
+                     ExplicitSave ||
+             project_write_purpose_ ==
+                 ProjectWritePurpose::SaveAs ||
+             project_write_purpose_ ==
+                 ProjectWritePurpose::CloseSave ||
+             project_write_purpose_ ==
+                 ProjectWritePurpose::
+                     TrainingExplicitSave)) {
+            if (project_write_purpose_ ==
+                ProjectWritePurpose::
+                    TrainingExplicitSave) {
+                if (auto adopted =
+                        adoptCompletedTrainingSnapshot();
+                    !adopted) {
+                    error =
+                        developerError(
+                            adopted.error());
+                }
+            }
+        }
+        if (error.empty() &&
+            (project_write_purpose_ ==
+                 ProjectWritePurpose::
+                     ExplicitSave ||
+             project_write_purpose_ ==
+                 ProjectWritePurpose::SaveAs ||
+             project_write_purpose_ ==
+                 ProjectWritePurpose::CloseSave ||
+             project_write_purpose_ ==
+                 ProjectWritePurpose::
+                     TrainingExplicitSave)) {
+            std::string cleanup_warning;
+            if (recovery_session_) {
+                // ProjectDocument::save_as (or the training-snapshot
+                // adoption path) has rebound every lazy source row to the
+                // durable destination before the worker reports success.
+                recovery_session_->detach_document();
+                if (auto released =
+                        recovery_session_
+                            ->release();
+                    !released) {
+                    cleanup_warning =
+                        developerError(
+                            released.error());
+                }
+            }
+            if (auto removed =
+                    lfs::io::project::
+                        remove_autosave_artifacts(
+                            project_write_destination_);
+                !removed) {
+                if (!cleanup_warning.empty()) {
+                    cleanup_warning += "; ";
+                }
+                cleanup_warning +=
+                    developerError(
+                        removed.error());
+            }
+            declined_recovery_.reset();
+            if (!cleanup_warning.empty()) {
+                LOG_WARN(
+                    "Project save is durable, but autosave cleanup failed: {}",
+                    cleanup_warning);
+                if (auto* gui =
+                        viewer_.getGuiManager()) {
+                    gui->enqueueToast({
+                        .title =
+                            "Project saved with a cleanup warning",
+                        .message =
+                            "The project is safely saved. A stale autosave file could not be removed and will be retried on the next open.",
+                        .level =
+                            lfs::vis::gui::
+                                ErrorNoticeLevel::
+                                    Warning,
+                        .fingerprint =
+                            std::hash<std::string>{}(
+                                "project-autosave-cleanup-warning"),
+                    });
+                }
+            }
+        }
+        if (error.empty() &&
+            project_write_purpose_ ==
+                ProjectWritePurpose::Compaction) {
+            auto reopened =
+                ProjectDocument::open(
+                    project_write_destination_,
+                    {
+                        .reader = {},
+                        .geometry = {},
+                        .defer_geometry_payloads =
+                            true,
+                    });
+            if (!reopened) {
+                error = developerError(
+                    reopened.error());
+            } else {
+                document_ =
+                    std::make_shared<
+                        ProjectDocument>(
+                        std::move(*reopened));
+            }
+        }
+
+        if (error.empty()) {
+            jobs.completed(*project_write_job_);
+            if (project_write_purpose_ ==
+                    ProjectWritePurpose::
+                        Autosave ||
+                project_write_purpose_ ==
+                    ProjectWritePurpose::
+                        TrainingAutosave) {
+                autosave_sequence_ = std::max(
+                    autosave_sequence_,
+                    project_write_autosave_sequence_);
+                last_autosaved_dirty_epoch_ =
+                    project_write_dirty_epoch_;
+                last_autosaved_scene_serial_ =
+                    project_write_scene_serial_;
+                last_autosave_at_ =
+                    std::chrono::steady_clock::
+                        now();
+                LOG_INFO(
+                    "Autosave sidecar sequence {} published",
+                    autosave_sequence_);
+            } else if (
+                project_write_purpose_ ==
+                    ProjectWritePurpose::
+                        ExplicitSave ||
+                project_write_purpose_ ==
+                    ProjectWritePurpose::
+                        SaveAs ||
+                project_write_purpose_ ==
+                    ProjectWritePurpose::
+                        CloseSave ||
+                project_write_purpose_ ==
+                    ProjectWritePurpose::
+                        TrainingExplicitSave) {
+                rememberProject(
+                    settings_,
+                    document_->project_uuid(),
+                    project_write_destination_);
+                if (auto persisted =
+                        persistSettings();
+                    !persisted) {
+                    LOG_WARN(
+                        "Project saved, but MRU settings failed: {}",
+                        developerError(
+                            persisted.error()));
+                }
+                cleanupRecoverySession();
+                resetMaintenanceClocks();
+            } else if (
+                project_write_purpose_ ==
+                ProjectWritePurpose::
+                    Compaction) {
+                LOG_INFO(
+                    "{} project compaction completed: {}",
+                    project_write_automatic_
+                        ? "Idle"
+                        : "Explicit",
+                    lfs::core::path_to_utf8(
+                        project_write_destination_));
+                resetMaintenanceClocks();
+            }
+        } else {
+            if (snapshot->worker_canceled) {
+                jobs.canceled(
+                    *project_write_job_);
+            } else {
+                jobs.failed(
+                    *project_write_job_, error);
+            }
+            last_project_write_error_ =
+                error;
+            if (snapshot->worker_canceled) {
+                LOG_INFO(
+                    "Project background write canceled: {}",
+                    error);
+            } else {
+                LOG_ERROR(
+                    "Project background write failed: {}",
+                    error);
+            }
+        }
+        const bool close_save =
+            project_write_purpose_ ==
+            ProjectWritePurpose::CloseSave;
+        if (close_save) {
+            {
+                std::lock_guard lock(
+                    close_save_mutex_);
+                close_save_error_ = error;
+            }
+            close_save_state_.store(
+                error.empty()
+                    ? CloseSaveState::Succeeded
+                    : CloseSaveState::Failed,
+                std::memory_order_release);
+        }
+        jobs.free(*project_write_job_);
+        project_write_job_.reset();
+        project_write_purpose_ =
+            ProjectWritePurpose::None;
+        project_write_destination_.clear();
+        project_write_autosave_sequence_ = 0;
+        project_write_automatic_ = false;
+        cached_project_info_.reset();
+        refreshStorageStats();
+        if (close_save) {
+            viewer_.requestApplicationClose();
+        }
+    }
+
+    void ProjectLifecycle::updateMaintenance() {
+        settleProjectWrite();
+        if (!document_ ||
+            viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            return;
+        }
+        const auto now =
+            std::chrono::steady_clock::now();
+        if (now >= next_storage_check_at_) {
+            refreshStorageStats();
+            next_storage_check_at_ =
+                now + std::chrono::minutes(1);
+        }
+        const bool training =
+            viewer_.getTrainerManager() &&
+            viewer_.getTrainerManager()
+                ->isTrainingActive();
+        if (!training &&
+            compaction_suggested_ &&
+            settings_.compaction_idle_seconds !=
+                0 &&
+            now - last_mutation_at_ >=
+                std::chrono::seconds(
+                    settings_
+                        .compaction_idle_seconds) &&
+            !scene_dirty_.load(
+                std::memory_order_acquire) &&
+            !payload_dirty_.load(
+                std::memory_order_acquire) &&
+            !document_->dirty()) {
+            if (auto started =
+                    startCompaction(true);
+                !started) {
+                LOG_DEBUG(
+                    "Idle compaction deferred: {}",
+                    developerError(
+                        started.error()));
+            }
+            return;
+        }
+        if (!document_->source_path() ||
+            recovered_master_path_) {
+            return;
+        }
+        const auto scene_serial =
+            scene_mutation_serial_.load(
+                std::memory_order_acquire);
+        const bool plausibly_dirty =
+            scene_dirty_.load(
+                std::memory_order_acquire) ||
+            payload_dirty_.load(
+                std::memory_order_acquire) ||
+            document_->dirty();
+        if (!plausibly_dirty) {
+            return;
+        }
+        const bool timer_due =
+            settings_.autosave_interval_seconds !=
+                0 &&
+            now - last_autosave_at_ >=
+                std::chrono::seconds(
+                    settings_
+                        .autosave_interval_seconds);
+        const auto threshold_reached =
+            [](const std::uint64_t current,
+               const std::uint64_t previous,
+               const std::uint64_t threshold) {
+                return current >= previous &&
+                       current - previous >= threshold;
+            };
+        const bool epoch_due =
+            threshold_reached(
+                document_->dirty_epoch(),
+                last_autosaved_dirty_epoch_,
+                settings_
+                    .autosave_dirty_epoch_threshold) ||
+            threshold_reached(
+                scene_serial,
+                last_autosaved_scene_serial_,
+                settings_
+                    .autosave_dirty_epoch_threshold);
+        if (timer_due || epoch_due) {
+            if (auto started = startAutosave();
+                !started) {
+                last_project_write_error_ =
+                    developerError(
+                        started.error());
+                LOG_WARN(
+                    "Autosave deferred: {}",
+                    last_project_write_error_);
+            }
+        }
+    }
+
     void ProjectLifecycle::markSceneMutation(
         const std::uint32_t mutation_flags) {
+        cached_project_info_.reset();
+        last_mutation_at_ =
+            std::chrono::steady_clock::now();
         scene_mutation_serial_.fetch_add(
             1, std::memory_order_acq_rel);
         const auto selection_flag =
@@ -691,6 +1874,7 @@ namespace lfs::vis::project {
         document_ =
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
+        cached_project_info_.reset();
         adopted_training_snapshot_count_ =
             metrics.capture.completed_snapshots;
         hydration_.store(
@@ -1369,6 +2553,14 @@ namespace lfs::vis::project {
                 "Only one project save may run at a time",
                 "project.save");
         }
+        if (viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "A project write is already in progress.",
+                "Manual save, autosave, and compaction share one exclusive job slot",
+                "project.job");
+        }
         if (auto adopted =
                 adoptCompletedTrainingSnapshot();
             !adopted) {
@@ -1390,7 +2582,17 @@ namespace lfs::vis::project {
                 ->isTrainingActive()) {
             auto context =
                 captureTrainingDocumentContext(
-                    viewer_, *document_);
+                    viewer_, *document_,
+                    recovered_master_path_
+                        ? lfs::io::project::
+                              CommitKind::Recovered
+                        : lfs::io::project::
+                              CommitKind::Explicit,
+                    recovery_session_
+                        ? std::optional{
+                              recovery_session_
+                                  ->writer_lock()}
+                        : std::nullopt);
             if (!context) {
                 return lfs::Status::failure(
                     std::move(context).error());
@@ -1405,11 +2607,24 @@ namespace lfs::vis::project {
                 }
                 preview = std::move(*captured);
             }
-            trainer->request_project_save(
-                *document_->source_path(),
-                std::move(preview),
-                std::move(*context));
-            return {};
+            const auto destination =
+                recovered_master_path_
+                    .value_or(
+                        *document_
+                             ->source_path());
+            const auto request_id =
+                trainer
+                    ->request_project_save(
+                        destination,
+                        std::move(preview),
+                        std::move(*context));
+            return startTrainingWrite(
+                ProjectWritePurpose::
+                    TrainingExplicitSave,
+                request_id, destination,
+                document_->dirty_epoch(),
+                scene_mutation_serial_.load(
+                    std::memory_order_acquire));
         }
         if (auto synchronized =
                 synchronizeDocumentFromViewer();
@@ -1426,14 +2641,26 @@ namespace lfs::vis::project {
             }
             preview = std::move(*captured);
         }
-        auto saved = document_->save(
-            *document_->source_path(),
+        const auto destination =
+            recovered_master_path_
+                .value_or(
+                    *document_->source_path());
+        const auto purpose =
+            recovered_master_path_
+                ? ProjectWritePurpose::SaveAs
+                : ProjectWritePurpose::
+                      ExplicitSave;
+        auto started = startDocumentWrite(
+            purpose, document_, destination,
             ProjectDocumentSaveOptions{
                 .commit =
                     {
                         .kind =
-                            lfs::io::project::
-                                CommitKind::Explicit,
+                            recovered_master_path_
+                                ? lfs::io::project::
+                                      CommitKind::Recovered
+                                : lfs::io::project::
+                                      CommitKind::Explicit,
                         .commit_uuid =
                             lfs::core::
                                 generate_uuid_v4(),
@@ -1453,26 +2680,16 @@ namespace lfs::vis::project {
                 .disk_reserve_bytes =
                     64ull * 1024 * 1024,
                 .preview_png = preview,
+                .writer_lock_lease =
+                    recovery_session_
+                        ? std::optional{
+                              recovery_session_
+                                  ->writer_lock()}
+                        : std::nullopt,
             });
-        if (!saved) {
-            return lfs::Status::failure(
-                std::move(saved).error());
+        if (!started) {
+            return started;
         }
-        rememberProject(
-            settings_, document_->project_uuid(),
-            *document_->source_path());
-        if (auto persisted = persistSettings();
-            !persisted) {
-            LOG_WARN(
-                "Project saved, but MRU settings failed: {}",
-                developerError(persisted.error()));
-        }
-        LOG_INFO(
-            "Saved .licht generation {} (rewritten={}, reused={}) to {}",
-            saved->generation, saved->rewritten_chunks,
-            saved->reused_chunks,
-            lfs::core::path_to_utf8(
-                *document_->source_path()));
         close_save_state_.store(
             CloseSaveState::Idle,
             std::memory_order_release);
@@ -1491,6 +2708,14 @@ namespace lfs::vis::project {
                 "A project save is already in progress.",
                 "Only one project save may run at a time",
                 "project.save");
+        }
+        if (viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "A project write is already in progress.",
+                "Manual save, autosave, and compaction share one exclusive job slot",
+                "project.job");
         }
         if (auto adopted =
                 adoptCompletedTrainingSnapshot();
@@ -1511,7 +2736,21 @@ namespace lfs::vis::project {
                 ->isTrainingActive()) {
             auto context =
                 captureTrainingDocumentContext(
-                    viewer_, *document_);
+                    viewer_, *document_,
+                    recovered_master_path_
+                        ? lfs::io::project::
+                              CommitKind::Recovered
+                        : lfs::io::project::
+                              CommitKind::Explicit,
+                    recovery_session_ &&
+                            recovered_master_path_ &&
+                            normalized->lexically_normal() ==
+                                recovered_master_path_
+                                    ->lexically_normal()
+                        ? std::optional{
+                              recovery_session_
+                                  ->writer_lock()}
+                        : std::nullopt);
             if (!context) {
                 return lfs::Status::failure(
                     std::move(context).error());
@@ -1526,11 +2765,19 @@ namespace lfs::vis::project {
                 }
                 preview = std::move(*captured);
             }
-            trainer->request_project_save(
-                *normalized,
-                std::move(preview),
-                std::move(*context));
-            return {};
+            const auto request_id =
+                trainer
+                    ->request_project_save(
+                        *normalized,
+                        std::move(preview),
+                        std::move(*context));
+            return startTrainingWrite(
+                ProjectWritePurpose::
+                    TrainingExplicitSave,
+                request_id, *normalized,
+                document_->dirty_epoch(),
+                scene_mutation_serial_.load(
+                    std::memory_order_acquire));
         }
         if (auto synchronized =
                 synchronizeDocumentFromViewer();
@@ -1547,14 +2794,18 @@ namespace lfs::vis::project {
             }
             preview = std::move(*captured);
         }
-        auto saved = document_->save_as(
-            *normalized,
+        auto started = startDocumentWrite(
+            ProjectWritePurpose::SaveAs,
+            document_, *normalized,
             ProjectDocumentSaveOptions{
                 .commit =
                     {
                         .kind =
-                            lfs::io::project::
-                                CommitKind::Explicit,
+                            recovered_master_path_
+                                ? lfs::io::project::
+                                      CommitKind::Recovered
+                                : lfs::io::project::
+                                      CommitKind::Explicit,
                         .commit_uuid =
                             lfs::core::
                                 generate_uuid_v4(),
@@ -1574,32 +2825,242 @@ namespace lfs::vis::project {
                 .disk_reserve_bytes =
                     64ull * 1024 * 1024,
                 .preview_png = preview,
+                .writer_lock_lease =
+                    recovery_session_ &&
+                            recovered_master_path_ &&
+                            normalized->lexically_normal() ==
+                                recovered_master_path_
+                                    ->lexically_normal()
+                        ? std::optional{
+                              recovery_session_
+                                  ->writer_lock()}
+                        : std::nullopt,
             });
-        if (!saved) {
-            return lfs::Status::failure(
-                std::move(saved).error());
+        if (!started) {
+            return started;
         }
-        rememberProject(
-            settings_, document_->project_uuid(),
-            *normalized);
-        if (auto persisted = persistSettings();
-            !persisted) {
-            LOG_WARN(
-                "Project Save As succeeded, but MRU settings failed: {}",
-                developerError(persisted.error()));
-        }
-        LOG_INFO(
-            "Saved project as {} generation {}",
-            lfs::core::path_to_utf8(*normalized),
-            saved->generation);
         close_save_state_.store(
             CloseSaveState::Idle,
             std::memory_order_release);
         return {};
     }
 
-    lfs::Result<void>
+    lfs::Result<ProjectOpenOutcome>
     ProjectLifecycle::open(
+        const std::filesystem::path& path,
+        const ProjectSwitchDisposition disposition) {
+        if (recovery_prompt_pending_) {
+            return ProjectOpenOutcome::
+                RecoveryPromptPending;
+        }
+        if (auto preflight =
+                preflightSwitch(disposition);
+            !preflight) {
+            return std::move(preflight).error();
+        }
+        if (viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            return fail<ProjectOpenOutcome>(
+                lfs::ErrorCode::FailedPrecondition,
+                "A project write is still running.",
+                "Wait for save, autosave, or compaction before opening another project",
+                "project.job");
+        }
+        auto normalized =
+            normalizedProjectPath(path);
+        if (!normalized) {
+            return std::move(normalized).error();
+        }
+        auto inspection =
+            lfs::io::project::
+                inspect_autosave_recovery(
+                    *normalized);
+        if (!inspection) {
+            return std::move(inspection).error();
+        }
+        const auto previous_autosave_sequence =
+            autosave_sequence_;
+        autosave_sequence_ =
+            std::max(
+                autosave_sequence_,
+                inspection
+                    ->autosave_sequence);
+        if (inspection->disposition ==
+            lfs::io::project::
+                RecoveryDisposition::
+                    Ambiguous) {
+            return fail<ProjectOpenOutcome>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Multiple autosaves have the same newest sequence.",
+                inspection->diagnostics.empty()
+                    ? "Recovery requires an explicit candidate choice"
+                    : inspection
+                          ->diagnostics.front(),
+                "project.recovery");
+        }
+        if (inspection->disposition ==
+                lfs::io::project::
+                    RecoveryDisposition::Offer &&
+            inspection->selected_path) {
+            const DeclinedRecoveryIdentity
+                offered_identity{
+                    .sidecar_path =
+                        inspection->selected_path
+                            ->lexically_normal(),
+                    .autosave_sequence =
+                        inspection->autosave_sequence,
+                    .snapshot_uuid =
+                        inspection->snapshot_uuid,
+                };
+            if (declined_recovery_ ==
+                offered_identity) {
+                auto opened = openMaster(
+                    *normalized, disposition);
+                if (!opened) {
+                    return std::move(opened).error();
+                }
+                return ProjectOpenOutcome::Opened;
+            }
+            auto* gui =
+                viewer_.getGuiManager();
+            if (!gui) {
+                return fail<ProjectOpenOutcome>(
+                    lfs::ErrorCode::
+                        FailedPrecondition,
+                    "A recoverable autosave is available.",
+                    "Headless callers must explicitly pass --recover",
+                    "project.recovery");
+            }
+            recovery_prompt_pending_ = true;
+            const auto master =
+                *normalized;
+            const auto sidecar =
+                *inspection->selected_path;
+            lfs::core::ModalRequest request;
+            request.title =
+                "Recover Autosaved Project?";
+            request.body_rml =
+                "<p>A newer autosaved state is available for this project.</p>"
+                "<p>Recover it, or open the last explicitly saved state.</p>";
+            request.style =
+                lfs::core::ModalStyle::Warning;
+            request.width_dp = 500;
+            request.buttons = {
+                {"Open Saved", "secondary"},
+                {"Recover", "primary"},
+            };
+            request.on_result =
+                [this, master, sidecar,
+                 offered_identity,
+                 disposition](
+                    const lfs::core::
+                        ModalResult& result) {
+                    recovery_prompt_pending_ =
+                        false;
+                    lfs::Result<void> opened;
+                    if (result.button_label ==
+                        "Recover") {
+                        opened = openRecovered(
+                            master, sidecar,
+                            disposition);
+                    } else {
+                        declined_recovery_ =
+                            offered_identity;
+                        opened = openMaster(
+                            master, disposition);
+                    }
+                    if (!opened) {
+                        LOG_ERROR(
+                            "Recovery decision failed: {}",
+                            developerError(
+                                opened.error()));
+                    }
+                };
+            request.on_cancel =
+                [this,
+                 previous_autosave_sequence] {
+                    recovery_prompt_pending_ =
+                        false;
+                    autosave_sequence_ =
+                        previous_autosave_sequence;
+                };
+            gui->enqueueModal(
+                std::move(request));
+            return ProjectOpenOutcome::
+                RecoveryPromptPending;
+        }
+        auto opened = openMaster(
+            *normalized, disposition);
+        if (!opened) {
+            return std::move(opened).error();
+        }
+        return ProjectOpenOutcome::Opened;
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::openRecovered(
+        const std::filesystem::path& master_path,
+        const std::filesystem::path& sidecar_path,
+        const ProjectSwitchDisposition disposition) {
+        auto session =
+            lfs::io::project::
+                begin_recovery_session(
+                    master_path,
+                    sidecar_path);
+        if (!session) {
+            return lfs::Status::failure(
+                std::move(session).error());
+        }
+        const auto temporary =
+            lfs::io::project::
+                recovery_session_temp_path(
+                    master_path);
+        if (auto materialized =
+                lfs::io::project::
+                    materialize_recovered_project(
+                        master_path,
+                        sidecar_path,
+                        temporary, *session);
+            !materialized) {
+            return materialized;
+        }
+        auto opened =
+            openMaster(
+                temporary, disposition);
+        if (!opened) {
+            static_cast<void>(
+                session->release());
+            return opened;
+        }
+        session->attach_document();
+        recovered_master_path_ =
+            master_path;
+        recovery_session_path_ =
+            temporary;
+        recovery_session_ =
+            std::move(*session);
+        rememberProject(
+            settings_, document_->project_uuid(),
+            master_path);
+        if (auto persisted = persistSettings();
+            !persisted) {
+            LOG_WARN(
+                "Recovered project opened, but MRU settings failed: {}",
+                developerError(
+                    persisted.error()));
+        }
+        resetMaintenanceClocks();
+        LOG_INFO(
+            "Recovered autosave {} over master {}",
+            lfs::core::path_to_utf8(
+                sidecar_path),
+            lfs::core::path_to_utf8(
+                master_path));
+        return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::openMaster(
         const std::filesystem::path& path,
         const ProjectSwitchDisposition disposition) {
         if (auto preflight =
@@ -1682,6 +3143,7 @@ namespace lfs::vis::project {
                 std::move(shell).error());
         }
 
+        stopHydrationThreads();
         viewer_.resetProjectState();
         manager->getScene().commitRestoreStage(
             std::move(*shell));
@@ -1694,7 +3156,9 @@ namespace lfs::vis::project {
         viewer_.stagePreparedProjectSessionRestore(
             std::move(*session));
 
+        cached_project_info_.reset();
         document_ = candidate;
+        cleanupRecoverySession();
         adopted_training_snapshot_count_ = 0;
         close_save_state_.store(
             CloseSaveState::Idle,
@@ -1756,6 +3220,8 @@ namespace lfs::vis::project {
             lfs::core::path_to_utf8(*normalized),
             candidate->generation(),
             candidate->payload_states().size());
+        resetMaintenanceClocks();
+        refreshStorageStats();
         return {};
     }
 
@@ -2064,9 +3530,12 @@ namespace lfs::vis::project {
                 "The scene clear request was rejected before switching projects",
                 "project.new");
         }
+        stopHydrationThreads();
+        cached_project_info_.reset();
         document_ =
             std::make_shared<ProjectDocument>(
                 std::move(*created));
+        cleanupRecoverySession();
         adopted_training_snapshot_count_ = 0;
         close_save_state_.store(
             CloseSaveState::Idle,
@@ -2083,6 +3552,10 @@ namespace lfs::vis::project {
             false, std::memory_order_release);
         payload_dirty_.store(
             false, std::memory_order_release);
+        storage_stats_ = {};
+        compaction_suggested_ = false;
+        autosave_sequence_ = 0;
+        resetMaintenanceClocks();
         return {};
     }
 
@@ -2090,6 +3563,10 @@ namespace lfs::vis::project {
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
+            return true;
+        }
+        if (viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
             return true;
         }
         if (!document_) {
@@ -2150,6 +3627,7 @@ namespace lfs::vis::project {
 
     ProjectLifecycle::CloseSaveStatus
     ProjectLifecycle::beginOrPollCloseSave() {
+        settleProjectWrite();
         switch (close_save_state_.load(
             std::memory_order_acquire)) {
         case CloseSaveState::Saving:
@@ -2171,6 +3649,10 @@ namespace lfs::vis::project {
 
         if (!hasDirtyProject()) {
             return CloseSaveStatus::NotDirty;
+        }
+        if (viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            return CloseSaveStatus::Saving;
         }
         if (!settings_.auto_save_on_close ||
             !document_ ||
@@ -2195,13 +3677,17 @@ namespace lfs::vis::project {
 
         const auto document = document_;
         const auto path =
-            *document_->source_path();
+            recovered_master_path_.value_or(
+                *document_->source_path());
         const ProjectDocumentSaveOptions options{
             .commit =
                 {
                     .kind =
-                        lfs::io::project::
-                            CommitKind::Explicit,
+                        recovered_master_path_
+                            ? lfs::io::project::
+                                  CommitKind::Recovered
+                            : lfs::io::project::
+                                  CommitKind::Explicit,
                     .commit_uuid =
                         lfs::core::
                             generate_uuid_v4(),
@@ -2224,129 +3710,30 @@ namespace lfs::vis::project {
             // forward rather than issuing a render.
             .preview_png = {},
         };
-        close_save_state_.store(
-            CloseSaveState::Saving,
-            std::memory_order_release);
         {
             std::lock_guard lock(
                 close_save_mutex_);
             close_save_error_.clear();
         }
-        try {
-            close_save_thread_ =
-                std::jthread(
-                    [this, document, path,
-                     options](
-                        const std::stop_token stop) {
-                        if (stop.stop_requested()) {
-                            return;
-                        }
-                        auto saved =
-                            document->save(
-                                path, options);
-                        const bool succeeded =
-                            static_cast<bool>(
-                                saved);
-                        const auto generation =
-                            succeeded
-                                ? saved->generation
-                                : 0;
-                        std::string error;
-                        if (!succeeded) {
-                            error = developerError(
-                                saved.error());
-                        }
-                        const bool posted =
-                            viewer_.postWork({
-                                .run =
-                                    [this, document,
-                                     path, succeeded,
-                                     generation,
-                                     error =
-                                         std::move(
-                                             error)] {
-                                        if (document_ !=
-                                            document) {
-                                            {
-                                                std::lock_guard lock(
-                                                    close_save_mutex_);
-                                                close_save_error_ =
-                                                    "The active project changed while the close save was running.";
-                                            }
-                                            close_save_state_.store(
-                                                CloseSaveState::Failed,
-                                                std::memory_order_release);
-                                        } else if (
-                                            succeeded) {
-                                            rememberProject(
-                                                settings_,
-                                                document->project_uuid(),
-                                                path);
-                                            if (auto persisted =
-                                                    persistSettings();
-                                                !persisted) {
-                                                LOG_WARN(
-                                                    "Close save succeeded, but MRU settings failed: {}",
-                                                    developerError(
-                                                        persisted.error()));
-                                            }
-                                            close_save_state_.store(
-                                                CloseSaveState::Succeeded,
-                                                std::memory_order_release);
-                                            LOG_INFO(
-                                                "Save-on-close published .licht generation {}",
-                                                generation);
-                                        } else {
-                                            {
-                                                std::lock_guard lock(
-                                                    close_save_mutex_);
-                                                close_save_error_ =
-                                                    error;
-                                            }
-                                            close_save_state_.store(
-                                                CloseSaveState::Failed,
-                                                std::memory_order_release);
-                                            LOG_ERROR(
-                                                "Save-on-close failed: {}",
-                                                error);
-                                        }
-                                        viewer_
-                                            .requestApplicationClose();
-                                    },
-                                .cancel =
-                                    [this] {
-                                        std::lock_guard lock(
-                                            close_save_mutex_);
-                                        close_save_error_ =
-                                            "The save completion was cancelled during shutdown.";
-                                        close_save_state_.store(
-                                            CloseSaveState::Failed,
-                                            std::memory_order_release);
-                                    },
-                            });
-                        if (!posted) {
-                            std::lock_guard lock(
-                                close_save_mutex_);
-                            close_save_error_ =
-                                "The application could not publish the save completion.";
-                            close_save_state_.store(
-                                CloseSaveState::Failed,
-                                std::memory_order_release);
-                        }
-                    });
-        } catch (const std::exception& error) {
-            // LFS-CENSUS-OK(empty-catch): thread construction failure is published through close-save state.
+        auto started = startDocumentWrite(
+            ProjectWritePurpose::CloseSave,
+            document, path, options);
+        if (!started) {
             {
                 std::lock_guard lock(
                     close_save_mutex_);
                 close_save_error_ =
-                    error.what();
+                    developerError(
+                        started.error());
             }
             close_save_state_.store(
                 CloseSaveState::Failed,
                 std::memory_order_release);
             return CloseSaveStatus::Failed;
         }
+        close_save_state_.store(
+            CloseSaveState::Saving,
+            std::memory_order_release);
         return CloseSaveStatus::Saving;
     }
 
@@ -2374,6 +3761,7 @@ namespace lfs::vis::project {
 
     lfs::Result<ProjectInfo>
     ProjectLifecycle::info() {
+        settleProjectWrite();
         if (close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving) {
@@ -2390,6 +3778,43 @@ namespace lfs::vis::project {
                 "Project lifecycle has not created or opened a document",
                 "project.document");
         }
+        if (project_write_job_) {
+            auto result =
+                cached_project_info_
+                    .value_or(ProjectInfo{});
+            const auto job =
+                viewer_.jobs().peek(
+                    *project_write_job_);
+            result.project_write_running =
+                true;
+            result.project_write_stage =
+                job ? job->stage
+                    : std::string{};
+            result.project_write_progress =
+                job ? job->progress : 0.0F;
+            result.project_write_error =
+                job ? job->error
+                    : std::string{};
+            result.autosave_sequence =
+                autosave_sequence_;
+            result.recovery_session =
+                recovered_master_path_
+                    .has_value();
+            result.compaction_suggested =
+                compaction_suggested_;
+            result.physical_bytes =
+                storage_stats_.physical_bytes;
+            result.estimated_live_bytes =
+                storage_stats_
+                    .estimated_live_bytes;
+            result.dead_bytes =
+                storage_stats_.dead_bytes;
+            result.dead_ratio =
+                storage_stats_.dead_ratio;
+            return result;
+        }
+        const std::lock_guard document_lock(
+            document_access_mutex_);
         if (auto adopted =
                 adoptCompletedTrainingSnapshot();
             !adopted) {
@@ -2416,7 +3841,10 @@ namespace lfs::vis::project {
             }
         }
         ProjectInfo result{
-            .path = document_->source_path(),
+            .path =
+                recovered_master_path_
+                    ? recovered_master_path_
+                    : document_->source_path(),
             .project_uuid =
                 document_->project_uuid().to_string(),
             .generation = document_->generation(),
@@ -2438,6 +3866,33 @@ namespace lfs::vis::project {
                 settings_.reopen_last_project,
             .auto_save_on_close =
                 settings_.auto_save_on_close,
+            .autosave_interval_seconds =
+                settings_
+                    .autosave_interval_seconds,
+            .autosave_dirty_epoch_threshold =
+                settings_
+                    .autosave_dirty_epoch_threshold,
+            .project_write_running = false,
+            .project_write_stage = {},
+            .project_write_progress = 0.0F,
+            .project_write_error =
+                last_project_write_error_,
+            .autosave_sequence =
+                autosave_sequence_,
+            .recovery_session =
+                recovered_master_path_
+                    .has_value(),
+            .compaction_suggested =
+                compaction_suggested_,
+            .physical_bytes =
+                storage_stats_.physical_bytes,
+            .estimated_live_bytes =
+                storage_stats_
+                    .estimated_live_bytes,
+            .dead_bytes =
+                storage_stats_.dead_bytes,
+            .dead_ratio =
+                storage_stats_.dead_ratio,
             .hydration_error = hydration_error_,
             .recent_projects = {},
         };
@@ -2508,6 +3963,7 @@ namespace lfs::vis::project {
                         payload_hydration),
             });
         }
+        cached_project_info_ = result;
         return result;
     }
 

@@ -1669,24 +1669,19 @@ namespace lfs::io::project {
         return result;
     }
 
-    lfs::Result<SelectionChapter> capture_selection_chapter(
+    lfs::Result<CapturedSelectionState> capture_selection_state(
         const lfs::core::Scene& scene,
         const std::span<const lfs::core::Uuid>
             selected_node_uuids) {
-        SelectionChapter chapter;
+        CapturedSelectionState state;
         const auto metadata =
             scene.captureSelectionStateMetadata();
-        auto groups = metadata.groups;
-        for (auto& group : groups) {
+        state.groups = metadata.groups;
+        for (auto& group : state.groups) {
             group.count = 0;
         }
-        if (auto result = chapter.set_groups(
-                std::move(groups),
-                metadata.active_group_id,
-                metadata.next_group_id);
-            !result) {
-            return std::move(result).error();
-        }
+        state.active_group_id = metadata.active_group_id;
+        state.next_group_id = metadata.next_group_id;
 
         for (const auto domain :
              {lfs::core::SelectionDomain::Splat,
@@ -1717,28 +1712,63 @@ namespace lfs::io::project {
                         cpu.data_ptr(),
                         mask.size());
                 }
-                if (auto result = chapter.upsert_slice(
-                        SelectionMaskSlice{
-                            .node_uuid = uuid,
-                            .domain = domain,
-                            .encoding =
-                                DEFAULT_SELECTION_MASK_ENCODING,
-                            .mask = std::move(mask),
-                        });
-                    !result) {
-                    return std::move(result).error();
-                }
+                state.slices.push_back(
+                    SelectionMaskSlice{
+                        .node_uuid = uuid,
+                        .domain = domain,
+                        .encoding =
+                            DEFAULT_SELECTION_MASK_ENCODING,
+                        .mask = std::move(mask),
+                    });
+            }
+        }
+        state.selected_node_uuids.assign(
+            selected_node_uuids.begin(),
+            selected_node_uuids.end());
+        return state;
+    }
+
+    lfs::Result<SelectionChapter>
+    materialize_selection_chapter(
+        CapturedSelectionState state) {
+        SelectionChapter chapter;
+        if (auto result = chapter.set_groups(
+                std::move(state.groups),
+                state.active_group_id,
+                state.next_group_id);
+            !result) {
+            return std::move(result).error();
+        }
+        for (auto& slice : state.slices) {
+            if (auto result =
+                    chapter.upsert_slice(
+                        std::move(slice));
+                !result) {
+                return std::move(result).error();
             }
         }
         if (auto result =
                 chapter.set_selected_node_uuids(
-                    std::vector<lfs::core::Uuid>(
-                        selected_node_uuids.begin(),
-                        selected_node_uuids.end()));
+                    std::move(
+                        state.selected_node_uuids));
             !result) {
             return std::move(result).error();
         }
         return chapter;
+    }
+
+    lfs::Result<SelectionChapter> capture_selection_chapter(
+        const lfs::core::Scene& scene,
+        const std::span<const lfs::core::Uuid>
+            selected_node_uuids) {
+        auto state =
+            capture_selection_state(
+                scene, selected_node_uuids);
+        if (!state) {
+            return std::move(state).error();
+        }
+        return materialize_selection_chapter(
+            std::move(*state));
     }
 
     lfs::Result<StagedSelectionChapter>

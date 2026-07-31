@@ -129,6 +129,52 @@ TEST(ArgumentParserTest,
     EXPECT_FALSE((*parsed)->project_path);
 }
 
+TEST(ArgumentParserTest,
+     RecoverRequiresHeadlessLichtProjectAndSetsOptIn) {
+    const auto directory =
+        make_test_path(
+            "lfs_arg_parser_recover_project");
+    const auto project =
+        std::filesystem::path(directory) /
+        "session.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+    const char* accepted[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--project",
+        project_text.c_str(),
+        "--recover",
+    };
+    auto parsed =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(
+                std::size(accepted)),
+            accepted);
+    ASSERT_TRUE(parsed)
+        << parsed.error();
+    EXPECT_TRUE((*parsed)->recover_project);
+    EXPECT_EQ(
+        (*parsed)->resume_project, project);
+
+    const char* rejected[] = {
+        "LichtFeld-Studio",
+        "--project",
+        project_text.c_str(),
+        "--recover",
+    };
+    auto invalid =
+        lfs::core::args::parse_args_and_params(
+            static_cast<int>(
+                std::size(rejected)),
+            rejected);
+    ASSERT_FALSE(invalid);
+    EXPECT_NE(
+        invalid.error().find(
+            "--recover requires --headless"),
+        std::string::npos);
+}
+
 TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     const auto data_path = make_test_path("lfs_arg_parser_default_data");
     const auto output_path = make_test_path("lfs_arg_parser_default_output");

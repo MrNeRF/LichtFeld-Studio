@@ -97,6 +97,25 @@ namespace lfs::io::project {
         SelectionHydrationReport report;
     };
 
+    // Detached value-only selection state. Tensor values are copied into
+    // owned CPU byte vectors during capture; chapter validation and assembly
+    // can then run after the optimizer safe point.
+    struct CapturedSelectionState {
+        std::vector<lfs::core::SelectionGroup> groups;
+        std::uint8_t active_group_id = 0;
+        std::uint8_t next_group_id = 1;
+        std::vector<SelectionMaskSlice> slices;
+        std::vector<lfs::core::Uuid> selected_node_uuids;
+    };
+
+    [[nodiscard]] LFS_IO_API lfs::Result<CapturedSelectionState>
+    capture_selection_state(
+        const lfs::core::Scene& scene,
+        std::span<const lfs::core::Uuid> selected_node_uuids);
+
+    [[nodiscard]] LFS_IO_API lfs::Result<SelectionChapter>
+    materialize_selection_chapter(CapturedSelectionState state);
+
     [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
     encode_selection_chapter(
         const SelectionChapter& chapter,

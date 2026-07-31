@@ -74,12 +74,18 @@ namespace lfs::vis {
             .mcmc_current = mcmc_current_,
             .mrnf_current = mrnf_current_,
             .igs_current = igs_current_,
-            .mcmc_session_references = {},
-            .mrnf_session_references = {},
-            .igs_session_references = {},
-            .mcmc_current_references = {},
-            .mrnf_current_references = {},
-            .igs_current_references = {},
+            .mcmc_session_references =
+                mcmc_session_references_,
+            .mrnf_session_references =
+                mrnf_session_references_,
+            .igs_session_references =
+                igs_session_references_,
+            .mcmc_current_references =
+                mcmc_current_references_,
+            .mrnf_current_references =
+                mrnf_current_references_,
+            .igs_current_references =
+                igs_current_references_,
             .dataset = dataset_config_,
         };
     }
@@ -144,6 +150,18 @@ namespace lfs::vis {
         mcmc_current_ = snapshot.mcmc_current;
         mrnf_current_ = snapshot.mrnf_current;
         igs_current_ = snapshot.igs_current;
+        mcmc_session_references_ =
+            snapshot.mcmc_session_references;
+        mrnf_session_references_ =
+            snapshot.mrnf_session_references;
+        igs_session_references_ =
+            snapshot.igs_session_references;
+        mcmc_current_references_ =
+            snapshot.mcmc_current_references;
+        mrnf_current_references_ =
+            snapshot.mrnf_current_references;
+        igs_current_references_ =
+            snapshot.igs_current_references;
         dataset_config_ = snapshot.dataset;
         loaded_ = true;
         dirty_.store(false, std::memory_order_release);
@@ -184,12 +202,18 @@ namespace lfs::vis {
         std::lock_guard lock(params_mutex_);
         if (strategy.empty() || strategy == "mcmc") {
             mcmc_current_ = mcmc_session_;
+            mcmc_current_references_ =
+                mcmc_session_references_;
         }
         if (strategy.empty() || lfs::core::param::is_mrnf_strategy(strategy)) {
             mrnf_current_ = mrnf_session_;
+            mrnf_current_references_ =
+                mrnf_session_references_;
         }
         if (strategy.empty() || strategy == "igs+") {
             igs_current_ = igs_session_;
+            igs_current_references_ =
+                igs_session_references_;
         }
     }
 
@@ -207,6 +231,12 @@ namespace lfs::vis {
         mrnf_current_ = mrnf_session_;
         igs_session_ = lfs::core::param::OptimizationParameters::igs_plus_defaults();
         igs_current_ = igs_session_;
+        mcmc_session_references_ = {};
+        mrnf_session_references_ = {};
+        igs_session_references_ = {};
+        mcmc_current_references_ = {};
+        mrnf_current_references_ = {};
+        igs_current_references_ = {};
         dataset_config_ = lfs::core::param::DatasetConfig{};
         dataset_config_.centralize_dataset = "off";
         dataset_config_.loading_params = lfs::core::param::LoadingParams{};
@@ -224,15 +254,29 @@ namespace lfs::vis {
 
         auto* session = &mrnf_session_;
         auto* current = &mrnf_current_;
+        auto* session_references =
+            &mrnf_session_references_;
+        auto* current_references =
+            &mrnf_current_references_;
         if (active_strategy_ == "mcmc") {
             session = &mcmc_session_;
             current = &mcmc_current_;
+            session_references =
+                &mcmc_session_references_;
+            current_references =
+                &mcmc_current_references_;
         } else if (active_strategy_ == "igs+") {
             session = &igs_session_;
             current = &igs_current_;
+            session_references =
+                &igs_session_references_;
+            current_references =
+                &igs_current_references_;
         }
         *session = opt;
         *current = opt;
+        *session_references = {};
+        *current_references = {};
 
         // Apply CLI overrides to dataset config
         const auto& ds = params.dataset;
@@ -260,10 +304,13 @@ namespace lfs::vis {
         }
         if (active_strategy_ == "mcmc") {
             mcmc_current_ = params;
+            mcmc_current_references_ = {};
         } else if (lfs::core::param::is_mrnf_strategy(active_strategy_)) {
             mrnf_current_ = params;
+            mrnf_current_references_ = {};
         } else if (active_strategy_ == "igs+") {
             igs_current_ = params;
+            igs_current_references_ = {};
         }
         LOG_DEBUG("Current params updated: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
     }
@@ -276,12 +323,18 @@ namespace lfs::vis {
         if (active_strategy_ == "mcmc") {
             mcmc_session_ = params;
             mcmc_current_ = params;
+            mcmc_session_references_ = {};
+            mcmc_current_references_ = {};
         } else if (lfs::core::param::is_mrnf_strategy(active_strategy_)) {
             mrnf_session_ = params;
             mrnf_current_ = params;
+            mrnf_session_references_ = {};
+            mrnf_current_references_ = {};
         } else if (active_strategy_ == "igs+") {
             igs_session_ = params;
             igs_current_ = params;
+            igs_session_references_ = {};
+            igs_current_references_ = {};
         }
         LOG_INFO("Imported params: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
     }
@@ -300,12 +353,18 @@ namespace lfs::vis {
         if (active_strategy_ == "mcmc") {
             mcmc_session_ = params.optimization;
             mcmc_current_ = params.optimization;
+            mcmc_session_references_ = {};
+            mcmc_current_references_ = {};
         } else if (lfs::core::param::is_mrnf_strategy(active_strategy_)) {
             mrnf_session_ = params.optimization;
             mrnf_current_ = params.optimization;
+            mrnf_session_references_ = {};
+            mrnf_current_references_ = {};
         } else if (active_strategy_ == "igs+") {
             igs_session_ = params.optimization;
             igs_current_ = params.optimization;
+            igs_session_references_ = {};
+            igs_current_references_ = {};
         }
 
         dataset_config_ = params.dataset;

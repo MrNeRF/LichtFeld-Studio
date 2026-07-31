@@ -7,6 +7,7 @@
     "file.open_recent": "最近打开",
     "file.save_project": "保存项目",
     "file.save_project_as": "项目另存为...",
+    "file.compact_project": "压缩项目",
     "file.reopen_last_project": "重新打开上次的项目",
     "file.auto_save_on_close": "关闭时自动保存",
     "file.no_recent_projects": "没有最近项目",

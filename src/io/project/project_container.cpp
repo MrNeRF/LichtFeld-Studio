@@ -2671,6 +2671,10 @@ namespace lfs::io::project {
         return impl_->state->selected.info.preview;
     }
 
+    const ReaderOptions& ProjectReader::reader_options() const noexcept {
+        return impl_->state->options;
+    }
+
     WriteCompatibility ProjectReader::write_compatibility() const {
         const ReaderState& state = *impl_->state;
         const CommitInfo& selected_commit = state.selected.commit.info;
@@ -2839,6 +2843,14 @@ namespace lfs::io::project {
         if (destination.empty()) {
             return {};
         }
+        if (impl_->state->options
+                .payload_bytes_read) {
+            impl_->state->options
+                .payload_bytes_read
+                ->fetch_add(
+                    destination.size(),
+                    std::memory_order_relaxed);
+        }
         if ((*resolved)->block_crc_table.has_value()) {
             if (auto verified = verify_block_range(
                     *impl_->state, **resolved, relative_offset,
@@ -2864,6 +2876,14 @@ namespace lfs::io::project {
             const std::uint64_t count =
                 std::min<std::uint64_t>(BLOCK_CRC_BYTES,
                                         row.stored_bytes - relative);
+            if (impl_->state->options
+                    .payload_bytes_read) {
+                impl_->state->options
+                    .payload_bytes_read
+                    ->fetch_add(
+                        count,
+                        std::memory_order_relaxed);
+            }
             auto bytes = read_vector(*impl_->state->file,
                                      row.payload_offset + relative, count,
                                      impl_->state->physical_size,

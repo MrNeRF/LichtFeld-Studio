@@ -8,9 +8,12 @@
 #include "core/error.hpp"
 #include "core/uuid.hpp"
 #include "io/project_document.hpp"
+#include "io/project_recovery.hpp"
+#include "visualizer/core/job_registry.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -21,7 +24,18 @@
 
 namespace lfs::vis {
     class VisualizerImpl;
-}
+    class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
+    class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
+    class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
+    class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
+    class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
+    class VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
+    class VisualizerImplResetTest_ProjectWriteSettlementCompletesBeforeNextDocumentWrite_Test;
+    class VisualizerImplResetTest_TrainingSnapshotCleanupTerminalizesProjectWrite_Test;
+    class VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
+    class VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
+    class VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
+} // namespace lfs::vis
 
 namespace lfs::vis::project {
 
@@ -36,6 +50,9 @@ namespace lfs::vis::project {
     struct ProjectLifecycleSettings {
         bool reopen_last_project = true;
         bool auto_save_on_close = true;
+        std::uint64_t autosave_interval_seconds = 5 * 60;
+        std::uint64_t autosave_dirty_epoch_threshold = 20;
+        std::uint64_t compaction_idle_seconds = 30;
         std::vector<ProjectMruEntry> mru;
 
         friend bool operator==(const ProjectLifecycleSettings&,
@@ -72,7 +89,7 @@ namespace lfs::vis::project {
         ProjectLifecycle(const ProjectLifecycle&) = delete;
         ProjectLifecycle& operator=(const ProjectLifecycle&) = delete;
 
-        [[nodiscard]] lfs::Result<void>
+        [[nodiscard]] lfs::Result<ProjectOpenOutcome>
         open(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition =
@@ -82,6 +99,8 @@ namespace lfs::vis::project {
         [[nodiscard]] lfs::Result<void>
         saveAs(const std::filesystem::path& path,
                bool regenerate_preview);
+        [[nodiscard]] lfs::Result<void>
+        compact();
         [[nodiscard]] lfs::Result<void>
         newProject(
             ProjectSwitchDisposition disposition =
@@ -94,6 +113,7 @@ namespace lfs::vis::project {
         void openStartupProject(
             const std::optional<std::filesystem::path>& explicit_path);
         void markSceneMutation(std::uint32_t mutation_flags);
+        void updateMaintenance();
         [[nodiscard]] bool hasDirtyProject();
         [[nodiscard]] bool autoSaveOnClose() const noexcept {
             return settings_.auto_save_on_close;
@@ -102,6 +122,9 @@ namespace lfs::vis::project {
         setReopenLastProject(bool enabled);
         [[nodiscard]] lfs::Result<void>
         setAutoSaveOnClose(bool enabled);
+        [[nodiscard]] lfs::Result<void>
+        setAutosaveIntervalSeconds(
+            std::uint64_t seconds);
         [[nodiscard]] bool containsEmbeddedSecrets() const;
         [[nodiscard]] CloseSaveStatus
         beginOrPollCloseSave();
@@ -110,6 +133,17 @@ namespace lfs::vis::project {
         closeSaveError() const;
 
     private:
+        friend class lfs::vis::VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
+        friend class lfs::vis::VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
+        friend class lfs::vis::VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
+        friend class lfs::vis::VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ProjectWriteSettlementCompletesBeforeNextDocumentWrite_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotCleanupTerminalizesProjectWrite_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
         enum class Hydration {
             Empty,
             ShellReady,
@@ -125,8 +159,69 @@ namespace lfs::vis::project {
             Failed,
         };
 
+        enum class ProjectWritePurpose {
+            None,
+            Autosave,
+            ExplicitSave,
+            SaveAs,
+            CloseSave,
+            Compaction,
+            TrainingAutosave,
+            TrainingExplicitSave,
+        };
+
+        struct DeclinedRecoveryIdentity {
+            std::filesystem::path sidecar_path;
+            std::uint64_t autosave_sequence = 0;
+            lfs::core::Uuid snapshot_uuid;
+
+            friend bool operator==(
+                const DeclinedRecoveryIdentity&,
+                const DeclinedRecoveryIdentity&) =
+                default;
+        };
+
         [[nodiscard]] lfs::Result<void>
         synchronizeDocumentFromViewer();
+        [[nodiscard]] lfs::Result<void>
+        openMaster(
+            const std::filesystem::path& path,
+            ProjectSwitchDisposition disposition);
+        [[nodiscard]] lfs::Result<void>
+        openRecovered(
+            const std::filesystem::path& master_path,
+            const std::filesystem::path& sidecar_path,
+            ProjectSwitchDisposition disposition);
+        [[nodiscard]] lfs::Result<void>
+        startAutosave();
+        [[nodiscard]] lfs::Result<void>
+        startDocumentWrite(
+            ProjectWritePurpose purpose,
+            std::shared_ptr<
+                lfs::io::project::ProjectDocument>
+                document,
+            std::filesystem::path destination,
+            lfs::io::project::
+                ProjectDocumentSaveOptions options,
+            std::optional<
+                lfs::io::project::
+                    ProjectDocumentAutosaveOptions>
+                autosave = std::nullopt);
+        [[nodiscard]] lfs::Result<void>
+        startCompaction(bool automatic);
+        [[nodiscard]] lfs::Result<void>
+        startTrainingWrite(
+            ProjectWritePurpose purpose,
+            std::uint64_t request_id,
+            std::filesystem::path master_path,
+            std::uint64_t dirty_epoch,
+            std::uint64_t scene_serial);
+        void queueProjectWriteSettlement(
+            JobHandle handle);
+        void settleProjectWrite();
+        void refreshStorageStats();
+        void resetMaintenanceClocks();
+        void cleanupRecoverySession();
         [[nodiscard]] lfs::Result<void>
         adoptCompletedTrainingSnapshot();
         [[nodiscard]] lfs::Result<std::vector<std::byte>>
@@ -139,6 +234,7 @@ namespace lfs::vis::project {
             std::vector<lfs::core::Uuid> selected_node_uuids);
         [[nodiscard]] lfs::Result<void>
         persistSettings();
+        void stopHydrationThreads();
         void markHydrationFailed(
             std::uint64_t epoch,
             const std::string& detail);
@@ -156,11 +252,56 @@ namespace lfs::vis::project {
         std::atomic<Hydration> hydration_{Hydration::Empty};
         std::atomic<bool> scene_dirty_{false};
         std::atomic<bool> payload_dirty_{false};
+        std::chrono::steady_clock::time_point
+            last_autosave_at_;
+        std::chrono::steady_clock::time_point
+            last_mutation_at_;
+        std::chrono::steady_clock::time_point
+            next_storage_check_at_;
+        std::uint64_t
+            last_autosaved_dirty_epoch_ = 0;
+        std::uint64_t
+            last_autosaved_scene_serial_ = 0;
+        std::uint64_t autosave_sequence_ = 0;
+        std::uint64_t
+            project_write_autosave_sequence_ = 0;
+        std::optional<JobHandle>
+            project_write_job_;
+        ProjectWritePurpose
+            project_write_purpose_ =
+                ProjectWritePurpose::None;
+        std::jthread project_write_thread_;
+        std::uint64_t
+            project_write_dirty_epoch_ = 0;
+        std::uint64_t
+            project_write_scene_serial_ = 0;
+        std::filesystem::path
+            project_write_destination_;
+        bool project_write_automatic_ = false;
+        std::string last_project_write_error_;
+        lfs::io::project::ProjectStorageStats
+            storage_stats_;
+        bool compaction_suggested_ = false;
+        bool compaction_suggestion_reported_ =
+            false;
+        std::optional<std::filesystem::path>
+            recovered_master_path_;
+        std::optional<std::filesystem::path>
+            recovery_session_path_;
+        std::optional<
+            lfs::io::project::RecoverySession>
+            recovery_session_;
+        bool recovery_prompt_pending_ = false;
+        std::optional<DeclinedRecoveryIdentity>
+            declined_recovery_;
+        mutable std::mutex
+            document_access_mutex_;
+        std::optional<ProjectInfo>
+            cached_project_info_;
         std::uint64_t
             adopted_training_snapshot_count_ = 0;
         mutable std::mutex thread_mutex_;
         std::vector<std::jthread> hydration_threads_;
-        std::jthread close_save_thread_;
         std::atomic<CloseSaveState>
             close_save_state_{CloseSaveState::Idle};
         mutable std::mutex close_save_mutex_;

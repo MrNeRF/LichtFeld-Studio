@@ -738,7 +738,9 @@ namespace lfs::vis {
 
     void TrainerManager::requestSaveProject() {
         if (trainer_ && isTrainingActive()) {
-            trainer_->request_project_save();
+            static_cast<void>(
+                trainer_
+                    ->request_project_save());
             LOG_INFO("Project save requested at iteration {}", getCurrentIteration());
         } else {
             LOG_WARN("Cannot save project snapshot - training not active");

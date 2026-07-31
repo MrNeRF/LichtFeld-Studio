@@ -165,6 +165,37 @@ namespace lfs::app {
                  info.reopen_last_project},
                 {"auto_save_on_close",
                  info.auto_save_on_close},
+                {"autosave_interval_seconds",
+                 info.autosave_interval_seconds},
+                {"autosave_dirty_epoch_threshold",
+                 info
+                     .autosave_dirty_epoch_threshold},
+                {"project_write_running",
+                 info.project_write_running},
+                {"project_write_stage",
+                 info.project_write_stage},
+                {"project_write_progress",
+                 info.project_write_progress},
+                {"project_write_error",
+                 info.project_write_error.empty()
+                     ? json(nullptr)
+                     : json(
+                           info
+                               .project_write_error)},
+                {"autosave_sequence",
+                 info.autosave_sequence},
+                {"recovery_session",
+                 info.recovery_session},
+                {"compaction_suggested",
+                 info.compaction_suggested},
+                {"physical_bytes",
+                 info.physical_bytes},
+                {"estimated_live_bytes",
+                 info.estimated_live_bytes},
+                {"dead_bytes",
+                 info.dead_bytes},
+                {"dead_ratio",
+                 info.dead_ratio},
                 {"hydration_error",
                  info.hydration_error.empty()
                      ? json(nullptr)
@@ -288,6 +319,92 @@ namespace lfs::app {
                             .add(
                                 "last_generation",
                                 last_generation),
+                    .native = std::nullopt,
+                });
+        }
+
+        lfs::Result<vis::ProjectInfo>
+        wait_for_project_write(
+            vis::Visualizer* viewer,
+            const std::string_view operation) {
+            constexpr auto TIMEOUT =
+                std::chrono::minutes(2);
+            constexpr auto POLL_INTERVAL =
+                std::chrono::milliseconds(25);
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                TIMEOUT;
+            do {
+                auto latest = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer->projectGetInfo();
+                    });
+                if (!latest) {
+                    return std::move(latest).error();
+                }
+                if (!latest
+                         ->project_write_running) {
+                    if (!latest
+                             ->project_write_error
+                             .empty()) {
+                        return lfs::make_error(
+                            lfs::ErrorInit{
+                                .code =
+                                    lfs::ErrorCode::
+                                        Unavailable,
+                                .domain =
+                                    lfs::ErrorDomain::
+                                        MCP,
+                                .severity =
+                                    lfs::Severity::
+                                        Error,
+                                .retryability =
+                                    lfs::Retryability::
+                                        NotRetryable,
+                                .operation_id = {},
+                                .user_message =
+                                    std::format(
+                                        "{} failed.",
+                                        operation),
+                                .detail =
+                                    latest
+                                        ->project_write_error,
+                                .detection =
+                                    LFS_SOURCE_SITE_CURRENT(),
+                                .fields = {},
+                                .native =
+                                    std::nullopt,
+                            });
+                    }
+                    return latest;
+                }
+                std::this_thread::sleep_for(
+                    POLL_INTERVAL);
+            } while (
+                std::chrono::steady_clock::now() <
+                deadline);
+            return lfs::make_error(
+                lfs::ErrorInit{
+                    .code =
+                        lfs::ErrorCode::
+                            DeadlineExceeded,
+                    .domain =
+                        lfs::ErrorDomain::MCP,
+                    .severity =
+                        lfs::Severity::Error,
+                    .retryability =
+                        lfs::Retryability::
+                            RetryableWithBackoff,
+                    .operation_id = {},
+                    .user_message =
+                        std::format(
+                            "{} did not finish before the MCP deadline.",
+                            operation),
+                    .detail =
+                        "Timed out waiting for the shared project-write job",
+                    .detection =
+                        LFS_SOURCE_SITE_CURRENT(),
+                    .fields = {},
                     .native = std::nullopt,
                 });
         }
@@ -2401,10 +2518,56 @@ namespace lfs::app {
                     return project_error_json(
                         result.error());
                 }
+                if (*result ==
+                    vis::ProjectOpenOutcome::
+                        RecoveryPromptPending) {
+                    return json{
+                        {"status",
+                         "recovery_decision_pending"},
+                        {"recovery_decision_pending",
+                         true},
+                    };
+                }
                 auto info = post_and_wait(
                     viewer, [viewer] {
                         return viewer->projectGetInfo();
                     });
+                return info
+                           ? project_info_json(*info)
+                           : project_error_json(
+                                 info.error());
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "project_compact",
+                .description = "Verify, compact, and atomically replace the active .licht master",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json::object(),
+                    .required = {}},
+                .metadata = {
+                    .category = "project",
+                    .kind = "mutation",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                    .long_running = true,
+                    .user_visible = true,
+                }},
+            [viewer](const json&) -> json {
+                auto started = post_and_wait(
+                    viewer, [viewer] {
+                        return viewer
+                            ->projectCompact();
+                    });
+                if (!started) {
+                    return project_error_json(
+                        started.error());
+                }
+                auto info =
+                    wait_for_project_write(
+                        viewer,
+                        "Project compaction");
                 return info
                            ? project_info_json(*info)
                            : project_error_json(

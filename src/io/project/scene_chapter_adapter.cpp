@@ -415,20 +415,18 @@ namespace lfs::io::project {
 
     } // namespace
 
-    lfs::Result<SceneGraphChapter> capture_scene_graph(
+    lfs::Result<CapturedSceneGraphState> capture_scene_graph_state(
         const lfs::core::Scene& scene,
         const ScenePayloadBindings& payload_bindings) {
-        SceneGraphChapter result;
+        CapturedSceneGraphState result;
         const lfs::core::Uuid training_uuid = scene.getTrainingModelNodeUuid();
-        if (auto status = result.set_training_model_uuid(
-                training_uuid.is_nil()
-                    ? std::optional<lfs::core::Uuid>{}
-                    : std::optional<lfs::core::Uuid>{training_uuid});
-            !status) {
-            return std::move(status).error();
-        }
+        result.training_model_uuid =
+            training_uuid.is_nil()
+                ? std::optional<lfs::core::Uuid>{}
+                : std::optional<lfs::core::Uuid>{training_uuid};
 
         const auto all_nodes = scene.getNodes();
+        result.nodes.reserve(all_nodes.size());
         std::unordered_set<lfs::core::NodeId> excluded;
         for (const lfs::core::SceneNode* node : all_nodes) {
             if (node->type == lfs::core::NodeType::KEYFRAME ||
@@ -453,9 +451,7 @@ namespace lfs::io::project {
                 return lfs::Result<void>::failure(std::move(captured).error());
             }
             captured->parent_uuid = parent_uuid;
-            if (auto status = result.upsert_node(*captured); !status) {
-                return status;
-            }
+            result.nodes.push_back(std::move(*captured));
             std::uint32_t saved_order = 0;
             for (const lfs::core::NodeId child_id : node.children) {
                 const lfs::core::SceneNode* child = scene.getNodeById(child_id);
@@ -478,10 +474,40 @@ namespace lfs::io::project {
                 return std::move(status).error();
             }
         }
+        return result;
+    }
+
+    lfs::Result<SceneGraphChapter>
+    materialize_scene_graph_chapter(
+        CapturedSceneGraphState state) {
+        SceneGraphChapter result;
+        if (auto status = result.set_training_model_uuid(
+                state.training_model_uuid);
+            !status) {
+            return std::move(status).error();
+        }
+        for (const auto& node : state.nodes) {
+            if (auto status = result.upsert_node(node);
+                !status) {
+                return std::move(status).error();
+            }
+        }
         if (auto valid = result.validate_hierarchy(); !valid) {
             return std::move(valid).error();
         }
         return result;
+    }
+
+    lfs::Result<SceneGraphChapter> capture_scene_graph(
+        const lfs::core::Scene& scene,
+        const ScenePayloadBindings& payload_bindings) {
+        auto state =
+            capture_scene_graph_state(scene, payload_bindings);
+        if (!state) {
+            return std::move(state).error();
+        }
+        return materialize_scene_graph_chapter(
+            std::move(*state));
     }
 
     namespace {

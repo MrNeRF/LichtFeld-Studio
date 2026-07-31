@@ -3,11 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "app/headless_recovery_document.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project_document.hpp"
+#include "io/project_recovery.hpp"
 #include "project/session_state.hpp"
 #include "training/checkpoint.hpp"
+#include "training/project_snapshot_chapters.hpp"
 #include "training/strategies/mcmc.hpp"
+#include "visualizer/core/parameter_manager.hpp"
 
 #include <gtest/gtest.h>
 
@@ -29,12 +33,15 @@
 #include <ranges>
 #include <span>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <vector>
 
 #if defined(__linux__)
+#include <csignal>
 #include <fcntl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -165,6 +172,39 @@ namespace {
         ASSERT_TRUE(result)
             << (result ? std::string{}
                        : lfs::format_for_developer(result.error()));
+    }
+
+    template <typename T>
+    T require_result(lfs::Result<T> result) {
+        if (!result) {
+            throw std::runtime_error(
+                lfs::format_for_developer(result.error()));
+        }
+        return std::move(*result);
+    }
+
+    std::vector<std::byte> read_file_bytes(
+        const fs::path& path) {
+        std::ifstream stream(
+            path, std::ios::binary | std::ios::ate);
+        EXPECT_TRUE(stream);
+        if (!stream) {
+            return {};
+        }
+        const auto size = stream.tellg();
+        EXPECT_GE(size, 0);
+        if (size < 0) {
+            return {};
+        }
+        std::vector<std::byte> result(
+            static_cast<std::size_t>(size));
+        stream.seekg(0);
+        stream.read(
+            reinterpret_cast<char*>(result.data()),
+            static_cast<std::streamsize>(
+                result.size()));
+        EXPECT_TRUE(stream);
+        return result;
     }
 
     ProjectDocumentSaveOptions save_options(
@@ -2103,5 +2143,999 @@ namespace {
         ASSERT_TRUE(after);
         EXPECT_EQ(*after, *before);
     }
+
+    TEST(ProjectDocumentTest,
+         AutosaveIsCompleteBoundOverlayAndDoesNotMutateMasterOrDirtyState) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "recovery.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        const fs::path recovered =
+            temporary.path / "recovered.licht";
+        write_phase_a_fixture(master);
+
+        const auto master_before =
+            read_file_bytes(master);
+        ProjectReader base =
+            ProjectReader::open(master).value();
+        auto document = ProjectDocument::open(master);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        require_status(
+            document->edit_view().dom().set(
+                "recovery_marker",
+                std::string{"autosaved"}));
+        const auto dirty_epoch =
+            document->dirty_epoch();
+        ASSERT_GT(dirty_epoch, 0u);
+
+        const Uuid snapshot_uuid =
+            fixed_uuid(980);
+        auto saved = document->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(981),
+                .base_explicit_commit_uuid =
+                    base.commit().commit_uuid,
+                .autosave_sequence = 7,
+                .snapshot_uuid = snapshot_uuid,
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        EXPECT_EQ(read_file_bytes(master),
+                  master_before);
+        EXPECT_TRUE(document->dirty());
+        EXPECT_EQ(document->dirty_epoch(),
+                  dirty_epoch);
+
+        ProjectReader overlay =
+            ProjectReader::open(sidecar).value();
+        EXPECT_EQ(
+            overlay.superblock().role,
+            ContainerRole::AutosaveSidecar);
+        EXPECT_EQ(
+            overlay.superblock()
+                .base_explicit_commit_uuid,
+            base.commit().commit_uuid);
+        EXPECT_EQ(
+            overlay.superblock().autosave_sequence,
+            7u);
+        EXPECT_EQ(
+            overlay.superblock()
+                .sidecar_snapshot_uuid,
+            snapshot_uuid);
+        EXPECT_EQ(
+            overlay.commit().kind,
+            CommitKind::Autosave);
+        require_status(overlay.verify_all());
+
+        for (const auto& base_row : base.chunks()) {
+            if (base_row.row_kind != RowKind::Live) {
+                continue;
+            }
+            const auto found = std::ranges::find(
+                overlay.chunks(), base_row.key,
+                &ChunkInfo::key);
+            ASSERT_NE(found, overlay.chunks().end())
+                << base_row.key_string();
+            EXPECT_TRUE(
+                found->row_kind == RowKind::Live ||
+                found->row_kind ==
+                    RowKind::SidecarBaseReference ||
+                found->row_kind ==
+                    RowKind::Tombstone);
+        }
+
+        auto inspection =
+            inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(
+                   inspection.error());
+        EXPECT_EQ(
+            inspection->disposition,
+            RecoveryDisposition::Offer);
+        EXPECT_EQ(
+            inspection->selected_path,
+            std::optional<fs::path>{sidecar});
+        require_status(materialize_recovered_project(
+            master, sidecar, recovered));
+        ProjectReader materialized =
+            ProjectReader::open(recovered).value();
+        require_status(materialized.verify_all());
+        const auto* overlay_view =
+            overlay.find(FOURCC_VIEW,
+                         base.superblock()
+                             .project_uuid);
+        const auto* recovered_view =
+            materialized.find(
+                FOURCC_VIEW,
+                base.superblock().project_uuid);
+        ASSERT_NE(overlay_view, nullptr);
+        ASSERT_NE(recovered_view, nullptr);
+        const auto overlay_view_bytes =
+            overlay.read_chunk(*overlay_view);
+        const auto recovered_view_bytes =
+            materialized.read_chunk(
+                *recovered_view);
+        ASSERT_TRUE(overlay_view_bytes);
+        ASSERT_TRUE(recovered_view_bytes);
+        EXPECT_EQ(
+            *overlay_view_bytes,
+            *recovered_view_bytes);
+
+        {
+            auto held = ProjectWriter::append(
+                master,
+                AppendOptions{
+                    .disk_reserve_bytes = 0,
+                });
+            ASSERT_TRUE(held)
+                << lfs::format_for_developer(
+                       held.error());
+            auto locked_save =
+                document->save_autosave(
+                    sidecar,
+                    ProjectDocumentAutosaveOptions{
+                        .file_uuid =
+                            fixed_uuid(982),
+                        .base_explicit_commit_uuid =
+                            base.commit()
+                                .commit_uuid,
+                        .autosave_sequence = 8,
+                        .snapshot_uuid =
+                            fixed_uuid(983),
+                        .index_compression =
+                            IndexCompression::
+                                StoredForDeterministicTests,
+                        .disk_reserve_bytes = 0,
+                    });
+            ASSERT_FALSE(locked_save);
+            EXPECT_EQ(
+                locked_save.error().code(),
+                lfs::ErrorCode::Unavailable);
+        }
+
+        auto explicit_save =
+            document->save(
+                master, save_options(984, 300));
+        ASSERT_TRUE(explicit_save)
+            << lfs::format_for_developer(
+                   explicit_save.error());
+        auto stale =
+            inspect_autosave_recovery(master);
+        ASSERT_TRUE(stale)
+            << lfs::format_for_developer(
+                   stale.error());
+        EXPECT_EQ(
+            stale->disposition,
+            RecoveryDisposition::StaleDeleted);
+        EXPECT_FALSE(fs::exists(sidecar));
+    }
+
+    TEST(ProjectDocumentTest,
+         AutosaveInheritsMasterCompatibilityFloorsAndRequiredCapabilities) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "compatibility-master.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+
+        ProjectReader base = require_result(ProjectReader::open(master));
+        std::vector<CleanProof> proofs;
+        proofs.reserve(base.chunks().size());
+        for (std::size_t index = 0; index < base.chunks().size(); ++index) {
+            proofs.push_back(require_result(base.make_clean_proof(
+                base.chunks()[index], 20'000 + index)));
+        }
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::append(master, AppendOptions{
+                                                  .compatibility = {},
+                                                  .index_compression =
+                                                      IndexCompression::StoredForDeterministicTests,
+                                                  .disk_reserve_bytes = 0,
+                                              }));
+            CommitOptions elevated{
+                .kind = CommitKind::Explicit,
+                .commit_uuid = fixed_uuid(9863),
+                .snapshot_uuid = fixed_uuid(9864),
+                .wallclock_unix_ns = 1300,
+                .min_reader_version = Version{1, 1},
+                .min_safe_writer_version = Version{1, 1},
+            };
+            elevated.extra_reader_capabilities.set(100);
+            elevated.extra_writer_capabilities.set(101);
+            require_status(writer.plan_commit(elevated));
+            require_status(writer.preflight(0));
+            for (std::size_t index = 0; index < proofs.size(); ++index) {
+                require_status(writer.reuse_if_clean(
+                    proofs[index], 20'000 + index));
+            }
+            require_status(writer.commit());
+        }
+
+        ReaderOptions compatibility;
+        compatibility.reader_version = Version{1, 1};
+        compatibility.writer_version = Version{1, 1};
+        compatibility.reader_capabilities.set(100);
+        compatibility.writer_capabilities.set(101);
+        ProjectReader elevated_master = require_result(
+            ProjectReader::open(master, compatibility));
+        ASSERT_TRUE(elevated_master.commit()
+                        .required_reader_capabilities.contains(100));
+        ASSERT_TRUE(elevated_master.commit()
+                        .required_writer_capabilities.contains(101));
+        auto document = ProjectDocument::open(
+            master, ProjectDocumentOpenOptions{.reader = compatibility});
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(document.error());
+        require_status(document->edit_view().dom().set(
+            "compatibility_marker", std::string{"autosaved"}));
+        auto saved = document->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9865),
+                .base_explicit_commit_uuid =
+                    elevated_master.commit().commit_uuid,
+                .autosave_sequence = 1,
+                .snapshot_uuid = fixed_uuid(9866),
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+
+        ProjectReader overlay = require_result(
+            ProjectReader::open(sidecar, compatibility));
+        EXPECT_TRUE(overlay.commit().min_reader_version >=
+                    elevated_master.commit().min_reader_version);
+        EXPECT_TRUE(overlay.commit().min_safe_writer_version >=
+                    elevated_master.commit().min_safe_writer_version);
+        EXPECT_TRUE(overlay.commit().required_reader_capabilities.contains_all(
+            elevated_master.commit().required_reader_capabilities));
+        EXPECT_TRUE(overlay.commit().required_writer_capabilities.contains_all(
+            elevated_master.commit().required_writer_capabilities));
+    }
+
+    TEST(ProjectDocumentTest,
+         RecoveredDocumentMergeHoldsMasterLockAndPublishesRecoveredKind) {
+        TemporaryDirectory temporary;
+        const fs::path master = temporary.path / "held-recovery.licht";
+        const fs::path sidecar = autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+        ProjectReader base = require_result(ProjectReader::open(master));
+        auto autosave_document = ProjectDocument::open(master);
+        ASSERT_TRUE(autosave_document)
+            << lfs::format_for_developer(autosave_document.error());
+        require_status(autosave_document->edit_view().dom().set(
+            "held_recovery_marker", std::string{"recovered"}));
+        auto autosaved = autosave_document->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9867),
+                .base_explicit_commit_uuid = base.commit().commit_uuid,
+                .autosave_sequence = 1,
+                .snapshot_uuid = fixed_uuid(9868),
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(autosaved)
+            << lfs::format_for_developer(autosaved.error());
+
+        RecoverySession session =
+            require_result(begin_recovery_session(master, sidecar));
+        const fs::path staging = recovery_session_temp_path(master);
+        require_status(materialize_recovered_project(
+            master, sidecar, staging, session));
+        auto recovered = ProjectDocument::open(staging);
+        ASSERT_TRUE(recovered)
+            << lfs::format_for_developer(recovered.error());
+        const auto recovered_marker =
+            recovered->view().dom().get_json("held_recovery_marker");
+        ASSERT_TRUE(recovered_marker.has_value());
+        EXPECT_EQ(*recovered_marker, "recovered");
+        auto competing = ProjectWriter::append(master);
+        ASSERT_FALSE(competing);
+        EXPECT_EQ(competing.error().code(), lfs::ErrorCode::Unavailable);
+
+        auto merge_options = save_options(9869, 1400);
+        merge_options.commit.kind = CommitKind::Recovered;
+        merge_options.writer_lock_lease = session.writer_lock();
+        auto merged = recovered->save_as(master, merge_options);
+        ASSERT_TRUE(merged)
+            << lfs::format_for_developer(merged.error());
+        ProjectReader durable = require_result(ProjectReader::open(master));
+        EXPECT_EQ(durable.commit().kind, CommitKind::Recovered);
+        auto durable_document = ProjectDocument::open(master);
+        ASSERT_TRUE(durable_document)
+            << lfs::format_for_developer(durable_document.error());
+        const auto durable_marker =
+            durable_document->view().dom().get_json("held_recovery_marker");
+        ASSERT_TRUE(durable_marker.has_value());
+        EXPECT_EQ(*durable_marker, "recovered");
+        EXPECT_TRUE(fs::exists(staging));
+        require_status(session.release());
+        EXPECT_FALSE(fs::exists(staging));
+        auto stale = inspect_autosave_recovery(master);
+        ASSERT_TRUE(stale)
+            << lfs::format_for_developer(stale.error());
+        EXPECT_EQ(stale->disposition, RecoveryDisposition::StaleDeleted);
+        EXPECT_FALSE(fs::exists(sidecar));
+    }
+
+    TEST(ProjectDocumentTest,
+         HeadlessRecoveryRebindKeepsLazyPayloadReadableAfterDurableMerge) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "headless-recovery-merge.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+        ProjectReader base =
+            require_result(ProjectReader::open(master));
+        auto autosave_document =
+            ProjectDocument::open(master);
+        ASSERT_TRUE(autosave_document)
+            << lfs::format_for_developer(
+                   autosave_document.error());
+        require_status(
+            autosave_document->edit_view().dom().set(
+                "headless_recovery_marker",
+                std::string{"recovered"}));
+        auto autosaved =
+            autosave_document->save_autosave(
+                sidecar,
+                ProjectDocumentAutosaveOptions{
+                    .file_uuid = fixed_uuid(9870),
+                    .base_explicit_commit_uuid =
+                        base.commit().commit_uuid,
+                    .autosave_sequence = 1,
+                    .snapshot_uuid = fixed_uuid(9871),
+                    .index_compression =
+                        IndexCompression::
+                            StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                });
+        ASSERT_TRUE(autosaved)
+            << lfs::format_for_developer(
+                   autosaved.error());
+
+        RecoverySession session = require_result(
+            begin_recovery_session(master, sidecar));
+        const fs::path staging =
+            recovery_session_temp_path(master);
+        require_status(materialize_recovered_project(
+            master, sidecar, staging, session));
+        auto recovered = ProjectDocument::open(
+            staging,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            });
+        ASSERT_TRUE(recovered)
+            << lfs::format_for_developer(
+                   recovered.error());
+        ASSERT_TRUE(std::ranges::all_of(
+            recovered->payload_states(),
+            [](const auto& state) {
+                return !state.loaded;
+            }));
+
+        lfs::app::detail::HeadlessRecoveryDocument owner(
+            std::move(*recovered), std::move(session));
+        ASSERT_NE(owner.recovery_session(), nullptr);
+        EXPECT_TRUE(owner.recovery_session()
+                        ->document_attached());
+        RecoverySession trainer_session =
+            *owner.recovery_session();
+
+        // Mirror the trainer's durable recovered publish with a separate
+        // document: the owner must remain bound to the staging file until it
+        // explicitly reopens the new master head.
+        auto writer_document = ProjectDocument::open(
+            staging,
+            ProjectDocumentOpenOptions{
+                .defer_geometry_payloads = true,
+            });
+        ASSERT_TRUE(writer_document)
+            << lfs::format_for_developer(
+                   writer_document.error());
+        auto merge_options = save_options(9872, 1500);
+        merge_options.commit.kind =
+            CommitKind::Recovered;
+        merge_options.writer_lock_lease =
+            trainer_session.writer_lock();
+        auto merged = writer_document->save_as(
+            master, merge_options);
+        ASSERT_TRUE(merged)
+            << lfs::format_for_developer(
+                   merged.error());
+        ASSERT_TRUE(fs::exists(staging));
+
+        auto early_release = trainer_session.release();
+        ASSERT_FALSE(early_release);
+        EXPECT_EQ(early_release.error().code(),
+                  lfs::ErrorCode::FailedPrecondition);
+        EXPECT_TRUE(fs::exists(staging));
+
+        require_status(
+            owner.rebind_after_durable_merge());
+        ASSERT_TRUE(owner.document().source_path());
+        EXPECT_EQ(owner.document().source_path()->lexically_normal(),
+                  master.lexically_normal());
+        EXPECT_FALSE(fs::exists(staging));
+
+        // The deferred geometry was untouched before the durable merge. Its
+        // first read now comes from the rebound master and must not see ENOENT.
+        Scene hydrated_scene;
+        auto shell = owner.document().stage_shell(hydrated_scene);
+        ASSERT_TRUE(shell)
+            << lfs::format_for_developer(
+                   shell.error());
+        hydrated_scene.commitRestoreStage(std::move(*shell));
+        auto staged =
+            owner.document().stage_hydration(hydrated_scene);
+        ASSERT_TRUE(staged)
+            << lfs::format_for_developer(
+                   staged.error());
+        const auto report =
+            ProjectDocument::commit_partial_hydration(
+                hydrated_scene, std::move(*staged), true);
+        EXPECT_EQ(report.hydrated_payload_units, 3u);
+        EXPECT_EQ(report.invalidated_payload_units, 0u);
+    }
+
+    TEST(ProjectDocumentTest,
+         HeadlessRecoveryTeardownDeletesTempOnlyAfterDocumentDestruction) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "headless-recovery-teardown.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+        ProjectReader base =
+            require_result(ProjectReader::open(master));
+        auto autosave_document =
+            ProjectDocument::open(master);
+        ASSERT_TRUE(autosave_document)
+            << lfs::format_for_developer(
+                   autosave_document.error());
+        require_status(
+            autosave_document->edit_view().dom().set(
+                "headless_teardown_marker",
+                std::string{"recovered"}));
+        auto autosaved =
+            autosave_document->save_autosave(
+                sidecar,
+                ProjectDocumentAutosaveOptions{
+                    .file_uuid = fixed_uuid(9873),
+                    .base_explicit_commit_uuid =
+                        base.commit().commit_uuid,
+                    .autosave_sequence = 1,
+                    .snapshot_uuid = fixed_uuid(9874),
+                    .index_compression =
+                        IndexCompression::
+                            StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                });
+        ASSERT_TRUE(autosaved)
+            << lfs::format_for_developer(
+                   autosaved.error());
+
+        const fs::path staging =
+            recovery_session_temp_path(master);
+        {
+            RecoverySession session =
+                require_result(begin_recovery_session(
+                    master, sidecar));
+            require_status(materialize_recovered_project(
+                master, sidecar, staging, session));
+            auto recovered = ProjectDocument::open(
+                staging,
+                ProjectDocumentOpenOptions{
+                    .defer_geometry_payloads = true,
+                });
+            ASSERT_TRUE(recovered)
+                << lfs::format_for_developer(
+                       recovered.error());
+            lfs::app::detail::HeadlessRecoveryDocument owner(
+                std::move(*recovered),
+                std::move(session));
+            ASSERT_TRUE(fs::exists(staging));
+            RecoverySession trainer_session =
+                *owner.recovery_session();
+            auto refused = trainer_session.release();
+            ASSERT_FALSE(refused);
+            EXPECT_EQ(refused.error().code(),
+                      lfs::ErrorCode::
+                          FailedPrecondition);
+            EXPECT_TRUE(fs::exists(staging));
+        }
+        EXPECT_FALSE(fs::exists(staging));
+    }
+
+    TEST(ProjectDocumentTest,
+         TrainingAutosaveRecoveryPreservesInactiveParameterSlotsAndBindings) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "training-params.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        const fs::path recovered =
+            temporary.path / "training-params-recovered.licht";
+        const Uuid project_uuid = fixed_uuid(9850);
+        const Uuid background_reference =
+            fixed_uuid(9851);
+        const Uuid ppisp_reference =
+            fixed_uuid(9852);
+
+        lfs::vis::ParameterManager manager;
+        ASSERT_TRUE(manager.ensureLoaded());
+        auto configured =
+            manager.capturePendingProjectState();
+        ASSERT_TRUE(configured)
+            << lfs::format_for_developer(
+                   configured.error());
+        configured->active_strategy = "mrnf";
+        configured->mcmc_session.iterations = 111;
+        configured->mcmc_current.iterations = 112;
+        configured->igs_session.iterations = 331;
+        configured->igs_current.iterations = 332;
+        configured->mcmc_session_references
+            .background_image_reference =
+            background_reference;
+        configured->mcmc_current_references
+            .background_image_reference =
+            background_reference;
+        configured->igs_session_references
+            .ppisp_reference = ppisp_reference;
+        configured->igs_current_references
+            .ppisp_reference = ppisp_reference;
+        require_status(
+            manager.restorePendingProjectState(
+                *configured));
+        auto live_parameters =
+            manager.capturePendingProjectState();
+        ASSERT_TRUE(live_parameters)
+            << lfs::format_for_developer(
+                   live_parameters.error());
+
+        Scene scene;
+        const auto model_id = scene.addSplat(
+            "training", make_splat(8));
+        ASSERT_NE(model_id, lfs::core::NULL_NODE);
+        scene.setTrainingModelNode(model_id);
+        const auto model_uuid =
+            scene.getNodeUuid(model_id);
+        const std::array selected_nodes{model_uuid};
+        lfs::training::ProjectSnapshotCpuState
+            cpu_state;
+        const auto snapshot_uuid = fixed_uuid(9853);
+        auto captured = lfs::training::
+            capture_project_snapshot_cpu_state(
+                scene, *live_parameters,
+                snapshot_uuid, 42, cpu_state,
+                selected_nodes);
+        ASSERT_TRUE(captured)
+            << lfs::format_for_developer(
+                   captured.error());
+        lfs::training::ProjectSnapshotChapters
+            chapters;
+        require_status(lfs::training::
+                           materialize_project_snapshot_cpu_chapters(
+                               std::move(cpu_state),
+                               chapters));
+        EXPECT_EQ(
+            chapters.selection
+                .selected_node_uuids(),
+            std::vector<Uuid>{model_uuid});
+
+        auto document = ProjectDocument::create(
+            project_uuid, 1000);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(
+                   document.error());
+        for (const auto& [uuid, key, kind] :
+             std::array{
+                 std::tuple{
+                     background_reference,
+                     std::string{"background"},
+                     std::string{"image"}},
+                 std::tuple{
+                     ppisp_reference,
+                     std::string{"ppisp"},
+                     std::string{"ppisp"}},
+             }) {
+            require_status(
+                document->edit_references().upsert(
+                    ReferenceRecord{
+                        .uuid = uuid,
+                        .key = key,
+                        .kind = kind,
+                        .locator =
+                            {
+                                .preferred =
+                                    "missing/" + key,
+                                .base =
+                                    LocatorBase::Project,
+                            },
+                        .fingerprint =
+                            fake_fingerprint(42),
+                        .unresolved = true,
+                    }));
+        }
+        auto initial = save_options(9854, 1100);
+        ASSERT_TRUE(document->save(master, initial));
+        require_status(
+            document->edit_parameters()
+                .set_snapshot(
+                    chapters.parameters));
+        auto base = ProjectReader::open(master);
+        ASSERT_TRUE(base);
+        auto autosaved = document->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9857),
+                .base_explicit_commit_uuid =
+                    base->commit().commit_uuid,
+                .autosave_sequence = 1,
+                .snapshot_uuid = snapshot_uuid,
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(autosaved)
+            << lfs::format_for_developer(
+                   autosaved.error());
+        require_status(materialize_recovered_project(
+            master, sidecar, recovered));
+        auto reopened =
+            ProjectDocument::open(recovered);
+        ASSERT_TRUE(reopened)
+            << lfs::format_for_developer(
+                   reopened.error());
+        auto restored =
+            reopened->parameters().snapshot();
+        ASSERT_TRUE(restored)
+            << lfs::format_for_developer(
+                   restored.error());
+        EXPECT_EQ(restored->active_strategy,
+                  "mrnf");
+        EXPECT_EQ(restored->mcmc_session.iterations,
+                  111u);
+        EXPECT_EQ(restored->mcmc_current.iterations,
+                  112u);
+        EXPECT_EQ(restored->igs_session.iterations,
+                  331u);
+        EXPECT_EQ(restored->igs_current.iterations,
+                  332u);
+        EXPECT_EQ(
+            restored->mcmc_session_references
+                .background_image_reference,
+            background_reference);
+        EXPECT_EQ(
+            restored->mcmc_current_references
+                .background_image_reference,
+            background_reference);
+        EXPECT_EQ(
+            restored->igs_session_references
+                .ppisp_reference,
+            ppisp_reference);
+        EXPECT_EQ(
+            restored->igs_current_references
+                .ppisp_reference,
+            ppisp_reference);
+    }
+
+    TEST(ProjectDocumentTest,
+         HeadlessOpenWithoutRecoverKeepsSidecarUntilExplicitHeadAdvances) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "headless-decline.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+        auto base = ProjectReader::open(master);
+        ASSERT_TRUE(base);
+        auto autosave_document =
+            ProjectDocument::open(master);
+        ASSERT_TRUE(autosave_document);
+        require_status(
+            autosave_document->edit_view().dom().set(
+                "headless_recovery_marker",
+                std::string{"autosaved"}));
+        auto autosaved =
+            autosave_document->save_autosave(
+                sidecar,
+                ProjectDocumentAutosaveOptions{
+                    .file_uuid = fixed_uuid(9860),
+                    .base_explicit_commit_uuid =
+                        base->commit().commit_uuid,
+                    .autosave_sequence = 9,
+                    .snapshot_uuid =
+                        fixed_uuid(9861),
+                    .index_compression =
+                        IndexCompression::
+                            StoredForDeterministicTests,
+                    .disk_reserve_bytes = 0,
+                });
+        ASSERT_TRUE(autosaved)
+            << lfs::format_for_developer(
+                   autosaved.error());
+        auto offered =
+            inspect_autosave_recovery(master);
+        ASSERT_TRUE(offered);
+        EXPECT_EQ(offered->disposition,
+                  RecoveryDisposition::Offer);
+
+        // This is the headless-without---recover policy: open the durable
+        // master and leave the valid offer untouched.
+        auto opened_master =
+            ProjectDocument::open(master);
+        ASSERT_TRUE(opened_master);
+        EXPECT_TRUE(fs::is_regular_file(sidecar));
+        EXPECT_FALSE(
+            opened_master->view().dom().get_json(
+                                           "headless_recovery_marker")
+                .has_value());
+        require_status(
+            opened_master->edit_view().dom().set(
+                "explicit_marker",
+                std::string{"saved"}));
+        auto options = save_options(9862, 1200);
+        auto explicit_save =
+            opened_master->save(master, options);
+        ASSERT_TRUE(explicit_save)
+            << lfs::format_for_developer(
+                   explicit_save.error());
+        EXPECT_TRUE(fs::is_regular_file(sidecar));
+        auto stale =
+            inspect_autosave_recovery(master);
+        ASSERT_TRUE(stale);
+        EXPECT_EQ(stale->disposition,
+                  RecoveryDisposition::StaleDeleted);
+        EXPECT_FALSE(fs::exists(sidecar));
+    }
+
+    TEST(ProjectDocumentTest,
+         OpenInspectionDeletesOwnedOrphanCompactionTemps) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "stale-temp.licht";
+        write_phase_a_fixture(master);
+        const fs::path orphan =
+            temporary.path /
+            "stale-temp.compact.killed.1.0.tmp.licht";
+        {
+            std::ofstream output(
+                orphan,
+                std::ios::binary |
+                    std::ios::trunc);
+            output << "partial compaction";
+        }
+        ASSERT_TRUE(fs::exists(orphan));
+        auto inspection =
+            inspect_autosave_recovery(master);
+        ASSERT_TRUE(inspection)
+            << lfs::format_for_developer(
+                   inspection.error());
+        EXPECT_EQ(
+            inspection->disposition,
+            RecoveryDisposition::StaleDeleted);
+        EXPECT_FALSE(fs::exists(orphan));
+        EXPECT_NE(
+            std::ranges::find(
+                inspection->deleted_paths,
+                orphan),
+            inspection->deleted_paths.end());
+    }
+
+#if defined(__linux__)
+    TEST(ProjectDocumentTest,
+         AutosaveSigkillAtEveryBoundaryLeavesCompleteOldOrNewSidecar) {
+        TemporaryDirectory temporary;
+        for (int boundary_value =
+                 static_cast<int>(
+                     CommitBoundary::
+                         CurrentHeadValidated);
+             boundary_value <=
+             static_cast<int>(
+                 CommitBoundary::Committed);
+             ++boundary_value) {
+            const auto boundary =
+                static_cast<CommitBoundary>(
+                    boundary_value);
+            SCOPED_TRACE(std::format(
+                "autosave boundary {}",
+                boundary_value));
+            const fs::path master =
+                temporary.path /
+                std::format(
+                    "autosave-crash-{}.licht",
+                    boundary_value);
+            const fs::path sidecar =
+                autosave_sidecar_path(master);
+            write_phase_a_fixture(master);
+            const auto master_before =
+                read_file_bytes(master);
+            const auto base =
+                ProjectReader::open(master);
+            ASSERT_TRUE(base);
+            {
+                auto document =
+                    ProjectDocument::open(master);
+                ASSERT_TRUE(document);
+                require_status(
+                    document->edit_view()
+                        .dom()
+                        .set(
+                            "crash_marker",
+                            std::string{"old"}));
+                auto saved =
+                    document->save_autosave(
+                        sidecar,
+                        ProjectDocumentAutosaveOptions{
+                            .file_uuid =
+                                fixed_uuid(
+                                    1100 +
+                                    boundary_value *
+                                        10),
+                            .base_explicit_commit_uuid =
+                                base->commit()
+                                    .commit_uuid,
+                            .autosave_sequence =
+                                1,
+                            .snapshot_uuid =
+                                fixed_uuid(
+                                    1101 +
+                                    boundary_value *
+                                        10),
+                            .index_compression =
+                                IndexCompression::
+                                    StoredForDeterministicTests,
+                            .disk_reserve_bytes =
+                                0,
+                            .boundary_observer =
+                                {},
+                        });
+                ASSERT_TRUE(saved)
+                    << lfs::format_for_developer(
+                           saved.error());
+            }
+
+            const pid_t child = ::fork();
+            ASSERT_GE(child, 0);
+            if (child == 0) {
+                try {
+                    auto document =
+                        ProjectDocument::open(
+                            master);
+                    if (!document) {
+                        ::_exit(101);
+                    }
+                    auto edited =
+                        document->edit_view()
+                            .dom()
+                            .set(
+                                "crash_marker",
+                                std::string{"new"});
+                    if (!edited) {
+                        ::_exit(102);
+                    }
+                    auto saved =
+                        document->save_autosave(
+                            sidecar,
+                            ProjectDocumentAutosaveOptions{
+                                .file_uuid =
+                                    fixed_uuid(
+                                        1102 +
+                                        boundary_value *
+                                            10),
+                                .base_explicit_commit_uuid =
+                                    base->commit()
+                                        .commit_uuid,
+                                .autosave_sequence =
+                                    2,
+                                .snapshot_uuid =
+                                    fixed_uuid(
+                                        1103 +
+                                        boundary_value *
+                                            10),
+                                .index_compression =
+                                    IndexCompression::
+                                        StoredForDeterministicTests,
+                                .disk_reserve_bytes =
+                                    0,
+                                .boundary_observer =
+                                    [boundary](
+                                        const CommitBoundary
+                                            reached) {
+                                        if (reached ==
+                                            boundary) {
+                                            ::kill(
+                                                ::getpid(),
+                                                SIGKILL);
+                                        }
+                                    },
+                            });
+                    (void)saved;
+                } catch (...) {
+                    ::_exit(103);
+                }
+                ::_exit(104);
+            }
+            int status = 0;
+            ASSERT_EQ(
+                ::waitpid(child, &status, 0),
+                child);
+            ASSERT_TRUE(WIFSIGNALED(status));
+            EXPECT_EQ(
+                WTERMSIG(status), SIGKILL);
+            EXPECT_EQ(
+                read_file_bytes(master),
+                master_before);
+
+            auto inspection =
+                inspect_autosave_recovery(
+                    master);
+            ASSERT_TRUE(inspection)
+                << lfs::format_for_developer(
+                       inspection.error());
+            ASSERT_EQ(
+                inspection->disposition,
+                RecoveryDisposition::Offer);
+            ASSERT_TRUE(
+                inspection->selected_path);
+            EXPECT_TRUE(
+                inspection
+                        ->autosave_sequence ==
+                    1 ||
+                inspection
+                        ->autosave_sequence ==
+                    2);
+            const fs::path materialized =
+                temporary.path /
+                std::format(
+                    "autosave-recovered-{}.licht",
+                    boundary_value);
+            require_status(
+                materialize_recovered_project(
+                    master,
+                    *inspection
+                         ->selected_path,
+                    materialized));
+            auto recovered =
+                ProjectReader::open(
+                    materialized);
+            ASSERT_TRUE(recovered);
+            require_status(
+                recovered->verify_all());
+            auto recovered_document =
+                ProjectDocument::open(
+                    materialized);
+            ASSERT_TRUE(recovered_document)
+                << lfs::format_for_developer(
+                       recovered_document.error());
+            const auto payload_marker =
+                recovered_document->view()
+                    .dom()
+                    .get<std::string>(
+                        "crash_marker");
+            ASSERT_TRUE(payload_marker);
+            EXPECT_EQ(
+                *payload_marker,
+                inspection->autosave_sequence == 1
+                    ? "old"
+                    : "new");
+        }
+    }
+#endif
 
 } // namespace

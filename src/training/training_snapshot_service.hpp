@@ -160,8 +160,9 @@ namespace lfs::training {
         const ADMMSparsityOptimizer* sparsity_optimizer = nullptr;
         std::span<const cudaStream_t> mutating_streams;
         // Runs inside the measured safe-point clock after all mutation streams
-        // are quiescent. The callback must produce owned CPU chapter state and
-        // stamp it with the supplied UUID.
+        // are quiescent. The callback may only copy detached value state and
+        // must stamp it with the supplied UUID. JSON/DOM/chapter assembly runs
+        // after capture() returns and the optimizer may mutate again.
         std::function<lfs::Result<
             TrainingSnapshotCpuStateMetrics>(
             const lfs::core::Uuid&)>

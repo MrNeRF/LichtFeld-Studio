@@ -1308,6 +1308,19 @@ namespace lfs::vis {
                 }
             });
 
+        cmd::ProjectCompact::when(
+            [this, publish_project_error](
+                const auto&) {
+                if (auto compacted =
+                        projectCompact();
+                    !compacted) {
+                    publish_project_error(
+                        "Compact Project",
+                        lfs::format_for_developer(
+                            compacted.error()));
+                }
+            });
+
         cmd::RequestExit::when([this](const auto&) {
             if (project_lifecycle_) {
                 project_lifecycle_
@@ -1429,6 +1442,27 @@ namespace lfs::vis {
                         project_lifecycle_
                             ->setAutoSaveOnClose(
                                 command.enabled);
+                    !saved) {
+                    publish_project_error(
+                        "Update Project Settings",
+                        lfs::format_for_developer(
+                            saved.error()));
+                }
+            });
+
+        cmd::SetProjectAutosaveInterval::when(
+            [this, publish_project_error](
+                const auto& command) {
+                if (!project_lifecycle_) {
+                    publish_project_error(
+                        "Update Project Settings",
+                        "Project lifecycle is unavailable.");
+                    return;
+                }
+                if (auto saved =
+                        project_lifecycle_
+                            ->setAutosaveIntervalSeconds(
+                                command.seconds);
                     !saved) {
                     publish_project_error(
                         "Update Project Settings",
@@ -1741,6 +1775,10 @@ namespace lfs::vis {
             }
             update_work_processed_ = !work.empty();
             runPostedWork(work, "viewer", viewer_thread_id_);
+        }
+        if (project_lifecycle_) {
+            project_lifecycle_
+                ->updateMaintenance();
         }
 
         if (gui_manager_) {
@@ -2629,12 +2667,12 @@ namespace lfs::vis {
             path, regenerate_preview);
     }
 
-    lfs::Result<void>
+    lfs::Result<ProjectOpenOutcome>
     VisualizerImpl::projectOpen(
         const std::filesystem::path& path,
         const ProjectSwitchDisposition disposition) {
         if (!project_lifecycle_) {
-            return visualizerFailure<void>(
+            return visualizerFailure<ProjectOpenOutcome>(
                 lfs::ErrorCode::Unavailable,
                 "Project lifecycle is unavailable.",
                 "The visualizer did not initialize its project lifecycle service",
@@ -2654,6 +2692,18 @@ namespace lfs::vis {
                 "project.lifecycle");
         }
         return project_lifecycle_->info();
+    }
+
+    lfs::Result<void>
+    VisualizerImpl::projectCompact() {
+        if (!project_lifecycle_) {
+            return visualizerFailure<void>(
+                lfs::ErrorCode::Unavailable,
+                "Project lifecycle is unavailable.",
+                "The visualizer did not initialize its project lifecycle service",
+                "project.lifecycle");
+        }
+        return project_lifecycle_->compact();
     }
 
     void VisualizerImpl::performReset() {

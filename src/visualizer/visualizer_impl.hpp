@@ -7,6 +7,7 @@
 #include "core/editor_context.hpp"
 #include "core/error_codes.hpp"
 #include "core/frame_state_machine.hpp"
+#include "core/job_registry.hpp"
 #include "core/main_loop.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
@@ -86,11 +87,13 @@ namespace lfs::vis {
         lfs::Result<void>
         projectSaveAs(const std::filesystem::path& path,
                       bool regenerate_preview = true) override;
-        lfs::Result<void>
+        lfs::Result<ProjectOpenOutcome>
         projectOpen(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition =
                 ProjectSwitchDisposition::RequireClean) override;
+        lfs::Result<void>
+        projectCompact() override;
         lfs::Result<ProjectInfo>
         projectGetInfo() override;
 
@@ -115,6 +118,12 @@ namespace lfs::vis {
         gui::GuiManager* getGuiManager() { return gui_manager_.get(); }
         const gui::GuiManager* getGuiManager() const {
             return gui_manager_.get();
+        }
+        [[nodiscard]] JobRegistry& jobs() noexcept {
+            return job_registry_;
+        }
+        [[nodiscard]] const JobRegistry& jobs() const noexcept {
+            return job_registry_;
         }
         const Viewport& getViewport() const { return viewport_; }
         Viewport& getViewport() { return viewport_; }
@@ -199,6 +208,7 @@ namespace lfs::vis {
 
         // GUI manager
         std::unique_ptr<gui::GuiManager> gui_manager_;
+        JobRegistry job_registry_;
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
@@ -206,6 +216,18 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
         friend class VisualizerImplResetTest_FileExitRoutesThroughCloseSaveStateMachine_Test;
         friend class VisualizerImplResetTest_CancelExitAndNextWindowAttemptRecoverFromFailedCloseSave_Test;
+        friend class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
+        friend class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
+        friend class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
+        friend class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
+        friend class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
+        friend class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
+        friend class VisualizerImplResetTest_RecoveredCloseDeletesTempAfterDocumentTeardown_Test;
+        friend class VisualizerImplResetTest_ProjectWriteSettlementCompletesBeforeNextDocumentWrite_Test;
+        friend class VisualizerImplResetTest_TrainingSnapshotCleanupTerminalizesProjectWrite_Test;
+        friend class VisualizerImplResetTest_TrainingSnapshotPrepareFailureTerminalizesProjectWrite_Test;
+        friend class VisualizerImplResetTest_TrainingSnapshotSupersedeTerminalizesOldAndCompletesNew_Test;
+        friend class VisualizerImplResetTest_TrainingSnapshotCancelTerminalizesBeforeSettlement_Test;
 
         // Allow ToolContext to access GUI manager for logging
         friend class ToolContext;

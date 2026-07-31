@@ -4,6 +4,7 @@
 
 #include "app/application.hpp"
 #include "app/application_startup.hpp"
+#include "app/headless_recovery_document.hpp"
 #include "app/headless_run_coordinator.hpp"
 #include "control/command_api.hpp"
 #include "core/checkpoint_format.hpp"
@@ -21,6 +22,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/project_document.hpp"
+#include "io/project_recovery.hpp"
 #include "tcp/include/tcp_publisher.hpp"
 #include "tcp/include/tcp_responder.hpp"
 #include "training/trainer.hpp"
@@ -126,7 +128,7 @@ namespace lfs::app {
         }
 
         struct LoadedTrainingProject {
-            io::project::ProjectDocument document;
+            detail::HeadlessRecoveryDocument document;
             core::param::TrainingParameters params;
             core::Uuid checkpoint_uuid;
             int iteration = 0;
@@ -144,21 +146,111 @@ namespace lfs::app {
             }
             const auto& path =
                 *cli_params.resume_project;
+            std::filesystem::path open_path = path;
+            std::optional<
+                io::project::RecoverySession>
+                recovery_session;
             LOG_INFO(
                 "Opening training project: {}",
                 core::path_to_utf8(path));
 
+            auto recovery =
+                io::project::inspect_autosave_recovery(
+                    path);
+            if (!recovery) {
+                return std::move(recovery)
+                    .error()
+                    .with_context(
+                        "inspect training project autosave",
+                        LFS_SOURCE_SITE_CURRENT());
+            }
+            if (recovery->disposition ==
+                io::project::RecoveryDisposition::
+                    Ambiguous) {
+                return training_project_error(
+                    lfs::ErrorCode::DataLoss,
+                    "Multiple valid autosave candidates have the same highest sequence",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            if (cli_params.recover_project) {
+                if (recovery->disposition !=
+                        io::project::
+                            RecoveryDisposition::
+                                Offer ||
+                    !recovery->selected_path) {
+                    return training_project_error(
+                        lfs::ErrorCode::
+                            FailedPrecondition,
+                        "No complete autosave is bound to the current master head",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                auto session =
+                    io::project::
+                        begin_recovery_session(
+                            path,
+                            *recovery
+                                 ->selected_path);
+                if (!session) {
+                    return std::move(session)
+                        .error()
+                        .with_context(
+                            "hold headless recovery master lock",
+                            LFS_SOURCE_SITE_CURRENT());
+                }
+                open_path = io::project::
+                    recovery_session_temp_path(
+                        path);
+                auto materialized =
+                    io::project::
+                        materialize_recovered_project(
+                            path,
+                            *recovery
+                                 ->selected_path,
+                            open_path, *session);
+                if (!materialized) {
+                    return std::move(
+                               materialized)
+                        .error()
+                        .with_context(
+                            "materialize headless autosave recovery",
+                            LFS_SOURCE_SITE_CURRENT());
+                }
+                recovery_session.emplace(
+                    std::move(*session));
+                LOG_INFO(
+                    "Recovering autosave sequence {} for headless project open",
+                    recovery
+                        ->autosave_sequence);
+            } else if (
+                recovery->disposition ==
+                io::project::RecoveryDisposition::
+                    Offer) {
+                LOG_WARN(
+                    "A fresh autosave is available but headless recovery was not requested; opening the durable master (pass --recover to restore it)");
+            }
+
             auto document =
-                io::project::ProjectDocument::open(path);
+                io::project::ProjectDocument::open(
+                    open_path);
             if (!document) {
+                if (recovery_session) {
+                    static_cast<void>(
+                        recovery_session
+                            ->release());
+                }
                 return std::move(document)
                     .error()
                     .with_context(
                         "open training project",
                         LFS_SOURCE_SITE_CURRENT());
             }
+            detail::HeadlessRecoveryDocument
+                recovery_document(
+                    std::move(*document),
+                    std::move(recovery_session));
             const auto checkpoint_uuids =
-                document->checkpoint_uuids();
+                recovery_document.document()
+                    .checkpoint_uuids();
             if (checkpoint_uuids.size() != 1) {
                 return training_project_error(
                     lfs::ErrorCode::DataLoss,
@@ -171,8 +263,8 @@ namespace lfs::app {
             const auto checkpoint_uuid =
                 checkpoint_uuids.front();
             const auto* checkpoint =
-                document->find_checkpoint(
-                    checkpoint_uuid);
+                recovery_document.document()
+                    .find_checkpoint(checkpoint_uuid);
             if (!checkpoint) {
                 return training_project_error(
                     lfs::ErrorCode::ContractViolation,
@@ -250,7 +342,8 @@ namespace lfs::app {
                 cli_params.cli_iterations_set;
 
             auto hydration =
-                document->hydrate(scene);
+                recovery_document.document()
+                    .hydrate(scene);
             if (!hydration) {
                 return std::move(hydration)
                     .error()
@@ -277,7 +370,8 @@ namespace lfs::app {
             }
 
             return LoadedTrainingProject{
-                .document = std::move(*document),
+                .document =
+                    std::move(recovery_document),
                 .params =
                     std::move(checkpoint_params),
                 .checkpoint_uuid =
@@ -357,6 +451,13 @@ namespace lfs::app {
                     }
 
                     if (training_project) {
+                        if (const auto* recovery_session =
+                                training_project->document
+                                    .recovery_session()) {
+                            trainer
+                                ->set_recovery_session(
+                                    *recovery_session);
+                        }
                         if (const auto initialized =
                                 trainer->initialize(
                                     effective_params);
@@ -370,6 +471,7 @@ namespace lfs::app {
                         const auto* checkpoint =
                             training_project
                                 ->document
+                                .document()
                                 .find_checkpoint(
                                     training_project
                                         ->checkpoint_uuid);
@@ -506,6 +608,19 @@ namespace lfs::app {
                     return 1;
                 }
 
+                if (training_project) {
+                    if (auto rebound =
+                            training_project->document
+                                .rebind_after_durable_merge();
+                        !rebound) {
+                        LOG_ERROR(
+                            "Headless TCP recovery merge could not rebind the live project document: {}",
+                            lfs::format_for_developer(
+                                rebound.error()));
+                        return 1;
+                    }
+                }
+
                 LOG_INFO("Headless with TCP training completed");
             }
 
@@ -550,6 +665,13 @@ namespace lfs::app {
                         std::make_unique<
                             training::Trainer>(
                             scene);
+                    if (const auto* recovery_session =
+                            project->document
+                                .recovery_session()) {
+                        trainer
+                            ->set_recovery_session(
+                                *recovery_session);
+                    }
                     if (!project->params
                              .python_scripts
                              .empty()) {
@@ -586,6 +708,7 @@ namespace lfs::app {
 
                     const auto* checkpoint =
                         project->document
+                            .document()
                             .find_checkpoint(
                                 project
                                     ->checkpoint_uuid);
@@ -661,6 +784,16 @@ namespace lfs::app {
                             "Training error: {}",
                             lfs::format_for_developer(
                                 result.error()));
+                        return 1;
+                    }
+                    if (auto rebound =
+                            project->document
+                                .rebind_after_durable_merge();
+                        !rebound) {
+                        LOG_ERROR(
+                            "Headless recovery merge could not rebind the live project document: {}",
+                            lfs::format_for_developer(
+                                rebound.error()));
                         return 1;
                     }
                     trainer->shutdown();

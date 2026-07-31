@@ -82,6 +82,15 @@ class SaveProjectAsOperator(Operator):
         return {"FINISHED"}
 
 
+class CompactProjectOperator(Operator):
+    label = "menu.file.compact_project"
+    description = "Reclaim dead bytes in the active LichtFeld project"
+
+    def execute(self, context) -> set:
+        lf.project_compact()
+        return {"FINISHED"}
+
+
 class ImportDatasetOperator(Operator):
     label = "menu.file.import_dataset"
     description = "Import a dataset folder"
@@ -286,6 +295,7 @@ class FileMenu:
                 shortcut="Ctrl+S",
             ),
             menu_operator(SaveProjectAsOperator),
+            menu_operator(CompactProjectOperator),
             menu_toggle(
                 lf.ui.tr("menu.file.reopen_last_project"),
                 lambda: lf.project_set_reopen_last(
@@ -322,6 +332,7 @@ _operator_classes = [
     OpenProjectOperator,
     SaveProjectOperator,
     SaveProjectAsOperator,
+    CompactProjectOperator,
     ImportDatasetOperator,
     ImportPlyOperator,
     ImportMeshOperator,

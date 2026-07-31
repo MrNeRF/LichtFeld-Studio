@@ -414,6 +414,14 @@ An explicit save deletes the sidecar only after the master head is durable.
 Compaction merges or discards the sidecar before making its base UUID
 unreachable.
 
+### 9.1 Recovery decline policy (owner decision 2026-07-31)
+
+Declining recovery never deletes a valid bound sidecar. The application opens the master head,
+suppresses re-prompting for that same sidecar within the session, and leaves the file in place;
+it is deleted only when it becomes stale under the standard predicate — that is, after the next
+durable explicit master commit. Interactive decline and a headless open without recovery are
+therefore identical in end state.
+
 ## 10. Writer commit state machine
 
 ```text

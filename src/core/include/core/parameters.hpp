@@ -313,6 +313,10 @@ namespace lfs::core {
             // train() is allowed to start.
             std::optional<std::filesystem::path> resume_project = std::nullopt;
 
+            // Headless-only opt-in to restore a fresh autosave sidecar bound to
+            // resume_project. GUI recovery is always an explicit prompt.
+            bool recover_project = false;
+
             // Headless/integration-test trigger for the production training
             // snapshot path. An empty path derives
             // <output>/snapshot_<iteration>.licht.

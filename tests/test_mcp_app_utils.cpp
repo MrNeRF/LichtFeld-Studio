@@ -83,9 +83,12 @@ namespace {
             const std::filesystem::path&, bool) override {
             return {};
         }
-        lfs::Result<void> projectOpen(
+        lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
             const std::filesystem::path&,
             lfs::vis::ProjectSwitchDisposition) override {
+            return lfs::vis::ProjectOpenOutcome::Opened;
+        }
+        lfs::Result<void> projectCompact() override {
             return {};
         }
         lfs::Result<lfs::vis::ProjectInfo>

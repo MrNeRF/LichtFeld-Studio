@@ -201,6 +201,7 @@ namespace {
             ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
             ::args::ValueFlag<std::string> project_file(mode_group, "path", "Open a .licht project", {"project"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from a .resume checkpoint or .licht project", {"resume"});
+            ::args::Flag recover_project(mode_group, "recover", "Headless: restore the fresh autosave sidecar bound to the .licht master", {"recover"});
             ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
             ::args::CompletionFlag completion(parser, {"complete"});
 
@@ -603,6 +604,14 @@ namespace {
                         params.resume_checkpoint = ckpt_path;
                     }
                 }
+            }
+            params.recover_project =
+                static_cast<bool>(recover_project);
+            if (params.recover_project &&
+                (!headless ||
+                 !params.resume_project)) {
+                return std::unexpected(
+                    "--recover requires --headless and a .licht --project/--resume source");
             }
 
             if (init_path) {

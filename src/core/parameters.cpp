@@ -389,6 +389,11 @@ namespace lfs::core {
                 project_path->extension() != ".licht") {
                 return "--project must reference a .licht file";
             }
+            if (recover_project &&
+                (!optimization.headless ||
+                 !resume_project)) {
+                return "--recover requires --headless and a .licht --project/--resume source";
+            }
             if (save_project_at_iteration && *save_project_at_iteration == 0) {
                 return "--save-project-at-iter must be positive";
             }

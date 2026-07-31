@@ -7,15 +7,12 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
+#include "io/project_chapters.hpp"
 #include <atomic>
 #include <expected>
 #include <mutex>
 #include <string>
 #include <string_view>
-
-namespace lfs::io::project {
-    struct ParameterManagerSnapshot;
-}
 
 namespace lfs::vis {
 
@@ -105,6 +102,23 @@ namespace lfs::vis {
         lfs::core::param::OptimizationParameters mcmc_current_;
         lfs::core::param::OptimizationParameters mrnf_current_;
         lfs::core::param::OptimizationParameters igs_current_;
+
+        // Logical REFS bindings are part of each role, not derivable from
+        // the path-bearing runtime parameter structs. Keep them alongside
+        // the live slots so a training safe-point can preserve inactive
+        // sessions without consulting serialized PRMS.
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings mcmc_session_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings mrnf_session_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings igs_session_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings mcmc_current_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings mrnf_current_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings igs_current_references_;
 
         // Dataset config (CLI overrides JSON defaults)
         lfs::core::param::DatasetConfig dataset_config_;

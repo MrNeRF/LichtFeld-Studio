@@ -187,6 +187,43 @@ namespace {
         return {};
     }
 
+    lfs::Result<lfs::vis::ProjectOpenOutcome>
+    post_project_open_to_viewer(
+        lfs::vis::Visualizer& viewer,
+        std::filesystem::path path,
+        const lfs::vis::ProjectSwitchDisposition
+            disposition) {
+        if (viewer.isOnViewerThread()) {
+            return viewer.projectOpen(
+                path, disposition);
+        }
+        const lfs::core::TaskContext context{
+            .name = "python.project_open",
+            .domain = lfs::ErrorDomain::Python,
+            .operation_id =
+                lfs::OperationId::generate(),
+            .site = LFS_SOURCE_SITE_CURRENT(),
+        };
+        return lfs::vis::post_guarded_and_wait<
+            lfs::vis::ProjectOpenOutcome>(
+            viewer, context,
+            [&viewer,
+             path = std::move(path),
+             disposition]() {
+                return viewer.projectOpen(
+                    path, disposition);
+            },
+            lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::Cancelled,
+                .domain = lfs::ErrorDomain::Python,
+                .severity = lfs::Severity::Warning,
+                .detail =
+                    "Viewer is shutting down",
+                .detection =
+                    LFS_SOURCE_SITE_CURRENT(),
+            }));
+    }
+
     std::expected<void, std::string> clear_scene_from_python() {
         if (auto* const viewer = lfs::python::get_visualizer()) {
             return post_clear_scene_to_viewer(*viewer);
@@ -603,6 +640,15 @@ NB_MODULE(lichtfeld, m) {
         .value("CANCELLED", OperatorResult::Cancelled)
         .value("RUNNING", OperatorResult::Running);
 
+    nb::enum_<lfs::vis::ProjectOpenOutcome>(
+        m, "ProjectOpenOutcome")
+        .value("OPENED",
+               lfs::vis::ProjectOpenOutcome::Opened)
+        .value(
+            "RECOVERY_PROMPT_PENDING",
+            lfs::vis::ProjectOpenOutcome::
+                RecoveryPromptPending);
+
     // Add user site-packages to sys.path on module import
     {
         auto user_packages = lfs::python::get_user_packages_dir();
@@ -811,16 +857,50 @@ NB_MODULE(lichtfeld, m) {
         "project_open",
         [](const std::string& path,
            const bool discard_changes) {
-            nb::gil_scoped_release release;
-            lfs::core::events::cmd::ProjectOpen{
-                .path = python_utf8_path(path),
-                .discard_changes =
-                    discard_changes}
-                .emit();
+            const auto project_path =
+                python_utf8_path(path);
+            if (project_path.empty()) {
+                nb::gil_scoped_release release;
+                lfs::core::events::cmd::ProjectOpen{
+                    .path = {},
+                    .discard_changes =
+                        discard_changes}
+                    .emit();
+                return lfs::vis::
+                    ProjectOpenOutcome::Opened;
+            }
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                throw std::runtime_error(
+                    "No visualizer is available");
+            }
+            auto opened = [&] {
+                nb::gil_scoped_release release;
+                return post_project_open_to_viewer(
+                    *viewer, project_path,
+                    discard_changes
+                        ? lfs::vis::
+                              ProjectSwitchDisposition::
+                                  DiscardChanges
+                        : lfs::vis::
+                              ProjectSwitchDisposition::
+                                  RequireClean);
+            }();
+            return lfs::python::unwrap(
+                std::move(opened));
         },
         nb::arg("path") = "",
         nb::arg("discard_changes") = false,
         "Open a .licht project");
+    m.def(
+        "project_compact", []() {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::
+                ProjectCompact{}
+                    .emit();
+        },
+        "Compact the active .licht project in the background");
     m.def(
         "project_is_dirty", []() {
             auto* const viewer =
@@ -912,6 +992,31 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("enabled"),
         "Enable or disable automatic project save on close");
+    m.def(
+        "project_autosave_interval_seconds", []() -> std::uint64_t {
+            auto* const viewer =
+                lfs::python::get_visualizer();
+            if (!viewer) {
+                return 5 * 60;
+            }
+            auto info = viewer->projectGetInfo();
+            return info
+                       ? info
+                             ->autosave_interval_seconds
+                       : 5 * 60;
+        },
+        "Return the timed project autosave interval in seconds");
+    m.def(
+        "project_set_autosave_interval_seconds",
+        [](const std::uint64_t seconds) {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::
+                SetProjectAutosaveInterval{
+                    .seconds = seconds}
+                    .emit();
+        },
+        nb::arg("seconds"),
+        "Set the timed project autosave interval in seconds; zero disables the timer trigger");
     m.def(
         "clear_scene", []() {
             nb::gil_scoped_release release;

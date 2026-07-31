@@ -63,6 +63,11 @@ class OperatorResult(enum.Enum):
 
     RUNNING = 2
 
+class ProjectOpenOutcome(enum.Enum):
+    OPENED = 0
+
+    RECOVERY_PROMPT_PENDING = 1
+
 class Hook(enum.Enum):
     training_start = 0
 
@@ -260,8 +265,11 @@ def project_save() -> None:
 def project_save_as(path: str = '') -> None:
     """Save the active project to a new .licht path"""
 
-def project_open(path: str = '', discard_changes: bool = False) -> None:
+def project_open(path: str = '', discard_changes: bool = False) -> ProjectOpenOutcome:
     """Open a .licht project"""
+
+def project_compact() -> None:
+    """Compact the active .licht project in the background"""
 
 def project_is_dirty() -> bool:
     """Return whether the active project has unsaved chapters"""
@@ -283,6 +291,14 @@ def project_auto_save_on_close_enabled() -> bool:
 
 def project_set_auto_save_on_close(enabled: bool) -> None:
     """Enable or disable automatic project save on close"""
+
+def project_autosave_interval_seconds() -> int:
+    """Return the timed project autosave interval in seconds"""
+
+def project_set_autosave_interval_seconds(seconds: int) -> None:
+    """
+    Set the timed project autosave interval in seconds; zero disables the timer trigger
+    """
 
 def clear_scene() -> None:
     """Remove all nodes from the scene"""

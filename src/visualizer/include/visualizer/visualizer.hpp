@@ -37,6 +37,11 @@ namespace lfs::vis {
         DiscardChanges,
     };
 
+    enum class ProjectOpenOutcome {
+        Opened,
+        RecoveryPromptPending,
+    };
+
     struct LFS_VIS_API ProjectPayloadInfo {
         std::string chapter;
         std::string node_uuid;
@@ -59,6 +64,21 @@ namespace lfs::vis {
         bool contains_embedded_secrets = false;
         bool reopen_last_project = true;
         bool auto_save_on_close = true;
+        std::uint64_t autosave_interval_seconds =
+            5 * 60;
+        std::uint64_t autosave_dirty_epoch_threshold =
+            20;
+        bool project_write_running = false;
+        std::string project_write_stage;
+        float project_write_progress = 0.0F;
+        std::string project_write_error;
+        std::uint64_t autosave_sequence = 0;
+        bool recovery_session = false;
+        bool compaction_suggested = false;
+        std::uint64_t physical_bytes = 0;
+        std::uint64_t estimated_live_bytes = 0;
+        std::uint64_t dead_bytes = 0;
+        double dead_ratio = 0.0;
         std::string hydration_error;
         std::vector<ProjectRecentInfo> recent_projects;
     };
@@ -113,11 +133,13 @@ namespace lfs::vis {
         virtual lfs::Result<void>
         projectSaveAs(const std::filesystem::path& path,
                       bool regenerate_preview = true) = 0;
-        virtual lfs::Result<void>
+        virtual lfs::Result<ProjectOpenOutcome>
         projectOpen(
             const std::filesystem::path& path,
             ProjectSwitchDisposition disposition =
                 ProjectSwitchDisposition::RequireClean) = 0;
+        virtual lfs::Result<void>
+        projectCompact() = 0;
         virtual lfs::Result<ProjectInfo>
         projectGetInfo() = 0;
 

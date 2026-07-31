@@ -22,6 +22,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/frame_state_machine.cpp
         core/data_loading_service.cpp
         core/editor_context.cpp
+        core/job_registry.cpp
         core/parameter_manager.cpp
         core/services.cpp
 

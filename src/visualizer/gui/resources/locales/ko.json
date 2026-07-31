@@ -7,6 +7,7 @@
     "file.open_recent": "최근 프로젝트",
     "file.save_project": "프로젝트 저장",
     "file.save_project_as": "다른 이름으로 프로젝트 저장...",
+    "file.compact_project": "프로젝트 압축",
     "file.reopen_last_project": "마지막 프로젝트 다시 열기",
     "file.auto_save_on_close": "닫을 때 자동 저장",
     "file.no_recent_projects": "최근 프로젝트 없음",

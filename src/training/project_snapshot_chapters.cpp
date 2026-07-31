@@ -98,13 +98,13 @@ namespace lfs::training {
     } // namespace
 
     lfs::Result<TrainingSnapshotCpuStateMetrics>
-    capture_project_snapshot_cpu_chapters(
+    capture_project_snapshot_cpu_state(
         const lfs::core::Scene& scene,
-        const lfs::core::param::TrainingParameters&
-            checkpoint_params,
+        const lfs::io::project::ParameterManagerSnapshot&
+            parameters,
         const lfs::core::Uuid& snapshot_uuid,
         const int iteration,
-        ProjectSnapshotChapters& output,
+        ProjectSnapshotCpuState& output,
         const std::span<const lfs::core::Uuid>
             selected_node_uuids) {
         if (snapshot_uuid.is_nil()) {
@@ -137,7 +137,7 @@ namespace lfs::training {
 
         const auto scng_begin = Clock::now();
         auto scene_graph =
-            lfs::io::project::capture_scene_graph(
+            lfs::io::project::capture_scene_graph_state(
                 scene, bindings);
         metrics.scng_ms =
             Milliseconds(Clock::now() - scng_begin)
@@ -152,7 +152,7 @@ namespace lfs::training {
 
         const auto selm_begin = Clock::now();
         auto selection =
-            lfs::io::project::capture_selection_chapter(
+            lfs::io::project::capture_selection_state(
                 scene, selected_node_uuids);
         metrics.selm_ms =
             Milliseconds(Clock::now() - selm_begin)
@@ -166,11 +166,34 @@ namespace lfs::training {
         }
 
         const auto prms_begin = Clock::now();
-        auto parameters =
-            capture_parameters(checkpoint_params);
+        auto captured_parameters = parameters;
         metrics.prms_ms =
             Milliseconds(Clock::now() - prms_begin)
                 .count();
+
+        ProjectSnapshotCpuState staged;
+        staged.snapshot_uuid = snapshot_uuid;
+        staged.iteration = iteration;
+        staged.scene_graph = std::move(*scene_graph);
+        staged.selection = std::move(*selection);
+        staged.parameters =
+            std::move(captured_parameters);
+        output = std::move(staged);
+        return metrics;
+    }
+
+    lfs::Result<TrainingSnapshotCpuStateMetrics>
+    capture_project_snapshot_cpu_state(
+        const lfs::core::Scene& scene,
+        const lfs::core::param::TrainingParameters&
+            checkpoint_params,
+        const lfs::core::Uuid& snapshot_uuid,
+        const int iteration,
+        ProjectSnapshotCpuState& output,
+        const std::span<const lfs::core::Uuid>
+            selected_node_uuids) {
+        auto parameters =
+            capture_parameters(checkpoint_params);
         if (!parameters) {
             return std::move(parameters)
                 .error()
@@ -178,14 +201,87 @@ namespace lfs::training {
                     "capture snapshot PRMS",
                     LFS_SOURCE_SITE_CURRENT());
         }
+        return capture_project_snapshot_cpu_state(
+            scene, *parameters, snapshot_uuid,
+            iteration, output,
+            selected_node_uuids);
+    }
 
+    lfs::Result<void>
+    materialize_project_snapshot_cpu_chapters(
+        ProjectSnapshotCpuState state,
+        ProjectSnapshotChapters& output) {
+        if (state.snapshot_uuid.is_nil() ||
+            state.iteration < 0) {
+            return lfs::Status::failure(
+                capture_error(
+                    lfs::ErrorCode::InvalidArgument,
+                    "Detached snapshot CPU state has an invalid stamp"));
+        }
+        auto scene_graph =
+            lfs::io::project::
+                materialize_scene_graph_chapter(
+                    std::move(state.scene_graph));
+        if (!scene_graph) {
+            return lfs::Status::failure(
+                std::move(scene_graph)
+                    .error()
+                    .with_context(
+                        "materialize snapshot SCNG",
+                        LFS_SOURCE_SITE_CURRENT()));
+        }
+        auto selection =
+            lfs::io::project::
+                materialize_selection_chapter(
+                    std::move(state.selection));
+        if (!selection) {
+            return lfs::Status::failure(
+                std::move(selection)
+                    .error()
+                    .with_context(
+                        "materialize snapshot SELM",
+                        LFS_SOURCE_SITE_CURRENT()));
+        }
+
+        const auto context =
+            std::move(output.document_context);
         ProjectSnapshotChapters staged;
-        staged.snapshot_uuid = snapshot_uuid;
-        staged.iteration = iteration;
+        staged.snapshot_uuid = state.snapshot_uuid;
+        staged.iteration = state.iteration;
         staged.scene_graph = std::move(*scene_graph);
         staged.selection = std::move(*selection);
-        staged.parameters = std::move(*parameters);
+        staged.parameters =
+            std::move(state.parameters);
+        staged.document_context = std::move(context);
         output = std::move(staged);
+        return {};
+    }
+
+    lfs::Result<TrainingSnapshotCpuStateMetrics>
+    capture_project_snapshot_cpu_chapters(
+        const lfs::core::Scene& scene,
+        const lfs::core::param::TrainingParameters&
+            checkpoint_params,
+        const lfs::core::Uuid& snapshot_uuid,
+        const int iteration,
+        ProjectSnapshotChapters& output,
+        const std::span<const lfs::core::Uuid>
+            selected_node_uuids) {
+        ProjectSnapshotCpuState state;
+        auto metrics =
+            capture_project_snapshot_cpu_state(
+                scene, checkpoint_params,
+                snapshot_uuid, iteration, state,
+                selected_node_uuids);
+        if (!metrics) {
+            return std::move(metrics).error();
+        }
+        if (auto materialized =
+                materialize_project_snapshot_cpu_chapters(
+                    std::move(state), output);
+            !materialized) {
+            return std::move(materialized).error();
+        }
         return metrics;
     }
 
