@@ -1048,6 +1048,40 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TASK_CANCELLED = "runtime.task_cancelled";
         inline constexpr const char* TASK_CANCELLING = "runtime.task_cancelling";
         inline constexpr const char* TASK_APPLYING = "runtime.task_applying";
+        inline constexpr const char* TASK_OPENING_ENCODER = "runtime.task_opening_encoder";
+        inline constexpr const char* TASK_RENDER_ERROR = "runtime.task_render_error";
+        inline constexpr const char* TASK_ENCODE_ERROR = "runtime.task_encode_error";
+        inline constexpr const char* TASK_FINALIZING = "runtime.task_finalizing";
+        inline constexpr const char* TASK_FAILED_DETAIL = "runtime.task_failed_detail";
+        inline constexpr const char* EXPORT_CANCELLED = "runtime.export_cancelled";
+        inline constexpr const char* NO_SPLAT_DATA = "runtime.no_splat_data";
+        inline constexpr const char* VIDEO_ENCODER_UNAVAILABLE = "runtime.video_encoder_unavailable";
+        inline constexpr const char* SCENE_MANAGER_UNAVAILABLE = "runtime.scene_manager_unavailable";
+        inline constexpr const char* NO_MODEL_SELECTED = "runtime.no_model_selected";
+        inline constexpr const char* NO_SCENE_MANAGER = "runtime.no_scene_manager";
+        inline constexpr const char* COLMAP_REQUIRES_DATASET = "runtime.colmap_requires_dataset";
+        inline constexpr const char* COLMAP_REQUIRES_SOURCE_PATH = "runtime.colmap_requires_source_path";
+        inline constexpr const char* COLMAP_REQUIRES_CAMERAS = "runtime.colmap_requires_cameras";
+        inline constexpr const char* RENDERED_GAUSSIAN_INVALID = "runtime.rendered_gaussian_invalid";
+        inline constexpr const char* RENDERED_GAUSSIAN_SHAPE_INVALID = "runtime.rendered_gaussian_shape_invalid";
+        inline constexpr const char* VIDEO_FRAME_MISSING = "runtime.video_frame_missing";
+        inline constexpr const char* COLMAP_UNKNOWN_EXCEPTION = "runtime.colmap_unknown_exception";
+        inline constexpr const char* COLMAP_WRITE_BACK_PATH = "runtime.colmap_write_back_path";
+        inline constexpr const char* EXPORT_UNKNOWN_EXCEPTION = "runtime.export_unknown_exception";
+        inline constexpr const char* SIMPLIFIED_SPLAT_ADD_FAILED = "runtime.simplified_splat_add_failed";
+        inline constexpr const char* EXPORT_WRITING_COLMAP = "runtime.export_writing_colmap";
+        inline constexpr const char* EXPORT_PREPARING_DATA = "runtime.export_preparing_data";
+        inline constexpr const char* EXPORT_DATA_PREPARED = "runtime.export_data_prepared";
+        inline constexpr const char* VIDEO_ENCODING_FRAME = "runtime.video_encoding_frame";
+        inline constexpr const char* VIDEO_MISSING_SCENE_OR_RENDERING = "runtime.video_missing_scene_or_rendering";
+        inline constexpr const char* VIDEO_GUI_MANAGER_UNAVAILABLE = "runtime.video_gui_manager_unavailable";
+        inline constexpr const char* VIDEO_NO_KEYFRAMES = "runtime.video_no_keyframes";
+        inline constexpr const char* VIDEO_RENDERING_ENGINE_UNAVAILABLE = "runtime.video_rendering_engine_unavailable";
+        inline constexpr const char* RENDERED_POINT_CLOUD_INVALID = "runtime.rendered_point_cloud_invalid";
+        inline constexpr const char* SCENE_MANAGER_NOT_INITIALIZED = "runtime.scene_manager_not_initialized";
+        inline constexpr const char* IMPORT_FAILED_DETAIL = "runtime.import_failed_detail";
+        inline constexpr const char* IMPORT_UNKNOWN_EXCEPTION = "runtime.import_unknown_exception";
+        inline constexpr const char* TRAINING_UNKNOWN_ERROR = "runtime.training_unknown_error";
     } // namespace Runtime
 
 } // namespace lichtfeld::Strings

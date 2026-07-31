@@ -91,7 +91,7 @@ namespace lfs::vis::gui {
         }
         const lfs::ErrorCode code =
             e.resource_exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Internal;
-        std::string message = e.error.value_or("Unknown error occurred during training.");
+        std::string message = e.error.value_or(LOC(lichtfeld::Strings::Runtime::TRAINING_UNKNOWN_ERROR));
         return makeNotification(code, lfs::ErrorDomain::Training, lfs::Severity::Error,
                                 std::move(message), error_op::kTrain, LFS_SOURCE_SITE_CURRENT());
     }

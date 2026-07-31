@@ -158,18 +158,18 @@ namespace lfs::vis::gui {
     [[nodiscard]] std::expected<ColmapExportSnapshot, std::string>
     makeColmapExportSnapshot(const lfs::vis::SceneManager& scene_manager) {
         if (!scene_manager.hasDataset()) {
-            return std::unexpected("COLMAP export requires a loaded dataset");
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::COLMAP_REQUIRES_DATASET));
         }
 
         const auto source_path = scene_manager.getDatasetPath();
         if (source_path.empty()) {
-            return std::unexpected("COLMAP export requires a source dataset path");
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::COLMAP_REQUIRES_SOURCE_PATH));
         }
 
         const auto& scene = scene_manager.getScene();
         auto cameras = scene.getAllCameras();
         if (cameras.empty()) {
-            return std::unexpected("COLMAP export requires scene cameras");
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::COLMAP_REQUIRES_CAMERAS));
         }
 
         ColmapExportSnapshot snapshot;
@@ -462,11 +462,11 @@ namespace lfs::vis::gui {
     std::expected<lfs::core::Tensor, std::string> makeGaussianPreviewVideoFrame(
         const std::shared_ptr<lfs::core::Tensor>& image) {
         if (!image || !image->is_valid() || image->ndim() != 3) {
-            return std::unexpected("Rendered Gaussian frame is invalid");
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::RENDERED_GAUSSIAN_INVALID));
         }
         if (image->size(0) <= 0 || image->size(1) <= 0 ||
             (image->size(2) != 3 && image->size(2) != 4)) {
-            return std::unexpected("Rendered Gaussian frame must have shape [H, W, 3] or [H, W, 4]");
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::RENDERED_GAUSSIAN_SHAPE_INVALID));
         }
 
         auto frame = *image;
@@ -531,7 +531,7 @@ namespace lfs::vis::gui {
                 if (!requires_composite_pass) {
                     auto render_result = engine.renderPointCloudImage(*snapshot.combined_model, request);
                     if (!render_result || !render_result->image) {
-                        return std::unexpected(render_result ? "Rendered point cloud frame is invalid"
+                        return std::unexpected(render_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                              : render_result.error());
                     }
                     return *render_result->image;
@@ -539,7 +539,7 @@ namespace lfs::vis::gui {
 
                 auto render_result = engine.renderPointCloudGpuFrame(*snapshot.combined_model, request);
                 if (!render_result || !render_result->valid()) {
-                    return std::unexpected(render_result ? "Rendered point cloud frame is invalid"
+                    return std::unexpected(render_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                          : render_result.error());
                 }
                 primary_frame = std::move(*render_result);
@@ -578,7 +578,7 @@ namespace lfs::vis::gui {
                     makeVideoExportFrameMetadata(frame_view, render_environment),
                     {width, height});
                 if (!materialized || !materialized->valid()) {
-                    return std::unexpected(materialized ? "Rendered Gaussian frame is invalid"
+                    return std::unexpected(materialized ? LOC(lichtfeld::Strings::Runtime::RENDERED_GAUSSIAN_INVALID)
                                                         : materialized.error());
                 }
                 primary_frame = std::move(*materialized);
@@ -602,14 +602,14 @@ namespace lfs::vis::gui {
 
             auto render_result = engine.renderPointCloudGpuFrame(*snapshot.point_cloud, request);
             if (!render_result || !render_result->valid()) {
-                return std::unexpected(render_result ? "Rendered point cloud frame is invalid"
+                return std::unexpected(render_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                      : render_result.error());
             }
 
             if (!requires_composite_pass) {
                 auto readback_result = engine.readbackGpuFrameColor(*render_result);
                 if (!readback_result || !*readback_result) {
-                    return std::unexpected(readback_result ? "Rendered point cloud frame is invalid"
+                    return std::unexpected(readback_result ? LOC(lichtfeld::Strings::Runtime::RENDERED_POINT_CLOUD_INVALID)
                                                            : readback_result.error());
                 }
                 return *(*readback_result);
@@ -619,7 +619,7 @@ namespace lfs::vis::gui {
         }
 
         if (!requires_composite_pass) {
-            return std::unexpected("No rendered image produced for video export");
+            return std::unexpected(LOC(lichtfeld::Strings::Runtime::VIDEO_FRAME_MISSING));
         }
 
         const bool any_selected = std::any_of(snapshot.meshes.begin(), snapshot.meshes.end(),
@@ -777,7 +777,8 @@ namespace lfs::vis::gui {
                 import_state_.num_points = e.num_points;
                 import_state_.completion_time = std::chrono::steady_clock::now();
                 import_state_.error = e.error.value_or("");
-                import_state_.stage = e.success ? "Complete" : "Failed";
+                import_state_.stage = e.success ? LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE)
+                                                : LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
                 import_state_.progress.store(1.0f);
             }
             import_state_.active.store(false);
@@ -826,11 +827,11 @@ namespace lfs::vis::gui {
 
         auto* const scene_manager = viewer_->getSceneManager();
         if (!scene_manager) {
-            publishExportFailureState(format, path, "Scene manager is not available");
+            publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::SCENE_MANAGER_UNAVAILABLE));
             return;
         }
         if (node_names.empty()) {
-            publishExportFailureState(format, path, "No model selected for export");
+            publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_MODEL_SELECTED));
             return;
         }
 
@@ -846,7 +847,7 @@ namespace lfs::vis::gui {
             }
         }
         if (splats.empty()) {
-            publishExportFailureState(format, path, "No splat data to export");
+            publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));
             return;
         }
 
@@ -867,7 +868,7 @@ namespace lfs::vis::gui {
 
         auto* const scene_manager = viewer_->getSceneManager();
         if (!scene_manager) {
-            std::string error = "Scene manager not initialized";
+            std::string error = LOC(lichtfeld::Strings::Runtime::SCENE_MANAGER_NOT_INITIALIZED);
             LOG_ERROR("COLMAP export failed: {}", error);
             publishExportFailureState(ExportFormat::COLMAP, path, std::move(error));
             return;
@@ -916,9 +917,9 @@ namespace lfs::vis::gui {
                 try {
                     if (stop_token.stop_requested() || export_state_.cancel_requested.load()) {
                         cancelled = true;
-                        error_msg = "Export cancelled by user";
+                        error_msg = LOC(lichtfeld::Strings::Runtime::EXPORT_CANCELLED);
                     } else {
-                        update_stage(0.1f, "Writing COLMAP sparse files");
+                        update_stage(0.1f, LOC(lichtfeld::Strings::Runtime::EXPORT_WRITING_COLMAP));
                         auto result = io::write_colmap_reconstruction(
                             snapshot.source_path,
                             path,
@@ -936,13 +937,13 @@ namespace lfs::vis::gui {
                 } catch (const std::exception& e) {
                     error_msg = std::string("COLMAP export crashed with exception: ") + e.what();
                 } catch (...) {
-                    error_msg = "COLMAP export crashed with unknown exception";
+                    error_msg = LOC(lichtfeld::Strings::Runtime::COLMAP_UNKNOWN_EXCEPTION);
                 }
 
                 if (success && (stop_token.stop_requested() || export_state_.cancel_requested.load())) {
                     success = false;
                     cancelled = true;
-                    error_msg = "Export cancelled by user";
+                    error_msg = LOC(lichtfeld::Strings::Runtime::EXPORT_CANCELLED);
                 }
 
                 if (success) {
@@ -990,7 +991,7 @@ namespace lfs::vis::gui {
                                             bool rad_streamable) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
-            publishExportFailureState(format, path, "No splat data to export");
+            publishExportFailureState(format, path, LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA));
             return;
         }
 
@@ -1055,9 +1056,9 @@ namespace lfs::vis::gui {
                 std::optional<std::shared_lock<std::shared_mutex>> model_lock;
 
                 try {
-                    if (!update_progress(0.0f, "Preparing export data")) {
+                    if (!update_progress(0.0f, LOC(lichtfeld::Strings::Runtime::EXPORT_PREPARING_DATA))) {
                         cancelled = true;
-                        error_msg = "Export cancelled by user";
+                        error_msg = LOC(lichtfeld::Strings::Runtime::EXPORT_CANCELLED);
                     }
 
                     if (!cancelled && model_mutex) {
@@ -1078,16 +1079,17 @@ namespace lfs::vis::gui {
                                                       : core::Scene::MergeStorageMode::Clone;
                         splat_data = core::Scene::mergeSplatsWithTransforms(merge_inputs, storage_mode);
                         if (!splat_data) {
-                            error_msg = "No splat data to export";
+                            error_msg = LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA);
                         } else if (sh_degree < splat_data->get_max_sh_degree()) {
                             truncateSHDegree(*splat_data, sh_degree);
                         }
                         model_lock.reset();
                     }
 
-                    if (!cancelled && splat_data && !update_progress(0.0f, "Export data prepared")) {
+                    if (!cancelled && splat_data &&
+                        !update_progress(0.0f, LOC(lichtfeld::Strings::Runtime::EXPORT_DATA_PREPARED))) {
                         cancelled = true;
-                        error_msg = "Export cancelled by user";
+                        error_msg = LOC(lichtfeld::Strings::Runtime::EXPORT_CANCELLED);
                     }
 
                     if (!cancelled && splat_data) {
@@ -1198,7 +1200,7 @@ namespace lfs::vis::gui {
                             break;
                         }
                         case ExportFormat::COLMAP:
-                            error_msg = "COLMAP export uses the dataset write-back path";
+                            error_msg = LOC(lichtfeld::Strings::Runtime::COLMAP_WRITE_BACK_PATH);
                             break;
                         }
                     }
@@ -1207,14 +1209,14 @@ namespace lfs::vis::gui {
                     error_msg = std::string("Export crashed with exception: ") + e.what();
                     LOG_ERROR("{}", error_msg);
                 } catch (...) {
-                    error_msg = "Export crashed with unknown exception";
+                    error_msg = LOC(lichtfeld::Strings::Runtime::EXPORT_UNKNOWN_EXCEPTION);
                     LOG_ERROR("{}", error_msg);
                 }
 
                 if (success && (stop_token.stop_requested() || export_state_.cancel_requested.load())) {
                     success = false;
                     cancelled = true;
-                    error_msg = "Export cancelled by user";
+                    error_msg = LOC(lichtfeld::Strings::Runtime::EXPORT_CANCELLED);
                 }
 
                 if (success) {
@@ -1506,8 +1508,8 @@ namespace lfs::vis::gui {
 
                     try {
                         const std::string message = detail && *detail
-                                                        ? std::format("Import failed with exception: {}", detail)
-                                                        : "Import failed with an unknown exception";
+                                                        ? std::format(LOC(lichtfeld::Strings::Runtime::IMPORT_FAILED_DETAIL), detail)
+                                                        : LOC(lichtfeld::Strings::Runtime::IMPORT_UNKNOWN_EXCEPTION);
                         {
                             const std::lock_guard lock(import_state_.mutex);
                             import_state_.error = message;
@@ -1697,7 +1699,8 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(import_state_.mutex);
             import_state_.completion_time = std::chrono::steady_clock::now();
             import_state_.success = result.has_value();
-            import_state_.stage = result ? "Complete" : "Failed";
+            import_state_.stage = result ? LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE)
+                                         : LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
             if (!result)
                 import_state_.error = result.error();
             success_val = import_state_.success;
@@ -1796,18 +1799,18 @@ namespace lfs::vis::gui {
         auto* const scene_manager = viewer_->getSceneManager();
         auto* const rendering_manager = viewer_->getRenderingManager();
         if (!scene_manager || !rendering_manager) {
-            fail_start("Missing scene or rendering manager");
+            fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_MISSING_SCENE_OR_RENDERING));
             return;
         }
 
         auto* gui_manager = viewer_->getGuiManager();
         if (!gui_manager) {
-            fail_start("GUI manager is not available");
+            fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_GUI_MANAGER_UNAVAILABLE));
             return;
         }
         const auto& timeline = gui_manager->sequencer().timeline();
         if (timeline.empty()) {
-            fail_start("No keyframes to export");
+            fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_NO_KEYFRAMES));
             return;
         }
 
@@ -1825,7 +1828,7 @@ namespace lfs::vis::gui {
 
         auto* const engine = rendering_manager->getRenderingEngine();
         if (!engine) {
-            fail_start("Rendering engine is not available");
+            fail_start(LOC(lichtfeld::Strings::Runtime::VIDEO_RENDERING_ENGINE_UNAVAILABLE));
             return;
         }
 
@@ -1887,13 +1890,13 @@ namespace lfs::vis::gui {
                 if (!encoder) {
                     {
                         std::lock_guard lock(video_export_state_.mutex);
-                        video_export_state_.error = "Video encoder not available";
+                        video_export_state_.error = LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE);
                         video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
                     }
                     video_export_state_.active.store(false);
                     publishVideoExportOverlayState();
                     lfs::core::events::state::VideoExportFailed{
-                        .error = "Video encoder not available"}
+                        .error = LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE)}
                         .emit();
                     cleanup_environment_state();
                     return;
@@ -1901,7 +1904,7 @@ namespace lfs::vis::gui {
 
                 {
                     std::lock_guard lock(video_export_state_.mutex);
-                    video_export_state_.stage = "Opening encoder";
+                    video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_OPENING_ENCODER);
                 }
                 publishVideoExportOverlayState();
 
@@ -1910,7 +1913,8 @@ namespace lfs::vis::gui {
                     {
                         std::lock_guard lock(video_export_state_.mutex);
                         video_export_state_.error = result.error();
-                        video_export_state_.stage = "Failed: " + result.error();
+                        video_export_state_.stage = std::format(LOC(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL),
+                                                                result.error());
                     }
                     LOG_ERROR("Failed to open encoder: {}", result.error());
                     lfs::core::events::state::VideoExportFailed{
@@ -1950,7 +1954,7 @@ namespace lfs::vis::gui {
                             std::lock_guard lock(video_export_state_.mutex);
                             video_export_state_.error = std::format(
                                 "Failed to render frame {}: {}", frame + 1, frame_tensor.error());
-                            video_export_state_.stage = "Render error";
+                            video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_RENDER_ERROR);
                         }
                         publishVideoExportOverlayState();
                         break;
@@ -1971,7 +1975,7 @@ namespace lfs::vis::gui {
                         {
                             std::lock_guard lock(video_export_state_.mutex);
                             video_export_state_.error = write_result.error();
-                            video_export_state_.stage = "Encode error";
+                            video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_ENCODE_ERROR);
                         }
                         publishVideoExportOverlayState();
                         LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error());
@@ -1983,7 +1987,8 @@ namespace lfs::vis::gui {
                         static_cast<float>(frame + 1) / static_cast<float>(total_frames));
                     {
                         std::lock_guard lock(video_export_state_.mutex);
-                        video_export_state_.stage = std::format("Encoding frame {}/{}", frame + 1, total_frames);
+                        video_export_state_.stage = std::format(
+                            LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODING_FRAME), frame + 1, total_frames);
                     }
                     publishVideoExportOverlayState();
                 }
@@ -1993,7 +1998,7 @@ namespace lfs::vis::gui {
                     if (cancelled) {
                         video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED);
                     } else if (video_export_state_.error.empty()) {
-                        video_export_state_.stage = "Finalizing";
+                        video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FINALIZING);
                     }
                 }
                 publishVideoExportOverlayState();
@@ -2224,7 +2229,7 @@ namespace lfs::vis::gui {
             [this, source_name, options]() -> std::expected<SimplifyCapture, std::string> {
                 auto* const scene_manager = viewer_->getSceneManager();
                 if (!scene_manager) {
-                    return std::unexpected("No scene manager");
+                    return std::unexpected(LOC(lichtfeld::Strings::Runtime::NO_SCENE_MANAGER));
                 }
 
                 const auto* const node = scene_manager->getScene().getNode(source_name);
@@ -2348,7 +2353,7 @@ namespace lfs::vis::gui {
             {
                 const std::lock_guard lock(splat_simplify_state_.mutex);
                 if (added_name.empty()) {
-                    splat_simplify_state_.error = "Failed to add simplified splat node";
+                    splat_simplify_state_.error = LOC(lichtfeld::Strings::Runtime::SIMPLIFIED_SPLAT_ADD_FAILED);
                     splat_simplify_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
                 } else {
                     splat_simplify_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE);
