@@ -207,8 +207,8 @@ namespace lfs::vis::gui {
             const std::string name = history.activeTransactionName().empty()
                                          ? "Grouped changes"
                                          : history.activeTransactionName();
-            return std::format("Transaction active: {} (depth {})",
-                               name, history.transactionDepth());
+            return std::vformat(LOC("runtime.transaction_active"),
+                                std::make_format_args(name, history.transactionDepth()));
         }
 
         [[nodiscard]] std::string historyRowsHtml(const std::vector<op::UndoStackItem>& items,
@@ -233,13 +233,14 @@ namespace lfs::vis::gui {
                     item.metadata.label.empty() ? std::string("Untitled Change") : item.metadata.label;
                 const bool is_next = index == 0;
                 const std::string stack_line = is_next
-                                                   ? std::format("NEXT {} · Top of stack",
-                                                                 kind == "undo" ? "UNDO" : "REDO")
+                                                   ? std::vformat(LOC("runtime.history_next"),
+                                                                  std::make_format_args(kind == "undo" ? "UNDO" : "REDO"))
                                                    : std::format("{} · {}", scope, source);
                 const std::string detail_line = is_next
-                                                    ? std::format("{} · {} · Size: {}",
-                                                                  scope, source, size_meta)
-                                                    : std::format("Size: {}", size_meta);
+                                                    ? std::vformat(LOC("runtime.history_detail"),
+                                                                   std::make_format_args(scope, source, size_meta))
+                                                    : std::vformat(LOC("runtime.history_size"),
+                                                                   std::make_format_args(size_meta));
                 const std::string row_classes = std::format(
                     "btn btn--ghost history-row{}{}",
                     kind == "redo" ? " history-row--redo" : "",
@@ -314,18 +315,16 @@ namespace lfs::vis::gui {
                                                        const core::LogLevel level) {
             const std::string level_label(logLevelLabel(level));
             if (entry_count == 0)
-                return std::format("No buffered CLI logs · Level {}", level_label);
+                return std::vformat(LOC("runtime.cli_no_logs"), std::make_format_args(level_label));
             if (displayed_entry_count < entry_count) {
-                return std::format("{} buffered log {} · showing latest {} · Level {}",
-                                   entry_count,
-                                   entry_count == 1 ? "entry" : "entries",
-                                   displayed_entry_count,
-                                   level_label);
+                return std::vformat(LOC("runtime.cli_logs_latest"),
+                                    std::make_format_args(entry_count,
+                                                          entry_count == 1 ? "entry" : "entries",
+                                                          displayed_entry_count, level_label));
             }
-            return std::format("{} buffered log {} · Level {}",
-                               entry_count,
-                               entry_count == 1 ? "entry" : "entries",
-                               level_label);
+            return std::vformat(LOC("runtime.cli_logs_summary"),
+                                std::make_format_args(entry_count,
+                                                      entry_count == 1 ? "entry" : "entries", level_label));
         }
 
         [[nodiscard]] int optionalMetricMilli(const std::optional<float>& value) {
@@ -891,7 +890,8 @@ namespace lfs::vis::gui {
         const bool show_filter = !tree_el_->filterText().empty();
         changed |= setCachedText(summary_filter_chip_el_,
                                  show_filter
-                                     ? std::format("Filter: \"{}\"", tree_el_->filterText())
+                                     ? std::vformat(LOC("runtime.scene_filter"),
+                                                    std::make_format_args(tree_el_->filterText()))
                                      : std::string{});
         changed |= setCachedProperty(summary_filter_chip_el_, "display",
                                      show_filter ? "inline-block" : "none");
@@ -1033,7 +1033,8 @@ namespace lfs::vis::gui {
         const core::LogLevel selected_level =
             logLevelFromSelection(logging_level_select_el_->GetSelection());
         core::Logger::get().set_level(selected_level);
-        setLoggingFeedback(std::format("Log level set to {}", logLevelLabel(selected_level)),
+        setLoggingFeedback(std::vformat(LOC("runtime.log_level_set"),
+                                        std::make_format_args(logLevelLabel(selected_level))),
                            FeedbackTone::Success);
     }
 
@@ -1041,15 +1042,15 @@ namespace lfs::vis::gui {
         auto& logger = core::Logger::get();
         const size_t entry_count = logger.buffered_log_count();
         if (entry_count == 0) {
-            setLoggingFeedback("No buffered logs to copy.", FeedbackTone::Info);
+            setLoggingFeedback(LOC("runtime.no_logs_to_copy"), FeedbackTone::Info);
             return;
         }
 
         const std::string log_text = logger.buffered_logs_as_text();
         SDL_SetClipboardText(log_text.c_str());
-        setLoggingFeedback(std::format("Copied {} log {} to the clipboard.",
-                                       entry_count,
-                                       entry_count == 1 ? "entry" : "entries"),
+        setLoggingFeedback(std::vformat(LOC("runtime.logs_copied"),
+                                        std::make_format_args(entry_count,
+                                                              entry_count == 1 ? "entry" : "entries")),
                            FeedbackTone::Success);
     }
 
@@ -1057,7 +1058,7 @@ namespace lfs::vis::gui {
         auto& logger = core::Logger::get();
         const size_t entry_count = logger.buffered_log_count();
         if (entry_count == 0) {
-            setLoggingFeedback("No buffered logs to export.", FeedbackTone::Info);
+            setLoggingFeedback(LOC("runtime.no_logs_to_export"), FeedbackTone::Info);
             return;
         }
 
@@ -1068,23 +1069,22 @@ namespace lfs::vis::gui {
         const std::string log_text = logger.buffered_logs_as_text();
         std::ofstream file;
         if (!core::open_file_for_write(path, file)) {
-            setLoggingFeedback("Failed to open the selected log file for writing.",
+            setLoggingFeedback(LOC("runtime.log_file_open_failed"),
                                FeedbackTone::Error);
             return;
         }
 
         file << log_text;
         if (!file.good()) {
-            setLoggingFeedback("Failed to write the log export.", FeedbackTone::Error);
+            setLoggingFeedback(LOC("runtime.log_write_failed"), FeedbackTone::Error);
             return;
         }
 
-        const std::string exported_count =
-            entry_count == 1 ? std::string("1 log entry")
-                             : std::format("{} log entries", entry_count);
-        setLoggingFeedback(std::format("Exported {} to {}.",
-                                       exported_count,
-                                       path.filename().string()),
+        const std::string exported_count = std::vformat(
+            entry_count == 1 ? LOC("runtime.log_entry_count") : LOC("runtime.log_entries_count"),
+            std::make_format_args(entry_count));
+        setLoggingFeedback(std::vformat(LOC("runtime.logs_exported"),
+                                        std::make_format_args(exported_count, path.filename().string())),
                            FeedbackTone::Success);
     }
 

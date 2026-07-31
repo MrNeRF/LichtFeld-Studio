@@ -2024,5 +2024,32 @@
     "delta": "Delta",
     "time": "Temps",
     "gpu": "GPU"
+  },
+  "runtime": {
+    "transaction_active": "Transaction active: {} (depth {})",
+    "history_next": "NEXT {} · Top of stack",
+    "history_detail": "{} · {} · Size: {}",
+    "history_size": "Size: {}",
+    "cli_no_logs": "No buffered CLI logs · Level {}",
+    "cli_logs_latest": "{} buffered log {} · showing latest {} · Level {}",
+    "cli_logs_summary": "{} buffered log {} · Level {}",
+    "scene_filter": "Filter: \"{}\"",
+    "log_level_set": "Log level set to {}",
+    "no_logs_to_copy": "No buffered logs to copy.",
+    "logs_copied": "Copied {} log {} to the clipboard.",
+    "no_logs_to_export": "No buffered logs to export.",
+    "log_file_open_failed": "Failed to open the selected log file for writing.",
+    "log_write_failed": "Failed to write the log export.",
+    "log_entry_count": "{} log entry",
+    "log_entries_count": "{} log entries",
+    "logs_exported": "Exported {} to {}.",
+    "config_load_failed": "Could not load '{}':\\n\\n{}",
+    "export_failed": "Failed to export:\\n\\n{}",
+    "video_export_failed": "Failed to export video:\\n\\n{}",
+    "conversion_failed": "Conversion failed:\\n\\n{}",
+    "checkpoint_save_failed": "Failed to save checkpoint at iteration {}:\\n\\n{}",
+    "lod_enabled_no_tree": "Enabled, no tree",
+    "lod_disabled": "No RAD LOD",
+    "lod_scale": "LOD scale x{:.1f}"
   }
 }

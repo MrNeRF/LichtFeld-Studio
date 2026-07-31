@@ -2024,5 +2024,32 @@
     "delta": "Delta",
     "time": "Tijd",
     "gpu": "GPU"
+  },
+  "runtime": {
+    "transaction_active": "Transactie actief: {} (diepte {})",
+    "history_next": "VOLGENDE {} · Bovenaan de stapel",
+    "history_detail": "{} · {} · Grootte: {}",
+    "history_size": "Grootte: {}",
+    "cli_no_logs": "Geen gebufferde CLI-logs · Niveau {}",
+    "cli_logs_latest": "{} gebufferde logs {} · laatste {} weergegeven · Niveau {}",
+    "cli_logs_summary": "{} gebufferde logs {} · Niveau {}",
+    "scene_filter": "Filter: \"{}\"",
+    "log_level_set": "Logniveau ingesteld op {}",
+    "no_logs_to_copy": "Geen logs om te kopiëren.",
+    "logs_copied": "{} logs {} naar het klembord gekopieerd.",
+    "no_logs_to_export": "Geen logs om te exporteren.",
+    "log_file_open_failed": "Kan het geselecteerde logbestand niet openen om te schrijven.",
+    "log_write_failed": "Kan de logexport niet schrijven.",
+    "log_entry_count": "{} logvermelding",
+    "log_entries_count": "{} logvermeldingen",
+    "logs_exported": "{} geëxporteerd naar {}.",
+    "config_load_failed": "Kan '{}' niet laden:\\n\\n{}",
+    "export_failed": "Exporteren mislukt:\\n\\n{}",
+    "video_export_failed": "Video exporteren mislukt:\\n\\n{}",
+    "conversion_failed": "Conversie mislukt:\\n\\n{}",
+    "checkpoint_save_failed": "Kan checkpoint bij iteratie {} niet opslaan:\\n\\n{}",
+    "lod_enabled_no_tree": "Ingeschakeld, geen boom",
+    "lod_disabled": "Geen RAD LOD",
+    "lod_scale": "LOD-schaal x{:.1f}"
   }
 }

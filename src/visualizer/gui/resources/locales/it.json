@@ -2024,5 +2024,32 @@
     "delta": "Delta",
     "time": "Tempo",
     "gpu": "GPU"
+  },
+  "runtime": {
+    "transaction_active": "Transazione attiva: {} (profondità {})",
+    "history_next": "SUCCESSIVO {} · In cima allo stack",
+    "history_detail": "{} · {} · Dimensione: {}",
+    "history_size": "Dimensione: {}",
+    "cli_no_logs": "Nessun log CLI memorizzato · Livello {}",
+    "cli_logs_latest": "{} log {} memorizzati · mostrati gli ultimi {} · Livello {}",
+    "cli_logs_summary": "{} log {} memorizzati · Livello {}",
+    "scene_filter": "Filtro: \"{}\"",
+    "log_level_set": "Livello log impostato su {}",
+    "no_logs_to_copy": "Nessun log da copiare.",
+    "logs_copied": "Copiati {} log {} negli appunti.",
+    "no_logs_to_export": "Nessun log da esportare.",
+    "log_file_open_failed": "Impossibile aprire il file di log selezionato per la scrittura.",
+    "log_write_failed": "Impossibile scrivere l'esportazione dei log.",
+    "log_entry_count": "{} voce di log",
+    "log_entries_count": "{} voci di log",
+    "logs_exported": "Esportati {} in {}.",
+    "config_load_failed": "Impossibile caricare '{}':\\n\\n{}",
+    "export_failed": "Esportazione non riuscita:\\n\\n{}",
+    "video_export_failed": "Esportazione video non riuscita:\\n\\n{}",
+    "conversion_failed": "Conversione non riuscita:\\n\\n{}",
+    "checkpoint_save_failed": "Impossibile salvare il checkpoint all'iterazione {}:\\n\\n{}",
+    "lod_enabled_no_tree": "Abilitato, nessun albero",
+    "lod_disabled": "RAD LOD assente",
+    "lod_scale": "Scala LOD x{:.1f}"
   }
 }

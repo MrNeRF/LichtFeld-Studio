@@ -2024,5 +2024,32 @@
     "delta": "Różnica",
     "time": "Czas",
     "gpu": "GPU"
+  },
+  "runtime": {
+    "transaction_active": "Transakcja aktywna: {} (głębokość {})",
+    "history_next": "NASTĘPNE {} · Szczyt stosu",
+    "history_detail": "{} · {} · Rozmiar: {}",
+    "history_size": "Rozmiar: {}",
+    "cli_no_logs": "Brak buforowanych logów CLI · Poziom {}",
+    "cli_logs_latest": "{} buforowanych logów {} · pokazano ostatnie {} · Poziom {}",
+    "cli_logs_summary": "{} buforowanych logów {} · Poziom {}",
+    "scene_filter": "Filtr: \"{}\"",
+    "log_level_set": "Poziom logowania ustawiono na {}",
+    "no_logs_to_copy": "Brak logów do skopiowania.",
+    "logs_copied": "Skopiowano {} logów {} do schowka.",
+    "no_logs_to_export": "Brak logów do wyeksportowania.",
+    "log_file_open_failed": "Nie można otworzyć wybranego pliku logu do zapisu.",
+    "log_write_failed": "Nie można zapisać eksportu logów.",
+    "log_entry_count": "{} wpis logu",
+    "log_entries_count": "{} wpisów logu",
+    "logs_exported": "Wyeksportowano {} do {}.",
+    "config_load_failed": "Nie można wczytać '{}':\\n\\n{}",
+    "export_failed": "Eksportowanie nie powiodło się:\\n\\n{}",
+    "video_export_failed": "Eksportowanie wideo nie powiodło się:\\n\\n{}",
+    "conversion_failed": "Konwersja nie powiodła się:\\n\\n{}",
+    "checkpoint_save_failed": "Nie można zapisać punktu kontrolnego w iteracji {}:\\n\\n{}",
+    "lod_enabled_no_tree": "Włączone, brak drzewa",
+    "lod_disabled": "Brak RAD LOD",
+    "lod_scale": "Skala LOD x{:.1f}"
   }
 }

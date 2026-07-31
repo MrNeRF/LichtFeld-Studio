@@ -2024,5 +2024,32 @@
     "delta": "차이",
     "time": "시간",
     "gpu": "GPU"
+  },
+  "runtime": {
+    "transaction_active": "트랜잭션 활성화: {} (깊이 {})",
+    "history_next": "다음 {} · 스택 맨 위",
+    "history_detail": "{} · {} · 크기: {}",
+    "history_size": "크기: {}",
+    "cli_no_logs": "버퍼된 CLI 로그 없음 · 레벨 {}",
+    "cli_logs_latest": "버퍼된 로그 {}개 ({} ) · 최신 {}개 표시 · 레벨 {}",
+    "cli_logs_summary": "버퍼된 로그 {}개 ({} ) · 레벨 {}",
+    "scene_filter": "필터: \"{}\"",
+    "log_level_set": "로그 수준을 {}(으)로 설정",
+    "no_logs_to_copy": "복사할 로그가 없습니다.",
+    "logs_copied": "로그 {}개 ({} )를 클립보드에 복사했습니다.",
+    "no_logs_to_export": "내보낼 로그가 없습니다.",
+    "log_file_open_failed": "선택한 로그 파일을 쓰기 위해 열 수 없습니다.",
+    "log_write_failed": "로그 내보내기를 쓸 수 없습니다.",
+    "log_entry_count": "로그 {}개",
+    "log_entries_count": "로그 {}개",
+    "logs_exported": "{}을(를) {}(으)로 내보냈습니다.",
+    "config_load_failed": "'{}'을(를) 불러올 수 없습니다:\\n\\n{}",
+    "export_failed": "내보내기에 실패했습니다:\\n\\n{}",
+    "video_export_failed": "비디오 내보내기에 실패했습니다:\\n\\n{}",
+    "conversion_failed": "변환에 실패했습니다:\\n\\n{}",
+    "checkpoint_save_failed": "반복 {}에서 체크포인트를 저장할 수 없습니다:\\n\\n{}",
+    "lod_enabled_no_tree": "활성화됨, 트리 없음",
+    "lod_disabled": "RAD LOD 없음",
+    "lod_scale": "LOD 배율 x{:.1f}"
   }
 }

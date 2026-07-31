@@ -2031,5 +2031,32 @@
     "delta": "差值",
     "time": "时间",
     "gpu": "GPU"
+  },
+  "runtime": {
+    "transaction_active": "事务活动：{}（深度 {}）",
+    "history_next": "下一个 {} · 堆栈顶部",
+    "history_detail": "{} · {} · 大小：{}",
+    "history_size": "大小：{}",
+    "cli_no_logs": "没有缓冲的 CLI 日志 · 级别 {}",
+    "cli_logs_latest": "{} 条缓冲日志（{}） · 显示最新 {} 条 · 级别 {}",
+    "cli_logs_summary": "{} 条缓冲日志（{}） · 级别 {}",
+    "scene_filter": "筛选器：“{}”",
+    "log_level_set": "日志级别已设置为 {}",
+    "no_logs_to_copy": "没有可复制的日志。",
+    "logs_copied": "已将 {} 条日志（{}）复制到剪贴板。",
+    "no_logs_to_export": "没有可导出的日志。",
+    "log_file_open_failed": "无法打开所选日志文件进行写入。",
+    "log_write_failed": "无法写入日志导出文件。",
+    "log_entry_count": "{} 条日志",
+    "log_entries_count": "{} 条日志",
+    "logs_exported": "已将 {} 导出到 {}。",
+    "config_load_failed": "无法加载“{}”：\\n\\n{}",
+    "export_failed": "导出失败：\\n\\n{}",
+    "video_export_failed": "视频导出失败：\\n\\n{}",
+    "conversion_failed": "转换失败：\\n\\n{}",
+    "checkpoint_save_failed": "无法在第 {} 次迭代保存检查点：\\n\\n{}",
+    "lod_enabled_no_tree": "已启用，无树",
+    "lod_disabled": "无 RAD LOD",
+    "lod_scale": "LOD 缩放 x{:.1f}"
   }
 }

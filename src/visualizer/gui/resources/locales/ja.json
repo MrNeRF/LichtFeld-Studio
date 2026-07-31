@@ -2024,5 +2024,32 @@
     "delta": "差分",
     "time": "時間",
     "gpu": "GPU"
+  },
+  "runtime": {
+    "transaction_active": "トランザクション実行中：{}（深さ {}）",
+    "history_next": "次 {} · スタックの先頭",
+    "history_detail": "{} · {} · サイズ：{}",
+    "history_size": "サイズ：{}",
+    "cli_no_logs": "バッファされたCLIログなし · レベル {}",
+    "cli_logs_latest": "{}件のログ（{}） · 最新{}件を表示 · レベル {}",
+    "cli_logs_summary": "{}件のログ（{}） · レベル {}",
+    "scene_filter": "フィルター：\"{}\"",
+    "log_level_set": "ログレベルを{}に設定",
+    "no_logs_to_copy": "コピーするログはありません。",
+    "logs_copied": "{}件のログ（{}）をクリップボードにコピーしました。",
+    "no_logs_to_export": "エクスポートするログはありません。",
+    "log_file_open_failed": "選択したログファイルを書き込み用に開けませんでした。",
+    "log_write_failed": "ログのエクスポートを書き込めませんでした。",
+    "log_entry_count": "{}件のログ",
+    "log_entries_count": "{}件のログ",
+    "logs_exported": "{}を{}にエクスポートしました。",
+    "config_load_failed": "'{}'を読み込めませんでした：\\n\\n{}",
+    "export_failed": "エクスポートに失敗しました：\\n\\n{}",
+    "video_export_failed": "動画のエクスポートに失敗しました：\\n\\n{}",
+    "conversion_failed": "変換に失敗しました：\\n\\n{}",
+    "checkpoint_save_failed": "反復{}でチェックポイントを保存できませんでした：\\n\\n{}",
+    "lod_enabled_no_tree": "有効（ツリーなし）",
+    "lod_disabled": "RAD LODなし",
+    "lod_scale": "LODスケール x{:.1f}"
   }
 }

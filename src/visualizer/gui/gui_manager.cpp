@@ -158,7 +158,7 @@ namespace lfs::vis::gui {
             } else if (stats.has_tree || stats.available) {
                 state.status_text = stats.enabled ? "Waiting for frame" : "Tree loaded, off";
             } else {
-                state.status_text = stats.enabled ? "Enabled, no tree" : "No RAD LOD";
+                state.status_text = LOC(stats.enabled ? "runtime.lod_enabled_no_tree" : "runtime.lod_disabled");
             }
 
             const std::size_t selected = stats.selected_splats > 0 ? stats.selected_splats : stats.output_size;
@@ -273,7 +273,8 @@ namespace lfs::vis::gui {
                                                  formatLodFloat(stats.min_pixel_scale));
             state.render_text = stats.full_quality_reference
                                     ? "leaf-only reference"
-                                    : std::format("LOD scale x{:.1f}", stats.lod_render_scale);
+                                    : std::vformat(LOC("runtime.lod_scale"),
+                                                   std::make_format_args(stats.lod_render_scale));
             state.foveation_text = stats.gpu_selection
                                        ? std::format("cone {:.0f}/{:.0f} deg | edge x{:.2f} | behind x{:.2f}",
                                                      stats.cone_inner_degrees,

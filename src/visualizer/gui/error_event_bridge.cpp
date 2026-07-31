@@ -107,8 +107,8 @@ namespace lfs::vis::gui {
 
     std::optional<lfs::ErrorNotification>
     translateConfigLoadFailed(const state::ConfigLoadFailed& e) {
-        std::string message = std::format("Could not load '{}':\n\n{}",
-                                          lfs::core::path_to_utf8(e.path.filename()), e.error);
+        std::string message = std::vformat(LOC("runtime.config_load_failed"),
+                                           std::make_format_args(lfs::core::path_to_utf8(e.path.filename()), e.error));
         return makeNotification(lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::App,
                                 lfs::Severity::Error, std::move(message), error_op::kLoadConfig,
                                 LFS_SOURCE_SITE_CURRENT());
@@ -123,21 +123,21 @@ namespace lfs::vis::gui {
                                     lfs::ErrorSurface::StatusOnly, /*actions=*/{});
         }
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
-                                std::format("Failed to export:\n\n{}", e.error), error_op::kExport,
+                                std::vformat(LOC("runtime.export_failed"), std::make_format_args(e.error)), error_op::kExport,
                                 LFS_SOURCE_SITE_CURRENT());
     }
 
     std::optional<lfs::ErrorNotification>
     translateVideoExportFailed(const state::VideoExportFailed& e) {
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
-                                std::format("Failed to export video:\n\n{}", e.error),
+                                std::vformat(LOC("runtime.video_export_failed"), std::make_format_args(e.error)),
                                 error_op::kExportVideo, LFS_SOURCE_SITE_CURRENT());
     }
 
     std::optional<lfs::ErrorNotification>
     translateMesh2SplatFailed(const state::Mesh2SplatFailed& e) {
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::Rendering,
-                                lfs::Severity::Error, std::format("Conversion failed:\n\n{}", e.error),
+                                lfs::Severity::Error, std::vformat(LOC("runtime.conversion_failed"), std::make_format_args(e.error)),
                                 error_op::kMesh2Splat, LFS_SOURCE_SITE_CURRENT());
     }
 
@@ -199,8 +199,8 @@ namespace lfs::vis::gui {
         }
         std::string message =
             e.is_checkpoint
-                ? std::format("Failed to save checkpoint at iteration {}:\n\n{}", e.iteration, e.error)
-                : std::format("Failed to export:\n\n{}", e.error);
+                ? std::vformat(LOC("runtime.checkpoint_save_failed"), std::make_format_args(e.iteration, e.error))
+                : std::vformat(LOC("runtime.export_failed"), std::make_format_args(e.error));
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
                                 std::move(message), error_op::kSave, LFS_SOURCE_SITE_CURRENT());
     }
