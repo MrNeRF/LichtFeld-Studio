@@ -102,7 +102,14 @@ namespace lfs::training {
         double project_snapshot_pre_step_mean_ms = 0.0;
         double project_snapshot_post_step_mean_ms = 0.0;
         double project_snapshot_step_regression_percent = 0.0;
+        int project_snapshot_pre_step_first_iteration = 0;
+        int project_snapshot_pre_step_last_iteration = 0;
+        std::size_t project_snapshot_pre_step_samples = 0;
+        int project_snapshot_post_step_first_iteration = 0;
+        int project_snapshot_post_step_last_iteration = 0;
         std::size_t project_snapshot_post_step_samples = 0;
+        bool project_snapshot_step_regression_gate_evaluated = false;
+        bool project_snapshot_step_regression_within_gate = false;
         bool project_snapshot_writer_in_flight = false;
     };
 
@@ -123,6 +130,8 @@ namespace lfs::training {
         [[nodiscard]] TrainingSnapshot snapshot() const;
         [[nodiscard]] std::vector<LossHistoryPoint> loss_history() const;
         void clear_loss_history();
+        void replace_loss_history(
+            std::vector<LossHistoryPoint> history);
 
         std::expected<void, std::string> execute(const Command& cmd);
 

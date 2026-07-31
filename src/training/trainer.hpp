@@ -20,6 +20,7 @@
 #include "metrics/metrics.hpp"
 #include "optimizer/scheduler.hpp"
 #include "progress.hpp"
+#include "project_snapshot_chapters.hpp"
 #include "strategies/istrategy.hpp"
 #include "training_snapshot_service.hpp"
 #include <array>
@@ -110,7 +111,14 @@ namespace lfs::training {
             double pre_snapshot_step_mean_ms = 0.0;
             double post_resume_step_mean_ms = 0.0;
             double post_resume_step_regression_percent = 0.0;
+            int pre_snapshot_step_first_iteration = 0;
+            int pre_snapshot_step_last_iteration = 0;
+            std::size_t pre_snapshot_step_samples = 0;
+            int post_resume_step_first_iteration = 0;
+            int post_resume_step_last_iteration = 0;
             std::size_t post_resume_step_samples = 0;
+            bool step_regression_gate_evaluated = false;
+            bool step_regression_within_gate = false;
             bool writer_in_flight = false;
         };
 
@@ -441,8 +449,6 @@ namespace lfs::training {
             int iter,
             bool in_controller_phase = false) const;
 
-        struct ProjectSnapshotChapters;
-
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
         void prepare_project_snapshot_at_safe_point(
@@ -450,10 +456,14 @@ namespace lfs::training {
             const std::filesystem::path& path);
         [[nodiscard]] lfs::Result<
             std::shared_ptr<ProjectSnapshotChapters>>
-        prestage_project_snapshot_chapters() const;
+        reserve_project_snapshot_chapters() const;
+        [[nodiscard]] lfs::Result<void>
+        initialize_project_snapshot_service();
         void capture_project_snapshot_at_safe_point(int iteration);
         void observe_training_step_duration(
-            int iteration, double elapsed_ms);
+            int iteration,
+            double elapsed_ms,
+            bool topology_changed);
         void join_finished_project_writer();
         void finish_project_writer();
         void apply_pending_params_at_safe_point();
@@ -559,11 +569,8 @@ namespace lfs::training {
         mutable std::mutex project_snapshot_mutex_;
         std::optional<std::filesystem::path>
             requested_project_path_;
-        std::deque<double> recent_step_times_ms_;
-        double project_pre_snapshot_step_mean_ms_ = 0.0;
-        double project_post_resume_step_sum_ms_ = 0.0;
-        std::size_t project_post_resume_step_samples_ = 0;
-        int project_post_resume_start_iteration_ = 0;
+        TrainingStepRegressionTracker
+            project_step_regression_;
         std::filesystem::path last_project_snapshot_path_;
         std::string last_project_writer_error_;
 

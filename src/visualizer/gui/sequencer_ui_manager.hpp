@@ -59,6 +59,7 @@ namespace lfs::vis {
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
+            void syncKeyframesToSceneGraph() { scene_sync_->syncToSceneGraph(); }
             void setFloating(bool floating);
             [[nodiscard]] bool blocksPointer(double x, double y) const;
             [[nodiscard]] bool blocksKeyboard() const;

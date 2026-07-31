@@ -89,6 +89,11 @@ namespace lfs::io::project {
     inline constexpr Fourcc FOURCC_MESH = make_fourcc('M', 'E', 'S', 'H');
     inline constexpr Fourcc FOURCC_CKPT = make_fourcc('C', 'K', 'P', 'T');
     inline constexpr Fourcc FOURCC_PPIS = make_fourcc('P', 'P', 'I', 'S');
+    inline constexpr Fourcc FOURCC_GUIL = make_fourcc('G', 'U', 'I', 'L');
+    inline constexpr Fourcc FOURCC_VIEW = make_fourcc('V', 'I', 'E', 'W');
+    inline constexpr Fourcc FOURCC_EDTR = make_fourcc('E', 'D', 'T', 'R');
+    inline constexpr Fourcc FOURCC_SEQR = make_fourcc('S', 'E', 'Q', 'R');
+    inline constexpr Fourcc FOURCC_METR = make_fourcc('M', 'E', 'T', 'R');
     inline constexpr Fourcc FOURCC_THMB = make_fourcc('T', 'H', 'M', 'B');
 
     struct ChunkKey {

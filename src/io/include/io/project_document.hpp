@@ -13,6 +13,7 @@
 #include "io/project_container.hpp"
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
+#include "io/session_chapters.hpp"
 #include "io/splat_chapter.hpp"
 
 #include <cstddef>
@@ -103,6 +104,8 @@ namespace lfs::io::project {
         std::optional<lfs::core::Uuid> checkpoint_uuid;
         std::optional<lfs::core::CheckpointHeader> checkpoint_header;
         bool trainer_state_pending = false;
+        ProjectSessionChapters pending_session;
+        bool gui_session_pending = true;
     };
 
     class LFS_IO_API ProjectHydrationPlan {
@@ -126,9 +129,9 @@ namespace lfs::io::project {
         std::unique_ptr<Impl> impl_;
     };
 
-    // A typed, retained representation of the P3 chapter set. Mutable access
-    // is deliberately explicit: obtaining an edit handle marks the chapter
-    // dirty. Only chapters absent from that dirty set may reuse their
+    // A typed, retained representation of the project chapter set. Mutable
+    // access is deliberately explicit: obtaining an edit handle marks the
+    // chapter dirty. Only chapters absent from that dirty set may reuse their
     // container CleanProof.
     class LFS_IO_API ProjectDocument {
     public:
@@ -158,6 +161,16 @@ namespace lfs::io::project {
         [[nodiscard]] SelectionChapter& edit_selection() noexcept;
         [[nodiscard]] const ParametersChapter& parameters() const noexcept;
         [[nodiscard]] ParametersChapter& edit_parameters() noexcept;
+        [[nodiscard]] const GuiLayoutChapter& gui_layout() const noexcept;
+        [[nodiscard]] GuiLayoutChapter& edit_gui_layout() noexcept;
+        [[nodiscard]] const ViewSessionChapter& view() const noexcept;
+        [[nodiscard]] ViewSessionChapter& edit_view() noexcept;
+        [[nodiscard]] const EditorSessionChapter& editor() const noexcept;
+        [[nodiscard]] EditorSessionChapter& edit_editor() noexcept;
+        [[nodiscard]] const SequencerSessionChapter& sequencer() const noexcept;
+        [[nodiscard]] SequencerSessionChapter& edit_sequencer() noexcept;
+        [[nodiscard]] const MetricsChapter& metrics() const noexcept;
+        [[nodiscard]] MetricsChapter& edit_metrics() noexcept;
 
         [[nodiscard]] const LazyChunkValue*
         find_checkpoint(const lfs::core::Uuid& instance_uuid) const noexcept;
@@ -219,9 +232,9 @@ namespace lfs::io::project {
         save(const std::filesystem::path& path,
              const ProjectDocumentSaveOptions& options = {});
 
-        // Strict Phase A. Every open P3 chapter, payload, node, and selection
-        // tensor is decoded and validated into a complete replacement scene.
-        // destination remains untouched.
+        // Strict Phase A. Every project chapter, payload, node, selection
+        // tensor, and five-chapter GUI session bundle is decoded and validated
+        // before destination is touched.
         [[nodiscard]] lfs::Result<ProjectHydrationPlan>
         stage_hydration(
             lfs::core::Scene& destination,

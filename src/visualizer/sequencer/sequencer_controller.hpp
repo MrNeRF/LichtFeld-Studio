@@ -112,6 +112,8 @@ namespace lfs::vis {
         void clear();
         bool saveToJson(const std::string& path) const;
         bool loadFromJson(const std::string& path);
+        [[nodiscard]] nlohmann::json saveToJson() const;
+        bool loadFromJson(const nlohmann::json& json);
 
         void setPlySequence(std::filesystem::path directory,
                             std::string node_name,

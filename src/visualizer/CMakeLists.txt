@@ -25,6 +25,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         core/parameter_manager.cpp
         core/services.cpp
 
+        # Project session chapters
+        project/session_state.cpp
+
         # Window management
         window/window_manager.cpp
         window/vulkan_context.cpp

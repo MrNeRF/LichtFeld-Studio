@@ -15,6 +15,7 @@
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "training/control/command_api.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
@@ -184,7 +185,12 @@ namespace lfs::vis {
                 LOG_WARN("Training worker exceeded the shutdown completion timeout");
             }
         }
-        completion_reaper_.request_stop();
+        {
+            // Publish the stop request under the predicate mutex so it cannot
+            // race between the reaper's predicate check and its wait.
+            std::lock_guard lock(training_thread_mutex_);
+            completion_reaper_.request_stop();
+        }
         training_thread_cv_.notify_all();
         if (completion_reaper_.joinable()) {
             completion_reaper_.join();
@@ -203,6 +209,9 @@ namespace lfs::vis {
             const auto& params = trainer->getParams();
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
+            // A new training run has no resumable elapsed-time authority.
+            accumulated_training_time_ =
+                std::chrono::steady_clock::duration{0};
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
@@ -226,6 +235,11 @@ namespace lfs::vis {
             const auto& params = trainer->getParams();
             pending_opt_params_ = params.optimization;
             pending_dataset_params_ = params.dataset;
+            // Checkpoint installation precedes optional METR hydration.
+            // Legacy checkpoints therefore start at zero, while a project
+            // METR chapter can replace this value before the first resume.
+            accumulated_training_time_ =
+                std::chrono::steady_clock::duration{0};
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
@@ -521,7 +535,6 @@ namespace lfs::vis {
 
         if (need_thread) {
             // Checkpoint resume: no thread exists yet
-            accumulated_training_time_ = std::chrono::steady_clock::duration{0};
             launchTrainingThread();
         } else {
             trainer_->request_resume();
@@ -944,10 +957,9 @@ namespace lfs::vis {
             const auto current = std::chrono::steady_clock::now() - training_start_time_;
             return std::chrono::duration<float>(accumulated_training_time_ + current).count();
         }
-        if (state == TrainingState::Paused || state == TrainingState::Finished) {
-            return std::chrono::duration<float>(accumulated_training_time_).count();
-        }
-        return 0.0f;
+        return std::chrono::duration<float>(
+                   accumulated_training_time_)
+            .count();
     }
 
     float TrainerManager::getEstimatedRemainingSeconds() const {
@@ -997,6 +1009,21 @@ namespace lfs::vis {
             .iteration = iteration,
             .psnr = psnr,
             .ssim = ssim};
+        const auto position = std::lower_bound(
+            evaluation_history_.begin(),
+            evaluation_history_.end(), iteration,
+            [](const EvaluationMetricsSnapshot& sample,
+               const int target_iteration) {
+                return sample.iteration <
+                       target_iteration;
+            });
+        if (position != evaluation_history_.end() &&
+            position->iteration == iteration) {
+            *position = *last_eval_metrics_;
+        } else {
+            evaluation_history_.insert(
+                position, *last_eval_metrics_);
+        }
     }
 
     std::optional<TrainerManager::EvaluationMetricsSnapshot> TrainerManager::getLastEvaluationMetrics() const {
@@ -1012,8 +1039,163 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> lock(eval_metrics_mutex_);
             last_eval_metrics_.reset();
+            evaluation_history_.clear();
         }
         last_psnr_.store(0.0f);
+    }
+
+    lfs::io::project::MetricsChapter
+    TrainerManager::captureProjectMetrics() const {
+        using lfs::io::project::LastEvaluationMetrics;
+        using lfs::io::project::MetricHistorySample;
+
+        lfs::io::project::MetricsChapter result;
+        const auto loss =
+            lfs::training::CommandCenter::instance()
+                .loss_history();
+        result.loss_history.reserve(loss.size());
+        for (const auto& sample : loss) {
+            result.loss_history.push_back(
+                MetricHistorySample{
+                    .iteration = sample.iteration,
+                    .value = sample.loss,
+                });
+        }
+        {
+            std::lock_guard<std::mutex> lock(
+                eval_metrics_mutex_);
+            result.psnr_history.reserve(
+                evaluation_history_.size());
+            for (const auto& sample :
+                 evaluation_history_) {
+                result.psnr_history.push_back(
+                    MetricHistorySample{
+                        .iteration =
+                            sample.iteration,
+                        .value = sample.psnr,
+                    });
+            }
+            if (last_eval_metrics_) {
+                result.last_evaluation =
+                    LastEvaluationMetrics{
+                        .iteration =
+                            last_eval_metrics_
+                                ->iteration,
+                        .psnr =
+                            last_eval_metrics_->psnr,
+                        .ssim =
+                            last_eval_metrics_->ssim,
+                    };
+            }
+        }
+        result.accumulated_training_seconds =
+            getElapsedSeconds();
+        return result;
+    }
+
+    void TrainerManager::restoreProjectMetrics(
+        const lfs::io::project::MetricsChapter&
+            metrics) {
+        std::vector<
+            lfs::training::LossHistoryPoint>
+            loss;
+        loss.reserve(metrics.loss_history.size());
+        for (const auto& sample :
+             metrics.loss_history) {
+            loss.push_back({
+                .iteration = sample.iteration,
+                .loss = sample.value,
+            });
+        }
+        lfs::training::CommandCenter::instance()
+            .replace_loss_history(std::move(loss));
+
+        {
+            std::lock_guard<std::mutex> lock(
+                loss_buffer_mutex_);
+            loss_buffer_.clear();
+            const std::size_t begin =
+                metrics.loss_history.size() >
+                        static_cast<std::size_t>(
+                            MAX_LOSS_POINTS)
+                    ? metrics.loss_history.size() -
+                          MAX_LOSS_POINTS
+                    : 0;
+            for (std::size_t index = begin;
+                 index < metrics.loss_history.size();
+                 ++index) {
+                loss_buffer_.push_back(
+                    metrics.loss_history[index]
+                        .value);
+            }
+        }
+        {
+            std::scoped_lock lock(
+                psnr_buffer_mutex_,
+                eval_metrics_mutex_);
+            psnr_buffer_.clear();
+            evaluation_history_.clear();
+            evaluation_history_.reserve(
+                metrics.psnr_history.size());
+            const std::size_t begin =
+                metrics.psnr_history.size() >
+                        static_cast<std::size_t>(
+                            MAX_PSNR_POINTS)
+                    ? metrics.psnr_history.size() -
+                          MAX_PSNR_POINTS
+                    : 0;
+            for (std::size_t index = 0;
+                 index < metrics.psnr_history.size();
+                 ++index) {
+                const auto& sample =
+                    metrics.psnr_history[index];
+                evaluation_history_.push_back({
+                    .iteration = sample.iteration,
+                    .psnr = sample.value,
+                    .ssim = 0.0f,
+                });
+                if (index >= begin)
+                    psnr_buffer_.push_back(
+                        sample.value);
+            }
+            if (metrics.last_evaluation) {
+                last_eval_metrics_ = {
+                    .iteration =
+                        metrics.last_evaluation
+                            ->iteration,
+                    .psnr =
+                        metrics.last_evaluation
+                            ->psnr,
+                    .ssim =
+                        metrics.last_evaluation
+                            ->ssim,
+                };
+                if (!evaluation_history_.empty() &&
+                    evaluation_history_.back()
+                            .iteration ==
+                        last_eval_metrics_
+                            ->iteration) {
+                    evaluation_history_.back()
+                        .ssim =
+                        last_eval_metrics_->ssim;
+                }
+            } else {
+                last_eval_metrics_.reset();
+            }
+        }
+        last_psnr_.store(
+            metrics.last_evaluation
+                ? metrics.last_evaluation->psnr
+                : (metrics.psnr_history.empty()
+                       ? 0.0f
+                       : metrics.psnr_history.back()
+                             .value));
+        accumulated_training_time_ =
+            std::chrono::duration_cast<
+                std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(
+                    metrics
+                        .accumulated_training_seconds));
     }
 
     void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {

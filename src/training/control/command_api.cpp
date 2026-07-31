@@ -146,12 +146,39 @@ namespace lfs::training {
             snapshot_.project_snapshot_post_step_mean_ms =
                 project.post_resume_step_mean_ms;
             snapshot_
+                .project_snapshot_pre_step_first_iteration =
+                project
+                    .pre_snapshot_step_first_iteration;
+            snapshot_
+                .project_snapshot_pre_step_last_iteration =
+                project
+                    .pre_snapshot_step_last_iteration;
+            snapshot_
+                .project_snapshot_pre_step_samples =
+                project.pre_snapshot_step_samples;
+            snapshot_
+                .project_snapshot_post_step_first_iteration =
+                project
+                    .post_resume_step_first_iteration;
+            snapshot_
+                .project_snapshot_post_step_last_iteration =
+                project
+                    .post_resume_step_last_iteration;
+            snapshot_
                 .project_snapshot_step_regression_percent =
                 project
                     .post_resume_step_regression_percent;
             snapshot_
                 .project_snapshot_post_step_samples =
                 project.post_resume_step_samples;
+            snapshot_
+                .project_snapshot_step_regression_gate_evaluated =
+                project
+                    .step_regression_gate_evaluated;
+            snapshot_
+                .project_snapshot_step_regression_within_gate =
+                project
+                    .step_regression_within_gate;
             snapshot_
                 .project_snapshot_writer_in_flight =
                 project.writer_in_flight;
@@ -189,6 +216,16 @@ namespace lfs::training {
         std::lock_guard<std::mutex> lock(mutex_);
         loss_history_.clear();
         last_recorded_iteration_ = -1;
+    }
+
+    void CommandCenter::replace_loss_history(
+        std::vector<LossHistoryPoint> history) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        loss_history_ = std::move(history);
+        last_recorded_iteration_ =
+            loss_history_.empty()
+                ? -1
+                : loss_history_.back().iteration;
     }
 
     std::vector<OperationInfo> CommandCenter::operations(std::optional<CommandTarget> target) const {

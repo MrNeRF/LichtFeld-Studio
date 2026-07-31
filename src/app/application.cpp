@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
+#include "app/application_startup.hpp"
 #include "app/headless_run_coordinator.hpp"
 #include "control/command_api.hpp"
 #include "core/checkpoint_format.hpp"
@@ -1058,6 +1059,16 @@ namespace lfs::app {
     } // namespace
 
     int Application::run(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+        if (auto startup =
+                validate_application_startup(*params);
+            !startup) {
+            LOG_ERROR(
+                "Startup rejected: {}",
+                lfs::format_for_developer(
+                    startup.error()));
+            return 1;
+        }
+
         // Pre-initialize CacheLoader for the exe module.
         // On Windows, lfs_io (static lib) is linked into both the exe and
         // lfs_visualizer.dll, giving each its own CacheLoader singleton.

@@ -956,7 +956,7 @@ namespace {
             document->save(path, first_options);
         ASSERT_TRUE(first) << lfs::format_for_developer(first.error());
         EXPECT_EQ(first->generation, 1u);
-        EXPECT_EQ(first->rewritten_chunks, 9u);
+        EXPECT_EQ(first->rewritten_chunks, 14u);
 
         auto reopened = ProjectDocument::open(path);
         ASSERT_TRUE(reopened)
@@ -1032,7 +1032,7 @@ namespace {
             << lfs::format_for_developer(second.error());
         EXPECT_EQ(second->generation, 2u);
         EXPECT_EQ(second->rewritten_chunks, 1u);
-        EXPECT_EQ(second->reused_chunks, 8u);
+        EXPECT_EQ(second->reused_chunks, 13u);
 
         auto reader = ProjectReader::open(path);
         ASSERT_TRUE(reader)

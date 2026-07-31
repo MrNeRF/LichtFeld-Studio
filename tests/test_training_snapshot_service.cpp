@@ -4,22 +4,28 @@
  */
 
 #include "core/parameters.hpp"
+#include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/uuid.hpp"
 #include "training/checkpoint.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
+#include "training/project_snapshot_chapters.hpp"
 #include "training/strategies/mcmc.hpp"
 #include "training/training_snapshot_service.hpp"
+#include "training_snapshot_test_helpers.hpp"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -89,6 +95,18 @@ namespace {
         return params;
     }
 
+    lfs::core::Tensor selection_mask(
+        const std::size_t count,
+        const std::uint8_t value) {
+        auto result = lfs::core::Tensor::empty(
+            {count},
+            lfs::core::Device::CPU,
+            lfs::core::DataType::UInt8);
+        std::fill_n(
+            result.ptr<std::uint8_t>(), count, value);
+        return result;
+    }
+
     bool cuda_device_available() {
         int count = 0;
         return cudaGetDeviceCount(&count) == cudaSuccess &&
@@ -138,6 +156,10 @@ namespace {
             model->means().cpu().to_vector();
         const auto original_moment_scales =
             source_moments->exp_avg_scale.cpu().to_vector();
+        const auto original_optimizer_moments =
+            lfs::training::test::
+                capture_optimizer_moment_bytes(
+                    strategy.get_optimizer());
 
         std::ostringstream reference_stream(
             std::ios::binary | std::ios::out);
@@ -157,7 +179,7 @@ namespace {
         lfs::training::TrainingSnapshotService service({
             .ring_slots = 4,
             .band_bytes = 64 * 1024,
-            .calibration_bytes = 64 * 1024,
+            .calibration_bytes = 64,
             .calibration_iterations = 4,
         });
         std::optional<lfs::core::Uuid> cpu_state_stamp;
@@ -172,12 +194,23 @@ namespace {
                 .capture_additional_cpu_state =
                     [&cpu_state_stamp](
                         const lfs::core::Uuid& uuid)
-                    -> lfs::Result<void> {
+                    -> lfs::Result<
+                        lfs::training::
+                            TrainingSnapshotCpuStateMetrics> {
                     cpu_state_stamp = uuid;
-                    return {};
+                    return lfs::training::
+                        TrainingSnapshotCpuStateMetrics{
+                            .scng_ms = 0.125,
+                            .selm_ms = 0.25,
+                            .prms_ms = 0.5,
+                        };
                 },
             };
 
+        auto initialized = service.initialize(request);
+        ASSERT_TRUE(initialized.has_value())
+            << lfs::format_for_developer(
+                   initialized.error());
         auto prepared = service.prepare(request);
         ASSERT_TRUE(prepared.has_value())
             << lfs::format_for_developer(
@@ -240,8 +273,21 @@ namespace {
                   metrics.checkpoint_bytes);
         EXPECT_TRUE(metrics.host_memory_preflight_passed);
         EXPECT_TRUE(metrics.host_ram_within_gate);
+        EXPECT_GT(metrics.service_initialization_ms, 0.0);
+        EXPECT_LT(metrics.prepare_stall_ms, 10.0);
+        EXPECT_DOUBLE_EQ(
+            metrics.preparation_ms,
+            metrics.prepare_stall_ms);
         EXPECT_GT(metrics.preparation_ms, 0.0);
         EXPECT_TRUE(metrics.cold_first_snapshot);
+        EXPECT_DOUBLE_EQ(metrics.scng_ms, 0.125);
+        EXPECT_DOUBLE_EQ(metrics.selm_ms, 0.25);
+        EXPECT_DOUBLE_EQ(metrics.prms_ms, 0.5);
+        EXPECT_DOUBLE_EQ(
+            metrics.cold_path_ms,
+            metrics.prepare_stall_ms +
+                metrics.pause_ms);
+        EXPECT_TRUE(metrics.cold_path_within_rig_gate);
         EXPECT_GT(metrics.tensor_piece_count, 0u);
         EXPECT_GT(metrics.cpu_piece_count, 0u);
         EXPECT_TRUE(metrics.consistency_proven);
@@ -259,6 +305,7 @@ namespace {
 
         const auto aggregate = service.metrics();
         EXPECT_EQ(aggregate.completed_snapshots, 1u);
+        EXPECT_EQ(aggregate.p95_n, 1u);
         EXPECT_DOUBLE_EQ(aggregate.pause_p95_ms,
                          metrics.pause_ms);
 
@@ -301,6 +348,248 @@ namespace {
                 .cpu()
                 .to_vector(),
             original_moment_scales);
+        lfs::training::test::
+            expect_optimizer_moment_bytes_equal(
+                original_optimizer_moments,
+                target_strategy.get_optimizer());
+    }
+
+    TEST(TrainingSnapshotServiceTest,
+         CpuChaptersCaptureExactSaveIterationInsideSafePoint) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+
+        constexpr std::size_t GAUSSIAN_COUNT = 4096;
+        constexpr int SAVED_ITERATION = 6;
+        lfs::core::Scene scene;
+        const auto model_id = scene.addSplat(
+            "iter_0000",
+            make_snapshot_test_splat(
+                GAUSSIAN_COUNT));
+        ASSERT_NE(model_id, lfs::core::NULL_NODE);
+        scene.setTrainingModelNode(model_id);
+        const auto model_uuid =
+            scene.getNodeUuid(model_id);
+        ASSERT_FALSE(model_uuid.is_nil());
+        auto* model_node =
+            scene.getNodeById(model_id);
+        ASSERT_NE(model_node, nullptr);
+        ASSERT_NE(model_node->model, nullptr);
+
+        auto params =
+            make_snapshot_test_params(
+                GAUSSIAN_COUNT);
+        params.dataset.images = "iter_0000";
+        const auto selection_group =
+            scene.addSelectionGroup(
+                "iter_0000", {0.25f, 0.5f, 0.75f});
+        ASSERT_NE(selection_group, 0);
+        scene.setActiveSelectionGroup(
+            selection_group);
+        lfs::training::MCMC strategy(
+            *model_node->model);
+        strategy.initialize(params.optimization);
+
+        lfs::training::TrainingSnapshotService service({
+            .ring_slots = 4,
+            .band_bytes = 64 * 1024,
+            .calibration_bytes = 64,
+            .calibration_iterations = 4,
+        });
+        const auto snapshot_uuid =
+            lfs::core::generate_uuid_v4();
+        lfs::training::ProjectSnapshotChapters
+            chapters;
+        lfs::training::TrainingSnapshotCaptureRequest
+            request{
+                .iteration = SAVED_ITERATION,
+                .snapshot_uuid = snapshot_uuid,
+                .strategy = strategy,
+                .params = params,
+                .capture_additional_cpu_state =
+                    [&](const lfs::core::Uuid& uuid) {
+                        return lfs::training::
+                            capture_project_snapshot_cpu_chapters(
+                                scene, params, uuid,
+                                SAVED_ITERATION,
+                                chapters);
+                    },
+            };
+        auto initialized = service.initialize(request);
+        ASSERT_TRUE(initialized)
+            << lfs::format_for_developer(
+                   initialized.error());
+
+        for (int iteration = 1;
+             iteration < SAVED_ITERATION;
+             ++iteration) {
+            const auto name =
+                std::format("iter_{:04}", iteration);
+            ASSERT_TRUE(
+                scene.renameNode(model_id, name));
+            params.dataset.images = name;
+            scene.renameSelectionGroup(
+                selection_group, name);
+            scene.applyPerNodeSelectionSlices(
+                lfs::core::SelectionDomain::Splat,
+                {{model_uuid,
+                  selection_mask(
+                      GAUSSIAN_COUNT,
+                      selection_group)}});
+        }
+
+        auto prepared = service.prepare(request);
+        ASSERT_TRUE(prepared)
+            << lfs::format_for_developer(
+                   prepared.error());
+
+        const auto saved_name =
+            std::format(
+                "iter_{:04}", SAVED_ITERATION);
+        ASSERT_TRUE(
+            scene.renameNode(model_id, saved_name));
+        params.dataset.images = saved_name;
+        scene.renameSelectionGroup(
+            selection_group, saved_name);
+        scene.applyPerNodeSelectionSlices(
+            lfs::core::SelectionDomain::Splat,
+            {{model_uuid,
+              selection_mask(
+                  GAUSSIAN_COUNT,
+                  selection_group)}});
+
+        request.safe_point_entered_at =
+            std::chrono::steady_clock::now();
+        auto pending = service.capture(
+            std::move(*prepared), request);
+        ASSERT_TRUE(pending)
+            << lfs::format_for_developer(
+                   pending.error());
+        auto captured = pending->wait();
+        ASSERT_TRUE(captured)
+            << lfs::format_for_developer(
+                   captured.error());
+
+        EXPECT_EQ(
+            captured->snapshot_uuid,
+            snapshot_uuid);
+        EXPECT_EQ(
+            captured->iteration,
+            SAVED_ITERATION);
+        EXPECT_EQ(chapters.snapshot_uuid, snapshot_uuid);
+        EXPECT_EQ(
+            chapters.iteration,
+            SAVED_ITERATION);
+
+        auto training_uuid =
+            chapters.scene_graph
+                .training_model_uuid();
+        ASSERT_TRUE(training_uuid)
+            << lfs::format_for_developer(
+                   training_uuid.error());
+        ASSERT_TRUE(*training_uuid);
+        EXPECT_EQ(**training_uuid, model_uuid);
+        auto saved_node =
+            chapters.scene_graph.find(model_uuid);
+        ASSERT_TRUE(saved_node)
+            << lfs::format_for_developer(
+                   saved_node.error());
+        ASSERT_TRUE(*saved_node);
+        EXPECT_EQ((*saved_node)->name, saved_name);
+        ASSERT_TRUE((*saved_node)->payload);
+        EXPECT_EQ(
+            (*saved_node)->payload->fourcc,
+            "CKPT");
+        EXPECT_EQ(
+            (*saved_node)->payload->instance_uuid,
+            snapshot_uuid);
+
+        ASSERT_EQ(chapters.selection.slices().size(), 1u);
+        const auto& saved_groups =
+            chapters.selection.groups();
+        const auto saved_group =
+            std::ranges::find(
+                saved_groups, selection_group,
+                &lfs::core::SelectionGroup::id);
+        ASSERT_NE(saved_group, saved_groups.end());
+        EXPECT_EQ(
+            saved_group->name,
+            saved_name);
+        const auto& saved_mask =
+            chapters.selection.slices().front().mask;
+        ASSERT_EQ(
+            saved_mask.size(),
+            GAUSSIAN_COUNT);
+        EXPECT_TRUE(std::ranges::all_of(
+            saved_mask,
+            [selection_group](
+                const std::uint8_t value) {
+                return value == selection_group;
+            }));
+        EXPECT_EQ(
+            chapters.parameters.dataset.images,
+            saved_name);
+
+        const std::string checkpoint_string(
+            reinterpret_cast<const char*>(
+                captured->checkpoint_bytes->data()),
+            captured->checkpoint_bytes->size());
+        std::istringstream checkpoint_stream(
+            checkpoint_string,
+            std::ios::binary | std::ios::in);
+        auto header =
+            lfs::core::load_checkpoint_header(
+                checkpoint_stream,
+                captured->checkpoint_bytes->size());
+        ASSERT_TRUE(header) << header.error();
+        EXPECT_EQ(
+            header->iteration,
+            SAVED_ITERATION);
+        EXPECT_TRUE(
+            captured->metrics
+                .pause_within_rig_gate);
+    }
+
+    TEST(TrainingStepRegressionTrackerTest,
+         SelectsDisclosedSteadyWindowsWithoutDensifyEvents) {
+        lfs::training::TrainingStepRegressionTracker
+            tracker(4);
+        for (int iteration = 1;
+             iteration <= 4; ++iteration) {
+            tracker.observe(iteration, 20.0, false);
+        }
+        tracker.observe(5, 200.0, true);
+        for (int iteration = 6;
+             iteration <= 9; ++iteration) {
+            tracker.observe(iteration, 10.0, false);
+        }
+        tracker.arm_after_snapshot(10);
+        tracker.observe(11, 10.9, false);
+        tracker.observe(12, 10.9, false);
+        tracker.observe(13, 200.0, true);
+        for (int iteration = 14;
+             iteration <= 17; ++iteration) {
+            tracker.observe(iteration, 10.9, false);
+        }
+
+        const auto metrics = tracker.metrics();
+        EXPECT_EQ(
+            metrics.pre_snapshot.first_iteration, 6);
+        EXPECT_EQ(
+            metrics.pre_snapshot.last_iteration, 9);
+        EXPECT_EQ(
+            metrics.pre_snapshot.sample_count, 4u);
+        EXPECT_EQ(
+            metrics.post_resume.first_iteration, 14);
+        EXPECT_EQ(
+            metrics.post_resume.last_iteration, 17);
+        EXPECT_EQ(
+            metrics.post_resume.sample_count, 4u);
+        EXPECT_NEAR(
+            metrics.regression_percent, 9.0, 1e-12);
+        EXPECT_TRUE(metrics.gate_evaluated);
+        EXPECT_TRUE(metrics.within_gate);
     }
 
 } // namespace

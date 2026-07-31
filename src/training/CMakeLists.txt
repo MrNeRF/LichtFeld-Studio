@@ -103,6 +103,7 @@ set(TRAINING_NEW_SOURCES
     control/command_api.cpp
     metrics/metrics.cpp
         checkpoint.cpp
+        project_snapshot_chapters.cpp
         training_snapshot_service.cpp
         progress.cpp
         training_cropbox_mask.cpp

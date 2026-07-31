@@ -9,6 +9,7 @@
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
+#include "io/session_chapters.hpp"
 #include "training/trainer.hpp"
 #include "training_state.hpp"
 #include <atomic>
@@ -21,6 +22,7 @@
 #include <optional>
 #include <stop_token>
 #include <thread>
+#include <vector>
 
 namespace lfs::core {
     class Scene;
@@ -135,6 +137,10 @@ namespace lfs::vis {
         void updateEvaluationMetrics(int iteration, float psnr, float ssim);
         std::optional<EvaluationMetricsSnapshot> getLastEvaluationMetrics() const;
         void clearEvaluationMetrics();
+        [[nodiscard]] lfs::io::project::MetricsChapter
+        captureProjectMetrics() const;
+        void restoreProjectMetrics(
+            const lfs::io::project::MetricsChapter& metrics);
 
         // Access to trainer (for rendering, etc.)
         lfs::training::Trainer* getTrainer() { return trainer_.get(); }
@@ -246,6 +252,8 @@ namespace lfs::vis {
         bool temporary_pause_initially_paused_ = false;
         bool temporary_pause_resume_in_flight_ = false;
         std::optional<EvaluationMetricsSnapshot> last_eval_metrics_;
+        std::vector<EvaluationMetricsSnapshot>
+            evaluation_history_;
         mutable std::mutex eval_metrics_mutex_;
 
         // Training time tracking

@@ -14,6 +14,7 @@
 #include "input/input_controller.hpp"
 #include "internal/viewport.hpp"
 #include "ipc/view_context.hpp"
+#include "project/session_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -87,13 +88,43 @@ namespace lfs::vis {
 
         // Component access
         TrainerManager* getTrainerManager() { return trainer_manager_.get(); }
+        const TrainerManager* getTrainerManager() const {
+            return trainer_manager_.get();
+        }
         SceneManager* getSceneManager() override { return scene_manager_.get(); }
         SDL_Window* getWindow() const { return window_manager_->getWindow(); }
         WindowManager* getWindowManager() { return window_manager_.get(); }
+        const WindowManager* getWindowManager() const {
+            return window_manager_.get();
+        }
         RenderingManager* getRenderingManager() override { return rendering_manager_.get(); }
+        const RenderingManager* getRenderingManager() const {
+            return rendering_manager_.get();
+        }
         gui::GuiManager* getGuiManager() { return gui_manager_.get(); }
+        const gui::GuiManager* getGuiManager() const {
+            return gui_manager_.get();
+        }
         const Viewport& getViewport() const { return viewport_; }
         Viewport& getViewport() { return viewport_; }
+        [[nodiscard]] lfs::Result<
+            lfs::io::project::ProjectSessionChapters>
+        captureProjectSession() const;
+        [[nodiscard]] lfs::Result<void>
+        stageProjectSessionRestore(
+            lfs::io::project::ProjectSessionChapters chapters);
+        [[nodiscard]] const std::vector<
+            project::CameraBookmarkProjectState>&
+        cameraBookmarks() const noexcept {
+            return camera_bookmarks_;
+        }
+        void setCameraBookmarks(
+            std::vector<
+                project::CameraBookmarkProjectState>
+                bookmarks) {
+            camera_bookmarks_ =
+                std::move(bookmarks);
+        }
 
         // FPS monitoring
         [[nodiscard]] float getCurrentFPS() const {
@@ -126,6 +157,9 @@ namespace lfs::vis {
         }
 
         InputController* getInputController() {
+            return input_controller_.get();
+        }
+        const InputController* getInputController() const {
             return input_controller_.get();
         }
 
@@ -186,6 +220,7 @@ namespace lfs::vis {
         void requestApplicationClose();
         void performReset();
         void resetProjectState();
+        void tryApplyProjectSessionRestore();
 
         // Tool initialization
         void initializeTools();
@@ -316,6 +351,7 @@ namespace lfs::vis {
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
         bool startup_plugin_preload_started_ = false;
+        bool gui_panels_ready_emitted_ = false;
         std::uint64_t startup_plugin_load_status_revision_ = 0;
         bool plugin_preload_timing_active_ = false;
         std::chrono::nanoseconds plugin_preload_max_update_stall_{};
@@ -325,6 +361,13 @@ namespace lfs::vis {
         std::unique_ptr<python::SequencerUIStateData> sequencer_ui_state_;
         std::vector<std::filesystem::path> pending_view_paths_;
         std::filesystem::path pending_dataset_path_;
+        project::GuiSessionRestoreCoordinator
+            gui_session_restore_;
+        lfs::io::project::ProjectSessionChapters
+            retained_project_session_;
+        std::vector<
+            project::CameraBookmarkProjectState>
+            camera_bookmarks_;
     };
 
 } // namespace lfs::vis

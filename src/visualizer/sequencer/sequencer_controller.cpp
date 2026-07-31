@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <nlohmann/json.hpp>
 
 namespace lfs::vis {
 
@@ -480,11 +481,26 @@ namespace lfs::vis {
         return timeline_.saveToJson(path);
     }
 
+    nlohmann::json SequencerController::saveToJson() const {
+        return timeline_.saveToJson();
+    }
+
     bool SequencerController::loadFromJson(const std::string& path) {
         stop();
         deselectKeyframe();
         const bool loaded = timeline_.loadFromJson(path);
         if (!loaded)
+            return false;
+        rebuildLoopKeyframe();
+        markTimelineChanged();
+        return true;
+    }
+
+    bool SequencerController::loadFromJson(
+        const nlohmann::json& json) {
+        stop();
+        deselectKeyframe();
+        if (!timeline_.loadFromJson(json))
             return false;
         rebuildLoopKeyframe();
         markTimelineChanged();

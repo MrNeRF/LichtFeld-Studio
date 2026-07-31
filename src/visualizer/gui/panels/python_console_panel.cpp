@@ -1583,6 +1583,19 @@ namespace lfs::vis::gui::panels {
         }
     }
 
+    void PythonConsoleState::setFontScale(const float scale) {
+        const auto nearest = std::min_element(
+            std::begin(FONT_STEPS), std::end(FONT_STEPS),
+            [scale](const float lhs, const float rhs) {
+                return std::abs(lhs - scale) <
+                       std::abs(rhs - scale);
+            });
+        font_scale_ =
+            nearest == std::end(FONT_STEPS)
+                ? 1.0f
+                : *nearest;
+    }
+
     void PythonConsoleState::addToHistory(const std::string& cmd) {
         std::lock_guard lock(mutex_);
         if (!cmd.empty() && (command_history_.empty() || command_history_.back() != cmd)) {
@@ -1622,6 +1635,11 @@ namespace lfs::vis::gui::panels {
     }
 
     editor::PythonEditor* PythonConsoleState::getEditor() {
+        return editor_.get();
+    }
+
+    const editor::PythonEditor*
+    PythonConsoleState::getEditor() const {
         return editor_.get();
     }
 

@@ -524,9 +524,20 @@ namespace lfs::mcp {
                          {"pause_p95_ms",
                           snapshot.project_snapshot
                               .pause_p95_ms},
+                         {"pause_p95_n",
+                          snapshot.project_snapshot
+                              .p95_n},
+                         {"service_initialization_ms",
+                          project_capture
+                              .service_initialization_ms},
+                         {"prepare_stall_ms",
+                          project_capture
+                              .prepare_stall_ms},
                          {"preparation_ms",
                           project_capture
                               .preparation_ms},
+                         {"cold_path_ms",
+                          project_capture.cold_path_ms},
                          {"cold_first_snapshot",
                           project_capture
                               .cold_first_snapshot},
@@ -538,6 +549,12 @@ namespace lfs::mcp {
                          {"cpu_state_ms",
                           project_capture
                               .additional_cpu_state_ms},
+                         {"scng_ms",
+                          project_capture.scng_ms},
+                         {"selm_ms",
+                          project_capture.selm_ms},
+                         {"prms_ms",
+                          project_capture.prms_ms},
                          {"serialize_and_issue_ms",
                           project_capture
                               .serialize_and_issue_ms},
@@ -554,21 +571,45 @@ namespace lfs::mcp {
                          {"pause_within_rig_gate",
                           project_capture
                               .pause_within_rig_gate},
+                         {"cold_path_within_rig_gate",
+                          project_capture
+                              .cold_path_within_rig_gate},
                          {"consistency_proven",
                           project_capture
                               .consistency_proven},
                          {"pre_snapshot_step_mean_ms",
                           snapshot
                               .project_snapshot_pre_step_mean_ms},
+                         {"pre_snapshot_step_first_iteration",
+                          snapshot
+                              .project_snapshot_pre_step_first_iteration},
+                         {"pre_snapshot_step_last_iteration",
+                          snapshot
+                              .project_snapshot_pre_step_last_iteration},
+                         {"pre_snapshot_step_samples",
+                          snapshot
+                              .project_snapshot_pre_step_samples},
                          {"post_resume_step_mean_ms",
                           snapshot
                               .project_snapshot_post_step_mean_ms},
+                         {"post_resume_step_first_iteration",
+                          snapshot
+                              .project_snapshot_post_step_first_iteration},
+                         {"post_resume_step_last_iteration",
+                          snapshot
+                              .project_snapshot_post_step_last_iteration},
                          {"post_resume_step_samples",
                           snapshot
                               .project_snapshot_post_step_samples},
                          {"step_regression_percent",
                           snapshot
                               .project_snapshot_step_regression_percent},
+                         {"step_regression_gate_evaluated",
+                          snapshot
+                              .project_snapshot_step_regression_gate_evaluated},
+                         {"step_regression_within_gate",
+                          snapshot
+                              .project_snapshot_step_regression_within_gate},
                      }}};
             });
 

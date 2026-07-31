@@ -67,6 +67,13 @@ namespace lfs::vis {
 
             [[nodiscard]] TransformSpace getTransformSpace() const { return transform_space_; }
             void setTransformSpace(TransformSpace space);
+            [[nodiscard]] GizmoOperation getOperation() const {
+                return current_operation_;
+            }
+            void setOperation(GizmoOperation operation) {
+                current_operation_ = operation;
+                node_gizmo_operation_ = operation;
+            }
             [[nodiscard]] PivotMode getPivotMode() const { return pivot_mode_; }
             void setPivotMode(PivotMode mode);
             [[nodiscard]] MultiTransformMode getMultiTransformMode() const { return multi_transform_mode_; }

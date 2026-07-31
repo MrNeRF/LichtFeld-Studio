@@ -305,6 +305,9 @@ namespace lfs::core {
         namespace internal {
             EVENT(TrainerReady, );
             EVENT(TrainingReadyToStart, );
+            // Startup plugin registration is terminal. Project GUIL state
+            // must not touch PanelRegistry before this concrete boundary.
+            EVENT(GuiPanelsReady, std::uint64_t registration_revision;);
             EVENT(WindowFocusLost, );
             EVENT(DisplayScaleChanged, float scale;);
             EVENT(UiScaleChangeRequested, float scale;); // 0 = auto (from OS)

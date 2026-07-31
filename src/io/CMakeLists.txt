@@ -252,6 +252,7 @@ add_library(lfs_io STATIC
         project/project_container.cpp
         project/project_writer.cpp
         project/project_chapters.cpp
+        project/session_chapters.cpp
         project/project_document.cpp
         project/splat_chapter.cpp
         project/scene_chapter_adapter.cpp

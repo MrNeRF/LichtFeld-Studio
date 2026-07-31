@@ -1102,4 +1102,24 @@ namespace lfs::vis::gui {
         host_.markContentDirty();
     }
 
+    std::string NativeScenePanel::projectActiveTab() const {
+        switch (active_tab_) {
+        case Tab::Scene: return "scene";
+        case Tab::History: return "history";
+        case Tab::Logging: return "logging";
+        }
+        return "scene";
+    }
+
+    void NativeScenePanel::setProjectActiveTab(
+        const std::string_view tab) {
+        if (tab == "history") {
+            setTab(Tab::History);
+        } else if (tab == "logging") {
+            setTab(Tab::Logging);
+        } else {
+            setTab(Tab::Scene);
+        }
+    }
+
 } // namespace lfs::vis::gui

@@ -123,7 +123,8 @@ namespace lfs::vis::tools {
                         SelectionFilterState filters{};
                         filters.crop_filter = crop_filter_enabled_;
                         filters.depth_filter = depth_filter_enabled_;
-                        filters.restrict_to_selected_nodes = true;
+                        filters.restrict_to_selected_nodes =
+                            restrict_to_selected_nodes_;
                         service->updatePassiveRingHoverPreview(last_mouse_pos_, mode, filters);
                     } else {
                         if (rm->isCursorPreviewActive()) {

@@ -1190,14 +1190,6 @@ namespace lfs::training {
         }
     } // namespace
 
-    struct Trainer::ProjectSnapshotChapters {
-        lfs::core::Uuid snapshot_uuid;
-        int iteration = 0;
-        lfs::io::project::SceneGraphChapter scene_graph;
-        lfs::io::project::SelectionChapter selection;
-        lfs::io::project::ParameterManagerSnapshot parameters;
-    };
-
     Trainer::CameraLossHeatmapState::~CameraLossHeatmapState() {
         if (copy_stream) {
             LFS_CUDA_LOG_TEARDOWN(cudaStreamSynchronize(copy_stream), copy_stream,
@@ -1226,6 +1218,11 @@ namespace lfs::training {
         finish_project_writer();
         prepared_project_snapshot_.reset();
         prestaged_project_chapters_.reset();
+        {
+            std::lock_guard lock(
+                project_snapshot_mutex_);
+            project_step_regression_.reset();
+        }
 
         // Sync callback stream to avoid race conditions
         if (callback_stream_) {
@@ -3047,9 +3044,19 @@ namespace lfs::training {
                 }
             }
 
+            if (auto snapshot_service =
+                    initialize_project_snapshot_service();
+                !snapshot_service) {
+                return std::unexpected(
+                    std::format(
+                        "Failed to initialize .licht snapshot service: {}",
+                        lfs::format_for_developer(
+                            snapshot_service.error())));
+            }
+
             if (params_.save_project_at_iteration) {
                 auto chapters =
-                    prestage_project_snapshot_chapters();
+                    reserve_project_snapshot_chapters();
                 if (!chapters) {
                     return std::unexpected(
                         std::format(
@@ -3060,7 +3067,8 @@ namespace lfs::training {
                 prestaged_project_chapters_ =
                     std::move(*chapters);
                 LOG_INFO(
-                    "Pre-staged .licht CPU chapters before optimizer start");
+                    "Reserved .licht snapshot UUID before optimizer start; "
+                    "CPU chapters remain deferred to the safe point");
             }
 
             initialized_ = true;
@@ -3504,7 +3512,7 @@ namespace lfs::training {
     void Trainer::request_project_save(
         std::filesystem::path path) {
         auto chapters =
-            prestage_project_snapshot_chapters();
+            reserve_project_snapshot_chapters();
         std::lock_guard lock(project_snapshot_mutex_);
         if (!chapters) {
             const auto message =
@@ -3512,7 +3520,7 @@ namespace lfs::training {
                     chapters.error());
             last_project_writer_error_ = message;
             LOG_ERROR(
-                "Cannot stage .licht CPU chapters: {}",
+                "Cannot reserve .licht snapshot identity: {}",
                 message);
             return;
         }
@@ -3523,9 +3531,45 @@ namespace lfs::training {
         requested_project_path_ = std::move(path);
     }
 
+    lfs::Result<void>
+    Trainer::initialize_project_snapshot_service() {
+        if (!project_snapshot_service_ || !strategy_) {
+            return lfs::Status::failure(
+                project_snapshot_error(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "Trainer has no snapshot service or strategy",
+                    LFS_SOURCE_SITE_CURRENT()));
+        }
+        const auto checkpoint_params =
+            params_for_checkpoint_save();
+        const std::array<cudaStream_t, 3>
+            mutating_streams{
+                training_stream_,
+                metrics_stream_,
+                callback_stream_,
+            };
+        const TrainingSnapshotCaptureRequest request{
+            .iteration = current_iteration_.load(),
+            .strategy = *strategy_,
+            .params = checkpoint_params,
+            .bilateral_grid = bilateral_grid_.get(),
+            .ppisp = ppisp_.get(),
+            .ppisp_controller_pool =
+                controller_pool_for_save(
+                    current_iteration_.load()),
+            .sparsity_optimizer =
+                dynamic_cast<
+                    const ADMMSparsityOptimizer*>(
+                    sparsity_optimizer_.get()),
+            .mutating_streams = mutating_streams,
+        };
+        return project_snapshot_service_->initialize(
+            request);
+    }
+
     lfs::Result<
-        std::shared_ptr<Trainer::ProjectSnapshotChapters>>
-    Trainer::prestage_project_snapshot_chapters() const {
+        std::shared_ptr<ProjectSnapshotChapters>>
+    Trainer::reserve_project_snapshot_chapters() const {
         if (!scene_) {
             return project_snapshot_error(
                 lfs::ErrorCode::FailedPrecondition,
@@ -3543,94 +3587,8 @@ namespace lfs::training {
 
         auto chapters =
             std::make_shared<ProjectSnapshotChapters>();
-        const auto provisional_uuid =
-            lfs::core::generate_uuid_v4();
         chapters->snapshot_uuid =
-            provisional_uuid;
-        lfs::io::project::ScenePayloadBindings
-            bindings;
-        bindings.emplace(
-            training_uuid,
-            lfs::io::project::PayloadBinding{
-                .fourcc = "CKPT",
-                .instance_uuid =
-                    provisional_uuid,
-                .source_kind = "checkpoint",
-            });
-        auto scene_graph =
-            lfs::io::project::capture_scene_graph(
-                *scene_, bindings);
-        if (!scene_graph) {
-            return std::move(scene_graph)
-                .error()
-                .with_context(
-                    "capture snapshot scene graph",
-                    LFS_SOURCE_SITE_CURRENT());
-        }
-        chapters->scene_graph =
-            std::move(*scene_graph);
-
-        // P4 has no GUI mutation surface. A default SELM is the
-        // correct headless state and avoids the legacy per-mask
-        // Tensor::cpu() path forbidden during capture.
-        chapters->selection = {};
-
-        const auto checkpoint_params =
-            params_for_checkpoint_save();
-        auto& parameters = chapters->parameters;
-        parameters.dataset =
-            checkpoint_params.dataset;
-        parameters.mcmc_session =
-            lfs::core::param::
-                OptimizationParameters::mcmc_defaults();
-        parameters.mrnf_session =
-            lfs::core::param::
-                OptimizationParameters::mrnf_defaults();
-        parameters.igs_session =
-            lfs::core::param::
-                OptimizationParameters::igs_plus_defaults();
-        parameters.mcmc_current =
-            parameters.mcmc_session;
-        parameters.mrnf_current =
-            parameters.mrnf_session;
-        parameters.igs_current =
-            parameters.igs_session;
-        parameters.active_strategy =
-            std::string(
-                lfs::core::param::
-                    canonical_strategy_name(
-                        checkpoint_params
-                            .optimization
-                            .strategy));
-        if (parameters.active_strategy ==
-            lfs::core::param::kStrategyMCMC) {
-            parameters.mcmc_session =
-                checkpoint_params.optimization;
-            parameters.mcmc_current =
-                checkpoint_params.optimization;
-        } else if (
-            parameters.active_strategy ==
-            lfs::core::param::kStrategyIGSPlus) {
-            parameters.igs_session =
-                checkpoint_params.optimization;
-            parameters.igs_current =
-                checkpoint_params.optimization;
-        } else if (
-            parameters.active_strategy ==
-            lfs::core::param::kStrategyMRNF) {
-            parameters.mrnf_session =
-                checkpoint_params.optimization;
-            parameters.mrnf_current =
-                checkpoint_params.optimization;
-        } else {
-            return project_snapshot_error(
-                lfs::ErrorCode::Unsupported,
-                std::format(
-                    "Snapshot strategy '{}' is not registered",
-                    checkpoint_params
-                        .optimization.strategy),
-                LFS_SOURCE_SITE_CURRENT());
-        }
+            lfs::core::generate_uuid_v4();
         return chapters;
     }
 
@@ -3645,24 +3603,36 @@ namespace lfs::training {
         result.last_path = last_project_snapshot_path_;
         result.last_writer_error =
             last_project_writer_error_;
+        const auto step_metrics =
+            project_step_regression_.metrics();
         result.pre_snapshot_step_mean_ms =
-            project_pre_snapshot_step_mean_ms_;
+            step_metrics.pre_snapshot.mean_ms;
+        result.pre_snapshot_step_first_iteration =
+            step_metrics.pre_snapshot
+                .first_iteration;
+        result.pre_snapshot_step_last_iteration =
+            step_metrics.pre_snapshot
+                .last_iteration;
+        result.pre_snapshot_step_samples =
+            step_metrics.pre_snapshot
+                .sample_count;
+        result.post_resume_step_mean_ms =
+            step_metrics.post_resume.mean_ms;
+        result.post_resume_step_first_iteration =
+            step_metrics.post_resume
+                .first_iteration;
+        result.post_resume_step_last_iteration =
+            step_metrics.post_resume
+                .last_iteration;
         result.post_resume_step_samples =
-            project_post_resume_step_samples_;
-        if (project_post_resume_step_samples_ > 0) {
-            result.post_resume_step_mean_ms =
-                project_post_resume_step_sum_ms_ /
-                static_cast<double>(
-                    project_post_resume_step_samples_);
-        }
-        if (project_pre_snapshot_step_mean_ms_ > 0.0 &&
-            result.post_resume_step_samples > 0) {
-            result.post_resume_step_regression_percent =
-                (result.post_resume_step_mean_ms /
-                     project_pre_snapshot_step_mean_ms_ -
-                 1.0) *
-                100.0;
-        }
+            step_metrics.post_resume
+                .sample_count;
+        result.post_resume_step_regression_percent =
+            step_metrics.regression_percent;
+        result.step_regression_gate_evaluated =
+            step_metrics.gate_evaluated;
+        result.step_regression_within_gate =
+            step_metrics.within_gate;
         result.writer_in_flight =
             project_writer_in_flight_.load(
                 std::memory_order_acquire);
@@ -3735,10 +3705,10 @@ namespace lfs::training {
                 prestaged_project_chapters_
                     ->snapshot_uuid.is_nil()) {
                 last_project_writer_error_ =
-                    "Snapshot CPU chapters were not pre-staged";
+                    "Snapshot UUID was not reserved";
                 LOG_ERROR(
-                    "Cannot prepare .licht snapshot: CPU chapters "
-                    "were not staged before the optimizer safe point");
+                    "Cannot prepare .licht snapshot: snapshot UUID "
+                    "was not reserved before the optimizer safe point");
                 return;
             }
             snapshot_uuid =
@@ -3785,18 +3755,8 @@ namespace lfs::training {
             return;
         }
 
-        double baseline_sum = 0.0;
         {
             std::lock_guard lock(project_snapshot_mutex_);
-            baseline_sum = std::accumulate(
-                recent_step_times_ms_.begin(),
-                recent_step_times_ms_.end(), 0.0);
-            project_pre_snapshot_step_mean_ms_ =
-                recent_step_times_ms_.empty()
-                    ? 0.0
-                    : baseline_sum /
-                          static_cast<double>(
-                              recent_step_times_ms_.size());
             last_project_writer_error_.clear();
         }
         prepared_project_snapshot_.emplace(
@@ -3806,12 +3766,11 @@ namespace lfs::training {
             capture_iteration;
         LOG_INFO(
             "Prepared .licht snapshot {} for iteration {} "
-            "({} checkpoint bytes, pre-step mean {:.3f} ms)",
+            "({} checkpoint bytes)",
             prepared_project_snapshot_->snapshot_uuid()
                 .to_string(),
             capture_iteration,
-            prepared_project_snapshot_->checkpoint_bytes(),
-            project_pre_snapshot_step_mean_ms_);
+            prepared_project_snapshot_->checkpoint_bytes());
     }
 
     void Trainer::capture_project_snapshot_at_safe_point(
@@ -3838,12 +3797,12 @@ namespace lfs::training {
         }
         if (!chapters) {
             LOG_ERROR(
-                "Cannot capture .licht snapshot: CPU chapters "
-                "were not staged before the optimizer safe point");
+                "Cannot capture .licht snapshot: snapshot UUID "
+                "was not reserved before the optimizer safe point");
             std::lock_guard lock(
                 project_snapshot_mutex_);
             last_project_writer_error_ =
-                "Snapshot CPU chapters were not pre-staged";
+                "Snapshot UUID was not reserved";
             requested_project_path_ =
                 prepared_project_path_;
             prepared_project_snapshot_.reset();
@@ -3894,63 +3853,23 @@ namespace lfs::training {
                     sparsity_optimizer_.get()),
             .mutating_streams = mutating_streams,
             .capture_additional_cpu_state =
-                [this, chapters, iteration](
+                [this, chapters, iteration,
+                 &checkpoint_params](
                     const lfs::core::Uuid&
                         captured_uuid)
-                -> lfs::Result<void> {
+                -> lfs::Result<
+                    TrainingSnapshotCpuStateMetrics> {
                 if (!scene_) {
-                    return lfs::Status::failure(
-                        project_snapshot_error(
-                            lfs::ErrorCode::
-                                FailedPrecondition,
-                            "Snapshot scene disappeared",
-                            LFS_SOURCE_SITE_CURRENT()));
+                    return project_snapshot_error(
+                        lfs::ErrorCode::
+                            FailedPrecondition,
+                        "Snapshot scene disappeared",
+                        LFS_SOURCE_SITE_CURRENT());
                 }
-                const auto training_uuid =
-                    scene_
-                        ->getTrainingModelNodeUuid();
-                if (training_uuid.is_nil()) {
-                    return lfs::Status::failure(
-                        project_snapshot_error(
-                            lfs::ErrorCode::
-                                FailedPrecondition,
-                            "Snapshot scene has no training-model UUID",
-                            LFS_SOURCE_SITE_CURRENT()));
-                }
-                auto staged_training =
-                    chapters->scene_graph
-                        .training_model_uuid();
-                if (!staged_training) {
-                    return lfs::Status::failure(
-                        std::move(staged_training)
-                            .error()
-                            .with_context(
-                                "validate snapshot training-model UUID",
-                                LFS_SOURCE_SITE_CURRENT()));
-                }
-                if (!*staged_training ||
-                    **staged_training !=
-                        training_uuid) {
-                    return lfs::Status::failure(
-                        project_snapshot_error(
-                            lfs::ErrorCode::
-                                ContractViolation,
-                            "Snapshot training-model UUID changed after CPU staging",
-                            LFS_SOURCE_SITE_CURRENT()));
-                }
-                if (chapters->snapshot_uuid !=
-                    captured_uuid) {
-                    return lfs::Status::failure(
-                        project_snapshot_error(
-                            lfs::ErrorCode::
-                                ContractViolation,
-                            "Pre-staged CPU chapter UUID changed before capture",
-                            LFS_SOURCE_SITE_CURRENT()));
-                }
-
-                chapters->iteration =
-                    iteration;
-                return {};
+                return capture_project_snapshot_cpu_chapters(
+                    *scene_, checkpoint_params,
+                    captured_uuid, iteration,
+                    *chapters);
             },
         };
 
@@ -3978,10 +3897,24 @@ namespace lfs::training {
             const auto message =
                 lfs::format_for_developer(
                     pending.error());
-            LOG_ERROR(
-                "Failed to capture .licht training snapshot "
-                "at iteration {}: {}",
-                iteration, message);
+            const bool requires_replan =
+                pending.error().code() ==
+                    lfs::ErrorCode::
+                        FailedPrecondition &&
+                pending.error().detail().find(
+                    "layout changed") !=
+                    std::string_view::npos;
+            if (requires_replan) {
+                LOG_WARN(
+                    "Replanning .licht snapshot at iteration {}: "
+                    "reason={}",
+                    iteration, message);
+            } else {
+                LOG_ERROR(
+                    "Failed to capture .licht training snapshot "
+                    "at iteration {}: {}",
+                    iteration, message);
+            }
             {
                 std::lock_guard lock(
                     project_snapshot_mutex_);
@@ -4008,15 +3941,11 @@ namespace lfs::training {
             return;
         }
 
-        project_post_resume_start_iteration_ =
-            iteration + 1;
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
-            project_post_resume_step_sum_ms_ =
-                0.0;
-            project_post_resume_step_samples_ =
-                0;
+            project_step_regression_
+                .arm_after_snapshot(iteration);
         }
         project_writer_done_.store(
             false, std::memory_order_release);
@@ -4279,56 +4208,49 @@ namespace lfs::training {
 
     void Trainer::observe_training_step_duration(
         const int iteration,
-        const double elapsed_ms) {
+        const double elapsed_ms,
+        const bool topology_changed) {
         if (!(elapsed_ms >= 0.0) ||
             !std::isfinite(elapsed_ms)) {
             return;
         }
-        bool log_gate = false;
-        double pre_mean = 0.0;
-        double post_mean = 0.0;
+        TrainingStepRegressionMetrics before;
+        TrainingStepRegressionMetrics after;
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
-            recent_step_times_ms_.push_back(
-                elapsed_ms);
-            if (recent_step_times_ms_.size() >
-                100) {
-                recent_step_times_ms_.pop_front();
-            }
-            if (iteration >=
-                    project_post_resume_start_iteration_ &&
-                project_post_resume_start_iteration_ >
-                    0 &&
-                project_post_resume_step_samples_ <
-                    100) {
-                project_post_resume_step_sum_ms_ +=
-                    elapsed_ms;
-                ++project_post_resume_step_samples_;
-                if (project_post_resume_step_samples_ ==
-                    100) {
-                    pre_mean =
-                        project_pre_snapshot_step_mean_ms_;
-                    post_mean =
-                        project_post_resume_step_sum_ms_ /
-                        100.0;
-                    log_gate = true;
-                }
-            }
+            before =
+                project_step_regression_.metrics();
+            project_step_regression_.observe(
+                iteration, elapsed_ms,
+                topology_changed);
+            after =
+                project_step_regression_.metrics();
         }
-        if (log_gate) {
-            const double regression =
-                pre_mean > 0.0
-                    ? (post_mean / pre_mean - 1.0) *
-                          100.0
-                    : 0.0;
+        if (!before.gate_evaluated &&
+            after.gate_evaluated) {
             LOG_INFO(
                 "Training snapshot post-resume step gate: "
-                "pre100={:.3f}ms post100={:.3f}ms "
+                "pre=[{},{}] pre_n={} pre_mean={:.3f}ms "
+                "post=[{},{}] post_n={} post_mean={:.3f}ms "
                 "regression={:.3f}% {}",
-                pre_mean, post_mean, regression,
-                regression <= 10.0 ? "PASS"
-                                   : "FAIL");
+                after.pre_snapshot
+                    .first_iteration,
+                after.pre_snapshot
+                    .last_iteration,
+                after.pre_snapshot
+                    .sample_count,
+                after.pre_snapshot.mean_ms,
+                after.post_resume
+                    .first_iteration,
+                after.post_resume
+                    .last_iteration,
+                after.post_resume
+                    .sample_count,
+                after.post_resume.mean_ms,
+                after.regression_percent,
+                after.within_gate ? "PASS"
+                                  : "FAIL");
         }
     }
 
@@ -6905,7 +6827,9 @@ namespace lfs::training {
                     break;
                 }
                 observe_training_step_duration(
-                    iter, training_step_ms);
+                    iter, training_step_ms,
+                    strategy_ &&
+                        strategy_->is_refining(iter));
 
                 // Transition to safe control phase and execute deferred Python callbacks
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);

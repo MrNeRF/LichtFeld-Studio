@@ -152,6 +152,7 @@ set(TEST_FILES
     test_project_chapters.cpp
     test_project_document.cpp
     test_p3_matrix_proof.cpp
+    test_p5_session_chapters.cpp
     test_training_terminal_state.cpp
     test_headless_run_coordinator.cpp
     test_argument_parser.cpp
@@ -291,6 +292,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_ui_modals.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/application_startup.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
 )
 

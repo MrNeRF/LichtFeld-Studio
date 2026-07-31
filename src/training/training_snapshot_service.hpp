@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -36,6 +37,12 @@ namespace lfs::training {
         int calibration_iterations = 4;
     };
 
+    struct TrainingSnapshotCpuStateMetrics {
+        double scng_ms = 0.0;
+        double selm_ms = 0.0;
+        double prms_ms = 0.0;
+    };
+
     struct TrainingSnapshotPauseMetrics {
         lfs::core::Uuid snapshot_uuid;
         int iteration = 0;
@@ -48,18 +55,27 @@ namespace lfs::training {
         std::uint64_t host_memory_required_bytes = 0;
         std::size_t tensor_piece_count = 0;
         std::size_t cpu_piece_count = 0;
+        double service_initialization_ms = 0.0;
+        double prepare_stall_ms = 0.0;
+        // Compatibility name retained for the P4 MCP surface. It is exactly
+        // the measured on-training-thread prepare stall.
         double preparation_ms = 0.0;
         double safe_point_entry_ms = 0.0;
         double stream_sync_ms = 0.0;
         double additional_cpu_state_ms = 0.0;
+        double scng_ms = 0.0;
+        double selm_ms = 0.0;
+        double prms_ms = 0.0;
         double serialize_and_issue_ms = 0.0;
         double last_d2h_wait_ms = 0.0;
         double pause_ms = 0.0;
+        double cold_path_ms = 0.0;
         double final_drain_ms = 0.0;
         double measured_pinned_d2h_bytes_per_second = 0.0;
         double rig_gate_ms = 0.0;
         bool cold_first_snapshot = false;
         bool pause_within_rig_gate = false;
+        bool cold_path_within_rig_gate = false;
         bool host_memory_preflight_passed = false;
         bool host_ram_within_gate = false;
         bool consistency_proven = false;
@@ -68,13 +84,67 @@ namespace lfs::training {
     struct TrainingSnapshotServiceMetrics {
         std::uint64_t completed_snapshots = 0;
         double pause_p95_ms = 0.0;
+        std::size_t p95_n = 0;
         TrainingSnapshotPauseMetrics last;
+    };
+
+    struct TrainingStepWindowMetrics {
+        int first_iteration = 0;
+        int last_iteration = 0;
+        std::size_t sample_count = 0;
+        double mean_ms = 0.0;
+    };
+
+    struct TrainingStepRegressionMetrics {
+        TrainingStepWindowMetrics pre_snapshot;
+        TrainingStepWindowMetrics post_resume;
+        double regression_percent = 0.0;
+        bool gate_evaluated = false;
+        bool within_gate = false;
+    };
+
+    // Selects two contiguous steady-state windows. A topology-changing
+    // refinement/densification iteration clears the candidate run, so no
+    // reported window can contain such an event.
+    class TrainingStepRegressionTracker {
+    public:
+        explicit TrainingStepRegressionTracker(
+            std::size_t window_size = 100);
+
+        void observe(
+            int iteration,
+            double elapsed_ms,
+            bool topology_changed);
+        void arm_after_snapshot(int snapshot_iteration);
+        [[nodiscard]] TrainingStepRegressionMetrics
+        metrics() const noexcept;
+        void reset() noexcept;
+
+    private:
+        struct Sample {
+            int iteration = 0;
+            double elapsed_ms = 0.0;
+        };
+
+        [[nodiscard]] TrainingStepWindowMetrics
+        summarize(const std::deque<Sample>& samples) const noexcept;
+
+        std::size_t window_size_ = 100;
+        std::deque<Sample> steady_run_;
+        std::optional<TrainingStepWindowMetrics>
+            latest_steady_window_;
+        std::deque<Sample> post_resume_run_;
+        TrainingStepRegressionMetrics metrics_;
+        int snapshot_iteration_ = 0;
+        bool armed_ = false;
     };
 
     struct TrainingSnapshotCaptureRequest {
         int iteration;
-        // Optional externally assigned identity. CPU chapters may be
-        // pre-staged with this UUID while the optimizer is still running.
+        // Optional externally assigned identity. The bundle may reserve this
+        // UUID inter-step on the training thread; SCNG/SELM/PRMS themselves
+        // are captured later inside the measured safe-point window. That
+        // inter-step work can overlap rendering, never optimizer mutation.
         // A nil UUID asks the service to generate one during prepare().
         lfs::core::Uuid snapshot_uuid;
         // Optional origin for the one optimizer-pause clock. The caller sets
@@ -92,7 +162,8 @@ namespace lfs::training {
         // Runs inside the measured safe-point clock after all mutation streams
         // are quiescent. The callback must produce owned CPU chapter state and
         // stamp it with the supplied UUID.
-        std::function<lfs::Result<void>(
+        std::function<lfs::Result<
+            TrainingSnapshotCpuStateMetrics>(
             const lfs::core::Uuid&)>
             capture_additional_cpu_state;
     };
@@ -167,9 +238,17 @@ namespace lfs::training {
         operator=(const TrainingSnapshotService&) = delete;
         ~TrainingSnapshotService();
 
-        // Preparation runs before the measured optimizer pause: it records the
-        // exact LFKP layout, calibrates the rig once, and pre-faults immutable
-        // pageable staging plus the bounded pinned ring.
+        // Trainer-start initialization owns the cold CUDA work: D2H stream,
+        // full-mutating-stream calibration, and bounded pinned ring. It must
+        // complete before prepare() is allowed onto a save path.
+        [[nodiscard]] lfs::Result<void>
+        initialize(
+            const TrainingSnapshotCaptureRequest& request);
+
+        // Preparation runs inter-step on the training thread (concurrent with
+        // rendering only): it records the exact LFKP layout and pre-faults
+        // immutable pageable staging. The residual stall is measured and
+        // bounded independently from the safe-point pause.
         [[nodiscard]] lfs::Result<PreparedTrainingSnapshot>
         prepare(const TrainingSnapshotCaptureRequest& request);
 

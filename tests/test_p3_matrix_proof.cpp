@@ -4,6 +4,7 @@
  */
 
 #include "io/project_document.hpp"
+#include "p5_matrix_rows.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/bilateral_grid.hpp"
 #include "training/components/ppisp.hpp"
@@ -12,6 +13,7 @@
 #include "training/components/sparsity_optimizer.hpp"
 #include "training/strategies/mcmc.hpp"
 #include "training/strategies/strategy_factory.hpp"
+#include "training_snapshot_test_helpers.hpp"
 
 #include <gtest/gtest.h>
 
@@ -560,6 +562,8 @@ namespace {
         std::string ppisp_bytes;
         std::string controller_bytes;
         std::string sparsity_bytes;
+        lfs::training::test::
+            AdamMomentByteSnapshot optimizer_moments;
     };
 
     MatrixCheckpoint make_matrix_checkpoint() {
@@ -619,6 +623,51 @@ namespace {
         lfs::training::MCMC strategy(*model);
         strategy.initialize(
             result.parameters.optimization);
+        {
+            const auto parameter_types =
+                lfs::training::AdamOptimizer::
+                    all_param_types();
+            for (std::size_t index = 0;
+                 index < parameter_types.size();
+                 ++index) {
+                auto* state =
+                    strategy.get_optimizer()
+                        .get_state_mutable(
+                            parameter_types[index]);
+                EXPECT_NE(state, nullptr);
+                if (!state) {
+                    continue;
+                }
+                state->step_count =
+                    static_cast<std::int64_t>(
+                        100 + index);
+                EXPECT_EQ(
+                    cudaMemset(
+                        state->exp_avg.data_ptr(),
+                        static_cast<int>(11 + index),
+                        state->exp_avg.bytes()),
+                    cudaSuccess);
+                EXPECT_EQ(
+                    cudaMemset(
+                        state->exp_avg_sq.data_ptr(),
+                        static_cast<int>(31 + index),
+                        state->exp_avg_sq.bytes()),
+                    cudaSuccess);
+                state->exp_avg_scale.fill_(
+                    0.25f +
+                    static_cast<float>(index));
+                state->exp_avg_sq_scale.fill_(
+                    0.5f +
+                    static_cast<float>(index));
+            }
+            EXPECT_EQ(
+                cudaDeviceSynchronize(),
+                cudaSuccess);
+        }
+        result.optimizer_moments =
+            lfs::training::test::
+                capture_optimizer_moment_bytes(
+                    strategy.get_optimizer());
         lfs::training::BilateralGrid bilateral(
             1, 2, 3, 4,
             result.parameters.optimization
@@ -967,7 +1016,7 @@ namespace {
     struct MatrixRows {
         std::set<std::string> p3;
         std::set<std::string> p4;
-        std::map<std::string, std::string> deferred;
+        std::set<std::string> p5;
     };
 
     MatrixRows read_matrix_rows() {
@@ -1001,7 +1050,7 @@ namespace {
             } else if (phase == "P4") {
                 result.p4.insert(row_id);
             } else {
-                result.deferred.emplace(row_id, phase);
+                result.p5.insert(row_id);
             }
         }
         return result;
@@ -1545,7 +1594,7 @@ namespace {
         ASSERT_TRUE(second_save)
             << lfs::format_for_developer(second_save.error());
         EXPECT_EQ(second_save->rewritten_chunks, 1u);
-        EXPECT_EQ(second_save->reused_chunks, 8u);
+        EXPECT_EQ(second_save->reused_chunks, 13u);
 
         auto second_open = ProjectDocument::open(path);
         ASSERT_TRUE(second_open)
@@ -2181,11 +2230,11 @@ namespace {
         EXPECT_EQ(
             **fully_restored,
             expected_checkpoint.iteration);
-        EXPECT_NE(
-            target_strategy.get_optimizer()
-                .get_state(
-                    lfs::training::ParamType::Means),
-            nullptr);
+        lfs::training::test::
+            expect_optimizer_moment_bytes_equal(
+                expected_checkpoint
+                    .optimizer_moments,
+                target_strategy.get_optimizer());
         prove_ckpt("CKPT-129");
         EXPECT_NE(
             target_strategy.get_scheduler(), nullptr);
@@ -2490,11 +2539,12 @@ namespace {
             << "P4 matrix registries must change whenever the normative "
                "ownership matrix gains or loses a CKPT/PPIS row";
 
-        ASSERT_FALSE(matrix_rows.deferred.empty());
-        for (const auto& [row_id, phase] : matrix_rows.deferred) {
-            EXPECT_EQ(phase, "P5")
-                << row_id << " has no explicit later-phase tag";
-        }
+        const std::set<std::string> registered_p5(
+            lfs::test::P5_MATRIX_ROWS.begin(),
+            lfs::test::P5_MATRIX_ROWS.end());
+        EXPECT_EQ(matrix_rows.p5, registered_p5)
+            << "P5_MATRIX_ROWS must change whenever the normative "
+               "ownership matrix gains or loses a P5 row";
 
         // Gap #12 is normative prose rather than a Markdown table row. These
         // assertions are its machine-checkable coverage entries.
@@ -2600,7 +2650,7 @@ namespace {
             << lfs::format_for_developer(
                    second_save.error());
         EXPECT_EQ(second_save->rewritten_chunks, 1u);
-        EXPECT_EQ(second_save->reused_chunks, 5u);
+        EXPECT_EQ(second_save->reused_chunks, 10u);
 
         auto reopened =
             ProjectDocument::open(project_path);

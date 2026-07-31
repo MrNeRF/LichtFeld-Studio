@@ -59,6 +59,8 @@ namespace lfs::vis {
     class WindowManager;
 
     namespace gui {
+        class NativeScenePanel;
+
         struct GuiHitTestResult {
             bool blocks_pointer = false;
             bool blocks_mouse_button = false;
@@ -126,6 +128,12 @@ namespace lfs::vis {
 
             [[nodiscard]] VisualizerImpl* getViewer() const { return viewer_; }
             [[nodiscard]] std::unordered_map<std::string, bool>* getWindowStates() { return &window_states_; }
+            [[nodiscard]] const std::unordered_map<std::string, bool>&
+            getWindowStates() const {
+                return window_states_;
+            }
+            [[nodiscard]] std::string scenePanelActiveTab() const;
+            void setScenePanelActiveTab(std::string_view tab);
 
             void requestExitConfirmation();
             bool isExitConfirmationPending() const;
@@ -321,6 +329,7 @@ namespace lfs::vis {
 
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
+            std::shared_ptr<NativeScenePanel> native_scene_panel_;
             uint64_t panel_frame_serial_ = 0;
             uint8_t ui_layout_settle_frames_ = 0;
             EditorContextUpdateStamp last_editor_context_update_stamp_;

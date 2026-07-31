@@ -69,6 +69,12 @@ namespace lfs::training {
             }
         }
 
+        class SnapshotReplanRequired final
+            : public std::runtime_error {
+        public:
+            using std::runtime_error::runtime_error;
+        };
+
         [[nodiscard]] lfs::Error snapshot_error(
             const lfs::ErrorCode code,
             std::string detail,
@@ -428,6 +434,125 @@ namespace lfs::training {
 
     } // namespace
 
+    TrainingStepRegressionTracker::
+        TrainingStepRegressionTracker(
+            const std::size_t window_size)
+        : window_size_(window_size) {
+        if (window_size_ == 0) {
+            throw std::invalid_argument(
+                "Training step regression window must be non-zero");
+        }
+    }
+
+    TrainingStepWindowMetrics
+    TrainingStepRegressionTracker::summarize(
+        const std::deque<Sample>& samples) const noexcept {
+        TrainingStepWindowMetrics result;
+        if (samples.empty()) {
+            return result;
+        }
+        result.first_iteration =
+            samples.front().iteration;
+        result.last_iteration =
+            samples.back().iteration;
+        result.sample_count = samples.size();
+        result.mean_ms =
+            std::accumulate(
+                samples.begin(), samples.end(), 0.0,
+                [](const double sum,
+                   const Sample& sample) {
+                    return sum + sample.elapsed_ms;
+                }) /
+            static_cast<double>(samples.size());
+        return result;
+    }
+
+    void TrainingStepRegressionTracker::observe(
+        const int iteration,
+        const double elapsed_ms,
+        const bool topology_changed) {
+        if (!(elapsed_ms >= 0.0) ||
+            !std::isfinite(elapsed_ms)) {
+            return;
+        }
+        if (topology_changed) {
+            steady_run_.clear();
+            if (armed_ &&
+                iteration > snapshot_iteration_ &&
+                !metrics_.gate_evaluated) {
+                post_resume_run_.clear();
+                metrics_.post_resume = {};
+            }
+            return;
+        }
+
+        steady_run_.push_back({
+            .iteration = iteration,
+            .elapsed_ms = elapsed_ms,
+        });
+        if (steady_run_.size() > window_size_) {
+            steady_run_.pop_front();
+        }
+        if (steady_run_.size() == window_size_) {
+            latest_steady_window_ =
+                summarize(steady_run_);
+        }
+
+        if (!armed_ ||
+            iteration <= snapshot_iteration_ ||
+            metrics_.gate_evaluated) {
+            return;
+        }
+        post_resume_run_.push_back({
+            .iteration = iteration,
+            .elapsed_ms = elapsed_ms,
+        });
+        metrics_.post_resume =
+            summarize(post_resume_run_);
+        if (post_resume_run_.size() != window_size_) {
+            return;
+        }
+        if (metrics_.pre_snapshot.sample_count !=
+                window_size_ ||
+            !(metrics_.pre_snapshot.mean_ms > 0.0)) {
+            return;
+        }
+        metrics_.regression_percent =
+            (metrics_.post_resume.mean_ms /
+                 metrics_.pre_snapshot.mean_ms -
+             1.0) *
+            100.0;
+        metrics_.gate_evaluated = true;
+        metrics_.within_gate =
+            metrics_.regression_percent <= 10.0;
+    }
+
+    void TrainingStepRegressionTracker::arm_after_snapshot(
+        const int snapshot_iteration) {
+        snapshot_iteration_ = snapshot_iteration;
+        post_resume_run_.clear();
+        metrics_ = {};
+        if (latest_steady_window_) {
+            metrics_.pre_snapshot =
+                *latest_steady_window_;
+        }
+        armed_ = true;
+    }
+
+    TrainingStepRegressionMetrics
+    TrainingStepRegressionTracker::metrics() const noexcept {
+        return metrics_;
+    }
+
+    void TrainingStepRegressionTracker::reset() noexcept {
+        steady_run_.clear();
+        latest_steady_window_.reset();
+        post_resume_run_.clear();
+        metrics_ = {};
+        snapshot_iteration_ = 0;
+        armed_ = false;
+    }
+
     struct PreparedTrainingSnapshot::Impl {
         lfs::core::Uuid snapshot_uuid;
         int planned_iteration = 0;
@@ -494,7 +619,9 @@ namespace lfs::training {
         }
 
         void initialize_resources(
-            const std::vector<TensorLayoutWitness>& layout) {
+            const std::vector<TensorLayoutWitness>& layout,
+            const std::span<const cudaStream_t>
+                mutating_streams) {
             if (!d2h_stream) {
                 require_cuda(
                     cudaStreamCreateWithFlags(
@@ -502,7 +629,7 @@ namespace lfs::training {
                         cudaStreamNonBlocking),
                     "create snapshot D2H stream");
             }
-            calibrate_once(layout);
+            calibrate_once(layout, mutating_streams);
             if (slots.empty()) {
                 slots.resize(config.ring_slots);
                 for (auto& slot : slots) {
@@ -526,6 +653,11 @@ namespace lfs::training {
                         drain_loop(stop);
                     });
             }
+            ensure_sh_scratch(layout);
+        }
+
+        void ensure_sh_scratch(
+            const std::vector<TensorLayoutWitness>& layout) {
             const bool needs_sh_scratch =
                 std::ranges::any_of(
                     layout,
@@ -545,12 +677,32 @@ namespace lfs::training {
         }
 
         void calibrate_once(
-            const std::vector<TensorLayoutWitness>& layout) {
+            const std::vector<TensorLayoutWitness>& layout,
+            const std::span<const cudaStream_t>
+                mutating_streams) {
             std::scoped_lock lock(calibration_mutex);
             if (process_pinned_d2h_bytes_per_second > 0.0) {
                 measured_bandwidth =
                     process_pinned_d2h_bytes_per_second;
                 return;
+            }
+            std::set<cudaStream_t> streams;
+            for (const auto stream : mutating_streams) {
+                if (stream) {
+                    streams.insert(stream);
+                }
+            }
+            for (const auto& witness : layout) {
+                if (witness.source_device ==
+                        lfs::core::Device::CUDA &&
+                    witness.source_stream) {
+                    streams.insert(witness.source_stream);
+                }
+            }
+            for (const auto stream : streams) {
+                require_cuda(
+                    cudaStreamSynchronize(stream),
+                    "sync snapshot calibration mutating stream");
             }
             const auto source = std::ranges::max_element(
                 layout, std::less{},
@@ -570,12 +722,6 @@ namespace lfs::training {
                 measured_bandwidth =
                     std::numeric_limits<double>::infinity();
                 return;
-            }
-            if (source->source_stream) {
-                require_cuda(
-                    cudaStreamSynchronize(
-                        source->source_stream),
-                    "sync calibration source stream");
             }
             const auto bytes = static_cast<std::size_t>(
                 std::min<std::uint64_t>(
@@ -1000,6 +1146,8 @@ namespace lfs::training {
                 record = capture->error.empty();
             }
             capture->drained_condition.notify_all();
+            double pause_p95_ms = 0.0;
+            std::size_t p95_n = 0;
             {
                 std::scoped_lock lock(metrics_mutex);
                 active_capture = false;
@@ -1011,7 +1159,18 @@ namespace lfs::training {
                     aggregate.pause_p95_ms =
                         percentile_95(
                             pause_samples);
+                    aggregate.p95_n =
+                        pause_samples.size();
+                    pause_p95_ms =
+                        aggregate.pause_p95_ms;
+                    p95_n = aggregate.p95_n;
                 }
+            }
+            if (record) {
+                LOG_INFO(
+                    "Training snapshot pause metric: "
+                    "p95={:.3f}ms p95_n={}",
+                    pause_p95_ms, p95_n);
             }
         }
 
@@ -1053,6 +1212,8 @@ namespace lfs::training {
         }
 
         TrainingSnapshotServiceConfig config;
+        bool initialized = false;
+        double initialization_ms = 0.0;
         cudaStream_t d2h_stream = nullptr;
         void* sh_scratch = nullptr;
         std::vector<RingSlot> slots;
@@ -1258,7 +1419,7 @@ namespace lfs::training {
                         expected.descriptor) ||
                     offset != expected.payload_offset ||
                     bytes != expected.payload_bytes) {
-                    throw std::runtime_error(
+                    throw SnapshotReplanRequired(
                         "Snapshot layout changed after preparation; request must be coalesced and replanned");
                 }
 
@@ -1487,9 +1648,97 @@ namespace lfs::training {
     TrainingSnapshotService::~TrainingSnapshotService() =
         default;
 
+    lfs::Result<void> TrainingSnapshotService::initialize(
+        const TrainingSnapshotCaptureRequest& request) {
+        if (impl_->initialized) {
+            return {};
+        }
+        try {
+            const auto begin = Clock::now();
+            std::vector<TensorLayoutWitness> layout;
+            CountingStreamBuffer buffer;
+            std::ostream destination(&buffer);
+            CountingTensorSink sink(layout);
+            {
+                lfs::core::TensorSerializationSinkScope
+                    scope(sink);
+                auto serialized = serialize_checkpoint(
+                    destination, request.iteration,
+                    request.strategy, request.params,
+                    request.bilateral_grid, request.ppisp,
+                    request.ppisp_controller_pool,
+                    request.sparsity_optimizer);
+                if (!serialized) {
+                    return lfs::Status::failure(
+                        std::move(serialized)
+                            .error()
+                            .with_context(
+                                "initialize training snapshot layout",
+                                LFS_SOURCE_SITE_CURRENT()));
+                }
+                if (!destination ||
+                    buffer.size() !=
+                        serialized->bytes ||
+                    buffer.size() == 0) {
+                    return lfs::Status::failure(
+                        snapshot_error(
+                            lfs::ErrorCode::DataLoss,
+                            "Snapshot initialization produced an invalid checkpoint layout",
+                            LFS_SOURCE_SITE_CURRENT()));
+                }
+            }
+            impl_->initialize_resources(
+                layout, request.mutating_streams);
+            impl_->initialization_ms =
+                Milliseconds(Clock::now() - begin)
+                    .count();
+            impl_->initialized = true;
+            {
+                std::scoped_lock lock(
+                    impl_->metrics_mutex);
+                impl_->aggregate.last
+                    .service_initialization_ms =
+                    impl_->initialization_ms;
+                impl_->aggregate.last
+                    .measured_pinned_d2h_bytes_per_second =
+                    impl_->measured_bandwidth;
+                impl_->aggregate.last
+                    .pinned_peak_bytes =
+                    impl_->config.ring_slots *
+                    impl_->config.band_bytes;
+            }
+            LOG_INFO(
+                "Training snapshot service initialized off the save path: "
+                "init={:.3f}ms pinned={} bytes raw_pinned_D2H={:.3f}GiB/s "
+                "mutating_streams={}",
+                impl_->initialization_ms,
+                impl_->config.ring_slots *
+                    impl_->config.band_bytes,
+                impl_->measured_bandwidth /
+                    static_cast<double>(
+                        1024ull * 1024 * 1024),
+                request.mutating_streams.size());
+            return {};
+        } catch (const std::exception& error) {
+            // LFS-CENSUS-OK(empty-catch): normalize the exception into a typed snapshot error.
+            return lfs::Status::failure(snapshot_error(
+                lfs::ErrorCode::Internal,
+                std::format(
+                    "Initialize training snapshot service failed: {}",
+                    error.what()),
+                LFS_SOURCE_SITE_CURRENT()));
+        }
+    }
+
     lfs::Result<PreparedTrainingSnapshot>
     TrainingSnapshotService::prepare(
         const TrainingSnapshotCaptureRequest& request) {
+        if (!impl_->initialized) {
+            return snapshot_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "Training snapshot service must be initialized before prepare",
+                LFS_SOURCE_SITE_CURRENT());
+        }
         try {
             const auto begin = Clock::now();
             auto prepared =
@@ -1538,7 +1787,7 @@ namespace lfs::training {
 
             prepared->baseline_rss_bytes =
                 read_rss_bytes();
-            impl_->initialize_resources(
+            impl_->ensure_sh_scratch(
                 prepared->layout);
 
             if (prepared->checkpoint_bytes >
@@ -1615,9 +1864,13 @@ namespace lfs::training {
                 prepared->metrics.host_rss_delta_bytes <=
                 prepared->checkpoint_bytes +
                     HOST_MEMORY_GATE_HEADROOM_BYTES;
-            prepared->metrics.preparation_ms =
+            prepared->metrics.service_initialization_ms =
+                impl_->initialization_ms;
+            prepared->metrics.prepare_stall_ms =
                 Milliseconds(Clock::now() - begin)
                     .count();
+            prepared->metrics.preparation_ms =
+                prepared->metrics.prepare_stall_ms;
             prepared->metrics
                 .measured_pinned_d2h_bytes_per_second =
                 impl_->measured_bandwidth;
@@ -1735,6 +1988,12 @@ namespace lfs::training {
                         lfs::format_for_developer(
                             captured.error()));
                 }
+                pending->metrics.scng_ms =
+                    captured->scng_ms;
+                pending->metrics.selm_ms =
+                    captured->selm_ms;
+                pending->metrics.prms_ms =
+                    captured->prms_ms;
                 std::scoped_lock lock(pending->mutex);
                 pending->stamps.push_back(PieceStamp{
                     .snapshot_uuid =
@@ -1779,7 +2038,7 @@ namespace lfs::training {
                         prepared.impl_
                             ->checkpoint_bytes ||
                     !sink.complete()) {
-                    throw std::runtime_error(
+                    throw SnapshotReplanRequired(
                         "Checkpoint layout changed after preparation");
                 }
                 sink.finish();
@@ -1834,20 +2093,31 @@ namespace lfs::training {
                 Milliseconds(
                     pause_end - pause_begin)
                     .count();
+            pending->metrics.cold_path_ms =
+                pending->metrics.pause_ms +
+                (pending->metrics.cold_first_snapshot
+                     ? pending->metrics
+                           .prepare_stall_ms
+                     : 0.0);
             pending->metrics
                 .pause_within_rig_gate =
                 pending->metrics.pause_ms <=
+                pending->metrics.rig_gate_ms;
+            pending->metrics
+                .cold_path_within_rig_gate =
+                pending->metrics.cold_path_ms <=
                 pending->metrics.rig_gate_ms;
             pending->pause_end = pause_end;
 
             LOG_INFO(
                 "Training snapshot {} iter {}: "
                 "bytes={} device_bytes={} pause={:.3f}ms "
-                "prepare={:.3f}ms cold_first={} "
+                "prepare_stall={:.3f}ms cold_path={:.3f}ms "
+                "cold_first={} "
                 "(safe_entry={:.3f} sync={:.3f} cpu_state={:.3f} "
                 "serialize+issue={:.3f} "
                 "last_d2h_wait={:.3f}) gate={:.3f}ms "
-                "raw_pinned_D2H={:.3f}GiB/s pause={} "
+                "raw_pinned_D2H={:.3f}GiB/s pause={} cold_path={} "
                 "host_delta={} host_gate={}",
                 pending->metrics.snapshot_uuid
                     .to_string(),
@@ -1856,7 +2126,8 @@ namespace lfs::training {
                 pending->metrics
                     .device_snapshot_bytes,
                 pending->metrics.pause_ms,
-                pending->metrics.preparation_ms,
+                pending->metrics.prepare_stall_ms,
+                pending->metrics.cold_path_ms,
                 pending->metrics.cold_first_snapshot,
                 pending->metrics
                     .safe_point_entry_ms,
@@ -1876,10 +2147,24 @@ namespace lfs::training {
                         .pause_within_rig_gate
                     ? "PASS"
                     : "FAIL",
+                pending->metrics
+                        .cold_path_within_rig_gate
+                    ? "PASS"
+                    : "FAIL",
                 pending->metrics.host_rss_delta_bytes,
                 pending->metrics.host_ram_within_gate
                     ? "PASS"
                     : "FAIL");
+            LOG_INFO(
+                "Training snapshot {} CPU chapters in safe point: "
+                "SCNG={:.3f}ms SELM={:.3f}ms PRMS={:.3f}ms total={:.3f}ms",
+                pending->metrics.snapshot_uuid
+                    .to_string(),
+                pending->metrics.scng_ms,
+                pending->metrics.selm_ms,
+                pending->metrics.prms_ms,
+                pending->metrics
+                    .additional_cpu_state_ms);
 
             impl_->mark_issuing_complete(pending);
             prepared.impl_.reset();
@@ -1905,8 +2190,15 @@ namespace lfs::training {
                     lock,
                     [&] { return pending->drained; });
             }
+            const bool requires_replan =
+                dynamic_cast<
+                    const SnapshotReplanRequired*>(
+                    &error) != nullptr;
             return snapshot_error(
-                lfs::ErrorCode::Internal,
+                requires_replan
+                    ? lfs::ErrorCode::
+                          FailedPrecondition
+                    : lfs::ErrorCode::Internal,
                 pending->error,
                 LFS_SOURCE_SITE_CURRENT());
         }

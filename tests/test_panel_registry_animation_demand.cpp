@@ -6,6 +6,7 @@
 
 #include <visualizer/gui/panel_registry.hpp>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -166,4 +167,59 @@ TEST_F(PanelRegistryAnimationDemandTest, BringPanelToFrontIgnoresDisabledFloatin
     auto panels = PanelRegistry::instance().get_panels_for_space(PanelSpace::Floating);
     ASSERT_EQ(panels.size(), 1u);
     EXPECT_EQ(panels.front().id, "test.second");
+}
+
+TEST_F(PanelRegistryAnimationDemandTest,
+       ProjectRectangleSurvivesMachineLocalScaleClamping) {
+    using namespace lfs::vis::gui;
+
+    registerRecordingPanel("test.project_rect");
+    const PanelProjectState requested{
+        .id = "test.project_rect",
+        .space = PanelSpace::Floating,
+        .float_x = -900.0f,
+        .float_y = 1700.0f,
+        .float_user_height = 333.0f,
+        .float_last_bounds_valid = true,
+        .float_last_x = -900.0f,
+        .float_last_y = 1700.0f,
+        .float_last_w = 640.0f,
+        .float_last_h = 333.0f,
+        .float_auto_center = false,
+        .float_stack_order = 17,
+    };
+    auto& registry = PanelRegistry::instance();
+    registry.apply_project_state({requested});
+
+    // UI scale is user-global. Its live resize must not rewrite the project
+    // rectangle merely because this machine applies a different scale/clamp.
+    registry.rescale_floating_panels(1.0f, 2.0f);
+    const auto captured = registry.capture_project_state();
+    const auto found = std::ranges::find(
+        captured, requested.id,
+        &PanelProjectState::id);
+    ASSERT_NE(found, captured.end());
+    EXPECT_FLOAT_EQ(found->float_x, requested.float_x);
+    EXPECT_FLOAT_EQ(found->float_y, requested.float_y);
+    EXPECT_FLOAT_EQ(
+        found->float_user_height,
+        requested.float_user_height);
+    EXPECT_FLOAT_EQ(
+        found->float_last_w,
+        requested.float_last_w);
+    EXPECT_FLOAT_EQ(
+        found->float_last_h,
+        requested.float_last_h);
+
+    registry.clear_project_state_retention();
+    const auto live = registry.capture_project_state();
+    const auto live_found = std::ranges::find(
+        live, requested.id,
+        &PanelProjectState::id);
+    ASSERT_NE(live_found, live.end());
+    EXPECT_FLOAT_EQ(
+        live_found->float_user_height,
+        requested.float_user_height * 2.0f);
+    EXPECT_FALSE(
+        live_found->float_last_bounds_valid);
 }

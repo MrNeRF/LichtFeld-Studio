@@ -3080,6 +3080,18 @@ namespace lfs::vis::gui {
 
     GuiManager::~GuiManager() = default;
 
+    std::string GuiManager::scenePanelActiveTab() const {
+        return native_scene_panel_
+                   ? native_scene_panel_->projectActiveTab()
+                   : "scene";
+    }
+
+    void GuiManager::setScenePanelActiveTab(
+        const std::string_view tab) {
+        if (native_scene_panel_)
+            native_scene_panel_->setProjectActiveTab(tab);
+    }
+
     void GuiManager::initCustomCursors() {
         if (!pipette_cursor_) {
             // The tip of the dropper sits near the lower-left corner in the 24x24 Tabler asset.
@@ -3831,8 +3843,10 @@ namespace lfs::vis::gui {
 
         // Floating panels (self-managed windows)
         {
-            auto panel = std::static_pointer_cast<IPanel>(
-                std::make_shared<NativeScenePanel>(&rmlui_manager_));
+            native_scene_panel_ =
+                std::make_shared<NativeScenePanel>(&rmlui_manager_);
+            auto panel =
+                std::static_pointer_cast<IPanel>(native_scene_panel_);
             native_panel_storage_.push_back(panel);
             reg_panel("lfs.scene", "Scene", panel, PanelSpace::SceneHeader, 0);
         }

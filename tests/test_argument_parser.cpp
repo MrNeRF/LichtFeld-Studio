@@ -4,7 +4,9 @@
 
 #include <gtest/gtest.h>
 
+#include "app/application_startup.hpp"
 #include "core/argument_parser.hpp"
+#include "core/parameters.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -22,6 +24,47 @@ namespace {
     }
 
 } // namespace
+
+TEST(ApplicationStartupTest,
+     GuiProjectResumeFailsLoudlyWithTypedLifecycleError) {
+    lfs::core::param::TrainingParameters params;
+    params.resume_project = "session.licht";
+    params.optimization.headless = false;
+
+    auto result =
+        lfs::app::validate_application_startup(params);
+    ASSERT_FALSE(result);
+    EXPECT_EQ(
+        result.error().code(),
+        lfs::ErrorCode::Unsupported);
+    EXPECT_EQ(
+        result.error().domain(),
+        lfs::ErrorDomain::App);
+    EXPECT_EQ(
+        result.error().user_message(),
+        "This .licht project cannot be resumed in the GUI yet.");
+    EXPECT_NE(
+        result.error().detail().find(
+            "lifecycle phase"),
+        std::string_view::npos);
+}
+
+TEST(ApplicationStartupTest,
+     HeadlessProjectAndLegacyResumeRemainAccepted) {
+    lfs::core::param::TrainingParameters params;
+    params.resume_project = "session.licht";
+    params.optimization.headless = true;
+    EXPECT_TRUE(
+        lfs::app::validate_application_startup(
+            params));
+
+    params.resume_project.reset();
+    params.resume_checkpoint = "legacy.resume";
+    params.optimization.headless = false;
+    EXPECT_TRUE(
+        lfs::app::validate_application_startup(
+            params));
+}
 
 TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     const auto data_path = make_test_path("lfs_arg_parser_default_data");

@@ -233,6 +233,24 @@ namespace lfs::vis::gui {
         uint64_t float_stack_order;
     };
 
+    struct PanelProjectState {
+        std::string id;
+        std::string parent_id;
+        PanelSpace space = PanelSpace::Floating;
+        int order = 100;
+        bool enabled = true;
+        float float_x = NAN;
+        float float_y = NAN;
+        float float_user_height = 0.0f;
+        bool float_last_bounds_valid = false;
+        float float_last_x = 0.0f;
+        float float_last_y = 0.0f;
+        float float_last_w = 0.0f;
+        float float_last_h = 0.0f;
+        bool float_auto_center = true;
+        uint64_t float_stack_order = 0;
+    };
+
     struct PanelSnapshot {
         size_t index;
         IPanel* panel;
@@ -318,6 +336,14 @@ namespace lfs::vis::gui {
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelDetails> get_panel(const std::string& id);
+        [[nodiscard]] std::vector<PanelProjectState>
+        capture_project_state() const;
+        void apply_project_state(
+            const std::vector<PanelProjectState>& state);
+        // Drops only retained, unclamped project rectangles. Live panel
+        // placement and registration are unchanged.
+        void clear_project_state_retention();
+        [[nodiscard]] uint64_t registration_revision() const;
         bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& id, bool enabled);
         bool bring_panel_to_front(const std::string& id);
@@ -352,7 +378,13 @@ namespace lfs::vis::gui {
         std::vector<PanelInfo> panels_;
         std::unordered_set<std::string> disabled_overrides_;
         mutable std::unordered_map<std::string, PollCacheEntry> poll_cache_;
+        // A monitor or user-global UI scale may clamp the live rectangle.
+        // Preserve the requested project rectangle until the user explicitly
+        // repositions or resizes the panel.
+        std::unordered_map<std::string, PanelProjectState>
+            requested_project_floating_state_;
         uint64_t next_float_stack_order_ = 1;
+        uint64_t registration_revision_ = 0;
         int8_t floating_cursor_dir_x_ = 0;
         int8_t floating_cursor_dir_y_ = 0;
     };

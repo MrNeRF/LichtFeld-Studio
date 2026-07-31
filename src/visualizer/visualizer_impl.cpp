@@ -1104,6 +1104,13 @@ namespace lfs::vis {
     void VisualizerImpl::setupEventHandlers() {
         using namespace lfs::core::events;
 
+        internal::GuiPanelsReady::when(
+            [this](const auto& event) {
+                gui_session_restore_.onPanelsReady(
+                    event.registration_revision);
+                tryApplyProjectSessionRestore();
+            });
+
         // NOTE: Training control commands (Start/Pause/Resume/Stop/SaveCheckpoint)
         // are now handled by TrainerManager::setupEventHandlers()
 
@@ -1409,6 +1416,19 @@ namespace lfs::vis {
                 plugin_load_status.detail);
             assert(!plugin_load_started || !gui_manager_->isStartupBlockingInput());
             startup_plugin_load_status_revision_ = plugin_load_status.revision;
+        }
+        if (startup_plugin_preload_started_ &&
+            !gui_panels_ready_emitted_ &&
+            project::
+                pluginPreloadTerminalForGuiPanels(
+                    startup_plugin_preload_started_,
+                    plugin_load_status.state)) {
+            gui_panels_ready_emitted_ = true;
+            internal::GuiPanelsReady{
+                .registration_revision =
+                    gui::PanelRegistry::instance()
+                        .registration_revision()}
+                .emit();
         }
 
         // Process MCP work queue
@@ -1809,6 +1829,10 @@ namespace lfs::vis {
         if (!python::is_plugin_preload_running()) {
             python::flush_signals();
         }
+        if (!gui_frame_rendered_) {
+            gui_session_restore_.onFirstGuiFrame();
+            tryApplyProjectSessionRestore();
+        }
         gui_frame_rendered_ = true;
         update_work_processed_ = false;
 
@@ -2074,6 +2098,50 @@ namespace lfs::vis {
         pending_auto_train_ = false;
         pending_training_action_ = PendingTrainingAction::None;
         pending_training_action_posted_ = false;
+        gui_session_restore_.clear();
+        retained_project_session_ = {};
+        camera_bookmarks_.clear();
+        gui::PanelRegistry::instance()
+            .clear_project_state_retention();
+    }
+
+    lfs::Result<
+        lfs::io::project::ProjectSessionChapters>
+    VisualizerImpl::captureProjectSession() const {
+        return project::captureGuiSession(
+            *this, retained_project_session_,
+            camera_bookmarks_);
+    }
+
+    lfs::Result<void>
+    VisualizerImpl::stageProjectSessionRestore(
+        lfs::io::project::ProjectSessionChapters
+            chapters) {
+        if (auto staged =
+                gui_session_restore_.stage(
+                    std::move(chapters));
+            !staged) {
+            return staged;
+        }
+        tryApplyProjectSessionRestore();
+        return {};
+    }
+
+    void VisualizerImpl::
+        tryApplyProjectSessionRestore() {
+        auto prepared =
+            gui_session_restore_.takeReady();
+        if (!prepared)
+            return;
+        auto retained = prepared->chapters;
+        project::applyGuiSession(
+            *this, *prepared, camera_bookmarks_);
+        retained_project_session_ =
+            std::move(retained);
+        LOG_INFO(
+            "Applied GUIL/VIEW/EDTR/SEQR/METR after first GUI frame and panel registration revision {}",
+            gui_session_restore_
+                .panelsRegistrationRevision());
     }
 
     void VisualizerImpl::wakeMainLoop() const {

@@ -293,29 +293,30 @@ namespace lfs::sequencer {
         std::sort(keyframes_.begin(), keyframes_.end());
     }
 
+    nlohmann::json Timeline::saveToJson() const {
+        nlohmann::json json{
+            {"version", JSON_VERSION},
+            {"clip_duration", clip_duration_},
+            {"keyframes", nlohmann::json::array()},
+        };
+        for (const auto& keyframe : keyframes_) {
+            if (keyframe.is_loop_point)
+                continue;
+            json["keyframes"].push_back(
+                {{"time", keyframe.time},
+                 {"position", {keyframe.position.x, keyframe.position.y, keyframe.position.z}},
+                 {"rotation", {keyframe.rotation.w, keyframe.rotation.x, keyframe.rotation.y, keyframe.rotation.z}},
+                 {"focal_length_mm", keyframe.focal_length_mm},
+                 {"easing", static_cast<int>(keyframe.easing)}});
+        }
+        if (clip_)
+            json["animation_clip"] = clip_->toJson();
+        return json;
+    }
+
     bool Timeline::saveToJson(const std::string& path) const {
         try {
             const std::filesystem::path path_fs = lfs::core::utf8_to_path(path);
-            nlohmann::json j;
-            j["version"] = JSON_VERSION;
-            j["clip_duration"] = clip_duration_;
-            j["keyframes"] = nlohmann::json::array();
-
-            for (const auto& kf : keyframes_) {
-                if (kf.is_loop_point)
-                    continue;
-                j["keyframes"].push_back({{"time", kf.time},
-                                          {"position", {kf.position.x, kf.position.y, kf.position.z}},
-                                          {"rotation", {kf.rotation.w, kf.rotation.x, kf.rotation.y, kf.rotation.z}},
-                                          {"focal_length_mm", kf.focal_length_mm},
-                                          {"easing", static_cast<int>(kf.easing)}});
-            }
-
-            // Save animation clip if present
-            if (clip_) {
-                j["animation_clip"] = clip_->toJson();
-            }
-
             if (auto result = lfs::io::ensure_output_parent_directory(path_fs); !result) {
                 LOG_ERROR("Failed to prepare timeline output '{}': {}", path, result.error().format());
                 return false;
@@ -329,7 +330,7 @@ namespace lfs::sequencer {
                 LOG_ERROR("Failed to open timeline file: {}", path);
                 return false;
             }
-            file << j.dump(2);
+            file << saveToJson().dump(2);
             file.close();
             if (!file) {
                 LOG_ERROR("Failed to write complete timeline file: {}", path);
@@ -343,6 +344,92 @@ namespace lfs::sequencer {
             return true;
         } catch (const std::exception& e) {
             LOG_ERROR("Timeline save failed: {}", e.what());
+            return false;
+        }
+    }
+
+    bool Timeline::loadFromJson(const nlohmann::json& json) {
+        try {
+            if (!json.is_object())
+                throw std::runtime_error("Timeline JSON root must be an object");
+            if (json.contains("version")) {
+                if (!json["version"].is_number_integer())
+                    throw std::runtime_error("Timeline version must be an integer");
+                const int version = json["version"].get<int>();
+                if (version <= 0 || version > JSON_VERSION)
+                    throw std::runtime_error("Unsupported timeline JSON version");
+            }
+            if (!json.contains("keyframes") || !json["keyframes"].is_array())
+                throw std::runtime_error("Timeline JSON must contain a keyframes array");
+            if (json["keyframes"].size() > MAX_TIMELINE_KEYFRAMES)
+                throw std::runtime_error("Timeline JSON exceeds the keyframe-count budget");
+
+            std::vector<Keyframe> loaded_keyframes;
+            loaded_keyframes.reserve(json["keyframes"].size());
+            KeyframeId next_keyframe_id = 1;
+            for (const auto& saved_keyframe : json["keyframes"]) {
+                if (!saved_keyframe.is_object())
+                    throw std::runtime_error("Timeline keyframe must be an object");
+                const auto position =
+                    jsonFloatArray<3>(saved_keyframe.at("position"), "Timeline position");
+                const auto rotation =
+                    jsonFloatArray<4>(saved_keyframe.at("rotation"), "Timeline rotation");
+                if (!saved_keyframe.at("easing").is_number_integer())
+                    throw std::runtime_error("Timeline easing must be an integer");
+
+                Keyframe keyframe;
+                keyframe.id = next_keyframe_id++;
+                keyframe.time =
+                    jsonFloat(saved_keyframe.at("time"), "Timeline keyframe time");
+                keyframe.position = {position[0], position[1], position[2]};
+                keyframe.rotation = {rotation[0], rotation[1], rotation[2], rotation[3]};
+                keyframe.focal_length_mm = clampFocalLength(
+                    jsonFloat(saved_keyframe.at("focal_length_mm"),
+                              "Timeline focal length"));
+                keyframe.easing =
+                    static_cast<EasingType>(saved_keyframe.at("easing").get<int>());
+                validateKeyframe(keyframe);
+                loaded_keyframes.push_back(keyframe);
+            }
+
+            std::unique_ptr<AnimationClip> loaded_clip;
+            if (json.contains("animation_clip")) {
+                loaded_clip =
+                    std::make_unique<AnimationClip>(
+                        AnimationClip::fromJson(json["animation_clip"]));
+            }
+
+            std::sort(loaded_keyframes.begin(), loaded_keyframes.end());
+            float loaded_duration = DEFAULT_CLIP_DURATION_SECONDS;
+            if (json.contains("clip_duration")) {
+                loaded_duration =
+                    jsonFloat(json["clip_duration"], "Timeline clip_duration");
+                if (loaded_duration < 0.0f ||
+                    loaded_duration > MAX_SEQUENCER_TIME_SECONDS) {
+                    throw std::runtime_error(
+                        "Timeline clip_duration is outside the supported range");
+                }
+                if (loaded_duration == 0.0f)
+                    loaded_duration = DEFAULT_CLIP_DURATION_SECONDS;
+            }
+            float real_end_time = 0.0f;
+            for (auto it = loaded_keyframes.rbegin();
+                 it != loaded_keyframes.rend(); ++it) {
+                if (!it->is_loop_point) {
+                    real_end_time = it->time;
+                    break;
+                }
+            }
+            const float final_duration = std::max(
+                {MIN_CLIP_DURATION_SECONDS, loaded_duration, real_end_time});
+
+            keyframes_ = std::move(loaded_keyframes);
+            clip_ = std::move(loaded_clip);
+            next_keyframe_id_ = next_keyframe_id;
+            clip_duration_ = final_duration;
+            return true;
+        } catch (const std::exception& error) {
+            LOG_ERROR("Timeline JSON restore failed: {}", error.what());
             return false;
         }
     }
@@ -366,74 +453,10 @@ namespace lfs::sequencer {
             if (bytes_read != file_size)
                 throw std::runtime_error("Timeline JSON changed size while it was being read");
 
-            const auto j = nlohmann::json::parse(
+            const auto json = nlohmann::json::parse(
                 json_bytes.begin(), json_bytes.begin() + static_cast<ptrdiff_t>(bytes_read));
-            if (!j.is_object())
-                throw std::runtime_error("Timeline JSON root must be an object");
-            if (j.contains("version")) {
-                if (!j["version"].is_number_integer())
-                    throw std::runtime_error("Timeline version must be an integer");
-                const int version = j["version"].get<int>();
-                if (version <= 0 || version > JSON_VERSION)
-                    throw std::runtime_error("Unsupported timeline JSON version");
-            }
-            if (!j.contains("keyframes") || !j["keyframes"].is_array())
-                throw std::runtime_error("Timeline JSON must contain a keyframes array");
-            if (j["keyframes"].size() > MAX_TIMELINE_KEYFRAMES)
-                throw std::runtime_error("Timeline JSON exceeds the keyframe-count budget");
-
-            std::vector<Keyframe> loaded_keyframes;
-            loaded_keyframes.reserve(j["keyframes"].size());
-            KeyframeId next_keyframe_id = 1;
-
-            for (const auto& jkf : j["keyframes"]) {
-                if (!jkf.is_object())
-                    throw std::runtime_error("Timeline keyframe must be an object");
-                const auto position = jsonFloatArray<3>(jkf.at("position"), "Timeline position");
-                const auto rotation = jsonFloatArray<4>(jkf.at("rotation"), "Timeline rotation");
-                if (!jkf.at("easing").is_number_integer())
-                    throw std::runtime_error("Timeline easing must be an integer");
-                Keyframe kf;
-                kf.id = next_keyframe_id++;
-                kf.time = jsonFloat(jkf.at("time"), "Timeline keyframe time");
-                kf.position = {position[0], position[1], position[2]};
-                kf.rotation = {rotation[0], rotation[1], rotation[2], rotation[3]};
-                kf.focal_length_mm = clampFocalLength(
-                    jsonFloat(jkf.at("focal_length_mm"), "Timeline focal length"));
-                kf.easing = static_cast<EasingType>(jkf.at("easing").get<int>());
-                validateKeyframe(kf);
-                loaded_keyframes.push_back(kf);
-            }
-
-            std::unique_ptr<AnimationClip> loaded_clip;
-            if (j.contains("animation_clip")) {
-                loaded_clip = std::make_unique<AnimationClip>(AnimationClip::fromJson(j["animation_clip"]));
-            }
-
-            std::sort(loaded_keyframes.begin(), loaded_keyframes.end());
-            // Pre-v4 fallback: setClipDuration floors to realEndTime() so loaded keyframes
-            // outside the default 30s clip remain visible.
-            float loaded_duration = DEFAULT_CLIP_DURATION_SECONDS;
-            if (j.contains("clip_duration")) {
-                loaded_duration = jsonFloat(j["clip_duration"], "Timeline clip_duration");
-                if (loaded_duration < 0.0f || loaded_duration > MAX_SEQUENCER_TIME_SECONDS)
-                    throw std::runtime_error("Timeline clip_duration is outside the supported range");
-                if (loaded_duration == 0.0f)
-                    loaded_duration = DEFAULT_CLIP_DURATION_SECONDS;
-            }
-            float real_end_time = 0.0f;
-            for (auto it = loaded_keyframes.rbegin(); it != loaded_keyframes.rend(); ++it) {
-                if (!it->is_loop_point) {
-                    real_end_time = it->time;
-                    break;
-                }
-            }
-            const float final_duration = std::max({MIN_CLIP_DURATION_SECONDS, loaded_duration, real_end_time});
-
-            keyframes_ = std::move(loaded_keyframes);
-            clip_ = std::move(loaded_clip);
-            next_keyframe_id_ = next_keyframe_id;
-            clip_duration_ = final_duration;
+            if (!loadFromJson(json))
+                return false;
             LOG_INFO("Loaded {} keyframes from {}", keyframes_.size(), path);
             return true;
         } catch (const std::exception& e) {

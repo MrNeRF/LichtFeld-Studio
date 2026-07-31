@@ -12,6 +12,7 @@
 #include <RmlUi/Core/EventListener.h>
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace Rml {
     class Element;
@@ -48,6 +49,8 @@ namespace lfs::vis::gui {
         bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
         void reloadRmlResources() override;
         void releaseRendererResources() override { host_.releaseRendererResources(); }
+        [[nodiscard]] std::string projectActiveTab() const;
+        void setProjectActiveTab(std::string_view tab);
 
     private:
         struct EventListener : Rml::EventListener {

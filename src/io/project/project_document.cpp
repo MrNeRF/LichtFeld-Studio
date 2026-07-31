@@ -112,11 +112,14 @@ namespace lfs::io::project {
             return absolute.lexically_normal();
         }
 
-        bool is_p3_fourcc(const Fourcc fourcc) noexcept {
+        bool is_project_managed_fourcc(const Fourcc fourcc) noexcept {
             return fourcc == FOURCC_PROJ || fourcc == FOURCC_PRMS ||
                    fourcc == FOURCC_SCNG || fourcc == FOURCC_SELM ||
                    fourcc == FOURCC_REFS || fourcc == FOURCC_SPLT ||
-                   fourcc == FOURCC_PCLD || fourcc == FOURCC_MESH;
+                   fourcc == FOURCC_PCLD || fourcc == FOURCC_MESH ||
+                   fourcc == FOURCC_GUIL || fourcc == FOURCC_VIEW ||
+                   fourcc == FOURCC_EDTR || fourcc == FOURCC_SEQR ||
+                   fourcc == FOURCC_METR;
         }
 
         bool is_lazy_binary_fourcc(const Fourcc fourcc) noexcept {
@@ -126,7 +129,9 @@ namespace lfs::io::project {
         bool is_singleton_fourcc(const Fourcc fourcc) noexcept {
             return fourcc == FOURCC_PROJ || fourcc == FOURCC_PRMS ||
                    fourcc == FOURCC_SCNG || fourcc == FOURCC_SELM ||
-                   fourcc == FOURCC_REFS;
+                   fourcc == FOURCC_REFS || fourcc == FOURCC_GUIL ||
+                   fourcc == FOURCC_VIEW || fourcc == FOURCC_EDTR ||
+                   fourcc == FOURCC_SEQR || fourcc == FOURCC_METR;
         }
 
         ChunkKey singleton_key(const Fourcc fourcc,
@@ -149,6 +154,131 @@ namespace lfs::io::project {
             result.igs_current = result.igs_session;
             result.dataset.centralize_dataset = "off";
             result.dataset.loading_params = lfs::core::param::LoadingParams{};
+            return result;
+        }
+
+        lfs::Result<std::vector<ReferenceOwnerBinding>>
+        session_reference_bindings(
+            const ViewSessionChapter& view,
+            const SequencerSessionChapter& sequencer) {
+            using Json = JsonChapterDom::Json;
+            std::vector<ReferenceOwnerBinding> result;
+
+            const auto parse_uuid =
+                [](const Json& value,
+                   const std::string_view field)
+                -> lfs::Result<lfs::core::Uuid> {
+                if (!value.is_string()) {
+                    return fail<lfs::core::Uuid>(
+                        lfs::ErrorCode::DataLoss,
+                        "A session reference UUID has the wrong type.",
+                        "Reference UUIDs must use canonical UUID strings",
+                        field);
+                }
+                const auto parsed =
+                    lfs::core::Uuid::from_string(
+                        value.get<std::string>());
+                if (!parsed || parsed->is_nil()) {
+                    return fail<lfs::core::Uuid>(
+                        lfs::ErrorCode::DataLoss,
+                        "A session reference UUID is invalid.",
+                        "Reference UUIDs must be canonical and non-nil",
+                        field);
+                }
+                return *parsed;
+            };
+
+            const auto settings =
+                view.dom().get_json("render_settings");
+            if (!settings || !settings->is_object()) {
+                return fail<
+                    std::vector<ReferenceOwnerBinding>>(
+                    lfs::ErrorCode::DataLoss,
+                    "VIEW render settings are missing.",
+                    "The environment reference owner cannot be indexed",
+                    "VIEW.render_settings");
+            }
+            const auto environment =
+                settings->find(
+                    "environment_reference_uuid");
+            if (environment != settings->end() &&
+                !environment->is_null()) {
+                auto uuid = parse_uuid(
+                    *environment,
+                    "VIEW.render_settings.environment_reference_uuid");
+                if (!uuid) {
+                    return std::move(uuid).error();
+                }
+                result.push_back({
+                    .reference_uuid = *uuid,
+                    .chapter = "VIEW",
+                    .owner_uuid = std::nullopt,
+                    .field =
+                        "render_settings.environment_reference_uuid",
+                });
+            }
+
+            const auto clips =
+                sequencer.dom().get_json(
+                    "ply_sequences");
+            if (!clips || !clips->is_array()) {
+                return fail<
+                    std::vector<ReferenceOwnerBinding>>(
+                    lfs::ErrorCode::DataLoss,
+                    "SEQR PLY clips are missing.",
+                    "The PLY-directory reference owners cannot be indexed",
+                    "SEQR.ply_sequences");
+            }
+            for (const auto& clip : *clips) {
+                if (!clip.is_object()) {
+                    return fail<
+                        std::vector<ReferenceOwnerBinding>>(
+                        lfs::ErrorCode::DataLoss,
+                        "A SEQR PLY clip is invalid.",
+                        "PLY clips must be JSON objects",
+                        "SEQR.ply_sequences");
+                }
+                const auto reference =
+                    clip.find(
+                        "directory_reference_uuid");
+                if (reference == clip.end() ||
+                    reference->is_null()) {
+                    continue;
+                }
+                auto reference_uuid = parse_uuid(
+                    *reference,
+                    "SEQR.ply_sequences.directory_reference_uuid");
+                if (!reference_uuid) {
+                    return std::move(
+                               reference_uuid)
+                        .error();
+                }
+                const auto owner =
+                    clip.find("node_uuid");
+                if (owner == clip.end()) {
+                    return fail<
+                        std::vector<ReferenceOwnerBinding>>(
+                        lfs::ErrorCode::DataLoss,
+                        "A referenced SEQR PLY clip has no stable owner.",
+                        "directory_reference_uuid requires node_uuid",
+                        "SEQR.ply_sequences.node_uuid");
+                }
+                auto owner_uuid = parse_uuid(
+                    *owner,
+                    "SEQR.ply_sequences.node_uuid");
+                if (!owner_uuid) {
+                    return std::move(owner_uuid)
+                        .error();
+                }
+                result.push_back({
+                    .reference_uuid =
+                        *reference_uuid,
+                    .chapter = "SEQR",
+                    .owner_uuid = *owner_uuid,
+                    .field =
+                        "ply_sequences.directory_reference_uuid",
+                });
+            }
             return result;
         }
 
@@ -537,6 +667,11 @@ namespace lfs::io::project {
         SceneGraphChapter scene_graph;
         SelectionChapter selection;
         ParametersChapter parameters;
+        GuiLayoutChapter gui_layout;
+        ViewSessionChapter view;
+        EditorSessionChapter editor;
+        SequencerSessionChapter sequencer;
+        MetricsChapter metrics;
 
         std::unordered_map<lfs::core::Uuid, SplatChapterPayload> splats;
         std::unordered_map<lfs::core::Uuid, PointCloudPayload> point_clouds;
@@ -669,8 +804,31 @@ namespace lfs::io::project {
             if (!pending) {
                 return lfs::Result<void>::failure(std::move(pending).error());
             }
+            if (auto valid = gui_layout.validate(); !valid) {
+                return valid;
+            }
+            if (auto valid = view.validate(); !valid) {
+                return valid;
+            }
+            if (auto valid = editor.validate(); !valid) {
+                return valid;
+            }
+            if (auto valid = sequencer.validate(); !valid) {
+                return valid;
+            }
+            if (auto valid = metrics.validate(); !valid) {
+                return valid;
+            }
+            auto session_bindings =
+                session_reference_bindings(
+                    view, sequencer);
+            if (!session_bindings) {
+                return lfs::Result<void>::failure(
+                    std::move(session_bindings).error());
+            }
             auto reverse = build_reverse_reference_index(
-                references, candidate_project, scene_graph, parameters);
+                references, candidate_project, scene_graph, parameters,
+                *session_bindings);
             if (!reverse) {
                 return lfs::Result<void>::failure(
                     std::move(reverse).error());
@@ -1220,6 +1378,11 @@ namespace lfs::io::project {
         bool have_scene = false;
         bool have_selection = false;
         bool have_parameters = false;
+        bool have_gui_layout = false;
+        bool have_view = false;
+        bool have_editor = false;
+        bool have_sequencer = false;
+        bool have_metrics = false;
 
         for (const auto& row : shared_reader->chunks()) {
             if (!row.is_live()) {
@@ -1273,7 +1436,7 @@ namespace lfs::io::project {
                     .info = row,
                     .proof = std::move(*proof),
                 });
-            if (!is_p3_fourcc(row.key.fourcc)) {
+            if (!is_project_managed_fourcc(row.key.fourcc)) {
                 continue;
             }
             if (row.chunk_version != P3_CHUNK_VERSION) {
@@ -1365,6 +1528,71 @@ namespace lfs::io::project {
                 }
                 impl->parameters = std::move(*chapter);
                 have_parameters = true;
+            } else if (row.key.fourcc == FOURCC_GUIL) {
+                if (have_gui_layout) {
+                    return fail<ProjectDocument>(
+                        lfs::ErrorCode::DataLoss,
+                        "The project contains duplicate GUIL chapters.",
+                        "Only one GUIL instance is allowed", "GUIL");
+                }
+                auto chapter = GuiLayoutChapter::from_bytes(*bytes);
+                if (!chapter) {
+                    return std::move(chapter).error();
+                }
+                impl->gui_layout = std::move(*chapter);
+                have_gui_layout = true;
+            } else if (row.key.fourcc == FOURCC_VIEW) {
+                if (have_view) {
+                    return fail<ProjectDocument>(
+                        lfs::ErrorCode::DataLoss,
+                        "The project contains duplicate VIEW chapters.",
+                        "Only one VIEW instance is allowed", "VIEW");
+                }
+                auto chapter = ViewSessionChapter::from_bytes(*bytes);
+                if (!chapter) {
+                    return std::move(chapter).error();
+                }
+                impl->view = std::move(*chapter);
+                have_view = true;
+            } else if (row.key.fourcc == FOURCC_EDTR) {
+                if (have_editor) {
+                    return fail<ProjectDocument>(
+                        lfs::ErrorCode::DataLoss,
+                        "The project contains duplicate EDTR chapters.",
+                        "Only one EDTR instance is allowed", "EDTR");
+                }
+                auto chapter = EditorSessionChapter::from_bytes(*bytes);
+                if (!chapter) {
+                    return std::move(chapter).error();
+                }
+                impl->editor = std::move(*chapter);
+                have_editor = true;
+            } else if (row.key.fourcc == FOURCC_SEQR) {
+                if (have_sequencer) {
+                    return fail<ProjectDocument>(
+                        lfs::ErrorCode::DataLoss,
+                        "The project contains duplicate SEQR chapters.",
+                        "Only one SEQR instance is allowed", "SEQR");
+                }
+                auto chapter = SequencerSessionChapter::from_bytes(*bytes);
+                if (!chapter) {
+                    return std::move(chapter).error();
+                }
+                impl->sequencer = std::move(*chapter);
+                have_sequencer = true;
+            } else if (row.key.fourcc == FOURCC_METR) {
+                if (have_metrics) {
+                    return fail<ProjectDocument>(
+                        lfs::ErrorCode::DataLoss,
+                        "The project contains duplicate METR chapters.",
+                        "Only one METR instance is allowed", "METR");
+                }
+                auto chapter = MetricsChapter::from_bytes(*bytes);
+                if (!chapter) {
+                    return std::move(chapter).error();
+                }
+                impl->metrics = std::move(*chapter);
+                have_metrics = true;
             } else if (row.key.fourcc == FOURCC_SPLT) {
                 auto payload = SplatChapterPayload::from_lfsp(*bytes);
                 if (!payload) {
@@ -1460,6 +1688,53 @@ namespace lfs::io::project {
     ParametersChapter& ProjectDocument::edit_parameters() noexcept {
         impl_->mark(FOURCC_PRMS);
         return impl_->parameters;
+    }
+
+    const GuiLayoutChapter& ProjectDocument::gui_layout() const noexcept {
+        return impl_->gui_layout;
+    }
+
+    GuiLayoutChapter& ProjectDocument::edit_gui_layout() noexcept {
+        impl_->mark(FOURCC_GUIL);
+        return impl_->gui_layout;
+    }
+
+    const ViewSessionChapter& ProjectDocument::view() const noexcept {
+        return impl_->view;
+    }
+
+    ViewSessionChapter& ProjectDocument::edit_view() noexcept {
+        impl_->mark(FOURCC_VIEW);
+        return impl_->view;
+    }
+
+    const EditorSessionChapter& ProjectDocument::editor() const noexcept {
+        return impl_->editor;
+    }
+
+    EditorSessionChapter& ProjectDocument::edit_editor() noexcept {
+        impl_->mark(FOURCC_EDTR);
+        return impl_->editor;
+    }
+
+    const SequencerSessionChapter&
+    ProjectDocument::sequencer() const noexcept {
+        return impl_->sequencer;
+    }
+
+    SequencerSessionChapter&
+    ProjectDocument::edit_sequencer() noexcept {
+        impl_->mark(FOURCC_SEQR);
+        return impl_->sequencer;
+    }
+
+    const MetricsChapter& ProjectDocument::metrics() const noexcept {
+        return impl_->metrics;
+    }
+
+    MetricsChapter& ProjectDocument::edit_metrics() noexcept {
+        impl_->mark(FOURCC_METR);
+        return impl_->metrics;
     }
 
     const LazyChunkValue*
@@ -1809,6 +2084,11 @@ namespace lfs::io::project {
         const ChunkKey scene_key = impl_->key(FOURCC_SCNG);
         const ChunkKey selection_key = impl_->key(FOURCC_SELM);
         const ChunkKey parameters_key = impl_->key(FOURCC_PRMS);
+        const ChunkKey gui_layout_key = impl_->key(FOURCC_GUIL);
+        const ChunkKey view_key = impl_->key(FOURCC_VIEW);
+        const ChunkKey editor_key = impl_->key(FOURCC_EDTR);
+        const ChunkKey sequencer_key = impl_->key(FOURCC_SEQR);
+        const ChunkKey metrics_key = impl_->key(FOURCC_METR);
 
         if (impl_->dirty_or_new(references_key)) {
             add_encoded(references_key, impl_->references.to_bytes(),
@@ -1829,6 +2109,30 @@ namespace lfs::io::project {
             }
             add_encoded(selection_key, std::move(*bytes),
                         selection_options());
+        }
+        if (impl_->dirty_or_new(gui_layout_key)) {
+            add_encoded(gui_layout_key, impl_->gui_layout.to_bytes(),
+                        json_options());
+        }
+        if (impl_->dirty_or_new(view_key)) {
+            add_encoded(view_key, impl_->view.to_bytes(),
+                        json_options());
+        }
+        if (impl_->dirty_or_new(editor_key)) {
+            add_encoded(editor_key, impl_->editor.to_bytes(),
+                        json_options());
+        }
+        if (impl_->dirty_or_new(sequencer_key)) {
+            add_encoded(sequencer_key, impl_->sequencer.to_bytes(),
+                        json_options());
+        }
+        if (impl_->dirty_or_new(metrics_key)) {
+            auto bytes = impl_->metrics.to_bytes();
+            if (!bytes) {
+                return std::move(bytes).error();
+            }
+            add_encoded(metrics_key, std::move(*bytes),
+                        json_options());
         }
 
         for (const auto& [uuid, payload] : impl_->splats) {
@@ -1926,6 +2230,11 @@ namespace lfs::io::project {
             scene_key,
             selection_key,
             parameters_key,
+            gui_layout_key,
+            view_key,
+            editor_key,
+            sequencer_key,
+            metrics_key,
         };
         for (const auto& [uuid, ignored] : impl_->splats) {
             (void)ignored;
@@ -2040,7 +2349,7 @@ namespace lfs::io::project {
                     return std::move(result).error();
                 }
                 ++report.reused_chunks;
-            } else if (is_p3_fourcc(key.fourcc)) {
+            } else if (is_project_managed_fourcc(key.fourcc)) {
                 if (auto result = writer->erase(key); !result) {
                     return std::move(result).error();
                 }
@@ -2298,6 +2607,13 @@ namespace lfs::io::project {
             if (!reverse) {
                 return std::move(reverse).error();
             }
+            ProjectSessionChapters pending_session{
+                .gui_layout = impl_->gui_layout,
+                .editor = impl_->editor,
+                .view = impl_->view,
+                .sequencer = impl_->sequencer,
+                .metrics = impl_->metrics,
+            };
 
             ScenePayloadResolver resolver;
             resolver.splat =
@@ -2465,6 +2781,9 @@ namespace lfs::io::project {
                         checkpoint_header,
                     .trainer_state_pending =
                         checkpoint_uuid.has_value(),
+                    .pending_session =
+                        std::move(pending_session),
+                    .gui_session_pending = true,
                 };
             return ProjectHydrationPlan(std::move(plan));
         } catch (const std::bad_alloc& error) {
@@ -2514,10 +2833,20 @@ namespace lfs::io::project {
     lfs::Result<ReverseReferenceIndex>
     ProjectDocument::reverse_reference_index(
         const std::span<const ReferenceOwnerBinding> additional_bindings) const {
+        auto session_bindings =
+            session_reference_bindings(
+                impl_->view, impl_->sequencer);
+        if (!session_bindings) {
+            return std::move(session_bindings).error();
+        }
+        session_bindings->insert(
+            session_bindings->end(),
+            additional_bindings.begin(),
+            additional_bindings.end());
         return build_reverse_reference_index(
             impl_->references, impl_->project, impl_->scene_graph,
             impl_->parameters,
-            additional_bindings);
+            *session_bindings);
     }
 
 } // namespace lfs::io::project
