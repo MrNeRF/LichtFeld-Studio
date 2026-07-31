@@ -5,6 +5,7 @@
 
 #include "io/project_document.hpp"
 #include "p5_matrix_rows.hpp"
+#include "p8_matrix_session_fixture.hpp"
 #include "ppisp_fixture.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/bilateral_grid.hpp"
@@ -22,15 +23,18 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <regex>
 #include <set>
 #include <span>
 #include <sstream>
@@ -1018,6 +1022,7 @@ namespace {
         std::set<std::string> p3;
         std::set<std::string> p4;
         std::set<std::string> p5;
+        std::set<std::string> exclusions;
     };
 
     MatrixRows read_matrix_rows() {
@@ -1027,23 +1032,64 @@ namespace {
         EXPECT_TRUE(stream.is_open()) << path;
         MatrixRows result;
         std::string line;
+        std::string section;
         std::size_t line_number = 0;
         while (std::getline(stream, line)) {
             ++line_number;
+            if (line.starts_with("## `")) {
+                const auto close = line.find('`', 4);
+                section = close == std::string::npos
+                              ? std::string{}
+                              : line.substr(4, close - 4);
+                continue;
+            }
+            if (line == "## Exclusions") {
+                section = "EXCLUSIONS";
+                continue;
+            }
+            if (line.starts_with("## ")) {
+                section.clear();
+                continue;
+            }
             if (line.empty() || line.front() != '|') {
                 continue;
             }
             const auto cells = split_markdown_row(line);
-            if (cells.size() < 6 || cells[4].size() < 3 ||
-                cells[4].front() != '`' || cells[4].back() != '`') {
+            if (section == "EXCLUSIONS") {
+                if (cells.size() < 5 || cells[1] == "Excluded state" ||
+                    cells[1].starts_with("---")) {
+                    continue;
+                }
+                EXPECT_FALSE(cells[1].empty()) << "matrix line " << line_number;
+                EXPECT_FALSE(cells[2].empty()) << "matrix line " << line_number;
+                EXPECT_FALSE(cells[3].empty())
+                    << "Every exclusion needs an explicit not-serialized boundary proof at line "
+                    << line_number;
+                result.exclusions.insert(
+                    std::format("EXCLUDED-{}", line_number));
+                continue;
+            }
+            const std::string phase = phase_for_authority(section);
+            if (phase.empty() || cells.size() < 7 ||
+                cells[1] == "Field" || cells[1].starts_with("---")) {
+                continue;
+            }
+            const std::string expected_authority =
+                std::format("`{}`", section);
+            EXPECT_EQ(cells[4], expected_authority)
+                << "Every persisted-field row has exactly one authority, matching its chapter section, at line "
+                << line_number;
+            EXPECT_GE(cells[4].size(), 3u);
+            if (cells[4].size() < 3u) {
                 continue;
             }
             const std::string authority =
                 cells[4].substr(1, cells[4].size() - 2);
-            const std::string phase = phase_for_authority(authority);
-            if (phase.empty()) {
-                continue;
-            }
+            EXPECT_EQ(authority, section) << "matrix line " << line_number;
+            EXPECT_FALSE(cells[1].empty()) << "matrix line " << line_number;
+            EXPECT_FALSE(cells[2].empty()) << "matrix line " << line_number;
+            EXPECT_FALSE(cells[5].empty()) << "matrix line " << line_number;
+            EXPECT_FALSE(cells[6].empty()) << "matrix line " << line_number;
             const std::string row_id =
                 std::format("{}-{}", authority, line_number);
             if (phase == "P3") {
@@ -1057,9 +1103,179 @@ namespace {
         return result;
     }
 
-    TEST(P3MatrixProof, EveryAssignedRowSurvivesSaveLoadSave) {
+    std::string ownership_item(
+        const std::string_view chapter,
+        const std::string_view kind,
+        const std::string_view path) {
+        return std::format("{}|{}|{}", chapter, kind, path);
+    }
+
+    void collect_json_ownership_paths(
+        const Json& value,
+        const std::string& prefix,
+        std::set<std::string>& paths) {
+        if (value.is_object()) {
+            for (const auto& [key, child] : value.items()) {
+                const std::string path =
+                    prefix.empty() ? key : std::format("{}.{}", prefix, key);
+                paths.insert(path);
+                collect_json_ownership_paths(child, path, paths);
+            }
+            return;
+        }
+        if (!value.is_array()) {
+            return;
+        }
+        const std::string elements = std::format("{}[]", prefix);
+        paths.insert(elements);
+        for (const auto& child : value) {
+            collect_json_ownership_paths(child, elements, paths);
+        }
+    }
+
+    std::set<std::string> runtime_ownership_inventory(
+        const fs::path& project_path) {
+        auto reader = ProjectReader::open(project_path);
+        if (!reader) {
+            throw std::runtime_error(
+                lfs::format_for_developer(reader.error()));
+        }
+        const std::set<std::string> json_chapters{
+            "PROJ",
+            "PRMS",
+            "SCNG",
+            "REFS",
+            "GUIL",
+            "EDTR",
+            "VIEW",
+            "SEQR",
+        };
+        std::set<std::string> inventory;
+        for (const auto& row : reader->chunks()) {
+            if (row.row_kind != RowKind::Live) {
+                continue;
+            }
+            const std::string chapter = row.key.fourcc.to_string();
+            inventory.insert(ownership_item(chapter, "chunk", chapter));
+            if (!json_chapters.contains(chapter)) {
+                continue;
+            }
+            auto payload = reader->read_chunk(row);
+            if (!payload) {
+                throw std::runtime_error(
+                    lfs::format_for_developer(payload.error()));
+            }
+            const auto text = std::string(
+                reinterpret_cast<const char*>(payload->data()),
+                payload->size());
+            const Json root = Json::parse(text);
+            std::set<std::string> paths;
+            collect_json_ownership_paths(root, {}, paths);
+            for (auto path : paths) {
+                if (chapter == "PRMS" && path.starts_with("presets.")) {
+                    const auto strategy_end = path.find('.', 8);
+                    if (strategy_end != std::string::npos) {
+                        path.replace(8, strategy_end - 8, "*");
+                    }
+                }
+                inventory.insert(ownership_item(chapter, "json", path));
+            }
+        }
+        return inventory;
+    }
+
+    void assert_runtime_ownership_inventory(
+        const fs::path& project_path) {
+        const auto observed = runtime_ownership_inventory(project_path);
+        const auto write_inventory = [&](std::ostream& stream) {
+            for (const auto& item : observed) {
+                const auto first = item.find('|');
+                const auto second = item.find('|', first + 1);
+                const auto chapter = item.substr(0, first);
+                const auto kind = item.substr(first + 1, second - first - 1);
+                const auto path = item.substr(second + 1);
+                stream
+                    << "<!-- P8-RUNTIME chapter=" << chapter
+                    << " kind=" << kind
+                    << " path=" << path
+                    << " authority=" << chapter << " -->\n";
+            }
+        };
+        if (std::getenv("LFS_P8_PRINT_OWNERSHIP_INVENTORY") != nullptr) {
+            write_inventory(std::cout);
+        }
+        if (const char* output =
+                std::getenv("LFS_P8_OWNERSHIP_INVENTORY_OUTPUT");
+            output != nullptr && std::string_view(output).size() != 0) {
+            std::ofstream stream(output);
+            if (!stream) {
+                throw std::runtime_error(
+                    std::format("failed to open ownership inventory output {}", output));
+            }
+            write_inventory(stream);
+        }
+
+        const fs::path matrix_path =
+            fs::path(PROJECT_ROOT_PATH) / "docs/licht_ownership_matrix.md";
+        std::ifstream matrix(matrix_path);
+        ASSERT_TRUE(matrix.is_open()) << matrix_path;
+        const std::regex marker(
+            R"(<!-- P8-RUNTIME chapter=([A-Z0-9]{4}) kind=(chunk|json) path=([^ ]+) authority=([A-Z0-9]{4}) -->)");
+        std::map<std::string, std::set<std::string>> declarations;
+        std::string line;
+        while (std::getline(matrix, line)) {
+            std::smatch match;
+            if (!std::regex_match(line, match, marker)) {
+                continue;
+            }
+            declarations[ownership_item(match[1].str(), match[2].str(),
+                                        match[3].str())]
+                .insert(match[4].str());
+        }
+        std::set<std::string> documented;
+        for (const auto& [item, authorities] : declarations) {
+            EXPECT_EQ(authorities.size(), 1u)
+                << "A serialized item must have exactly one authority: " << item;
+            const auto chapter = item.substr(0, item.find('|'));
+            EXPECT_TRUE(authorities.contains(chapter))
+                << "Serialized item authority must match its chapter: " << item;
+            documented.insert(item);
+        }
+        EXPECT_EQ(documented, observed)
+            << "Runtime serialization added, removed, or renamed a field without updating the ownership inventory";
+    }
+
+    TEST(P8OwnershipMatrixRatchet,
+         EveryPersistedFieldHasOneAuthorityAndEveryExclusionHasProof) {
+        const MatrixRows rows = read_matrix_rows();
+        std::set<std::string> registered(
+            P3_MATRIX_ROWS.begin(), P3_MATRIX_ROWS.end());
+        registered.insert(
+            P4_CKPT_MATRIX_ROWS.begin(), P4_CKPT_MATRIX_ROWS.end());
+        registered.insert(
+            P4_PPIS_MATRIX_ROWS.begin(), P4_PPIS_MATRIX_ROWS.end());
+        registered.insert(
+            lfs::test::P5_MATRIX_ROWS.begin(),
+            lfs::test::P5_MATRIX_ROWS.end());
+        std::set<std::string> documented = rows.p3;
+        documented.insert(rows.p4.begin(), rows.p4.end());
+        documented.insert(rows.p5.begin(), rows.p5.end());
+        EXPECT_EQ(documented, registered)
+            << "Every normative persisted-field row must name an existing round-trip proof registry entry";
+        EXPECT_GE(rows.exclusions.size(), 20u)
+            << "Every intentionally non-serialized field group needs a concrete boundary proof";
+    }
+
+    TEST(P8OwnershipMatrixRatchet,
+         MaximallyPopulatedSerializedOutputMatchesOwnershipMatrix) {
         MatrixTemporaryDirectory temporary;
-        const fs::path path = temporary.path / "matrix-proof.licht";
+        const char* requested =
+            std::getenv("LFS_P8_OWNERSHIP_PROJECT_OUTPUT");
+        const fs::path path =
+            requested != nullptr && std::string_view(requested).size() != 0
+                ? fs::path(requested)
+                : temporary.path / "matrix-proof.licht";
+        fs::create_directories(path.parent_path());
 
         const Uuid project_uuid = matrix_uuid(1);
         const Uuid dataset_ref = matrix_uuid(2);
@@ -1545,6 +1761,28 @@ namespace {
             checkpoint_uuid,
             std::move(*checkpoint_payload)));
 
+        auto session = lfs::test::make_p8_matrix_session();
+        Json view = Json::parse(session.view.dom().dump());
+        view["render_settings"]["environment_reference_uuid"] =
+            environment_ref.to_string();
+        auto parsed_view = ViewSessionChapter::parse(view.dump());
+        ASSERT_TRUE(parsed_view)
+            << lfs::format_for_developer(parsed_view.error());
+        session.view = std::move(*parsed_view);
+        Json sequencer = Json::parse(session.sequencer.dom().dump());
+        sequencer["ply_sequences"][0]["directory_reference_uuid"] =
+            sequence_ref.to_string();
+        auto parsed_sequencer =
+            SequencerSessionChapter::parse(sequencer.dump());
+        ASSERT_TRUE(parsed_sequencer)
+            << lfs::format_for_developer(parsed_sequencer.error());
+        session.sequencer = std::move(*parsed_sequencer);
+        document->edit_gui_layout() = session.gui_layout;
+        document->edit_editor() = session.editor;
+        document->edit_view() = session.view;
+        document->edit_sequencer() = session.sequencer;
+        document->edit_metrics() = session.metrics;
+
         auto first_save =
             document->save(
                 path,
@@ -1552,6 +1790,7 @@ namespace {
                     100, 200, checkpoint_uuid));
         ASSERT_TRUE(first_save)
             << lfs::format_for_developer(first_save.error());
+        assert_runtime_ownership_inventory(path);
 
         auto first_open = ProjectDocument::open(path);
         ASSERT_TRUE(first_open)

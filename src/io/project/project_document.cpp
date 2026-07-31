@@ -135,6 +135,48 @@ namespace lfs::io::project {
                    fourcc == FOURCC_SEQR || fourcc == FOURCC_METR;
         }
 
+        bool has_unknown_json_root(const Fourcc fourcc,
+                                   const JsonChapterDom& dom) {
+            using Json = JsonChapterDom::Json;
+            const auto root = Json::parse(dom.dump());
+            if (!root.is_object()) {
+                return false;
+            }
+            std::set<std::string_view> known;
+            if (fourcc == FOURCC_PROJ) {
+                known = {"schema_version", "manifest", "project_uuid",
+                         "created_at_unix_ns", "modified_at_unix_ns",
+                         "dataset_reference_uuid", "project_lineage",
+                         "georeference", "embed_decisions", "provenance",
+                         "embedded_payloads"};
+            } else if (fourcc == FOURCC_REFS) {
+                known = {"schema_version", "references"};
+            } else if (fourcc == FOURCC_SCNG) {
+                known = {"schema_version", "nodes", "training_model_uuid"};
+            } else if (fourcc == FOURCC_PRMS) {
+                known = {"schema_version", "active_strategy", "presets",
+                         "dataset"};
+            } else if (fourcc == FOURCC_GUIL) {
+                known = {"version", "layouts"};
+            } else if (fourcc == FOURCC_VIEW) {
+                known = {"version", "render_settings", "panel_cameras",
+                         "navigation", "split", "camera_bookmarks", "tools",
+                         "sequencer_view", "active_camera_uuid"};
+            } else if (fourcc == FOURCC_EDTR) {
+                known = {"version", "open_files", "active_file", "vim_mode",
+                         "contains_embedded_secrets"};
+            } else if (fourcc == FOURCC_SEQR) {
+                known = {"version", "timeline", "ply_sequences", "playhead",
+                         "loop_mode", "playback_speed", "preferences"};
+            } else {
+                return false;
+            }
+            return std::ranges::any_of(
+                root.items(), [&](const auto& item) {
+                    return !known.contains(item.key());
+                });
+        }
+
         ChunkKey singleton_key(const Fourcc fourcc,
                                const lfs::core::Uuid& project_uuid) {
             return ChunkKey{.fourcc = fourcc, .instance_uuid = project_uuid};
@@ -648,6 +690,7 @@ namespace lfs::io::project {
         struct SourceRow {
             ChunkInfo info;
             CleanProof proof;
+            bool opaque = false;
 
             [[nodiscard]] lfs::Result<void>
             reuse(ProjectWriter& writer) const {
@@ -689,6 +732,10 @@ namespace lfs::io::project {
         std::map<ChunkKey, Hash128, ChunkKeyLess> content_hashes;
         std::set<ChunkKey, ChunkKeyLess> dirty;
         std::uint64_t dirty_epoch = 0;
+        bool missing_opaque_preservation_capability = false;
+        bool missing_retained_json_capability = false;
+        mutable std::vector<ProjectDocumentDegradedState>
+            degraded_states;
 
         [[nodiscard]] ChunkKey key(const Fourcc fourcc) const {
             return singleton_key(fourcc, project_uuid);
@@ -715,6 +762,7 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         validate(const ProjectChapter& candidate_project,
                  const std::map<ChunkKey, Hash128, ChunkKeyLess>& hashes) const {
+            degraded_states.clear();
             auto manifest = candidate_project.manifest();
             auto manifest_uuid = candidate_project.project_uuid();
             auto created = candidate_project.created_at_unix_ns();
@@ -850,6 +898,83 @@ namespace lfs::io::project {
             nodes_by_uuid.reserve(nodes->size());
             for (const auto& node : *nodes) {
                 nodes_by_uuid.emplace(node.uuid, &node);
+            }
+            const auto parse_session_uuid =
+                [](const JsonChapterDom::Json& value,
+                   const std::string_view field)
+                -> lfs::Result<lfs::core::Uuid> {
+                if (!value.is_string()) {
+                    return fail<lfs::core::Uuid>(
+                        lfs::ErrorCode::DataLoss,
+                        "A session camera UUID has the wrong type.",
+                        "Camera identities use canonical UUID strings",
+                        field);
+                }
+                const auto parsed = lfs::core::Uuid::from_string(
+                    value.get<std::string>());
+                if (!parsed || parsed->is_nil()) {
+                    return fail<lfs::core::Uuid>(
+                        lfs::ErrorCode::DataLoss,
+                        "A session camera UUID is invalid.",
+                        "Camera identities must be canonical and non-null",
+                        field);
+                }
+                return *parsed;
+            };
+
+            if (const auto active_camera =
+                    view.dom().get_json("active_camera_uuid");
+                active_camera && !active_camera->is_null()) {
+                auto uuid = parse_session_uuid(
+                    *active_camera, "VIEW.active_camera_uuid");
+                if (!uuid) {
+                    return lfs::Result<void>::failure(
+                        std::move(uuid).error());
+                }
+                const auto found = nodes_by_uuid.find(*uuid);
+                if (found == nodes_by_uuid.end() ||
+                    found->second->type != "camera") {
+                    degraded_states.push_back(
+                        ProjectDocumentDegradedState::MissingActiveCamera);
+                }
+            }
+
+            if (const auto timeline =
+                    sequencer.dom().get_json("timeline");
+                timeline && timeline->is_object()) {
+                const auto keyframes = timeline->find("keyframes");
+                if (keyframes != timeline->end() &&
+                    keyframes->is_array()) {
+                    for (const auto& keyframe : *keyframes) {
+                        if (!keyframe.is_object()) {
+                            continue;
+                        }
+                        const auto camera =
+                            keyframe.find("camera_uuid");
+                        if (camera == keyframe.end() ||
+                            camera->is_null()) {
+                            continue;
+                        }
+                        auto uuid = parse_session_uuid(
+                            *camera,
+                            "SEQR.timeline.keyframes.camera_uuid");
+                        if (!uuid) {
+                            return lfs::Result<void>::failure(
+                                std::move(uuid).error());
+                        }
+                        const auto found = nodes_by_uuid.find(*uuid);
+                        if (found == nodes_by_uuid.end() ||
+                            found->second->type != "camera") {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "A sequencer keyframe references a missing camera.",
+                                std::format(
+                                    "SEQR camera {} is absent from SCNG",
+                                    uuid->to_string()),
+                                "SEQR.timeline.keyframes.camera_uuid");
+                        }
+                    }
+                }
             }
             for (const auto& selected : selection.selected_node_uuids()) {
                 if (!nodes_by_uuid.contains(selected)) {
@@ -1416,20 +1541,37 @@ namespace lfs::io::project {
             if (!proof) {
                 return std::move(proof).error();
             }
-            if (is_lazy_binary_fourcc(row.key.fourcc)) {
-                if (row.chunk_version != P3_CHUNK_VERSION ||
-                    row.compression != Compression::Stored) {
-                    return fail<ProjectDocument>(
-                        lfs::ErrorCode::Unsupported,
-                        "This project uses an unsupported binary chapter encoding.",
-                        std::format(
-                            "{} chunk version {} compression {} must be "
-                            "version 1 stored bytes",
-                            row.key.fourcc.to_string(),
-                            row.chunk_version,
-                            static_cast<unsigned>(row.compression)),
-                        "chunk.binary_encoding");
+            const bool lazy_binary =
+                is_lazy_binary_fourcc(row.key.fourcc);
+            const bool managed =
+                is_project_managed_fourcc(row.key.fourcc);
+            const bool thumbnail =
+                row.key.fourcc == FOURCC_THMB;
+            const bool unsupported_known_encoding =
+                (managed || lazy_binary || thumbnail) &&
+                (row.chunk_version != P3_CHUNK_VERSION ||
+                 (lazy_binary &&
+                  row.compression != Compression::Stored));
+            const bool opaque =
+                unsupported_known_encoding ||
+                (!managed && !lazy_binary && !thumbnail);
+            if (opaque || thumbnail) {
+                impl->source_rows.emplace(
+                    row.key,
+                    Impl::SourceRow{
+                        .info = row,
+                        .proof = std::move(*proof),
+                        .opaque = opaque,
+                    });
+                if (opaque &&
+                    !shared_reader->commit()
+                         .required_writer_capabilities
+                         .contains(OPAQUE_CHUNK_PRESERVATION)) {
+                    impl->missing_opaque_preservation_capability = true;
                 }
+                continue;
+            }
+            if (lazy_binary) {
                 auto lazy = std::make_unique<LazyChunkValue::Impl>();
                 lazy->reader = shared_reader;
                 lazy->source = row;
@@ -1458,19 +1600,8 @@ namespace lfs::io::project {
                 Impl::SourceRow{
                     .info = row,
                     .proof = std::move(*proof),
+                    .opaque = false,
                 });
-            if (!is_project_managed_fourcc(row.key.fourcc)) {
-                continue;
-            }
-            if (row.chunk_version != P3_CHUNK_VERSION) {
-                return fail<ProjectDocument>(
-                    lfs::ErrorCode::Unsupported,
-                    "This project uses a newer core chapter version.",
-                    std::format("{} chunk version {} is unsupported",
-                                row.key.fourcc.to_string(),
-                                row.chunk_version),
-                    "chunk.chunk_version");
-            }
             if (is_singleton_fourcc(row.key.fourcc) &&
                 row.key.instance_uuid != impl->project_uuid) {
                 return fail<ProjectDocument>(
@@ -1505,6 +1636,13 @@ namespace lfs::io::project {
                     return std::move(chapter).error();
                 }
                 impl->project = std::move(*chapter);
+                if (has_unknown_json_root(
+                        FOURCC_PROJ, impl->project.dom()) &&
+                    !shared_reader->commit()
+                         .required_writer_capabilities
+                         .contains(RETAINED_JSON_FIELDS)) {
+                    impl->missing_retained_json_capability = true;
+                }
                 have_project = true;
             } else if (row.key.fourcc == FOURCC_REFS) {
                 if (have_references) {
@@ -1518,6 +1656,13 @@ namespace lfs::io::project {
                     return std::move(chapter).error();
                 }
                 impl->references = std::move(*chapter);
+                if (has_unknown_json_root(
+                        FOURCC_REFS, impl->references.dom()) &&
+                    !shared_reader->commit()
+                         .required_writer_capabilities
+                         .contains(RETAINED_JSON_FIELDS)) {
+                    impl->missing_retained_json_capability = true;
+                }
                 have_references = true;
             } else if (row.key.fourcc == FOURCC_SCNG) {
                 if (have_scene) {
@@ -1531,6 +1676,13 @@ namespace lfs::io::project {
                     return std::move(chapter).error();
                 }
                 impl->scene_graph = std::move(*chapter);
+                if (has_unknown_json_root(
+                        FOURCC_SCNG, impl->scene_graph.dom()) &&
+                    !shared_reader->commit()
+                         .required_writer_capabilities
+                         .contains(RETAINED_JSON_FIELDS)) {
+                    impl->missing_retained_json_capability = true;
+                }
                 have_scene = true;
             } else if (row.key.fourcc == FOURCC_SELM) {
                 if (have_selection) {
@@ -1557,6 +1709,13 @@ namespace lfs::io::project {
                     return std::move(chapter).error();
                 }
                 impl->parameters = std::move(*chapter);
+                if (has_unknown_json_root(
+                        FOURCC_PRMS, impl->parameters.dom()) &&
+                    !shared_reader->commit()
+                         .required_writer_capabilities
+                         .contains(RETAINED_JSON_FIELDS)) {
+                    impl->missing_retained_json_capability = true;
+                }
                 have_parameters = true;
             } else if (row.key.fourcc == FOURCC_GUIL) {
                 if (have_gui_layout) {
@@ -1570,6 +1729,13 @@ namespace lfs::io::project {
                     return std::move(chapter).error();
                 }
                 impl->gui_layout = std::move(*chapter);
+                if (has_unknown_json_root(
+                        FOURCC_GUIL, impl->gui_layout.dom()) &&
+                    !shared_reader->commit()
+                         .required_writer_capabilities
+                         .contains(RETAINED_JSON_FIELDS)) {
+                    impl->missing_retained_json_capability = true;
+                }
                 have_gui_layout = true;
             } else if (row.key.fourcc == FOURCC_VIEW) {
                 if (have_view) {
@@ -1583,6 +1749,13 @@ namespace lfs::io::project {
                     return std::move(chapter).error();
                 }
                 impl->view = std::move(*chapter);
+                if (has_unknown_json_root(
+                        FOURCC_VIEW, impl->view.dom()) &&
+                    !shared_reader->commit()
+                         .required_writer_capabilities
+                         .contains(RETAINED_JSON_FIELDS)) {
+                    impl->missing_retained_json_capability = true;
+                }
                 have_view = true;
             } else if (row.key.fourcc == FOURCC_EDTR) {
                 if (have_editor) {
@@ -1596,6 +1769,13 @@ namespace lfs::io::project {
                     return std::move(chapter).error();
                 }
                 impl->editor = std::move(*chapter);
+                if (has_unknown_json_root(
+                        FOURCC_EDTR, impl->editor.dom()) &&
+                    !shared_reader->commit()
+                         .required_writer_capabilities
+                         .contains(RETAINED_JSON_FIELDS)) {
+                    impl->missing_retained_json_capability = true;
+                }
                 have_editor = true;
             } else if (row.key.fourcc == FOURCC_SEQR) {
                 if (have_sequencer) {
@@ -1609,6 +1789,13 @@ namespace lfs::io::project {
                     return std::move(chapter).error();
                 }
                 impl->sequencer = std::move(*chapter);
+                if (has_unknown_json_root(
+                        FOURCC_SEQR, impl->sequencer.dom()) &&
+                    !shared_reader->commit()
+                         .required_writer_capabilities
+                         .contains(RETAINED_JSON_FIELDS)) {
+                    impl->missing_retained_json_capability = true;
+                }
                 have_sequencer = true;
             } else if (row.key.fourcc == FOURCC_METR) {
                 if (have_metrics) {
@@ -1699,6 +1886,11 @@ namespace lfs::io::project {
     const std::optional<std::filesystem::path>&
     ProjectDocument::source_path() const noexcept {
         return impl_->source_path;
+    }
+
+    std::span<const ProjectDocumentDegradedState>
+    ProjectDocument::degraded_states() const noexcept {
+        return impl_->degraded_states;
     }
 
     const lfs::core::Uuid&
@@ -2247,9 +2439,14 @@ namespace lfs::io::project {
         save_options.commit = CommitOptions{
             .kind = CommitKind::Autosave,
             .commit_uuid =
-                lfs::core::generate_uuid_v4(),
+                options.commit_uuid.is_nil()
+                    ? lfs::core::generate_uuid_v4()
+                    : options.commit_uuid,
             .snapshot_uuid = options.snapshot_uuid,
-            .wallclock_unix_ns = unix_time_ns(),
+            .wallclock_unix_ns =
+                options.wallclock_unix_ns == 0
+                    ? unix_time_ns()
+                    : options.wallclock_unix_ns,
             .min_reader_version =
                 impl_->source_reader
                     ? impl_->source_reader
@@ -2302,6 +2499,35 @@ namespace lfs::io::project {
         auto normalized = normalized_absolute_path(path);
         if (!normalized) {
             return std::move(normalized).error();
+        }
+        if (impl_->source_reader) {
+            const auto compatibility =
+                impl_->source_reader->write_compatibility();
+            if (!compatibility.safe) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::Unsupported,
+                    "This project is read-only in the current LichtFeld version.",
+                    std::format(
+                        "project save refused before writing bytes: {}",
+                        compatibility.reasons.empty()
+                            ? std::string{"unknown writer incompatibility"}
+                            : compatibility.reasons.front()),
+                    "commit.write_compatibility");
+            }
+        }
+        if (impl_->missing_opaque_preservation_capability) {
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::Unsupported,
+                "This project is read-only because it contains opaque chapters without a preservation declaration.",
+                "safe append requires required_writer_capabilities bit 5 (OPAQUE_CHUNK_PRESERVATION)",
+                "commit.required_writer_capabilities");
+        }
+        if (impl_->missing_retained_json_capability) {
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::Unsupported,
+                "This project is read-only because it contains retained JSON fields without a preservation declaration.",
+                "safe append requires required_writer_capabilities bit 6 (RETAINED_JSON_FIELDS)",
+                "commit.required_writer_capabilities");
         }
         if (!is_autosave && impl_->source_path &&
             *impl_->source_path != *normalized) {
@@ -2369,6 +2595,19 @@ namespace lfs::io::project {
         }
 
         CommitOptions commit = options.commit;
+        const bool retains_unknown_json =
+            has_unknown_json_root(FOURCC_PROJ, impl_->project.dom()) ||
+            has_unknown_json_root(FOURCC_REFS, impl_->references.dom()) ||
+            has_unknown_json_root(FOURCC_SCNG, impl_->scene_graph.dom()) ||
+            has_unknown_json_root(FOURCC_PRMS, impl_->parameters.dom()) ||
+            has_unknown_json_root(FOURCC_GUIL, impl_->gui_layout.dom()) ||
+            has_unknown_json_root(FOURCC_VIEW, impl_->view.dom()) ||
+            has_unknown_json_root(FOURCC_EDTR, impl_->editor.dom()) ||
+            has_unknown_json_root(FOURCC_SEQR, impl_->sequencer.dom());
+        if (retains_unknown_json) {
+            commit.extra_writer_capabilities.set(
+                RETAINED_JSON_FIELDS);
+        }
         if (commit.wallclock_unix_ns == 0) {
             commit.wallclock_unix_ns = unix_time_ns();
         }
@@ -2688,7 +2927,8 @@ namespace lfs::io::project {
             auto result = ProjectWriter::append(
                 *normalized,
                 AppendOptions{
-                    .compatibility = {},
+                    .compatibility =
+                        impl_->source_reader->reader_options(),
                     .index_compression = options.index_compression,
                     .disk_reserve_bytes = options.disk_reserve_bytes,
                     .boundary_observer = {},
@@ -2751,15 +2991,21 @@ namespace lfs::io::project {
                 if (encoded.contains(key)) {
                     continue;
                 }
-                auto result = is_autosave
-                                  ? writer
-                                        ->add_sidecar_base_reference(
-                                            source.info)
-                                  : source.reuse(*writer);
+                auto result =
+                    is_autosave
+                        ? writer->add_sidecar_base_reference(
+                              source.info)
+                        : (source.opaque
+                               ? source.carry_opaque(*writer)
+                               : source.reuse(*writer));
                 if (!result) {
                     return std::move(result).error();
                 }
-                ++report.reused_chunks;
+                if (source.opaque && !is_autosave) {
+                    ++report.opaque_chunks_carried;
+                } else {
+                    ++report.reused_chunks;
+                }
             } else if (
                 is_autosave &&
                 is_project_managed_fourcc(
@@ -2940,6 +3186,31 @@ namespace lfs::io::project {
     ProjectDocument::save_as(
         const std::filesystem::path& path,
         const ProjectDocumentSaveOptions& options) {
+        if (impl_->source_reader) {
+            const auto compatibility =
+                impl_->source_reader->write_compatibility();
+            if (!compatibility.safe) {
+                return fail<ProjectDocumentSaveReport>(
+                    lfs::ErrorCode::Unsupported,
+                    "This project is read-only in the current LichtFeld version.",
+                    std::format(
+                        "Save As refused before staging destination bytes: {}",
+                        compatibility.reasons.empty()
+                            ? std::string{"unknown writer incompatibility"}
+                            : compatibility.reasons.front()),
+                    "commit.write_compatibility");
+            }
+        }
+        if (impl_->missing_opaque_preservation_capability ||
+            impl_->missing_retained_json_capability) {
+            return fail<ProjectDocumentSaveReport>(
+                lfs::ErrorCode::Unsupported,
+                "This project cannot be saved under another name by the current writer.",
+                impl_->missing_opaque_preservation_capability
+                    ? "opaque rows lack required writer capability bit 5"
+                    : "retained JSON fields lack required writer capability bit 6",
+                "commit.required_writer_capabilities");
+        }
         auto normalized = normalized_absolute_path(path);
         if (!normalized) {
             return std::move(normalized).error();
@@ -3015,11 +3286,19 @@ namespace lfs::io::project {
         auto compacted = ProjectWriter::compact(
             temporary,
             CompactionOptions{
-                .compatibility = {},
+                .compatibility =
+                    impl_->source_reader
+                        ? impl_->source_reader
+                              ->reader_options()
+                        : ReaderOptions{},
                 .new_file_uuid = file_uuid,
-                .commit_uuid = lfs::core::generate_uuid_v4(),
+                .commit_uuid =
+                    options.save_as_compaction_commit_uuid.is_nil()
+                        ? lfs::core::generate_uuid_v4()
+                        : options.save_as_compaction_commit_uuid,
                 .snapshot_uuid = options.commit.snapshot_uuid,
-                .creation_time_unix_ns = 0,
+                .creation_time_unix_ns =
+                    options.save_as_creation_time_unix_ns,
                 .wallclock_unix_ns = options.commit.wallclock_unix_ns,
                 .keep_tombstones = false,
                 .disk_reserve_bytes = options.disk_reserve_bytes,

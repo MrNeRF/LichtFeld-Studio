@@ -44,6 +44,19 @@ namespace lfs::io::project {
         double dead_ratio = 0.0;
     };
 
+    // Non-nil identities and a non-zero clock make recovery publication
+    // reproducible for release-corpus generation. Production callers use the
+    // defaults and receive generated identities/current time as before.
+    struct RecoveryMaterializationOptions {
+        lfs::core::Uuid file_uuid = {};
+        lfs::core::Uuid commit_uuid = {};
+        std::uint64_t wallclock_unix_ns = 0;
+        IndexCompression index_compression =
+            IndexCompression::Zstd;
+        std::uint64_t disk_reserve_bytes =
+            64ull * 1024 * 1024;
+    };
+
     class LFS_IO_API RecoverySession {
     public:
         RecoverySession() noexcept;
@@ -82,14 +95,16 @@ namespace lfs::io::project {
             const std::filesystem::path&,
             const std::filesystem::path&,
             const std::filesystem::path&,
-            CommitBoundaryObserver);
+            CommitBoundaryObserver,
+            const RecoveryMaterializationOptions&);
         friend lfs::Result<void>
         materialize_recovered_project(
             const std::filesystem::path&,
             const std::filesystem::path&,
             const std::filesystem::path&,
             const RecoverySession&,
-            CommitBoundaryObserver);
+            CommitBoundaryObserver,
+            const RecoveryMaterializationOptions&);
     };
 
     [[nodiscard]] LFS_IO_API std::filesystem::path
@@ -132,7 +147,8 @@ namespace lfs::io::project {
         const std::filesystem::path& master_path,
         const std::filesystem::path& sidecar_path,
         const std::filesystem::path& destination,
-        CommitBoundaryObserver boundary_observer = {});
+        CommitBoundaryObserver boundary_observer = {},
+        const RecoveryMaterializationOptions& options = {});
 
     [[nodiscard]] LFS_IO_API lfs::Result<void>
     materialize_recovered_project(
@@ -140,7 +156,8 @@ namespace lfs::io::project {
         const std::filesystem::path& sidecar_path,
         const std::filesystem::path& destination,
         const RecoverySession& session,
-        CommitBoundaryObserver boundary_observer = {});
+        CommitBoundaryObserver boundary_observer = {},
+        const RecoveryMaterializationOptions& options = {});
 
     [[nodiscard]] LFS_IO_API
         lfs::Result<ProjectStorageStats>

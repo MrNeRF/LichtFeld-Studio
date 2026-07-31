@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -12,6 +13,7 @@
 #include <iterator>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -1252,9 +1254,11 @@ namespace {
         // generation is the sole product output.
         {
             auto params = createParams(phase_one_iterations);
-            params.optimization.save_steps = {
-                static_cast<size_t>(std::max(1, checkpoint_iter / 2)),
-                static_cast<size_t>(checkpoint_iter)};
+            if (std::getenv("LFS_P8_HEADLESS_CORPUS_OUTPUT") == nullptr) {
+                params.optimization.save_steps = {
+                    static_cast<size_t>(std::max(1, checkpoint_iter / 2)),
+                    static_cast<size_t>(checkpoint_iter)};
+            }
             lfs::core::Scene scene;
 
             auto load_result = lfs::training::loadTrainingDataIntoScene(params, scene);
@@ -1279,6 +1283,20 @@ namespace {
         const auto project_path = output_path_ / "project.licht";
         ASSERT_TRUE(std::filesystem::is_regular_file(project_path))
             << "Project file not found: " << project_path;
+        if (const char* release_output =
+                std::getenv("LFS_P8_HEADLESS_CORPUS_OUTPUT");
+            release_output != nullptr &&
+            std::string_view(release_output).size() != 0) {
+            std::error_code copy_error;
+            std::filesystem::copy_file(
+                project_path, release_output,
+                std::filesystem::copy_options::overwrite_existing,
+                copy_error);
+            ASSERT_FALSE(copy_error)
+                << "failed to publish the headless release-corpus fixture: "
+                << copy_error.message();
+            return;
+        }
 
         size_t resume_file_count = 0;
         for (const auto& entry : std::filesystem::recursive_directory_iterator(output_path_)) {

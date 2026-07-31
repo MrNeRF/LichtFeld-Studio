@@ -889,20 +889,22 @@ namespace lfs::io::project {
                                 error.message()),
                     "REFS", "fingerprint");
             }
-            if (observed_size != expected.size) {
+            // Size and mtime are cache hints. A copied/relinked file can carry
+            // stale metadata while retaining the exact content fingerprint,
+            // so only the all-metadata-match case may take the no-I/O path.
+            if (observed_size == expected.size &&
+                observed_mtime == expected.mtime_unix_ns) {
                 ReferenceFingerprint observed = expected;
-                observed.size = observed_size;
                 observed.mtime_unix_ns = observed_mtime;
                 return FingerprintCheck{
-                    .disposition = FingerprintDisposition::SizeMismatch,
+                    .disposition = FingerprintDisposition::MatchFastPath,
                     .observed = observed,
-                    .diagnostic =
-                        std::format("size changed from {} to {}", expected.size,
-                                    observed_size),
+                    .diagnostic = "mtime and size match",
                 };
             }
         }
-        if (observed_mtime == expected.mtime_unix_ns) {
+        if (observed_kind != FingerprintKind::File &&
+            observed_mtime == expected.mtime_unix_ns) {
             ReferenceFingerprint observed = expected;
             observed.mtime_unix_ns = observed_mtime;
             return FingerprintCheck{
@@ -919,14 +921,6 @@ namespace lfs::io::project {
         if (!observed) {
             return std::move(observed).error();
         }
-        if (observed->size != expected.size) {
-            return FingerprintCheck{
-                .disposition = FingerprintDisposition::SizeMismatch,
-                .observed = *observed,
-                .diagnostic = std::format("size changed from {} to {}", expected.size,
-                                          observed->size),
-            };
-        }
         if (observed->head_xxh3 != expected.head_xxh3 ||
             observed->tail_xxh3 != expected.tail_xxh3 ||
             (expected.full_xxh3 &&
@@ -939,14 +933,16 @@ namespace lfs::io::project {
         }
         return FingerprintCheck{
             .disposition =
-                observed->mtime_unix_ns == expected.mtime_unix_ns
+                observed->mtime_unix_ns == expected.mtime_unix_ns &&
+                        observed->size == expected.size
                     ? FingerprintDisposition::MatchFastPath
                     : FingerprintDisposition::MatchMtimeRefreshed,
             .observed = *observed,
             .diagnostic =
-                observed->mtime_unix_ns == expected.mtime_unix_ns
+                observed->mtime_unix_ns == expected.mtime_unix_ns &&
+                        observed->size == expected.size
                     ? "mtime, size, and content fingerprint match"
-                    : "mtime changed; size and content fingerprint match",
+                    : "metadata changed; content fingerprint matches",
         };
     }
 
@@ -1676,6 +1672,12 @@ namespace lfs::io::project {
                 !updated) {
                 return std::move(updated).error();
             }
+            if (auto updated = element->set(
+                    "fingerprint.size",
+                    check->observed->size);
+                !updated) {
+                return std::move(updated).error();
+            }
             if (auto unresolved = element->set("unresolved", false); !unresolved) {
                 return std::move(unresolved).error();
             }
@@ -1725,7 +1727,6 @@ namespace lfs::io::project {
         }
         const bool same_content =
             observed->kind == (*record)->fingerprint.kind &&
-            observed->size == (*record)->fingerprint.size &&
             observed->head_xxh3 == (*record)->fingerprint.head_xxh3 &&
             observed->tail_xxh3 == (*record)->fingerprint.tail_xxh3 &&
             (!(*record)->fingerprint.full_xxh3 ||

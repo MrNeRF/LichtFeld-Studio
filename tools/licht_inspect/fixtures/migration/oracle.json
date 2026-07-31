@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "authority_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918",
+  "inputs": [
+    {
+      "path": "checkpoint.resume",
+      "kind": "legacy_lfkp",
+      "bytes": 6244,
+      "sha256": "66b854eef6f75e6106afcc82fd5e55f84c0f10f8b8181e3f5fcbfbc8928f4f8e"
+    },
+    {
+      "path": "appearance.ppisp",
+      "kind": "legacy_ppisp",
+      "bytes": 667,
+      "sha256": "6b3c7ffb20f9b57603429c714ef19e03de52087630015f01f13bc847acab8f3b"
+    },
+    {
+      "path": "layout_config/LichtFeldStudio/layout.json",
+      "kind": "legacy_layout",
+      "bytes": 154,
+      "sha256": "cd3fc1e29dd680fe486a2b32cf56e90525c33180ea792a2cf51613f97e2ed2ce"
+    },
+    {
+      "path": "live.rad",
+      "kind": "external_rad_reference",
+      "bytes": 44,
+      "sha256": "735e76d9f12de5e32537832c8a151ff765a3cd7ba9c51853bf001457fcfb8292"
+    },
+    {
+      "path": "half_migrated/LichtFeldStudio/layout.json",
+      "kind": "half_migrated_legacy_layout",
+      "bytes": 99,
+      "sha256": "57530d3611ff9b312f0821ade1a19f2b3db01d04ad8e4a2fd878ab2d12c668fc"
+    },
+    {
+      "path": "half_migrated/project.licht",
+      "kind": "half_migrated_project",
+      "bytes": 71808,
+      "sha256": "64a55bc70d3384d15f4248830f123b08e054fb329d13e67ae9671c4baf52b6a7"
+    }
+  ],
+  "checkpoint": {
+    "project_uuid": "0000c300-0000-4000-8000-00000000c300",
+    "checkpoint_uuid": "0000c301-0000-4000-8000-00000000c301",
+    "iteration": 37,
+    "num_gaussians": 2,
+    "strategy": "mcmc",
+    "max_iter": 90,
+    "chapter_set_must_include": ["CKPT", "PRMS", "SCNG"],
+    "chapter_set_must_exclude": ["PPIS"]
+  },
+  "ppisp": {
+    "project_uuid": "0000c310-0000-4000-8000-00000000c310",
+    "ppisp_uuid": "0000c31f-0000-4000-8000-00000000c31f",
+    "num_cameras": 2,
+    "num_frames": 3,
+    "images_folder": "images",
+    "training_authority": "CKPT",
+    "non_checkpoint_authority": "PPIS"
+  },
+  "layout": {
+    "right_panel_width": 451.0,
+    "scene_panel_ratio": 0.61,
+    "python_console_width": 377.0,
+    "bottom_dock_height": 222.0,
+    "left_dock_width": 417.0,
+    "sequencer_visible": true,
+    "authority": "GUIL.layouts[].areas[]"
+  },
+  "rad": {
+    "project_uuid": "0000c320-0000-4000-8000-00000000c320",
+    "node_uuid": "0000c32a-0000-4000-8000-00000000c32a",
+    "reference_uuid": "0000c32b-0000-4000-8000-00000000c32b",
+    "key": "splat.live_rad",
+    "kind": "rad",
+    "authority": "REFS",
+    "decision": "external"
+  },
+  "half_migrated": {
+    "winner": "project.licht:GUIL",
+    "legacy_left_dock_width": 999.0,
+    "project_left_dock_width": 320.0
+  }
+}

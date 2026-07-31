@@ -15,6 +15,11 @@ data
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py
+!scripts/licht_compat_matrix.py
+!scripts/licht_compat_policy.py
+!scripts/licht_compat_recovery.py
+!scripts/licht_ownership_inventory.py
+!scripts/licht_spec_self_containment.py
 !src/python/_lfs_panel_contract.py
 !src/python/lfs_splat_lod_hierarchy.py
 !src/python/lfs_plugins/**/*.py

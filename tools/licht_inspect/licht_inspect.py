@@ -61,6 +61,18 @@ ROLE_SIDECAR = 1
 COMPRESSION_STORED = 0
 COMPRESSION_ZSTD = 1
 COMPRESSION_NAMES = {0: "stored", 1: "zstd"}
+JSON_CHAPTER_FOURCCS = {
+    b"PROJ",
+    b"REFS",
+    b"SCNG",
+    b"PRMS",
+    b"GUIL",
+    b"EDTR",
+    b"VIEW",
+    b"SEQR",
+}
+MAX_JSON_CHAPTER_BYTES = 64 * 1024 * 1024
+MAX_JSON_NESTING_DEPTH = 512
 
 KIND_EXPLICIT = 1
 KIND_AUTOSAVE = 2
@@ -1396,6 +1408,72 @@ def verify_container(container: Container) -> list[str]:
                 _require(decoded_size == row.uncompressed_bytes, reader.path, row.payload_offset, f"payload[{row.key_text}].decoded_size", row.uncompressed_bytes, decoded_size)
             reports.append(f"{row.key_text}: stored_bytes={row.stored_bytes} crc32c={_fmt_u32(running_crc)}")
     return reports
+
+
+def verify_json_chapter(path: str, row: IndexRow, payload: bytes) -> None:
+    """Validate the bounded JSON grammar used by a semantic chapter payload."""
+
+    _require(
+        row.uncompressed_bytes <= MAX_JSON_CHAPTER_BYTES,
+        path,
+        row.payload_offset,
+        f"payload[{row.key_text}].json.size",
+        f"<= {MAX_JSON_CHAPTER_BYTES}",
+        row.uncompressed_bytes,
+    )
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in payload:
+        character = chr(byte)
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "{[":
+            depth += 1
+            if depth > MAX_JSON_NESTING_DEPTH:
+                raise FormatError(
+                    path,
+                    row.payload_offset,
+                    f"payload[{row.key_text}].json.depth",
+                    f"<= {MAX_JSON_NESTING_DEPTH}",
+                    depth,
+                )
+        elif character in "}]" and depth:
+            depth -= 1
+
+    def reject_duplicates(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str):
+        raise ValueError(f"non-finite JSON number {value}")
+
+    try:
+        json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as error:
+        raise FormatError(
+            path,
+            row.payload_offset,
+            f"payload[{row.key_text}].json",
+            "valid UTF-8 JSON with unique object keys, finite numbers, and bounded depth",
+            f"{type(error).__name__}: {error}",
+        ) from error
 
 
 class _BoundedPread(io.RawIOBase):

@@ -95,8 +95,22 @@ namespace {
         const std::string pathological(2048, '[');
         auto too_deep_and_truncated = JsonChapterDom::parse(pathological);
         ASSERT_FALSE(too_deep_and_truncated);
-        EXPECT_EQ(too_deep_and_truncated.error().code(), lfs::ErrorCode::DataLoss);
+        EXPECT_EQ(too_deep_and_truncated.error().code(),
+                  lfs::ErrorCode::ResourceExhausted);
         EXPECT_EQ(too_deep_and_truncated.error().domain(), lfs::ErrorDomain::IO);
+
+        auto duplicate = JsonChapterDom::parse(
+            R"json({"outer":{"same":1,"same":2}})json");
+        ASSERT_FALSE(duplicate);
+        EXPECT_EQ(duplicate.error().code(), lfs::ErrorCode::DataLoss);
+        EXPECT_NE(duplicate.error().detail().find("Duplicate JSON object key 'same'"),
+                  std::string_view::npos);
+
+        const std::string oversized(64ull * 1024 * 1024 + 1, ' ');
+        auto too_large = JsonChapterDom::parse(oversized);
+        ASSERT_FALSE(too_large);
+        EXPECT_EQ(too_large.error().code(),
+                  lfs::ErrorCode::ResourceExhausted);
     }
 
     TEST(JsonChapterDomTest, FailedSetAcrossNonObjectIsTypedAndTransactional) {

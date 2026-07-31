@@ -138,6 +138,29 @@ def build_semantic_cases() -> tuple[SemanticCase, ...]:
         )
     )
 
+    writer, layout = _base_writer(0xD011, two_rows=True)
+    tombstone_live = bytearray(writer.bytes())
+    first_row = layout.index_offset + INDEX_HEADER_BYTES
+    second_row = first_row + INDEX_ROW_BYTES
+    tombstone_live[second_row : second_row + 4] = tombstone_live[
+        first_row : first_row + 4
+    ]
+    tombstone_live[second_row + 16 : second_row + 32] = tombstone_live[
+        first_row + 16 : first_row + 32
+    ]
+    struct.pack_into("<HBBI", tombstone_live, second_row + 4, 0, 1, 0, 0)
+    struct.pack_into("<QQQQ", tombstone_live, second_row + 32, 0, 0, 0, 0)
+    struct.pack_into("<QII", tombstone_live, second_row + 64, 1, 0, 0)
+    _refresh_generation(tombstone_live, layout, (0,))
+    cases.append(
+        SemanticCase(
+            "tombstone-and-live-share-key-valid-crcs",
+            bytes(tombstone_live),
+            "repair_only",
+            "strict key order forbids a tombstone and live row sharing one key",
+        )
+    )
+
     writer, layout = _base_writer(0xD002, two_rows=True)
     overlap = bytearray(writer.bytes())
     rows = sorted(layout.rows, key=lambda row: row.key)

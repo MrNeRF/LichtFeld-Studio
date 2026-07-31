@@ -231,6 +231,42 @@ namespace {
         EXPECT_EQ((*refreshed)->fingerprint.mtime_unix_ns,
                   mtime_only->observed->mtime_unix_ns);
 
+        auto stale_metadata = **refreshed;
+        stale_metadata.fingerprint.size += 17;
+        stale_metadata.fingerprint.mtime_unix_ns -= 31;
+        ASSERT_TRUE(chapter.upsert(stale_metadata));
+        auto content_match = chapter.verify_and_refresh(ref_id, path);
+        ASSERT_TRUE(content_match)
+            << lfs::format_for_developer(content_match.error());
+        EXPECT_EQ(content_match->disposition,
+                  FingerprintDisposition::MatchMtimeRefreshed);
+        auto metadata_refreshed = chapter.find(ref_id);
+        ASSERT_TRUE(metadata_refreshed && *metadata_refreshed);
+        EXPECT_EQ((*metadata_refreshed)->fingerprint.size,
+                  fs::file_size(path));
+        EXPECT_EQ((*metadata_refreshed)->fingerprint.mtime_unix_ns,
+                  content_match->observed->mtime_unix_ns);
+
+        auto relink_metadata = **metadata_refreshed;
+        relink_metadata.fingerprint.size += 41;
+        relink_metadata.fingerprint.mtime_unix_ns -= 73;
+        relink_metadata.unresolved = true;
+        ASSERT_TRUE(chapter.upsert(relink_metadata));
+        ASSERT_TRUE(chapter.relink(
+            ref_id,
+            ReferenceLocator{
+                .preferred = "moved/reference.bin",
+                .base = LocatorBase::Project,
+            },
+            path, false));
+        auto relinked = chapter.find(ref_id);
+        ASSERT_TRUE(relinked && *relinked);
+        EXPECT_EQ((*relinked)->locator.preferred,
+                  "moved/reference.bin");
+        EXPECT_EQ((*relinked)->fingerprint.size,
+                  fs::file_size(path));
+        EXPECT_FALSE((*relinked)->unresolved);
+
         {
             std::ofstream stream(path, std::ios::binary | std::ios::trunc);
             stream << "different-size";
@@ -332,6 +368,44 @@ namespace {
         EXPECT_EQ(index->at(ref_id)[0].chapter, "SCNG");
         EXPECT_EQ(index->at(ref_id)[1].chapter, "VIEW");
         EXPECT_EQ(index->at(ref_id)[0].owner_uuid, splat_id);
+    }
+
+    TEST(ProjectChapterTest, SceneGraphRejectsParentCyclesAndDuplicateNodeUuids) {
+        const auto root_id =
+            uuid("41000000-0000-4000-8000-000000000001");
+        const auto child_id =
+            uuid("41000000-0000-4000-8000-000000000002");
+        SceneGraphChapter chapter;
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = root_id,
+            .type = "group",
+            .name = "Root",
+            .child_order = 0,
+        }));
+        ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
+            .uuid = child_id,
+            .type = "group",
+            .name = "Child",
+            .parent_uuid = root_id,
+            .child_order = 0,
+        }));
+
+        using Json = lfs::io::JsonChapterDom::Json;
+        const auto baseline = Json::parse(chapter.dom().dump());
+
+        auto cycle = baseline;
+        cycle["nodes"][0]["parent_uuid"] = child_id.to_string();
+        auto cycle_result = SceneGraphChapter::parse(cycle.dump());
+        ASSERT_FALSE(cycle_result);
+        EXPECT_EQ(cycle_result.error().code(),
+                  lfs::ErrorCode::DataLoss);
+
+        auto duplicate = baseline;
+        duplicate["nodes"].push_back(duplicate["nodes"][1]);
+        auto duplicate_result = SceneGraphChapter::parse(duplicate.dump());
+        ASSERT_FALSE(duplicate_result);
+        EXPECT_EQ(duplicate_result.error().code(),
+                  lfs::ErrorCode::DataLoss);
     }
 
     TEST(ProjectChapterTest, ParametersMutationRetainsUnknownNestedObjects) {

@@ -93,6 +93,10 @@ namespace lfs::io::project {
         // Explicit GUI saves may replace THMB. An empty span means carry the
         // current preview forward without regenerating it.
         std::span<const std::byte> preview_png;
+        // Optional deterministic seam for Save As's internal compaction
+        // generation. Normal callers leave these unset.
+        lfs::core::Uuid save_as_compaction_commit_uuid = {};
+        std::uint64_t save_as_creation_time_unix_ns = 0;
         // Recovery merge writers reuse the original master's retained lock.
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
@@ -103,6 +107,10 @@ namespace lfs::io::project {
         lfs::core::Uuid base_explicit_commit_uuid;
         std::uint64_t autosave_sequence = 0;
         lfs::core::Uuid snapshot_uuid;
+        // Optional deterministic release-fixture seam. Production callers
+        // leave these unset and receive a generated identity/current time.
+        lfs::core::Uuid commit_uuid = {};
+        std::uint64_t wallclock_unix_ns = 0;
         IndexCompression index_compression = IndexCompression::Zstd;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         CommitBoundaryObserver boundary_observer;
@@ -112,6 +120,10 @@ namespace lfs::io::project {
         Fourcc fourcc;
         lfs::core::Uuid instance_uuid;
         bool loaded = true;
+    };
+
+    enum class ProjectDocumentDegradedState : std::uint8_t {
+        MissingActiveCamera = 1,
     };
 
     struct ProjectDocumentSaveReport {
@@ -180,6 +192,8 @@ namespace lfs::io::project {
 
         [[nodiscard]] const std::optional<std::filesystem::path>&
         source_path() const noexcept;
+        [[nodiscard]] std::span<const ProjectDocumentDegradedState>
+        degraded_states() const noexcept;
         [[nodiscard]] const lfs::core::Uuid& project_uuid() const noexcept;
         [[nodiscard]] std::uint64_t generation() const noexcept;
         [[nodiscard]] std::uint64_t dirty_epoch() const noexcept;

@@ -17,8 +17,10 @@ import base64
 import dataclasses
 import hashlib
 import json
+import os
 from pathlib import Path
 import struct
+import subprocess
 import uuid
 from typing import Iterable, Sequence
 
@@ -1050,13 +1052,246 @@ def build_fixture_bytes() -> tuple[dict[str, bytes], dict[str, object]]:
     return files, manifest
 
 
+def _manifest_bytes(manifest: dict[str, object]) -> bytes:
+    return (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _release_manifest_root(rows: Sequence[dict[str, object]]) -> str:
+    digest = hashlib.sha256()
+    for row in sorted(rows, key=lambda item: str(item["path"])):
+        digest.update(
+            (json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            )
+        )
+    return digest.hexdigest()
+
+
+def check_release_corpus(output_dir: Path) -> tuple[int, str | None]:
+    release_dir = output_dir / "release_corpus"
+    manifest_path = release_dir / "manifest.json"
+    if not manifest_path.is_file():
+        return 0, None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    rows = manifest.get("fixtures")
+    if manifest.get("schema") != 2 or not isinstance(rows, list) or not rows:
+        raise AssertionError("release_corpus/manifest.json must contain a non-empty schema-2 fixtures list")
+    authority = manifest.get("authority_sha")
+    if not isinstance(authority, str) or len(authority) != 40:
+        raise AssertionError("release corpus manifest has an invalid authority_sha")
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise AssertionError(f"release corpus row {index} is not an object")
+        required = {
+            "path",
+            "sha256",
+            "writer_sha",
+            "capabilities",
+            "producer",
+            "reproducible",
+        }
+        if not required.issubset(row):
+            raise AssertionError(
+                f"release corpus row {index} is missing required provenance fields"
+            )
+        relative = row["path"]
+        if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+            raise AssertionError(f"release corpus row {index} has an invalid relative path")
+        if relative in seen:
+            raise AssertionError(f"duplicate release corpus path: {relative}")
+        seen.add(relative)
+        artifact = release_dir / relative
+        if not artifact.is_file():
+            raise AssertionError(f"release corpus artifact is missing: {artifact}")
+        actual = _sha256(artifact)
+        if actual != row["sha256"]:
+            raise AssertionError(
+                f"release corpus sha mismatch for {relative}: expected {row['sha256']}, got {actual}"
+            )
+        writer_sha = row["writer_sha"]
+        if not isinstance(writer_sha, str) or len(writer_sha) != 40:
+            raise AssertionError(f"release corpus row {relative} has an invalid writer_sha")
+        if not isinstance(row["producer"], str) or not row["producer"]:
+            raise AssertionError(f"release corpus row {relative} has an invalid producer")
+        if not isinstance(row["reproducible"], bool):
+            raise AssertionError(f"release corpus row {relative} has an invalid reproducible flag")
+        if row["reproducible"]:
+            if not isinstance(row.get("identity_set"), str) or not row["identity_set"]:
+                raise AssertionError(
+                    f"reproducible release row {relative} lacks an identity_set"
+                )
+        elif not isinstance(row.get("reason"), str) or not row["reason"]:
+            raise AssertionError(
+                f"non-reproducible release row {relative} lacks a reason"
+            )
+        capabilities = row["capabilities"]
+        if not isinstance(capabilities, dict) or set(capabilities) != {
+            "min_reader",
+            "min_safe_writer",
+            "required_reader",
+            "required_writer",
+        }:
+            raise AssertionError(f"release corpus row {relative} has an invalid capabilities object")
+    actual_root = _release_manifest_root(rows)
+    if manifest.get("manifest_root_sha256") != actual_root:
+        raise AssertionError(
+            "release corpus manifest root mismatch: "
+            f"expected {manifest.get('manifest_root_sha256')}, got {actual_root}"
+        )
+
+    # Once a manifest has landed, its existing rows are immutable. A release
+    # update may append rows only. During the initial P8 addition HEAD has no
+    # manifest, so there is no baseline to compare.
+    repository = Path(__file__).resolve().parents[2]
+    relative_manifest = manifest_path.relative_to(repository).as_posix()
+    baseline = subprocess.run(
+        ["git", "show", f"HEAD:{relative_manifest}"],
+        cwd=repository,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if baseline.returncode == 0:
+        old = json.loads(baseline.stdout)
+        old_rows = {row["path"]: row for row in old.get("fixtures", [])}
+        new_rows = {row["path"]: row for row in rows}
+        for path, old_row in old_rows.items():
+            if path not in new_rows:
+                raise AssertionError(f"release corpus is append-only; removed row: {path}")
+            new_row = new_rows[path]
+            if new_row == old_row:
+                continue
+            old_core = {
+                key: old_row[key]
+                for key in ("path", "sha256", "writer_sha", "capabilities")
+            }
+            new_core = {
+                key: new_row[key]
+                for key in ("path", "sha256", "writer_sha", "capabilities")
+            }
+            if old.get("schema") == 1 and new_core == old_core:
+                continue
+            authorized_recovery_relock = (
+                path == "recovered-commit.licht"
+                and new_row.get("relocked_from_sha256") == old_row.get("sha256")
+                and isinstance(new_row.get("relock_reason"), str)
+                and bool(new_row["relock_reason"])
+                and new_row.get("capabilities") == old_row.get("capabilities")
+            )
+            if not authorized_recovery_relock:
+                raise AssertionError(
+                    f"release corpus is SHA-locked; changed existing row: {path}"
+                )
+    return len(rows), actual_root
+
+
+def check_migration_fixtures(output_dir: Path) -> tuple[int, str | None]:
+    migration_dir = output_dir / "migration"
+    oracle_path = migration_dir / "oracle.json"
+    if not oracle_path.is_file():
+        return 0, None
+    oracle = json.loads(oracle_path.read_text(encoding="utf-8"))
+    rows = oracle.get("inputs")
+    authority = oracle.get("authority_sha")
+    if oracle.get("schema") != 1 or not isinstance(rows, list) or not rows:
+        raise AssertionError(
+            "migration/oracle.json must contain a non-empty schema-1 inputs list"
+        )
+    if not isinstance(authority, str) or len(authority) != 40:
+        raise AssertionError("migration oracle has an invalid authority_sha")
+    seen: set[str] = set()
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or set(row) != {
+            "path",
+            "kind",
+            "bytes",
+            "sha256",
+        }:
+            raise AssertionError(
+                f"migration input {index} must contain exactly path, kind, bytes, sha256"
+            )
+        relative = row["path"]
+        if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+            raise AssertionError(f"migration input {index} has an invalid relative path")
+        if relative in seen:
+            raise AssertionError(f"duplicate migration input path: {relative}")
+        seen.add(relative)
+        path = migration_dir / relative
+        if not path.is_file():
+            raise AssertionError(f"migration input is missing: {path}")
+        if path.stat().st_size != row["bytes"]:
+            raise AssertionError(
+                f"migration input size mismatch for {relative}: "
+                f"expected {row['bytes']}, got {path.stat().st_size}"
+            )
+        actual = _sha256(path)
+        if actual != row["sha256"]:
+            raise AssertionError(
+                f"migration input sha mismatch for {relative}: "
+                f"expected {row['sha256']}, got {actual}"
+            )
+    return len(rows), authority
+
+
+def check_fixtures(output_dir: Path) -> dict[str, object]:
+    files, manifest = build_fixture_bytes()
+    expected_manifest = _manifest_bytes(manifest)
+    problems: list[str] = []
+    for name, expected in sorted(files.items()):
+        path = output_dir / name
+        if not path.is_file():
+            problems.append(f"missing golden: {name}")
+            continue
+        actual = path.read_bytes()
+        if actual != expected:
+            problems.append(
+                f"golden changed: {name} expected_sha={hashlib.sha256(expected).hexdigest()} "
+                f"actual_sha={hashlib.sha256(actual).hexdigest()}"
+            )
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.is_file():
+        problems.append("missing golden manifest.json")
+    elif manifest_path.read_bytes() != expected_manifest:
+        problems.append("golden manifest.json differs from deterministic recomputation")
+    if problems:
+        raise AssertionError("fixture check failed:\n  " + "\n  ".join(problems))
+    release_count, release_root = check_release_corpus(output_dir)
+    migration_count, migration_authority = check_migration_fixtures(output_dir)
+    print(
+        "PASS fixture bytes: "
+        f"goldens={len(files)} release_corpus={release_count} "
+        f"release_root={release_root or 'not-present'} "
+        f"migration_inputs={migration_count} "
+        f"migration_authority={migration_authority or 'not-present'}"
+    )
+    return manifest
+
+
 def generate_fixtures(output_dir: Path) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     files, manifest = build_fixture_bytes()
+    existing_manifest_path = output_dir / "manifest.json"
+    if existing_manifest_path.is_file():
+        existing = json.loads(existing_manifest_path.read_text(encoding="utf-8"))
+        locked = existing.get("fixtures", {})
+        for name, data in files.items():
+            old = locked.get(name) if isinstance(locked, dict) else None
+            if isinstance(old, dict) and old.get("sha256") != hashlib.sha256(data).hexdigest():
+                raise AssertionError(
+                    f"regenerating bytes under locked fixture name is forbidden: {name}"
+                )
     for name, data in sorted(files.items()):
         (output_dir / name).write_bytes(data)
-    manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8")
-    (output_dir / "manifest.json").write_bytes(manifest_bytes)
+    (output_dir / "manifest.json").write_bytes(_manifest_bytes(manifest))
     return manifest
 
 
@@ -1067,9 +1302,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         default=Path(__file__).resolve().parent / "fixtures",
     )
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
+        "--check",
+        action="store_true",
+        help="recompute in memory and compare against the SHA-locked corpus (default)",
+    )
+    modes.add_argument(
+        "--write",
+        action="store_true",
+        help="write fixtures; requires RELEASE_FIXTURE_UPDATE=1 and a compatibility note",
+    )
+    parser.add_argument(
+        "--compatibility-note",
+        help="exact non-empty note already added to docs/compatibility.md for --write",
+    )
     args = parser.parse_args(argv)
-    manifest = generate_fixtures(args.output_dir)
-    print("NON-PRODUCTION fixture writer: generated deterministic stored-index corpus")
+    if not args.write:
+        manifest = check_fixtures(args.output_dir)
+        print("NON-PRODUCTION fixture writer: deterministic corpus check only")
+    else:
+        if os.environ.get("RELEASE_FIXTURE_UPDATE") != "1":
+            parser.error("--write requires RELEASE_FIXTURE_UPDATE=1")
+        if not args.compatibility_note or not args.compatibility_note.strip():
+            parser.error("--write requires --compatibility-note")
+        compatibility = Path(__file__).resolve().parents[2] / "docs/compatibility.md"
+        if not compatibility.is_file() or args.compatibility_note not in compatibility.read_text(
+            encoding="utf-8"
+        ):
+            parser.error("--compatibility-note must already appear in docs/compatibility.md")
+        manifest = generate_fixtures(args.output_dir)
+        print("NON-PRODUCTION fixture writer: wrote deterministic stored-index corpus")
     for name, info in sorted(manifest["fixtures"].items()):
         print(f"{name}: {info['bytes']} bytes sha256={info['sha256']}")
     return 0

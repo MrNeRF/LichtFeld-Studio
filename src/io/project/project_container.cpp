@@ -2818,12 +2818,29 @@ namespace lfs::io::project {
             return {};
         }
 
+        lfs::Result<void>
+        require_supported_payload_access(const ProjectReader& reader) {
+            if (reader.open_state() == OpenState::Open) {
+                return {};
+            }
+            return status_failure(detail::project_error(
+                lfs::ErrorCode::Unsupported,
+                "Payload access is unavailable while inspecting a newer project.",
+                "allow_unsupported_inspection exposes only validated container metadata; "
+                "verify, extract, map, stream, and clean-proof operations are refused",
+                reader.path(), reader.commit().offset,
+                "commit.read_compatibility"));
+        }
+
     } // namespace
 
     lfs::Result<void>
     ProjectReader::read_stored_at(const ChunkInfo& chunk,
                                   const std::uint64_t relative_offset,
                                   const std::span<std::byte> destination) const {
+        if (auto allowed = require_supported_payload_access(*this); !allowed) {
+            return allowed;
+        }
         auto resolved = resolve_chunk(*impl_->state, chunk);
         if (!resolved) {
             return status_failure(std::move(resolved).error());
@@ -2864,6 +2881,9 @@ namespace lfs::io::project {
     }
 
     lfs::Result<void> ProjectReader::verify_chunk(const ChunkInfo& chunk) const {
+        if (auto allowed = require_supported_payload_access(*this); !allowed) {
+            return allowed;
+        }
         auto resolved = resolve_chunk(*impl_->state, chunk);
         if (!resolved) {
             return status_failure(std::move(resolved).error());
@@ -2967,6 +2987,9 @@ namespace lfs::io::project {
 
     lfs::Result<std::vector<std::byte>>
     ProjectReader::read_chunk(const ChunkInfo& chunk) const {
+        if (auto allowed = require_supported_payload_access(*this); !allowed) {
+            return std::move(allowed).error();
+        }
         auto resolved = resolve_chunk(*impl_->state, chunk);
         if (!resolved) {
             return std::move(resolved).error();
@@ -3004,6 +3027,9 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<std::byte>> ProjectReader::read_preview() const {
+        if (auto allowed = require_supported_payload_access(*this); !allowed) {
+            return std::move(allowed).error();
+        }
         if (!preview().has_value()) {
             return detail::project_error(
                 lfs::ErrorCode::NotFound,
@@ -3027,6 +3053,9 @@ namespace lfs::io::project {
     lfs::Result<CleanProof>
     ProjectReader::make_clean_proof(const ChunkInfo& chunk,
                                     const std::uint64_t mutation_epoch) const {
+        if (auto allowed = require_supported_payload_access(*this); !allowed) {
+            return std::move(allowed).error();
+        }
         auto resolved = resolve_chunk(*impl_->state, chunk);
         if (!resolved) {
             return std::move(resolved).error();
@@ -3223,6 +3252,9 @@ namespace lfs::io::project {
 
     lfs::Result<BoundedInputStream>
     ProjectReader::open_bounded_stream(const ChunkInfo& chunk) const {
+        if (auto allowed = require_supported_payload_access(*this); !allowed) {
+            return std::move(allowed).error();
+        }
         auto resolved = resolve_chunk(*impl_->state, chunk);
         if (!resolved) {
             return std::move(resolved).error();
@@ -3291,6 +3323,9 @@ namespace lfs::io::project {
     ProjectReader::map_stored_range(const ChunkInfo& chunk,
                                     const std::uint64_t relative_offset,
                                     const std::uint64_t length) const {
+        if (auto allowed = require_supported_payload_access(*this); !allowed) {
+            return std::move(allowed).error();
+        }
         auto resolved = resolve_chunk(*impl_->state, chunk);
         if (!resolved) {
             return std::move(resolved).error();

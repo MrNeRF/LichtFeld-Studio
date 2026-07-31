@@ -727,7 +727,8 @@ namespace lfs::io::project {
         const std::filesystem::path& master_path,
         const std::filesystem::path& sidecar_path,
         const std::filesystem::path& destination,
-        CommitBoundaryObserver boundary_observer) {
+        CommitBoundaryObserver boundary_observer,
+        const RecoveryMaterializationOptions& options) {
         auto session = begin_recovery_session(
             master_path, sidecar_path);
         if (!session) {
@@ -738,7 +739,8 @@ namespace lfs::io::project {
             materialize_recovered_project(
                 master_path, sidecar_path,
                 destination, *session,
-                std::move(boundary_observer));
+                std::move(boundary_observer),
+                options);
         if (materialized) {
             session->detach_temporary();
         }
@@ -751,7 +753,8 @@ namespace lfs::io::project {
         const std::filesystem::path& sidecar_path,
         const std::filesystem::path& destination,
         const RecoverySession& session,
-        CommitBoundaryObserver boundary_observer) {
+        CommitBoundaryObserver boundary_observer,
+        const RecoveryMaterializationOptions& options) {
         const auto normalized_master =
             master_path.lexically_normal();
         const auto normalized_sidecar =
@@ -818,6 +821,16 @@ namespace lfs::io::project {
             !valid) {
             return valid;
         }
+        CapabilitySet recovered_reader_capabilities =
+            master->commit().required_reader_capabilities |
+            sidecar->commit().required_reader_capabilities;
+        CapabilitySet recovered_writer_capabilities =
+            master->commit().required_writer_capabilities |
+            sidecar->commit().required_writer_capabilities;
+        // SIDECAR_OVERLAY_V1 describes the disposable overlay envelope, not
+        // the materialized master. All content-level requirements survive.
+        recovered_reader_capabilities.set(SIDECAR_OVERLAY_V1, false);
+        recovered_writer_capabilities.set(SIDECAR_OVERLAY_V1, false);
         session.state_->temporary = destination;
         auto writer = ProjectWriter::create(
             destination,
@@ -826,7 +839,9 @@ namespace lfs::io::project {
                     master->superblock()
                         .project_uuid,
                 .file_uuid =
-                    lfs::core::generate_uuid_v4(),
+                    options.file_uuid.is_nil()
+                        ? lfs::core::generate_uuid_v4()
+                        : options.file_uuid,
                 .role = ContainerRole::Master,
                 .base_explicit_commit_uuid = {},
                 .autosave_sequence = 0,
@@ -835,9 +850,9 @@ namespace lfs::io::project {
                     master->superblock()
                         .creation_time_unix_ns,
                 .index_compression =
-                    IndexCompression::Zstd,
+                    options.index_compression,
                 .disk_reserve_bytes =
-                    64ull * 1024 * 1024,
+                    options.disk_reserve_bytes,
                 .boundary_observer =
                     std::move(boundary_observer),
                 .writer_lock_anchor =
@@ -852,24 +867,28 @@ namespace lfs::io::project {
                     .kind =
                         CommitKind::Recovered,
                     .commit_uuid =
-                        lfs::core::
-                            generate_uuid_v4(),
+                        options.commit_uuid.is_nil()
+                            ? lfs::core::generate_uuid_v4()
+                            : options.commit_uuid,
                     .snapshot_uuid =
                         sidecar->superblock()
                             .sidecar_snapshot_uuid,
-                    .wallclock_unix_ns = 0,
+                    .wallclock_unix_ns =
+                        options.wallclock_unix_ns == 0
+                            ? detail::unix_time_ns()
+                            : options.wallclock_unix_ns,
                     .min_reader_version =
-                        master->commit()
-                            .min_reader_version,
+                        std::max(
+                            master->commit().min_reader_version,
+                            sidecar->commit().min_reader_version),
                     .min_safe_writer_version =
-                        master->commit()
-                            .min_safe_writer_version,
+                        std::max(
+                            master->commit().min_safe_writer_version,
+                            sidecar->commit().min_safe_writer_version),
                     .extra_reader_capabilities =
-                        master->commit()
-                            .required_reader_capabilities,
+                        recovered_reader_capabilities,
                     .extra_writer_capabilities =
-                        master->commit()
-                            .required_writer_capabilities,
+                        recovered_writer_capabilities,
                 });
             !planned) {
             return planned;

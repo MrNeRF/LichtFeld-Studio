@@ -15,6 +15,7 @@ from typing import Callable, Sequence
 
 try:
     from .conformance_adversaries import run_semantic_adversaries
+    from .conformance_chapters import run_chapter_structural_hostility
     from .conformance_common import (
         DEFAULT_SEED,
         CategoryResult,
@@ -28,9 +29,11 @@ try:
     from .conformance_truncation import run_truncation_sweep
     from .conformance_verifier import run_independent_verifier
     from .oracle_corpus import PREVIEW_CORRUPTION_CASE_COUNT
+    from .make_fixtures import check_fixtures
     from .run_selftest import main as selftest_main
 except ImportError:  # Direct script execution.
     from conformance_adversaries import run_semantic_adversaries
+    from conformance_chapters import run_chapter_structural_hostility
     from conformance_common import (
         DEFAULT_SEED,
         CategoryResult,
@@ -44,6 +47,7 @@ except ImportError:  # Direct script execution.
     from conformance_truncation import run_truncation_sweep
     from conformance_verifier import run_independent_verifier
     from oracle_corpus import PREVIEW_CORRUPTION_CASE_COUNT
+    from make_fixtures import check_fixtures
     from run_selftest import main as selftest_main
 
 
@@ -56,6 +60,7 @@ def _seed_value(text: str) -> int:
 
 def _baseline_selftest(fixture_dir: Path, oracle_cases: int) -> CategoryResult:
     started = time.monotonic()
+    check_fixtures(fixture_dir)
     captured = io.StringIO()
     with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
         result = selftest_main(
@@ -165,6 +170,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 _run_category(
                     "semantic-adversaries",
                     lambda: run_semantic_adversaries(config),
+                )
+            )
+            results.append(
+                _run_category(
+                    "chapter-structural-hostility",
+                    run_chapter_structural_hostility,
                 )
             )
             results.append(

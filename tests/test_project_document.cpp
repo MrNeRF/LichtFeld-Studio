@@ -700,6 +700,103 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         SelectionReferencingMissingSceneNodeRefusesHydration) {
+        auto document = ProjectDocument::create(fixed_uuid(920), 100);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(document.error());
+        require_status(document->edit_selection().set_selected_node_uuids(
+            {fixed_uuid(921)}));
+
+        Scene live;
+        ASSERT_NE(live.addGroup("Existing"), lfs::core::NULL_NODE);
+        const auto before = witness_scene(live);
+        auto staged = document->stage_hydration(live);
+        ASSERT_FALSE(staged);
+        EXPECT_EQ(staged.error().code(), lfs::ErrorCode::DataLoss);
+        EXPECT_EQ(witness_scene(live), before);
+    }
+
+    TEST(ProjectDocumentTest,
+         TruncatedStandalonePpispRefusesHydrationBeforeSceneMutation) {
+        const auto payload_uuid = fixed_uuid(925);
+        auto document = ProjectDocument::create(fixed_uuid(924), 100);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(document.error());
+        auto bytes = std::make_shared<const std::vector<std::byte>>(
+            std::vector<std::byte>{std::byte{0x50}, std::byte{0x50}});
+        auto payload = LazyChunkValue::from_owned(bytes, payload_uuid);
+        ASSERT_TRUE(payload)
+            << lfs::format_for_developer(payload.error());
+        require_status(document->set_ppisp(
+            payload_uuid, std::move(*payload)));
+
+        Scene live;
+        ASSERT_NE(live.addGroup("Existing"), lfs::core::NULL_NODE);
+        const auto before = witness_scene(live);
+        auto staged = document->stage_hydration(live);
+        ASSERT_FALSE(staged);
+        EXPECT_EQ(staged.error().code(), lfs::ErrorCode::DataLoss);
+        EXPECT_EQ(witness_scene(live), before);
+    }
+
+    TEST(ProjectDocumentTest,
+         CheckpointWindowPastStoredPayloadRefusesHydrationBeforeSceneMutation) {
+        const auto training_uuid = fixed_uuid(926);
+        const auto checkpoint_uuid = fixed_uuid(927);
+        auto model = make_splat(2);
+        lfs::training::MCMC strategy(*model);
+        lfs::core::param::TrainingParameters parameters;
+        parameters.optimization =
+            lfs::core::param::OptimizationParameters::mcmc_defaults();
+        parameters.optimization.sh_degree = 0;
+        parameters.optimization.max_cap = 2;
+        strategy.initialize(parameters.optimization);
+
+        std::ostringstream stream(std::ios::binary | std::ios::out);
+        auto serialized = lfs::training::serialize_checkpoint(
+            stream, 11, strategy, parameters, nullptr, nullptr, nullptr,
+            nullptr);
+        ASSERT_TRUE(serialized)
+            << lfs::format_for_developer(serialized.error());
+        const auto encoded = stream.str();
+        ASSERT_GT(encoded.size(), 32u);
+        std::vector<std::byte> truncated(encoded.size() - 1);
+        std::memcpy(truncated.data(), encoded.data(), truncated.size());
+
+        auto document = ProjectDocument::create(fixed_uuid(928), 100);
+        ASSERT_TRUE(document)
+            << lfs::format_for_developer(document.error());
+        require_status(document->edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = training_uuid,
+                .type = "splat",
+                .name = "Training",
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "CKPT",
+                    .instance_uuid = checkpoint_uuid,
+                    .source_kind = "training",
+                },
+            }));
+        require_status(document->edit_scene_graph().set_training_model_uuid(
+            training_uuid));
+        auto payload = LazyChunkValue::from_owned(
+            std::move(truncated), checkpoint_uuid);
+        ASSERT_TRUE(payload)
+            << lfs::format_for_developer(payload.error());
+        require_status(document->set_checkpoint(
+            checkpoint_uuid, std::move(*payload)));
+
+        Scene live;
+        ASSERT_NE(live.addGroup("Existing"), lfs::core::NULL_NODE);
+        const auto before = witness_scene(live);
+        auto staged = document->stage_hydration(live);
+        ASSERT_FALSE(staged);
+        EXPECT_EQ(staged.error().code(), lfs::ErrorCode::DataLoss);
+        EXPECT_EQ(witness_scene(live), before);
+    }
+
+    TEST(ProjectDocumentTest,
          PhaseAFailureInjectionLeavesEveryLiveSceneByteUntouched) {
         TemporaryDirectory temporary;
         const fs::path path =
@@ -1888,6 +1985,48 @@ namespace {
                 WorldOriginProvenance::CentralizeByPointCloud,
         }));
 
+        auto pending_parameters =
+            require_result(document->parameters().snapshot());
+        pending_parameters.active_strategy = "mcmc";
+        pending_parameters.mcmc_session.iterations = 5;
+        pending_parameters.mcmc_current.iterations = 5;
+        require_status(document->edit_parameters().set_snapshot(
+            pending_parameters));
+
+        auto duplicate_training_payload = SplatChapterPayload::capture(
+            *checkpoint_model, SplatSourceKind::ImportedPly, false);
+        ASSERT_TRUE(duplicate_training_payload)
+            << lfs::format_for_developer(
+                   duplicate_training_payload.error());
+        require_status(document->set_splat(
+            training_uuid, std::move(*duplicate_training_payload)));
+        require_status(project.upsert_embed_decision(EmbedDecision{
+            .uuid = training_uuid,
+            .node_uuid = training_uuid,
+            .payload_fourcc = "SPLT",
+            .decision = "embedded",
+            .reason = "dual-authority validation case",
+        }));
+        require_status(project.upsert_embedded_payload_provenance(
+            provenance(training_uuid, "SPLT",
+                       "assets/dual-authority.ply", 9)));
+        auto dual_authority_options = save_options(90, 190);
+        dual_authority_options.commit.snapshot_uuid = checkpoint_uuid;
+        auto dual_authority =
+            document->save(path, dual_authority_options);
+        ASSERT_FALSE(dual_authority);
+        EXPECT_EQ(dual_authority.error().code(),
+                  lfs::ErrorCode::DataLoss)
+            << lfs::format_for_developer(dual_authority.error());
+        EXPECT_FALSE(fs::exists(path));
+        EXPECT_TRUE(document->remove_splat(training_uuid));
+        auto removed_decision = project.dom().array_remove(
+            "embed_decisions", training_uuid.to_string());
+        ASSERT_TRUE(removed_decision && *removed_decision);
+        auto removed_provenance = project.dom().array_remove(
+            "embedded_payloads", training_uuid.to_string());
+        ASSERT_TRUE(removed_provenance && *removed_provenance);
+
         auto first_options = save_options(100, 200);
         first_options.commit.snapshot_uuid =
             checkpoint_uuid;
@@ -1929,6 +2068,10 @@ namespace {
         auto hydrated =
             ProjectDocument::commit_hydration(
                 restored, std::move(*staged));
+        ASSERT_TRUE(hydrated.checkpoint_header);
+        EXPECT_EQ(hydrated.checkpoint_header->iteration, 17);
+        EXPECT_EQ(hydrated.pending_parameters.active_strategy, "mcmc");
+        EXPECT_EQ(hydrated.pending_parameters.mcmc_current.iterations, 5u);
         EXPECT_EQ(restored.getNodeCount(), 5u);
         EXPECT_EQ(restored.getTrainingModelNodeUuid(), training_uuid);
         const auto* restored_import =

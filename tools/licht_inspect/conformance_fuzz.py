@@ -36,6 +36,62 @@ class Mutation:
     single_byte: bool
 
 
+def _load_chapter_dictionary() -> tuple[bytes, ...]:
+    path = Path(__file__).resolve().parent / "fuzz_corpus/dictionary.json"
+    entries = json.loads(path.read_text(encoding="utf-8"))["tokens"]
+    tokens: list[bytes] = []
+    for entry in entries:
+        if "ascii" in entry:
+            tokens.append(entry["ascii"].encode("utf-8"))
+        else:
+            tokens.append(bytes.fromhex(entry["hex"]))
+    if not tokens or any(not token for token in tokens):
+        raise AssertionError("chapter fuzz dictionary contains an empty token")
+    return tuple(tokens)
+
+
+def _load_regression_cases(fixture_dir: Path) -> tuple[tuple[str, Mutation], ...]:
+    path = Path(__file__).resolve().parent / "fuzz_corpus/cases.json"
+    recipes = json.loads(path.read_text(encoding="utf-8"))["cases"]
+    result: list[tuple[str, Mutation]] = []
+    for recipe in recipes:
+        source_name = str(recipe["source"])
+        source = (fixture_dir / source_name).read_bytes()
+        operation = recipe["operation"]
+        offset = int(recipe.get("offset", 0))
+        if operation == "replace":
+            replacement = bytes.fromhex(recipe["hex"])
+            if offset < 0 or offset + len(replacement) > len(source):
+                raise AssertionError(f"invalid fuzz regression replacement: {recipe}")
+            data = source[:offset] + replacement + source[offset + len(replacement) :]
+            fixed = True
+        elif operation == "truncate":
+            if offset < 0 or offset >= len(source):
+                raise AssertionError(f"invalid fuzz regression truncation: {recipe}")
+            data = source[:offset]
+            fixed = False
+        elif operation == "insert_ascii":
+            if offset < 0 or offset > len(source):
+                raise AssertionError(f"invalid fuzz regression insertion: {recipe}")
+            token = str(recipe["ascii"]).encode("utf-8")
+            data = source[:offset] + token + source[offset:]
+            fixed = False
+        else:
+            raise AssertionError(f"unknown fuzz regression operation: {operation}")
+        result.append(
+            (
+                source_name,
+                Mutation(
+                    data=data,
+                    description=str(recipe["id"]),
+                    fixed_coordinates=fixed,
+                    single_byte=False,
+                ),
+            )
+        )
+    return tuple(result)
+
+
 def _fixture_boundaries(info: dict[str, object], size: int) -> tuple[int, ...]:
     points = {
         0,
@@ -116,10 +172,11 @@ def _mutate(
     rng: random.Random,
     source: bytes,
     boundaries: tuple[int, ...],
+    dictionary: tuple[bytes, ...],
 ) -> Mutation:
     if not source:
         return Mutation(b"\x00", "insert into empty source", False, False)
-    operation = rng.randrange(7)
+    operation = rng.randrange(8)
     offset = _weighted_offset(rng, boundaries, len(source))
     if operation == 0:
         data = bytearray(source)
@@ -169,12 +226,21 @@ def _mutate(
             False,
             False,
         )
-    width = min(len(source) - offset, rng.randint(1, 128))
+    if operation == 6:
+        width = min(len(source) - offset, rng.randint(1, 128))
+        destination = _weighted_offset(rng, boundaries, len(source))
+        duplicate = source[offset : offset + width]
+        return Mutation(
+            source[:destination] + duplicate + source[destination:],
+            f"duplicate [0x{offset:x},0x{offset + width:x}) at 0x{destination:x}",
+            False,
+            False,
+        )
+    token = rng.choice(dictionary)
     destination = _weighted_offset(rng, boundaries, len(source))
-    duplicate = source[offset : offset + width]
     return Mutation(
-        source[:destination] + duplicate + source[destination:],
-        f"duplicate [0x{offset:x},0x{offset + width:x}) at 0x{destination:x}",
+        source[:destination] + token + source[destination:],
+        f"dictionary token {token[:32]!r} at 0x{destination:x}",
         False,
         False,
     )
@@ -244,6 +310,8 @@ def run_mutation_fuzzer(
     ]
     rng = random.Random(seed)
     rng.shuffle(sources)
+    dictionary = _load_chapter_dictionary()
+    regression_cases = _load_regression_cases(fixture_dir)
     boundaries = {
         name: _fixture_boundaries(info, len(data))
         for name, data, info in sources
@@ -263,8 +331,17 @@ def run_mutation_fuzzer(
                 break
             if stop_at is not None and now >= stop_at:
                 break
-            name, source, source_info = sources[cases % len(sources)]
-            mutation = _mutate(rng, source, boundaries[name])
+            if cases < len(regression_cases):
+                name, mutation = regression_cases[cases]
+                source = (fixture_dir / name).read_bytes()
+                source_info = fixture_meta[name]
+            else:
+                name, source, source_info = sources[
+                    (cases - len(regression_cases)) % len(sources)
+                ]
+                mutation = _mutate(
+                    rng, source, boundaries[name], dictionary
+                )
             case_path.write_bytes(mutation.data)
             try:
                 outcome, detail = classified_outcome(
@@ -313,11 +390,15 @@ def run_mutation_fuzzer(
     mode_detail = (
         f"timebox={fuzz_minutes:g}m" if fuzz_minutes is not None else f"limit={case_limit}"
     )
+    elapsed = max(time.monotonic() - started, 1e-9)
     return timed_result(
         "mutation-fuzz",
         started,
         cases,
         f"{mode_detail}, sources={len(sources)}, opens={successful_opens}, "
+        f"dictionary_tokens={len(dictionary)}, regression_cases={len(regression_cases)}, "
+        f"cases_per_second={cases / elapsed:.1f}, "
+        f"unique_terminal_classes={len(outcomes)}, unclassified=0, "
         f"selected_crc_detections={strong_crc_detections}, "
         f"multi_bit_collision_candidates={collision_caveat_candidates}, "
         f"outcomes={dict(sorted(outcomes.items()))}",

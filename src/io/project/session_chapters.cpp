@@ -15,6 +15,8 @@
 #include <exception>
 #include <format>
 #include <limits>
+#include <map>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <string>
@@ -580,6 +582,102 @@ namespace lfs::io::project {
             return {};
         }
 
+        lfs::Result<void> validate_gui_area_tree(
+            const Json& areas) {
+            const bool has_explicit_identity =
+                std::ranges::any_of(
+                    areas, [](const Json& area) {
+                        return area.is_object() &&
+                               (area.contains("id") ||
+                                area.contains("parent_id"));
+                    });
+            if (!has_explicit_identity) {
+                if (areas.size() != 1) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "GUIL area tree has multiple implicit roots",
+                        "GUIL.layouts.areas");
+                }
+                return {};
+            }
+
+            std::map<std::string, std::optional<std::string>> parents;
+            for (const auto& area : areas) {
+                if (!area.is_object() || !area.contains("id") ||
+                    !area["id"].is_string() ||
+                    area["id"].get<std::string>().empty() ||
+                    !area.contains("parent_id") ||
+                    (!area["parent_id"].is_null() &&
+                     !area["parent_id"].is_string())) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "Every explicit GUIL area needs an id and nullable parent_id",
+                        "GUIL.layouts.areas");
+                }
+                const auto id = area["id"].get<std::string>();
+                std::optional<std::string> parent;
+                if (!area["parent_id"].is_null()) {
+                    parent = area["parent_id"].get<std::string>();
+                    if (parent->empty()) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "GUIL area parent_id cannot be empty",
+                            "GUIL.layouts.areas.parent_id");
+                    }
+                }
+                if (!parents.emplace(id, std::move(parent)).second) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "GUIL area ids must be unique",
+                        "GUIL.layouts.areas.id");
+                }
+            }
+
+            std::size_t roots = 0;
+            for (const auto& [id, parent] : parents) {
+                if (!parent) {
+                    ++roots;
+                } else if (!parents.contains(*parent)) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        std::format(
+                            "GUIL area {} references missing parent {}",
+                            id, *parent),
+                        "GUIL.layouts.areas.parent_id");
+                }
+            }
+            if (roots != 1) {
+                return fail<void>(
+                    lfs::ErrorCode::DataLoss,
+                    std::format(
+                        "GUIL area tree requires exactly one root; found {}",
+                        roots),
+                    "GUIL.layouts.areas.parent_id");
+            }
+
+            for (const auto& [origin, ignored] : parents) {
+                (void)ignored;
+                std::set<std::string> seen;
+                auto current = origin;
+                while (true) {
+                    if (!seen.insert(current).second) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            std::format(
+                                "GUIL area tree contains a cycle through {}",
+                                current),
+                            "GUIL.layouts.areas.parent_id");
+                    }
+                    const auto& parent = parents.at(current);
+                    if (!parent) {
+                        break;
+                    }
+                    current = *parent;
+                }
+            }
+            return {};
+        }
+
         lfs::Result<void> validate_gui(
             const Json& root) {
             if (root.value("version", 0) != 1) {
@@ -627,11 +725,19 @@ namespace lfs::io::project {
                         "Each GUIL layout needs active and non-empty areas",
                         "GUIL.layouts");
                 }
+                if (auto tree = validate_gui_area_tree(
+                        layout["areas"]);
+                    !tree) {
+                    return tree;
+                }
                 for (const auto& area :
                      layout["areas"]) {
                     if (!area.is_object() ||
                         !area.contains(
                             "rect_or_split_position") ||
+                        !area["rect_or_split_position"].is_object() ||
+                        !area["rect_or_split_position"].contains("kind") ||
+                        !area["rect_or_split_position"]["kind"].is_string() ||
                         !area.contains(
                             "active_space") ||
                         !area["active_space"].is_string() ||

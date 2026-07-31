@@ -641,6 +641,65 @@ namespace {
         EXPECT_EQ(missing.error().code(), lfs::ErrorCode::NotFound);
     }
 
+    TEST(ProjectContainerReader,
+         PreviewLocatorMismatchAndWrongCompressionInvalidateOnlyThePublishingSlot) {
+        TemporaryDirectory temporary;
+        const auto source = FIXTURES / "preview-locator.licht";
+        const auto original = require_result(ProjectReader::open(source));
+        ASSERT_EQ(original.commit().generation, 2u);
+        ASSERT_TRUE(original.preview());
+        const auto active_slot = original.selected_head().slot_id;
+        const auto active_head =
+            static_cast<std::size_t>(HEAD_SLOT_OFFSETS[active_slot]);
+
+        const auto expect_fallback = [&](const fs::path& path) {
+            auto opened = ProjectReader::open(path);
+            ASSERT_TRUE(opened)
+                << lfs::format_for_developer(opened.error());
+            EXPECT_EQ(opened->commit().generation, 1u);
+            EXPECT_FALSE(opened->warnings().empty());
+            EXPECT_FALSE(opened->preview().has_value());
+        };
+
+        const auto locator_path = temporary.path / "locator-mismatch.licht";
+        fs::copy_file(source, locator_path);
+        auto locator_bytes = read_file_bytes(locator_path);
+        put_u64(locator_bytes, active_head + 112,
+                original.preview()->offset + 64);
+        put_u32(locator_bytes, active_head + 4092,
+                crc_range(locator_bytes, active_head, 4092));
+        write_file_bytes(locator_path, locator_bytes);
+        expect_fallback(locator_path);
+
+        const auto compression_path =
+            temporary.path / "preview-compression.licht";
+        fs::copy_file(source, compression_path);
+        auto compression_bytes = read_file_bytes(compression_path);
+        const auto row = std::ranges::find_if(
+            original.chunks(), [](const ChunkInfo& chunk) {
+                return chunk.key.fourcc == FOURCC_THMB;
+            });
+        ASSERT_NE(row, original.chunks().end());
+        const auto row_index = static_cast<std::size_t>(
+            std::distance(original.chunks().begin(), row));
+        const auto index_row = static_cast<std::size_t>(
+            original.commit().index_offset + INDEX_HEADER_BYTES +
+            row_index * INDEX_ROW_BYTES);
+        compression_bytes[static_cast<std::size_t>(row->header_offset + 7)] =
+            static_cast<std::byte>(Compression::Zstd);
+        compression_bytes[index_row + 7] =
+            static_cast<std::byte>(Compression::Zstd);
+        put_u32(compression_bytes,
+                static_cast<std::size_t>(row->header_offset + 60),
+                crc_range(compression_bytes,
+                          static_cast<std::size_t>(row->header_offset), 60));
+        const std::array<std::uint32_t, 1> active_slots = {active_slot};
+        refresh_generation_envelope(
+            compression_bytes, original, active_slots);
+        write_file_bytes(compression_path, compression_bytes);
+        expect_fallback(compression_path);
+    }
+
     TEST(ProjectContainerReader, UnsupportedAuthorityIsInspectOnly) {
         ReaderOptions options;
         options.allow_unsupported_inspection = true;

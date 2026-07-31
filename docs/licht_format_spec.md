@@ -1,9 +1,8 @@
 # LichtFeld `.licht` Container Byte Grammar, Version 1.0
 
-Status: P0 frozen grammar for the `licht_format` branch. This document is the
-published on-disk contract. It specializes the normative structure and state
-machines in `PROJECT_FORMAT_PLAN.md` sections 1 through 3. No C or C++ object
-layout is part of the format.
+Status: published and frozen grammar for format 1.0. This document is the
+self-contained on-disk contract; no repository plan, source file, or C/C++
+object layout is required to implement it.
 
 ## 1. Conformance language and primitive encodings
 
@@ -119,7 +118,8 @@ every rule below and all transitively referenced metadata validate.
 
 ### 4.1 Preview locator and the foreign-reader contract
 
-The preview locator exists so that a thumbnailer or asset browser can extract a
+The preview locator is an **AUDIT-ONLY accelerator**, never semantic authority.
+It exists so that a thumbnailer or asset browser can extract a
 project preview without implementing the container: read the superblock, read
 both 4,096-byte head slots at their fixed offsets, CRC32c-validate each over
 `[0,4092)`, select the valid slot with the higher `head_sequence`, and read
@@ -572,6 +572,44 @@ version or required-reader capability. This fallback is never silent. A payload 
 found later by lazy verification leaves metadata inspectable but marks that
 chunk unusable; production UI hydration must not install partial state.
 
+### 11.1 Chapter and cross-chapter validation
+
+Semantic hydration is transactional: a truncated payload, a JSON type mismatch,
+an out-of-range enum, an excessive count, or a non-finite value produces a
+typed error before any partial project state is installed. The following 1.0
+decisions are normative:
+
+* Every `SELM` node UUID must exist in `SCNG`, and every selected Gaussian index
+  must be smaller than the bound splat count; otherwise hydration refuses the
+  selection before slicing.
+* A `REFS` content hash is authoritative. A matching hash accepts and refreshes
+  changed size/mtime cache hints. A mismatch leaves the reference unresolved
+  and requests an explicit relink. A missing file retains a placeholder row.
+* For a resumed training node, `CKPT.iteration` is the active trainer iteration
+  even when it differs from a `PRMS` strategy limit. `PRMS` still retains every
+  inactive strategy session. An unknown active strategy is refused. Any `CKPT`
+  legacy-payload window whose base plus length exceeds its stored payload is a
+  bounds error.
+* A `GUIL` area tree must have exactly one root, no missing parent, and no cycle.
+  An unknown space type without retained opaque state is invalid.
+* A `SEQR` keyframe naming a camera absent from `SCNG`/`VIEW` is refused with a
+  typed diagnostic. A missing `VIEW.active_camera_uuid` instead opens in the
+  documented `MissingActiveCamera` degraded state and selects a default camera.
+* `SCNG` rejects duplicate node UUIDs and parent cycles. A training node bound
+  to `CKPT` must not also have a live `SPLT` authority. Standalone `PPIS` is for
+  non-checkpoint ownership; a damaged standalone payload refuses hydration.
+* `METR` iterations are monotonic and all persisted values are finite. A
+  violation rejects the chapter without sorting or dropping samples.
+* A `THMB` locator must agree with the indexed `THMB` stored span and that row
+  must use stored compression. Disagreement invalidates the publishing head
+  slot; an older valid slot may be selected only with a visible warning.
+* A known fourcc at an unsupported chunk version is retained as opaque. Any
+  save that cannot declare capability bit 5 refuses rather than dropping it.
+  Unknown JSON members and UUID arrays likewise require capability bit 6.
+* Undeclared project/vendor capability bits 112–127 are inspectable but
+  write-unsafe. A sidecar base-reference key absent from its master is invalid.
+  A tombstone and live row sharing one key is duplicate-key corruption.
+
 ## 12. Inspect, extract, and verify behavior
 
 The independent reference CLI performs the complete metadata open sequence for
@@ -605,6 +643,17 @@ expected value/range, and observed value. The terminal taxonomy is:
 `extract` and `verify` require `open_gen_N`; they refuse
 `unsupported_newer` because interpreting or validating future payload
 semantics is outside this reader's declared capability set.
+
+For known JSON chapter payloads, duplicate object keys are invalid rather than
+first- or last-wins. A semantic reader MUST reject them consistently at every
+nesting level. A decoded JSON chapter greater than 67,108,864 bytes, or nesting
+that exceeds an implementation's bounded parser stack, MUST fail with a typed
+resource-exhaustion or data-loss result; it MUST NOT be silently dropped.
+
+For `METR`, sample iterations are non-negative and monotonically
+non-decreasing, and every persisted floating-point value is finite. A semantic
+reader rejects the entire `METR` chapter on violation; it never sorts, filters,
+or silently removes hostile samples.
 
 ## 13. Versioning and capability policy
 

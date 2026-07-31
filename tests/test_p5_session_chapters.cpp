@@ -9,6 +9,7 @@
 #include "gui/editor/python_editor.hpp"
 #include "io/project_document.hpp"
 #include "p5_matrix_rows.hpp"
+#include "p8_matrix_session_fixture.hpp"
 #include "project/session_state.hpp"
 #include "sequencer/timeline.hpp"
 #include "training/control/command_api.hpp"
@@ -20,6 +21,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <set>
 #include <stdexcept>
@@ -750,6 +752,88 @@ namespace {
         EXPECT_TRUE(
             prepareGuiSessionRestore(
                 std::move(session)));
+    }
+
+    TEST(P5SessionChapterTest,
+         GuilAreaTreeRejectsCyclesMissingParentsTwoRootsAndIncompleteOpaqueSpaces) {
+        const auto area_with_identity =
+            [](Json area, std::string id,
+               std::optional<std::string> parent) {
+                area["id"] = std::move(id);
+                area["parent_id"] = parent
+                                        ? Json(*parent)
+                                        : Json(nullptr);
+                return area;
+            };
+        const auto expect_data_loss = [](const Json& candidate) {
+            auto parsed = GuiLayoutChapter::parse(candidate.dump());
+            ASSERT_FALSE(parsed);
+            EXPECT_EQ(parsed.error().code(),
+                      lfs::ErrorCode::DataLoss);
+        };
+
+        GuiLayoutChapter chapter;
+        const Json baseline = root_json(chapter.dom());
+        const Json implicit_area = baseline["layouts"][0]["areas"][0];
+
+        Json cycle = baseline;
+        cycle["layouts"][0]["areas"] = Json::array({
+            area_with_identity(implicit_area, "root", std::nullopt),
+            area_with_identity(implicit_area, "loop-a", "loop-b"),
+            area_with_identity(implicit_area, "loop-b", "loop-a"),
+        });
+        expect_data_loss(cycle);
+
+        Json missing_parent = baseline;
+        missing_parent["layouts"][0]["areas"] = Json::array({
+            area_with_identity(implicit_area, "root", std::nullopt),
+            area_with_identity(implicit_area, "child", "absent"),
+        });
+        expect_data_loss(missing_parent);
+
+        Json two_roots = baseline;
+        two_roots["layouts"][0]["areas"] = Json::array({
+            area_with_identity(implicit_area, "root-a", std::nullopt),
+            area_with_identity(implicit_area, "root-b", std::nullopt),
+        });
+        expect_data_loss(two_roots);
+
+        Json missing_opaque = baseline;
+        missing_opaque["layouts"][0]["areas"][0]["spaces"].push_back(
+            Json{{"type", "vendor.missing_payload"}, {"version", 1}});
+        expect_data_loss(missing_opaque);
+    }
+
+    TEST(P5SessionChapterTest,
+         MissingViewCameraIsDocumentedDegradedStateButSequencerCameraRefusesHydration) {
+        const auto missing = lfs::core::generate_uuid_v4();
+
+        auto view_document = ProjectDocument::create(
+            lfs::core::generate_uuid_v4(), 100);
+        ASSERT_TRUE(view_document);
+        require_status(view_document->edit_view().dom().set(
+            "active_camera_uuid", missing.to_string()));
+        lfs::core::Scene view_scene;
+        auto view_plan = view_document->stage_hydration(view_scene);
+        ASSERT_TRUE(view_plan)
+            << lfs::format_for_developer(view_plan.error());
+        EXPECT_NE(std::ranges::find(
+                      view_document->degraded_states(),
+                      ProjectDocumentDegradedState::MissingActiveCamera),
+                  view_document->degraded_states().end());
+
+        auto sequence_document = ProjectDocument::create(
+            lfs::core::generate_uuid_v4(), 100);
+        ASSERT_TRUE(sequence_document);
+        require_status(sequence_document->edit_sequencer().dom().set_json(
+            "timeline.keyframes",
+            Json::array({Json{{"camera_uuid", missing.to_string()}}})));
+        lfs::core::Scene sequence_scene;
+        auto sequence_plan =
+            sequence_document->stage_hydration(sequence_scene);
+        ASSERT_FALSE(sequence_plan);
+        EXPECT_EQ(sequence_plan.error().code(),
+                  lfs::ErrorCode::DataLoss);
     }
 
     TEST(P5SessionChapterTest,
@@ -1873,3 +1957,12 @@ namespace {
     }
 
 } // namespace
+
+namespace lfs::test {
+
+    io::project::ProjectSessionChapters
+    make_p8_matrix_session() {
+        return make_matrix_session();
+    }
+
+} // namespace lfs::test

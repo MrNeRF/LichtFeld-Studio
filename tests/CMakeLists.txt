@@ -152,6 +152,8 @@ set(TEST_FILES
     test_project_chapters.cpp
     test_project_document.cpp
     test_project_lifecycle.cpp
+    test_p8_compatibility.cpp
+    test_p8_migrations.cpp
     test_job_registry.cpp
     test_p3_matrix_proof.cpp
     test_p5_session_chapters.cpp

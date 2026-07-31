@@ -8,6 +8,8 @@
 #include <format>
 #include <new>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace lfs::io {
@@ -15,6 +17,40 @@ namespace lfs::io {
     namespace {
 
         using Json = nlohmann::ordered_json;
+        constexpr std::size_t MAX_JSON_CHAPTER_BYTES =
+            64ull * 1024 * 1024;
+        constexpr std::size_t MAX_JSON_NESTING_DEPTH = 512;
+
+        bool exceeds_json_nesting_limit(
+            const std::string_view bytes) noexcept {
+            std::size_t depth = 0;
+            bool in_string = false;
+            bool escaped = false;
+            for (const char character : bytes) {
+                if (in_string) {
+                    if (escaped) {
+                        escaped = false;
+                    } else if (character == '\\') {
+                        escaped = true;
+                    } else if (character == '"') {
+                        in_string = false;
+                    }
+                    continue;
+                }
+                if (character == '"') {
+                    in_string = true;
+                } else if (character == '{' || character == '[') {
+                    ++depth;
+                    if (depth > MAX_JSON_NESTING_DEPTH) {
+                        return true;
+                    }
+                } else if ((character == '}' || character == ']') &&
+                           depth != 0) {
+                    --depth;
+                }
+            }
+            return false;
+        }
 
         struct PathSegments {
             std::vector<std::string_view> values;
@@ -222,8 +258,56 @@ namespace lfs::io {
         : root_(Json::object()) {}
 
     lfs::Result<JsonChapterDom> JsonChapterDom::parse(const std::string_view bytes) {
+        if (bytes.size() > MAX_JSON_CHAPTER_BYTES) {
+            return make_dom_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "The project JSON chapter is too large to load.",
+                std::format(
+                    "JSON chapter has {} bytes; maximum is {} bytes",
+                    bytes.size(), MAX_JSON_CHAPTER_BYTES));
+        }
+        if (exceeds_json_nesting_limit(bytes)) {
+            return make_dom_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "The project JSON chapter is nested too deeply to load.",
+                std::format(
+                    "JSON nesting exceeds the maximum depth of {}",
+                    MAX_JSON_NESTING_DEPTH));
+        }
         try {
-            return JsonChapterDom(Json::parse(bytes.begin(), bytes.end()));
+            bool duplicate_key = false;
+            std::string duplicate_name;
+            std::unordered_map<int, std::unordered_set<std::string>>
+                object_keys;
+            const auto reject_duplicate =
+                [&](const int depth, const Json::parse_event_t event,
+                    Json& parsed) {
+                    if (event == Json::parse_event_t::object_start) {
+                        object_keys[depth + 1].clear();
+                    } else if (event == Json::parse_event_t::key) {
+                        auto& keys = object_keys[depth];
+                        const auto key = parsed.get<std::string>();
+                        if (!keys.insert(key).second) {
+                            duplicate_key = true;
+                            duplicate_name = key;
+                        }
+                    } else if (event == Json::parse_event_t::object_end) {
+                        object_keys.erase(depth + 1);
+                    }
+                    return true;
+                };
+            auto parsed = Json::parse(
+                bytes.begin(), bytes.end(), reject_duplicate);
+            if (duplicate_key) {
+                return make_dom_error(
+                    lfs::ErrorCode::DataLoss,
+                    "The project JSON chapter contains a duplicate key.",
+                    std::format(
+                        "Duplicate JSON object key '{}' is forbidden; both parsers use reject semantics",
+                        duplicate_name),
+                    duplicate_name);
+            }
+            return JsonChapterDom(std::move(parsed));
         } catch (const nlohmann::json::parse_error& error) {
             return make_dom_error(
                 lfs::ErrorCode::DataLoss, "The project contains malformed JSON.",
