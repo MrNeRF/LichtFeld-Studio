@@ -5,6 +5,7 @@
 
 #include "python_lsp_client.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/services.hpp"
 #include "gui/editor/zep_rml_display.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -2398,20 +2399,20 @@ namespace lfs::vis::editor {
             const bool has_selection = hasEditableSelection();
             std::vector<gui::ContextMenuItem> items;
             if (has_selection && !read_only) {
-                items.push_back(gui::ContextMenuItem{.label = "Cut", .action = "cut"});
+                items.push_back(gui::ContextMenuItem{.label = lfs::event::LocalizationManager::getInstance().get("common.cut"), .action = "cut"});
             }
             if (has_selection) {
-                items.push_back(gui::ContextMenuItem{.label = "Copy", .action = "copy"});
+                items.push_back(gui::ContextMenuItem{.label = lfs::event::LocalizationManager::getInstance().get("common.copy"), .action = "copy"});
             }
             if (!read_only) {
                 items.push_back(gui::ContextMenuItem{
-                    .label = "Paste",
+                    .label = lfs::event::LocalizationManager::getInstance().get("common.paste"),
                     .action = "paste",
                     .separator_before = !items.empty(),
                 });
             }
             items.push_back(gui::ContextMenuItem{
-                .label = "Select All",
+                .label = lfs::event::LocalizationManager::getInstance().get("common.select_all"),
                 .action = "select-all",
                 .separator_before = !items.empty(),
             });

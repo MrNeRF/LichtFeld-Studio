@@ -17,6 +17,8 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+import lichtfeld as lf
+
 from .http import urlopen
 
 logger = logging.getLogger(__name__)
@@ -210,7 +212,7 @@ def _download_with_progress(
                     speed_str = _format_bytes(speed) + "/s"
                     eta_str = _format_time(eta_seconds) if eta_seconds > 0 else ""
                     
-                    status = f"Downloading... {int(percent * 100)}% ({_format_bytes(downloaded)} / {_format_bytes(total_size)}) {speed_str}"
+                    status = f"{lf.ui.tr('asset_manager.import_button_downloading')} {int(percent * 100)}% ({_format_bytes(downloaded)} / {_format_bytes(total_size)}) {speed_str}"
                     if eta_str:
                         status += f" ETA: {eta_str}"
                     
@@ -219,7 +221,7 @@ def _download_with_progress(
                     # Unknown size
                     elapsed = current_time - start_time
                     speed = downloaded / elapsed if elapsed > 0 else 0
-                    status = f"Downloading... {_format_bytes(downloaded)} ({_format_bytes(speed)}/s)"
+                    status = f"{lf.ui.tr('asset_manager.import_button_downloading')} {_format_bytes(downloaded)} ({_format_bytes(speed)}/s)"
                     on_progress(-1.0, status)
     
     if on_progress:
@@ -283,9 +285,9 @@ def _download_http(
             
             if on_progress:
                 if total_size:
-                    on_progress(0.0, f"Downloading... 0% (0 / {_format_bytes(total_size)})")
+            on_progress(0.0, f"{lf.ui.tr('asset_manager.import_button_downloading')} 0% (0 / {_format_bytes(total_size)})")
                 else:
-                    on_progress(0.0, "Downloading... (size unknown)")
+            on_progress(0.0, f"{lf.ui.tr('asset_manager.import_button_downloading')} (size unknown)")
             
             _download_with_progress(
                 resp,

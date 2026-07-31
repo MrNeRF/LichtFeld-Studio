@@ -4,6 +4,7 @@
 
 #include "gui/vram_hud_overlay.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "gui/layout_state.hpp"
 
 #include <RmlUi/Core/Context.h>
@@ -723,7 +724,8 @@ namespace lfs::vis::gui {
             rows_root_->SetInnerRML("");
             auto empty_ptr = document_->CreateElement("div");
             empty_ptr->SetAttribute("class", "vram-hud-empty");
-            empty_ptr->SetInnerRML("Waiting for training diagnostics...");
+            empty_ptr->SetInnerRML(
+                lfs::event::LocalizationManager::getInstance().get("common.waiting_training_diagnostics"));
             empty_row_ = rows_root_->AppendChild(std::move(empty_ptr));
         }
 

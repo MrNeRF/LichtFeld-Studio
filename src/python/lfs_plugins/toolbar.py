@@ -499,6 +499,7 @@ class _GizmoToolbarController:
             "tool",
             display_button["value"],
             display_button["icon_src"],
+            tooltip_key="ui.transform_tools",
             tooltip_text="Transform Tools",
             action_id=display_button["action_id"],
             shortcut_text=display_button["shortcut_text"],
@@ -1086,10 +1087,10 @@ class _UtilityToolbarController:
     _INPUT_SETTINGS_PANEL_ID = "lfs.input_settings"
     _PLUGIN_MARKETPLACE_PANEL_ID = "lfs.plugin_marketplace"
     _CAMERA_MODE_SPECS = (
-        ("camera-orbit", "orbit", "Orbit Camera"),
-        ("world", "trackball", "Free Orbit Camera"),
-        ("camera-fpv", "fpv", "Fly Camera"),
-        ("drone", "drone", "Drone Camera"),
+        ("camera-orbit", "orbit", "ui.orbit_camera", "Orbit Camera"),
+        ("world", "trackball", "ui.free_orbit_camera", "Free Orbit Camera"),
+        ("camera-fpv", "fpv", "ui.fly_camera", "Fly Camera"),
+        ("drone", "drone", "ui.drone_camera", "Drone Camera"),
     )
     _PRIMARY_ACTIONS = {
         "home": "CAMERA_RESET_HOME",
@@ -1132,10 +1133,11 @@ class _UtilityToolbarController:
                 "set_camera_navigation_mode",
                 mode_id,
                 _icon_src(icon_name),
+                tooltip_key=tooltip_key,
                 tooltip_text=label,
                 selected=camera_mode == mode_id,
             )
-            for icon_name, mode_id, label in self._CAMERA_MODE_SPECS
+            for icon_name, mode_id, tooltip_key, label in self._CAMERA_MODE_SPECS
         ]
         primary_buttons = [
             _button_record("util-home", "home", "", _icon_src("home"),

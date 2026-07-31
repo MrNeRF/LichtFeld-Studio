@@ -937,7 +937,7 @@ class PluginMarketplacePanel(Panel):
             return
 
         if is_loading and entry_count == 0:
-            text = "Fetching plugin registry..."
+            text = lf.ui.tr("plugin_marketplace.loading")
             tone = "status-info"
         elif registry_loaded:
             noun = "plugin" if entry_count == 1 else "plugins"

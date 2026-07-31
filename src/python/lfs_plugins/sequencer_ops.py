@@ -19,7 +19,7 @@ def _shortcut(action, fallback):
 class AddKeyframeOperator(Operator):
     """Add a keyframe at the current camera position."""
 
-    label = "Add Keyframe Here"
+    label = "sequencer.add_keyframe_here"
     shortcut = ""
 
     def execute(self, context):
@@ -30,7 +30,7 @@ class AddKeyframeOperator(Operator):
 class UpdateKeyframeOperator(Operator):
     """Update selected keyframe to current camera position."""
 
-    label = "Update to Current View"
+    label = "sequencer.update_to_current_view"
     shortcut = ""
 
     def execute(self, context):
@@ -41,7 +41,7 @@ class UpdateKeyframeOperator(Operator):
 class PlayPauseOperator(Operator):
     """Toggle sequencer playback."""
 
-    label = "Play/Pause"
+    label = "action.sequencer_play_pause"
     shortcut = ""
 
     def execute(self, context):

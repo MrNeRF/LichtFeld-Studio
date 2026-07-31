@@ -1039,7 +1039,8 @@ namespace lfs::vis {
             el_btn_dock_toggle_->SetClass("hidden", false);
         }
         if (el_dock_toggle_label_)
-            el_dock_toggle_label_->SetInnerRML(floating_ ? "Dock" : "Undock");
+            el_dock_toggle_label_->SetInnerRML(
+                lfs::event::LocalizationManager::getInstance().get(floating_ ? "ui.dock" : "ui.undock"));
         if (el_btn_close_panel_) {
             el_btn_close_panel_->SetAttribute("data-tooltip", "common.close");
             el_btn_close_panel_->SetClass("hidden", !floating_);

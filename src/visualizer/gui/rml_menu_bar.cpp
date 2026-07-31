@@ -4,6 +4,7 @@
 
 #include "gui/rml_menu_bar.hpp"
 #include "core/events.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
@@ -719,13 +720,13 @@ namespace lfs::vis::gui {
             struct NavButtonSpec {
                 NavMode mode;
                 const char* icon;
-                const char* tooltip;
+                std::string tooltip;
             };
-            static constexpr NavButtonSpec kNavButtons[] = {
-                {NavMode::Orbit, "camera-orbit", "Orbit Camera"},
-                {NavMode::Trackball, "world", "Free Orbit Camera"},
-                {NavMode::FPV, "camera-fpv", "Fly Camera"},
-                {NavMode::Drone, "drone", "Drone Camera"},
+            const NavButtonSpec kNavButtons[] = {
+                {NavMode::Orbit, "camera-orbit", lfs::event::LocalizationManager::getInstance().get("ui.orbit_camera")},
+                {NavMode::Trackball, "world", lfs::event::LocalizationManager::getInstance().get("ui.free_orbit_camera")},
+                {NavMode::FPV, "camera-fpv", lfs::event::LocalizationManager::getInstance().get("ui.fly_camera")},
+                {NavMode::Drone, "drone", lfs::event::LocalizationManager::getInstance().get("ui.drone_camera")},
             };
             const auto mode = ic->cameraNavigationMode();
             for (const auto& spec : kNavButtons) {
@@ -992,7 +993,8 @@ namespace lfs::vis::gui {
             if (split_view != last_window_split_view_) {
                 menu_window_split_view_->SetClass("selected", split_view);
                 menu_window_split_view_->SetAttribute(
-                    "title", split_view ? "Exit Independent Split View" : "Independent Split View");
+                    "title", lfs::event::LocalizationManager::getInstance().get(
+                                  split_view ? "ui.exit_independent_split_view" : "ui.independent_split_view"));
                 last_window_split_view_ = split_view;
                 render_needed_ = true;
             }
@@ -1000,7 +1002,8 @@ namespace lfs::vis::gui {
 
         if (menu_window_toggle_ui_ && ui_hidden_ != last_ui_hidden_) {
             menu_window_toggle_ui_->SetClass("selected", ui_hidden_);
-            menu_window_toggle_ui_->SetAttribute("title", ui_hidden_ ? "Show UI" : "Hide UI");
+            menu_window_toggle_ui_->SetAttribute(
+                "title", lfs::event::LocalizationManager::getInstance().get(ui_hidden_ ? "ui.show_ui" : "ui.hide_ui"));
             last_ui_hidden_ = ui_hidden_;
             render_needed_ = true;
         }
@@ -1013,7 +1016,9 @@ namespace lfs::vis::gui {
             }();
             if (maximized != last_window_maximized_) {
                 menu_window_maximize_->SetClass("maximized", maximized);
-                menu_window_maximize_->SetAttribute("title", maximized ? "Restore Window" : "Maximize Window");
+                menu_window_maximize_->SetAttribute(
+                    "title", lfs::event::LocalizationManager::getInstance().get(
+                                  maximized ? "ui.restore_window" : "ui.maximize_window"));
                 last_window_maximized_ = maximized;
                 render_needed_ = true;
             }

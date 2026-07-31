@@ -458,16 +458,17 @@ namespace {
 
         std::vector<lfs::vis::gui::ContextMenuItem> items;
         if (has_selection) {
-            items.push_back(lfs::vis::gui::ContextMenuItem{.label = "Copy", .action = "copy"});
+            items.push_back(lfs::vis::gui::ContextMenuItem{
+                .label = lfs::event::LocalizationManager::getInstance().get("common.copy"), .action = "copy"});
         }
         items.push_back(lfs::vis::gui::ContextMenuItem{
-            .label = "Copy All",
+            .label = lfs::event::LocalizationManager::getInstance().get("common.copy_all"),
             .action = "copy-all",
             .separator_before = has_selection,
         });
         if (!read_only) {
             items.push_back(lfs::vis::gui::ContextMenuItem{
-                .label = "Paste",
+                .label = lfs::event::LocalizationManager::getInstance().get("common.paste"),
                 .action = "paste",
                 .separator_before = !items.empty(),
             });

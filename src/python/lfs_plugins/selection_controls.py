@@ -80,7 +80,7 @@ def _execute_stage(stage):
     result = stage.execute()
     result_get = getattr(result, "get", None)
     if result_get is None:
-        return "Operation returned an invalid result."
+        return _ui_label("selection.operation_failed_generic", "Operation failed.")
     if bool(result_get("ok", False)):
         return None
     error = str(result_get("error", "") or "").strip()

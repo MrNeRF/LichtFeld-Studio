@@ -52,20 +52,20 @@
                 <div id="menu-window-split-view"
                      class="icon-btn menu-window-btn menu-window-utility-btn"
                      data-action="toggle_independent_split_view"
-                     title="Independent Split View">
+                     title="@tr:ui.independent_split_view">
                     <img src="../icon/layout-columns.png" />
                 </div>
                 <div id="menu-window-toggle-ui"
                      class="icon-btn menu-window-btn menu-window-utility-btn"
                      data-action="window_toggle_ui"
-                     title="Hide UI">
+                     title="@tr:ui.hide_ui">
                     <img src="../icon/layout-off.png" />
                 </div>
                 <div class="menu-window-separator"></div>
                 <div id="menu-window-minimize"
                      class="icon-btn menu-window-btn"
                      data-action="window_minimize"
-                     title="Minimize">
+                     title="@tr:ui.minimize">
                     <div class="window-icon window-icon-minimize">
                         <div class="window-minimize-line"></div>
                     </div>
@@ -73,7 +73,7 @@
                 <div id="menu-window-maximize"
                      class="icon-btn menu-window-btn"
                      data-action="window_toggle_maximize"
-                     title="Maximize Window">
+                     title="@tr:ui.maximize_window">
                     <div class="window-icon window-icon-maximize">
                         <div class="window-maximize-box"></div>
                     </div>
@@ -85,7 +85,7 @@
                 <div id="menu-window-close"
                      class="icon-btn menu-window-btn menu-window-close"
                      data-action="window_close"
-                     title="Close">
+                     title="@tr:common.close">
                     <div class="window-icon window-icon-close">
                         <div class="window-close-line window-close-line-a"></div>
                         <div class="window-close-line window-close-line-b"></div>

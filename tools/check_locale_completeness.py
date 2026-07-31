@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Validate shipped locale keys and std::format placeholders against en.json."""
+"""Validate locale keys, formatting, and std::format placeholders against en.json."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import string
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCALES_DIR = PROJECT_ROOT / "src" / "visualizer" / "gui" / "resources" / "locales"
+JSON_KEY_PATTERN = re.compile(r'(?<!\\)"(?:\\.|[^"\\])*"\s*:')
 
 
 def flatten_strings(data: dict[str, Any], prefix: str = "") -> dict[str, str]:
@@ -36,6 +38,17 @@ def load_locale(path: Path) -> dict[str, str]:
     return flatten_strings(data)
 
 
+def compact_key_lines(path: Path) -> list[tuple[int, int]]:
+    """Return lines containing more than one JSON object key."""
+    findings: list[tuple[int, int]] = []
+    with path.open(encoding="utf-8") as locale_file:
+        for line_number, line in enumerate(locale_file, start=1):
+            key_count = len(JSON_KEY_PATTERN.findall(line))
+            if key_count > 1:
+                findings.append((line_number, key_count))
+    return findings
+
+
 def placeholders(value: str) -> tuple[str, ...]:
     """Return normalized format placeholders, raising ValueError for malformed braces."""
     return tuple(sorted(
@@ -53,6 +66,7 @@ en.json is the canonical locale. The default check validates every shipped
 locale and exits with status 1 when a locale:
   - omits a key from en.json;
   - contains an unexpected or obsolete key; or
+  - places more than one JSON key on the same physical line;
   - has malformed or mismatched std::format placeholders.
 
 Named placeholders may be reordered to suit the target language. Identical
@@ -101,6 +115,13 @@ def main() -> int:
     identical_reports: list[tuple[str, list[str]]] = []
 
     for locale_path in sorted(LOCALES_DIR.glob("*.json")):
+        compact_lines = compact_key_lines(locale_path)
+        if compact_lines:
+            failures.append(f"{locale_path.name} has multiple JSON keys on the same line:")
+            failures.extend(
+                f"  line {line_number}: {key_count} keys; keep one key per line"
+                for line_number, key_count in compact_lines
+            )
         if locale_path == english_path:
             continue
         locale = load_locale(locale_path)
