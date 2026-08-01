@@ -103,7 +103,7 @@ target_include_directories(lichtfeld_format_tests PRIVATE
 target_compile_definitions(lichtfeld_format_tests PRIVATE
     LFS_FORMAT_TEST_TARGET
     PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
-    $<$<PLATFORM_ID:Windows>:LFS_CORE_EXPORTS>
+    $<$<PLATFORM_ID:Windows>:LFS_CORE_EXPORTS;LFS_LOGGER_EXPORTS>
 )
 target_link_libraries(lichtfeld_format_tests PRIVATE
     GTest::gtest_main
