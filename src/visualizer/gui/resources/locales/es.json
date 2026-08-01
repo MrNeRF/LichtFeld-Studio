@@ -63,6 +63,7 @@
     "remove": "Quitar",
     "delete": "Eliminar",
     "edit": "Editar",
+    "filter": "Filtro",
     "browse": "Examinar...",
     "apply": "Aplicar",
     "reset": "Restablecer",
@@ -278,7 +279,33 @@
     "empty": "No hay directorios supervisados.",
     "scanning": "Analizando...",
     "done": "Listo",
-    "save_scan": "Guardar y analizar"
+    "save_scan": "Guardar y analizar",
+    "scan_cancelling": "Cancelando escaneo...",
+    "scan_no_directories": "No hay directorios vigilados para escanear.",
+    "scan_preparing_one": "Preparando el escaneo de 1 carpeta...",
+    "scan_preparing_many": "Preparando el escaneo de {count} carpetas...",
+    "scan_backend_unavailable": "Error de escaneo: el backend del Administrador de recursos no está disponible.",
+    "scan_cancelled": "Escaneo cancelado.",
+    "scan_path": "Escaneando {path}",
+    "scan_progress": "Escaneando {path} ({folders} carpetas, {assets} recursos encontrados)",
+    "scan_no_assets": "No se encontraron recursos importables en {path}",
+    "scan_registering": "Registrando {count} recursos de {path}",
+    "scan_registering_progress": "Registrando {processed}/{total} recursos de {path}",
+    "scan_added": "Se añadieron {added} de {total}",
+    "scan_already_cataloged": "Se encontraron {count}, ya catalogados",
+    "scan_status_path": "{status}: {path}",
+    "scan_failed_path": "No se pudo escanear {path}: {error}",
+    "scan_cancelled_summary": "Escaneo cancelado. Se encontraron {discovered}, se añadieron {added}.",
+    "scan_complete_summary": "Escaneo completado. Se encontraron {discovered}, se añadieron {added}.",
+    "scan_save_failed_summary": "El escaneo terminó, pero no se pudo guardar. Se encontraron {discovered}, se añadieron {added}.",
+    "scan_complete_no_new": "Escaneo completado. Se encontraron {discovered}, no se añadieron recursos nuevos.",
+    "scan_finish_failed": "No se pudo finalizar el escaneo: {error}",
+    "scan_log_queued": "En cola",
+    "scan_log_no_assets": "Sin recursos",
+    "scan_log_scanning_found": "Escaneando ({count} encontrados)",
+    "scan_log_registering_found": "Registrando ({count} encontrados)",
+    "scan_log_registering_counts": "Registrando ({created} nuevos, {skipped} omitidos)",
+    "scan_log_failed": "Error"
   },
   "transform": {
     "node": "Nodo: %s",
@@ -864,7 +891,13 @@
     "status_complete": "¡Completado!",
     "tooltip.refresh": "Volver a escanear todos los directorios de activos y actualizar los metadatos del catálogo",
     "tooltip.clean_missing": "Eliminar entradas del catálogo cuyos archivos ya no existen en el disco",
-    "folder.watch_dirs_badge": "Supervisados"
+    "folder.watch_dirs_badge": "Supervisados",
+    "error_download_failed": "Error de descarga",
+    "error_unsupported_url": "URL no compatible",
+    "error_extract_failed": "Error de extracción",
+    "error_unknown": "Error desconocido",
+    "error_empty_url": "Introduzca una URL",
+    "status_cancelling": "Cancelando..."
   },
   "video_extractor": {
     "title": "Extraer fotogramas de video",
@@ -1875,15 +1908,15 @@
       "status_selection": "La región de comparación marcada pasa a ser la selección activa de gaussianas.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} gaussianas",
       "empty": {
-          "title": "Comparación no disponible",
-          "message": "Elige una segunda métrica para ver cómo se agrupan dos propiedades de las gaussianas.",
+        "title": "Comparación no disponible",
+        "message": "Elige una segunda métrica para ver cómo se agrupan dos propiedades de las gaussianas.",
         "metric_unavailable": {
-            "title": "Métrica de comparación no disponible",
-            "message": "No se pudo leer la métrica de comparación del modelo combinado de gaussianas."
+          "title": "Métrica de comparación no disponible",
+          "message": "No se pudo leer la métrica de comparación del modelo combinado de gaussianas."
         },
         "no_visible_values": {
-            "title": "No hay valores comparables",
-            "message": "El par de métricas seleccionado no contiene muestras finitas visibles para visualizar."
+          "title": "No hay valores comparables",
+          "message": "El par de métricas seleccionado no contiene muestras finitas visibles para visualizar."
         }
       }
     },
@@ -1896,28 +1929,28 @@
     },
     "empty": {
       "unavailable": {
-          "title": "Histograma no disponible",
-          "message": "Cambia a una vista o escena de edición con splats gaussianos para inspeccionar una distribución."
+        "title": "Histograma no disponible",
+        "message": "Cambia a una vista o escena de edición con splats gaussianos para inspeccionar una distribución."
       },
       "no_scene": {
-          "title": "No hay ninguna escena cargada",
-          "message": "Carga una escena de gaussianas y vuelve a abrir el panel de histograma."
+        "title": "No hay ninguna escena cargada",
+        "message": "Carga una escena de gaussianas y vuelve a abrir el panel de histograma."
       },
       "no_visible_gaussians": {
-          "title": "No hay gaussianas visibles",
-          "message": "El histograma solo funciona cuando la escena activa contiene un modelo de gaussianas visible."
+        "title": "No hay gaussianas visibles",
+        "message": "El histograma solo funciona cuando la escena activa contiene un modelo de gaussianas visible."
       },
       "metric_unavailable": {
-          "title": "Métrica no disponible",
-          "message": "No se pudo leer la métrica seleccionada del modelo combinado de gaussianas."
+        "title": "Métrica no disponible",
+        "message": "No se pudo leer la métrica seleccionada del modelo combinado de gaussianas."
       },
       "no_visible_values": {
-          "title": "No hay valores visibles",
-          "message": "La métrica seleccionada no contiene muestras finitas visibles para visualizar."
+        "title": "No hay valores visibles",
+        "message": "La métrica seleccionada no contiene muestras finitas visibles para visualizar."
       },
       "no_selected_values": {
-          "title": "No hay muestras en la selección",
-          "message": "Los modelos seleccionados no contienen muestras finitas para esta métrica."
+        "title": "No hay muestras en la selección",
+        "message": "Los modelos seleccionados no contienen muestras finitas para esta métrica."
       }
     },
     "metric": {

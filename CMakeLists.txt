@@ -191,6 +191,7 @@ configure_file(
 
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
+option(BUILD_LOCALIZATION_TESTS "Register headless localization contract tests without LibTorch" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -1274,11 +1275,13 @@ endif()
 # =============================================================================
 # TESTING (Optional)
 # =============================================================================
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_LOCALIZATION_TESTS)
     enable_testing()
     add_subdirectory(tests)
     if(BUILD_UNICODE_TEST_ONLY)
         message(STATUS "Unicode path test enabled. Build with 'ninja unicode_path_test' and run with 'ctest -R UnicodePathTest'")
+    elseif(BUILD_LOCALIZATION_TESTS)
+        message(STATUS "Headless localization tests enabled. Build with 'ninja test_localization_contracts' and run with 'ctest -R LocalizationContracts'")
     else()
         message(STATUS "Tests enabled. Build with 'ninja lichtfeld_tests' and run with 'ninja run_tests' or 'ctest -L fast'")
     endif()

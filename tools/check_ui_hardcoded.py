@@ -26,7 +26,7 @@ STRING_LITERAL = re.compile(r'"((?:\\.|[^"\\])*)"')
 RML_TEXT = re.compile(r">([^<>{}][^<>{}]*[A-Za-z][^<>{}]*)<")
 UI_SINK = re.compile(
     r"\b(SetText|SetInnerRML|body_rml|\.title\s*=|\.label\s*=|bind_func\(|"
-    r"\.stage\s*=|\.error\s*=|\bstatus\s*=|addError\(|fail_start\(|std::unexpected\(|"
+    r"\.stage\s*=|\.error\s*=|\bstatus\s*=|_set_scan_log_entry\(|addError\(|fail_start\(|std::unexpected\(|"
     r"set_text\(|set_inner_rml\(|message_dialog\()"
 )
 IGNORE_LINE = re.compile(r"\b(LOG_(?:TRACE|DEBUG|INFO|WARN|ERROR)|#include)\b")

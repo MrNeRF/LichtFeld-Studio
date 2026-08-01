@@ -253,7 +253,13 @@
     "status_complete": "Terminé !",
     "tooltip.refresh": "Rescanner tous les répertoires d'actifs et mettre à jour les métadonnées du catalogue",
     "tooltip.clean_missing": "Supprimer les entrées du catalogue dont les fichiers n'existent plus sur le disque",
-    "folder.watch_dirs_badge": "Surveillé"
+    "folder.watch_dirs_badge": "Surveillé",
+    "error_download_failed": "Échec du téléchargement",
+    "error_unsupported_url": "URL non prise en charge",
+    "error_extract_failed": "Échec de l’extraction",
+    "error_unknown": "Erreur inconnue",
+    "error_empty_url": "Saisissez une URL",
+    "status_cancelling": "Annulation..."
   },
   "training": {
     "section.dataset": "Dataset",
@@ -630,6 +636,7 @@
     "remove": "Retirer",
     "delete": "Supprimer",
     "edit": "Éditer",
+    "filter": "Filtrer",
     "browse": "Parcourir...",
     "apply": "Appliquer",
     "reset": "Réinitialiser",
@@ -1475,7 +1482,33 @@
     "empty": "Aucun répertoire surveillé.",
     "scanning": "Analyse...",
     "done": "Terminé",
-    "save_scan": "Enregistrer et analyser"
+    "save_scan": "Enregistrer et analyser",
+    "scan_cancelling": "Annulation de l’analyse...",
+    "scan_no_directories": "Aucun dossier surveillé à analyser.",
+    "scan_preparing_one": "Préparation de l’analyse d’un dossier...",
+    "scan_preparing_many": "Préparation de l’analyse de {count} dossiers...",
+    "scan_backend_unavailable": "Échec de l’analyse : le backend du gestionnaire de ressources est indisponible.",
+    "scan_cancelled": "Analyse annulée.",
+    "scan_path": "Analyse de {path}",
+    "scan_progress": "Analyse de {path} ({folders} dossiers, {assets} ressources trouvées)",
+    "scan_no_assets": "Aucune ressource importable trouvée dans {path}",
+    "scan_registering": "Enregistrement de {count} ressources depuis {path}",
+    "scan_registering_progress": "Enregistrement de {processed}/{total} ressources depuis {path}",
+    "scan_added": "{added} ajoutées sur {total}",
+    "scan_already_cataloged": "{count} trouvées, déjà cataloguées",
+    "scan_status_path": "{status} : {path}",
+    "scan_failed_path": "Échec de l’analyse de {path} : {error}",
+    "scan_cancelled_summary": "Analyse annulée. {discovered} trouvées, {added} ajoutées.",
+    "scan_complete_summary": "Analyse terminée. {discovered} trouvées, {added} ajoutées.",
+    "scan_save_failed_summary": "Analyse terminée, mais l’enregistrement a échoué. {discovered} trouvées, {added} ajoutées.",
+    "scan_complete_no_new": "Analyse terminée. {discovered} trouvées, aucune nouvelle ressource ajoutée.",
+    "scan_finish_failed": "Impossible de terminer l’analyse : {error}",
+    "scan_log_queued": "En attente",
+    "scan_log_no_assets": "Aucune ressource",
+    "scan_log_scanning_found": "Analyse ({count} trouvées)",
+    "scan_log_registering_found": "Enregistrement ({count} trouvées)",
+    "scan_log_registering_counts": "Enregistrement ({created} nouvelles, {skipped} ignorées)",
+    "scan_log_failed": "Échec"
   },
   "axis": {
     "x": "X :",
@@ -1875,15 +1908,15 @@
       "status_selection": "La région de comparaison marquée devient la sélection active de gaussiennes.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} gaussiennes",
       "empty": {
-          "title": "Comparaison indisponible",
-          "message": "Choisissez une seconde métrique pour voir comment deux propriétés des gaussiennes se regroupent.",
+        "title": "Comparaison indisponible",
+        "message": "Choisissez une seconde métrique pour voir comment deux propriétés des gaussiennes se regroupent.",
         "metric_unavailable": {
-            "title": "Métrique de comparaison indisponible",
-            "message": "La métrique de comparaison n'a pas pu être lue depuis le modèle de gaussiennes combiné."
+          "title": "Métrique de comparaison indisponible",
+          "message": "La métrique de comparaison n'a pas pu être lue depuis le modèle de gaussiennes combiné."
         },
         "no_visible_values": {
-            "title": "Aucune valeur comparable",
-            "message": "La paire de métriques sélectionnée ne contient aucun échantillon fini visible à afficher."
+          "title": "Aucune valeur comparable",
+          "message": "La paire de métriques sélectionnée ne contient aucun échantillon fini visible à afficher."
         }
       }
     },
@@ -1896,28 +1929,28 @@
     },
     "empty": {
       "unavailable": {
-          "title": "Histogramme indisponible",
-          "message": "Passez à une vue ou une scène d'édition contenant des splats gaussiens pour analyser une distribution."
+        "title": "Histogramme indisponible",
+        "message": "Passez à une vue ou une scène d'édition contenant des splats gaussiens pour analyser une distribution."
       },
       "no_scene": {
-          "title": "Aucune scène chargée",
-          "message": "Chargez une scène de gaussiennes, puis rouvrez le panneau d'histogramme."
+        "title": "Aucune scène chargée",
+        "message": "Chargez une scène de gaussiennes, puis rouvrez le panneau d'histogramme."
       },
       "no_visible_gaussians": {
-          "title": "Aucune gaussienne visible",
-          "message": "L'histogramme fonctionne uniquement lorsque la scène active contient un modèle de gaussiennes visible."
+        "title": "Aucune gaussienne visible",
+        "message": "L'histogramme fonctionne uniquement lorsque la scène active contient un modèle de gaussiennes visible."
       },
       "metric_unavailable": {
-          "title": "Métrique indisponible",
-          "message": "La métrique sélectionnée n'a pas pu être lue depuis le modèle de gaussiennes combiné."
+        "title": "Métrique indisponible",
+        "message": "La métrique sélectionnée n'a pas pu être lue depuis le modèle de gaussiennes combiné."
       },
       "no_visible_values": {
-          "title": "Aucune valeur visible",
-          "message": "La métrique sélectionnée ne contient aucun échantillon fini visible à afficher."
+        "title": "Aucune valeur visible",
+        "message": "La métrique sélectionnée ne contient aucun échantillon fini visible à afficher."
       },
       "no_selected_values": {
-          "title": "Aucun échantillon dans la sélection",
-          "message": "Les modèles sélectionnés ne contiennent aucun échantillon fini pour cette métrique."
+        "title": "Aucun échantillon dans la sélection",
+        "message": "Les modèles sélectionnés ne contiennent aucun échantillon fini pour cette métrique."
       }
     },
     "metric": {

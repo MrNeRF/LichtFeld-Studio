@@ -3,6 +3,29 @@
 
 # Testing module - comprehensive tests for all components
 
+# =============================================================================
+# Headless localization contracts (no LibTorch/CUDA)
+# =============================================================================
+if(BUILD_LOCALIZATION_TESTS)
+    find_package(Python REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME LocalizationContracts
+        COMMAND ${Python_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/python/test_localization_contracts.py
+    )
+    set_tests_properties(LocalizationContracts PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        TIMEOUT 30
+    )
+    add_custom_target(test_localization_contracts
+        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R LocalizationContracts
+        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/CTestTestfile.cmake
+        USES_TERMINAL
+    )
+    message(STATUS "Registered headless localization contract tests (no LibTorch)")
+    return()
+endif()
+
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 

@@ -253,7 +253,13 @@
     "status_complete": "Abgeschlossen!",
     "tooltip.refresh": "Alle Asset-Verzeichnisse neu scannen und Katalog-Metadaten aktualisieren",
     "tooltip.clean_missing": "Katalogeinträge entfernen, deren Dateien nicht mehr auf der Festplatte existieren",
-    "folder.watch_dirs_badge": "Überwacht"
+    "folder.watch_dirs_badge": "Überwacht",
+    "error_download_failed": "Download fehlgeschlagen",
+    "error_unsupported_url": "Nicht unterstützte URL",
+    "error_extract_failed": "Entpacken fehlgeschlagen",
+    "error_unknown": "Unbekannter Fehler",
+    "error_empty_url": "Geben Sie eine URL ein",
+    "status_cancelling": "Wird abgebrochen..."
   },
   "training": {
     "section.dataset": "Datensatz",
@@ -630,6 +636,7 @@
     "remove": "Entfernen",
     "delete": "Löschen",
     "edit": "Bearbeiten",
+    "filter": "Filter",
     "browse": "Durchsuchen...",
     "apply": "Anwenden",
     "reset": "Zurücksetzen",
@@ -1475,7 +1482,33 @@
     "empty": "Keine überwachten Verzeichnisse.",
     "scanning": "Wird durchsucht...",
     "done": "Fertig",
-    "save_scan": "Speichern und durchsuchen"
+    "save_scan": "Speichern und durchsuchen",
+    "scan_cancelling": "Scan wird abgebrochen...",
+    "scan_no_directories": "Keine überwachten Ordner zum Scannen.",
+    "scan_preparing_one": "Scan von 1 Ordner wird vorbereitet...",
+    "scan_preparing_many": "Scan von {count} Ordnern wird vorbereitet...",
+    "scan_backend_unavailable": "Scan fehlgeschlagen: Asset-Manager-Backend ist nicht verfügbar.",
+    "scan_cancelled": "Scan abgebrochen.",
+    "scan_path": "Scanne {path}",
+    "scan_progress": "Scanne {path} ({folders} Ordner, {assets} Assets gefunden)",
+    "scan_no_assets": "Keine importierbaren Assets in {path} gefunden",
+    "scan_registering": "Registriere {count} Assets aus {path}",
+    "scan_registering_progress": "Registriere {processed}/{total} Assets aus {path}",
+    "scan_added": "{added} von {total} hinzugefügt",
+    "scan_already_cataloged": "{count} gefunden, bereits katalogisiert",
+    "scan_status_path": "{status}: {path}",
+    "scan_failed_path": "Scannen von {path} fehlgeschlagen: {error}",
+    "scan_cancelled_summary": "Scan abgebrochen. {discovered} gefunden, {added} hinzugefügt.",
+    "scan_complete_summary": "Scan abgeschlossen. {discovered} gefunden, {added} hinzugefügt.",
+    "scan_save_failed_summary": "Scan beendet, Speichern fehlgeschlagen. {discovered} gefunden, {added} hinzugefügt.",
+    "scan_complete_no_new": "Scan abgeschlossen. {discovered} gefunden, keine neuen Assets hinzugefügt.",
+    "scan_finish_failed": "Scan konnte nicht abgeschlossen werden: {error}",
+    "scan_log_queued": "Wartend",
+    "scan_log_no_assets": "Keine Assets",
+    "scan_log_scanning_found": "Scanne ({count} gefunden)",
+    "scan_log_registering_found": "Registriere ({count} gefunden)",
+    "scan_log_registering_counts": "Registriere ({created} neu, {skipped} übersprungen)",
+    "scan_log_failed": "Fehlgeschlagen"
   },
   "axis": {
     "x": "X:",
@@ -1875,15 +1908,15 @@
       "status_selection": "Die markierte Vergleichsregion wird zur aktiven Auswahl Gaußscher Splats.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaußsche Splats",
       "empty": {
-          "title": "Vergleich nicht verfügbar",
-          "message": "Wählen Sie eine zweite Metrik, um zu sehen, wie zwei Eigenschaften Gaußscher Splats zusammen gruppiert sind.",
+        "title": "Vergleich nicht verfügbar",
+        "message": "Wählen Sie eine zweite Metrik, um zu sehen, wie zwei Eigenschaften Gaußscher Splats zusammen gruppiert sind.",
         "metric_unavailable": {
-            "title": "Vergleichsmetrik nicht verfügbar",
-            "message": "Die Vergleichsmetrik konnte nicht aus dem kombinierten Gauß-Modell gelesen werden."
+          "title": "Vergleichsmetrik nicht verfügbar",
+          "message": "Die Vergleichsmetrik konnte nicht aus dem kombinierten Gauß-Modell gelesen werden."
         },
         "no_visible_values": {
-            "title": "Keine vergleichbaren Werte",
-            "message": "Das ausgewählte Metrikpaar enthält keine sichtbaren endlichen Stichproben zur Darstellung."
+          "title": "Keine vergleichbaren Werte",
+          "message": "Das ausgewählte Metrikpaar enthält keine sichtbaren endlichen Stichproben zur Darstellung."
         }
       }
     },
@@ -1896,28 +1929,28 @@
     },
     "empty": {
       "unavailable": {
-          "title": "Histogramm nicht verfügbar",
-          "message": "Wechseln Sie zu einer Ansicht oder Bearbeitungsszene mit Gaußschen Splats, um eine Verteilung zu untersuchen."
+        "title": "Histogramm nicht verfügbar",
+        "message": "Wechseln Sie zu einer Ansicht oder Bearbeitungsszene mit Gaußschen Splats, um eine Verteilung zu untersuchen."
       },
       "no_scene": {
-          "title": "Keine Szene geladen",
-          "message": "Laden Sie eine Gauß-Szene und öffnen Sie dann das Histogramm-Panel erneut."
+        "title": "Keine Szene geladen",
+        "message": "Laden Sie eine Gauß-Szene und öffnen Sie dann das Histogramm-Panel erneut."
       },
       "no_visible_gaussians": {
-          "title": "Keine sichtbaren Gaußschen Splats",
-          "message": "Das Histogramm funktioniert nur, wenn die aktive Szene ein sichtbares Gauß-Modell enthält."
+        "title": "Keine sichtbaren Gaußschen Splats",
+        "message": "Das Histogramm funktioniert nur, wenn die aktive Szene ein sichtbares Gauß-Modell enthält."
       },
       "metric_unavailable": {
-          "title": "Metrik nicht verfügbar",
-          "message": "Die ausgewählte Metrik konnte nicht aus dem kombinierten Gauß-Modell gelesen werden."
+        "title": "Metrik nicht verfügbar",
+        "message": "Die ausgewählte Metrik konnte nicht aus dem kombinierten Gauß-Modell gelesen werden."
       },
       "no_visible_values": {
-          "title": "Keine sichtbaren Werte",
-          "message": "Die ausgewählte Metrik enthält keine sichtbaren endlichen Stichproben zur Darstellung."
+        "title": "Keine sichtbaren Werte",
+        "message": "Die ausgewählte Metrik enthält keine sichtbaren endlichen Stichproben zur Darstellung."
       },
       "no_selected_values": {
-          "title": "Keine Stichproben in der Auswahl",
-          "message": "Die ausgewählten Modelle enthalten keine endlichen Stichproben für diese Metrik."
+        "title": "Keine Stichproben in der Auswahl",
+        "message": "Die ausgewählten Modelle enthalten keine endlichen Stichproben für diese Metrik."
       }
     },
     "metric": {

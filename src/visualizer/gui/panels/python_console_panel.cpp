@@ -1097,9 +1097,9 @@ namespace {
 
         std::string status;
         if (pane.packages_loading)
-            status = LOC("common.loading");
+            status = LOC("status.loading");
         else if (!pane.packages_error.empty())
-            status = LOC("common.error");
+            status = LOC("status.error");
         else if (pane.packages_search_filter.empty())
             status = std::format("({})", pane.packages.size());
         else

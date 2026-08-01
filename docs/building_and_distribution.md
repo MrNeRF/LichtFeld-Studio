@@ -122,6 +122,28 @@ ctest --test-dir build/tests --output-on-failure -L slow
 ctest --test-dir build/tests --output-on-failure -L nightly
 ```
 
+### Localization contracts
+
+The localization contracts are a small, headless validation suite. They validate
+locale key and placeholder parity, one-key-per-line JSON formatting, literal
+translation-key references, RML directives, the hardcoded-UI-text audit, and
+localized cached UI state. They do not build or execute the GUI, LibTorch, or
+CUDA test targets.
+
+Register the contracts in an existing build directory:
+
+```bash
+cmake -S . -B build -DBUILD_LOCALIZATION_TESTS=ON
+cmake --build build --target test_localization_contracts
+```
+
+The custom target runs the single CTest entry named `LocalizationContracts`.
+It can also be invoked directly after configuration:
+
+```bash
+ctest --test-dir build/tests --output-on-failure -R LocalizationContracts
+```
+
 The repository intentionally ignores `data/`, but several fast, slow, nightly,
 and GPU tests read real files from `data/bicycle` or `data/garden`. Populate
 those paths with compatible real datasets before running the affected tiers.
@@ -159,6 +181,7 @@ dist/
 | `BUILD_CUDA_PTX_ONLY` | OFF | PTX-only build (auto-enabled by PORTABLE) |
 | `BUILD_CUDA_MIN_SM` | 75 | Minimum GPU (75=Turing, 80=Ampere, 89=Ada) |
 | `BUILD_TESTS` | OFF | Build test suite |
+| `BUILD_LOCALIZATION_TESTS` | OFF | Register headless localization contract tests |
 | `LFS_ENFORCE_LINUX_GUI_BACKENDS` | ON | Linux only. Fail configure if SDL3 would be built without both X11 and Wayland |
 
 ONNX Runtime is consumed as a pinned prebuilt GPU SDK on x64 Windows and Linux

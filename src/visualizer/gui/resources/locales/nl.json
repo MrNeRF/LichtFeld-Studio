@@ -253,7 +253,13 @@
     "status_complete": "Voltooid!",
     "tooltip.refresh": "Alle asset-mappen opnieuw scannen en catalogusmetadata bijwerken",
     "tooltip.clean_missing": "Catalogusitems verwijderen waarvan de bestanden niet meer op de schijf bestaan",
-    "folder.watch_dirs_badge": "Bewaakt"
+    "folder.watch_dirs_badge": "Bewaakt",
+    "error_download_failed": "Download mislukt",
+    "error_unsupported_url": "Niet-ondersteunde URL",
+    "error_extract_failed": "Uitpakken mislukt",
+    "error_unknown": "Onbekende fout",
+    "error_empty_url": "Voer een URL in",
+    "status_cancelling": "Annuleren..."
   },
   "training": {
     "section.dataset": "Dataset",
@@ -630,6 +636,7 @@
     "remove": "Verwijderen",
     "delete": "Verwijderen",
     "edit": "Bewerken",
+    "filter": "Filter",
     "browse": "Bladeren...",
     "apply": "Toepassen",
     "reset": "Resetten",
@@ -1475,7 +1482,33 @@
     "empty": "Geen bewaakte mappen.",
     "scanning": "Scannen...",
     "done": "Gereed",
-    "save_scan": "Opslaan en scannen"
+    "save_scan": "Opslaan en scannen",
+    "scan_cancelling": "Scan annuleren...",
+    "scan_no_directories": "Geen bewaakte mappen om te scannen.",
+    "scan_preparing_one": "Scan van 1 map voorbereiden...",
+    "scan_preparing_many": "Scan van {count} mappen voorbereiden...",
+    "scan_backend_unavailable": "Scan mislukt: Asset Manager-backend is niet beschikbaar.",
+    "scan_cancelled": "Scan geannuleerd.",
+    "scan_path": "{path} scannen",
+    "scan_progress": "{path} scannen ({folders} mappen, {assets} assets gevonden)",
+    "scan_no_assets": "Geen importeerbare assets gevonden in {path}",
+    "scan_registering": "{count} assets uit {path} registreren",
+    "scan_registering_progress": "{processed}/{total} assets uit {path} registreren",
+    "scan_added": "{added} van {total} toegevoegd",
+    "scan_already_cataloged": "{count} gevonden, al gecatalogiseerd",
+    "scan_status_path": "{status}: {path}",
+    "scan_failed_path": "Scannen van {path} mislukt: {error}",
+    "scan_cancelled_summary": "Scan geannuleerd. {discovered} gevonden, {added} toegevoegd.",
+    "scan_complete_summary": "Scan voltooid. {discovered} gevonden, {added} toegevoegd.",
+    "scan_save_failed_summary": "Scan voltooid, maar opslaan is mislukt. {discovered} gevonden, {added} toegevoegd.",
+    "scan_complete_no_new": "Scan voltooid. {discovered} gevonden, geen nieuwe assets toegevoegd.",
+    "scan_finish_failed": "Kan scan niet voltooien: {error}",
+    "scan_log_queued": "In wachtrij",
+    "scan_log_no_assets": "Geen assets",
+    "scan_log_scanning_found": "Scannen ({count} gevonden)",
+    "scan_log_registering_found": "Registreren ({count} gevonden)",
+    "scan_log_registering_counts": "Registreren ({created} nieuw, {skipped} overgeslagen)",
+    "scan_log_failed": "Mislukt"
   },
   "axis": {
     "x": "X:",
@@ -1875,15 +1908,15 @@
       "status_selection": "De gemarkeerde vergelijkingsregio wordt de actieve selectie van Gaussische splats.",
       "bin_tooltip": "X {x_range} | Y {y_range} | {count} Gaussische splats",
       "empty": {
-          "title": "Vergelijking niet beschikbaar",
-          "message": "Kies een tweede metriek om te zien hoe twee eigenschappen van Gaussische splats samen clusteren.",
+        "title": "Vergelijking niet beschikbaar",
+        "message": "Kies een tweede metriek om te zien hoe twee eigenschappen van Gaussische splats samen clusteren.",
         "metric_unavailable": {
-            "title": "Vergelijkingsmetriek niet beschikbaar",
-            "message": "De vergelijkingsmetriek kon niet uit het gecombineerde Gaussische model worden gelezen."
+          "title": "Vergelijkingsmetriek niet beschikbaar",
+          "message": "De vergelijkingsmetriek kon niet uit het gecombineerde Gaussische model worden gelezen."
         },
         "no_visible_values": {
-            "title": "Geen vergelijkbare waarden",
-            "message": "Het geselecteerde metriekpaar bevat geen zichtbare eindige monsters om weer te geven."
+          "title": "Geen vergelijkbare waarden",
+          "message": "Het geselecteerde metriekpaar bevat geen zichtbare eindige monsters om weer te geven."
         }
       }
     },
@@ -1896,28 +1929,28 @@
     },
     "empty": {
       "unavailable": {
-          "title": "Histogram niet beschikbaar",
-          "message": "Schakel naar een weergave of bewerkingsscène met Gaussische splats om een verdeling te onderzoeken."
+        "title": "Histogram niet beschikbaar",
+        "message": "Schakel naar een weergave of bewerkingsscène met Gaussische splats om een verdeling te onderzoeken."
       },
       "no_scene": {
-          "title": "Geen scène geladen",
-          "message": "Laad een Gaussische scène en open daarna het histogramvenster opnieuw."
+        "title": "Geen scène geladen",
+        "message": "Laad een Gaussische scène en open daarna het histogramvenster opnieuw."
       },
       "no_visible_gaussians": {
-          "title": "Geen zichtbare Gaussische splats",
-          "message": "Het histogram werkt alleen wanneer de actieve scène een zichtbaar Gaussisch model bevat."
+        "title": "Geen zichtbare Gaussische splats",
+        "message": "Het histogram werkt alleen wanneer de actieve scène een zichtbaar Gaussisch model bevat."
       },
       "metric_unavailable": {
-          "title": "Metriek niet beschikbaar",
-          "message": "De geselecteerde metriek kon niet uit het gecombineerde Gaussische model worden gelezen."
+        "title": "Metriek niet beschikbaar",
+        "message": "De geselecteerde metriek kon niet uit het gecombineerde Gaussische model worden gelezen."
       },
       "no_visible_values": {
-          "title": "Geen zichtbare waarden",
-          "message": "De geselecteerde metriek bevat geen zichtbare eindige monsters om weer te geven."
+        "title": "Geen zichtbare waarden",
+        "message": "De geselecteerde metriek bevat geen zichtbare eindige monsters om weer te geven."
       },
       "no_selected_values": {
-          "title": "Geen monsters in selectie",
-          "message": "De geselecteerde modellen bevatten geen eindige monsters voor deze metriek."
+        "title": "Geen monsters in selectie",
+        "message": "De geselecteerde modellen bevatten geen eindige monsters voor deze metriek."
       }
     },
     "metric": {
