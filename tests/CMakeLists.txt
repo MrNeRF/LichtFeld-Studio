@@ -51,68 +51,91 @@ if(BUILD_UNICODE_TEST_ONLY)
     return()  # Skip the rest of the file
 endif()
 
-# Container and retained-chapter tests compile the production CPU sources
-# directly so this executable has no CUDA, training, or visualizer link edge.
-set(LICHT_FORMAT_TEST_FILES
+# MSVC resolves every object reference before /OPT:REF, while GNU ld can discard
+# unreferenced function sections before resolution. Keep the dependency-heavy
+# chapter coverage in the non-Windows composition.
+set(LICHT_FORMAT_WINDOWS_FILES
     test_json_chapter_dom.cpp
     test_project_chapters.cpp
     test_project_container.cpp
-    test_selection_chapter.cpp
-    test_p8_compatibility.cpp
-    test_p8_migrations.cpp
-)
-# test_project_document.cpp is excluded: it links headless recovery, training strategies, and visualizer parameter state.
-# test_p3_matrix_proof.cpp is excluded: it links checkpoint and training-strategy implementations.
-# test_p5_session_chapters.cpp is excluded: it links the Python editor and TrainingManager runtime.
-
-add_executable(lichtfeld_format_tests
-    ${LICHT_FORMAT_TEST_FILES}
     licht_format_test_runtime.cpp
-    licht_format_tensor_runtime.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/checkpoint_format.cpp
     ${CMAKE_SOURCE_DIR}/src/core/error.cpp
     ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
     ${CMAKE_SOURCE_DIR}/src/core/parameters.cpp
     ${CMAKE_SOURCE_DIR}/src/core/uuid.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/tensor/tensor_serialization.cpp
     ${CMAKE_SOURCE_DIR}/src/io/json_chapter_dom.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_chapters.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/crc32c.cpp
-    ${CMAKE_SOURCE_DIR}/src/io/project/geometry_payload.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_file.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_container.cpp
-    ${CMAKE_SOURCE_DIR}/src/io/project/project_document.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_recovery.cpp
+)
+
+set(LICHT_FORMAT_NON_WINDOWS_FILES
+    ${LICHT_FORMAT_WINDOWS_FILES}
+    test_selection_chapter.cpp
+    test_p8_compatibility.cpp
+    test_p8_migrations.cpp
+    licht_format_tensor_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/checkpoint_format.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/tensor/tensor_serialization.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/geometry_payload.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_document.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/selection_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/session_chapters.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/splat_chapter.cpp
     ${CMAKE_SOURCE_DIR}/src/visualizer/gui/layout_state.cpp
 )
+# test_project_document.cpp is excluded: it links headless recovery, training strategies, and visualizer parameter state.
+# test_p3_matrix_proof.cpp is excluded: it links checkpoint and training-strategy implementations.
+# test_p5_session_chapters.cpp is excluded: it links the Python editor and TrainingManager runtime.
+
+if(WIN32)
+    set(LICHT_FORMAT_TARGET_FILES ${LICHT_FORMAT_WINDOWS_FILES})
+else()
+    set(LICHT_FORMAT_TARGET_FILES ${LICHT_FORMAT_NON_WINDOWS_FILES})
+endif()
+
+add_executable(lichtfeld_format_tests ${LICHT_FORMAT_TARGET_FILES})
 target_include_directories(lichtfeld_format_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/io/include
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/training
-    ${CMAKE_SOURCE_DIR}/src/training/include
-    ${CMAKE_SOURCE_DIR}/src/visualizer
     ${CMAKE_SOURCE_DIR}/tests
     ${CMAKE_BINARY_DIR}/include
-    ${CUDAToolkit_INCLUDE_DIRS}
 )
+if(NOT WIN32)
+    target_include_directories(lichtfeld_format_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/training
+        ${CMAKE_SOURCE_DIR}/src/training/include
+        ${CMAKE_SOURCE_DIR}/src/visualizer
+        ${CUDAToolkit_INCLUDE_DIRS}
+    )
+endif()
 target_compile_definitions(lichtfeld_format_tests PRIVATE
-    LFS_FORMAT_TEST_TARGET
     PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
-    $<$<PLATFORM_ID:Windows>:LFS_CORE_EXPORTS;LFS_LOGGER_EXPORTS>
 )
+if(WIN32)
+    target_compile_definitions(lichtfeld_format_tests PRIVATE
+        LFS_CORE_EXPORTS
+        LFS_LOGGER_EXPORTS
+    )
+else()
+    target_compile_definitions(lichtfeld_format_tests PRIVATE
+        LFS_FORMAT_TEST_TARGET
+    )
+endif()
 target_link_libraries(lichtfeld_format_tests PRIVATE
     GTest::gtest_main
     nlohmann_json::nlohmann_json
-    OpenSSL::Crypto
     xxHash::xxhash
     zstd::libzstd
     Threads::Threads
 )
+if(NOT WIN32)
+    target_link_libraries(lichtfeld_format_tests PRIVATE OpenSSL::Crypto)
+endif()
 if(MSVC)
     target_compile_options(lichtfeld_format_tests PRIVATE /Gy)
     target_link_options(lichtfeld_format_tests PRIVATE /OPT:REF)

@@ -190,6 +190,7 @@ jobs:
 
       - name: Run format authority and conformance gates
         run: |
+          git config --global --add safe.directory "$(pwd)"
           python3 -m venv /tmp/licht-format-python
           . /tmp/licht-format-python/bin/activate
           python -m pip install zstandard
