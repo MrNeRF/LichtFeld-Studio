@@ -1291,6 +1291,9 @@ namespace {
                "save->load->save assertion";
 
         const MatrixRows matrix_rows = read_matrix_rows();
+        EXPECT_GE(matrix_rows.exclusions.size(), 20u)
+            << "The ownership matrix must keep its documented not-serialized "
+               "exclusion rows; deleting the Exclusions table must fail here";
         const auto registered = lfs::test::licht::word_set(
             lfs::test::licht::P3_MATRIX_ROW_DATA);
         EXPECT_EQ(matrix_rows.p3, registered)

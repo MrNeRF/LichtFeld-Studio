@@ -251,6 +251,15 @@ namespace {
         }
     }
 
+    TEST(ProjectContainerReader, WriteSafetyReportsBothIndependentGates) {
+        auto reader = ProjectReader::open(FIXTURES / "write-unsafe.licht");
+        ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());
+        const auto compatibility = reader->write_compatibility();
+        EXPECT_FALSE(compatibility.safe);
+        EXPECT_EQ(compatibility.reasons.size(), 2u)
+            << "the version and capability gates must refuse independently";
+    }
+
     TEST(ProjectContainerReader, SelectedGenerationAndCarriedRowsMatchGrammar) {
         auto reader = ProjectReader::open(FIXTURES / "multi-generation-append.licht");
         ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());

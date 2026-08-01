@@ -6,6 +6,51 @@
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# =============================================================================
+# Unicode Path Test Only (no CUDA dependencies)
+# =============================================================================
+if(BUILD_UNICODE_TEST_ONLY)
+    # Standalone Unicode path test without CUDA
+    add_executable(unicode_path_test
+        test_unicode_paths_windows.cpp
+    )
+
+    target_include_directories(unicode_path_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_BINARY_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(unicode_path_test PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+    )
+
+    # C++23 standard
+    set_target_properties(unicode_path_test PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Enable Windows long path support (paths > MAX_PATH/260 chars)
+    if(WIN32 AND MSVC)
+        # Add manifest file as a source to enable long path awareness
+        target_sources(unicode_path_test PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/unicode_path_test.manifest
+        )
+    endif()
+
+    # Register with CTest
+    include(GoogleTest)
+    gtest_discover_tests(unicode_path_test
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        PROPERTIES TIMEOUT 30
+    )
+
+    message(STATUS "Building standalone Unicode path test (no CUDA)")
+    return()  # Skip the rest of the file
+endif()
+
 # Container and retained-chapter tests compile the production CPU sources
 # directly so this executable has no CUDA, training, or visualizer link edge.
 set(LICHT_FORMAT_TEST_FILES
@@ -77,50 +122,6 @@ if(COMMAND nanobind_build_library AND NOT TARGET nanobind-static)
     nanobind_build_library(nanobind-static)
 endif()
 
-# =============================================================================
-# Unicode Path Test Only (no CUDA dependencies)
-# =============================================================================
-if(BUILD_UNICODE_TEST_ONLY)
-    # Standalone Unicode path test without CUDA
-    add_executable(unicode_path_test
-        test_unicode_paths_windows.cpp
-    )
-
-    target_include_directories(unicode_path_test PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_BINARY_DIR}/include
-        ${CMAKE_SOURCE_DIR}/src
-    )
-
-    target_link_libraries(unicode_path_test PRIVATE
-        GTest::gtest
-        GTest::gtest_main
-    )
-
-    # C++23 standard
-    set_target_properties(unicode_path_test PROPERTIES
-        CXX_STANDARD 23
-        CXX_STANDARD_REQUIRED ON
-    )
-
-    # Enable Windows long path support (paths > MAX_PATH/260 chars)
-    if(WIN32 AND MSVC)
-        # Add manifest file as a source to enable long path awareness
-        target_sources(unicode_path_test PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/unicode_path_test.manifest
-        )
-    endif()
-
-    # Register with CTest
-    include(GoogleTest)
-    gtest_discover_tests(unicode_path_test
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        PROPERTIES TIMEOUT 30
-    )
-
-    message(STATUS "Building standalone Unicode path test (no CUDA)")
-    return()  # Skip the rest of the file
-endif()
 
 if(NOT BUILD_TESTS)
     message(STATUS "Building CPU-only format tests (no CUDA); full suite disabled")
@@ -738,14 +739,14 @@ set_tests_properties(lichtfeld.python.gpu PROPERTIES
 # Custom targets for convenience
 add_custom_target(run_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -L fast
-    DEPENDS lichtfeld_tests
+    DEPENDS lichtfeld_tests lichtfeld_format_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running the fast developer test tier"
 )
 
 add_custom_target(run_full_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -LE nightly
-    DEPENDS lichtfeld_tests
+    DEPENDS lichtfeld_tests lichtfeld_format_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Running fast and slow tests (excluding nightly)"
 )
