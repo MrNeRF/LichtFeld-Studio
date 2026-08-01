@@ -234,12 +234,25 @@ protected:
     template <typename Predicate>
     [[nodiscard]] bool pumpUntil(
         std::mutex& queue_mutex, std::vector<lfs::vis::Visualizer::WorkItem>& queue,
-        Predicate&& predicate,
+        Predicate&& condition,
         const std::chrono::milliseconds timeout = std::chrono::seconds(10)) {
-        return lfs::test::licht::wait_until(
-            timeout, std::forward<Predicate>(predicate), [&] {
-                lfs::test::licht::drain_work_queue(queue_mutex, queue);
-            });
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (!condition() && std::chrono::steady_clock::now() < deadline) {
+            lfs::test::licht::drain_work_queue(queue_mutex, queue);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return condition();
+    }
+
+    template <typename Predicate>
+    [[nodiscard]] bool waitUntil(
+        Predicate&& condition,
+        const std::chrono::milliseconds timeout = std::chrono::seconds(10)) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (!condition() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return condition();
     }
 
     void installModalOverlay(
@@ -269,36 +282,6 @@ protected:
 
 namespace {
 
-    void write_text_file(const std::filesystem::path& path, const std::string& contents) {
-        std::filesystem::create_directories(path.parent_path());
-        std::ofstream out(path, std::ios::binary);
-        ASSERT_TRUE(out.is_open()) << "Failed to open " << path;
-        out << contents;
-        out.close();
-        ASSERT_TRUE(out.good()) << "Failed to write " << path;
-    }
-
-    void write_png(const std::filesystem::path& path) {
-        static const std::vector<unsigned char> png_1x1 = {
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
-            0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
-            0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99,
-            0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
-            0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
-
-        std::filesystem::create_directories(path.parent_path());
-        std::ofstream out(path, std::ios::binary);
-        ASSERT_TRUE(out.is_open()) << "Failed to open " << path;
-        out.write(reinterpret_cast<const char*>(png_1x1.data()),
-                  static_cast<std::streamsize>(png_1x1.size()));
-        out.close();
-        ASSERT_TRUE(out.good()) << "Failed to write " << path;
-    }
-
     bool cuda_device_available() {
         int count = 0;
         return cudaGetDeviceCount(&count) ==
@@ -325,10 +308,10 @@ namespace {
     }
 
     void write_minimal_transforms_dataset(const std::filesystem::path& dataset_path) {
-        write_png(dataset_path / "frame_0001.png");
-        write_text_file(
-            dataset_path / "transforms.json",
-            R"({
+        std::filesystem::create_directories(dataset_path);
+        const auto png = lfs::test::licht::one_pixel_png();
+        lfs::test::licht::write_file_bytes(dataset_path / "frame_0001.png", png);
+        const auto transforms = lfs::test::licht::byte_vector(R"({
   "fl_x": 1.0,
   "fl_y": 1.0,
   "cx": 0.5,
@@ -348,6 +331,8 @@ namespace {
   ]
 }
 )");
+        lfs::test::licht::write_file_bytes(
+            dataset_path / "transforms.json", transforms);
     }
 
     void write_empty_project(
@@ -1123,14 +1108,12 @@ namespace lfs::vis {
             const auto first_job =
                 *viewer.project_lifecycle_
                      ->project_write_job_;
-            ASSERT_TRUE(lfs::test::licht::wait_until(
-                std::chrono::seconds(10),
+            ASSERT_TRUE(waitUntil(
                 [&] {
                     const auto snapshot = viewer.jobs().peek(first_job);
                     return snapshot &&
                            snapshot->status == JobStatus::CompletionPending;
-                },
-                [] {}));
+                }));
             auto pending =
                 viewer.jobs().peek(first_job);
             ASSERT_TRUE(pending);
@@ -1720,8 +1703,6 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            NewProjectDirtyGateRunsBelowEveryCommandEntry) {
-        const auto& temporary = temporary_.path;
-
         auto options = projectOptions();
         {
             VisualizerImpl viewer(options);

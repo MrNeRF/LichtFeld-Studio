@@ -4,6 +4,7 @@
  */
 
 #include "io/project_document.hpp"
+#include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
 #include "ppisp_fixture.hpp"
 #include "training/checkpoint.hpp"
@@ -51,24 +52,10 @@ namespace {
     using lfs::core::Uuid;
     using Json = lfs::io::JsonChapterDom::Json;
     using namespace lfs::io::project;
+    using lfs::test::licht::PENDING_PARAMETER_EXCLUSIONS;
     using lfs::test::licht::require_result;
     using lfs::test::licht::require_result_ptr;
     using lfs::test::licht::TemporaryDirectory;
-
-    struct PendingParameterExclusion {
-        std::string_view field;
-        std::string_view phase;
-    };
-
-    constexpr auto PENDING_PARAMETER_EXCLUSIONS =
-        std::to_array<PendingParameterExclusion>({
-            {"headless", "P6/process launch"},
-            {"auto_train", "P6/process launch"},
-            {"no_splash", "P6/process launch"},
-            {"debug_python", "P6/process launch"},
-            {"debug_python_port", "P6/process launch"},
-            {"config_file", "P6/process launch"},
-        });
 
     Json pending_parameter_field_map(
         const lfs::core::param::OptimizationParameters& parameters,

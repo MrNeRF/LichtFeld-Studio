@@ -385,7 +385,6 @@ namespace lfs::training {
             int iter,
             lfs::core::Camera* cam,
             lfs::core::Tensor gt_image,
-            RenderMode render_mode,
             std::stop_token stop_token = {});
 
         [[nodiscard]] static RetryDecision classify_forward_retry(

@@ -380,13 +380,6 @@ namespace {
         expect_optimizer_config_eq(config, loaded.get_config());
     }
 
-    TEST(BilateralGridConfigSerializationTest, FutureComponentVersionReturnsTypedUnsupported) {
-        lfs::training::BilateralGrid loaded(1, 1, 1, 1, 1);
-        expect_typed_future_version_failure(
-            "BilateralGrid", BILATERAL_MAGIC, BILATERAL_VERSION,
-            [&](std::istream& stream) { loaded.deserialize(stream); });
-    }
-
     TEST(PPISPConfigSerializationTest, NewFormatRoundTripPreservesEveryField) {
         const auto config = ppisp_config();
         lfs::training::PPISP source(100, config);
@@ -438,13 +431,6 @@ namespace {
         expect_ppisp_config_eq(config, loaded.get_config());
     }
 
-    TEST(PPISPConfigSerializationTest, FutureComponentVersionReturnsTypedUnsupported) {
-        lfs::training::PPISP loaded(1);
-        expect_typed_future_version_failure(
-            "PPISP", PPISP_MAGIC, PPISP_VERSION,
-            [&](std::istream& stream) { loaded.deserialize(stream); });
-    }
-
     TEST(PPISPControllerPoolConfigSerializationTest, NewFormatRoundTripPreservesEveryField) {
         const auto config = controller_pool_config();
         lfs::training::PPISPControllerPool source(1, 100, config);
@@ -486,11 +472,28 @@ namespace {
         expect_optimizer_config_eq(config, loaded.get_config());
     }
 
-    TEST(PPISPControllerPoolConfigSerializationTest, FutureComponentVersionReturnsTypedUnsupported) {
-        lfs::training::PPISPControllerPool loaded(1, 1);
-        expect_typed_future_version_failure(
-            "PPISPControllerPool", CONTROLLER_POOL_MAGIC, CONTROLLER_POOL_VERSION,
-            [&](std::istream& stream) { loaded.deserialize(stream); });
+    TEST(ComponentConfigSerializationTest, FutureComponentVersionsReturnTypedUnsupported) {
+        {
+            SCOPED_TRACE("BilateralGrid");
+            lfs::training::BilateralGrid loaded(1, 1, 1, 1, 1);
+            expect_typed_future_version_failure(
+                "BilateralGrid", BILATERAL_MAGIC, BILATERAL_VERSION,
+                [&](std::istream& stream) { loaded.deserialize(stream); });
+        }
+        {
+            SCOPED_TRACE("PPISP");
+            lfs::training::PPISP loaded(1);
+            expect_typed_future_version_failure(
+                "PPISP", PPISP_MAGIC, PPISP_VERSION,
+                [&](std::istream& stream) { loaded.deserialize(stream); });
+        }
+        {
+            SCOPED_TRACE("PPISPControllerPool");
+            lfs::training::PPISPControllerPool loaded(1, 1);
+            expect_typed_future_version_failure(
+                "PPISPControllerPool", CONTROLLER_POOL_MAGIC, CONTROLLER_POOL_VERSION,
+                [&](std::istream& stream) { loaded.deserialize(stream); });
+        }
     }
 
     TEST(CheckpointComponentConfigRoundTripTest, AllConfigsRoundTripInsideLfkp) {

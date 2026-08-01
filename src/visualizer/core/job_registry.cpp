@@ -257,19 +257,4 @@ namespace lfs::vis {
             });
     }
 
-    std::vector<JobHandle>
-    JobRegistry::completionPending() const {
-        const std::lock_guard lock(mutex_);
-        std::vector<JobHandle> result;
-        result.reserve(entries_.size());
-        for (const auto& [id, entry] : entries_) {
-            (void)id;
-            if (entry.status ==
-                JobStatus::CompletionPending) {
-                result.push_back(entry.handle);
-            }
-        }
-        return result;
-    }
-
 } // namespace lfs::vis

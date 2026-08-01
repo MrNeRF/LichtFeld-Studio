@@ -130,28 +130,12 @@ namespace lfs::vis {
         [[nodiscard]] lfs::Result<
             lfs::io::project::ProjectSessionChapters>
         captureProjectSession() const;
-        [[nodiscard]] lfs::Result<void>
-        stageProjectSessionRestore(
-            lfs::io::project::ProjectSessionChapters chapters);
         void stagePreparedProjectSessionRestore(
             project::PreparedGuiSessionRestore prepared);
         [[nodiscard]] bool
         isProjectSessionRestorePending() const noexcept {
             return gui_session_restore_.hasPending();
         }
-        [[nodiscard]] const std::vector<
-            project::CameraBookmarkProjectState>&
-        cameraBookmarks() const noexcept {
-            return camera_bookmarks_;
-        }
-        void setCameraBookmarks(
-            std::vector<
-                project::CameraBookmarkProjectState>
-                bookmarks) {
-            camera_bookmarks_ =
-                std::move(bookmarks);
-        }
-
         // FPS monitoring
         [[nodiscard]] float getCurrentFPS() const {
             return rendering_manager_ ? rendering_manager_->getCurrentFPS() : 0.0f;

@@ -53,19 +53,58 @@ namespace {
         1'735'689'601'000'000'000;
 
     CreateOptions fixture_create_options(const std::uint64_t file_tag) {
-        return deterministic_create_options(file_tag, FIXED_CREATION_TIME_NS);
+        return {
+            .project_uuid = fixed_uuid(1),
+            .file_uuid = fixed_uuid(file_tag),
+            .role = ContainerRole::Master,
+            .creation_time_unix_ns = FIXED_CREATION_TIME_NS,
+            .index_compression = IndexCompression::StoredForDeterministicTests,
+            .disk_reserve_bytes = 0,
+        };
     }
 
     CommitOptions fixture_commit_options(const std::uint64_t commit_tag,
                                          const std::uint64_t snapshot_tag,
                                          const std::uint64_t generation) {
-        return deterministic_commit_options(
-            commit_tag, snapshot_tag, FIXED_COMMIT_TIME_NS + generation);
+        return {
+            .kind = CommitKind::Explicit,
+            .commit_uuid = fixed_uuid(commit_tag),
+            .snapshot_uuid = fixed_uuid(snapshot_tag),
+            .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + generation,
+        };
     }
 
     AppendOptions fixture_append_options() {
-        return deterministic_append_options();
+        return {
+            .compatibility = {},
+            .index_compression = IndexCompression::StoredForDeterministicTests,
+            .disk_reserve_bytes = 0,
+        };
     }
+
+#ifndef _WIN32
+    template <typename Work>
+    int run_child_process(Work&& work, const int exception_exit = 126,
+                          const int normal_exit = 0) {
+        const pid_t child = ::fork();
+        if (child < 0) {
+            throw std::runtime_error("fork failed in test driver");
+        }
+        if (child == 0) {
+            try {
+                work();
+            } catch (...) {
+                ::_exit(exception_exit);
+            }
+            ::_exit(normal_exit);
+        }
+        int status = 0;
+        if (::waitpid(child, &status, 0) != child) {
+            throw std::runtime_error("waitpid failed in test driver");
+        }
+        return status;
+    }
+#endif
 
     std::uint32_t crc_range(const std::span<const std::byte> bytes,
                             const std::size_t offset,
@@ -454,8 +493,9 @@ namespace {
         EXPECT_LE(reader.preview()->bytes, MAX_PREVIEW_BYTES);
         const auto preview = require_result(reader.read_preview());
         ASSERT_GE(preview.size(), 8u);
-        const auto png_signature =
-            hex_bytes("89504e470d0a1a0a");
+        constexpr std::array png_signature{
+            std::byte{0x89}, std::byte{0x50}, std::byte{0x4e}, std::byte{0x47},
+            std::byte{0x0d}, std::byte{0x0a}, std::byte{0x1a}, std::byte{0x0a}};
         EXPECT_TRUE(std::equal(png_signature.begin(), png_signature.end(),
                                preview.begin()));
         const auto matching = std::find_if(
@@ -591,10 +631,16 @@ namespace {
                 require_result(prior.make_clean_proof(*proj, 29));
             ProjectWriter writer = require_result(ProjectWriter::append(
                 preview_path, fixture_append_options()));
-            const auto png = hex_bytes(
-                "89504e470d0a1a0a0000000d4948445200000001000000010804000000"
-                "b51c0c020000000b4944415478da6364f80f00010501012718e3660000"
-                "000049454e44ae426082");
+            static constexpr char PNG[] =
+                "\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52"
+                "\x00\x00\x00\x01\x00\x00\x00\x01\x08\x04\x00\x00\x00\xb5\x1c\x0c"
+                "\x02\x00\x00\x00\x0b\x49\x44\x41\x54\x78\xda\x63\x64\xf8\x0f\x00"
+                "\x01\x05\x01\x01\x27\x18\xe3\x66\x00\x00\x00\x00\x49\x45\x4e\x44"
+                "\xae\x42\x60\x82";
+            const auto png_span = std::as_bytes(
+                std::span(PNG, sizeof(PNG) - 1));
+            const std::vector<std::byte> png(
+                png_span.begin(), png_span.end());
             require_status(writer.plan_commit(
                 fixture_commit_options(119, 218, 2)));
             require_status(writer.preflight(png.size()));

@@ -2549,20 +2549,6 @@ namespace lfs::vis {
             camera_bookmarks_);
     }
 
-    lfs::Result<void>
-    VisualizerImpl::stageProjectSessionRestore(
-        lfs::io::project::ProjectSessionChapters
-            chapters) {
-        if (auto staged =
-                gui_session_restore_.stage(
-                    std::move(chapters));
-            !staged) {
-            return staged;
-        }
-        tryApplyProjectSessionRestore();
-        return {};
-    }
-
     void VisualizerImpl::
         stagePreparedProjectSessionRestore(
             project::PreparedGuiSessionRestore

@@ -3399,34 +3399,6 @@ namespace lfs::vis::editor {
         return impl_->vim_mode_enabled;
     }
 
-    PythonEditorSessionState PythonEditor::captureSessionState() const {
-        if (impl_->editor == nullptr)
-            return {};
-        auto* buffer =
-            impl_->editor->GetActiveBuffer();
-        if (buffer == nullptr)
-            return {};
-        return capture_buffer_session_state(
-            *buffer,
-            impl_->editor->GetActiveWindow());
-    }
-
-    void PythonEditor::restoreSessionState(
-        const std::string& text,
-        const PythonEditorSessionState& state) {
-        if (impl_->buffer == nullptr || impl_->editor == nullptr) {
-            return;
-        }
-
-        impl_->setTextSilently(
-            text, state.cursor_byte);
-        restore_buffer_session_state(
-            *impl_->buffer,
-            impl_->editor->GetActiveWindow(),
-            text, state);
-        impl_->editor->RequestRefresh();
-    }
-
     PythonEditorWorkspaceSessionState
     PythonEditor::captureWorkspaceSessionState(
         const std::string_view active_locator,

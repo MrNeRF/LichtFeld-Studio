@@ -112,16 +112,4 @@ namespace lfs::training {
         ProjectSnapshotCpuState state,
         ProjectSnapshotChapters& output);
 
-    // Convenience wrapper for non-latency-sensitive callers and tests.
-    [[nodiscard]] lfs::Result<TrainingSnapshotCpuStateMetrics>
-    capture_project_snapshot_cpu_chapters(
-        const lfs::core::Scene& scene,
-        const lfs::core::param::TrainingParameters&
-            checkpoint_params,
-        const lfs::core::Uuid& snapshot_uuid,
-        int iteration,
-        ProjectSnapshotChapters& output,
-        std::span<const lfs::core::Uuid>
-            selected_node_uuids = {});
-
 } // namespace lfs::training

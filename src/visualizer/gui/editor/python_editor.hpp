@@ -120,9 +120,6 @@ namespace lfs::vis::editor {
         bool needsRmlFrame() const;
         void setVimModeEnabled(bool enabled);
         bool isVimModeEnabled() const;
-        [[nodiscard]] PythonEditorSessionState captureSessionState() const;
-        void restoreSessionState(const std::string& text,
-                                 const PythonEditorSessionState& state);
         [[nodiscard]] PythonEditorWorkspaceSessionState
         captureWorkspaceSessionState(
             std::string_view active_locator,

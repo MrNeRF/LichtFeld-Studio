@@ -407,6 +407,7 @@ namespace lfs::core {
         }
         const size_t erased_uuids = uuid_to_id_.erase(uuid_copy);
         assert(erased_uuids == 1);
+        static_cast<void>(erased_uuids);
         id_to_index_.erase(id);
         nodes_.erase(nodes_.begin() + static_cast<ptrdiff_t>(removed_index));
         if (!name_to_id_.contains(name_copy)) {
@@ -2982,7 +2983,7 @@ namespace lfs::core {
     void Scene::installRestoreSelectionState(
         RestoreSelectionState state) noexcept {
         assert(transaction_depth_ == 0);
-        const auto valid_mask =
+        [[maybe_unused]] const auto valid_mask =
             [](const std::shared_ptr<Tensor>& mask,
                const size_t expected) {
                 return !mask ||

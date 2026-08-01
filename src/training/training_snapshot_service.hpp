@@ -215,8 +215,6 @@ namespace lfs::training {
         ~PendingTrainingSnapshot();
 
         [[nodiscard]] bool ready() const;
-        [[nodiscard]] TrainingSnapshotPauseMetrics
-        pause_metrics() const;
         [[nodiscard]] lfs::Result<CapturedTrainingSnapshot>
         wait();
 

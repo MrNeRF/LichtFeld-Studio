@@ -1614,12 +1614,6 @@ namespace lfs::training {
         return impl_->drained;
     }
 
-    TrainingSnapshotPauseMetrics
-    PendingTrainingSnapshot::pause_metrics() const {
-        std::scoped_lock lock(impl_->mutex);
-        return impl_->metrics;
-    }
-
     lfs::Result<CapturedTrainingSnapshot>
     PendingTrainingSnapshot::wait() {
         std::unique_lock lock(impl_->mutex);

@@ -257,32 +257,4 @@ namespace lfs::training {
         return {};
     }
 
-    lfs::Result<TrainingSnapshotCpuStateMetrics>
-    capture_project_snapshot_cpu_chapters(
-        const lfs::core::Scene& scene,
-        const lfs::core::param::TrainingParameters&
-            checkpoint_params,
-        const lfs::core::Uuid& snapshot_uuid,
-        const int iteration,
-        ProjectSnapshotChapters& output,
-        const std::span<const lfs::core::Uuid>
-            selected_node_uuids) {
-        ProjectSnapshotCpuState state;
-        auto metrics =
-            capture_project_snapshot_cpu_state(
-                scene, checkpoint_params,
-                snapshot_uuid, iteration, state,
-                selected_node_uuids);
-        if (!metrics) {
-            return std::move(metrics).error();
-        }
-        if (auto materialized =
-                materialize_project_snapshot_cpu_chapters(
-                    std::move(state), output);
-            !materialized) {
-            return std::move(materialized).error();
-        }
-        return metrics;
-    }
-
 } // namespace lfs::training

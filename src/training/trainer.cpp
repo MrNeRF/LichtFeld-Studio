@@ -5006,7 +5006,6 @@ namespace lfs::training {
         int iter,
         lfs::core::Camera* cam,
         lfs::core::Tensor gt_image,
-        RenderMode render_mode,
         std::stop_token stop_token) {
         StepPhase current_phase = StepPhase::Forward;
         bool persistent_commit = false;
@@ -5868,13 +5867,6 @@ namespace lfs::training {
                                     const size_t num_depth_pixels = rendered_depth.numel();
                                     const size_t depth_partials =
                                         lfs::training::kernels::depth_loss_partial_count(num_depth_pixels);
-                                    auto depth_prior =
-                                        depth_prior_from_mode(params_.optimization.depth_loss_mode);
-                                    if (depth_anchor_fit_attempted_ &&
-                                        resolved_depth_prior_ != lfs::training::kernels::DepthPriorType::Auto) {
-                                        depth_prior = resolved_depth_prior_;
-                                    }
-
                                     const int total_iterations =
                                         std::max(1, params_.optimization.resolved_total_iterations());
                                     const float depth_progress =
@@ -7037,8 +7029,6 @@ namespace lfs::training {
 
             // Start from current_iteration_ (allows resume from checkpoint)
             int iter = current_iteration_.load() > 0 ? current_iteration_.load() + 1 : 1;
-            const RenderMode render_mode = RenderMode::RGB;
-
             if (progress_) {
                 progress_->update(
                     iter,
@@ -7322,7 +7312,7 @@ namespace lfs::training {
                 train_phase = StepPhase::Forward;
                 const auto training_step_begin =
                     std::chrono::steady_clock::now();
-                auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
+                auto step_result = train_step(iter, cam, gt_image, stop_token);
                 const double training_step_ms =
                     std::chrono::duration<double, std::milli>(
                         std::chrono::steady_clock::now() -

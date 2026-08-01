@@ -238,8 +238,6 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<void>
         set_ppisp(const lfs::core::Uuid& instance_uuid,
                   LazyChunkValue payload);
-        [[nodiscard]] bool
-        remove_ppisp(const lfs::core::Uuid& instance_uuid);
         [[nodiscard]] std::vector<lfs::core::Uuid>
         ppisp_uuids() const;
 

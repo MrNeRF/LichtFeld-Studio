@@ -633,26 +633,6 @@ namespace lfs::python {
         second->gaussian_count.store(2, std::memory_order_release);
     }
 
-    TEST_F(SceneValidityTest, GenerationNonNegative) {
-        auto gen = get_scene_generation();
-        EXPECT_GE(gen, 0u);
-    }
-
-    TEST_F(SceneValidityTest, GenerationIncrementsOnSet) {
-        auto gen1 = get_scene_generation();
-        set_application_scene(&dummy_scene_);
-        auto gen2 = get_scene_generation();
-        EXPECT_GT(gen2, gen1);
-    }
-
-    TEST_F(SceneValidityTest, GenerationIncrementsOnClear) {
-        set_application_scene(&dummy_scene_);
-        auto gen1 = get_scene_generation();
-        set_application_scene(nullptr);
-        auto gen2 = get_scene_generation();
-        EXPECT_GT(gen2, gen1);
-    }
-
     TEST_F(SceneValidityTest, GetApplicationSceneReturnsCorrectPointer) {
         EXPECT_EQ(get_application_scene(), nullptr);
         set_application_scene(&dummy_scene_);

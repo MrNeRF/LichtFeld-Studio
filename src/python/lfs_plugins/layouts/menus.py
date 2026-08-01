@@ -132,8 +132,3 @@ def get_menu_bar_entries() -> list[tuple[str, str, int, type]]:
             order = getattr(cls, "order", 100)
             result.append((idname, label, order, cls))
     return result
-
-
-def _clear_menus():
-    """Clear all registered menus (for testing/reload)."""
-    _MENU_CLASSES.clear()

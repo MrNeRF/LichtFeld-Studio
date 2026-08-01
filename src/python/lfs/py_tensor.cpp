@@ -502,7 +502,7 @@ namespace lfs::python {
         return tensor_.count_nonzero();
     }
 
-    PyTensor PyTensor::from_numpy(nb::ndarray<> arr, bool copy) {
+    PyTensor PyTensor::from_numpy(nb::ndarray<> arr, bool /*copy*/) {
         // Get shape
         std::vector<size_t> shape_vec;
         for (size_t i = 0; i < arr.ndim(); ++i) {

@@ -2166,20 +2166,6 @@ namespace lfs::io::project {
         return {};
     }
 
-    bool ProjectDocument::remove_ppisp(
-        const lfs::core::Uuid& instance_uuid) {
-        const ChunkKey key{
-            .fourcc = FOURCC_PPIS,
-            .instance_uuid = instance_uuid,
-        };
-        const bool removed =
-            impl_->ppisp_payloads.erase(instance_uuid) != 0;
-        if (removed) {
-            impl_->mark(key.fourcc, key.instance_uuid);
-        }
-        return removed;
-    }
-
     std::vector<lfs::core::Uuid>
     ProjectDocument::ppisp_uuids() const {
         return sorted_uuids(impl_->ppisp_payloads);

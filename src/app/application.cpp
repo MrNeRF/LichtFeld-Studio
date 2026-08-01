@@ -1053,20 +1053,6 @@ namespace lfs::app {
             return fut;
         }
 
-        void warmupCudaSync() {
-            checkCudaDriverVersion();
-
-            cudaDeviceProp prop;
-            if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
-                LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
-                         prop.totalGlobalMem / (1024 * 1024));
-            }
-
-            LOG_INFO("Initializing CUDA...");
-            fast_lfs::rasterization::warmup_kernels();
-            lfs::diagnostics::VramProfiler::instance().captureCudaWarmupDelta();
-        }
-
         void warmupCudaAsync() {
             checkCudaDriverVersion();
 

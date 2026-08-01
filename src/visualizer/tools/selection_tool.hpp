@@ -47,9 +47,6 @@ namespace lfs::vis::tools {
         [[nodiscard]] bool restrictToSelectedNodes() const {
             return restrict_to_selected_nodes_;
         }
-        void setRestrictToSelectedNodes(bool enabled) {
-            restrict_to_selected_nodes_ = enabled;
-        }
         // Project restore runs after VIEW render state has been staged. Set
         // preference owners without recomputing the saved depth transform from
         // the current camera or emitting an in-progress tool gesture.

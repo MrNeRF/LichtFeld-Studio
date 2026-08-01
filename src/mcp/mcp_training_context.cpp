@@ -25,29 +25,12 @@
 #include "training/training_setup.hpp"
 #include "visualizer/selection/selection_group_mask.hpp"
 
-#include <algorithm>
 #include <cassert>
 #include <sstream>
 
 namespace lfs::mcp {
 
     namespace {
-        struct ScreenRect {
-            float x0;
-            float y0;
-            float x1;
-            float y1;
-        };
-
-        [[nodiscard]] ScreenRect normalize_screen_rect(const float x0, const float y0, const float x1, const float y1) {
-            return {
-                .x0 = std::min(x0, x1),
-                .y0 = std::min(y0, y1),
-                .x1 = std::max(x0, x1),
-                .y1 = std::max(y0, y1),
-            };
-        }
-
         core::Tensor ensure_cuda_bool_mask(const core::Tensor& mask) {
             auto result = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
             if (result.device() != core::Device::CUDA) {

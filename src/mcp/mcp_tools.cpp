@@ -42,16 +42,6 @@ namespace lfs::mcp {
             return "unknown";
         }
 
-        training::CommandTarget string_to_target(const std::string& s) {
-            if (s == "model")
-                return training::CommandTarget::Model;
-            if (s == "optimizer")
-                return training::CommandTarget::Optimizer;
-            if (s == "session")
-                return training::CommandTarget::Session;
-            return training::CommandTarget::Session;
-        }
-
         json parameter_error_envelope(const lfs::ErrorCode code, const std::string& message,
                                       const std::string& parameter, const lfs::OperationId operation_id) {
             lfs::Error error = lfs::make_error(lfs::ErrorInit{

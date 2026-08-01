@@ -571,10 +571,6 @@ namespace lfs::app {
             return vis::cap::decomposeTransform(matrix);
         }
 
-        glm::mat4 compose_transform(const TransformComponents& components) {
-            return vis::cap::composeTransform(components);
-        }
-
         int64_t selected_gaussian_count(const core::Scene& scene) {
             const auto mask = scene.getSelectionMask();
             if (!mask || !mask->is_valid())
@@ -861,7 +857,6 @@ namespace lfs::app {
         }
 
         json crop_box_info_json(const vis::SceneManager& scene_manager,
-                                const vis::RenderingManager* rendering_manager,
                                 const core::NodeId cropbox_id) {
             const auto& scene = scene_manager.getScene();
             const auto* const node = scene.getNodeById(cropbox_id);
@@ -1365,179 +1360,6 @@ namespace lfs::app {
             return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
         }
 
-        std::expected<void, std::string> prepare_scene_select_node_operator(
-            vis::Visualizer& viewer,
-            const json& /*args*/,
-            vis::op::OperatorProperties& props) {
-            auto* const scene_manager = viewer.getSceneManager();
-            if (!scene_manager)
-                return std::unexpected("Scene manager not initialized");
-
-            const auto name = props.get<std::string>("name");
-            if (!name || name->empty())
-                return std::unexpected("Field 'name' must be provided");
-            if (!scene_manager->getScene().getNode(*name))
-                return std::unexpected("Node not found: " + *name);
-
-            const auto mode = props.get_or<std::string>("mode", "replace");
-            if (mode != "replace" && mode != "add")
-                return std::unexpected("Unsupported node selection mode: " + mode);
-
-            return {};
-        }
-
-        json scene_select_node_result(vis::Visualizer& viewer,
-                                      const json& /*args*/,
-                                      const vis::op::OperatorProperties& /*props*/,
-                                      const vis::op::OperatorReturnValue& /*result*/) {
-            auto* const scene_manager = viewer.getSceneManager();
-            if (!scene_manager)
-                return json{{"error", "Scene manager not initialized"}};
-
-            const auto& scene = scene_manager->getScene();
-            json nodes = json::array();
-            for (const auto& selected_name : scene_manager->getSelectedNodeNames()) {
-                if (const auto* const node = scene.getNode(selected_name))
-                    nodes.push_back(node_summary_json(scene, *node));
-            }
-
-            return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
-        }
-
-        std::expected<void, std::string> prepare_crop_box_add_operator(
-            vis::Visualizer& viewer,
-            const json& /*args*/,
-            vis::op::OperatorProperties& props) {
-            auto* const scene_manager = viewer.getSceneManager();
-            if (!scene_manager)
-                return std::unexpected("Scene manager not initialized");
-
-            auto parent_id = vis::cap::resolveCropBoxParentId(
-                *scene_manager, props.get<std::string>("node"));
-            if (!parent_id)
-                return std::unexpected(parent_id.error());
-            return {};
-        }
-
-        std::expected<void, std::string> prepare_crop_box_set_operator(
-            vis::Visualizer& viewer,
-            const json& /*args*/,
-            vis::op::OperatorProperties& props) {
-            auto* const scene_manager = viewer.getSceneManager();
-            if (!scene_manager)
-                return std::unexpected("Scene manager not initialized");
-
-            auto cropbox_id = vis::cap::resolveCropBoxId(*scene_manager, props.get<std::string>("node"));
-            if (!cropbox_id)
-                return std::unexpected(cropbox_id.error());
-
-            if (!props.has("min") && !props.has("max") &&
-                !props.has("translation") && !props.has("rotation") && !props.has("scale") &&
-                !props.has("inverse") && !props.has("enabled") && !props.has("show") && !props.has("use")) {
-                return std::unexpected("No crop box fields were provided");
-            }
-            return {};
-        }
-
-        std::expected<void, std::string> prepare_crop_box_target_operator(
-            vis::Visualizer& viewer,
-            const json& /*args*/,
-            vis::op::OperatorProperties& props) {
-            auto* const scene_manager = viewer.getSceneManager();
-            if (!scene_manager)
-                return std::unexpected("Scene manager not initialized");
-
-            auto cropbox_id = vis::cap::resolveCropBoxId(*scene_manager, props.get<std::string>("node"));
-            if (!cropbox_id)
-                return std::unexpected(cropbox_id.error());
-            return {};
-        }
-
-        json crop_box_operator_result(vis::Visualizer& viewer,
-                                      const json& /*args*/,
-                                      const vis::op::OperatorProperties& props,
-                                      const vis::op::OperatorReturnValue& /*result*/) {
-            auto* const scene_manager = viewer.getSceneManager();
-            auto* const rendering_manager = viewer.getRenderingManager();
-            if (!scene_manager)
-                return json{{"error", "Scene manager not initialized"}};
-
-            const auto cropbox_id = props.get<core::NodeId>("resolved_cropbox_id");
-            if (!cropbox_id)
-                return json{{"error", "Crop box result did not resolve a target"}};
-
-            return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
-        }
-
-        json ellipsoid_info_json(const vis::SceneManager& scene_manager,
-                                 const vis::RenderingManager* rendering_manager,
-                                 const core::NodeId ellipsoid_id);
-
-        std::expected<void, std::string> prepare_ellipsoid_add_operator(
-            vis::Visualizer& viewer,
-            const json& /*args*/,
-            vis::op::OperatorProperties& props) {
-            auto* const scene_manager = viewer.getSceneManager();
-            if (!scene_manager)
-                return std::unexpected("Scene manager not initialized");
-
-            auto parent_id = vis::cap::resolveEllipsoidParentId(
-                *scene_manager, props.get<std::string>("node"));
-            if (!parent_id)
-                return std::unexpected(parent_id.error());
-            return {};
-        }
-
-        std::expected<void, std::string> prepare_ellipsoid_set_operator(
-            vis::Visualizer& viewer,
-            const json& /*args*/,
-            vis::op::OperatorProperties& props) {
-            auto* const scene_manager = viewer.getSceneManager();
-            if (!scene_manager)
-                return std::unexpected("Scene manager not initialized");
-
-            auto ellipsoid_id = vis::cap::resolveEllipsoidId(*scene_manager, props.get<std::string>("node"));
-            if (!ellipsoid_id)
-                return std::unexpected(ellipsoid_id.error());
-
-            if (!props.has("radii") && !props.has("translation") && !props.has("rotation") &&
-                !props.has("scale") && !props.has("inverse") && !props.has("enabled") &&
-                !props.has("show") && !props.has("use")) {
-                return std::unexpected("No ellipsoid fields were provided");
-            }
-            return {};
-        }
-
-        std::expected<void, std::string> prepare_ellipsoid_target_operator(
-            vis::Visualizer& viewer,
-            const json& /*args*/,
-            vis::op::OperatorProperties& props) {
-            auto* const scene_manager = viewer.getSceneManager();
-            if (!scene_manager)
-                return std::unexpected("Scene manager not initialized");
-
-            auto ellipsoid_id = vis::cap::resolveEllipsoidId(*scene_manager, props.get<std::string>("node"));
-            if (!ellipsoid_id)
-                return std::unexpected(ellipsoid_id.error());
-            return {};
-        }
-
-        json ellipsoid_operator_result(vis::Visualizer& viewer,
-                                       const json& /*args*/,
-                                       const vis::op::OperatorProperties& props,
-                                       const vis::op::OperatorReturnValue& /*result*/) {
-            auto* const scene_manager = viewer.getSceneManager();
-            auto* const rendering_manager = viewer.getRenderingManager();
-            if (!scene_manager)
-                return json{{"error", "Scene manager not initialized"}};
-
-            const auto ellipsoid_id = props.get<core::NodeId>("resolved_ellipsoid_id");
-            if (!ellipsoid_id)
-                return json{{"error", "Ellipsoid result did not resolve a target"}};
-
-            return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
-        }
-
         json camera_node_json(const core::Scene& scene, const core::SceneNode& node) {
             assert(node.camera);
 
@@ -1619,7 +1441,6 @@ namespace lfs::app {
         }
 
         json ellipsoid_info_json(const vis::SceneManager& scene_manager,
-                                 const vis::RenderingManager* rendering_manager,
                                  const core::NodeId ellipsoid_id) {
             const auto& scene = scene_manager.getScene();
             const auto* const node = scene.getNodeById(ellipsoid_id);
@@ -2022,10 +1843,6 @@ namespace lfs::app {
             return nullptr;
         }
 
-        const core::Tensor* resolve_gaussian_field(const core::SplatData& splat_data, std::string_view field_name) {
-            return resolve_gaussian_field(const_cast<core::SplatData&>(splat_data), field_name);
-        }
-
         json tensor_payload_json(const core::Tensor& tensor) {
             json shape = json::array();
             for (const auto dim : tensor.shape().dims())
@@ -2080,14 +1897,6 @@ namespace lfs::app {
                 result.push_back(static_cast<float>(parsed));
             }
             return result;
-        }
-
-        size_t product_of_tail_dims(const core::Tensor& tensor) {
-            size_t product = 1;
-            const auto& shape = tensor.shape();
-            for (size_t i = 1; i < shape.rank(); ++i)
-                product *= shape[i];
-            return product;
         }
 
         class EventSubscriptionRegistry {
@@ -4189,7 +3998,7 @@ namespace lfs::app {
                     if (!cropbox_id)
                         return json{{"error", cropbox_id.error()}};
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -4207,7 +4016,6 @@ namespace lfs::app {
 
                 return post_and_wait(viewer_impl, [viewer_impl, requested_node]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
-                    auto* const rendering_manager = viewer_impl->getRenderingManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
 
@@ -4215,7 +4023,7 @@ namespace lfs::app {
                     if (!cropbox_id)
                         return json{{"error", cropbox_id.error()}};
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -4302,7 +4110,7 @@ namespace lfs::app {
                         return json{{"error", result.error()}};
                     }
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -4334,7 +4142,7 @@ namespace lfs::app {
                     if (!result)
                         return json{{"error", result.error()}};
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -4364,7 +4172,7 @@ namespace lfs::app {
                     if (!result)
                         return json{{"error", result.error()}};
 
-                    return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+                    return crop_box_info_json(*scene_manager, *cropbox_id);
                 });
             });
 
@@ -4394,7 +4202,7 @@ namespace lfs::app {
                     if (!ellipsoid_id)
                         return json{{"error", ellipsoid_id.error()}};
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 
@@ -4412,7 +4220,6 @@ namespace lfs::app {
 
                 return post_and_wait(viewer_impl, [viewer_impl, requested_node]() -> json {
                     auto* const scene_manager = viewer_impl->getSceneManager();
-                    auto* const rendering_manager = viewer_impl->getRenderingManager();
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
 
@@ -4420,7 +4227,7 @@ namespace lfs::app {
                     if (!ellipsoid_id)
                         return json{{"error", ellipsoid_id.error()}};
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 
@@ -4501,7 +4308,7 @@ namespace lfs::app {
                         return json{{"error", result.error()}};
                     }
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 
@@ -4532,7 +4339,7 @@ namespace lfs::app {
                     if (auto result = fit_ellipsoid_to_parent(*scene_manager, rendering_manager, *ellipsoid_id, use_percentile); !result)
                         return json{{"error", result.error()}};
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 
@@ -4561,7 +4368,7 @@ namespace lfs::app {
                     if (auto result = reset_ellipsoid(*scene_manager, rendering_manager, *ellipsoid_id); !result)
                         return json{{"error", result.error()}};
 
-                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                    return ellipsoid_info_json(*scene_manager, *ellipsoid_id);
                 });
             });
 

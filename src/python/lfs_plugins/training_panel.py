@@ -18,10 +18,6 @@ from .ui import RuntimeState, PanelStateBinding
 # Asset Manager integration (optional)
 try:
     from .asset_index import AssetIndex
-    from .asset_manager_integration import (
-        derive_project_scene_names,
-        ensure_dataset_catalog_context,
-    )
 
     ASSET_MANAGER_AVAILABLE = True
 except ImportError:
@@ -2307,21 +2303,6 @@ class TrainingPanel(Panel):
         except Exception as e:
             lf.log.warn(f"Failed to initialize Asset Manager in training panel: {e}")
             self._asset_index = None
-
-    def _get_or_create_project_scene(self):
-        """Infer project/scene names from dataset path or current context.
-
-        Returns:
-            Tuple of (project_name, scene_name, dataset_path) or (None, None, None)
-        """
-        d = lf.dataset_params()
-        if not d or not d.has_params() or not d.data_path:
-            return None, None, None
-
-        dataset_path = d.data_path
-        project_name, scene_name = derive_project_scene_names(dataset_path)
-
-        return project_name, scene_name, dataset_path
 
     def _on_remove_step_event(self, handle, event, args):
         if not args:

@@ -590,6 +590,18 @@ namespace lfs::test::licht {
         return result;
     }
 
+    std::vector<std::byte> one_pixel_png() {
+        static constexpr char PNG[] =
+            "\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52"
+            "\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4"
+            "\x89\x00\x00\x00\x0a\x49\x44\x41\x54\x78\x9c\x63\x60\x00\x00\x00"
+            "\x02\x00\x01\xe5\x27\xd4\xa2\x00\x00\x00\x00\x49\x45\x4e\x44\xae"
+            "\x42\x60\x82";
+        const auto bytes = std::as_bytes(
+            std::span(PNG, sizeof(PNG) - 1));
+        return {bytes.begin(), bytes.end()};
+    }
+
     std::unique_ptr<core::SplatData> make_matrix_splat(const bool cuda) {
         const Device device = cuda ? Device::CUDA : Device::CPU;
         constexpr std::size_t count = 4;

@@ -8,6 +8,7 @@
 #include "core/scene.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "io/project_document.hpp"
+#include "licht_matrix_test_data.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
 #include "sequencer/timeline.hpp"

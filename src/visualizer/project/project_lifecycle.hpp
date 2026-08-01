@@ -115,9 +115,6 @@ namespace lfs::vis::project {
         void markSceneMutation(std::uint32_t mutation_flags);
         void updateMaintenance();
         [[nodiscard]] bool hasDirtyProject();
-        [[nodiscard]] bool autoSaveOnClose() const noexcept {
-            return settings_.auto_save_on_close;
-        }
         [[nodiscard]] lfs::Result<void>
         setReopenLastProject(bool enabled);
         [[nodiscard]] lfs::Result<void>

@@ -225,7 +225,7 @@ namespace lfs::io {
             if constexpr (std::same_as<T, void>) {
                 return lfs::Result<void>::failure(std::move(error));
             } else {
-                return std::move(error);
+                return error;
             }
         }
 

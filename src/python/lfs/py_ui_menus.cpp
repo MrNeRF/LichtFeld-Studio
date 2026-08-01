@@ -244,7 +244,6 @@ namespace lfs::python {
             return false;
         }
 
-        void draw_schema_menu_items(const nb::object&, const nb::object&) {}
     } // namespace
 
     void PyMenuRegistry::register_menu(nb::object menu_class) {

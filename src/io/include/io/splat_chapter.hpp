@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
-#include <string_view>
 #include <vector>
 
 namespace lfs::io::project {
@@ -43,10 +42,7 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<std::unique_ptr<lfs::core::SplatData>>
         hydrate(lfs::core::SplatTensorAllocator tensor_allocator = {}) const;
 
-        [[nodiscard]] static bool must_embed(SplatSourceKind source_kind) noexcept;
         [[nodiscard]] static bool must_reference_external(
-            SplatSourceKind source_kind) noexcept;
-        [[nodiscard]] static std::string_view source_kind_name(
             SplatSourceKind source_kind) noexcept;
 
     private:

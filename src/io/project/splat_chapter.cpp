@@ -126,33 +126,9 @@ namespace lfs::io::project {
         }
     }
 
-    bool SplatChapterPayload::must_embed(
-        const SplatSourceKind source_kind) noexcept {
-        return source_kind != SplatSourceKind::LiveRad;
-    }
-
     bool SplatChapterPayload::must_reference_external(
         const SplatSourceKind source_kind) noexcept {
         return source_kind == SplatSourceKind::LiveRad;
-    }
-
-    std::string_view SplatChapterPayload::source_kind_name(
-        const SplatSourceKind source_kind) noexcept {
-        switch (source_kind) {
-        case SplatSourceKind::ImportedPly:
-            return "ply";
-        case SplatSourceKind::ImportedSpz:
-            return "spz";
-        case SplatSourceKind::ImportedSog:
-            return "sog";
-        case SplatSourceKind::Generated:
-            return "generated";
-        case SplatSourceKind::BakedRad:
-            return "baked_rad";
-        case SplatSourceKind::LiveRad:
-            return "rad";
-        }
-        return {};
     }
 
 } // namespace lfs::io::project

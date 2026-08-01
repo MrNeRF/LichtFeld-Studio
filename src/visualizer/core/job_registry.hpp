@@ -13,7 +13,6 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <vector>
 
 namespace lfs::vis {
 
@@ -105,13 +104,6 @@ namespace lfs::vis {
             JobHandle handle) const;
         [[nodiscard]] bool anyRunning(JobType type) const;
         [[nodiscard]] bool hasCompletionPending() const;
-        [[nodiscard]] std::vector<JobHandle>
-        completionPending() const;
-
-        [[nodiscard]] std::thread::id
-        mainThread() const noexcept {
-            return main_thread_;
-        }
 
     private:
         struct Entry {
