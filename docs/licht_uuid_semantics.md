@@ -1,14 +1,15 @@
 # LichtFeld UUID Semantics (`.licht`)
 
-**Status:** P0 packet (e) — normative intent for P1 implementation.  
+**Status:** P0 packet (e) — normative UUID semantics; P1–P8 implementation landed.
 **Plan reference:** `PROJECT_FORMAT_PLAN.md` §1 decisions 6–7, §2.1, §3, §4.  
 **Scope:** How every 128-bit UUID behaves across create, import, duplicate, paste,
 undo/redo, save, compaction, and recovery. Schema freezes and chapter codecs are
 out of scope here.
 
-This note is checked in **before** any chapter schema freezes. Where live code
-contradicts the plan, the contradiction is flagged as a **TENSION** block rather
-than silently resolved.
+This note was checked in **before** any chapter schema freezes. The “current code”, TENSION,
+prototype, and P1 checklist sections preserve that preimplementation audit baseline; the landed
+implementation resolves those campaign items. Explicitly PROPOSED and future items remain
+non-goals unless another current authority adopts them.
 
 ---
 

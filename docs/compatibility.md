@@ -1,27 +1,41 @@
 # `.licht` compatibility register
 
 This register is normative for released `.licht` grammars. A row is immutable after
-publication: locked production fixtures are append-only, and bytes already named by a row
-may not be regenerated under that row's writer SHA.
+publication: release-corpus entries are append-only, and bytes already named by a row may
+not be regenerated under that row's writer SHA.
 
 P8 authority/base writer SHA: `8ca8028e6214b1f424c373b24d479cd90ff2e918`.
 Current candidate producer base SHA: `bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb`.
 
 ## Published-grammar register
 
-| Spec | Fixture manifest root SHA-256 | Reader capabilities | Minimum reader | Minimum safe writer | Writer SHA | Status |
-|---|---|---|---|---|---|---|
-| 1.0 | `43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb` | bits 0–7 (`INDEX_ZSTD_V1`, `CHUNK_ZSTD_V1`, `BLOCK_CRC32C_V1`, `INDEX_TOMBSTONES_V1`, `SIDECAR_OVERLAY_V1`, `OPAQUE_CHUNK_PRESERVATION`, `RETAINED_JSON_FIELDS`, `CLEAN_PROOF_REUSE`) | 1.0 | 1.0 | `bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb` | Published grammar candidate; content-locked by P8 and the pre-release SELM withdrawal |
+| Spec | Release manifest root SHA-256 | Tagged parser tree SHA-256 | Reader capabilities | Minimum reader | Minimum safe writer | Writer SHA | Status |
+|---|---|---|---|---|---|---|---|
+| 1.0 P8 baseline | `690a820b806dc8e633e8aaacd7b381a4a9f25963160e5e92e3b490217bc63326` | `9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d` | bits 0–7 (`INDEX_ZSTD_V1`, `CHUNK_ZSTD_V1`, `BLOCK_CRC32C_V1`, `INDEX_TOMBSTONES_V1`, `SIDECAR_OVERLAY_V1`, `OPAQUE_CHUNK_PRESERVATION`, `RETAINED_JSON_FIELDS`, `CLEAN_PROOF_REUSE`) | 1.0 | 1.0 | `8ca8028e6214b1f424c373b24d479cd90ff2e918` | Frozen P8 content authority |
+| 1.0 current candidate | `43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb` | `9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d` | bits 0–7 (`INDEX_ZSTD_V1`, `CHUNK_ZSTD_V1`, `BLOCK_CRC32C_V1`, `INDEX_TOMBSTONES_V1`, `SIDECAR_OVERLAY_V1`, `OPAQUE_CHUNK_PRESERVATION`, `RETAINED_JSON_FIELDS`, `CLEAN_PROOF_REUSE`) | 1.0 | 1.0 | `bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb` | Pre-release SELM withdrawal; RawU8 fixture appended |
 
-Published-grammar register line: `licht/1.0 manifest=43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb reader=1.0 writer=1.0 caps=0-7 writer_sha=bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb`.
+Published-grammar register line: `licht/1.0 manifest=690a820b806dc8e633e8aaacd7b381a4a9f25963160e5e92e3b490217bc63326 tagged_tree=9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d reader=1.0 writer=1.0 caps=0-7 writer_sha=8ca8028e6214b1f424c373b24d479cd90ff2e918`.
 
-The candidate becomes **Published** only after all three events occur: the implementation,
-C++ compatibility tests, and locked fixtures merge to the main branch; a release tag names
-this exact manifest root; and the release notes link that tag back to this immutable row. P8
-does not create that tag. HEAD identity is provenance only and never substitutes for the
-fixture hashes.
+Current-candidate register line: `licht/1.0 manifest=43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb tagged_tree=9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d reader=1.0 writer=1.0 caps=0-7 writer_sha=bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb`.
 
-The shipped verification surface is the production C++ reader/writer and its gtests.
+Known provenance defect: the SHA-locked `selection-raw-u8.licht` row records `writer_sha=bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb`; the fixture and SELM withdrawal were actually introduced by `cc3e63b20ee7ec5c0d00f4fd64ba394955d4ad0c`.
+
+The current candidate becomes **Published** only after all three events occur: the machinery and
+locked artifacts merge to the main branch; a release tag names the current manifest root and
+tagged-parser tree hash; and the release notes link that tag back to this immutable row. P8
+does not create that tag. Descendant commits run the gates by content, so HEAD identity is
+informational and never substitutes for either hash.
+
+The tagged 1.0 parser is scoped to structural container validation. The live parser may add
+semantic JSON-chapter checks without invalidating that structural snapshot. Canonical
+dual-parser comparison excludes only `Container.path`, `Container.warnings`,
+`WriteCompatibility.reasons`, and `HeadAttempt.error` diagnostic text; superblock, selected
+head, commit, index rows, normalized offsets, CRC fields, and per-chunk verification results
+must agree exactly. A live validation change that alters container structure or the accepted
+1.0 structural grammar requires a new tagged snapshot and a new register row; it may not
+silently rewrite this freeze.
+
+The production verification surface also includes the C++ reader/writer and its gtests.
 `P8CompatibilityTest.ReleaseCorpusCppReaderOpensEveryLockedArtifact` opens every locked
 production fixture; `P8CompatibilityTest.ReleaseCorpusProductionPathsReproduceManifestSha256`
 re-emits every deterministic production path and compares its SHA-256; the container golden
@@ -30,10 +44,11 @@ by the `ProjectDocument` and chapter tests. A validation change that alters the 
 grammar requires a new register row and new locked fixture; it may not silently rewrite this
 row.
 
-Fixture update note: P8 created the initial production-writer fixture set from the six required
-producer paths plus the foreign-preview audit case. Existing container goldens remain
-byte-identical. The fixtures live under `tests/fixtures/licht/` because only C++ tests consume
-them.
+Fixture update note: P8 created the initial production-writer release corpus from the six
+required producer paths plus the foreign-preview audit case. Existing container goldens remain
+byte-identical. Canonical fixture bytes and the current candidate manifest live under
+`tests/fixtures/licht/release_corpus/`. The byte-exact seven-row P8 baseline manifest lives at
+`tools/licht_inspect/baseline/release_manifest.json` and references those same first seven files.
 
 Fixture update note: P8 Round 2 relocks `recovered-commit.licht` through the real bound-
 sidecar recovery materialization path. The other reproducible production rows remain

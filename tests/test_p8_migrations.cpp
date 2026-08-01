@@ -7,8 +7,10 @@
 #include "gui/layout_state.hpp"
 #include "io/project_document.hpp"
 #include "licht_test_support.hpp"
-#include "training/components/ppisp.hpp"
 #include "training/components/ppisp_file.hpp"
+#if !defined(LFS_FORMAT_TEST_TARGET)
+#include "training/components/ppisp.hpp"
+#endif
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -40,6 +42,9 @@ namespace {
     using namespace lfs::io::project;
     using namespace lfs::test::licht;
 
+    constexpr std::string_view AUTHORITY_SHA =
+        "8ca8028e6214b1f424c373b24d479cd90ff2e918";
+
     fs::path fixture_root() {
         return fs::path(PROJECT_ROOT_PATH) /
                "tests/fixtures/licht/migration";
@@ -51,6 +56,132 @@ namespace {
             throw std::runtime_error("migration oracle is missing");
         }
         return Json::parse(stream);
+    }
+
+#if defined(LFS_FORMAT_TEST_TARGET)
+    struct PpispFixtureSummary {
+        std::uint32_t camera_count = 0;
+        std::uint32_t frame_count = 0;
+        lfs::training::PPISPFileMetadata metadata;
+
+        [[nodiscard]] std::size_t num_cameras() const {
+            return camera_count;
+        }
+        [[nodiscard]] std::size_t num_frames() const {
+            return frame_count;
+        }
+    };
+
+    PpispFixtureSummary inspect_ppisp_fixture(
+        const fs::path& path) {
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream) {
+            throw std::runtime_error("migration PPISP fixture is missing");
+        }
+        lfs::training::PPISPFileHeader outer{};
+        stream.read(reinterpret_cast<char*>(&outer), sizeof(outer));
+        if (!stream || outer.magic != lfs::training::PPISP_FILE_MAGIC ||
+            outer.version != lfs::training::PPISP_FILE_VERSION ||
+            lfs::training::has_flag(
+                outer.flags,
+                lfs::training::PPISPFileFlags::HAS_CONTROLLER)) {
+            throw std::runtime_error("migration PPISP header is invalid");
+        }
+
+        std::uint32_t inference_magic = 0;
+        std::uint32_t inference_version = 0;
+        std::int32_t inference_cameras = 0;
+        std::int32_t inference_frames = 0;
+        stream.read(reinterpret_cast<char*>(&inference_magic),
+                    sizeof(inference_magic));
+        stream.read(reinterpret_cast<char*>(&inference_version),
+                    sizeof(inference_version));
+        stream.read(reinterpret_cast<char*>(&inference_cameras),
+                    sizeof(inference_cameras));
+        stream.read(reinterpret_cast<char*>(&inference_frames),
+                    sizeof(inference_frames));
+        if (!stream || inference_magic != 0x4c465049 ||
+            inference_version != 1 || inference_cameras < 0 ||
+            inference_frames < 0 ||
+            static_cast<std::uint32_t>(inference_cameras) !=
+                outer.num_cameras ||
+            static_cast<std::uint32_t>(inference_frames) !=
+                outer.num_frames) {
+            throw std::runtime_error(
+                "migration PPISP inference header is invalid");
+        }
+
+        struct TensorHeader {
+            std::uint32_t magic = 0;
+            std::uint32_t version = 0;
+            std::uint8_t dtype = 0;
+            std::uint8_t device = 0;
+            std::uint16_t rank = 0;
+            std::uint64_t numel = 0;
+        };
+        static_assert(sizeof(TensorHeader) == 24);
+        constexpr std::array<std::uint8_t, 6> DTYPE_BYTES{
+            4, 2, 4, 8, 1, 1};
+        for (int tensor_index = 0; tensor_index < 4; ++tensor_index) {
+            TensorHeader tensor{};
+            stream.read(reinterpret_cast<char*>(&tensor), sizeof(tensor));
+            if (!stream || tensor.magic != 0x4c465354 ||
+                tensor.version != 1 || tensor.dtype >= DTYPE_BYTES.size() ||
+                tensor.rank > 8) {
+                throw std::runtime_error(
+                    "migration PPISP tensor header is invalid");
+            }
+            stream.seekg(
+                static_cast<std::streamoff>(tensor.rank) * 8 +
+                    static_cast<std::streamoff>(tensor.numel) *
+                        DTYPE_BYTES[tensor.dtype],
+                std::ios::cur);
+            if (!stream) {
+                throw std::runtime_error(
+                    "migration PPISP tensor payload is truncated");
+            }
+        }
+
+        PpispFixtureSummary result{
+            .camera_count = outer.num_cameras,
+            .frame_count = outer.num_frames,
+        };
+        if (lfs::training::has_flag(
+                outer.flags,
+                lfs::training::PPISPFileFlags::HAS_METADATA)) {
+            std::uint64_t json_bytes = 0;
+            stream.read(reinterpret_cast<char*>(&json_bytes),
+                        sizeof(json_bytes));
+            std::string json(json_bytes, '\0');
+            stream.read(json.data(),
+                        static_cast<std::streamsize>(json.size()));
+            if (!stream) {
+                throw std::runtime_error(
+                    "migration PPISP metadata is truncated");
+            }
+            const auto metadata = Json::parse(json);
+            result.metadata.dataset_path_utf8 =
+                metadata.value("dataset_path", std::string{});
+            result.metadata.images_folder =
+                metadata.value("images_folder", std::string{});
+        }
+        return result;
+    }
+#endif
+
+    TEST(P8MigrationFixtureTest, FrozenInputManifestIsAuthorityLocked) {
+        const Json expected = oracle();
+        EXPECT_EQ(expected.at("authority_sha").get<std::string>(),
+                  AUTHORITY_SHA);
+        ASSERT_EQ(expected.at("inputs").size(), 6u);
+        for (const auto& input : expected.at("inputs")) {
+            const auto path =
+                fixture_root() / input.at("path").get<std::string>();
+            ASSERT_TRUE(fs::is_regular_file(path)) << path;
+            EXPECT_EQ(fs::file_size(path),
+                      input.at("bytes").get<std::uint64_t>())
+                << path;
+        }
     }
 
     lfs::core::param::TrainingParameters migration_parameters() {
@@ -211,11 +342,16 @@ namespace {
          LegacyPpispMapsToPrmsAndMatrixQualifiedPayloadOracle) {
         const auto expected = oracle().at("ppisp");
         const auto path = fixture_root() / "appearance.ppisp";
+#if defined(LFS_FORMAT_TEST_TARGET)
+        const auto loaded = inspect_ppisp_fixture(path);
+        const auto& metadata = loaded.metadata;
+#else
         lfs::training::PPISP loaded(90);
         lfs::training::PPISPFileMetadata metadata;
         const auto parsed = lfs::training::load_ppisp_file(
             path, loaded, nullptr, &metadata);
         ASSERT_TRUE(parsed) << parsed.error();
+#endif
         EXPECT_EQ(loaded.num_cameras(),
                   expected.at("num_cameras").get<std::size_t>());
         EXPECT_EQ(loaded.num_frames(),

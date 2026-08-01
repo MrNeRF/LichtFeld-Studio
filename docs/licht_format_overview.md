@@ -13,14 +13,14 @@ selections, the panel layout, the split view, the code-editor buffers you never 
 sequencer timeline, the camera you were flying. Close the app, reopen, continue. Move the file to
 another machine, continue there.
 
-Today that session is scattered across `checkpoint.resume` (LFKP), `.ppisp` sidecars,
-`layout.json`, and a pile of runtime state that simply dies with the process. The `.licht` format
-replaces all of it.
+That session was previously scattered across `checkpoint.resume` (LFKP), `.ppisp` sidecars,
+`layout.json`, and runtime-only state. The `.licht` format replaces those project writers.
 
-**One format.** `.licht` is the *only* thing the app writes. The legacy writers are deleted;
-their readers are kept forever as importers. There is no dual-write transition and no precedence
-dance between old and new files. Interop exports — `.ply`, `.rad`, `.spz`, `.sog`, `.usdz`,
-`.html` — are unaffected: one-way bakes, never project state.
+**One format.** `.licht` is the *only* project format the app writes. The legacy writers are
+deleted; their readers are transitional importers whose eventual removal requires an announced
+breaking change. There is no dual-write transition or precedence dance between old and new files.
+Interop exports — `.ply`, `.rad`, `.spz`, `.sog`, `.usdz`, `.html` — are unaffected: one-way
+bakes, never project state.
 
 ## The container in one page
 
@@ -47,8 +47,8 @@ original footer-authority grammar was itself refuted and replaced by the head-sl
 second review round. The read-side contract is frozen and defended in the shipped tree by C++
 reader/writer tests: locked binary fixtures, byte-for-byte writer reproduction, malformed-file
 classification, bounded reads, publication crash matrices, and document-level chapter
-validation. Earlier independent development tooling was removed once those guarantees were
-covered by the product implementation and tests.
+validation. The independent parser, frozen 1.0 parser snapshot, release corpus, and conformance
+battery under `tools/licht_inspect/` remain content-addressed release authorities.
 
 ## Chapters: single authority for every field
 
@@ -61,7 +61,7 @@ reconciled at load time:
 | `PROJ` | Project identity, UUID lineage, commit metadata |
 | `REFS` | External references: dataset root, live `.rad` sources, background/env images, PLY-sequence dirs — relative-preferred paths + fingerprints |
 | `SCNG` | Scene graph: nodes, transforms, visibility, groups, camera enablement — keyed by 128-bit node UUIDs |
-| `SELM` | Selection groups and per-node mask slices |
+| `SELM` | Selection groups and per-node RawU8 mask slices; encoding 2 is permanently reserved after its pre-release withdrawal |
 | `SPLT` | Embedded splat payloads (LFSP verbatim, page-aligned) for non-training nodes |
 | `PCLD` / `MESH` | Point-cloud / mesh payloads — distinct chunks with their own versioning (owner decision 2026-07-30) |
 | `CKPT` | The training checkpoint (LFKP embedded byte-verbatim via bounded windows): model, optimizer, strategy, iteration |
@@ -131,16 +131,12 @@ bit-exact RNG replay; no RNG state exists to capture, and the format does not pr
 4. Second instance of the app: read-only or Save As. Concurrent writers are unsupported and
    enforced via an OS lock on a held fd, not existence checks.
 
-## Where it stands (2026-07-30)
+## Where it stands (2026-08-01)
 
-- **P0** (invariants, byte grammar, ownership matrix, snapshot and OS-semantics studies): done,
-  exited with a formal verdict; its development-only executables are retained in branch history,
-  not the shipped tree.
-- **P1** (node UUID identity through scene/undo/selection/sequencer, serializer gap fixes,
-  field-wise config serialization, retained-DOM layer): landed.
-- **P2** (the production C++ container core, `src/io/project/`): in build — the v1 prototype it
-  replaces implemented the refuted footer grammar and serves as input only.
-- **P3–P8**: chapters, training snapshot productionization, GUI session chapters, lifecycle
-  (File menu / `--project` / restore-last-session / save-on-close), autosave & recovery,
-  compatibility hardening — in that order, each gated on builds, targeted C++ gtests, and GUI
-  validation.
+- **P0–P1** established the invariants, byte grammar, ownership and UUID rules, serializer
+  foundations, and retained-DOM layer.
+- **P2–P8 are landed.** The production container, all project/session chapters, training snapshot,
+  lifecycle and partial-open flow, autosave/recovery/compaction, and compatibility/release gates
+  are implemented on `licht_format`.
+- Draft PR #1525 is open against `master`. Its Ubuntu and Windows lanes build and run the
+  CPU-only `lichtfeld_format_tests` gate; GPU-only validation remains a separate hardware gate.

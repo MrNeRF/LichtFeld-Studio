@@ -1099,9 +1099,17 @@ namespace lfs::io::project {
                     });
             }
         }
-        state.selected_node_uuids.assign(
-            selected_node_uuids.begin(),
-            selected_node_uuids.end());
+        state.selected_node_uuids.reserve(
+            selected_node_uuids.size());
+        for (const auto& uuid : selected_node_uuids) {
+            const auto* node = scene.getNodeByUuid(uuid);
+            if (node != nullptr &&
+                (node->type == lfs::core::NodeType::KEYFRAME ||
+                 node->type == lfs::core::NodeType::KEYFRAME_GROUP)) {
+                continue;
+            }
+            state.selected_node_uuids.push_back(uuid);
+        }
         return state;
     }
 

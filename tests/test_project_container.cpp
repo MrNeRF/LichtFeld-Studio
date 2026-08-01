@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <ostream>
 #include <span>
 #include <stdexcept>
@@ -258,6 +259,38 @@ namespace {
         EXPECT_FALSE(compatibility.safe);
         EXPECT_EQ(compatibility.reasons.size(), 2u)
             << "the version and capability gates must refuse independently";
+    }
+
+    TEST(ProjectContainerReader, FullMaterializedOracleCorpusParity) {
+        const char* manifest_environment =
+            std::getenv("LFS_LICHT_ORACLE_MANIFEST");
+        if (manifest_environment == nullptr ||
+            std::string_view(manifest_environment).empty()) {
+            GTEST_SKIP()
+                << "set LFS_LICHT_ORACLE_MANIFEST to a materialized "
+                   "oracle_corpus.py manifest";
+        }
+        const fs::path manifest_path = manifest_environment;
+        std::ifstream input(manifest_path);
+        ASSERT_TRUE(input) << manifest_path;
+        const nlohmann::json manifest = nlohmann::json::parse(input);
+        ASSERT_EQ(manifest.at("schema").get<int>(), 1);
+        const auto& cases = manifest.at("cases");
+        ASSERT_EQ(cases.size(), manifest.at("case_count").get<std::size_t>());
+        ASSERT_GE(cases.size(), 10'000u);
+
+        for (const auto& record : cases) {
+            const std::string case_id =
+                record.at("case_id").get<std::string>();
+            SCOPED_TRACE(case_id);
+            const fs::path path =
+                manifest_path.parent_path() /
+                record.at("mutated_file").get<std::string>();
+            const std::string expected =
+                record.at("expected_outcome").get<std::string>();
+            const OpenClassification actual = ProjectReader::classify(path);
+            EXPECT_EQ(actual.outcome_name(), expected) << actual.diagnostic;
+        }
     }
 
     TEST(ProjectContainerReader, SelectedGenerationAndCarriedRowsMatchGrammar) {

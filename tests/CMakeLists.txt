@@ -57,41 +57,73 @@ set(LICHT_FORMAT_TEST_FILES
     test_json_chapter_dom.cpp
     test_project_chapters.cpp
     test_project_container.cpp
+    test_selection_chapter.cpp
+    test_p8_compatibility.cpp
+    test_p8_migrations.cpp
 )
+# test_project_document.cpp is excluded: it links headless recovery, training strategies, and visualizer parameter state.
+# test_p3_matrix_proof.cpp is excluded: it links checkpoint and training-strategy implementations.
+# test_p5_session_chapters.cpp is excluded: it links the Python editor and TrainingManager runtime.
 
 add_executable(lichtfeld_format_tests
     ${LICHT_FORMAT_TEST_FILES}
     licht_format_test_runtime.cpp
+    licht_format_tensor_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/checkpoint_format.cpp
     ${CMAKE_SOURCE_DIR}/src/core/error.cpp
     ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
     ${CMAKE_SOURCE_DIR}/src/core/parameters.cpp
     ${CMAKE_SOURCE_DIR}/src/core/uuid.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/tensor/tensor_serialization.cpp
     ${CMAKE_SOURCE_DIR}/src/io/json_chapter_dom.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_chapters.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/crc32c.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/geometry_payload.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_file.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_container.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_document.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_writer.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_recovery.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/selection_chapter.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/session_chapters.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/splat_chapter.cpp
+    ${CMAKE_SOURCE_DIR}/src/visualizer/gui/layout_state.cpp
 )
 target_include_directories(lichtfeld_format_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/include
     ${CMAKE_SOURCE_DIR}/src/io/include
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/training
+    ${CMAKE_SOURCE_DIR}/src/training/include
+    ${CMAKE_SOURCE_DIR}/src/visualizer
     ${CMAKE_SOURCE_DIR}/tests
     ${CMAKE_BINARY_DIR}/include
+    ${CUDAToolkit_INCLUDE_DIRS}
 )
 target_compile_definitions(lichtfeld_format_tests PRIVATE
+    LFS_FORMAT_TEST_TARGET
     PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
     $<$<PLATFORM_ID:Windows>:LFS_CORE_EXPORTS>
 )
 target_link_libraries(lichtfeld_format_tests PRIVATE
     GTest::gtest_main
     nlohmann_json::nlohmann_json
+    OpenSSL::Crypto
     xxHash::xxhash
     zstd::libzstd
     Threads::Threads
 )
+if(MSVC)
+    target_compile_options(lichtfeld_format_tests PRIVATE /Gy)
+    target_link_options(lichtfeld_format_tests PRIVATE /OPT:REF)
+else()
+    target_compile_options(lichtfeld_format_tests PRIVATE
+        -ffunction-sections -fdata-sections
+    )
+    target_link_options(lichtfeld_format_tests PRIVATE
+        -Wl,--no-export-dynamic -Wl,--gc-sections
+    )
+endif()
 if(WIN32)
     target_link_libraries(lichtfeld_format_tests PRIVATE bcrypt)
 endif()
@@ -112,6 +144,11 @@ set_tests_properties(lichtfeld_format_tests PROPERTIES
     TIMEOUT 300
 )
 
+if(NOT BUILD_TESTS)
+    message(STATUS "Building CPU-only format tests (no CUDA); full suite disabled")
+    return()  # lichtfeld_format_tests is defined above; the rest needs CUDA/Torch
+endif()
+
 # Reuse nanobind headers for Python UI regression tests
 if(NOT DEFINED NB_DIR)
     find_package(Python REQUIRED COMPONENTS Interpreter Development Development.Module Development.SABIModule)
@@ -120,12 +157,6 @@ endif()
 
 if(COMMAND nanobind_build_library AND NOT TARGET nanobind-static)
     nanobind_build_library(nanobind-static)
-endif()
-
-
-if(NOT BUILD_TESTS)
-    message(STATUS "Building CPU-only format tests (no CUDA); full suite disabled")
-    return()  # lichtfeld_format_tests is defined above; the rest needs CUDA/Torch
 endif()
 
 # Find LibTorch for tensor comparison tests

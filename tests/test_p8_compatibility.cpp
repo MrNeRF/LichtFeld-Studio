@@ -32,6 +32,7 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <csignal>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -1053,6 +1054,115 @@ namespace {
     }
 
 #ifndef _WIN32
+    TEST(P8CompatibilityTest,
+         AutosaveSigkillAtEveryBoundaryLeavesCompleteOldOrNewSidecar) {
+        TemporaryDirectory temporary;
+        for (int boundary_value =
+                 static_cast<int>(CommitBoundary::CurrentHeadValidated);
+             boundary_value <=
+             static_cast<int>(CommitBoundary::Committed);
+             ++boundary_value) {
+            const auto boundary =
+                static_cast<CommitBoundary>(boundary_value);
+            SCOPED_TRACE(std::format("autosave boundary {}", boundary_value));
+            const auto master = temporary.path /
+                                std::format("autosave-crash-{}.licht",
+                                            boundary_value);
+            const auto sidecar = autosave_sidecar_path(master);
+            auto initial = create_document(
+                90'000 + boundary_value * 100, "autosave-crash");
+            (void)require_result(initial.save(
+                master, save_options(90'010 + boundary_value * 100)));
+            const auto master_before = read_file_bytes(master);
+            const auto base = require_result(ProjectReader::open(master));
+            {
+                auto document = require_result(ProjectDocument::open(master));
+                require_status(document.edit_view().dom().set(
+                    "crash_marker", std::string{"old"}));
+                (void)require_result(document.save_autosave(
+                    sidecar,
+                    ProjectDocumentAutosaveOptions{
+                        .file_uuid =
+                            fixed_uuid(90'020 + boundary_value * 100),
+                        .base_explicit_commit_uuid =
+                            base.commit().commit_uuid,
+                        .autosave_sequence = 1,
+                        .snapshot_uuid =
+                            fixed_uuid(90'021 + boundary_value * 100),
+                        .index_compression =
+                            IndexCompression::StoredForDeterministicTests,
+                        .disk_reserve_bytes = 0,
+                    }));
+            }
+
+            const pid_t child = ::fork();
+            ASSERT_GE(child, 0);
+            if (child == 0) {
+                try {
+                    auto document = ProjectDocument::open(master);
+                    if (!document) {
+                        ::_exit(101);
+                    }
+                    auto edited = document->edit_view().dom().set(
+                        "crash_marker", std::string{"new"});
+                    if (!edited) {
+                        ::_exit(102);
+                    }
+                    (void)document->save_autosave(
+                        sidecar,
+                        ProjectDocumentAutosaveOptions{
+                            .file_uuid =
+                                fixed_uuid(90'022 + boundary_value * 100),
+                            .base_explicit_commit_uuid =
+                                base.commit().commit_uuid,
+                            .autosave_sequence = 2,
+                            .snapshot_uuid =
+                                fixed_uuid(90'023 + boundary_value * 100),
+                            .index_compression =
+                                IndexCompression::StoredForDeterministicTests,
+                            .disk_reserve_bytes = 0,
+                            .boundary_observer =
+                                [boundary](const CommitBoundary reached) {
+                                    if (reached == boundary) {
+                                        ::kill(::getpid(), SIGKILL);
+                                    }
+                                },
+                        });
+                } catch (...) {
+                    ::_exit(103);
+                }
+                ::_exit(104);
+            }
+            int status = 0;
+            ASSERT_EQ(::waitpid(child, &status, 0), child);
+            ASSERT_TRUE(WIFSIGNALED(status));
+            EXPECT_EQ(WTERMSIG(status), SIGKILL);
+            EXPECT_EQ(read_file_bytes(master), master_before);
+
+            auto inspection = inspect_autosave_recovery(master);
+            ASSERT_TRUE(inspection)
+                << lfs::format_for_developer(inspection.error());
+            ASSERT_EQ(inspection->disposition, RecoveryDisposition::Offer);
+            ASSERT_TRUE(inspection->selected_path);
+            EXPECT_TRUE(inspection->autosave_sequence == 1 ||
+                        inspection->autosave_sequence == 2);
+            const auto recovered = temporary.path /
+                                   std::format("autosave-recovered-{}.licht",
+                                               boundary_value);
+            require_status(materialize_recovered_project(
+                master, *inspection->selected_path, recovered));
+            auto reader = require_result(ProjectReader::open(recovered));
+            require_status(reader.verify_all());
+            auto recovered_document =
+                require_result(ProjectDocument::open(recovered));
+            const auto marker = recovered_document.view().dom().get<std::string>(
+                "crash_marker");
+            ASSERT_TRUE(marker);
+            EXPECT_EQ(*marker,
+                      inspection->autosave_sequence == 1 ? "old" : "new");
+        }
+    }
+
     TEST(P8LockMatrixTest,
          SecondProcessIsReadOnlyOnOriginalAndMaySaveAsElsewhere) {
         TemporaryDirectory temporary;

@@ -1,8 +1,8 @@
 # `.licht` project-state ownership matrix
 
-Status: **normative for format 1.0**, except the explicitly non-serialized items under **UNRESOLVED** (U1 and U2 resolved by owner decision 2026-07-30; the former PROPOSED gap-#12 block is now normative). This is the published project-state ownership register. A format field is not releasable until it appears here with one semantic authority.
+Status: **normative for format 1.0**. P3–P8 implement this ownership model. The human-readable audit columns are historical; the machine-readable runtime inventory is current. U3 and U5 are v1 non-goals; U4 and U6 are resolved. A format field is not releasable until it appears here with one semantic authority.
 
-“Serialized where today” describes the live `licht_format` checkout; it is evidence, not permission to duplicate that state in `.licht`. A legacy value may remain physically present inside an opaque, byte-verbatim `CKPT` or `PPIS` payload while another chapter is its semantic authority. Such values must be ignored or reconciled as stated below.
+“Serialized where today” describes the preimplementation `licht_format` checkout audited for this matrix; it is historical evidence, not permission to duplicate that state in `.licht`. A legacy value may remain physically present inside an opaque, byte-verbatim `CKPT` or `PPIS` payload while another chapter is its semantic authority. Such values must be ignored or reconciled as stated below.
 
 ## Normative vocabulary
 
@@ -83,7 +83,7 @@ These rules are mandatory and take precedence over incidental duplication in tod
 | Selection groups: `id`, `name`, `color`, `locked` | `SelectionGroup`, `Scene::selection_groups_` @ `src/core/include/core/scene.hpp` | Memory/undo snapshot only | `SELM` | IDs 1–255 are persisted. `count` is recomputed from restored slices. | Group add/remove/rename/color/lock edit |
 | `active_selection_group`, `next_group_id` | `Scene::{active_selection_group_,next_group_id_}` @ `src/core/include/core/scene.hpp` | Memory/undo snapshot only | `SELM` | Validate against restored groups; repair an invalid active ID explicitly and mark the project dirty. | Active group or allocator change |
 | Per-node selection mask slices keyed by node UUID, including splat and point-cloud slices | Current flat `Scene::selection_mask_` and `Scene::currentSelectionCapacity()` @ `src/core/include/core/scene.hpp`, `src/core/scene.cpp` | One flat splat-only tensor; no point-cloud slice serializer | `SELM` | Restore only after the complete node set and payload sizes are known. Concatenate/project into runtime caches; no positional node-order authority. Current point-cloud absence is contradiction C7. | Selection paint/write, topology change, group removal, or mask remap |
-| Ordered selected-node UUID set | Runtime `SelectionState::selected_nodes_` @ `src/visualizer/scene/selection_state.hpp` | Runtime `NodeId` set only | `SELM` | Resolve UUIDs after all scene and generated nodes are available; restore last. Generated keyframe selection follows U6. | Node select/add/remove/clear |
+| Ordered selected-node UUID set | Runtime `SelectionState::selected_nodes_` @ `src/visualizer/scene/selection_state.hpp` | Runtime `NodeId` set only | `SELM` | Restore SCNG-owned UUIDs last. Capture drops generated keyframe and keyframe-group UUIDs as settled in U6. | Node select/add/remove/clear |
 
 `SelectionGroup::count`, `Scene::has_selection_`, cached node masks, generation counters, and group-count dirty flags are derived and excluded.
 
@@ -134,7 +134,7 @@ Every row below is scoped to a **non-training** splat node. The equivalent train
 | Bilateral grid dimensions/configuration, `step`, current/initial LR, total iterations, grids, Adam moments | `BilateralGrid::serialize` @ `src/training/components/bilateral_grid.cpp` | Optional LFKP `HAS_BILATERAL_GRID` block | `CKPT` | Accumulated gradients and temporary buffers rebuild. | Bilateral optimizer step/state mutation |
 | Training PPISP dimensions/configuration, `step`, current/initial LR, total iterations, exposure/vignetting/colour/CRF tensors and Adam moments, camera/frame ID maps | `PPISP::serialize` @ `src/training/components/ppisp.cpp` | Optional LFKP `HAS_PPISP` block | `CKPT` | Wins over `PPIS`. Viewer manual overrides remain `VIEW`. Gradients/finalization caches rebuild. | PPISP optimizer step, mapping, or tensor mutation |
 | PPISP controller dimensions/configuration, `step`, current/initial LR, total iterations, CNN/FC weights and Adam moments | `PPISPControllerPool::serialize` @ `src/training/components/ppisp_controller_pool.cu` | Optional LFKP `HAS_PPISP_CONTROLLER` block | `CKPT` | Inference-only `PPIS` controller weights cannot override an active checkpoint controller. Runtime prediction buffers/last-camera cache rebuild. | Controller optimizer step/state mutation |
-| Sparsity ADMM `z`, `u`, `opa_sigmoid` | `ADMMSparsityOptimizer::serialize` @ `src/training/components/sparsity_optimizer.cpp` | Optional LFKP `HAS_SPARSITY` block | `CKPT` | Required for mid-sparsification resume. C2 version bump applied in-tree (v2), pending build/test. | ADMM initialize/step/reset/topology change |
+| Sparsity ADMM `z`, `u`, `opa_sigmoid` | `ADMMSparsityOptimizer::serialize` @ `src/training/components/sparsity_optimizer.cpp` | Optional LFKP `HAS_SPARSITY` block | `CKPT` | Required for mid-sparsification resume. The C2 v2 block is covered by checkpoint and P3 matrix round-trip tests. | ADMM initialize/step/reset/topology change |
 | Active core/schedule params: `iterations`, `sh_degree_interval`, `means_lr`, `means_lr_end`, `shs_lr`, `opacity_lr`, `scaling_lr`, `scaling_lr_end`, `rotation_lr`, `lambda_dssim`, `min_opacity`, `refine_every`, `start_refine`, `stop_refine`, `grad_threshold`, `sh_degree`, `opacity_reg`, `scale_reg`, `init_opacity`, `init_scaling`, `max_cap` | `OptimizationParameters`; `OptimizationParameters::to_json`; `serialize_checkpoint` @ `src/core/include/core/parameters.hpp`, `src/core/parameters.cpp`, `src/training/checkpoint.cpp` | Embedded LFKP parameter JSON | `CKPT` | Active exact-resume values win. PRMS contains only role-qualified pending copies. `sh_degree` here is the training param — distinct from the identically named VIEW render setting. | Active trainer parameter mutation |
 | Active evaluation/output schedule and strategy behavior: `eval_steps`, `save_steps`, `bg_modulation`, `enable_eval`, `enable_save_eval_images`, `strategy` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | Resume behavior uses checkpoint values; any explicit post-open edit is a new mutation. `headless` is excluded despite being serialized today. | Active trainer parameter mutation |
 | Active mask params: `mask_mode`, `invert_masks`, `mask_threshold`, `mask_opacity_penalty_weight`, `mask_opacity_penalty_power`, `use_alpha_as_mask` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | DatasetConfig's duplicated invert/threshold values are normalized to these active values for the trainer; pending dataset UI copies remain PRMS. | Active mask-policy mutation |
@@ -216,7 +216,7 @@ Editor execution status, LSP state, completion lists, diagnostics, output termin
 | Field | C++ owner (struct/class @ file) | Serialized where today | Chapter authority | Precedence/reconciliation rule | Dirty trigger |
 |---|---|---|---|---|---|
 | Timeline JSON version, `clip_duration`, ordered camera keyframes `{time,position,rotation,focal_length_mm,easing}` | `Timeline`, `Keyframe`; `Timeline::saveToJson` @ `src/sequencer/timeline.hpp`, `src/sequencer/keyframe.hpp`, `src/sequencer/timeline.cpp` | Standalone timeline JSON | `SEQR` | Inline the semantic JSON in retained DOM. Loop-point keyframe and runtime keyframe IDs are regenerated. | Keyframe/clip-duration edit |
-| Animation clip `name`; tracks `{id,type,target}`; generic keyframes `{time,value,easing}` | `AnimationClip::toJson`, `AnimationTrack`, `GenericKeyframe` @ `src/sequencer/animation_clip.cpp`, `src/sequencer/animation_track.hpp` | Nested in standalone timeline JSON | `SEQR` | Track target identity tension is U6; values/order must survive unknown fields. | Clip/track/keyframe edit |
+| Animation clip `name`; tracks `{id,type,target}`; generic keyframes `{time,value,easing}` | `AnimationClip::toJson`, `AnimationTrack`, `GenericKeyframe` @ `src/sequencer/animation_clip.cpp`, `src/sequencer/animation_track.hpp` | Nested in standalone timeline JSON | `SEQR` | Values and order survive unknown fields; stable timeline-keyframe identity is post-v1. | Clip/track/keyframe edit |
 | PLY-sequence clip node name, ordered frame entries/node names, and `fps` | `PlySequenceClip`, `PlySequenceFrame` @ `src/visualizer/sequencer/sequencer_controller.hpp` | Runtime only | `SEQR` | Saved order wins over directory enumeration. Its external directory record is separately owned and resolved by REFS. | Clip import/reorder/name/FPS change |
 | `playhead`, `loop_mode`, `playback_speed` | `SequencerController::{playhead_,loop_mode_,playback_speed_}` @ `src/visualizer/sequencer/sequencer_controller.hpp` | Runtime only | `SEQR` | Restore stopped at saved playhead. Controller values win over `SequencerUIState` mirrors. | Seek, loop-mode, or speed change |
 | Editing/preview preferences: `snap_to_grid`, `snap_interval`, `follow_playback`, `show_pip_preview`, `pip_preview_scale`, `show_film_strip` | `SequencerUIState` @ `src/visualizer/gui/sequencer_ui_state.hpp` | Runtime only | `SEQR` | Project sequencer-session state. Export preset/dimensions/framerate/quality and preview `equirectangular` are excluded. | Preference change |
@@ -269,7 +269,7 @@ These fields must not appear as authoritative `.licht` project state.
 | Selection counts, cache masks, dirty/generation counters | `Scene` selection internals and `SelectionState` @ `src/core/include/core/scene.hpp`, `src/visualizer/scene/selection_state.hpp` | Recompute from SELM. |
 | Undo/redo history, clipboard, active drags/strokes/polygons, hover/popup/modal state | `UndoHistory`, `SceneManager::clipboard_`, `SelectionService::InteractiveSelectionState` @ `src/visualizer/operation/undo_history.hpp`, `src/visualizer/scene/scene_manager.hpp`, `src/visualizer/selection/selection_service.hpp` | Transient interaction state, not durable project DTO. |
 | Editor execution/LSP/completion/diagnostics/output/terminal process/history/scrollback | `PythonEditor::Impl`, `PythonLspClient`, `PythonConsoleState`, `TerminalWidget` @ `src/visualizer/gui/editor/python_editor.cpp`, `src/visualizer/gui/editor/python_lsp_client.hpp`, `src/visualizer/gui/panels/python_console_panel.hpp`, `src/visualizer/gui/terminal/terminal_widget.hpp` | Rebuilt or intentionally session-transient; only EDTR document session persists. |
-| Sequencer playback state (`PLAYING`/`PAUSED`/`SCRUBBING`), reverse direction, revisions, loop-point keyframe, export preset/dimensions/FPS/quality | `SequencerController`, `Timeline`, `SequencerUIState` @ `src/visualizer/sequencer/sequencer_controller.hpp`, `src/sequencer/timeline.hpp`, `src/visualizer/gui/sequencer_ui_state.hpp` | Restore stopped at the persisted playhead; regenerate/reselect as resolved in U6. Export dialog choices are not v2 project state. |
+| Sequencer playback state (`PLAYING`/`PAUSED`/`SCRUBBING`), reverse direction, revisions, loop-point keyframe, export preset/dimensions/FPS/quality | `SequencerController`, `Timeline`, `SequencerUIState` @ `src/visualizer/sequencer/sequencer_controller.hpp`, `src/sequencer/timeline.hpp`, `src/visualizer/gui/sequencer_ui_state.hpp` | Restore stopped at the persisted playhead; regenerate keyframe nodes and drop their prior selection as resolved in U6. Export dialog choices are not v2 project state. |
 | Generated `KeyframeData`/keyframe scene nodes, including derived `keyframe_index` | `KeyframeData`; `KeyframeSceneSync::syncToSceneGraph` @ `src/core/include/core/scene.hpp`, `src/visualizer/gui/keyframe_scene_sync.cpp` | Regenerate from SEQR; never serialize in SCNG. |
 | Trainer telemetry beyond METR (FPS, ETA, instantaneous phase, transient snapshots, per-image report details) | `TrainingSnapshot`, `EvalMetrics`, AppStore fields @ `src/training/control/command_api.hpp`, `src/training/metrics/metrics.hpp`, `src/visualizer/include/visualizer/app_store.hpp` | Rebuilt or external report output per plan §6. |
 | Dataset contents | `loadTrainingDataIntoScene`; `Camera` asset paths @ `src/training/training_setup.cpp`, `src/core/include/core/camera.hpp` | Never embedded. REFS stores root/fingerprint; SCNG stores logical camera context. |
@@ -277,9 +277,10 @@ These fields must not appear as authoritative `.licht` project state.
 | Window framebuffer size, monitor geometry, render texture handles, frame serials | `WindowManager`, `SplitViewService`, `RenderingManager` @ `src/visualizer/window/window_manager.hpp`, `src/visualizer/rendering/split_view_service.hpp`, `src/visualizer/rendering/rendering_manager.hpp` | Recompute for the current machine. GUIL stores logical window geometry only. |
 | Container transaction/envelope metadata: file/commit/snapshot UUIDs, head sequence, physical offsets/sizes, generations, CRCs, tombstones, compression/alignment | Current prototype surfaces are `FileHeader`, `ChunkHeader`, `IndexRow`, `Footer` @ `src/io/include/io/project_container.hpp` | Physical container authority, outside application-state chapters. Only semantic `project_uuid` is mirrored in PROJ and must match the superblock. |
 
-## UNRESOLVED
+## Remaining policy and explicit v1 non-goals
 
-These are not permissions to choose opportunistically. Each needs an owner decision or schema amendment before the relevant compatibility fixture is accepted.
+These are not permissions to choose opportunistically. Resolved entries record the selected
+policy; non-goals record a deliberate v1 boundary.
 
 ### ~~U1~~ — RESOLVED (owner decision 2026-07-30): SPLT scope
 
@@ -295,38 +296,59 @@ import source for provenance only — it is never load-bearing for restore of an
 Distinct `PCLD` and `MESH` chunks with their own versioning (plan §2.2). The PROPOSED
 geometry-payload block above is hereby normative with that chunk assignment.
 
-### U3 — camera in-memory mask payload
+### U3 — V1 NON-GOAL: camera in-memory mask payload
 
-`Camera::_in_memory_mask_raw` can supersede `mask_path` for direct-scene plugins (`src/core/include/core/camera.hpp`). Dataset contents may not be embedded, but this tensor may have no external source. Decide whether it is a SCNG auxiliary payload, a geometry payload instance, or deliberately unsupported with a loud save error.
+`Camera::_in_memory_mask_raw` can supersede `mask_path` for direct-scene plugins
+(`src/core/include/core/camera.hpp`). V1 deliberately does not serialize this tensor.
+`capture_scene_graph_state` returns a typed `FailedPrecondition` error instead of silently dropping
+it. A future embedded camera-mask payload requires a new ownership and compatibility decision.
 
-### U4 — duplicate camera asset-path owners in code
+### ~~U4~~ — RESOLVED: camera asset-path authority
 
-`SceneNode::{image_path,mask_path,depth_path}` and `Camera::{_image_path,_mask_path,_depth_path,_normal_path}` are both plausible source fields. The chapter is settled as SCNG, but the durable DTO must choose one canonical source and validate/derive the other; it must not serialize both and apply last-writer-wins.
+The `Camera` value is canonical. `capture_camera` writes its image, mask, depth, and normal paths to
+the SCNG camera record, and hydration reconstructs the `Camera` from that record. Scene-node path
+mirrors are not a second serialized authority.
 
-### U5 — clean editor file changed or missing on disk
+### U5 — V1 NON-GOAL: clean editor file recovery snapshots
 
-EDTR clearly embeds modified buffers but the plan does not settle clean-buffer conflict behavior. Current code has a path, current text, and modified bit but no fingerprint. Decide whether clean text is also embedded as a recovery snapshot, or whether disk is required and a missing/changed file opens an explicit conflict tab.
+EDTR embeds modified buffers only. A clean entry is locator-only external state: restore reads the
+current disk bytes, and a missing, unreadable, or oversized file restores an empty tab. V1 has no
+clean-buffer fingerprint, embedded recovery snapshot, or conflict UI; adding those is future work.
 
-### U6 — generated keyframe identity and animation targets
+### ~~U6~~ — RESOLVED: selected generated keyframe nodes
 
-`Timeline::saveToJson` omits camera-keyframe IDs, `KeyframeSceneSync` regenerates name-based nodes, and animation tracks/PLY clips store string target/node names. Plan decision 6 says names are display-only UUIDs, while restore order says node selection is restored last. Define UUID-stable target encoding and whether selected generated keyframes are restored by timeline keyframe identity or intentionally dropped.
+V1 drops selection of generated `KEYFRAME` and `KEYFRAME_GROUP` scene nodes during SELM capture.
+Those nodes remain derived from SEQR and omitted from SCNG, so they cannot reappear as restored
+node selection after save and reopen. Stable timeline-keyframe identity and selection restoration
+are a post-v1 format feature.
 
 ### ~~U7~~ — RESOLVED (owner work order 2026-07-31): METR canonical history and retention
 
 `METR` stores binary, ordered `{i32 iteration, f32 value}` loss and PSNR histories (up to 10,000,000 samples each), f64 accumulated seconds, and optional last-eval `{i32 iteration, f32 psnr, f32 ssim}`. Full histories are canonical; capped `TrainerManager` deques and report projections are rebuilt.
 
-## Plan/code contradictions and release blockers
+## Historical plan/code contradictions — resolved
 
-1. **Container grammar:** `src/io/include/io/project_container.hpp` is the refuted v1 header/footer/previous-index design with packed structs, mutable header authority, `SUPERSEDED`, and 32-bit `instance_id`. Plan v2 requires immutable superblock, dual head slots as sole authority, complete indices/tombstones, explicit encoding, and 128-bit instance UUIDs. It must not be treated as a v2 implementation.
-2. **LFKP versioning:** `CheckpointFlags::HAS_SPARSITY` and the ADMM block were originally added while `CHECKPOINT_VERSION` remained 1, violating plan §2.5/known gap 2. *Resolved in-tree 2026-07-18: `CHECKPOINT_VERSION=2` + `CHECKPOINT_VERSION_HAS_SPARSITY=2` with a v1..v2 accept range; pending build/test verification.*
-3. **Camera enablement duplicate:** embedded LFKP serialization still retains `disabled_camera_uids`, and the legacy importer applies it (`src/training/checkpoint.cpp`, `src/visualizer/scene/scene_manager.cpp`), contrary to SCNG authority. Project restore applies SCNG afterward; the field remains legacy-import compatibility only.
-4. **Retained-DOM violation if reused:** `OptimizationParameters::to_json`, `DatasetConfig::to_json`, `LayoutState::save`, `Timeline::saveToJson`, and `AnimationClip::toJson` build fresh JSON objects. They drop unknown members and cannot directly implement plan decision 11.
-5. **Dropped exact dataset fields:** `DatasetConfig::to_json` does not serialize `timelapse_images` or `timelapse_every`, although both affect an active training session and therefore belong in CKPT.
-6. **Process mode trapped in exact params:** `OptimizationParameters::to_json` writes `headless`, and checkpoint load adopts it instead of preserving invocation mode. `.licht` restore must treat `headless` as runtime/CLI state, as listed in exclusions.
-7. **Point-cloud selection absent:** SELM requires per-node splat and point-cloud mask slices, but `Scene::currentSelectionCapacity()` delegates to splat-only `getSelectionGaussianCount()` in `src/core/scene.cpp`.
-8. **Raw config layouts:** `BilateralGrid::serialize`, `PPISP::serialize`, and `PPISPControllerPool::serialize` write raw `Config` structs guarded by `static_assert(sizeof)`, contrary to plan decision 15's field-wise encoding requirement. LFKP must be versioned before CKPT is frozen byte-verbatim for v2.
-9. **Persistent identity mismatch:** scene references, sequencer targets, PLY frame node names, and generated keyframe selection are currently name/`NodeId` based, contrary to plan decision 6's UUID-only persistent identity.
-10. ~~**Legacy writers remain live.**~~ **Resolved in P6 (2026-07-31):** standalone checkpoint/LFKP, `.ppisp`, and `layout.json` writer paths were removed from product surfaces. Their readers remain import-only; new persistence is chapter-backed `.licht`.
+1. **Container grammar — resolved in P2:** the production container uses the immutable superblock,
+   dual head slots, complete indices/tombstones, explicit encoding, and UUID chunk keys.
+2. **LFKP versioning — resolved in P1:** sparsity state is version-gated by LFKP v2; the current
+   build and checkpoint tests exercise the accepted version range.
+3. **Camera enablement duplicate — resolved in P3/P4:** SCNG wins for project restore. The LFKP
+   field remains only for standalone legacy-checkpoint import.
+4. **Retained-DOM preservation — resolved in P1/P3/P5:** every JSON project chapter mutates a
+   retained DOM and the P8 compatibility tests prove unknown-field carry-forward.
+5. **Exact dataset fields — resolved in P4:** CKPT and PRMS capture the role-qualified timelapse
+   and dataset fields covered by the ownership proofs.
+6. **Process mode in exact params — resolved in P3/P4:** project chapter adaptation strips
+   `headless`; invocation policy remains runtime-owned.
+7. **Point-cloud selection — resolved in P3:** SELM stores and hydrates per-node splat and
+   point-cloud slices.
+8. **Component config layouts — resolved in P1:** bilateral-grid, PPISP, and controller configs
+   use field-wise versioned encoding with legacy readers.
+9. **Persistent identity — resolved in P1/P3/P5/U6:** project references use UUIDs. V1 drops
+   selection of regenerated keyframe nodes; stable timeline-keyframe identity is post-v1.
+10. **Legacy writers — resolved in P6:** standalone checkpoint/LFKP, `.ppisp`, and `layout.json`
+    writer paths were removed from product surfaces. Their readers are transitional importers;
+    new project persistence is chapter-backed `.licht`.
 
 ## Runtime serialization inventory
 

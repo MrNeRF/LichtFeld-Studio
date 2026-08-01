@@ -2,14 +2,17 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Design (implementation not started) |
+| **Status** | Landed; historical P1.1 implementation design |
 | **Phase** | P1.1 subset of plan P1 ("State & serializer foundations") |
 | **Branch** | `licht_format` |
 | **Normative inputs** | `docs/licht_uuid_semantics.md` (D1–D8, TENSIONS, §5.3), `PROJECT_FORMAT_PLAN.md` §1 decisions 6–7, §2.4 SCNG/SELM, §7 P1 exit |
 | **Scope** | Runtime dual-identity (`NodeId` + `node_uuid`), mint/preserve lifecycle, undo restore, selection translation boundary, name-as-label migration inventory, Python/MCP additive surfaces |
 | **Out of scope** | Container rewrite (P2), `SCNG`/`SELM` on-disk codecs (P3), project/file/commit/snapshot UUIDs beyond the shared generator, `instance_uuid` chunk keys |
 
-This document is **normative for P1.1 implementation**. Rules pinned by the UUID note (D1–D8 unmarked items) are restated as MUST/SHOULD and not re-litigated. Items marked **PROPOSED** in the UUID note remain un-signed-off and are called out explicitly.
+This document is the normative record of the P1.1 implementation design. Its “today”, “not
+implemented”, deferred, rollout, and PR-plan language records the preimplementation baseline; P1.1
+and its P2/P3/P6 follow-on format surfaces have landed. Explicitly PROPOSED or future items remain
+non-goals unless another current authority adopts them.
 
 ---
 

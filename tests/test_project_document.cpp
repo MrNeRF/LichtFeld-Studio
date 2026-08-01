@@ -512,6 +512,57 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         SelectedGeneratedKeyframeNodesDoNotSurviveSaveAndReopen) {
+        Scene source;
+        const auto group_id = source.addGroup("Persistent group");
+        const auto keyframe_group_id =
+            source.addKeyframeGroup("Generated keyframes");
+        const auto keyframe_id = source.addKeyframe(
+            "Generated keyframe", keyframe_group_id,
+            std::make_unique<lfs::core::KeyframeData>());
+        ASSERT_NE(group_id, lfs::core::NULL_NODE);
+        ASSERT_NE(keyframe_group_id, lfs::core::NULL_NODE);
+        ASSERT_NE(keyframe_id, lfs::core::NULL_NODE);
+
+        const auto group_uuid = source.getNodeUuid(group_id);
+        const auto keyframe_group_uuid =
+            source.getNodeUuid(keyframe_group_id);
+        const auto keyframe_uuid = source.getNodeUuid(keyframe_id);
+        auto scene_chapter =
+            capture_scene_graph(source, ScenePayloadBindings{});
+        ASSERT_TRUE(scene_chapter)
+            << lfs::format_for_developer(scene_chapter.error());
+        const std::array selected{
+            group_uuid, keyframe_group_uuid, keyframe_uuid};
+        auto selection_chapter =
+            capture_selection_chapter(source, selected);
+        ASSERT_TRUE(selection_chapter)
+            << lfs::format_for_developer(selection_chapter.error());
+        EXPECT_EQ(selection_chapter->selected_node_uuids(),
+                  (std::vector<Uuid>{group_uuid}));
+
+        auto document = make_empty_document(fixed_uuid(923), 100);
+        document->edit_scene_graph() = std::move(*scene_chapter);
+        document->edit_selection() = std::move(*selection_chapter);
+        TemporaryDirectory temporary;
+        const auto path = temporary.path / "keyframe-selection.licht";
+        (void)require_result(document->save(path, save_options(923, 200)));
+
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
+        EXPECT_EQ(reopened->selection().selected_node_uuids(),
+                  (std::vector<Uuid>{group_uuid}));
+        Scene restored;
+        auto report = reopened->hydrate(restored);
+        ASSERT_TRUE(report)
+            << lfs::format_for_developer(report.error());
+        EXPECT_EQ(report->selection.selected_node_uuids,
+                  (std::vector<Uuid>{group_uuid}));
+        EXPECT_NE(restored.getNodeByUuid(group_uuid), nullptr);
+        EXPECT_EQ(restored.getNodeByUuid(keyframe_group_uuid), nullptr);
+        EXPECT_EQ(restored.getNodeByUuid(keyframe_uuid), nullptr);
+    }
+
+    TEST(ProjectDocumentTest,
          TruncatedStandalonePpispRefusesHydrationBeforeSceneMutation) {
         const auto payload_uuid = fixed_uuid(925);
         auto document = make_empty_document(fixed_uuid(924), 100);

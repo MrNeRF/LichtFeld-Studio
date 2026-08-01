@@ -120,6 +120,7 @@ namespace {
         }
     }
 
+#if !defined(LFS_FORMAT_TEST_TARGET)
     TEST(SelectionChapterTest,
          BothDomainsGroupsAndSelectedNodeOrderRoundTrip) {
         const Uuid splat_uuid = fixed_uuid(1);
@@ -245,6 +246,7 @@ namespace {
             restored.captureSelectionStateMetadata();
         EXPECT_EQ(metadata.next_group_id, 2);
     }
+#endif
 
     TEST(SelectionChapterTest,
          WithdrawnEncodingTruncationAndOverlappingRangesAreRejected) {
@@ -319,6 +321,7 @@ namespace {
         EXPECT_FALSE(overlap_result);
     }
 
+#if !defined(LFS_FORMAT_TEST_TARGET)
     TEST(SelectionChapterTest,
          PointCloudTopologyRemovalKeepsRemainingUuidSlice) {
         const Uuid first_uuid = fixed_uuid(31);
@@ -349,5 +352,6 @@ namespace {
         EXPECT_FALSE(slices.contains(first_uuid));
         EXPECT_TRUE(slices.contains(second_uuid));
     }
+#endif
 
 } // namespace

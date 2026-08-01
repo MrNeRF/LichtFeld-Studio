@@ -493,9 +493,30 @@ namespace lfs::io::project {
 #else
             const auto system_time = std::filesystem::file_time_type::clock::to_sys(value);
 #endif
-            return std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       system_time.time_since_epoch())
-                .count();
+            constexpr std::int64_t NS_PER_SECOND = 1'000'000'000;
+            constexpr auto MIN_NS = std::numeric_limits<std::int64_t>::min();
+            constexpr auto MAX_NS = std::numeric_limits<std::int64_t>::max();
+            const auto elapsed = system_time.time_since_epoch();
+            using Elapsed = std::remove_cv_t<decltype(elapsed)>;
+            const auto seconds =
+                std::chrono::duration_cast<std::chrono::seconds>(elapsed);
+            const auto remainder =
+                elapsed - std::chrono::duration_cast<Elapsed>(seconds);
+            const auto remainder_ns =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(remainder)
+                    .count();
+            const auto seconds_count = seconds.count();
+            if (seconds_count > MAX_NS / NS_PER_SECOND ||
+                (seconds_count == MAX_NS / NS_PER_SECOND &&
+                 remainder_ns > MAX_NS % NS_PER_SECOND)) {
+                return MAX_NS;
+            }
+            if (seconds_count < MIN_NS / NS_PER_SECOND ||
+                (seconds_count == MIN_NS / NS_PER_SECOND &&
+                 remainder_ns < MIN_NS % NS_PER_SECOND)) {
+                return MIN_NS;
+            }
+            return seconds_count * NS_PER_SECOND + remainder_ns;
         }
 
         lfs::Result<std::vector<std::byte>> read_file_window(

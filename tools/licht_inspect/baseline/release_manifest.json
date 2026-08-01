@@ -1,0 +1,153 @@
+{
+  "authority_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918",
+  "fixtures": [
+    {
+      "capabilities": {
+        "min_reader": "1.0",
+        "min_safe_writer": "1.0",
+        "required_reader": "0x00000000000000000000000000000003",
+        "required_writer": "0x00000000000000000000000000000040"
+      },
+      "identity_set": "p8-release-v1",
+      "path": "save.licht",
+      "producer": "ProjectDocument::save",
+      "reproducible": true,
+      "reproduction": {
+        "commit_uuid": "000138e4-0000-4000-8000-0000000138e4",
+        "creation_time_unix_ns": 1735689600000080000,
+        "file_uuid": "000138e6-0000-4000-8000-0000000138e6",
+        "project_uuid": "00013880-0000-4000-8000-000000013880",
+        "snapshot_uuid": "000138e5-0000-4000-8000-0000000138e5",
+        "wallclock_unix_ns": 1735689601000080100
+      },
+      "sha256": "64a55bc70d3384d15f4248830f123b08e054fb329d13e67ae9671c4baf52b6a7",
+      "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
+    },
+    {
+      "capabilities": {
+        "min_reader": "1.0",
+        "min_safe_writer": "1.0",
+        "required_reader": "0x00000000000000000000000000000013",
+        "required_writer": "0x00000000000000000000000000000050"
+      },
+      "identity_set": "p8-release-v1",
+      "path": "save.licht.autosave",
+      "producer": "ProjectDocument::save_autosave",
+      "reproducible": true,
+      "reproduction": {
+        "autosave_sequence": 1,
+        "base_commit_uuid": "000138e4-0000-4000-8000-0000000138e4",
+        "commit_uuid": "54671195-b9fb-47b8-9e0a-006a4e6e2961",
+        "file_uuid": "00013948-0000-4000-8000-000000013948",
+        "snapshot_uuid": "00013949-0000-4000-8000-000000013949",
+        "wallclock_unix_ns": 1785533976918336597
+      },
+      "sha256": "cbcfc53191c2c3a8c6acc97036895bb3b4579e38112ebb620d376aa6bf4cc498",
+      "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
+    },
+    {
+      "capabilities": {
+        "min_reader": "1.0",
+        "min_safe_writer": "1.0",
+        "required_reader": "0x00000000000000000000000000000003",
+        "required_writer": "0x000000000000000000000000000000c0"
+      },
+      "identity_set": "p8-release-v1",
+      "path": "save-as.licht",
+      "producer": "ProjectDocument::save_as",
+      "reproducible": true,
+      "reproduction": {
+        "commit_uuid": "000139ac-0000-4000-8000-0000000139ac",
+        "compaction_commit_uuid": "144956bd-fa0a-4c74-948d-c4395dbfb187",
+        "creation_time_unix_ns": 1785533976923675966,
+        "file_uuid": "000139ae-0000-4000-8000-0000000139ae",
+        "snapshot_uuid": "000139ad-0000-4000-8000-0000000139ad",
+        "wallclock_unix_ns": 1735689601000080300
+      },
+      "sha256": "af5e017744b425ff5f1e0301eb0004391c95a18c0811a446de0bc6c547322f4f",
+      "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
+    },
+    {
+      "capabilities": {
+        "min_reader": "1.0",
+        "min_safe_writer": "1.0",
+        "required_reader": "0x00000000000000000000000000000003",
+        "required_writer": "0x00000000000000000000000000000040"
+      },
+      "identity_set": "p8-release-v1",
+      "path": "compaction.licht",
+      "producer": "ProjectWriter::compact",
+      "reproducible": true,
+      "reproduction": {
+        "commit_uuid": "00013a11-0000-4000-8000-000000013a11",
+        "creation_time_unix_ns": 1735689600000080400,
+        "file_uuid": "00013a10-0000-4000-8000-000000013a10",
+        "snapshot_uuid": "00013a12-0000-4000-8000-000000013a12",
+        "wallclock_unix_ns": 1735689601000080400
+      },
+      "sha256": "d0999a58f67404879c1e2c6dd3c5cbe6b90d7c61faa77771bcb7a7c00b92f509",
+      "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
+    },
+    {
+      "capabilities": {
+        "min_reader": "1.0",
+        "min_safe_writer": "1.0",
+        "required_reader": "0x00000000000000000000000000000003",
+        "required_writer": "0x00000000000000000000000000000040"
+      },
+      "identity_set": "p8-release-v1",
+      "path": "recovered-commit.licht",
+      "producer": "materialize_recovered_project",
+      "relock_reason": "Rebuilt through bound-sidecar recovery materialization instead of a direct CommitKind::Recovered save",
+      "relocked_from_sha256": "311828f4c4b2c22c3eee1d091d859d62b227fc8a18fc090aeeab36343907b1cf",
+      "reproducible": true,
+      "reproduction": {
+        "base_commit_uuid": "000138e4-0000-4000-8000-0000000138e4",
+        "commit_uuid": "00013a75-0000-4000-8000-000000013a75",
+        "file_uuid": "00013a74-0000-4000-8000-000000013a74",
+        "snapshot_uuid": "00013949-0000-4000-8000-000000013949",
+        "wallclock_unix_ns": 1735689601000080500
+      },
+      "sha256": "afb4697064f5100b74506dade1b07913928e67b5e58be4ddf514d14f78f90f02",
+      "writer_sha": "2ee7deb31648dff1588dd15dcc03e57c08fff389"
+    },
+    {
+      "capabilities": {
+        "min_reader": "1.0",
+        "min_safe_writer": "1.0",
+        "required_reader": "0x00000000000000000000000000000003",
+        "required_writer": "0x00000000000000000000000000000000"
+      },
+      "path": "headless-train-output.licht",
+      "producer": "headless training final project publish",
+      "reason": "CUDA training tensor bytes are not reproducible across supported GPU and driver combinations; this row remains SHA-locked and reader-verified",
+      "reproducible": false,
+      "sha256": "d48ab55ca501480db0aa767bac3443bb8b3966eee3b3b95f14fcd2685df9c60c",
+      "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
+    },
+    {
+      "capabilities": {
+        "min_reader": "1.0",
+        "min_safe_writer": "1.0",
+        "required_reader": "0x00000000000000000000000000000003",
+        "required_writer": "0x00000000000000000000000000000040"
+      },
+      "identity_set": "p8-release-v1",
+      "path": "foreign-preview.licht",
+      "producer": "ProjectDocument::save with foreign preview",
+      "reproducible": true,
+      "reproduction": {
+        "commit_uuid": "00013ae2-0000-4000-8000-000000013ae2",
+        "creation_time_unix_ns": 1735689600000080600,
+        "file_uuid": "00013ae4-0000-4000-8000-000000013ae4",
+        "project_uuid": "00013ad8-0000-4000-8000-000000013ad8",
+        "snapshot_uuid": "00013ae3-0000-4000-8000-000000013ae3",
+        "wallclock_unix_ns": 1735689601000080610
+      },
+      "sha256": "0e412a2e15039b15a458566d80e3da207bf6cba95bbe0b5688b7ee566a03f8f0",
+      "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
+    }
+  ],
+  "manifest_root_sha256": "690a820b806dc8e633e8aaacd7b381a4a9f25963160e5e92e3b490217bc63326",
+  "schema": 2
+}

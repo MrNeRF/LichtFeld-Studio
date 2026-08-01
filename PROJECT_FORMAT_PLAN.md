@@ -436,66 +436,37 @@ GUI-touching phases, compute-sanitizer memcheck for CUDA-touching phases.
 | Sidecar/master lineage confusion | UUID lineage validation; recovery never trusts filenames or mtimes |
 | Old-writer data loss via known-chapter rewrite | Version-gated: newer chapter versions are opaque to old writers, capability bits enforced |
 
-## 10. Execution state & resume instructions (2026-07-22, P0 exited + P1 landed)
+## 10. Execution state (2026-08-01, campaign complete)
 
-Branch `licht_format`. The three-way adversarial review (Codex max ×2 rounds, Grok ×2 rounds,
-synthesis) is **done**; this document is the frozen output. Verdict: SOUND-WITH-FIXES, all fixes
-folded in above. Do not reopen §1 decisions without new evidence.
+Branch `licht_format`. P2 through P8 landed and the §7 campaign is complete:
 
-**Landed on the branch (checked in 2026-07-22, four commits):**
+| Phase | Commit |
+|---|---|
+| P2 — container core rewrite | `6229895a1` |
+| P3 — core chapters | `5ce15a05c` |
+| P4 — training snapshot and chapter | `4e3576919` |
+| P5 — session chapters | `80e2cbb5a` |
+| P6 — lifecycle and partial open | `b5e2bee0b` |
+| P7 — autosave, recovery, and compaction | `1e0e624cb`, with regression fix `8ca8028e6` |
+| P8 — compatibility and release hardening | `f0aac10d8` |
 
-1. **P0 artifacts** — this plan (`PROJECT_FORMAT_PLAN.md`),
-   `docs/licht_format_spec.md` (byte grammar + state machines),
-   `docs/licht_ownership_matrix.md` (109 rows), `docs/licht_uuid_semantics.md`,
-   `docs/licht_p1_node_uuid_migration.md`, plus development-only parser, input-sweep,
-   snapshot-benchmark, and OS-semantics studies. Those studies completed before the production
-   implementation and remain recoverable in branch history; only product code, C++ tests, and
-   their binary fixtures remain in the shipped tree.
-2. **P1 foundations** — node UUID identity migration S1–S5 (`core/uuid.*`, scene/undo/
-   selection/sequencer/python/MCP/TCP, additive APIs only) + all §5 gap fixes (LFKP v2 +
-   `CHECKPOINT_MIN_SUPPORTED_VERSION` + per-version flag whitelists, frozen-ranges reapply
-   after adoption, ADMM restore, `markPayloadDiverged`, `getConfigDir` collapse, …) +
-   P1.2 field-wise component config serialization (`training/components/config_serialization.*`).
-   Built, 131 C++ + 7 Python targeted gtests green, 7k-iter smoke green, dual-reviewed.
-3. **P1.3** retained-DOM JSON chapter layer (`io/json_chapter_dom.*`, `lfs::Result` API).
-4. **v1 container prototype** — `src/io/project/`, implements the *refuted* v1 grammar
-   (footer authority, `prev_index_offset`). **Input to the P2 rewrite only** per the §7
-   disposition list — do not build features on it, do not extend it.
+`master` was merged at `f63cdb87e`, the last state at which the complete campaign battery was
+known green. Draft PR #1525 (`licht_format` to `master`) is open. The P0d Windows column is now
+exercised by the PR's Windows CPU-only format-test lane; the matching Ubuntu lane exercises the
+same target and CTest gate.
 
-**Resume checklist, in order:**
+Post-P8 refinements cover the transitional lifetime of legacy import readers, the Windows UUID
+include order, CPU-only test consolidation and CI wiring, withdrawal and permanent reservation of
+SELM encoding 2, removal of unused code, the CMake 4.4.0 pin, the `BUILD_FORMAT_TESTS` target,
+bounded ENOSPC namespace skipping, portable filesystem timestamps, and restoration of the
+dual-gate and ownership-exclusion assertions. The `.licht` readability promise is permanent;
+legacy import readers are transitional and may be removed only as an announced breaking change.
 
-1. ~~Gap-fix review/build/test~~ **DONE** (landed, see above).
-2. ~~P0 packets (a)–(e)~~ **DONE** (landed, see above; Windows column of packet (d) still
-   pending — needs a Windows box/CI, blocks P2 *exit*, not P2 start).
-3. ~~P0 exit review~~ **DONE** — verdict below; conditions (A)–(C) remain live gates on
-   later phases.
-   *EXIT VERDICT (2026-07-18, fable synthesis): PROCEED to P1/P2 freezes. Read-side format
-   contract complete (grammar/matrix/UUID note and the historical independent parser/input sweep).
-   Conditions: (A) Windows OS-semantics execution blocks P2 exit; (B) owner snapshot-SLA
-   decision blocks P4 autosave productionization; (C) writer-side gates (G9–G12, disk-full,
-   clean-proof reuse, refuse-write enforcement, dirty-CKPT escalation, real process-kill crash
-   matrix) are P2/P4/P6 acceptance criteria now pinned by the production C++ test suites.
-   Bench numbers are re-proven on the production snapshot service, ≥2 rigs.*
-4. ~~P1~~ **DONE** (landed; formal matrix-row round-trip proof arrives with P3 chapters).
-5. **P2 — NEXT.** Dispatch the container core rewrite (§7 P2 scope + prototype disposition)
-   against the frozen spec. Acceptance (all mandatory): (i) reproduces every golden fixture in
-   `tests/fixtures/licht/` byte-for-byte; (ii) the C++ reader opens and validates every locked
-   production fixture; (iii) malformed-file and unsupported-newer classifications match their
-   fixed C++ oracles; (iv) writer-side gates from condition (C), including the process-kill crash
-   matrix; (v) `lfs::Error`/`Result<T>` conventions + `tools/error_debt_census.py` ratchet clean.
-6. ~~OPEN OWNER DECISIONS~~ **ALL RESOLVED 2026-07-30**:
-   (a) snapshot pause SLA = **bandwidth-scaled** (`p95 ≤ snapshot_bytes / measured_pinned_D2H
-   × 1.12`, per-rig baseline) — P4 unblocked. (b) gap #12 = **distinct `PCLD`/`MESH` fourccs**
-   with their own versioning — P3 chunk registry unblocked. (c) `SPLT` scope = **embed all
-   imported splats (PLY/SPZ/SOG), always**; live-RAD external + read-only, destructive edits
-   refused until explicit bake to an embedded node — P3 unblocked. Normative text updated in
-   §2.2 and the ownership matrix (U1/U2).
-7. P3..P8 in order per §7.
+The scheduling labels in §1–§9 are the frozen planning baseline. Their P2–P8 `NEXT`, `pending`,
+and phase deferrals are complete. The explicitly beyond-v1 items remain non-goals: tensor-native
+geometry encodings, `SUMM`, archive-save mode, embedded plugin packages, and exact RNG-state
+resume.
 
-**Working agreements:** fable plans/audits (≤2 agents, hardest judgments only), Codex/Grok
-execute frozen specs (user directive for this campaign); `lfs-build-guard` behind
-`flock /tmp/lfs_build.lock`, max `-j2`, builds deprioritized behind higher-priority sessions
-on this box; targeted gtests only; live GUI validation for GUI phases; compute-sanitizer for
-CUDA changes; commit only when asked, plain messages without Claude trailers. Review artifacts
-(Codex session `019f744a-b3ba-71b0-80b9-632308e9c89a`, round logs) were session-scratchpad
-only — the surviving authority is this document.
+Known open items are the pre-existing Python FOV test failure, the ownership-matrix policy for
+selection of regenerated keyframe nodes, and GPU validation deferred while the device is occupied:
+the two P7 snapshot safe-point tests, training smoke coverage, and compute-sanitizer coverage.
