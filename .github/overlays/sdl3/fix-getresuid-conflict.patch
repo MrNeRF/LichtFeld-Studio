@@ -1,0 +1,60 @@
+core/unix: do not redeclare getresuid/getresgid
+
+When SDL's feature checks do not detect getresuid()/getresgid(), SDL_gtk.c
+defines static inline fallbacks under the libc names. glibc declares both
+functions non-static in <unistd.h>, so when the checks fail while those
+declarations are still visible the file no longer compiles:
+
+  error: static declaration of 'getresuid' follows non-static declaration
+
+Give the fallbacks SDL-private names and call those instead, so a fallback can
+never collide with a libc declaration.
+
+This is an upstream SDL defect (still present in 3.4.12) and should be reported
+there; drop this overlay once a fixed version reaches our vcpkg baseline.
+
+--- a/src/core/unix/SDL_gtk.c	2026-08-01 07:05:19.175795926 +0200
++++ b/src/core/unix/SDL_gtk.c	2026-08-01 07:05:19.187796168 +0200
+@@ -83,19 +83,23 @@
+     return libgdk != NULL && libgtk != NULL;
+ }
+ 
+-#ifndef HAVE_GETRESUID
++#ifdef HAVE_GETRESUID
++#define SDL_getresuid getresuid
++#else
+ // Non-POSIX, but Linux and some BSDs have it.
+ // To reduce the number of code paths, if getresuid() isn't available at
+ // compile-time, we behave as though it existed but failed at runtime.
+-static inline int getresuid(uid_t *ruid, uid_t *euid, uid_t *suid) {
++static inline int SDL_getresuid(uid_t *ruid, uid_t *euid, uid_t *suid) {
+     errno = ENOSYS;
+     return -1;
+ }
+ #endif
+ 
+-#ifndef HAVE_GETRESGID
++#ifdef HAVE_GETRESGID
++#define SDL_getresgid getresgid
++#else
+ // Same as getresuid() but for the primary group
+-static inline int getresgid(uid_t *ruid, uid_t *euid, uid_t *suid) {
++static inline int SDL_getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid) {
+     errno = ENOSYS;
+     return -1;
+ }
+@@ -117,12 +121,12 @@
+     // we don't use Linux getauxval() or prctl PR_GET_DUMPABLE,
+     // BSD issetugid(), or similar OS-specific detection
+ 
+-    if (getresuid(&ruid, &euid, &suid) != 0) {
++    if (SDL_getresuid(&ruid, &euid, &suid) != 0) {
+         ruid = suid = getuid();
+         euid = geteuid();
+     }
+ 
+-    if (getresgid(&rgid, &egid, &sgid) != 0) {
++    if (SDL_getresgid(&rgid, &egid, &sgid) != 0) {
+         rgid = sgid = getgid();
+         egid = getegid();
+     }
