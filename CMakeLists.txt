@@ -24,7 +24,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LFS_VCPKG_OVERL
 # cache values are visible before project(), when the vcpkg toolchain resolves
 # manifest features.
 list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests vulkan-validation)
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES tests)
 endif()
 
@@ -190,6 +190,7 @@ configure_file(
 )
 
 option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_FORMAT_TESTS "Build only the CPU-only .licht format tests (no CUDA)" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -1277,7 +1278,7 @@ endif()
 # =============================================================================
 # TESTING (Optional)
 # =============================================================================
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS)
     enable_testing()
     add_subdirectory(tests)
     if(BUILD_UNICODE_TEST_ONLY)

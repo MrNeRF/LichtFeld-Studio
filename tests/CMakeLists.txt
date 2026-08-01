@@ -122,6 +122,11 @@ if(BUILD_UNICODE_TEST_ONLY)
     return()  # Skip the rest of the file
 endif()
 
+if(NOT BUILD_TESTS)
+    message(STATUS "Building CPU-only format tests (no CUDA); full suite disabled")
+    return()  # lichtfeld_format_tests is defined above; the rest needs CUDA/Torch
+endif()
+
 # Find LibTorch for tensor comparison tests
 # Set Torch_DIR based on platform
 get_filename_component(PROJ_ROOT_DIR "${CMAKE_SOURCE_DIR}" ABSOLUTE)
