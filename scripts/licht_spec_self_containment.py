@@ -73,11 +73,7 @@ def main() -> int:
     # those same bytes. No plan or source-document input is passed to a parser.
     result = subprocess.run(
         [
-            "uv",
-            "run",
-            "--with",
-            "zstandard",
-            "python",
+            sys.executable,
             "scripts/licht_compat_matrix.py",
         ],
         cwd=repository,
