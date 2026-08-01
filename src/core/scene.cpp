@@ -4558,6 +4558,24 @@ namespace lfs::core {
         return count;
     }
 
+    Scene::CameraTrainingCounts Scene::getCameraTrainingCounts(const NodeId camera_group_id) const {
+        const SceneNode* const group = getNodeById(camera_group_id);
+        if (!group || group->type != NodeType::CAMERA_GROUP)
+            return {};
+
+        CameraTrainingCounts counts;
+        for (const NodeId child_id : group->children) {
+            const SceneNode* const child = getNodeById(child_id);
+            if (!child || child->type != NodeType::CAMERA || !child->camera)
+                continue;
+
+            ++counts.total;
+            if (child->training_enabled)
+                ++counts.enabled;
+        }
+        return counts;
+    }
+
     void Scene::setCameraTrainingEnabled(const std::string& name, bool enabled) {
         const NodeId id = getNodeIdByName(name);
         if (id == NULL_NODE)

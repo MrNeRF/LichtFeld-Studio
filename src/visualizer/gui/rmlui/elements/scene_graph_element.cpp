@@ -79,6 +79,17 @@ namespace lfs::vis::gui {
             return name;
         }
 
+        [[nodiscard]] std::string formatCameraGroupLabel(
+            const std::string& name,
+            const core::Scene::CameraTrainingCounts counts) {
+            if (counts.enabled == counts.total)
+                return std::format("{}  ({})", name, formatWithThousands(counts.total));
+            return std::format("{}  ({}/{})",
+                               name,
+                               formatWithThousands(counts.enabled),
+                               formatWithThousands(counts.total));
+        }
+
         [[nodiscard]] std::string lowerCopy(std::string value) {
             std::ranges::transform(value, value.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
@@ -847,9 +858,9 @@ namespace lfs::vis::gui {
                 break;
             }
             case core::NodeType::CAMERA_GROUP:
-                snapshot.label = std::format("{}  ({})",
-                                             node->name,
-                                             formatWithThousands(node->children.size()));
+                snapshot.label = formatCameraGroupLabel(
+                    node->name,
+                    scene.getCameraTrainingCounts(node->id));
                 break;
             case core::NodeType::KEYFRAME:
                 if (node->keyframe)

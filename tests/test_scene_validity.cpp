@@ -1394,6 +1394,48 @@ namespace lfs::python {
         EXPECT_TRUE(scene.getNodeById(group)->children.empty());
     }
 
+    TEST_F(SceneValidityTest, CameraGroupTrainingCountsTrackEnabledDirectChildren) {
+        lfs::vis::SceneManager sm;
+        auto& scene = sm.getScene();
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        const core::NodeId training = scene.addCameraGroup("Training", cameras, 3);
+        const core::NodeId validation = scene.addCameraGroup("Validation", cameras, 1);
+        const core::NodeId non_camera_child = scene.addGroup("Nested", training);
+        const core::NodeId train_a = scene.addCamera("train_a.png", training, make_test_camera());
+        const core::NodeId train_b = scene.addCamera("train_b.png", training, make_test_camera());
+        const core::NodeId train_c = scene.addCamera("train_c.png", training, make_test_camera());
+        const core::NodeId val_a = scene.addCamera("val_a.png", validation, make_test_camera());
+        ASSERT_NE(non_camera_child, core::NULL_NODE);
+        ASSERT_NE(train_a, core::NULL_NODE);
+        ASSERT_NE(train_b, core::NULL_NODE);
+        ASSERT_NE(train_c, core::NULL_NODE);
+        ASSERT_NE(val_a, core::NULL_NODE);
+
+        auto counts = scene.getCameraTrainingCounts(training);
+        EXPECT_EQ(counts.enabled, 3u);
+        EXPECT_EQ(counts.total, 3u);
+        EXPECT_EQ(scene.getActiveCameraCount(), 4u);
+
+        scene.setCameraTrainingEnabled(train_b, false);
+
+        counts = scene.getCameraTrainingCounts(training);
+        EXPECT_EQ(counts.enabled, 2u);
+        EXPECT_EQ(counts.total, 3u);
+        EXPECT_EQ(scene.getActiveCameraCount(), 3u);
+
+        const auto validation_counts = scene.getCameraTrainingCounts(validation);
+        EXPECT_EQ(validation_counts.enabled, 1u);
+        EXPECT_EQ(validation_counts.total, 1u);
+
+        const auto invalid_counts = scene.getCameraTrainingCounts(core::NULL_NODE);
+        EXPECT_EQ(invalid_counts.enabled, 0u);
+        EXPECT_EQ(invalid_counts.total, 0u);
+
+        const auto non_camera_group_counts = scene.getCameraTrainingCounts(cameras);
+        EXPECT_EQ(non_camera_group_counts.enabled, 0u);
+        EXPECT_EQ(non_camera_group_counts.total, 0u);
+    }
+
     TEST_F(SceneValidityTest, SceneManagerBlocksActiveCameraSubtreeAndAllowsInactiveCameraRemoval) {
         const ScopedServicesClear services_scope;
         lfs::vis::SceneManager sm;

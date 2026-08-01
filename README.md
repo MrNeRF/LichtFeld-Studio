@@ -21,7 +21,7 @@ LichtFeld Studio lets you train new scenes from COLMAP datasets, resume checkpoi
 [![Donorbox](https://img.shields.io/badge/Donorbox-Support-27A9E1)](https://donorbox.org/lichtfeld-studio)
 
 [**Download Windows**](https://github.com/MrNeRF/LichtFeld-Studio/releases) •
-[**Build From Source**](https://github.com/MrNeRF/LichtFeld-Studio/wiki/) •
+[**Build From Source**](docs/building_and_distribution.md) •
 [**Plugin System**](docs/plugin-system.md) •
 [**MCP Guide**](docs/docs/development/mcp/index.md) •
 [**Support Development**](#support-development) •
@@ -79,7 +79,10 @@ LichtFeld Studio is free and open source. If it is useful in your research, prod
 
 Windows binaries are now available through the Lichtfeld Portal. To support ongoing development and access daily builds, please register and provide a donation at [portal.lichtfeld.io](https://portal.lichtfeld.io/). Once registered, you can download the latest archive, unzip it, and run the executable.
 
-For building from source and platform-specific notes, see the [Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/) and the repo-local docs in [docs/README.md](docs/README.md).
+For building from source and platform-specific notes, see the
+[Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/). Developers can find
+contributor setup and test commands in the repo-local
+[source build guide](docs/building_and_distribution.md).
 
 Current project notes:
 
@@ -92,6 +95,7 @@ Current project notes:
 
 - [Project Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/)
 - [FAQ](https://github.com/MrNeRF/LichtFeld-Studio/wiki/Frequently-Asked-Questions)
+- [Source Build Guide](docs/building_and_distribution.md)
 - [Plugin System](docs/plugin-system.md)
 - [Plugin Developer Guide](docs/plugins/getting-started.md)
 - [MCP Guide](docs/docs/development/mcp/index.md)
@@ -112,7 +116,7 @@ Getting started:
 
 - Check issues labeled `good first issue`
 - Join the [Discord](https://discord.gg/TbxJST2BbC) if you want to discuss implementation details before opening a larger change
-- Install the pre-commit hook with `cp tools/pre-commit .git/hooks/`
+- Follow the [source build guide](docs/building_and_distribution.md) for toolchain setup, the pre-commit hook, and test commands
 
 ## Corporate Sponsors
 

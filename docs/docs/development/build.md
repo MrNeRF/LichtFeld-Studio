@@ -128,12 +128,7 @@ CUDA: native (native)
 
 ## Tests
 
-Tests remain opt-in and have their own manifest dependency feature:
-
-```sh
-cmake -S . -B build/tests -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
-cmake --build build/tests --target lichtfeld_tests -j6
-```
-
-This keeps test-only package restore and target generation out of the normal
-application loop without changing any shipped feature.
+Tests remain opt-in, keeping test-only package restore and target generation
+out of the normal application loop without changing any shipped feature. The
+canonical [source build guide](../../building_and_distribution.md#tests)
+documents the test build targets, CTest tiers, and required real-data layout.

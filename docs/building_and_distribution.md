@@ -30,6 +30,18 @@ set CUDNN_ROOT_DIR=C:\Program Files\NVIDIA\CUDNN\v9.24
 For unusual layouts, pass `-DLFS_CUDNN_BIN_DIR=...` directly to the cuDNN DLL
 directory, for example `...\bin\<cuda-version>\x64`.
 
+## Contributor Setup
+
+Install the repository's pre-commit hook after cloning:
+
+```bash
+cp tools/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+The hook applies `clang-format` to staged C, C++, and CUDA source files outside
+`external/` before each commit.
+
 ## Linux Prerequisites
 
 On Linux, LichtFeld Studio requires SDL3 to be built with at least one windowing backend (`x11` or `wayland`).
@@ -77,6 +89,45 @@ cmake --install build --prefix ./dist
 # Example training run
 ./dist/bin/run_lichtfeld.sh -d /path/to/data -o /path/to/output
 ```
+
+## Tests
+
+Tests are a separate opt-in build:
+
+```bash
+cmake -S . -B build/tests -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_TESTS=ON
+cmake --build build/tests \
+  --target lichtfeld_tests tensor_hardening_tests \
+  -j6
+```
+
+Run the CTest label that matches the subsystem and cost of the change:
+
+| Label | Use it for |
+|---|---|
+| `fast` | Default developer loop: core unit tests, fast Python tests, focused GPU contracts, and some real-data loader checks |
+| `slow` | Dataset loaders, training, interop, and other multi-second integration paths |
+| `nightly` | Stress, large-tensor, real-data, and optional-codec coverage |
+| `hardening` | Isolated tensor hardening and crash-prone oracle tests |
+| `discovery` | Discovery fuzzing and parameter sweeps |
+| `gpu` | All registered tests that require GPU execution |
+
+For example:
+
+```bash
+ctest --test-dir build/tests --output-on-failure -L fast
+ctest --test-dir build/tests --output-on-failure -L slow
+ctest --test-dir build/tests --output-on-failure -L nightly
+```
+
+The repository intentionally ignores `data/`, but several fast, slow, nightly,
+and GPU tests read real files from `data/bicycle` or `data/garden`. Populate
+those paths with compatible real datasets before running the affected tiers.
+Synthetic placeholder input is not a substitute: loader, training, image-codec,
+and checkpoint tests assert the expected images, masks, COLMAP files, or point
+cloud exist on disk.
 
 ## What's the Difference?
 

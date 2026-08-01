@@ -234,6 +234,11 @@ namespace lfs::core {
             bool selection_installed = false;
         };
 
+        struct CameraTrainingCounts {
+            size_t enabled = 0;
+            size_t total = 0;
+        };
+
         enum class MutationType : uint32_t {
             NODE_ADDED = 1 << 0,
             NODE_REMOVED = 1 << 1,
@@ -501,6 +506,7 @@ namespace lfs::core {
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getActiveCameras() const;
         [[nodiscard]] size_t getActiveCameraCount() const;
+        [[nodiscard]] CameraTrainingCounts getCameraTrainingCounts(NodeId camera_group_id) const;
         void setCameraTrainingEnabled(const std::string& name, bool enabled);
         void setCameraTrainingEnabled(NodeId id, bool enabled);
 
