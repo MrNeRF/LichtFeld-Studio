@@ -3001,6 +3001,15 @@ namespace {
     }
 
     TEST(ProjectContainerWriter, RealEnospcUsesIsolatedTmpfs) {
+        // Sandboxed CI containers refuse user/mount namespaces; the disk-full
+        // guarantee is then only provable on hosts that allow unshare.
+        const int probe = std::system(
+            "unshare --user --map-root-user --mount true 2>/dev/null");
+        if (probe != 0) {
+            GTEST_SKIP()
+                << "unshare not permitted in this environment; "
+                   "ENOSPC matrix requires a host with namespace support";
+        }
         char executable[PATH_MAX + 1]{};
         const ssize_t length =
             ::readlink("/proc/self/exe", executable, PATH_MAX);
