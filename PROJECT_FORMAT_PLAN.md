@@ -27,8 +27,10 @@ replaced wholesale by the append-generation design in §3.
    parser in CI, shared fuzz corpus, an inspect/extract CLI tool.
 2. **One format (owner decision)**: `.licht` is the only format the app **writes**. Standalone
    `checkpoint.resume`/LFKP files, `.ppisp` sidecars, `layout.json` become **import-only**:
-   readers kept forever, writer code paths deleted. No dual-write transition, no precedence
-   rules. Headless CLI training output is a `.licht` project too. Interop exports unaffected.
+   readers retained for a transition period, writer code paths deleted. No dual-write
+   transition, no precedence rules. Removal of the legacy readers is a planned, announced
+   breaking change (owner decision 2026-08-01); the forever guarantee covers `.licht` itself.
+   Headless CLI training output is a `.licht` project too. Interop exports unaffected.
 3. **Normal save = append one generation**: append dirty chunks + a complete live index + a
    commit record, flush, then publish via one of two alternating validated head slots. Unchanged
    payloads are never rewritten — metadata-only Ctrl+S is milliseconds, not a 10 GB rewrite.
@@ -273,7 +275,8 @@ not an absolute — capability bits gate anything cross-cutting.
 - **Restore-last-session**: argless startup opens the MRU project; `--project` and drag-drop open
   explicitly; crash recovery per §3.
 - **Legacy import**: opening `checkpoint.resume`, `.ppisp`, or a bare PLY/dataset folds it into a
-  new untitled project (readers kept forever); nothing writes those formats again.
+  new untitled project (readers retained for a transition period, removed later as an announced
+  breaking change); nothing writes those formats again.
 
 ## 5. Known-gap fixes (small, independently landable — land in P1)
 
