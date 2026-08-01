@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -286,6 +287,255 @@ namespace lfs::vis::project {
             return false;
         }
 
+        template <typename Owner>
+        struct JsonField {
+            std::string_view name;
+            std::function<Json(const Owner&)> write;
+            std::function<lfs::Result<void>(
+                const Json&,
+                Owner&,
+                std::string_view,
+                std::string_view)>
+                read;
+        };
+
+        template <typename Owner, typename Member>
+        JsonField<Owner> required_field(
+            const std::string_view name,
+            Member Owner::*member) {
+            return {
+                .name = name,
+                .write = [member](const Owner& source) { return Json(source.*member); },
+                .read = [member](
+                            const Json& json,
+                            Owner& destination,
+                            const std::string_view prefix,
+                            const std::string_view field) { return assign_required(
+                                                                json,
+                                                                field,
+                                                                destination.*member,
+                                                                prefix); },
+            };
+        }
+
+        template <typename Owner, typename Member>
+        JsonField<Owner> optional_field(
+            const std::string_view name,
+            Member Owner::*member) {
+            return {
+                .name = name,
+                .write = [member](const Owner& source) { return Json(source.*member); },
+                .read = [member](
+                            const Json& json,
+                            Owner& destination,
+                            std::string_view,
+                            const std::string_view field) {
+                    (void)assign_optional(
+                        json, field, destination.*member);
+                    return lfs::Result<void>{}; },
+            };
+        }
+
+        template <typename Owner>
+        JsonField<Owner> vec3_field(
+            const std::string_view name,
+            glm::vec3 Owner::*member) {
+            return {
+                .name = name,
+                .write = [member](const Owner& source) { return vec3_json(source.*member); },
+                .read = [member](
+                            const Json& json,
+                            Owner& destination,
+                            const std::string_view prefix,
+                            const std::string_view field) {
+                    auto value = required_vec3(
+                        json, field, prefix);
+                    if (!value) {
+                        return lfs::Status::failure(
+                            std::move(value).error());
+                    }
+                    destination.*member = *value;
+                    return lfs::Result<void>{}; },
+            };
+        }
+
+        template <typename Owner, typename Enum,
+                  typename AfterAssign = std::nullptr_t>
+        JsonField<Owner> enum_field(
+            const std::string_view name,
+            Enum Owner::*member,
+            const int minimum,
+            const int maximum,
+            const std::string_view invalid_detail,
+            AfterAssign after_assign = nullptr) {
+            return {
+                .name = name,
+                .write = [member](const Owner& source) { return Json(static_cast<int>(source.*member)); },
+                .read = [=](
+                            const Json& json,
+                            Owner& destination,
+                            const std::string_view prefix,
+                            const std::string_view field) {
+                    int value = 0;
+                    if (auto status = assign_required(
+                            json, field, value, prefix);
+                        !status) {
+                        return status;
+                    }
+                    if (value < minimum || value > maximum) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            std::string(invalid_detail),
+                            std::string(prefix) + "." +
+                                std::string(field));
+                    }
+                    destination.*member = static_cast<Enum>(value);
+                    if constexpr (!std::same_as<
+                                      AfterAssign,
+                                      std::nullptr_t>)
+                        after_assign(destination);
+                    return lfs::Result<void>{}; },
+            };
+        }
+
+        template <typename Owner, typename Writer, typename Reader>
+        JsonField<Owner> custom_field(
+            const std::string_view name,
+            Writer write,
+            Reader read) {
+            return {
+                .name = name,
+                .write = std::move(write),
+                .read = std::move(read),
+            };
+        }
+
+        template <typename Owner>
+        Json fields_to_json(
+            const Owner& source,
+            const std::vector<JsonField<Owner>>& fields) {
+            Json result = Json::object();
+            for (const auto& field : fields) {
+                result[std::string(field.name)] =
+                    field.write(source);
+            }
+            return result;
+        }
+
+        template <typename Owner>
+        void append_fields(
+            Json& result,
+            const Owner& source,
+            const std::vector<JsonField<Owner>>& fields) {
+            for (const auto& field : fields) {
+                result[std::string(field.name)] =
+                    field.write(source);
+            }
+        }
+
+        template <typename Owner>
+        lfs::Result<void> read_fields(
+            const Json& json,
+            Owner& destination,
+            const std::string_view prefix,
+            const std::vector<JsonField<Owner>>& fields) {
+            for (const auto& field : fields) {
+                if (auto status = field.read(
+                        json,
+                        destination,
+                        prefix,
+                        field.name);
+                    !status) {
+                    return status;
+                }
+            }
+            return {};
+        }
+
+        template <typename Owner, std::size_t Size>
+        JsonField<Owner> array_field(
+            const std::string_view name,
+            std::array<float, Size> Owner::*member) {
+            return custom_field<Owner>(
+                name,
+                [member](const Owner& source) {
+                    return json_array(source.*member);
+                },
+                [member](const Json& json,
+                         Owner& destination,
+                         const std::string_view prefix,
+                         const std::string_view field) {
+                    const auto found =
+                        json.find(std::string(field));
+                    if (found == json.end()) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "Panel camera field is missing",
+                            std::string(prefix) + "." +
+                                std::string(field));
+                    }
+                    const auto values =
+                        number_array<Size>(*found);
+                    if (!values) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "Panel camera field must contain finite numbers",
+                            std::string(prefix) + "." +
+                                std::string(field));
+                    }
+                    destination.*member = *values;
+                    return lfs::Result<void>{};
+                });
+        }
+
+        template <typename Owner>
+        JsonField<Owner> nullable_positive_float_field(
+            const std::string_view name,
+            std::optional<float> Owner::*member) {
+            return custom_field<Owner>(
+                name,
+                [member](const Owner& source) {
+                    const auto& value = source.*member;
+                    return value ? Json(*value) : Json(nullptr);
+                },
+                [member](const Json& json,
+                         Owner& destination,
+                         const std::string_view prefix,
+                         const std::string_view field) {
+                    const auto found =
+                        json.find(std::string(field));
+                    if (found == json.end()) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "Panel camera ortho_scale is missing",
+                            std::string(prefix) + "." +
+                                std::string(field));
+                    }
+                    if (found->is_null()) {
+                        (destination.*member).reset();
+                        return lfs::Result<void>{};
+                    }
+                    if (!found->is_number()) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "Panel camera ortho scale must be a number or null",
+                            std::string(prefix) + "." +
+                                std::string(field));
+                    }
+                    const auto value =
+                        scalar<float>(json, field);
+                    if (!value || *value <= 0.0f) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "Panel camera ortho scale must be positive and finite",
+                            std::string(prefix) + "." +
+                                std::string(field));
+                    }
+                    destination.*member = *value;
+                    return lfs::Result<void>{};
+                });
+        }
+
         Json::const_iterator find_required_object(
             const Json& parent,
             const std::string_view key) {
@@ -312,210 +562,284 @@ namespace lfs::vis::project {
             return found;
         }
 
+        const auto& ppisp_override_fields() {
+            using Overrides = std::remove_cvref_t<
+                decltype(std::declval<RenderSettings>()
+                             .ppisp_overrides)>;
+            static const std::vector<JsonField<Overrides>> fields{
+                required_field("exposure_offset", &Overrides::exposure_offset),
+                required_field("vignette_enabled", &Overrides::vignette_enabled),
+                required_field("vignette_strength", &Overrides::vignette_strength),
+                required_field("wb_temperature", &Overrides::wb_temperature),
+                required_field("wb_tint", &Overrides::wb_tint),
+                required_field("color_red_x", &Overrides::color_red_x),
+                required_field("color_red_y", &Overrides::color_red_y),
+                required_field("color_green_x", &Overrides::color_green_x),
+                required_field("color_green_y", &Overrides::color_green_y),
+                required_field("color_blue_x", &Overrides::color_blue_x),
+                required_field("color_blue_y", &Overrides::color_blue_y),
+                required_field("gamma_multiplier", &Overrides::gamma_multiplier),
+                required_field("gamma_red", &Overrides::gamma_red),
+                required_field("gamma_green", &Overrides::gamma_green),
+                required_field("gamma_blue", &Overrides::gamma_blue),
+                required_field("crf_toe", &Overrides::crf_toe),
+                required_field("crf_shoulder", &Overrides::crf_shoulder),
+            };
+            return fields;
+        }
+
+        const auto& render_settings_fields() {
+            static const std::vector<JsonField<RenderSettings>> fields{
+                required_field("focal_length_mm", &RenderSettings::focal_length_mm),
+                required_field("scaling_modifier", &RenderSettings::scaling_modifier),
+                required_field("antialiasing", &RenderSettings::antialiasing),
+                required_field("mip_filter", &RenderSettings::mip_filter),
+                required_field("sh_degree", &RenderSettings::sh_degree),
+                required_field("render_scale", &RenderSettings::render_scale),
+                enum_field("camera_metrics_mode", &RenderSettings::camera_metrics_mode,
+                           0, 2, "Unsupported camera metrics mode"),
+                required_field("show_crop_box", &RenderSettings::show_crop_box),
+                required_field("use_crop_box", &RenderSettings::use_crop_box),
+                required_field("show_ellipsoid", &RenderSettings::show_ellipsoid),
+                required_field("use_ellipsoid", &RenderSettings::use_ellipsoid),
+                required_field("desaturate_unselected", &RenderSettings::desaturate_unselected),
+                required_field("desaturate_cropping", &RenderSettings::desaturate_cropping),
+                required_field("hide_outside_depth_box", &RenderSettings::hide_outside_depth_box),
+                required_field("crop_filter_for_selection", &RenderSettings::crop_filter_for_selection),
+                required_field("apply_appearance_correction", &RenderSettings::apply_appearance_correction),
+                enum_field("ppisp_mode", &RenderSettings::ppisp_mode,
+                           0, 1, "Unsupported PPISP mode"),
+                custom_field<RenderSettings>(
+                    "ppisp_overrides",
+                    [](const RenderSettings& settings) {
+                        return fields_to_json(settings.ppisp_overrides,
+                                              ppisp_override_fields());
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view prefix, std::string_view field) {
+                        const auto found = find_required_object(json, field);
+                        if (found == json.end()) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "VIEW PPISP overrides are missing",
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        return read_fields(
+                            *found, settings.ppisp_overrides,
+                            std::string(prefix) + "." + std::string(field),
+                            ppisp_override_fields());
+                    }),
+                vec3_field("background_color", &RenderSettings::background_color),
+                enum_field("environment_mode", &RenderSettings::environment_mode,
+                           0, 1, "Unsupported environment mode"),
+                custom_field<RenderSettings>(
+                    "environment_reference_uuid",
+                    [](const RenderSettings&) { return Json(nullptr); },
+                    [](const Json&, RenderSettings&, std::string_view,
+                       std::string_view) { return lfs::Result<void>{}; }),
+                custom_field<RenderSettings>(
+                    "environment_builtin",
+                    [](const RenderSettings& settings) {
+                        return settings.environment_map_path ==
+                                       lfs::vis::kDefaultEnvironmentMapPath
+                                   ? Json(settings.environment_map_path)
+                                   : Json(nullptr);
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view, std::string_view field) {
+                        if (const auto value = scalar<std::string>(json, field))
+                            settings.environment_map_path = *value;
+                        return lfs::Result<void>{};
+                    }),
+                required_field("environment_exposure", &RenderSettings::environment_exposure),
+                required_field("environment_rotation_degrees", &RenderSettings::environment_rotation_degrees),
+                required_field("show_coord_axes", &RenderSettings::show_coord_axes),
+                required_field("axes_size", &RenderSettings::axes_size),
+                custom_field<RenderSettings>(
+                    "axes_visibility",
+                    [](const RenderSettings& settings) {
+                        return Json::array({settings.axes_visibility[0],
+                                            settings.axes_visibility[1],
+                                            settings.axes_visibility[2]});
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view prefix, std::string_view field) {
+                        const auto found = find_required_array(json, field);
+                        if (found == json.end() || found->size() != 3 ||
+                            !std::ranges::all_of(*found, [](const Json& item) {
+                                return item.is_boolean();
+                            })) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "Axes visibility must contain three booleans",
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        for (std::size_t index = 0; index < 3; ++index)
+                            settings.axes_visibility[index] = (*found)[index].get<bool>();
+                        return lfs::Result<void>{};
+                    }),
+                required_field("show_grid", &RenderSettings::show_grid),
+                required_field("grid_plane", &RenderSettings::grid_plane),
+                required_field("grid_opacity", &RenderSettings::grid_opacity),
+                required_field("point_cloud_mode", &RenderSettings::point_cloud_mode),
+                required_field("voxel_size", &RenderSettings::voxel_size),
+                required_field("show_rings", &RenderSettings::show_rings),
+                required_field("ring_width", &RenderSettings::ring_width),
+                required_field("show_center_markers", &RenderSettings::show_center_markers),
+                required_field("show_camera_frustums", &RenderSettings::show_camera_frustums),
+                required_field("camera_frustum_scale", &RenderSettings::camera_frustum_scale),
+                vec3_field("train_camera_color", &RenderSettings::train_camera_color),
+                vec3_field("eval_camera_color", &RenderSettings::eval_camera_color),
+                required_field("show_pivot", &RenderSettings::show_pivot),
+                enum_field("split_view_mode", &RenderSettings::split_view_mode,
+                           0, 3, "Unsupported split-view mode"),
+                enum_field("gt_comparison_mode", &RenderSettings::gt_comparison_mode,
+                           std::numeric_limits<int>::min(),
+                           std::numeric_limits<int>::max(),
+                           "Unsupported GT comparison mode",
+                           [](RenderSettings& settings) {
+                               sanitizeGTComparisonSettings(settings);
+                           }),
+                required_field("split_position", &RenderSettings::split_position),
+                required_field("split_view_offset", &RenderSettings::split_view_offset),
+                custom_field<RenderSettings>(
+                    "raster_backend",
+                    [](const RenderSettings& settings) {
+                        return Json(std::string(
+                            lfs::rendering::gaussianRasterBackendId(
+                                settings.raster_backend)));
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view prefix, std::string_view field) {
+                        const auto value = scalar<std::string>(json, field);
+                        if (!value ||
+                            !lfs::rendering::isGaussianRasterBackendId(*value)) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "Unsupported raster backend",
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        settings.raster_backend =
+                            lfs::rendering::gaussianRasterBackendFromId(*value);
+                        settings.gut = lfs::rendering::isGutBackend(
+                            settings.raster_backend);
+                        return lfs::Result<void>{};
+                    }),
+                required_field("equirectangular", &RenderSettings::equirectangular),
+                required_field("orthographic", &RenderSettings::orthographic),
+                required_field("ortho_scale", &RenderSettings::ortho_scale),
+                required_field("depth_view", &RenderSettings::depth_view),
+                required_field("depth_view_min", &RenderSettings::depth_view_min),
+                required_field("depth_view_max", &RenderSettings::depth_view_max),
+                enum_field("depth_visualization_mode", &RenderSettings::depth_visualization_mode,
+                           std::numeric_limits<int>::min(),
+                           std::numeric_limits<int>::max(),
+                           "Unsupported depth visualization mode",
+                           [](RenderSettings& settings) {
+                               sanitizeDepthViewSettings(settings);
+                           }),
+                vec3_field("selection_color_committed", &RenderSettings::selection_color_committed),
+                vec3_field("selection_color_preview", &RenderSettings::selection_color_preview),
+                vec3_field("selection_color_center_marker", &RenderSettings::selection_color_center_marker),
+                required_field("depth_clip_enabled", &RenderSettings::depth_clip_enabled),
+                required_field("depth_clip_far", &RenderSettings::depth_clip_far),
+                required_field("mesh_wireframe", &RenderSettings::mesh_wireframe),
+                vec3_field("mesh_wireframe_color", &RenderSettings::mesh_wireframe_color),
+                required_field("mesh_wireframe_width", &RenderSettings::mesh_wireframe_width),
+                vec3_field("mesh_light_dir", &RenderSettings::mesh_light_dir),
+                required_field("mesh_light_intensity", &RenderSettings::mesh_light_intensity),
+                required_field("mesh_ambient", &RenderSettings::mesh_ambient),
+                required_field("mesh_backface_culling", &RenderSettings::mesh_backface_culling),
+                required_field("mesh_shadow_enabled", &RenderSettings::mesh_shadow_enabled),
+                required_field("mesh_shadow_resolution", &RenderSettings::mesh_shadow_resolution),
+                required_field("depth_filter_enabled", &RenderSettings::depth_filter_enabled),
+                vec3_field("depth_filter_min", &RenderSettings::depth_filter_min),
+                vec3_field("depth_filter_max", &RenderSettings::depth_filter_max),
+                custom_field<RenderSettings>(
+                    "depth_filter_transform",
+                    [](const RenderSettings& settings) {
+                        return Json{{"rotation", json_array(matrix_array(
+                                                     settings.depth_filter_transform.getRotationMat()))},
+                                    {"translation", vec3_json(
+                                                        settings.depth_filter_transform.getTranslation())}};
+                    },
+                    [](const Json& json, RenderSettings& settings,
+                       std::string_view prefix, std::string_view field) {
+                        const auto transform = find_required_object(json, field);
+                        if (transform == json.end()) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "Depth-filter transform is missing",
+                                std::string(prefix) + "." + std::string(field));
+                        }
+                        const auto rotation_it = transform->find("rotation");
+                        const auto rotation = rotation_it == transform->end()
+                                                  ? std::optional<std::array<float, 9>>{}
+                                                  : number_array<9>(*rotation_it);
+                        if (!rotation) {
+                            return fail<void>(
+                                lfs::ErrorCode::DataLoss,
+                                "Depth-filter rotation must be a finite 3x3 matrix",
+                                std::string(prefix) + "." + std::string(field) +
+                                    ".rotation");
+                        }
+                        auto translation = required_vec3(
+                            *transform, "translation",
+                            std::string(prefix) + "." + std::string(field));
+                        if (!translation)
+                            return lfs::Status::failure(std::move(translation).error());
+                        settings.depth_filter_transform =
+                            lfs::geometry::EuclideanTransform(
+                                glm::quat_cast(array_matrix(*rotation)), *translation);
+                        return lfs::Result<void>{};
+                    }),
+                required_field("lod_enabled", &RenderSettings::lod_enabled),
+                required_field("lod_auto_enable_rad", &RenderSettings::lod_auto_enable_rad),
+                required_field("lod_max_splats", &RenderSettings::lod_max_splats),
+                required_field("lod_render_scale", &RenderSettings::lod_render_scale),
+                required_field("lod_behind_camera_penalty", &RenderSettings::lod_behind_camera_penalty),
+                required_field("lod_cone_foveation", &RenderSettings::lod_cone_foveation),
+                required_field("lod_cone_inner_degrees", &RenderSettings::lod_cone_inner_degrees),
+                required_field("lod_cone_outer_degrees", &RenderSettings::lod_cone_outer_degrees),
+                required_field("lod_page_pool_splats", &RenderSettings::lod_page_pool_splats),
+                required_field("lod_pool_vram_fraction", &RenderSettings::lod_pool_vram_fraction),
+                required_field("lod_fade_frames", &RenderSettings::lod_fade_frames),
+                required_field("lod_debug_colors", &RenderSettings::lod_debug_colors),
+            };
+            return fields;
+        }
+
+        const auto& panel_camera_fields() {
+            static const std::vector<
+                JsonField<PanelCameraProjectState>>
+                fields{
+                    array_field("R", &PanelCameraProjectState::rotation),
+                    array_field("t", &PanelCameraProjectState::translation),
+                    array_field("pivot", &PanelCameraProjectState::pivot),
+                    array_field("home_R", &PanelCameraProjectState::home_rotation),
+                    array_field("home_t", &PanelCameraProjectState::home_translation),
+                    array_field("home_pivot", &PanelCameraProjectState::home_pivot),
+                    required_field("home_saved", &PanelCameraProjectState::home_saved),
+                    required_field("zoom_speed", &PanelCameraProjectState::zoom_speed),
+                    required_field("max_zoom_speed", &PanelCameraProjectState::max_zoom_speed),
+                    required_field("rotate_speed", &PanelCameraProjectState::rotate_speed),
+                    required_field("centre_speed", &PanelCameraProjectState::centre_speed),
+                    required_field("roll_speed", &PanelCameraProjectState::roll_speed),
+                    required_field("translate_speed", &PanelCameraProjectState::translate_speed),
+                    required_field("wasd_speed", &PanelCameraProjectState::wasd_speed),
+                    required_field("max_wasd_speed", &PanelCameraProjectState::max_wasd_speed),
+                    nullable_positive_float_field(
+                        "ortho_scale", &PanelCameraProjectState::ortho_scale),
+                };
+            return fields;
+        }
+
     } // namespace
 
     SessionJson renderSettingsToProjectJson(
         const RenderSettings& settings) {
-        const auto& ppisp = settings.ppisp_overrides;
-        const auto rotation =
-            settings.depth_filter_transform
-                .getRotationMat();
-        const bool packaged_environment =
-            settings.environment_map_path ==
-            lfs::vis::kDefaultEnvironmentMapPath;
-
-        return Json{
-            {"focal_length_mm", settings.focal_length_mm},
-            {"scaling_modifier", settings.scaling_modifier},
-            {"antialiasing", settings.antialiasing},
-            {"mip_filter", settings.mip_filter},
-            {"sh_degree", settings.sh_degree},
-            {"render_scale", settings.render_scale},
-            {"camera_metrics_mode",
-             static_cast<int>(
-                 settings.camera_metrics_mode)},
-            {"show_crop_box", settings.show_crop_box},
-            {"use_crop_box", settings.use_crop_box},
-            {"show_ellipsoid", settings.show_ellipsoid},
-            {"use_ellipsoid", settings.use_ellipsoid},
-            {"desaturate_unselected",
-             settings.desaturate_unselected},
-            {"desaturate_cropping",
-             settings.desaturate_cropping},
-            {"hide_outside_depth_box",
-             settings.hide_outside_depth_box},
-            {"crop_filter_for_selection",
-             settings.crop_filter_for_selection},
-            {"apply_appearance_correction",
-             settings.apply_appearance_correction},
-            {"ppisp_mode",
-             static_cast<int>(settings.ppisp_mode)},
-            {"ppisp_overrides",
-             {
-                 {"exposure_offset",
-                  ppisp.exposure_offset},
-                 {"vignette_enabled",
-                  ppisp.vignette_enabled},
-                 {"vignette_strength",
-                  ppisp.vignette_strength},
-                 {"wb_temperature",
-                  ppisp.wb_temperature},
-                 {"wb_tint", ppisp.wb_tint},
-                 {"color_red_x", ppisp.color_red_x},
-                 {"color_red_y", ppisp.color_red_y},
-                 {"color_green_x",
-                  ppisp.color_green_x},
-                 {"color_green_y",
-                  ppisp.color_green_y},
-                 {"color_blue_x",
-                  ppisp.color_blue_x},
-                 {"color_blue_y",
-                  ppisp.color_blue_y},
-                 {"gamma_multiplier",
-                  ppisp.gamma_multiplier},
-                 {"gamma_red", ppisp.gamma_red},
-                 {"gamma_green", ppisp.gamma_green},
-                 {"gamma_blue", ppisp.gamma_blue},
-                 {"crf_toe", ppisp.crf_toe},
-                 {"crf_shoulder", ppisp.crf_shoulder},
-             }},
-            {"background_color",
-             vec3_json(settings.background_color)},
-            {"environment_mode",
-             static_cast<int>(settings.environment_mode)},
-            {"environment_reference_uuid", nullptr},
-            {"environment_builtin",
-             packaged_environment
-                 ? Json(settings.environment_map_path)
-                 : Json(nullptr)},
-            {"environment_exposure",
-             settings.environment_exposure},
-            {"environment_rotation_degrees",
-             settings.environment_rotation_degrees},
-            {"show_coord_axes",
-             settings.show_coord_axes},
-            {"axes_size", settings.axes_size},
-            {"axes_visibility",
-             Json::array(
-                 {settings.axes_visibility[0],
-                  settings.axes_visibility[1],
-                  settings.axes_visibility[2]})},
-            {"show_grid", settings.show_grid},
-            {"grid_plane", settings.grid_plane},
-            {"grid_opacity", settings.grid_opacity},
-            {"point_cloud_mode",
-             settings.point_cloud_mode},
-            {"voxel_size", settings.voxel_size},
-            {"show_rings", settings.show_rings},
-            {"ring_width", settings.ring_width},
-            {"show_center_markers",
-             settings.show_center_markers},
-            {"show_camera_frustums",
-             settings.show_camera_frustums},
-            {"camera_frustum_scale",
-             settings.camera_frustum_scale},
-            {"train_camera_color",
-             vec3_json(settings.train_camera_color)},
-            {"eval_camera_color",
-             vec3_json(settings.eval_camera_color)},
-            {"show_pivot", settings.show_pivot},
-            {"split_view_mode",
-             static_cast<int>(settings.split_view_mode)},
-            {"gt_comparison_mode",
-             static_cast<int>(
-                 settings.gt_comparison_mode)},
-            {"split_position",
-             settings.split_position},
-            {"split_view_offset",
-             settings.split_view_offset},
-            {"raster_backend",
-             std::string(
-                 lfs::rendering::
-                     gaussianRasterBackendId(
-                         settings.raster_backend))},
-            {"equirectangular",
-             settings.equirectangular},
-            {"orthographic", settings.orthographic},
-            {"ortho_scale", settings.ortho_scale},
-            {"depth_view", settings.depth_view},
-            {"depth_view_min",
-             settings.depth_view_min},
-            {"depth_view_max",
-             settings.depth_view_max},
-            {"depth_visualization_mode",
-             static_cast<int>(
-                 settings.depth_visualization_mode)},
-            {"selection_color_committed",
-             vec3_json(
-                 settings.selection_color_committed)},
-            {"selection_color_preview",
-             vec3_json(
-                 settings.selection_color_preview)},
-            {"selection_color_center_marker",
-             vec3_json(
-                 settings
-                     .selection_color_center_marker)},
-            {"depth_clip_enabled",
-             settings.depth_clip_enabled},
-            {"depth_clip_far",
-             settings.depth_clip_far},
-            {"mesh_wireframe",
-             settings.mesh_wireframe},
-            {"mesh_wireframe_color",
-             vec3_json(
-                 settings.mesh_wireframe_color)},
-            {"mesh_wireframe_width",
-             settings.mesh_wireframe_width},
-            {"mesh_light_dir",
-             vec3_json(settings.mesh_light_dir)},
-            {"mesh_light_intensity",
-             settings.mesh_light_intensity},
-            {"mesh_ambient", settings.mesh_ambient},
-            {"mesh_backface_culling",
-             settings.mesh_backface_culling},
-            {"mesh_shadow_enabled",
-             settings.mesh_shadow_enabled},
-            {"mesh_shadow_resolution",
-             settings.mesh_shadow_resolution},
-            {"depth_filter_enabled",
-             settings.depth_filter_enabled},
-            {"depth_filter_min",
-             vec3_json(settings.depth_filter_min)},
-            {"depth_filter_max",
-             vec3_json(settings.depth_filter_max)},
-            {"depth_filter_transform",
-             {
-                 {"rotation",
-                  json_array(matrix_array(rotation))},
-                 {"translation",
-                  vec3_json(
-                      settings.depth_filter_transform
-                          .getTranslation())},
-             }},
-            {"lod_enabled", settings.lod_enabled},
-            {"lod_auto_enable_rad",
-             settings.lod_auto_enable_rad},
-            {"lod_max_splats",
-             settings.lod_max_splats},
-            {"lod_render_scale",
-             settings.lod_render_scale},
-            {"lod_behind_camera_penalty",
-             settings.lod_behind_camera_penalty},
-            {"lod_cone_foveation",
-             settings.lod_cone_foveation},
-            {"lod_cone_inner_degrees",
-             settings.lod_cone_inner_degrees},
-            {"lod_cone_outer_degrees",
-             settings.lod_cone_outer_degrees},
-            {"lod_page_pool_splats",
-             settings.lod_page_pool_splats},
-            {"lod_pool_vram_fraction",
-             settings.lod_pool_vram_fraction},
-            {"lod_fade_frames",
-             settings.lod_fade_frames},
-            {"lod_debug_colors",
-             settings.lod_debug_colors},
-        };
+        return fields_to_json(
+            settings, render_settings_fields());
     }
 
     lfs::Result<RenderSettings>
@@ -536,337 +860,14 @@ namespace lfs::vis::project {
         }
 
         RenderSettings settings = base;
-
-#define LFS_SESSION_ASSIGN(Member)                               \
-    do {                                                         \
-        if (auto status =                                        \
-                assign_required(json, #Member, settings.Member); \
-            !status) {                                           \
-            return std::move(status).error();                    \
-        }                                                        \
-    } while (false)
-
-        LFS_SESSION_ASSIGN(focal_length_mm);
-        LFS_SESSION_ASSIGN(scaling_modifier);
-        LFS_SESSION_ASSIGN(antialiasing);
-        LFS_SESSION_ASSIGN(mip_filter);
-        LFS_SESSION_ASSIGN(sh_degree);
-        LFS_SESSION_ASSIGN(render_scale);
-        int enum_value = 0;
-        if (auto status = assign_required(
-                json, "camera_metrics_mode",
-                enum_value);
+        if (auto status = read_fields(
+                json,
+                settings,
+                "VIEW.render_settings",
+                render_settings_fields());
             !status) {
             return std::move(status).error();
         }
-        if (enum_value < 0 || enum_value > 2) {
-            return fail<RenderSettings>(
-                lfs::ErrorCode::DataLoss,
-                "Unsupported camera metrics mode",
-                "VIEW.render_settings.camera_metrics_mode");
-        }
-        settings.camera_metrics_mode =
-            static_cast<
-                RenderSettings::CameraMetricsMode>(
-                enum_value);
-
-        LFS_SESSION_ASSIGN(show_crop_box);
-        LFS_SESSION_ASSIGN(use_crop_box);
-        LFS_SESSION_ASSIGN(show_ellipsoid);
-        LFS_SESSION_ASSIGN(use_ellipsoid);
-        LFS_SESSION_ASSIGN(desaturate_unselected);
-        LFS_SESSION_ASSIGN(desaturate_cropping);
-        LFS_SESSION_ASSIGN(hide_outside_depth_box);
-        LFS_SESSION_ASSIGN(crop_filter_for_selection);
-        LFS_SESSION_ASSIGN(
-            apply_appearance_correction);
-        if (auto status = assign_required(
-                json, "ppisp_mode", enum_value);
-            !status) {
-            return std::move(status).error();
-        }
-        if (enum_value < 0 || enum_value > 1) {
-            return fail<RenderSettings>(
-                lfs::ErrorCode::DataLoss,
-                "Unsupported PPISP mode",
-                "VIEW.render_settings.ppisp_mode");
-        }
-        settings.ppisp_mode =
-            static_cast<RenderSettings::PPISPMode>(
-                enum_value);
-
-        const auto ppisp_it =
-            find_required_object(
-                json, "ppisp_overrides");
-        if (ppisp_it == json.end()) {
-            return fail<RenderSettings>(
-                lfs::ErrorCode::DataLoss,
-                "VIEW PPISP overrides are missing",
-                "VIEW.render_settings.ppisp_overrides");
-        }
-        auto& ppisp = settings.ppisp_overrides;
-#define LFS_SESSION_ASSIGN_PPISP(Member)                 \
-    do {                                                 \
-        if (auto status = assign_required(               \
-                *ppisp_it, #Member, ppisp.Member,        \
-                "VIEW.render_settings.ppisp_overrides"); \
-            !status) {                                   \
-            return std::move(status).error();            \
-        }                                                \
-    } while (false)
-        LFS_SESSION_ASSIGN_PPISP(exposure_offset);
-        LFS_SESSION_ASSIGN_PPISP(vignette_enabled);
-        LFS_SESSION_ASSIGN_PPISP(vignette_strength);
-        LFS_SESSION_ASSIGN_PPISP(wb_temperature);
-        LFS_SESSION_ASSIGN_PPISP(wb_tint);
-        LFS_SESSION_ASSIGN_PPISP(color_red_x);
-        LFS_SESSION_ASSIGN_PPISP(color_red_y);
-        LFS_SESSION_ASSIGN_PPISP(color_green_x);
-        LFS_SESSION_ASSIGN_PPISP(color_green_y);
-        LFS_SESSION_ASSIGN_PPISP(color_blue_x);
-        LFS_SESSION_ASSIGN_PPISP(color_blue_y);
-        LFS_SESSION_ASSIGN_PPISP(gamma_multiplier);
-        LFS_SESSION_ASSIGN_PPISP(gamma_red);
-        LFS_SESSION_ASSIGN_PPISP(gamma_green);
-        LFS_SESSION_ASSIGN_PPISP(gamma_blue);
-        LFS_SESSION_ASSIGN_PPISP(crf_toe);
-        LFS_SESSION_ASSIGN_PPISP(crf_shoulder);
-#undef LFS_SESSION_ASSIGN_PPISP
-
-        auto vec = required_vec3(
-            json, "background_color");
-        if (!vec)
-            return std::move(vec).error();
-        settings.background_color = *vec;
-
-        if (auto status = assign_required(
-                json, "environment_mode",
-                enum_value);
-            !status) {
-            return std::move(status).error();
-        }
-        if (enum_value < 0 || enum_value > 1) {
-            return fail<RenderSettings>(
-                lfs::ErrorCode::DataLoss,
-                "Unsupported environment mode",
-                "VIEW.render_settings.environment_mode");
-        }
-        settings.environment_mode =
-            static_cast<EnvironmentBackgroundMode>(
-                enum_value);
-        if (const auto builtin =
-                scalar<std::string>(
-                    json, "environment_builtin")) {
-            settings.environment_map_path = *builtin;
-        }
-        LFS_SESSION_ASSIGN(environment_exposure);
-        LFS_SESSION_ASSIGN(
-            environment_rotation_degrees);
-        LFS_SESSION_ASSIGN(show_coord_axes);
-        LFS_SESSION_ASSIGN(axes_size);
-
-        const auto axes_it =
-            find_required_array(
-                json, "axes_visibility");
-        if (axes_it == json.end() ||
-            axes_it->size() != 3 ||
-            !std::ranges::all_of(
-                *axes_it, [](const Json& item) {
-                    return item.is_boolean();
-                })) {
-            return fail<RenderSettings>(
-                lfs::ErrorCode::DataLoss,
-                "Axes visibility must contain three booleans",
-                "VIEW.render_settings.axes_visibility");
-        }
-        for (std::size_t index = 0;
-             index < 3; ++index) {
-            settings.axes_visibility[index] =
-                (*axes_it)[index].get<bool>();
-        }
-
-        LFS_SESSION_ASSIGN(show_grid);
-        LFS_SESSION_ASSIGN(grid_plane);
-        LFS_SESSION_ASSIGN(grid_opacity);
-        LFS_SESSION_ASSIGN(point_cloud_mode);
-        LFS_SESSION_ASSIGN(voxel_size);
-        LFS_SESSION_ASSIGN(show_rings);
-        LFS_SESSION_ASSIGN(ring_width);
-        LFS_SESSION_ASSIGN(show_center_markers);
-        LFS_SESSION_ASSIGN(show_camera_frustums);
-        LFS_SESSION_ASSIGN(camera_frustum_scale);
-        vec = required_vec3(
-            json, "train_camera_color");
-        if (!vec)
-            return std::move(vec).error();
-        settings.train_camera_color = *vec;
-        vec = required_vec3(
-            json, "eval_camera_color");
-        if (!vec)
-            return std::move(vec).error();
-        settings.eval_camera_color = *vec;
-        LFS_SESSION_ASSIGN(show_pivot);
-
-        if (auto status = assign_required(
-                json, "split_view_mode",
-                enum_value);
-            !status) {
-            return std::move(status).error();
-        }
-        if (enum_value < 0 || enum_value > 3) {
-            return fail<RenderSettings>(
-                lfs::ErrorCode::DataLoss,
-                "Unsupported split-view mode",
-                "VIEW.render_settings.split_view_mode");
-        }
-        settings.split_view_mode =
-            static_cast<SplitViewMode>(enum_value);
-        if (auto status = assign_required(
-                json, "gt_comparison_mode",
-                enum_value);
-            !status) {
-            return std::move(status).error();
-        }
-        settings.gt_comparison_mode =
-            static_cast<GTComparisonMode>(enum_value);
-        sanitizeGTComparisonSettings(settings);
-        LFS_SESSION_ASSIGN(split_position);
-        LFS_SESSION_ASSIGN(split_view_offset);
-
-        const auto backend =
-            scalar<std::string>(
-                json, "raster_backend");
-        if (!backend ||
-            !lfs::rendering::
-                isGaussianRasterBackendId(*backend)) {
-            return fail<RenderSettings>(
-                lfs::ErrorCode::DataLoss,
-                "Unsupported raster backend",
-                "VIEW.render_settings.raster_backend");
-        }
-        settings.raster_backend =
-            lfs::rendering::
-                gaussianRasterBackendFromId(*backend);
-        settings.gut =
-            lfs::rendering::isGutBackend(
-                settings.raster_backend);
-        LFS_SESSION_ASSIGN(equirectangular);
-        LFS_SESSION_ASSIGN(orthographic);
-        LFS_SESSION_ASSIGN(ortho_scale);
-        LFS_SESSION_ASSIGN(depth_view);
-        LFS_SESSION_ASSIGN(depth_view_min);
-        LFS_SESSION_ASSIGN(depth_view_max);
-        if (auto status = assign_required(
-                json, "depth_visualization_mode",
-                enum_value);
-            !status) {
-            return std::move(status).error();
-        }
-        settings.depth_visualization_mode =
-            static_cast<
-                lfs::rendering::
-                    DepthVisualizationMode>(
-                enum_value);
-        sanitizeDepthViewSettings(settings);
-
-        vec = required_vec3(
-            json, "selection_color_committed");
-        if (!vec)
-            return std::move(vec).error();
-        settings.selection_color_committed = *vec;
-        vec = required_vec3(
-            json, "selection_color_preview");
-        if (!vec)
-            return std::move(vec).error();
-        settings.selection_color_preview = *vec;
-        vec = required_vec3(
-            json,
-            "selection_color_center_marker");
-        if (!vec)
-            return std::move(vec).error();
-        settings.selection_color_center_marker = *vec;
-        LFS_SESSION_ASSIGN(depth_clip_enabled);
-        LFS_SESSION_ASSIGN(depth_clip_far);
-        LFS_SESSION_ASSIGN(mesh_wireframe);
-        vec = required_vec3(
-            json, "mesh_wireframe_color");
-        if (!vec)
-            return std::move(vec).error();
-        settings.mesh_wireframe_color = *vec;
-        LFS_SESSION_ASSIGN(mesh_wireframe_width);
-        vec = required_vec3(json, "mesh_light_dir");
-        if (!vec)
-            return std::move(vec).error();
-        settings.mesh_light_dir = *vec;
-        LFS_SESSION_ASSIGN(mesh_light_intensity);
-        LFS_SESSION_ASSIGN(mesh_ambient);
-        LFS_SESSION_ASSIGN(mesh_backface_culling);
-        LFS_SESSION_ASSIGN(mesh_shadow_enabled);
-        LFS_SESSION_ASSIGN(mesh_shadow_resolution);
-        LFS_SESSION_ASSIGN(depth_filter_enabled);
-        vec = required_vec3(
-            json, "depth_filter_min");
-        if (!vec)
-            return std::move(vec).error();
-        settings.depth_filter_min = *vec;
-        vec = required_vec3(
-            json, "depth_filter_max");
-        if (!vec)
-            return std::move(vec).error();
-        settings.depth_filter_max = *vec;
-
-        const auto transform_it =
-            find_required_object(
-                json, "depth_filter_transform");
-        if (transform_it == json.end()) {
-            return fail<RenderSettings>(
-                lfs::ErrorCode::DataLoss,
-                "Depth-filter transform is missing",
-                "VIEW.render_settings.depth_filter_transform");
-        }
-        const auto rotation_it =
-            transform_it->find("rotation");
-        const auto rotation =
-            rotation_it == transform_it->end()
-                ? std::optional<
-                      std::array<float, 9>>{}
-                : number_array<9>(*rotation_it);
-        if (!rotation) {
-            return fail<RenderSettings>(
-                lfs::ErrorCode::DataLoss,
-                "Depth-filter rotation must be a finite 3x3 matrix",
-                "VIEW.render_settings.depth_filter_transform.rotation");
-        }
-        auto translation = required_vec3(
-            *transform_it, "translation",
-            "VIEW.render_settings.depth_filter_transform");
-        if (!translation)
-            return std::move(translation).error();
-        settings.depth_filter_transform =
-            lfs::geometry::EuclideanTransform(
-                glm::quat_cast(
-                    array_matrix(*rotation)),
-                *translation);
-
-        LFS_SESSION_ASSIGN(lod_enabled);
-        LFS_SESSION_ASSIGN(lod_auto_enable_rad);
-        LFS_SESSION_ASSIGN(lod_max_splats);
-        LFS_SESSION_ASSIGN(lod_render_scale);
-        LFS_SESSION_ASSIGN(
-            lod_behind_camera_penalty);
-        LFS_SESSION_ASSIGN(lod_cone_foveation);
-        LFS_SESSION_ASSIGN(
-            lod_cone_inner_degrees);
-        LFS_SESSION_ASSIGN(
-            lod_cone_outer_degrees);
-        LFS_SESSION_ASSIGN(lod_page_pool_splats);
-        LFS_SESSION_ASSIGN(
-            lod_pool_vram_fraction);
-        LFS_SESSION_ASSIGN(lod_fade_frames);
-        LFS_SESSION_ASSIGN(lod_debug_colors);
-
-#undef LFS_SESSION_ASSIGN
-
         enforceProjectionBackend(settings);
         settings.gut =
             lfs::rendering::isGutBackend(
@@ -938,34 +939,9 @@ namespace lfs::vis::project {
     SessionJson panelCameraProjectStateToJson(
         const std::string_view panel,
         const PanelCameraProjectState& state) {
-        return Json{
-            {"panel", panel},
-            {"R", json_array(state.rotation)},
-            {"t", json_array(state.translation)},
-            {"pivot", json_array(state.pivot)},
-            {"home_R",
-             json_array(state.home_rotation)},
-            {"home_t",
-             json_array(state.home_translation)},
-            {"home_pivot",
-             json_array(state.home_pivot)},
-            {"home_saved", state.home_saved},
-            {"zoom_speed", state.zoom_speed},
-            {"max_zoom_speed",
-             state.max_zoom_speed},
-            {"rotate_speed", state.rotate_speed},
-            {"centre_speed", state.centre_speed},
-            {"roll_speed", state.roll_speed},
-            {"translate_speed",
-             state.translate_speed},
-            {"wasd_speed", state.wasd_speed},
-            {"max_wasd_speed",
-             state.max_wasd_speed},
-            {"ortho_scale",
-             state.ortho_scale
-                 ? Json(*state.ortho_scale)
-                 : Json(nullptr)},
-        };
+        Json result{{"panel", panel}};
+        append_fields(result, state, panel_camera_fields());
+        return result;
     }
 
     lfs::Result<PanelCameraProjectState>
@@ -979,108 +955,13 @@ namespace lfs::vis::project {
         }
 
         PanelCameraProjectState state;
-        const auto read_array =
-            [&](const std::string_view key,
-                auto& destination)
-            -> lfs::Result<void> {
-            const auto found =
-                json.find(std::string(key));
-            if (found == json.end()) {
-                return fail<void>(
-                    lfs::ErrorCode::DataLoss,
-                    "Panel camera field is missing",
-                    std::string(
-                        "VIEW.panel_cameras.") +
-                        std::string(key));
-            }
-            const auto values =
-                number_array<
-                    std::tuple_size_v<
-                        std::remove_cvref_t<
-                            decltype(destination)>>>(
-                    *found);
-            if (!values) {
-                return fail<void>(
-                    lfs::ErrorCode::DataLoss,
-                    "Panel camera field must contain finite numbers",
-                    std::string(
-                        "VIEW.panel_cameras.") +
-                        std::string(key));
-            }
-            destination = *values;
-            return {};
-        };
-
-        if (auto result =
-                read_array("R", state.rotation);
-            !result)
-            return std::move(result).error();
-        if (auto result = read_array(
-                "t", state.translation);
-            !result)
-            return std::move(result).error();
-        if (auto result =
-                read_array("pivot", state.pivot);
-            !result)
-            return std::move(result).error();
-        if (auto result = read_array(
-                "home_R", state.home_rotation);
-            !result)
-            return std::move(result).error();
-        if (auto result = read_array(
-                "home_t", state.home_translation);
-            !result)
-            return std::move(result).error();
-        if (auto result = read_array(
-                "home_pivot", state.home_pivot);
-            !result)
-            return std::move(result).error();
-
-#define LFS_CAMERA_ASSIGN(Member)             \
-    do {                                      \
-        if (auto status = assign_required(    \
-                json, #Member, state.Member,  \
-                "VIEW.panel_cameras");        \
-            !status) {                        \
-            return std::move(status).error(); \
-        }                                     \
-    } while (false)
-        LFS_CAMERA_ASSIGN(home_saved);
-        LFS_CAMERA_ASSIGN(zoom_speed);
-        LFS_CAMERA_ASSIGN(max_zoom_speed);
-        LFS_CAMERA_ASSIGN(rotate_speed);
-        LFS_CAMERA_ASSIGN(centre_speed);
-        LFS_CAMERA_ASSIGN(roll_speed);
-        LFS_CAMERA_ASSIGN(translate_speed);
-        LFS_CAMERA_ASSIGN(wasd_speed);
-        LFS_CAMERA_ASSIGN(max_wasd_speed);
-#undef LFS_CAMERA_ASSIGN
-
-        const auto ortho =
-            json.find("ortho_scale");
-        if (ortho == json.end()) {
-            return fail<PanelCameraProjectState>(
-                lfs::ErrorCode::DataLoss,
-                "Panel camera ortho_scale is missing",
-                "VIEW.panel_cameras.ortho_scale");
-        }
-        if (ortho->is_null()) {
-            state.ortho_scale.reset();
-        } else if (ortho->is_number()) {
-            const auto value = ortho->get<float>();
-            if (!std::isfinite(value) ||
-                value <= 0.0f) {
-                return fail<PanelCameraProjectState>(
-                    lfs::ErrorCode::DataLoss,
-                    "Panel camera ortho scale must be positive and finite",
-                    "VIEW.panel_cameras.ortho_scale");
-            }
-            state.ortho_scale = value;
-        } else {
-            return fail<PanelCameraProjectState>(
-                lfs::ErrorCode::DataLoss,
-                "Panel camera ortho scale must be a number or null",
-                "VIEW.panel_cameras.ortho_scale");
+        if (auto status = read_fields(
+                json,
+                state,
+                "VIEW.panel_cameras",
+                panel_camera_fields());
+            !status) {
+            return std::move(status).error();
         }
 
         constexpr std::array positive_speeds = {
@@ -1613,6 +1494,107 @@ namespace lfs::vis::project {
                        : Json(nullptr);
         }
 
+        const auto& fixed_layout_fields() {
+            static const std::vector<
+                JsonField<gui::PanelLayoutProjectState>>
+                fields{
+                    optional_field("right_panel_width", &gui::PanelLayoutProjectState::right_panel_width),
+                    optional_field("scene_panel_ratio", &gui::PanelLayoutProjectState::scene_panel_ratio),
+                    optional_field("python_console_width", &gui::PanelLayoutProjectState::python_console_width),
+                    optional_field("bottom_dock_height", &gui::PanelLayoutProjectState::bottom_dock_height),
+                    optional_field("left_dock_width", &gui::PanelLayoutProjectState::left_dock_width),
+                    optional_field("sequencer_visible", &gui::PanelLayoutProjectState::show_sequencer),
+                };
+            return fields;
+        }
+
+        const auto& window_fields() {
+            using WindowState =
+                WindowManager::ProjectWindowState;
+            static const std::vector<JsonField<WindowState>> fields{
+                optional_field("x", &WindowState::x),
+                optional_field("y", &WindowState::y),
+                optional_field("width", &WindowState::width),
+                optional_field("height", &WindowState::height),
+                optional_field("fullscreen", &WindowState::fullscreen),
+                optional_field("maximized", &WindowState::maximized),
+                optional_field("restore_x", &WindowState::restore_x),
+                optional_field("restore_y", &WindowState::restore_y),
+                optional_field("restore_width", &WindowState::restore_width),
+                optional_field("restore_height", &WindowState::restore_height),
+            };
+            return fields;
+        }
+
+        const auto& panel_fields() {
+            using Panel = gui::PanelProjectState;
+            const auto nullable_float = [](
+                                            const std::string_view name,
+                                            float Panel::*member) {
+                return custom_field<Panel>(
+                    name,
+                    [member](const Panel& panel) {
+                        return finite_or_null(panel.*member);
+                    },
+                    [member](const Json& json,
+                             Panel& panel,
+                             std::string_view,
+                             const std::string_view field) {
+                        panel.*member =
+                            scalar<float>(json, field).value_or(NAN);
+                        return lfs::Result<void>{};
+                    });
+            };
+            static const std::vector<JsonField<Panel>> fields{
+                optional_field("id", &Panel::id),
+                optional_field("parent_id", &Panel::parent_id),
+                custom_field<Panel>(
+                    "space",
+                    [](const Panel& panel) {
+                        return Json(panel_space_name(panel.space));
+                    },
+                    [](const Json& json,
+                       Panel& panel,
+                       std::string_view,
+                       const std::string_view field) {
+                        if (const auto name =
+                                scalar<std::string>(json, field)) {
+                            if (const auto space =
+                                    panel_space_from_name(*name)) {
+                                panel.space = *space;
+                            }
+                        }
+                        return lfs::Result<void>{};
+                    }),
+                optional_field("order", &Panel::order),
+                optional_field("enabled", &Panel::enabled),
+                nullable_float("float_x", &Panel::float_x),
+                nullable_float("float_y", &Panel::float_y),
+                optional_field("float_user_height", &Panel::float_user_height),
+                optional_field("float_last_bounds_valid", &Panel::float_last_bounds_valid),
+                optional_field("float_last_x", &Panel::float_last_x),
+                optional_field("float_last_y", &Panel::float_last_y),
+                optional_field("float_last_w", &Panel::float_last_w),
+                optional_field("float_last_h", &Panel::float_last_h),
+                optional_field("float_auto_center", &Panel::float_auto_center),
+                optional_field("float_stack_order", &Panel::float_stack_order),
+            };
+            return fields;
+        }
+
+        const auto& sequencer_preference_fields() {
+            using Preferences = gui::panels::SequencerUIState;
+            static const std::vector<JsonField<Preferences>> fields{
+                optional_field("snap_to_grid", &Preferences::snap_to_grid),
+                optional_field("snap_interval", &Preferences::snap_interval),
+                optional_field("follow_playback", &Preferences::follow_playback),
+                optional_field("show_pip_preview", &Preferences::show_pip_preview),
+                optional_field("pip_preview_scale", &Preferences::pip_preview_scale),
+                optional_field("show_film_strip", &Preferences::show_film_strip),
+            };
+            return fields;
+        }
+
         std::string selection_submode_name(
             const SelectionSubMode mode) {
             switch (mode) {
@@ -1822,71 +1804,19 @@ namespace lfs::vis::project {
             window_states.contains(
                 "python_console") &&
             window_states.at("python_console");
-        const Json fixed_payload{
-            {"right_panel_width",
-             layout.right_panel_width},
-            {"scene_panel_ratio",
-             layout.scene_panel_ratio},
-            {"python_console_width",
-             layout.python_console_width},
-            {"bottom_dock_height",
-             layout.bottom_dock_height},
-            {"left_dock_width",
-             layout.left_dock_width},
-            {"sequencer_visible",
-             layout.show_sequencer},
-            {"python_console_visible",
-             console_visible},
-            {"window",
-             {
-                 {"x", window.x},
-                 {"y", window.y},
-                 {"width", window.width},
-                 {"height", window.height},
-                 {"fullscreen",
-                  window.fullscreen},
-                 {"maximized", window.maximized},
-                 {"restore_x", window.restore_x},
-                 {"restore_y", window.restore_y},
-                 {"restore_width",
-                  window.restore_width},
-                 {"restore_height",
-                  window.restore_height},
-             }},
-        };
+        Json fixed_payload =
+            fields_to_json(layout, fixed_layout_fields());
+        fixed_payload["python_console_visible"] =
+            console_visible;
+        fixed_payload["window"] =
+            fields_to_json(window, window_fields());
 
         Json panels = Json::array();
         for (const auto& panel :
              gui::PanelRegistry::instance()
                  .capture_project_state()) {
-            panels.push_back({
-                {"id", panel.id},
-                {"parent_id", panel.parent_id},
-                {"space",
-                 panel_space_name(panel.space)},
-                {"order", panel.order},
-                {"enabled", panel.enabled},
-                {"float_x",
-                 finite_or_null(panel.float_x)},
-                {"float_y",
-                 finite_or_null(panel.float_y)},
-                {"float_user_height",
-                 panel.float_user_height},
-                {"float_last_bounds_valid",
-                 panel.float_last_bounds_valid},
-                {"float_last_x",
-                 panel.float_last_x},
-                {"float_last_y",
-                 panel.float_last_y},
-                {"float_last_w",
-                 panel.float_last_w},
-                {"float_last_h",
-                 panel.float_last_h},
-                {"float_auto_center",
-                 panel.float_auto_center},
-                {"float_stack_order",
-                 panel.float_stack_order},
-            });
+            panels.push_back(
+                fields_to_json(panel, panel_fields()));
         }
         const Json registry_payload{
             {"panels", std::move(panels)},
@@ -2360,21 +2290,9 @@ namespace lfs::vis::project {
             {"playback_speed",
              controller.playbackSpeed()},
             {"preferences",
-             {
-                 {"snap_to_grid",
-                  sequencer_ui.snap_to_grid},
-                 {"snap_interval",
-                  sequencer_ui.snap_interval},
-                 {"follow_playback",
-                  sequencer_ui.follow_playback},
-                 {"show_pip_preview",
-                  sequencer_ui.show_pip_preview},
-                 {"pip_preview_scale",
-                  sequencer_ui
-                      .pip_preview_scale},
-                 {"show_film_strip",
-                  sequencer_ui.show_film_strip},
-             }},
+             fields_to_json(
+                 sequencer_ui,
+                 sequencer_preference_fields())},
         };
         if (auto merged =
                 result.sequencer
@@ -2572,24 +2490,11 @@ namespace lfs::vis::project {
             gui::PanelLayoutProjectState layout =
                 gui_manager->panelLayout()
                     .captureProjectState();
-            assign_optional(
-                fixed, "right_panel_width",
-                layout.right_panel_width);
-            assign_optional(
-                fixed, "scene_panel_ratio",
-                layout.scene_panel_ratio);
-            assign_optional(
-                fixed, "python_console_width",
-                layout.python_console_width);
-            assign_optional(
-                fixed, "bottom_dock_height",
-                layout.bottom_dock_height);
-            assign_optional(
-                fixed, "left_dock_width",
-                layout.left_dock_width);
-            assign_optional(
-                fixed, "sequencer_visible",
-                layout.show_sequencer);
+            (void)read_fields(
+                fixed,
+                layout,
+                "GUIL.fixed_arrangement",
+                fixed_layout_fields());
 
             if (const auto window_json =
                     find_required_object(
@@ -2598,36 +2503,11 @@ namespace lfs::vis::project {
                 auto state =
                     window_manager
                         ->captureProjectState();
-                assign_optional(
-                    *window_json, "x", state.x);
-                assign_optional(
-                    *window_json, "y", state.y);
-                assign_optional(
-                    *window_json, "width",
-                    state.width);
-                assign_optional(
-                    *window_json, "height",
-                    state.height);
-                assign_optional(
-                    *window_json, "fullscreen",
-                    state.fullscreen);
-                assign_optional(
-                    *window_json, "maximized",
-                    state.maximized);
-                assign_optional(
-                    *window_json, "restore_x",
-                    state.restore_x);
-                assign_optional(
-                    *window_json, "restore_y",
-                    state.restore_y);
-                assign_optional(
+                (void)read_fields(
                     *window_json,
-                    "restore_width",
-                    state.restore_width);
-                assign_optional(
-                    *window_json,
-                    "restore_height",
-                    state.restore_height);
+                    state,
+                    "GUIL.fixed_arrangement.window",
+                    window_fields());
                 window_manager->applyProjectState(
                     state);
             }
@@ -2678,54 +2558,11 @@ namespace lfs::vis::project {
                     if (!id || !space)
                         continue;
                     gui::PanelProjectState state;
-                    state.id = *id;
-                    assign_optional(
-                        saved, "parent_id",
-                        state.parent_id);
-                    state.space = *space;
-                    assign_optional(
-                        saved, "order",
-                        state.order);
-                    assign_optional(
-                        saved, "enabled",
-                        state.enabled);
-                    state.float_x =
-                        scalar<float>(
-                            saved, "float_x")
-                            .value_or(NAN);
-                    state.float_y =
-                        scalar<float>(
-                            saved, "float_y")
-                            .value_or(NAN);
-                    assign_optional(
+                    (void)read_fields(
                         saved,
-                        "float_user_height",
-                        state.float_user_height);
-                    assign_optional(
-                        saved,
-                        "float_last_bounds_valid",
-                        state
-                            .float_last_bounds_valid);
-                    assign_optional(
-                        saved, "float_last_x",
-                        state.float_last_x);
-                    assign_optional(
-                        saved, "float_last_y",
-                        state.float_last_y);
-                    assign_optional(
-                        saved, "float_last_w",
-                        state.float_last_w);
-                    assign_optional(
-                        saved, "float_last_h",
-                        state.float_last_h);
-                    assign_optional(
-                        saved,
-                        "float_auto_center",
-                        state.float_auto_center);
-                    assign_optional(
-                        saved,
-                        "float_stack_order",
-                        state.float_stack_order);
+                        state,
+                        "GUIL.panel_registry.panels",
+                        panel_fields());
                     panels.push_back(
                         std::move(state));
                 }
@@ -3349,30 +3186,11 @@ namespace lfs::vis::project {
                     find_required_object(
                         root, "preferences");
                 preferences != root.end()) {
-                assign_optional(
+                (void)read_fields(
                     *preferences,
-                    "snap_to_grid",
-                    ui.snap_to_grid);
-                assign_optional(
-                    *preferences,
-                    "snap_interval",
-                    ui.snap_interval);
-                assign_optional(
-                    *preferences,
-                    "follow_playback",
-                    ui.follow_playback);
-                assign_optional(
-                    *preferences,
-                    "show_pip_preview",
-                    ui.show_pip_preview);
-                assign_optional(
-                    *preferences,
-                    "pip_preview_scale",
-                    ui.pip_preview_scale);
-                assign_optional(
-                    *preferences,
-                    "show_film_strip",
-                    ui.show_film_strip);
+                    ui,
+                    "SEQR.preferences",
+                    sequencer_preference_fields());
             }
             // Controller values are canonical over the UI mirrors.
             ui.playback_speed =

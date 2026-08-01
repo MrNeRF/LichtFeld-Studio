@@ -4,11 +4,11 @@
 
 #include "io/selection_chapter.hpp"
 
+#include "chapter_binary_utils.hpp"
+
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cmath>
-#include <concepts>
 #include <cstring>
 #include <format>
 #include <limits>
@@ -28,7 +28,20 @@ namespace lfs::io::project {
         constexpr std::size_t SLICE_ROW_BYTES = 64;
         constexpr std::size_t UUID_BYTES = 16;
         constexpr std::uint64_t DATA_ALIGNMENT = 64;
-        constexpr std::size_t DELTA_HEADER_BYTES = 24;
+
+        using chapter_binary::align_up;
+        using chapter_binary::all_zero;
+        using chapter_binary::checked_add;
+        using chapter_binary::checked_mul;
+        using chapter_binary::read_f32;
+        using chapter_binary::read_u16;
+        using chapter_binary::read_u32;
+        using chapter_binary::read_u64;
+        using chapter_binary::valid_utf8;
+        using chapter_binary::write_f32;
+        using chapter_binary::write_u16;
+        using chapter_binary::write_u32;
+        using chapter_binary::write_u64;
 
         struct EncodedSlice {
             SelectionMaskSlice slice;
@@ -40,8 +53,6 @@ namespace lfs::io::project {
             lfs::core::Uuid node_uuid;
             lfs::core::SelectionDomain domain =
                 lfs::core::SelectionDomain::Splat;
-            SelectionMaskEncoding encoding =
-                SelectionMaskEncoding::RawU8;
             std::uint64_t element_count = 0;
             std::uint64_t nonzero_count = 0;
             std::uint64_t data_offset = 0;
@@ -98,214 +109,12 @@ namespace lfs::io::project {
                 field));
         }
 
-        template <std::unsigned_integral T>
-        bool checked_add(const T lhs, const T rhs, T& output) {
-            if (rhs > std::numeric_limits<T>::max() - lhs) {
-                return false;
-            }
-            output = lhs + rhs;
-            return true;
-        }
-
-        template <std::unsigned_integral T>
-        bool checked_mul(const T lhs, const T rhs, T& output) {
-            if (lhs != 0 &&
-                rhs > std::numeric_limits<T>::max() / lhs) {
-                return false;
-            }
-            output = lhs * rhs;
-            return true;
-        }
-
-        bool align_up(
-            const std::uint64_t value,
-            const std::uint64_t alignment,
-            std::uint64_t& output) {
-            std::uint64_t adjusted = 0;
-            if (!std::has_single_bit(alignment) ||
-                !checked_add(
-                    value, alignment - 1, adjusted)) {
-                return false;
-            }
-            output = adjusted & ~(alignment - 1);
-            return true;
-        }
-
-        std::uint16_t read_u16(
-            const std::span<const std::byte> bytes,
-            const std::size_t offset) {
-            return static_cast<std::uint16_t>(
-                       std::to_integer<std::uint8_t>(
-                           bytes[offset])) |
-                   static_cast<std::uint16_t>(
-                       std::to_integer<std::uint8_t>(
-                           bytes[offset + 1]))
-                       << 8u;
-        }
-
-        std::uint32_t read_u32(
-            const std::span<const std::byte> bytes,
-            const std::size_t offset) {
-            std::uint32_t result = 0;
-            for (std::size_t byte = 0;
-                 byte < sizeof(result);
-                 ++byte) {
-                result |= static_cast<std::uint32_t>(
-                              std::to_integer<std::uint8_t>(
-                                  bytes[offset + byte]))
-                          << (byte * 8u);
-            }
-            return result;
-        }
-
-        std::uint64_t read_u64(
-            const std::span<const std::byte> bytes,
-            const std::size_t offset) {
-            std::uint64_t result = 0;
-            for (std::size_t byte = 0;
-                 byte < sizeof(result);
-                 ++byte) {
-                result |= static_cast<std::uint64_t>(
-                              std::to_integer<std::uint8_t>(
-                                  bytes[offset + byte]))
-                          << (byte * 8u);
-            }
-            return result;
-        }
-
-        float read_f32(
-            const std::span<const std::byte> bytes,
-            const std::size_t offset) {
-            return std::bit_cast<float>(read_u32(bytes, offset));
-        }
-
-        void write_u16(
-            const std::span<std::byte> bytes,
-            const std::size_t offset,
-            const std::uint16_t value) {
-            for (std::size_t byte = 0;
-                 byte < sizeof(value);
-                 ++byte) {
-                bytes[offset + byte] =
-                    static_cast<std::byte>(
-                        value >> (byte * 8u));
-            }
-        }
-
-        void write_u32(
-            const std::span<std::byte> bytes,
-            const std::size_t offset,
-            const std::uint32_t value) {
-            for (std::size_t byte = 0;
-                 byte < sizeof(value);
-                 ++byte) {
-                bytes[offset + byte] =
-                    static_cast<std::byte>(
-                        value >> (byte * 8u));
-            }
-        }
-
-        void write_u64(
-            const std::span<std::byte> bytes,
-            const std::size_t offset,
-            const std::uint64_t value) {
-            for (std::size_t byte = 0;
-                 byte < sizeof(value);
-                 ++byte) {
-                bytes[offset + byte] =
-                    static_cast<std::byte>(
-                        value >> (byte * 8u));
-            }
-        }
-
-        void write_f32(
-            const std::span<std::byte> bytes,
-            const std::size_t offset,
-            const float value) {
-            write_u32(
-                bytes,
-                offset,
-                std::bit_cast<std::uint32_t>(value));
-        }
-
-        bool all_zero(
-            const std::span<const std::byte> bytes) {
-            return std::ranges::all_of(
-                bytes,
-                [](const std::byte value) {
-                    return value == std::byte{0};
-                });
-        }
-
-        bool valid_utf8(const std::string_view text) {
-            std::size_t index = 0;
-            while (index < text.size()) {
-                const auto lead =
-                    static_cast<std::uint8_t>(
-                        static_cast<unsigned char>(text[index]));
-                if (lead <= 0x7fu) {
-                    ++index;
-                    continue;
-                }
-
-                std::size_t count = 0;
-                std::uint32_t codepoint = 0;
-                if ((lead & 0xe0u) == 0xc0u) {
-                    count = 2;
-                    codepoint = lead & 0x1fu;
-                } else if ((lead & 0xf0u) == 0xe0u) {
-                    count = 3;
-                    codepoint = lead & 0x0fu;
-                } else if ((lead & 0xf8u) == 0xf0u) {
-                    count = 4;
-                    codepoint = lead & 0x07u;
-                } else {
-                    return false;
-                }
-                if (index + count > text.size()) {
-                    return false;
-                }
-                for (std::size_t continuation = 1;
-                     continuation < count;
-                     ++continuation) {
-                    const auto byte =
-                        static_cast<std::uint8_t>(
-                            static_cast<unsigned char>(
-                                text[index + continuation]));
-                    if ((byte & 0xc0u) != 0x80u) {
-                        return false;
-                    }
-                    codepoint =
-                        (codepoint << 6u) | (byte & 0x3fu);
-                }
-                const std::uint32_t minimum =
-                    count == 2   ? 0x80u
-                    : count == 3 ? 0x800u
-                                 : 0x10000u;
-                if (codepoint < minimum ||
-                    codepoint > 0x10ffffu ||
-                    (codepoint >= 0xd800u &&
-                     codepoint <= 0xdfffu)) {
-                    return false;
-                }
-                index += count;
-            }
-            return true;
-        }
-
         bool valid_domain(
             const lfs::core::SelectionDomain domain) {
             return domain ==
                        lfs::core::SelectionDomain::Splat ||
                    domain ==
                        lfs::core::SelectionDomain::PointCloud;
-        }
-
-        bool valid_encoding(
-            const SelectionMaskEncoding encoding) {
-            return encoding == SelectionMaskEncoding::RawU8 ||
-                   encoding ==
-                       SelectionMaskEncoding::DeltaBitpack;
         }
 
         lfs::Result<void> validate_groups(
@@ -381,9 +190,17 @@ namespace lfs::io::project {
                     "Selection slice has an unknown domain",
                     "slices.domain");
             }
-            if (!valid_encoding(slice.encoding)) {
+            if (slice.encoding !=
+                SelectionMaskEncoding::RawU8) {
+                const auto value = static_cast<std::uint8_t>(
+                    slice.encoding);
                 return invalid(
-                    "Selection slice has an unknown encoding",
+                    value == 2
+                        ? "Selection mask encoding 2 was withdrawn before "
+                          "release"
+                        : std::format(
+                              "Selection slice has unknown encoding {}",
+                              value),
                     "slices.encoding");
             }
             for (std::size_t index = 0;
@@ -414,433 +231,22 @@ namespace lfs::io::project {
             return result;
         }
 
-        lfs::Result<std::vector<std::byte>>
-        encode_delta_bitpack(
-            const std::span<const std::uint8_t> mask,
-            std::uint64_t& nonzero_count) {
-            nonzero_count = static_cast<std::uint64_t>(
-                std::ranges::count_if(
-                    mask,
-                    [](const std::uint8_t value) {
-                        return value != 0;
-                    }));
-            std::uint64_t code_bytes_u64 = 0;
-            if (!checked_add(
-                    nonzero_count,
-                    std::uint64_t{3},
-                    code_bytes_u64)) {
-                return selection_error(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The selection state cannot be saved.",
-                    "Selection delta code count overflows",
-                    "slices.mask");
-            }
-            code_bytes_u64 /= 4u;
-            if (code_bytes_u64 >
-                std::numeric_limits<std::size_t>::max()) {
-                return selection_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "The selection mask is too large for this process.",
-                    "Selection delta code table exceeds size_t",
-                    "slices.mask");
-            }
-
-            std::vector<std::byte> codes(
-                static_cast<std::size_t>(code_bytes_u64),
-                std::byte{0});
-            std::vector<std::byte> deltas;
-            std::vector<std::byte> values;
-            values.reserve(
-                static_cast<std::size_t>(nonzero_count));
-
-            std::uint64_t previous_plus_one = 0;
-            std::size_t encoded_index = 0;
-            for (std::size_t index = 0;
-                 index < mask.size();
-                 ++index) {
-                if (mask[index] == 0) {
-                    continue;
-                }
-                const auto current_plus_one =
-                    static_cast<std::uint64_t>(index) + 1u;
-                const auto delta =
-                    current_plus_one - previous_plus_one;
-                previous_plus_one = current_plus_one;
-
-                std::uint8_t code = 0;
-                if (delta == 1) {
-                    code = 0;
-                } else if (
-                    delta <=
-                    std::numeric_limits<std::uint8_t>::max()) {
-                    code = 1;
-                    deltas.push_back(
-                        static_cast<std::byte>(delta));
-                } else if (
-                    delta <=
-                    std::numeric_limits<std::uint16_t>::max()) {
-                    code = 2;
-                    const auto offset = deltas.size();
-                    deltas.resize(offset + 2);
-                    write_u16(
-                        deltas,
-                        offset,
-                        static_cast<std::uint16_t>(delta));
-                } else {
-                    code = 3;
-                    const auto offset = deltas.size();
-                    deltas.resize(offset + 8);
-                    write_u64(deltas, offset, delta);
-                }
-                codes[encoded_index / 4] |=
-                    static_cast<std::byte>(
-                        code << ((encoded_index % 4) * 2u));
-                values.push_back(
-                    static_cast<std::byte>(mask[index]));
-                ++encoded_index;
-            }
-            assert(encoded_index == nonzero_count);
-
-            std::uint64_t total = DELTA_HEADER_BYTES;
-            if (!checked_add(
-                    total,
-                    static_cast<std::uint64_t>(codes.size()),
-                    total) ||
-                !checked_add(
-                    total,
-                    static_cast<std::uint64_t>(deltas.size()),
-                    total) ||
-                !checked_add(
-                    total,
-                    static_cast<std::uint64_t>(values.size()),
-                    total) ||
-                total > std::numeric_limits<std::size_t>::max()) {
-                return selection_error(
-                    lfs::ErrorCode::ResourceExhausted,
-                    "The selection mask is too large for this process.",
-                    "Selection delta payload size overflows",
-                    "slices.mask");
-            }
-            std::vector<std::byte> result(
-                static_cast<std::size_t>(total));
-            write_u64(result, 0, nonzero_count);
-            write_u64(result, 8, codes.size());
-            write_u64(result, 16, deltas.size());
-            std::size_t cursor = DELTA_HEADER_BYTES;
-            std::ranges::copy(
-                codes, result.begin() + cursor);
-            cursor += codes.size();
-            std::ranges::copy(
-                deltas, result.begin() + cursor);
-            cursor += deltas.size();
-            std::ranges::copy(
-                values, result.begin() + cursor);
-            return result;
-        }
-
-        lfs::Result<EncodedSlice> encode_slice(
-            SelectionMaskSlice slice,
-            const std::optional<SelectionMaskEncoding>
-                encoding_override) {
-            if (encoding_override) {
-                slice.encoding = *encoding_override;
-            }
+        EncodedSlice encode_slice(SelectionMaskSlice slice) {
             EncodedSlice result{
                 .slice = std::move(slice),
                 .bytes = {},
                 .nonzero_count = 0,
             };
-            if (result.slice.encoding ==
-                SelectionMaskEncoding::RawU8) {
-                result.nonzero_count =
-                    static_cast<std::uint64_t>(
-                        std::ranges::count_if(
-                            result.slice.mask,
-                            [](const std::uint8_t value) {
-                                return value != 0;
-                            }));
-                const auto bytes = std::as_bytes(
-                    std::span(result.slice.mask));
-                result.bytes.assign(
-                    bytes.begin(), bytes.end());
-                return result;
-            }
-            auto bytes = encode_delta_bitpack(
-                result.slice.mask,
-                result.nonzero_count);
-            if (!bytes) {
-                return std::move(bytes).error();
-            }
-            result.bytes = std::move(*bytes);
-            return result;
-        }
-
-        lfs::Result<void> validate_delta_payload(
-            const std::span<const std::byte> bytes,
-            const std::uint64_t element_count,
-            const std::uint64_t expected_nonzero_count,
-            const std::array<bool, 256>& group_ids) {
-            if (bytes.size() < DELTA_HEADER_BYTES) {
-                return lfs::Result<void>::failure(
-                    corrupt<void>(
-                        "SELM delta-bitpack header is truncated",
-                        "slices.data")
-                        .error());
-            }
-            const auto nonzero_count = read_u64(bytes, 0);
-            const auto code_bytes = read_u64(bytes, 8);
-            const auto delta_bytes = read_u64(bytes, 16);
-            if (nonzero_count != expected_nonzero_count ||
-                nonzero_count > element_count) {
-                return lfs::Result<void>::failure(
-                    corrupt<void>(
-                        std::format(
-                            "SELM delta nonzero count {} disagrees with "
-                            "descriptor {} or element count {}",
-                            nonzero_count,
-                            expected_nonzero_count,
-                            element_count),
-                        "slices.nonzero_count")
-                        .error());
-            }
-            std::uint64_t expected_code_bytes = 0;
-            if (!checked_add(
-                    nonzero_count,
-                    std::uint64_t{3},
-                    expected_code_bytes)) {
-                return lfs::Result<void>::failure(
-                    corrupt<void>(
-                        "SELM delta code count overflows",
-                        "slices.data")
-                        .error());
-            }
-            expected_code_bytes /= 4u;
-            if (code_bytes != expected_code_bytes) {
-                return lfs::Result<void>::failure(
-                    corrupt<void>(
-                        std::format(
-                            "SELM delta code bytes {} != expected {}",
-                            code_bytes,
-                            expected_code_bytes),
-                        "slices.data")
-                        .error());
-            }
-            std::uint64_t value_offset = DELTA_HEADER_BYTES;
-            if (!checked_add(
-                    value_offset, code_bytes, value_offset) ||
-                !checked_add(
-                    value_offset, delta_bytes, value_offset)) {
-                return lfs::Result<void>::failure(
-                    corrupt<void>(
-                        "SELM delta table offsets overflow",
-                        "slices.data")
-                        .error());
-            }
-            std::uint64_t payload_end = 0;
-            if (!checked_add(
-                    value_offset,
-                    nonzero_count,
-                    payload_end) ||
-                payload_end != bytes.size()) {
-                return lfs::Result<void>::failure(
-                    corrupt<void>(
-                        std::format(
-                            "SELM delta payload size {} does not match "
-                            "tables ending at {}",
-                            bytes.size(),
-                            payload_end),
-                        "slices.data")
-                        .error());
-            }
-
-            const auto codes = bytes.subspan(
-                DELTA_HEADER_BYTES,
-                static_cast<std::size_t>(code_bytes));
-            const auto delta_data = bytes.subspan(
-                DELTA_HEADER_BYTES +
-                    static_cast<std::size_t>(code_bytes),
-                static_cast<std::size_t>(delta_bytes));
-            const auto values = bytes.subspan(
-                static_cast<std::size_t>(value_offset),
-                static_cast<std::size_t>(nonzero_count));
-            if (nonzero_count % 4 != 0 &&
-                !codes.empty()) {
-                const auto used_bits =
-                    static_cast<unsigned>(
-                        (nonzero_count % 4) * 2u);
-                const auto last =
-                    std::to_integer<std::uint8_t>(
-                        codes.back());
-                if ((last >> used_bits) != 0) {
-                    return lfs::Result<void>::failure(
-                        corrupt<void>(
-                            "SELM delta code padding bits are nonzero",
-                            "slices.data")
-                            .error());
-                }
-            }
-
-            std::size_t delta_cursor = 0;
-            std::uint64_t current_plus_one = 0;
-            for (std::uint64_t encoded_index = 0;
-                 encoded_index < nonzero_count;
-                 ++encoded_index) {
-                const auto packed =
-                    std::to_integer<std::uint8_t>(
-                        codes[static_cast<std::size_t>(
-                            encoded_index / 4)]);
-                const auto code = static_cast<std::uint8_t>(
-                    (packed >>
-                     ((encoded_index % 4) * 2u)) &
-                    0x3u);
-                std::uint64_t delta = 1;
-                if (code == 1) {
-                    if (delta_cursor >= delta_data.size()) {
-                        return lfs::Result<void>::failure(
-                            corrupt<void>(
-                                "SELM u8 delta is truncated",
-                                "slices.data")
-                                .error());
-                    }
-                    delta = std::to_integer<std::uint8_t>(
-                        delta_data[delta_cursor++]);
-                    if (delta <= 1) {
-                        return lfs::Result<void>::failure(
-                            corrupt<void>(
-                                "SELM u8 delta is not canonical",
-                                "slices.data")
-                                .error());
-                    }
-                } else if (code == 2) {
-                    if (delta_data.size() - delta_cursor < 2) {
-                        return lfs::Result<void>::failure(
-                            corrupt<void>(
-                                "SELM u16 delta is truncated",
-                                "slices.data")
-                                .error());
-                    }
-                    delta = read_u16(
-                        delta_data, delta_cursor);
-                    delta_cursor += 2;
-                    if (delta <=
-                        std::numeric_limits<std::uint8_t>::max()) {
-                        return lfs::Result<void>::failure(
-                            corrupt<void>(
-                                "SELM u16 delta is not canonical",
-                                "slices.data")
-                                .error());
-                    }
-                } else if (code == 3) {
-                    if (delta_data.size() - delta_cursor < 8) {
-                        return lfs::Result<void>::failure(
-                            corrupt<void>(
-                                "SELM u64 delta is truncated",
-                                "slices.data")
-                                .error());
-                    }
-                    delta = read_u64(
-                        delta_data, delta_cursor);
-                    delta_cursor += 8;
-                    if (delta <=
-                        std::numeric_limits<std::uint16_t>::max()) {
-                        return lfs::Result<void>::failure(
-                            corrupt<void>(
-                                "SELM u64 delta is not canonical",
-                                "slices.data")
-                                .error());
-                    }
-                }
-                if (!checked_add(
-                        current_plus_one,
-                        delta,
-                        current_plus_one) ||
-                    current_plus_one == 0 ||
-                    current_plus_one > element_count) {
-                    return lfs::Result<void>::failure(
-                        corrupt<void>(
-                            "SELM delta index exceeds element_count",
-                            "slices.data")
-                            .error());
-                }
-                const auto value =
-                    std::to_integer<std::uint8_t>(
-                        values[static_cast<std::size_t>(
-                            encoded_index)]);
-                if (value == 0 || !group_ids[value]) {
-                    return lfs::Result<void>::failure(
-                        corrupt<void>(
-                            std::format(
-                                "SELM delta value {} is zero or does not "
-                                "name a selection group",
-                                value),
-                            "slices.data")
-                            .error());
-                }
-            }
-            if (delta_cursor != delta_data.size()) {
-                return lfs::Result<void>::failure(
-                    corrupt<void>(
-                        "SELM delta body has trailing bytes",
-                        "slices.data")
-                        .error());
-            }
-            return {};
-        }
-
-        std::vector<std::uint8_t> decode_delta_payload(
-            const std::span<const std::byte> bytes,
-            const std::size_t element_count) {
-            const auto nonzero_count = read_u64(bytes, 0);
-            const auto code_bytes = read_u64(bytes, 8);
-            const auto delta_bytes = read_u64(bytes, 16);
-            const auto codes = bytes.subspan(
-                DELTA_HEADER_BYTES,
-                static_cast<std::size_t>(code_bytes));
-            const auto delta_data = bytes.subspan(
-                DELTA_HEADER_BYTES +
-                    static_cast<std::size_t>(code_bytes),
-                static_cast<std::size_t>(delta_bytes));
-            const auto values = bytes.subspan(
-                DELTA_HEADER_BYTES +
-                    static_cast<std::size_t>(code_bytes) +
-                    static_cast<std::size_t>(delta_bytes),
-                static_cast<std::size_t>(nonzero_count));
-
-            std::vector<std::uint8_t> result(
-                element_count, 0);
-            std::size_t delta_cursor = 0;
-            std::uint64_t current_plus_one = 0;
-            for (std::uint64_t encoded_index = 0;
-                 encoded_index < nonzero_count;
-                 ++encoded_index) {
-                const auto packed =
-                    std::to_integer<std::uint8_t>(
-                        codes[static_cast<std::size_t>(
-                            encoded_index / 4)]);
-                const auto code = static_cast<std::uint8_t>(
-                    (packed >>
-                     ((encoded_index % 4) * 2u)) &
-                    0x3u);
-                std::uint64_t delta = 1;
-                if (code == 1) {
-                    delta = std::to_integer<std::uint8_t>(
-                        delta_data[delta_cursor++]);
-                } else if (code == 2) {
-                    delta = read_u16(
-                        delta_data, delta_cursor);
-                    delta_cursor += 2;
-                } else if (code == 3) {
-                    delta = read_u64(
-                        delta_data, delta_cursor);
-                    delta_cursor += 8;
-                }
-                current_plus_one += delta;
-                result[static_cast<std::size_t>(
-                    current_plus_one - 1)] =
-                    std::to_integer<std::uint8_t>(
-                        values[static_cast<std::size_t>(
-                            encoded_index)]);
-            }
+            result.nonzero_count =
+                static_cast<std::uint64_t>(
+                    std::ranges::count_if(
+                        result.slice.mask,
+                        [](const std::uint8_t value) {
+                            return value != 0;
+                        }));
+            const auto bytes =
+                std::as_bytes(std::span(result.slice.mask));
+            result.bytes.assign(bytes.begin(), bytes.end());
             return result;
         }
 
@@ -944,9 +350,7 @@ namespace lfs::io::project {
     }
 
     lfs::Result<std::vector<std::byte>>
-    encode_selection_chapter(
-        const SelectionChapter& chapter,
-        const SelectionEncodeOptions& options) {
+    encode_selection_chapter(const SelectionChapter& chapter) {
         if (auto result = validate_groups(
                 chapter.groups(),
                 chapter.active_group_id(),
@@ -982,13 +386,8 @@ namespace lfs::io::project {
                 !result) {
                 return std::move(result).error();
             }
-            auto encoded = encode_slice(
-                std::move(slice),
-                options.encoding_override);
-            if (!encoded) {
-                return std::move(encoded).error();
-            }
-            encoded_slices.push_back(std::move(*encoded));
+            encoded_slices.push_back(
+                encode_slice(std::move(slice)));
         }
 
         std::unordered_set<lfs::core::Uuid> selected_seen;
@@ -1459,9 +858,8 @@ namespace lfs::io::project {
                     std::to_integer<std::uint8_t>(
                         payload[offset + 16]));
             const auto encoding =
-                static_cast<SelectionMaskEncoding>(
-                    std::to_integer<std::uint8_t>(
-                        payload[offset + 17]));
+                std::to_integer<std::uint8_t>(
+                    payload[offset + 17]);
             const auto element_count =
                 read_u64(payload, offset + 24);
             const auto nonzero_count =
@@ -1470,8 +868,21 @@ namespace lfs::io::project {
                 read_u64(payload, offset + 40);
             const auto slice_data_bytes =
                 read_u64(payload, offset + 48);
+            if (encoding != static_cast<std::uint8_t>(
+                                SelectionMaskEncoding::RawU8)) {
+                return corrupt<SelectionChapter>(
+                    encoding == 2
+                        ? std::format(
+                              "SELM slice row {} uses encoding 2, which "
+                              "was withdrawn before release",
+                              index)
+                        : std::format(
+                              "SELM slice row {} uses unknown encoding {}",
+                              index,
+                              encoding),
+                    "slices.encoding");
+            }
             if (uuid.is_nil() || !valid_domain(domain) ||
-                !valid_encoding(encoding) ||
                 !all_zero(payload.subspan(offset + 18, 6)) ||
                 !all_zero(payload.subspan(offset + 56, 8)) ||
                 element_count >
@@ -1500,7 +911,6 @@ namespace lfs::io::project {
             descriptors.push_back(SliceDescriptor{
                 .node_uuid = uuid,
                 .domain = domain,
-                .encoding = encoding,
                 .element_count = element_count,
                 .nonzero_count = nonzero_count,
                 .data_offset = slice_data_offset,
@@ -1516,19 +926,13 @@ namespace lfs::io::project {
             descriptors,
             [](const SliceDescriptor& lhs,
                const SliceDescriptor& rhs) {
-                const SelectionMaskSlice lhs_key{
-                    .node_uuid = lhs.node_uuid,
-                    .domain = lhs.domain,
-                    .encoding = lhs.encoding,
-                    .mask = {},
-                };
-                const SelectionMaskSlice rhs_key{
-                    .node_uuid = rhs.node_uuid,
-                    .domain = rhs.domain,
-                    .encoding = rhs.encoding,
-                    .mask = {},
-                };
-                return slice_key_less(lhs_key, rhs_key);
+                if (lhs.node_uuid.bytes != rhs.node_uuid.bytes) {
+                    return std::ranges::lexicographical_compare(
+                        lhs.node_uuid.bytes,
+                        rhs.node_uuid.bytes);
+                }
+                return static_cast<std::uint8_t>(lhs.domain) <
+                       static_cast<std::uint8_t>(rhs.domain);
             });
         for (std::size_t index = 1;
              index < descriptors.size();
@@ -1567,47 +971,32 @@ namespace lfs::io::project {
                     descriptor.data_offset),
                 static_cast<std::size_t>(
                     descriptor.data_bytes));
-            if (descriptor.encoding ==
-                SelectionMaskEncoding::RawU8) {
-                if (descriptor.data_bytes !=
-                    descriptor.element_count) {
-                    return corrupt<SelectionChapter>(
-                        "SELM raw slice byte count does not equal "
-                        "element_count",
-                        "slices.data");
-                }
-                std::uint64_t nonzero_count = 0;
-                for (const auto byte : bytes) {
-                    const auto value =
-                        std::to_integer<std::uint8_t>(byte);
-                    if (value != 0) {
-                        ++nonzero_count;
-                        if (!ids[value]) {
-                            return corrupt<SelectionChapter>(
-                                std::format(
-                                    "SELM raw slice uses unknown group "
-                                    "ID {}",
-                                    value),
-                                "slices.data");
-                        }
+            if (descriptor.data_bytes !=
+                descriptor.element_count) {
+                return corrupt<SelectionChapter>(
+                    "SELM raw slice byte count does not equal "
+                    "element_count",
+                    "slices.data");
+            }
+            std::uint64_t nonzero_count = 0;
+            for (const auto byte : bytes) {
+                const auto value =
+                    std::to_integer<std::uint8_t>(byte);
+                if (value != 0) {
+                    ++nonzero_count;
+                    if (!ids[value]) {
+                        return corrupt<SelectionChapter>(
+                            std::format(
+                                "SELM raw slice uses unknown group ID {}",
+                                value),
+                            "slices.data");
                     }
                 }
-                if (nonzero_count !=
-                    descriptor.nonzero_count) {
-                    return corrupt<SelectionChapter>(
-                        "SELM raw slice nonzero count is incorrect",
-                        "slices.nonzero_count");
-                }
-            } else {
-                if (auto validation =
-                        validate_delta_payload(
-                            bytes,
-                            descriptor.element_count,
-                            descriptor.nonzero_count,
-                            ids);
-                    !validation) {
-                    return std::move(validation).error();
-                }
+            }
+            if (nonzero_count != descriptor.nonzero_count) {
+                return corrupt<SelectionChapter>(
+                    "SELM raw slice nonzero count is incorrect",
+                    "slices.nonzero_count");
             }
         }
 
@@ -1641,28 +1030,17 @@ namespace lfs::io::project {
                     descriptor.data_offset),
                 static_cast<std::size_t>(
                     descriptor.data_bytes));
-            std::vector<std::uint8_t> mask;
-            if (descriptor.encoding ==
-                SelectionMaskEncoding::RawU8) {
-                mask.resize(
-                    static_cast<std::size_t>(
-                        descriptor.element_count));
-                if (!mask.empty()) {
-                    std::memcpy(
-                        mask.data(),
-                        bytes.data(),
-                        mask.size());
-                }
-            } else {
-                mask = decode_delta_payload(
-                    bytes,
-                    static_cast<std::size_t>(
-                        descriptor.element_count));
+            std::vector<std::uint8_t> mask(
+                static_cast<std::size_t>(
+                    descriptor.element_count));
+            if (!mask.empty()) {
+                std::memcpy(
+                    mask.data(), bytes.data(), mask.size());
             }
             result.slices_.push_back(SelectionMaskSlice{
                 .node_uuid = descriptor.node_uuid,
                 .domain = descriptor.domain,
-                .encoding = descriptor.encoding,
+                .encoding = SelectionMaskEncoding::RawU8,
                 .mask = std::move(mask),
             });
         }
@@ -1716,8 +1094,7 @@ namespace lfs::io::project {
                     SelectionMaskSlice{
                         .node_uuid = uuid,
                         .domain = domain,
-                        .encoding =
-                            DEFAULT_SELECTION_MASK_ENCODING,
+                        .encoding = SelectionMaskEncoding::RawU8,
                         .mask = std::move(mask),
                     });
             }

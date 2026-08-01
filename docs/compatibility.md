@@ -5,14 +5,15 @@ publication: locked production fixtures are append-only, and bytes already named
 may not be regenerated under that row's writer SHA.
 
 P8 authority/base writer SHA: `8ca8028e6214b1f424c373b24d479cd90ff2e918`.
+Current candidate producer base SHA: `bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb`.
 
 ## Published-grammar register
 
 | Spec | Fixture manifest root SHA-256 | Reader capabilities | Minimum reader | Minimum safe writer | Writer SHA | Status |
 |---|---|---|---|---|---|---|
-| 1.0 | `690a820b806dc8e633e8aaacd7b381a4a9f25963160e5e92e3b490217bc63326` | bits 0–7 (`INDEX_ZSTD_V1`, `CHUNK_ZSTD_V1`, `BLOCK_CRC32C_V1`, `INDEX_TOMBSTONES_V1`, `SIDECAR_OVERLAY_V1`, `OPAQUE_CHUNK_PRESERVATION`, `RETAINED_JSON_FIELDS`, `CLEAN_PROOF_REUSE`) | 1.0 | 1.0 | `8ca8028e6214b1f424c373b24d479cd90ff2e918` | Published grammar candidate; content-locked by P8 |
+| 1.0 | `43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb` | bits 0–7 (`INDEX_ZSTD_V1`, `CHUNK_ZSTD_V1`, `BLOCK_CRC32C_V1`, `INDEX_TOMBSTONES_V1`, `SIDECAR_OVERLAY_V1`, `OPAQUE_CHUNK_PRESERVATION`, `RETAINED_JSON_FIELDS`, `CLEAN_PROOF_REUSE`) | 1.0 | 1.0 | `bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb` | Published grammar candidate; content-locked by P8 and the pre-release SELM withdrawal |
 
-Published-grammar register line: `licht/1.0 manifest=690a820b806dc8e633e8aaacd7b381a4a9f25963160e5e92e3b490217bc63326 reader=1.0 writer=1.0 caps=0-7 writer_sha=8ca8028e6214b1f424c373b24d479cd90ff2e918`.
+Published-grammar register line: `licht/1.0 manifest=43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb reader=1.0 writer=1.0 caps=0-7 writer_sha=bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb`.
 
 The candidate becomes **Published** only after all three events occur: the implementation,
 C++ compatibility tests, and locked fixtures merge to the main branch; a release tag names
@@ -37,6 +38,12 @@ them.
 Fixture update note: P8 Round 2 relocks `recovered-commit.licht` through the real bound-
 sidecar recovery materialization path. The other reproducible production rows remain
 byte-identical, and the explicitly non-reproducible headless-training row remains unchanged.
+
+Fixture update note: before 1.0 publication, selection encoding value 2
+(`DeltaBitpack`) was withdrawn and permanently reserved. The seven existing production
+fixtures remain byte-identical because their `SELM` chapters contain no mask slices. The
+append-only `selection-raw-u8.licht` row records a populated production `SELM` chapter using
+encoding 1 (`RawU8`) and updates the candidate manifest root.
 
 ## Minimum-safe-writer and capability bump checklist
 

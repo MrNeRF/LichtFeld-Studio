@@ -11,7 +11,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <span>
 #include <vector>
 
@@ -21,19 +20,16 @@ namespace lfs::io::project {
 
     enum class SelectionMaskEncoding : std::uint8_t {
         RawU8 = 1,
-        DeltaBitpack = 2,
+        // Value 2 was assigned to DeltaBitpack, then withdrawn before
+        // release. It is reserved and must never be reused.
     };
-
-    inline constexpr SelectionMaskEncoding
-        DEFAULT_SELECTION_MASK_ENCODING =
-            SelectionMaskEncoding::DeltaBitpack;
 
     struct SelectionMaskSlice {
         lfs::core::Uuid node_uuid;
         lfs::core::SelectionDomain domain =
             lfs::core::SelectionDomain::Splat;
         SelectionMaskEncoding encoding =
-            DEFAULT_SELECTION_MASK_ENCODING;
+            SelectionMaskEncoding::RawU8;
         std::vector<std::uint8_t> mask;
     };
 
@@ -83,10 +79,6 @@ namespace lfs::io::project {
         std::vector<lfs::core::Uuid> selected_node_uuids_;
     };
 
-    struct SelectionEncodeOptions {
-        std::optional<SelectionMaskEncoding> encoding_override;
-    };
-
     struct SelectionHydrationReport {
         bool repaired_group_metadata = false;
         std::vector<lfs::core::Uuid> selected_node_uuids;
@@ -117,9 +109,7 @@ namespace lfs::io::project {
     materialize_selection_chapter(CapturedSelectionState state);
 
     [[nodiscard]] LFS_IO_API lfs::Result<std::vector<std::byte>>
-    encode_selection_chapter(
-        const SelectionChapter& chapter,
-        const SelectionEncodeOptions& options = {});
+    encode_selection_chapter(const SelectionChapter& chapter);
 
     [[nodiscard]] LFS_IO_API lfs::Result<SelectionChapter>
     decode_selection_chapter(std::span<const std::byte> payload);

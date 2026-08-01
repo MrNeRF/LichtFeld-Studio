@@ -4,9 +4,10 @@
 
 #include "io/geometry_payload.hpp"
 
+#include "chapter_binary_utils.hpp"
+
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cassert>
 #include <cstring>
 #include <format>
@@ -22,12 +23,26 @@ namespace lfs::io::project {
 
     namespace {
 
-        using namespace std::string_view_literals;
-
         constexpr std::size_t PROPERTY_DESCRIPTOR_BYTES = 48;
         constexpr std::size_t PROPERTY_ALIGNMENT = 64;
         constexpr std::size_t PCLD_HEADER_BYTES = 24;
         constexpr std::size_t MESH_HEADER_BYTES = 32;
+
+        using chapter_binary::align_up;
+        using chapter_binary::all_zero;
+        using chapter_binary::checked_add;
+        using chapter_binary::checked_mul;
+        using chapter_binary::read_f32;
+        using chapter_binary::read_i32;
+        using chapter_binary::read_u16;
+        using chapter_binary::read_u32;
+        using chapter_binary::read_u64;
+        using chapter_binary::valid_utf8;
+        using chapter_binary::write_f32;
+        using chapter_binary::write_i32;
+        using chapter_binary::write_u16;
+        using chapter_binary::write_u32;
+        using chapter_binary::write_u64;
 
         struct PropertyDescriptor {
             std::string name;
@@ -36,6 +51,42 @@ namespace lfs::io::project {
             std::uint32_t encoding = 0;
             std::uint64_t byte_offset = 0;
             std::uint64_t byte_length = 0;
+        };
+
+        struct PointProperty {
+            std::string_view name;
+            lfs::core::Tensor lfs::core::PointCloud::*tensor;
+            std::uint16_t components;
+        };
+
+        constexpr std::array POINT_PROPERTIES{
+            PointProperty{"means", &lfs::core::PointCloud::means, 3},
+            PointProperty{"colors", &lfs::core::PointCloud::colors, 3},
+            PointProperty{"normals", &lfs::core::PointCloud::normals, 3},
+            PointProperty{"sh0", &lfs::core::PointCloud::sh0, 0},
+            PointProperty{"shN", &lfs::core::PointCloud::shN, 0},
+            PointProperty{"opacity", &lfs::core::PointCloud::opacity, 1},
+            PointProperty{"scaling", &lfs::core::PointCloud::scaling, 3},
+            PointProperty{"rotation", &lfs::core::PointCloud::rotation, 4},
+            PointProperty{"attribute_names", nullptr, 0},
+        };
+
+        struct MeshProperty {
+            std::string_view name;
+            lfs::core::Tensor lfs::core::MeshData::*tensor;
+            std::uint16_t components;
+        };
+
+        constexpr std::array MESH_PROPERTIES{
+            MeshProperty{"vertices", &lfs::core::MeshData::vertices, 3},
+            MeshProperty{"normals", &lfs::core::MeshData::normals, 3},
+            MeshProperty{"tangents", &lfs::core::MeshData::tangents, 4},
+            MeshProperty{"texcoords", &lfs::core::MeshData::texcoords, 2},
+            MeshProperty{"colors", &lfs::core::MeshData::colors, 4},
+            MeshProperty{"indices", nullptr, 0},
+            MeshProperty{"submeshes", nullptr, 0},
+            MeshProperty{"materials", nullptr, 0},
+            MeshProperty{"textures", nullptr, 0},
         };
 
         lfs::Error geometry_error(const lfs::ErrorCode code,
@@ -62,11 +113,16 @@ namespace lfs::io::project {
 
         template <typename T>
         lfs::Result<T> data_loss(std::string detail, const std::string_view field = {}) {
-            return geometry_error(
+            auto error = geometry_error(
                 lfs::ErrorCode::DataLoss,
                 "The project contains invalid geometry data.",
                 std::move(detail),
                 field);
+            if constexpr (std::is_void_v<T>) {
+                return lfs::Result<void>::failure(std::move(error));
+            } else {
+                return error;
+            }
         }
 
         lfs::Result<void> invalid_geometry(std::string detail,
@@ -76,172 +132,6 @@ namespace lfs::io::project {
                 "The geometry cannot be saved.",
                 std::move(detail),
                 field));
-        }
-
-        template <typename T>
-        bool checked_add(const T lhs, const T rhs, T& output) {
-            static_assert(std::is_unsigned_v<T>);
-            if (rhs > std::numeric_limits<T>::max() - lhs) {
-                return false;
-            }
-            output = lhs + rhs;
-            return true;
-        }
-
-        template <typename T>
-        bool checked_mul(const T lhs, const T rhs, T& output) {
-            static_assert(std::is_unsigned_v<T>);
-            if (lhs != 0 && rhs > std::numeric_limits<T>::max() / lhs) {
-                return false;
-            }
-            output = lhs * rhs;
-            return true;
-        }
-
-        bool align_up(const std::uint64_t value,
-                      const std::uint64_t alignment,
-                      std::uint64_t& output) {
-            assert(alignment != 0 && std::has_single_bit(alignment));
-            std::uint64_t adjusted = 0;
-            if (!checked_add(value, alignment - 1, adjusted)) {
-                return false;
-            }
-            output = adjusted & ~(alignment - 1);
-            return true;
-        }
-
-        std::uint16_t read_u16(const std::span<const std::byte> bytes,
-                               const std::size_t offset) {
-            return static_cast<std::uint16_t>(
-                       std::to_integer<std::uint8_t>(bytes[offset])) |
-                   static_cast<std::uint16_t>(
-                       std::to_integer<std::uint8_t>(bytes[offset + 1]))
-                       << 8u;
-        }
-
-        std::uint32_t read_u32(const std::span<const std::byte> bytes,
-                               const std::size_t offset) {
-            std::uint32_t value = 0;
-            for (std::size_t index = 0; index < sizeof(value); ++index) {
-                value |= static_cast<std::uint32_t>(
-                             std::to_integer<std::uint8_t>(bytes[offset + index]))
-                         << (index * 8u);
-            }
-            return value;
-        }
-
-        std::int32_t read_i32(const std::span<const std::byte> bytes,
-                              const std::size_t offset) {
-            return std::bit_cast<std::int32_t>(read_u32(bytes, offset));
-        }
-
-        std::uint64_t read_u64(const std::span<const std::byte> bytes,
-                               const std::size_t offset) {
-            std::uint64_t value = 0;
-            for (std::size_t index = 0; index < sizeof(value); ++index) {
-                value |= static_cast<std::uint64_t>(
-                             std::to_integer<std::uint8_t>(bytes[offset + index]))
-                         << (index * 8u);
-            }
-            return value;
-        }
-
-        float read_f32(const std::span<const std::byte> bytes,
-                       const std::size_t offset) {
-            return std::bit_cast<float>(read_u32(bytes, offset));
-        }
-
-        void write_u16(const std::span<std::byte> bytes,
-                       const std::size_t offset,
-                       const std::uint16_t value) {
-            for (std::size_t index = 0; index < sizeof(value); ++index) {
-                bytes[offset + index] =
-                    static_cast<std::byte>(value >> (index * 8u));
-            }
-        }
-
-        void write_u32(const std::span<std::byte> bytes,
-                       const std::size_t offset,
-                       const std::uint32_t value) {
-            for (std::size_t index = 0; index < sizeof(value); ++index) {
-                bytes[offset + index] =
-                    static_cast<std::byte>(value >> (index * 8u));
-            }
-        }
-
-        void write_i32(const std::span<std::byte> bytes,
-                       const std::size_t offset,
-                       const std::int32_t value) {
-            write_u32(bytes, offset, std::bit_cast<std::uint32_t>(value));
-        }
-
-        void write_u64(const std::span<std::byte> bytes,
-                       const std::size_t offset,
-                       const std::uint64_t value) {
-            for (std::size_t index = 0; index < sizeof(value); ++index) {
-                bytes[offset + index] =
-                    static_cast<std::byte>(value >> (index * 8u));
-            }
-        }
-
-        void write_f32(const std::span<std::byte> bytes,
-                       const std::size_t offset,
-                       const float value) {
-            write_u32(bytes, offset, std::bit_cast<std::uint32_t>(value));
-        }
-
-        bool all_zero(const std::span<const std::byte> bytes) {
-            return std::ranges::all_of(bytes, [](const std::byte value) {
-                return value == std::byte{0};
-            });
-        }
-
-        bool valid_utf8(const std::string_view text) {
-            std::size_t index = 0;
-            while (index < text.size()) {
-                const auto lead =
-                    static_cast<std::uint8_t>(static_cast<unsigned char>(text[index]));
-                if (lead <= 0x7fu) {
-                    ++index;
-                    continue;
-                }
-
-                std::size_t count = 0;
-                std::uint32_t codepoint = 0;
-                if ((lead & 0xe0u) == 0xc0u) {
-                    count = 2;
-                    codepoint = lead & 0x1fu;
-                } else if ((lead & 0xf0u) == 0xe0u) {
-                    count = 3;
-                    codepoint = lead & 0x0fu;
-                } else if ((lead & 0xf8u) == 0xf0u) {
-                    count = 4;
-                    codepoint = lead & 0x07u;
-                } else {
-                    return false;
-                }
-                if (index + count > text.size()) {
-                    return false;
-                }
-                for (std::size_t continuation = 1; continuation < count;
-                     ++continuation) {
-                    const auto byte = static_cast<std::uint8_t>(
-                        static_cast<unsigned char>(text[index + continuation]));
-                    if ((byte & 0xc0u) != 0x80u) {
-                        return false;
-                    }
-                    codepoint = (codepoint << 6u) | (byte & 0x3fu);
-                }
-                const std::uint32_t minimum =
-                    count == 2 ? 0x80u : count == 3 ? 0x800u
-                                                    : 0x10000u;
-                if (codepoint < minimum || codepoint > 0x10ffffu ||
-                    (codepoint >= 0xd800u && codepoint <= 0xdfffu)) {
-                    return false;
-                }
-                index += count;
-            }
-            return true;
         }
 
         std::optional<std::size_t> geometry_dtype_size(
@@ -262,66 +152,61 @@ namespace lfs::io::project {
             return std::nullopt;
         }
 
-        std::optional<GeometryDtype> geometry_dtype(
-            const lfs::core::DataType dtype) {
-            switch (dtype) {
-            case lfs::core::DataType::Float32:
-                return GeometryDtype::Float32;
-            case lfs::core::DataType::Float16:
-                return GeometryDtype::Float16;
-            case lfs::core::DataType::UInt8:
-                return GeometryDtype::UInt8;
-            case lfs::core::DataType::Int32:
-                return GeometryDtype::Int32;
-            default:
-                return std::nullopt;
-            }
-        }
-
         std::optional<lfs::core::DataType> tensor_dtype(
             const GeometryDtype dtype) {
             switch (dtype) {
             case GeometryDtype::Float32:
                 return lfs::core::DataType::Float32;
-            case GeometryDtype::Float16:
-                return lfs::core::DataType::Float16;
             case GeometryDtype::UInt8:
                 return lfs::core::DataType::UInt8;
-            case GeometryDtype::Int32:
-                return lfs::core::DataType::Int32;
             default:
                 return std::nullopt;
             }
         }
 
         bool is_pcld_known_property(const std::string_view name) {
-            constexpr std::array names = {
-                "means"sv,
-                "colors"sv,
-                "normals"sv,
-                "sh0"sv,
-                "shN"sv,
-                "opacity"sv,
-                "scaling"sv,
-                "rotation"sv,
-                "attribute_names"sv,
-            };
-            return std::ranges::find(names, name) != names.end();
+            return std::ranges::find(
+                       POINT_PROPERTIES,
+                       name,
+                       &PointProperty::name) != POINT_PROPERTIES.end();
         }
 
         bool is_mesh_known_property(const std::string_view name) {
-            constexpr std::array names = {
-                "vertices"sv,
-                "normals"sv,
-                "tangents"sv,
-                "texcoords"sv,
-                "colors"sv,
-                "indices"sv,
-                "submeshes"sv,
-                "materials"sv,
-                "textures"sv,
-            };
-            return std::ranges::find(names, name) != names.end();
+            return std::ranges::find(
+                       MESH_PROPERTIES,
+                       name,
+                       &MeshProperty::name) != MESH_PROPERTIES.end();
+        }
+
+        template <typename IsKnown>
+        lfs::Result<void> append_opaque_property(
+            std::vector<GeometryPropertyPlane>& retained,
+            GeometryPropertyPlane property,
+            const std::string_view fourcc,
+            IsKnown is_known) {
+            if (is_known(property.name)) {
+                return invalid_geometry(
+                    std::format(
+                        "'{}' is a {} v1 well-known property and cannot be "
+                        "registered as opaque",
+                        property.name,
+                        fourcc),
+                    property.name);
+            }
+            if (std::ranges::any_of(
+                    retained,
+                    [&](const GeometryPropertyPlane& existing) {
+                        return existing.name == property.name;
+                    })) {
+                return invalid_geometry(
+                    std::format(
+                        "{} opaque property '{}' already exists",
+                        fourcc,
+                        property.name),
+                    property.name);
+            }
+            retained.push_back(std::move(property));
+            return {};
         }
 
         lfs::Result<std::vector<PropertyDescriptor>> parse_descriptors(
@@ -520,19 +405,15 @@ namespace lfs::io::project {
                     element_count, descriptor.components, expected) ||
                 !checked_mul<std::uint64_t>(
                     expected, *dtype_bytes, expected)) {
-                return lfs::Result<void>::failure(geometry_error(
-                    lfs::ErrorCode::DataLoss,
-                    "The project contains invalid geometry data.",
+                return data_loss<void>(
                     std::format(
                         "Geometry property '{}' declared size arithmetic "
                         "overflows u64",
                         descriptor.name),
-                    "properties.byte_length"));
+                    "properties.byte_length");
             }
             if (descriptor.byte_length != expected) {
-                return lfs::Result<void>::failure(geometry_error(
-                    lfs::ErrorCode::DataLoss,
-                    "The project contains invalid geometry data.",
+                return data_loss<void>(
                     std::format(
                         "Geometry property '{}' has {} bytes; expected {} = {} "
                         "elements x {} components x {} bytes",
@@ -542,7 +423,7 @@ namespace lfs::io::project {
                         element_count,
                         descriptor.components,
                         *dtype_bytes),
-                    "properties.byte_length"));
+                    "properties.byte_length");
             }
             return {};
         }
@@ -563,9 +444,7 @@ namespace lfs::io::project {
             if (descriptor.dtype != dtype ||
                 descriptor.components != components ||
                 descriptor.encoding != encoding) {
-                return lfs::Result<void>::failure(geometry_error(
-                    lfs::ErrorCode::DataLoss,
-                    "The project contains invalid geometry data.",
+                return data_loss<void>(
                     std::format(
                         "Geometry property '{}' descriptor is "
                         "components={}, dtype={}, encoding={}; expected "
@@ -577,7 +456,7 @@ namespace lfs::io::project {
                         components,
                         std::to_underlying(dtype),
                         encoding),
-                    "properties"));
+                    "properties");
             }
             return {};
         }
@@ -586,55 +465,31 @@ namespace lfs::io::project {
             const PropertyDescriptor& descriptor,
             const std::uint64_t point_count,
             const std::span<const std::byte> plane) {
-            if (descriptor.name == "means") {
-                if (auto result = require_descriptor_shape(
-                        descriptor, GeometryDtype::Float32, 3);
-                    !result) {
-                    return result;
-                }
-            } else if (descriptor.name == "colors") {
+            const auto spec = std::ranges::find(
+                POINT_PROPERTIES,
+                descriptor.name,
+                &PointProperty::name);
+            assert(spec != POINT_PROPERTIES.end());
+            if (descriptor.name == "colors") {
                 if (descriptor.components != 3 ||
                     (descriptor.dtype != GeometryDtype::UInt8 &&
                      descriptor.dtype != GeometryDtype::Float32) ||
                     descriptor.encoding != GEOMETRY_ENCODING_RAW) {
-                    return lfs::Result<void>::failure(geometry_error(
-                        lfs::ErrorCode::DataLoss,
-                        "The project contains invalid geometry data.",
+                    return data_loss<void>(
                         "PCLD colors must be raw u8x3 or f32x3",
-                        "properties.colors"));
-                }
-            } else if (descriptor.name == "normals" ||
-                       descriptor.name == "scaling") {
-                if (auto result = require_descriptor_shape(
-                        descriptor, GeometryDtype::Float32, 3);
-                    !result) {
-                    return result;
-                }
-            } else if (descriptor.name == "opacity") {
-                if (auto result = require_descriptor_shape(
-                        descriptor, GeometryDtype::Float32, 1);
-                    !result) {
-                    return result;
-                }
-            } else if (descriptor.name == "rotation") {
-                if (auto result = require_descriptor_shape(
-                        descriptor, GeometryDtype::Float32, 4);
-                    !result) {
-                    return result;
+                        "properties.colors");
                 }
             } else if (descriptor.name == "sh0" ||
                        descriptor.name == "shN") {
                 if (descriptor.dtype != GeometryDtype::Float32 ||
                     descriptor.encoding != GEOMETRY_ENCODING_RAW ||
                     descriptor.components % 3 != 0) {
-                    return lfs::Result<void>::failure(geometry_error(
-                        lfs::ErrorCode::DataLoss,
-                        "The project contains invalid geometry data.",
+                    return data_loss<void>(
                         std::format(
                             "PCLD {} must use raw f32 components in RGB "
                             "triples",
                             descriptor.name),
-                        "properties"));
+                        "properties");
                 }
             } else if (descriptor.name == "attribute_names") {
                 if (auto result = require_descriptor_shape(
@@ -646,61 +501,60 @@ namespace lfs::io::project {
                     return result;
                 }
                 if (plane.size() < 4) {
-                    return lfs::Result<void>::failure(geometry_error(
-                        lfs::ErrorCode::DataLoss,
-                        "The project contains invalid geometry data.",
+                    return data_loss<void>(
                         "PCLD attribute_names string table is truncated",
-                        "properties.attribute_names"));
+                        "properties.attribute_names");
                 }
                 const std::uint32_t count = read_u32(plane, 0);
                 std::size_t cursor = 4;
                 for (std::uint32_t index = 0; index < count; ++index) {
                     if (cursor > plane.size() ||
                         plane.size() - cursor < sizeof(std::uint16_t)) {
-                        return lfs::Result<void>::failure(geometry_error(
-                            lfs::ErrorCode::DataLoss,
-                            "The project contains invalid geometry data.",
+                        return data_loss<void>(
                             std::format(
                                 "PCLD attribute_names entry {} length is "
                                 "truncated",
                                 index),
-                            "properties.attribute_names"));
+                            "properties.attribute_names");
                     }
                     const auto length = read_u16(plane, cursor);
                     cursor += sizeof(std::uint16_t);
                     if (length > plane.size() - cursor) {
-                        return lfs::Result<void>::failure(geometry_error(
-                            lfs::ErrorCode::DataLoss,
-                            "The project contains invalid geometry data.",
+                        return data_loss<void>(
                             std::format(
                                 "PCLD attribute_names entry {} exceeds the "
                                 "string table",
                                 index),
-                            "properties.attribute_names"));
+                            "properties.attribute_names");
                     }
                     const std::string_view name(
                         reinterpret_cast<const char*>(plane.data() + cursor),
                         length);
                     if (!valid_utf8(name)) {
-                        return lfs::Result<void>::failure(geometry_error(
-                            lfs::ErrorCode::DataLoss,
-                            "The project contains invalid geometry data.",
+                        return data_loss<void>(
                             std::format(
                                 "PCLD attribute_names entry {} is not valid "
                                 "UTF-8",
                                 index),
-                            "properties.attribute_names"));
+                            "properties.attribute_names");
                     }
                     cursor += length;
                 }
                 if (cursor != plane.size()) {
-                    return lfs::Result<void>::failure(geometry_error(
-                        lfs::ErrorCode::DataLoss,
-                        "The project contains invalid geometry data.",
+                    return data_loss<void>(
                         "PCLD attribute_names string table has trailing bytes",
-                        "properties.attribute_names"));
+                        "properties.attribute_names");
                 }
                 return {};
+            } else {
+                assert(spec->components != 0);
+                if (auto result = require_descriptor_shape(
+                        descriptor,
+                        GeometryDtype::Float32,
+                        spec->components);
+                    !result) {
+                    return result;
+                }
             }
 
             if (descriptor.encoding == GEOMETRY_ENCODING_RAW) {
@@ -770,8 +624,8 @@ namespace lfs::io::project {
             const std::string_view name,
             const lfs::core::Tensor& source,
             const std::uint64_t element_count,
-            const std::optional<std::uint16_t> required_components = std::nullopt,
-            const std::optional<GeometryDtype> required_dtype = std::nullopt) {
+            const std::uint16_t required_components,
+            const GeometryDtype dtype) {
             if (!source.is_valid()) {
                 return geometry_error(
                     lfs::ErrorCode::InvalidArgument,
@@ -821,8 +675,8 @@ namespace lfs::io::project {
                         components),
                     name);
             }
-            if (required_components &&
-                components != *required_components) {
+            if (required_components != 0 &&
+                components != required_components) {
                 return geometry_error(
                     lfs::ErrorCode::InvalidArgument,
                     "The geometry cannot be saved.",
@@ -830,30 +684,20 @@ namespace lfs::io::project {
                         "Geometry property '{}' has {} components; expected {}",
                         name,
                         components,
-                        *required_components),
+                        required_components),
                     name);
             }
-            const auto dtype = geometry_dtype(source.dtype());
-            if (!dtype) {
-                return geometry_error(
-                    lfs::ErrorCode::InvalidArgument,
-                    "The geometry cannot be saved.",
-                    std::format(
-                        "Geometry property '{}' tensor dtype {} has no PCLD/"
-                        "MESH v1 encoding",
-                        name,
-                        lfs::core::dtype_name(source.dtype())),
-                    name);
-            }
-            if (required_dtype && *dtype != *required_dtype) {
+            const auto expected_dtype = tensor_dtype(dtype);
+            assert(expected_dtype.has_value());
+            if (source.dtype() != *expected_dtype) {
                 return geometry_error(
                     lfs::ErrorCode::InvalidArgument,
                     "The geometry cannot be saved.",
                     std::format(
                         "Geometry property '{}' uses dtype {}; expected {}",
                         name,
-                        std::to_underlying(*dtype),
-                        std::to_underlying(*required_dtype)),
+                        lfs::core::dtype_name(source.dtype()),
+                        lfs::core::dtype_name(*expected_dtype)),
                     name);
             }
 
@@ -861,7 +705,7 @@ namespace lfs::io::project {
             GeometryPropertyPlane plane{
                 .name = std::string(name),
                 .components = static_cast<std::uint16_t>(components),
-                .dtype = *dtype,
+                .dtype = dtype,
                 .encoding = GEOMETRY_ENCODING_RAW,
                 .bytes = std::vector<std::byte>(cpu.bytes()),
             };
@@ -1105,42 +949,10 @@ namespace lfs::io::project {
             const auto point_count =
                 static_cast<std::uint64_t>(point_cloud->means.shape()[0]);
 
-            auto make_known =
+            const auto make_known =
                 [&](const std::string_view name)
                 -> lfs::Result<std::optional<GeometryPropertyPlane>> {
-                const lfs::core::Tensor* tensor = nullptr;
-                std::optional<std::uint16_t> components;
-                std::optional<GeometryDtype> dtype;
-                if (name == "means") {
-                    tensor = &point_cloud->means;
-                    components = 3;
-                    dtype = GeometryDtype::Float32;
-                } else if (name == "colors") {
-                    tensor = &point_cloud->colors;
-                    components = 3;
-                } else if (name == "normals") {
-                    tensor = &point_cloud->normals;
-                    components = 3;
-                    dtype = GeometryDtype::Float32;
-                } else if (name == "sh0") {
-                    tensor = &point_cloud->sh0;
-                    dtype = GeometryDtype::Float32;
-                } else if (name == "shN") {
-                    tensor = &point_cloud->shN;
-                    dtype = GeometryDtype::Float32;
-                } else if (name == "opacity") {
-                    tensor = &point_cloud->opacity;
-                    components = 1;
-                    dtype = GeometryDtype::Float32;
-                } else if (name == "scaling") {
-                    tensor = &point_cloud->scaling;
-                    components = 3;
-                    dtype = GeometryDtype::Float32;
-                } else if (name == "rotation") {
-                    tensor = &point_cloud->rotation;
-                    components = 4;
-                    dtype = GeometryDtype::Float32;
-                } else if (name == "attribute_names") {
+                if (name == "attribute_names") {
                     if (point_cloud->attribute_names.empty()) {
                         return std::optional<GeometryPropertyPlane>{};
                     }
@@ -1149,58 +961,53 @@ namespace lfs::io::project {
                     if (!bytes) {
                         return std::move(bytes).error();
                     }
-                    return std::optional<GeometryPropertyPlane>(
-                        GeometryPropertyPlane{
-                            .name = "attribute_names",
-                            .components = 1,
-                            .dtype = GeometryDtype::UInt8,
-                            .encoding =
-                                PCLD_ENCODING_ATTRIBUTE_NAMES,
-                            .bytes = std::move(*bytes),
-                        });
+                    return GeometryPropertyPlane{
+                        .name = "attribute_names",
+                        .components = 1,
+                        .dtype = GeometryDtype::UInt8,
+                        .encoding = PCLD_ENCODING_ATTRIBUTE_NAMES,
+                        .bytes = std::move(*bytes),
+                    };
                 }
-                assert(tensor != nullptr);
-                if (!tensor->is_valid() ||
-                    (tensor->numel() == 0 && name != "means")) {
+
+                const auto spec = std::ranges::find(
+                    POINT_PROPERTIES, name, &PointProperty::name);
+                assert(spec != POINT_PROPERTIES.end() && spec->tensor);
+                const auto& tensor = point_cloud.get()->*(spec->tensor);
+                if (!tensor.is_valid() ||
+                    (tensor.numel() == 0 && name != "means")) {
                     return std::optional<GeometryPropertyPlane>{};
+                }
+                auto dtype = GeometryDtype::Float32;
+                if (name == "colors") {
+                    if (tensor.dtype() == lfs::core::DataType::UInt8) {
+                        dtype = GeometryDtype::UInt8;
+                    } else if (
+                        tensor.dtype() != lfs::core::DataType::Float32) {
+                        return geometry_error(
+                            lfs::ErrorCode::InvalidArgument,
+                            "The point cloud cannot be saved.",
+                            "PCLD colors must be u8x3 or f32x3",
+                            "colors");
+                    }
                 }
                 auto plane = tensor_plane(
                     name,
-                    *tensor,
+                    tensor,
                     point_count,
-                    components,
+                    spec->components,
                     dtype);
                 if (!plane) {
                     return std::move(plane).error();
-                }
-                if (name == "colors" &&
-                    plane->dtype != GeometryDtype::UInt8 &&
-                    plane->dtype != GeometryDtype::Float32) {
-                    return geometry_error(
-                        lfs::ErrorCode::InvalidArgument,
-                        "The point cloud cannot be saved.",
-                        "PCLD colors must be u8x3 or f32x3",
-                        "colors");
                 }
                 return std::optional<GeometryPropertyPlane>(
                     std::move(*plane));
             };
 
-            constexpr std::array canonical_names = {
-                "means"sv,
-                "colors"sv,
-                "normals"sv,
-                "sh0"sv,
-                "shN"sv,
-                "opacity"sv,
-                "scaling"sv,
-                "rotation"sv,
-                "attribute_names"sv,
-            };
             std::set<std::string_view> emitted;
             std::vector<GeometryPropertyPlane> properties;
             properties.reserve(
-                canonical_names.size() +
+                POINT_PROPERTIES.size() +
                 payload.retained_properties().size());
             for (const auto& retained : payload.retained_properties()) {
                 if (!is_pcld_known_property(retained.name)) {
@@ -1218,11 +1025,11 @@ namespace lfs::io::project {
                     properties.push_back(std::move(**current));
                 }
             }
-            for (const auto name : canonical_names) {
-                if (!emitted.emplace(name).second) {
+            for (const auto& spec : POINT_PROPERTIES) {
+                if (!emitted.emplace(spec.name).second) {
                     continue;
                 }
-                auto current = make_known(name);
+                auto current = make_known(spec.name);
                 if (!current) {
                     return std::move(current).error();
                 }
@@ -1656,104 +1463,81 @@ namespace lfs::io::project {
                 mesh->vertices.shape()[0];
             const std::uint64_t index_count = mesh->indices.numel();
 
-            auto make_known =
+            const auto make_known =
                 [&](const std::string_view name)
                 -> lfs::Result<std::optional<GeometryPropertyPlane>> {
                 if (name == "indices") {
-                    auto plane =
-                        encode_mesh_indices(
-                            mesh->indices, index_count, vertex_count);
+                    auto plane = encode_mesh_indices(
+                        mesh->indices, index_count, vertex_count);
                     if (!plane) {
                         return std::move(plane).error();
                     }
                     return std::optional<GeometryPropertyPlane>(
                         std::move(*plane));
                 }
-                if (name == "submeshes") {
-                    if (mesh->submeshes.empty()) {
-                        return std::optional<GeometryPropertyPlane>{};
-                    }
-                    auto bytes = encode_submeshes(
-                        mesh->submeshes,
-                        index_count,
-                        mesh->materials.size());
+
+                const auto special_plane =
+                    [&](const std::string_view property,
+                        const std::uint16_t components,
+                        const GeometryDtype dtype,
+                        const std::uint32_t encoding,
+                        auto encode)
+                    -> lfs::Result<std::optional<GeometryPropertyPlane>> {
+                    auto bytes = encode();
                     if (!bytes) {
                         return std::move(bytes).error();
                     }
-                    return std::optional<GeometryPropertyPlane>(
-                        GeometryPropertyPlane{
-                            .name = "submeshes",
-                            .components = 3,
-                            .dtype = GeometryDtype::UInt32,
-                            .encoding = MESH_ENCODING_SUBMESHES,
-                            .bytes = std::move(*bytes),
+                    if (bytes->empty()) {
+                        return std::optional<GeometryPropertyPlane>{};
+                    }
+                    return GeometryPropertyPlane{
+                        .name = std::string(property),
+                        .components = components,
+                        .dtype = dtype,
+                        .encoding = encoding,
+                        .bytes = std::move(*bytes),
+                    };
+                };
+                if (name == "submeshes") {
+                    return special_plane(
+                        name, 3, GeometryDtype::UInt32,
+                        MESH_ENCODING_SUBMESHES, [&] {
+                            return encode_submeshes(
+                                mesh->submeshes,
+                                index_count,
+                                mesh->materials.size());
                         });
                 }
                 if (name == "materials") {
-                    if (mesh->materials.empty()) {
-                        return std::optional<GeometryPropertyPlane>{};
-                    }
-                    auto bytes = encode_materials(
-                        mesh->materials, mesh->texture_images.size());
-                    if (!bytes) {
-                        return std::move(bytes).error();
-                    }
-                    return std::optional<GeometryPropertyPlane>(
-                        GeometryPropertyPlane{
-                            .name = "materials",
-                            .components = 1,
-                            .dtype = GeometryDtype::UInt8,
-                            .encoding = MESH_ENCODING_MATERIALS,
-                            .bytes = std::move(*bytes),
+                    return special_plane(
+                        name, 1, GeometryDtype::UInt8,
+                        MESH_ENCODING_MATERIALS, [&] {
+                            return encode_materials(
+                                mesh->materials,
+                                mesh->texture_images.size());
                         });
                 }
                 if (name == "textures") {
-                    if (mesh->texture_images.empty()) {
-                        return std::optional<GeometryPropertyPlane>{};
-                    }
-                    auto bytes =
-                        encode_textures(mesh->texture_images);
-                    if (!bytes) {
-                        return std::move(bytes).error();
-                    }
-                    return std::optional<GeometryPropertyPlane>(
-                        GeometryPropertyPlane{
-                            .name = "textures",
-                            .components = 1,
-                            .dtype = GeometryDtype::UInt8,
-                            .encoding = MESH_ENCODING_TEXTURES,
-                            .bytes = std::move(*bytes),
+                    return special_plane(
+                        name, 1, GeometryDtype::UInt8,
+                        MESH_ENCODING_TEXTURES, [&] {
+                            return encode_textures(mesh->texture_images);
                         });
                 }
 
-                const lfs::core::Tensor* tensor = nullptr;
-                std::uint16_t components = 0;
-                if (name == "vertices") {
-                    tensor = &mesh->vertices;
-                    components = 3;
-                } else if (name == "normals") {
-                    tensor = &mesh->normals;
-                    components = 3;
-                } else if (name == "tangents") {
-                    tensor = &mesh->tangents;
-                    components = 4;
-                } else if (name == "texcoords") {
-                    tensor = &mesh->texcoords;
-                    components = 2;
-                } else if (name == "colors") {
-                    tensor = &mesh->colors;
-                    components = 4;
-                }
-                assert(tensor != nullptr);
-                if (!tensor->is_valid() ||
-                    (tensor->numel() == 0 && name != "vertices")) {
+                const auto spec = std::ranges::find(
+                    MESH_PROPERTIES, name, &MeshProperty::name);
+                assert(spec != MESH_PROPERTIES.end() && spec->tensor);
+                const auto& tensor = mesh.get()->*(spec->tensor);
+                if (!tensor.is_valid() ||
+                    (tensor.numel() == 0 && name != "vertices")) {
                     return std::optional<GeometryPropertyPlane>{};
                 }
                 auto plane = tensor_plane(
                     name,
-                    *tensor,
+                    tensor,
                     vertex_count,
-                    components,
+                    spec->components,
                     GeometryDtype::Float32);
                 if (!plane) {
                     return std::move(plane).error();
@@ -1762,21 +1546,10 @@ namespace lfs::io::project {
                     std::move(*plane));
             };
 
-            constexpr std::array canonical_names = {
-                "vertices"sv,
-                "normals"sv,
-                "tangents"sv,
-                "texcoords"sv,
-                "colors"sv,
-                "indices"sv,
-                "submeshes"sv,
-                "materials"sv,
-                "textures"sv,
-            };
             std::set<std::string_view> emitted;
             std::vector<GeometryPropertyPlane> properties;
             properties.reserve(
-                canonical_names.size() +
+                MESH_PROPERTIES.size() +
                 payload.retained_properties().size());
             for (const auto& retained : payload.retained_properties()) {
                 if (!is_mesh_known_property(retained.name)) {
@@ -1794,11 +1567,11 @@ namespace lfs::io::project {
                     properties.push_back(std::move(**current));
                 }
             }
-            for (const auto name : canonical_names) {
-                if (!emitted.emplace(name).second) {
+            for (const auto& spec : MESH_PROPERTIES) {
+                if (!emitted.emplace(spec.name).second) {
                     continue;
                 }
-                auto current = make_known(name);
+                auto current = make_known(spec.name);
                 if (!current) {
                     return std::move(current).error();
                 }
@@ -1829,43 +1602,15 @@ namespace lfs::io::project {
                     }
                 }
 
-                if (descriptor.name == "vertices") {
+                const auto spec = std::ranges::find(
+                    MESH_PROPERTIES,
+                    descriptor.name,
+                    &MeshProperty::name);
+                if (spec != MESH_PROPERTIES.end() && spec->tensor) {
                     if (auto result = require_descriptor_shape(
                             descriptor,
                             GeometryDtype::Float32,
-                            3);
-                        !result) {
-                        return result;
-                    }
-                } else if (descriptor.name == "normals") {
-                    if (auto result = require_descriptor_shape(
-                            descriptor,
-                            GeometryDtype::Float32,
-                            3);
-                        !result) {
-                        return result;
-                    }
-                } else if (descriptor.name == "tangents") {
-                    if (auto result = require_descriptor_shape(
-                            descriptor,
-                            GeometryDtype::Float32,
-                            4);
-                        !result) {
-                        return result;
-                    }
-                } else if (descriptor.name == "texcoords") {
-                    if (auto result = require_descriptor_shape(
-                            descriptor,
-                            GeometryDtype::Float32,
-                            2);
-                        !result) {
-                        return result;
-                    }
-                } else if (descriptor.name == "colors") {
-                    if (auto result = require_descriptor_shape(
-                            descriptor,
-                            GeometryDtype::Float32,
-                            4);
+                            spec->components);
                         !result) {
                         return result;
                     }
@@ -1887,17 +1632,14 @@ namespace lfs::io::project {
                                 static_cast<std::uint32_t>(
                                     std::numeric_limits<std::int32_t>::max()) ||
                             stored >= vertex_count) {
-                            return lfs::Result<void>::failure(
-                                geometry_error(
-                                    lfs::ErrorCode::DataLoss,
-                                    "The project contains invalid geometry data.",
-                                    std::format(
-                                        "MESH index {} value {} is outside "
-                                        "the runtime range [0, {})",
-                                        index,
-                                        stored,
-                                        vertex_count),
-                                    "indices"));
+                            return data_loss<void>(
+                                std::format(
+                                    "MESH index {} value {} is outside "
+                                    "the runtime range [0, {})",
+                                    index,
+                                    stored,
+                                    vertex_count),
+                                "indices");
                         }
                     }
                 } else if (descriptor.name == "submeshes") {
@@ -1910,12 +1652,10 @@ namespace lfs::io::project {
                         return result;
                     }
                     if (descriptor.byte_length % 12 != 0) {
-                        return lfs::Result<void>::failure(geometry_error(
-                            lfs::ErrorCode::DataLoss,
-                            "The project contains invalid geometry data.",
+                        return data_loss<void>(
                             "MESH submeshes plane length is not a multiple of "
                             "12",
-                            "submeshes"));
+                            "submeshes");
                     }
                 } else if (descriptor.name == "materials") {
                     if (auto result = require_descriptor_shape(
@@ -1929,11 +1669,9 @@ namespace lfs::io::project {
                     std::size_t cursor = 0;
                     while (cursor < plane.size()) {
                         if (plane.size() - cursor < 2) {
-                            return lfs::Result<void>::failure(geometry_error(
-                                lfs::ErrorCode::DataLoss,
-                                "The project contains invalid geometry data.",
+                            return data_loss<void>(
                                 "MESH material name length is truncated",
-                                "materials"));
+                                "materials");
                         }
                         const auto name_bytes =
                             read_u16(plane, cursor);
@@ -1943,22 +1681,18 @@ namespace lfs::io::project {
                                 70u + name_bytes,
                                 record_end) ||
                             record_end > plane.size()) {
-                            return lfs::Result<void>::failure(geometry_error(
-                                lfs::ErrorCode::DataLoss,
-                                "The project contains invalid geometry data.",
+                            return data_loss<void>(
                                 "MESH material record exceeds its plane",
-                                "materials"));
+                                "materials");
                         }
                         const std::string_view name(
                             reinterpret_cast<const char*>(
                                 plane.data() + cursor + 2),
                             name_bytes);
                         if (!valid_utf8(name)) {
-                            return lfs::Result<void>::failure(geometry_error(
-                                lfs::ErrorCode::DataLoss,
-                                "The project contains invalid geometry data.",
+                            return data_loss<void>(
                                 "MESH material name is not valid UTF-8",
-                                "materials"));
+                                "materials");
                         }
                         const std::size_t double_sided_offset =
                             cursor + 2 + name_bytes + 40 + 20;
@@ -1966,12 +1700,10 @@ namespace lfs::io::project {
                                 plane[double_sided_offset]) > 1 ||
                             !all_zero(plane.subspan(
                                 double_sided_offset + 1, 7))) {
-                            return lfs::Result<void>::failure(geometry_error(
-                                lfs::ErrorCode::DataLoss,
-                                "The project contains invalid geometry data.",
+                            return data_loss<void>(
                                 "MESH material boolean/reserved bytes are "
                                 "invalid",
-                                "materials"));
+                                "materials");
                         }
                         std::uint64_t aligned = 0;
                         if (!align_up(record_end, 8, aligned) ||
@@ -1980,11 +1712,9 @@ namespace lfs::io::project {
                                 static_cast<std::size_t>(record_end),
                                 static_cast<std::size_t>(
                                     aligned - record_end)))) {
-                            return lfs::Result<void>::failure(geometry_error(
-                                lfs::ErrorCode::DataLoss,
-                                "The project contains invalid geometry data.",
+                            return data_loss<void>(
                                 "MESH material record padding is invalid",
-                                "materials"));
+                                "materials");
                         }
                         cursor = static_cast<std::size_t>(aligned);
                     }
@@ -2000,11 +1730,9 @@ namespace lfs::io::project {
                     std::size_t cursor = 0;
                     while (cursor < plane.size()) {
                         if (plane.size() - cursor < 20) {
-                            return lfs::Result<void>::failure(geometry_error(
-                                lfs::ErrorCode::DataLoss,
-                                "The project contains invalid geometry data.",
+                            return data_loss<void>(
                                 "MESH texture record header is truncated",
-                                "textures"));
+                                "textures");
                         }
                         const auto width = read_u32(plane, cursor);
                         const auto height = read_u32(plane, cursor + 4);
@@ -2018,12 +1746,10 @@ namespace lfs::io::project {
                             !checked_mul<std::uint64_t>(
                                 expected, channels, expected) ||
                             expected != pixel_bytes) {
-                            return lfs::Result<void>::failure(geometry_error(
-                                lfs::ErrorCode::DataLoss,
-                                "The project contains invalid geometry data.",
+                            return data_loss<void>(
                                 "MESH texture pixel count does not match its "
                                 "dimensions",
-                                "textures"));
+                                "textures");
                         }
                         std::uint64_t record_end = 0;
                         if (!checked_add<std::uint64_t>(
@@ -2031,11 +1757,9 @@ namespace lfs::io::project {
                                 pixel_bytes,
                                 record_end) ||
                             record_end > plane.size()) {
-                            return lfs::Result<void>::failure(geometry_error(
-                                lfs::ErrorCode::DataLoss,
-                                "The project contains invalid geometry data.",
+                            return data_loss<void>(
                                 "MESH texture record exceeds its plane",
-                                "textures"));
+                                "textures");
                         }
                         cursor = static_cast<std::size_t>(record_end);
                     }
@@ -2075,21 +1799,18 @@ namespace lfs::io::project {
                         range_end > index_count ||
                         material_count == 0 ||
                         material_index >= material_count) {
-                        return lfs::Result<void>::failure(
-                            geometry_error(
-                                lfs::ErrorCode::DataLoss,
-                                "The project contains invalid geometry data.",
-                                std::format(
-                                    "MESH submesh at byte {} has range "
-                                    "[{}, {}) and material {}; limits are "
-                                    "{} indices and {} materials",
-                                    offset,
-                                    start_index,
-                                    range_end,
-                                    material_index,
-                                    index_count,
-                                    material_count),
-                                "submeshes"));
+                        return data_loss<void>(
+                            std::format(
+                                "MESH submesh at byte {} has range "
+                                "[{}, {}) and material {}; limits are "
+                                "{} indices and {} materials",
+                                offset,
+                                start_index,
+                                range_end,
+                                material_index,
+                                index_count,
+                                material_count),
+                            "submeshes");
                     }
                 }
             }
@@ -2235,27 +1956,11 @@ namespace lfs::io::project {
 
     lfs::Result<void> PointCloudPayload::add_opaque_property(
         GeometryPropertyPlane property) {
-        if (is_pcld_known_property(property.name)) {
-            return invalid_geometry(
-                std::format(
-                    "'{}' is a PCLD v1 well-known property and cannot be "
-                    "registered as opaque",
-                    property.name),
-                property.name);
-        }
-        if (std::ranges::any_of(
-                retained_properties_,
-                [&](const GeometryPropertyPlane& existing) {
-                    return existing.name == property.name;
-                })) {
-            return invalid_geometry(
-                std::format(
-                    "PCLD opaque property '{}' already exists",
-                    property.name),
-                property.name);
-        }
-        retained_properties_.push_back(std::move(property));
-        return {};
+        return append_opaque_property(
+            retained_properties_,
+            std::move(property),
+            "PCLD",
+            is_pcld_known_property);
     }
 
     MeshPayload::MeshPayload(std::shared_ptr<lfs::core::MeshData> mesh)
@@ -2263,27 +1968,11 @@ namespace lfs::io::project {
 
     lfs::Result<void> MeshPayload::add_opaque_property(
         GeometryPropertyPlane property) {
-        if (is_mesh_known_property(property.name)) {
-            return invalid_geometry(
-                std::format(
-                    "'{}' is a MESH v1 well-known property and cannot be "
-                    "registered as opaque",
-                    property.name),
-                property.name);
-        }
-        if (std::ranges::any_of(
-                retained_properties_,
-                [&](const GeometryPropertyPlane& existing) {
-                    return existing.name == property.name;
-                })) {
-            return invalid_geometry(
-                std::format(
-                    "MESH opaque property '{}' already exists",
-                    property.name),
-                property.name);
-        }
-        retained_properties_.push_back(std::move(property));
-        return {};
+        return append_opaque_property(
+            retained_properties_,
+            std::move(property),
+            "MESH",
+            is_mesh_known_property);
     }
 
     lfs::Result<std::vector<std::byte>>
@@ -2423,9 +2112,14 @@ namespace lfs::io::project {
                     decode_attribute_names(plane);
                 continue;
             }
-            if (!is_pcld_known_property(descriptor.name)) {
+            const auto spec = std::ranges::find(
+                POINT_PROPERTIES,
+                descriptor.name,
+                &PointProperty::name);
+            if (spec == POINT_PROPERTIES.end()) {
                 continue;
             }
+            assert(spec->tensor);
             const auto dtype = tensor_dtype(descriptor.dtype);
             assert(dtype.has_value());
             lfs::core::TensorShape shape{
@@ -2457,23 +2151,8 @@ namespace lfs::io::project {
             if (!tensor) {
                 return std::move(tensor).error();
             }
-            if (descriptor.name == "means") {
-                point_cloud->means = std::move(*tensor);
-            } else if (descriptor.name == "colors") {
-                point_cloud->colors = std::move(*tensor);
-            } else if (descriptor.name == "normals") {
-                point_cloud->normals = std::move(*tensor);
-            } else if (descriptor.name == "sh0") {
-                point_cloud->sh0 = std::move(*tensor);
-            } else if (descriptor.name == "shN") {
-                point_cloud->shN = std::move(*tensor);
-            } else if (descriptor.name == "opacity") {
-                point_cloud->opacity = std::move(*tensor);
-            } else if (descriptor.name == "scaling") {
-                point_cloud->scaling = std::move(*tensor);
-            } else if (descriptor.name == "rotation") {
-                point_cloud->rotation = std::move(*tensor);
-            }
+            point_cloud.get()->*(spec->tensor) =
+                std::move(*tensor);
         }
         assert(point_cloud->means.is_valid());
         assert(
@@ -2700,11 +2379,14 @@ namespace lfs::io::project {
                     return std::move(materials).error();
                 }
                 mesh->materials = std::move(*materials);
-            } else if (descriptor.name == "vertices" ||
-                       descriptor.name == "normals" ||
-                       descriptor.name == "tangents" ||
-                       descriptor.name == "texcoords" ||
-                       descriptor.name == "colors") {
+            } else {
+                const auto spec = std::ranges::find(
+                    MESH_PROPERTIES,
+                    descriptor.name,
+                    &MeshProperty::name);
+                if (spec == MESH_PROPERTIES.end() || !spec->tensor) {
+                    continue;
+                }
                 auto tensor = allocate_tensor(
                     options,
                     lfs::core::TensorShape{
@@ -2716,17 +2398,7 @@ namespace lfs::io::project {
                 if (!tensor) {
                     return std::move(tensor).error();
                 }
-                if (descriptor.name == "vertices") {
-                    mesh->vertices = std::move(*tensor);
-                } else if (descriptor.name == "normals") {
-                    mesh->normals = std::move(*tensor);
-                } else if (descriptor.name == "tangents") {
-                    mesh->tangents = std::move(*tensor);
-                } else if (descriptor.name == "texcoords") {
-                    mesh->texcoords = std::move(*tensor);
-                } else if (descriptor.name == "colors") {
-                    mesh->colors = std::move(*tensor);
-                }
+                mesh.get()->*(spec->tensor) = std::move(*tensor);
             }
         }
         assert(

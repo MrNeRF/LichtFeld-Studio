@@ -231,12 +231,93 @@ namespace {
         ASSERT_TRUE(preview_report)
             << lfs::format_for_developer(preview_report.error());
 
+        const fs::path selection =
+            output / "selection-raw-u8.licht";
+        auto selection_document =
+            create_document(80'690, "selection-raw-u8");
+        const auto root_uuid = fixed_uuid(80'691);
+        const auto point_uuid = fixed_uuid(80'692);
+        require_status(selection_document.edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = root_uuid,
+                .type = "group",
+                .name = "Selection root",
+                .child_order = 0,
+            }));
+        require_status(selection_document.edit_scene_graph().upsert_node(
+            SceneNodeRecord{
+                .uuid = point_uuid,
+                .type = "pointcloud",
+                .name = "Selected points",
+                .parent_uuid = root_uuid,
+                .child_order = 0,
+                .payload = PayloadBinding{
+                    .fourcc = "PCLD",
+                    .instance_uuid = point_uuid,
+                    .source_kind = "ply",
+                },
+            }));
+        require_status(selection_document.set_point_cloud(
+            point_uuid, PointCloudPayload(make_point_cloud(8))));
+        require_status(selection_document.edit_project().upsert_embed_decision(
+            EmbedDecision{
+                .uuid = point_uuid,
+                .node_uuid = point_uuid,
+                .payload_fourcc = "PCLD",
+                .decision = "embedded",
+                .reason = "RawU8 selection fixture",
+            }));
+        require_status(
+            selection_document.edit_project()
+                .upsert_embedded_payload_provenance(
+                    EmbeddedPayloadProvenance{
+                        .uuid = point_uuid,
+                        .node_uuid = point_uuid,
+                        .fourcc = "PCLD",
+                        .import_locator =
+                            {
+                                .preferred = "assets/selected-points.ply",
+                                .base = LocatorBase::Project,
+                            },
+                        .import_fingerprint = fingerprint(77),
+                        .content_xxh3_128 = {},
+                    }));
+        require_status(selection_document.edit_selection().set_groups(
+            {
+                lfs::core::SelectionGroup{
+                    .id = 3,
+                    .name = "Review",
+                    .color = {0.2f, 0.4f, 0.8f},
+                },
+                lfs::core::SelectionGroup{
+                    .id = 7,
+                    .name = "Protected",
+                    .color = {0.9f, 0.1f, 0.3f},
+                    .locked = true,
+                },
+            },
+            7, 8));
+        require_status(selection_document.edit_selection().upsert_slice(
+            SelectionMaskSlice{
+                .node_uuid = point_uuid,
+                .domain = lfs::core::SelectionDomain::PointCloud,
+                .encoding = SelectionMaskEncoding::RawU8,
+                .mask = {3, 0, 7, 3, 0, 7, 7, 3},
+            }));
+        require_status(selection_document.edit_selection()
+                           .set_selected_node_uuids({point_uuid}));
+        auto selection_report = selection_document.save(
+            selection, save_options(80'700));
+        ASSERT_TRUE(selection_report)
+            << lfs::format_for_developer(selection_report.error());
+
         verify_open_fixture(saved, CommitKind::Explicit);
         verify_open_fixture(sidecar, CommitKind::Autosave);
         verify_open_fixture(save_as, CommitKind::Explicit);
         verify_open_fixture(compacted, CommitKind::Compaction);
         verify_open_fixture(recovered, CommitKind::Recovered);
         verify_open_fixture(preview, CommitKind::Explicit);
+        verify_open_fixture(selection, CommitKind::Explicit);
         auto preview_reader = require_result(ProjectReader::open(preview));
         ASSERT_TRUE(preview_reader.preview().has_value());
         EXPECT_EQ(require_result(preview_reader.read_preview()), png);
@@ -385,7 +466,7 @@ namespace {
                       row.at("sha256").get<std::string>());
             ++reproduced;
         }
-        EXPECT_EQ(reproduced, 6u);
+        EXPECT_EQ(reproduced, 7u);
         EXPECT_EQ(documented_exemptions, 1u);
 
         const auto recovered = require_result(ProjectReader::open(
@@ -405,7 +486,7 @@ namespace {
         const fs::path release =
             fs::path(PROJECT_ROOT_PATH) /
             "tests/fixtures/licht/release_corpus";
-        constexpr std::array<std::string_view, 7> artifacts{
+        constexpr std::array<std::string_view, 8> artifacts{
             "save.licht",
             "save.licht.autosave",
             "save-as.licht",
@@ -413,6 +494,7 @@ namespace {
             "recovered-commit.licht",
             "headless-train-output.licht",
             "foreign-preview.licht",
+            "selection-raw-u8.licht",
         };
         const ReaderOptions v1 = declared_v1();
         for (const auto artifact : artifacts) {
@@ -439,6 +521,15 @@ namespace {
             release / "foreign-preview.licht", v1));
         ASSERT_TRUE(preview.preview().has_value());
         EXPECT_EQ(require_result(preview.read_preview()), one_pixel_png());
+
+        auto selection = require_result(ProjectDocument::open(
+            release / "selection-raw-u8.licht",
+            ProjectDocumentOpenOptions{.reader = v1}));
+        ASSERT_EQ(selection.selection().slices().size(), 1u);
+        const auto& slice = selection.selection().slices().front();
+        EXPECT_EQ(slice.encoding, SelectionMaskEncoding::RawU8);
+        EXPECT_EQ(slice.mask,
+                  (std::vector<std::uint8_t>{3, 0, 7, 3, 0, 7, 7, 3}));
     }
 
     TEST(P8CompatibilityTest,

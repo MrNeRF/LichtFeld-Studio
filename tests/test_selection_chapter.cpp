@@ -28,7 +28,6 @@ namespace {
     using lfs::core::Tensor;
     using lfs::core::Uuid;
     using lfs::io::project::SelectionChapter;
-    using lfs::io::project::SelectionEncodeOptions;
     using lfs::io::project::SelectionMaskEncoding;
     using lfs::io::project::SelectionMaskSlice;
     using lfs::test::licht::fixed_uuid;
@@ -167,7 +166,7 @@ namespace {
         ASSERT_EQ(decoded->slices().size(), 2);
         EXPECT_EQ(
             decoded->slices()[0].encoding,
-            SelectionMaskEncoding::DeltaBitpack);
+            SelectionMaskEncoding::RawU8);
         EXPECT_EQ(
             decoded->selected_node_uuids(),
             (std::vector<Uuid>{point_uuid, splat_uuid}));
@@ -217,11 +216,7 @@ namespace {
             << lfs::format_for_developer(chapter.error());
         auto raw =
             lfs::io::project::encode_selection_chapter(
-                *chapter,
-                SelectionEncodeOptions{
-                    .encoding_override =
-                        SelectionMaskEncoding::RawU8,
-                });
+                *chapter);
         ASSERT_TRUE(raw)
             << lfs::format_for_developer(raw.error());
         (*raw)[20] = static_cast<std::byte>(99);
@@ -252,7 +247,7 @@ namespace {
     }
 
     TEST(SelectionChapterTest,
-         TruncatedDeltaAndOverlappingSliceRangesAreRejected) {
+         WithdrawnEncodingTruncationAndOverlappingRangesAreRejected) {
         SelectionChapter chapter;
         ASSERT_TRUE(chapter.set_groups(
             {lfs::core::SelectionGroup{
@@ -283,6 +278,21 @@ namespace {
             << lfs::format_for_developer(encoded.error());
 
         const auto slice_table = read_u64(*encoded, 32);
+
+        auto withdrawn = *encoded;
+        withdrawn[slice_table + 17] = std::byte{2};
+        auto withdrawn_result =
+            lfs::io::project::decode_selection_chapter(
+                withdrawn);
+        ASSERT_FALSE(withdrawn_result);
+        EXPECT_EQ(
+            withdrawn_result.error().code(),
+            lfs::ErrorCode::DataLoss);
+        EXPECT_NE(
+            withdrawn_result.error().detail().find(
+                "withdrawn before release"),
+            std::string_view::npos);
+
         auto truncated = *encoded;
         const auto data_bytes =
             read_u64(truncated, slice_table + 48);

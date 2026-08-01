@@ -582,6 +582,13 @@ decisions are normative:
 * Every `SELM` node UUID must exist in `SCNG`, and every selected Gaussian index
   must be smaller than the bound splat count; otherwise hydration refuses the
   selection before slicing.
+* A version-1 `SELM` slice uses encoding `1` (`RawU8`): the slice data is exactly
+  `element_count` bytes, with one selection-group ID per element, and
+  `data_bytes == element_count`. Production writers store the enclosing `SELM`
+  chunk with `ZSTD` compression. Encoding value `2` was assigned to the
+  experimental `DeltaBitpack` codec and withdrawn before publication; it is
+  permanently reserved. Writers MUST NOT emit it, and readers MUST reject it
+  with a typed data-loss error rather than interpreting its bytes.
 * A `REFS` content hash is authoritative. A matching hash accepts and refreshes
   changed size/mtime cache hints. A mismatch leaves the reference unresolved
   and requests an explicit relink. A missing file retains a placeholder row.

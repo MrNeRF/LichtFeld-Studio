@@ -146,8 +146,30 @@
       },
       "sha256": "0e412a2e15039b15a458566d80e3da207bf6cba95bbe0b5688b7ee566a03f8f0",
       "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
+    },
+    {
+      "capabilities": {
+        "min_reader": "1.0",
+        "min_safe_writer": "1.0",
+        "required_reader": "0x00000000000000000000000000000003",
+        "required_writer": "0x00000000000000000000000000000000"
+      },
+      "identity_set": "slim-selm-raw-u8-v1",
+      "path": "selection-raw-u8.licht",
+      "producer": "ProjectDocument::save with populated RawU8 selection",
+      "reproducible": true,
+      "reproduction": {
+        "commit_uuid": "00013b3c-0000-4000-8000-000000013b3c",
+        "creation_time_unix_ns": 1735689600000080690,
+        "file_uuid": "00013b3e-0000-4000-8000-000000013b3e",
+        "project_uuid": "00013b32-0000-4000-8000-000000013b32",
+        "snapshot_uuid": "00013b3d-0000-4000-8000-000000013b3d",
+        "wallclock_unix_ns": 1735689601000080700
+      },
+      "sha256": "e69cdfe457d52d4583ae3f5881788a587f350db048228556585a25bed3693ab1",
+      "writer_sha": "bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb"
     }
   ],
-  "manifest_root_sha256": "690a820b806dc8e633e8aaacd7b381a4a9f25963160e5e92e3b490217bc63326",
+  "manifest_root_sha256": "43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb",
   "schema": 2
 }

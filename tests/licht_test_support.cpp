@@ -1095,13 +1095,13 @@ namespace lfs::test::licht {
         require_status(selection.upsert_slice(SelectionMaskSlice{
             .node_uuid = imported_node,
             .domain = lfs::core::SelectionDomain::Splat,
-            .encoding = SelectionMaskEncoding::DeltaBitpack,
+            .encoding = SelectionMaskEncoding::RawU8,
             .mask = {3, 0, 7, 3},
         }));
         require_status(selection.upsert_slice(SelectionMaskSlice{
             .node_uuid = point_node,
             .domain = lfs::core::SelectionDomain::PointCloud,
-            .encoding = SelectionMaskEncoding::DeltaBitpack,
+            .encoding = SelectionMaskEncoding::RawU8,
             .mask = {0, 7},
         }));
         require_status(selection.set_selected_node_uuids(
