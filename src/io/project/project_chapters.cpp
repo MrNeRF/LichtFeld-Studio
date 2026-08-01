@@ -487,7 +487,12 @@ namespace lfs::io::project {
         }
 
         std::int64_t file_time_ns(const std::filesystem::file_time_type value) {
+#if defined(_MSC_VER)
+            const auto system_time =
+                std::chrono::clock_cast<std::chrono::system_clock>(value);
+#else
             const auto system_time = std::filesystem::file_time_type::clock::to_sys(value);
+#endif
             return std::chrono::duration_cast<std::chrono::nanoseconds>(
                        system_time.time_since_epoch())
                 .count();
