@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "licht_test_support.hpp"
 #include "project/project_lifecycle.hpp"
 
 #include <filesystem>
@@ -11,24 +12,8 @@ namespace {
 
     namespace fs = std::filesystem;
     using lfs::core::Uuid;
+    using lfs::test::licht::TemporaryDirectory;
     using namespace lfs::vis::project;
-
-    class TemporaryDirectory {
-    public:
-        TemporaryDirectory()
-            : path(fs::temp_directory_path() /
-                   ("lfs-p6-lifecycle-" +
-                    lfs::core::generate_uuid_v4().to_string())) {
-            fs::create_directories(path);
-        }
-
-        ~TemporaryDirectory() {
-            std::error_code ignored;
-            fs::remove_all(path, ignored);
-        }
-
-        fs::path path;
-    };
 
     TEST(ProjectLifecycleSettingsTest,
          MissingSettingsUseVisionDefaults) {

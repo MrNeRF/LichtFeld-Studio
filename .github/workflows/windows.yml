@@ -189,6 +189,13 @@ jobs:
           set PATH=%CD%\%BUILD_DIR%;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\bin;%PATH%
           cmake --build %BUILD_DIR% -j %NUMBER_OF_PROCESSORS%
 
+      - name: Build and run CPU-only format tests
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build %BUILD_DIR% --target lichtfeld_format_tests -j %NUMBER_OF_PROCESSORS%
+          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^lichtfeld_format_tests$"
+
       - name: Verify nvJPEG2000 runtime bundle
         shell: pwsh
         run: |

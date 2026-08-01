@@ -7,6 +7,7 @@
 #include "io/loaders/loader_utils.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
+#include "licht_test_support.hpp"
 #include "project/session_state.hpp"
 #include "training/checkpoint.hpp"
 #include "training/project_snapshot_chapters.hpp"
@@ -55,84 +56,19 @@ namespace {
     using lfs::core::Tensor;
     using lfs::core::Uuid;
     using namespace lfs::io::project;
+    using lfs::test::licht::make_empty_document;
+    using lfs::test::licht::make_point_cloud;
+    using lfs::test::licht::make_splat;
+    using lfs::test::licht::make_triangle_mesh;
+    using lfs::test::licht::one_pixel_png;
+    using lfs::test::licht::read_file_bytes;
+    using lfs::test::licht::require_result;
+    using lfs::test::licht::require_result_ptr;
+    using lfs::test::licht::require_status;
+    using lfs::test::licht::TemporaryDirectory;
 
     Uuid fixed_uuid(const std::uint64_t tag) {
-        const auto parsed = Uuid::from_string(
-            std::format("70000000-0000-4000-8000-{:012x}", tag));
-        EXPECT_TRUE(parsed);
-        return parsed.value_or(Uuid{});
-    }
-
-    class TemporaryDirectory {
-    public:
-        TemporaryDirectory()
-            : path(fs::temp_directory_path() /
-                   ("lfs-p3-document-" +
-                    lfs::core::generate_uuid_v4().to_string())) {
-            fs::create_directories(path);
-        }
-
-        ~TemporaryDirectory() {
-            std::error_code ignored;
-            fs::remove_all(path, ignored);
-        }
-
-        fs::path path;
-    };
-
-    std::unique_ptr<lfs::core::SplatData>
-    make_splat(const std::size_t count) {
-        std::vector<float> means(count * 3, 0.0f);
-        std::vector<float> rotations(count * 4, 0.0f);
-        for (std::size_t index = 0; index < count; ++index) {
-            means[index * 3] = static_cast<float>(index);
-            rotations[index * 4] = 1.0f;
-        }
-        return std::make_unique<lfs::core::SplatData>(
-            0,
-            Tensor::from_vector(means, {count, std::size_t{3}}, Device::CPU),
-            Tensor::zeros({count, std::size_t{1}, std::size_t{3}},
-                          Device::CPU, DataType::Float32),
-            Tensor{},
-            Tensor::zeros({count, std::size_t{3}}, Device::CPU,
-                          DataType::Float32),
-            Tensor::from_vector(rotations, {count, std::size_t{4}},
-                                Device::CPU),
-            Tensor::zeros({count, std::size_t{1}}, Device::CPU,
-                          DataType::Float32),
-            1.0f);
-    }
-
-    std::shared_ptr<lfs::core::PointCloud>
-    make_point_cloud(const std::size_t count) {
-        std::vector<float> means(count * 3, 0.0f);
-        std::vector<float> colors(count * 3, 0.5f);
-        for (std::size_t index = 0; index < count; ++index) {
-            means[index * 3] = static_cast<float>(index + 10);
-        }
-        return std::make_shared<lfs::core::PointCloud>(
-            Tensor::from_vector(means, {count, std::size_t{3}}, Device::CPU),
-            Tensor::from_vector(colors, {count, std::size_t{3}}, Device::CPU));
-    }
-
-    std::shared_ptr<lfs::core::MeshData> make_mesh() {
-        return std::make_shared<lfs::core::MeshData>(
-            Tensor::from_vector(
-                std::vector<float>{
-                    -1.0f,
-                    -1.0f,
-                    0.0f,
-                    1.0f,
-                    -1.0f,
-                    0.0f,
-                    0.0f,
-                    1.0f,
-                    0.0f,
-                },
-                {std::size_t{3}, std::size_t{3}}, Device::CPU),
-            Tensor::from_vector(
-                std::vector<std::int32_t>{0, 1, 2},
-                {std::size_t{1}, std::size_t{3}}, Device::CPU));
+        return lfs::test::licht::fixed_uuid_in_namespace(0x70000000, tag);
     }
 
     Tensor selection_tensor(
@@ -144,14 +80,7 @@ namespace {
     }
 
     ReferenceFingerprint fake_fingerprint(const std::uint8_t tag) {
-        ReferenceFingerprint result;
-        result.kind = FingerprintKind::File;
-        result.size = 1000 + tag;
-        result.mtime_unix_ns = 2000 + tag;
-        result.head_xxh3.bytes.fill(tag);
-        result.tail_xxh3.bytes.fill(
-            static_cast<std::uint8_t>(tag + 1));
-        return result;
+        return lfs::test::licht::fingerprint(tag);
     }
 
     EmbeddedPayloadProvenance provenance(
@@ -168,61 +97,10 @@ namespace {
         };
     }
 
-    void require_status(lfs::Result<void> result) {
-        ASSERT_TRUE(result)
-            << (result ? std::string{}
-                       : lfs::format_for_developer(result.error()));
-    }
-
-    template <typename T>
-    T require_result(lfs::Result<T> result) {
-        if (!result) {
-            throw std::runtime_error(
-                lfs::format_for_developer(result.error()));
-        }
-        return std::move(*result);
-    }
-
-    std::vector<std::byte> read_file_bytes(
-        const fs::path& path) {
-        std::ifstream stream(
-            path, std::ios::binary | std::ios::ate);
-        EXPECT_TRUE(stream);
-        if (!stream) {
-            return {};
-        }
-        const auto size = stream.tellg();
-        EXPECT_GE(size, 0);
-        if (size < 0) {
-            return {};
-        }
-        std::vector<std::byte> result(
-            static_cast<std::size_t>(size));
-        stream.seekg(0);
-        stream.read(
-            reinterpret_cast<char*>(result.data()),
-            static_cast<std::streamsize>(
-                result.size()));
-        EXPECT_TRUE(stream);
-        return result;
-    }
-
     ProjectDocumentSaveOptions save_options(
-        const std::uint64_t identity_tag,
-        const std::uint64_t wallclock) {
-        return ProjectDocumentSaveOptions{
-            .commit =
-                {
-                    .kind = CommitKind::Explicit,
-                    .commit_uuid = fixed_uuid(identity_tag),
-                    .snapshot_uuid = fixed_uuid(identity_tag + 1),
-                    .wallclock_unix_ns = wallclock,
-                },
-            .file_uuid = fixed_uuid(identity_tag + 2),
-            .index_compression =
-                IndexCompression::StoredForDeterministicTests,
-            .disk_reserve_bytes = 0,
-        };
+        const std::uint64_t identity_tag, const std::uint64_t wallclock) {
+        return lfs::test::licht::deterministic_document_save_options(
+            0x70000000, identity_tag, wallclock);
     }
 
     std::vector<std::byte> tensor_bytes(
@@ -236,82 +114,6 @@ namespace {
             std::memcpy(
                 result.data(), cpu.data_ptr(), result.size());
         }
-        return result;
-    }
-
-    std::vector<std::byte> one_pixel_png() {
-        constexpr std::array<std::uint8_t, 67> bytes{
-            0x89,
-            0x50,
-            0x4e,
-            0x47,
-            0x0d,
-            0x0a,
-            0x1a,
-            0x0a,
-            0x00,
-            0x00,
-            0x00,
-            0x0d,
-            0x49,
-            0x48,
-            0x44,
-            0x52,
-            0x00,
-            0x00,
-            0x00,
-            0x01,
-            0x00,
-            0x00,
-            0x00,
-            0x01,
-            0x08,
-            0x06,
-            0x00,
-            0x00,
-            0x00,
-            0x1f,
-            0x15,
-            0xc4,
-            0x89,
-            0x00,
-            0x00,
-            0x00,
-            0x0a,
-            0x49,
-            0x44,
-            0x41,
-            0x54,
-            0x78,
-            0x9c,
-            0x63,
-            0x60,
-            0x00,
-            0x00,
-            0x00,
-            0x02,
-            0x00,
-            0x01,
-            0xe5,
-            0x27,
-            0xd4,
-            0xa2,
-            0x00,
-            0x00,
-            0x00,
-            0x00,
-            0x49,
-            0x45,
-            0x4e,
-            0x44,
-            0xae,
-            0x42,
-            0x60,
-            0x82,
-        };
-        std::vector<std::byte> result(bytes.size());
-        std::memcpy(
-            result.data(), bytes.data(), bytes.size());
         return result;
     }
 
@@ -417,10 +219,7 @@ namespace {
         const Uuid mesh_uuid = fixed_uuid(954);
         const Uuid reference_uuid = fixed_uuid(955);
 
-        auto document =
-            ProjectDocument::create(project_uuid, 100);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(document.error());
+        auto document = make_empty_document(project_uuid, 100);
         require_status(
             document->edit_references().upsert(
                 ReferenceRecord{
@@ -494,7 +293,7 @@ namespace {
             point_uuid,
             PointCloudPayload(make_point_cloud(2))));
         require_status(document->set_mesh(
-            mesh_uuid, MeshPayload(make_mesh())));
+            mesh_uuid, MeshPayload(make_triangle_mesh())));
         auto& project = document->edit_project();
         for (const auto& [uuid, fourcc, tag] :
              std::array{
@@ -684,9 +483,7 @@ namespace {
 
     TEST(ProjectDocumentTest,
          InvalidPendingParametersRefuseHydrationBeforeSceneMutation) {
-        auto document = ProjectDocument::create(fixed_uuid(910), 100);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(document.error());
+        auto document = make_empty_document(fixed_uuid(910), 100);
         require_status(document->edit_parameters().dom().set(
             "active_strategy", std::string{"not-a-strategy"}));
 
@@ -701,9 +498,7 @@ namespace {
 
     TEST(ProjectDocumentTest,
          SelectionReferencingMissingSceneNodeRefusesHydration) {
-        auto document = ProjectDocument::create(fixed_uuid(920), 100);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(document.error());
+        auto document = make_empty_document(fixed_uuid(920), 100);
         require_status(document->edit_selection().set_selected_node_uuids(
             {fixed_uuid(921)}));
 
@@ -719,9 +514,7 @@ namespace {
     TEST(ProjectDocumentTest,
          TruncatedStandalonePpispRefusesHydrationBeforeSceneMutation) {
         const auto payload_uuid = fixed_uuid(925);
-        auto document = ProjectDocument::create(fixed_uuid(924), 100);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(document.error());
+        auto document = make_empty_document(fixed_uuid(924), 100);
         auto bytes = std::make_shared<const std::vector<std::byte>>(
             std::vector<std::byte>{std::byte{0x50}, std::byte{0x50}});
         auto payload = LazyChunkValue::from_owned(bytes, payload_uuid);
@@ -763,9 +556,7 @@ namespace {
         std::vector<std::byte> truncated(encoded.size() - 1);
         std::memcpy(truncated.data(), encoded.data(), truncated.size());
 
-        auto document = ProjectDocument::create(fixed_uuid(928), 100);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(document.error());
+        auto document = make_empty_document(fixed_uuid(928), 100);
         require_status(document->edit_scene_graph().upsert_node(
             SceneNodeRecord{
                 .uuid = training_uuid,
@@ -836,10 +627,7 @@ namespace {
         for (const auto& [injection, name] :
              injections) {
             SCOPED_TRACE(name);
-            auto document = ProjectDocument::open(path);
-            ASSERT_TRUE(document)
-                << lfs::format_for_developer(
-                       document.error());
+            auto document = require_result_ptr(ProjectDocument::open(path));
             switch (injection) {
             case Injection::Proj:
                 require_status(
@@ -967,14 +755,11 @@ namespace {
             temporary.path / "partial-hydration.licht";
         write_phase_a_fixture(path);
 
-        auto document = ProjectDocument::open(
+        auto document = require_result_ptr(ProjectDocument::open(
             path,
             ProjectDocumentOpenOptions{
                 .defer_geometry_payloads = true,
-            });
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(
-                   document.error());
+            }));
         ASSERT_EQ(document->payload_states().size(), 3u);
         EXPECT_TRUE(std::ranges::all_of(
             document->payload_states(),
@@ -1088,14 +873,11 @@ namespace {
                 std::move(*bytes);
         }
 
-        auto document = ProjectDocument::open(
+        auto document = require_result_ptr(ProjectDocument::open(
             path,
             ProjectDocumentOpenOptions{
                 .defer_geometry_payloads = true,
-            });
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(
-                   document.error());
+            }));
         document->edit_metrics()
             .accumulated_training_seconds = 1.0;
         auto saved =
@@ -1133,12 +915,7 @@ namespace {
         TemporaryDirectory temporary;
         const auto path =
             temporary.path / "preview-policy.licht";
-        auto document =
-            ProjectDocument::create(
-                fixed_uuid(990), 100);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(
-                   document.error());
+        auto document = make_empty_document(fixed_uuid(990), 100);
         const auto preview = one_pixel_png();
         auto first_options =
             save_options(991, 200);
@@ -1161,9 +938,7 @@ namespace {
         ASSERT_TRUE(first_bytes);
         EXPECT_EQ(*first_bytes, preview);
 
-        auto reopened =
-            ProjectDocument::open(path);
-        ASSERT_TRUE(reopened);
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
         reopened->edit_metrics()
             .accumulated_training_seconds = 1.0;
         auto second =
@@ -1206,12 +981,11 @@ namespace {
         const auto path =
             temporary.path / "partial-delete.licht";
         write_phase_a_fixture(path);
-        auto document = ProjectDocument::open(
+        auto document = require_result_ptr(ProjectDocument::open(
             path,
             ProjectDocumentOpenOptions{
                 .defer_geometry_payloads = true,
-            });
-        ASSERT_TRUE(document);
+            }));
 
         EXPECT_TRUE(
             document->remove_splat(
@@ -1266,9 +1040,7 @@ namespace {
             reader->find(
                 FOURCC_PCLD, fixed_uuid(953)),
             nullptr);
-        auto reopened =
-            ProjectDocument::open(path);
-        ASSERT_TRUE(reopened);
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
         const auto reopened_splats =
             reopened->splat_uuids();
         EXPECT_EQ(
@@ -1294,12 +1066,11 @@ namespace {
             existing << "replace me";
         }
 
-        auto document = ProjectDocument::open(
+        auto document = require_result_ptr(ProjectDocument::open(
             source,
             ProjectDocumentOpenOptions{
                 .defer_geometry_payloads = true,
-            });
-        ASSERT_TRUE(document);
+            }));
         const auto project_uuid =
             document->project_uuid();
         auto saved = document->save_as(
@@ -1341,12 +1112,8 @@ namespace {
 
     TEST(ProjectDocumentPerformanceGate,
          MultiGigabyteCkptColdShellRestoreAndPartialSave) {
-        const char* source_text =
-            std::getenv(
-                "LFS_P6_P4_PROJECT_FIXTURE");
-        const char* output_text =
-            std::getenv(
-                "LFS_P6_LARGE_PROJECT_PATH");
+        const char* source_text = std::getenv("LFS_P6_P4_PROJECT_FIXTURE");
+        const char* output_text = std::getenv("LFS_P6_LARGE_PROJECT_PATH");
         if (!source_text || !output_text) {
             GTEST_SKIP()
                 << "Set LFS_P6_P4_PROJECT_FIXTURE and "
@@ -1356,421 +1123,210 @@ namespace {
 
         const fs::path source(source_text);
         const fs::path output(output_text);
-        const bool reuse_large_project =
-            std::getenv(
-                "LFS_P6_REUSE_LARGE_PROJECT") !=
-            nullptr;
+        const bool reuse_large_project = std::getenv("LFS_P6_REUSE_LARGE_PROJECT") != nullptr;
         ASSERT_TRUE(fs::is_regular_file(source));
         if (!reuse_large_project) {
             std::error_code filesystem_error;
-            fs::create_directories(
-                output.parent_path(),
-                filesystem_error);
-            ASSERT_FALSE(filesystem_error)
-                << filesystem_error.message();
-            fs::copy_file(
-                source, output,
-                fs::copy_options::
-                    overwrite_existing,
-                filesystem_error);
-            ASSERT_FALSE(filesystem_error)
-                << filesystem_error.message();
+            fs::create_directories(output.parent_path(), filesystem_error);
+            ASSERT_FALSE(filesystem_error) << filesystem_error.message();
+            fs::copy_file(source, output, fs::copy_options::overwrite_existing,
+                          filesystem_error);
+            ASSERT_FALSE(filesystem_error) << filesystem_error.message();
         } else {
-            ASSERT_TRUE(
-                fs::is_regular_file(output));
+            ASSERT_TRUE(fs::is_regular_file(output));
         }
 
         ChunkInfo source_checkpoint;
-        std::vector<CleanProof>
-            carry_proofs;
+        std::vector<CleanProof> carry_proofs;
         {
-            auto reader =
-                ProjectReader::open(output);
-            ASSERT_TRUE(reader)
-                << lfs::format_for_developer(
-                       reader.error());
-            const auto row =
-                std::ranges::find_if(
-                    reader->chunks(),
-                    [](const ChunkInfo& candidate) {
-                        return candidate.key.fourcc ==
-                                   FOURCC_CKPT &&
-                               candidate.row_kind ==
-                                   RowKind::Live;
-                    });
+            auto reader = ProjectReader::open(output);
+            ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());
+            const auto row = std::ranges::find_if(reader->chunks(), [](const ChunkInfo& candidate) {
+                return candidate.key.fourcc == FOURCC_CKPT && candidate.row_kind == RowKind::Live;
+            });
             ASSERT_NE(row, reader->chunks().end());
-            ASSERT_EQ(
-                row->compression,
-                Compression::Stored);
+            ASSERT_EQ(row->compression, Compression::Stored);
             source_checkpoint = *row;
-            for (const auto& candidate :
-                 reader->chunks()) {
-                if (!candidate.is_live() ||
-                    candidate.key ==
-                        source_checkpoint.key) {
+            for (const auto& candidate : reader->chunks()) {
+                if (!candidate.is_live() || candidate.key == source_checkpoint.key) {
                     continue;
                 }
-                auto proof =
-                    reader->make_clean_proof(
-                        candidate, 1);
-                ASSERT_TRUE(proof)
-                    << lfs::format_for_developer(
-                           proof.error());
-                carry_proofs.push_back(
-                    std::move(*proof));
+                auto proof = reader->make_clean_proof(candidate, 1);
+                ASSERT_TRUE(proof) << lfs::format_for_developer(proof.error());
+                carry_proofs.push_back(std::move(*proof));
             }
         }
 
         constexpr std::uint64_t TARGET_CKPT_BYTES =
-            2ull * 1024 * 1024 * 1024 +
-            256ull * 1024 * 1024;
-        ASSERT_GT(
-            source_checkpoint.stored_bytes,
-            0u);
+            2ull * 1024 * 1024 * 1024 + 256ull * 1024 * 1024;
+        ASSERT_GT(source_checkpoint.stored_bytes, 0u);
         const std::uint64_t repeats =
-            (TARGET_CKPT_BYTES +
-             source_checkpoint.stored_bytes - 1) /
+            (TARGET_CKPT_BYTES + source_checkpoint.stored_bytes - 1) /
             source_checkpoint.stored_bytes;
-        const std::uint64_t expanded_bytes =
-            reuse_large_project
-                ? source_checkpoint.stored_bytes
-                : repeats *
-                      source_checkpoint.stored_bytes;
-        ASSERT_GT(
-            expanded_bytes,
-            2ull * 1024 * 1024 * 1024);
+        const std::uint64_t expanded_bytes = reuse_large_project
+                                                 ? source_checkpoint.stored_bytes
+                                                 : repeats * source_checkpoint.stored_bytes;
+        ASSERT_GT(expanded_bytes, 2ull * 1024 * 1024 * 1024);
 
         double publish_ms = 0.0;
         if (!reuse_large_project) {
-            const auto publish_started =
-                std::chrono::steady_clock::now();
-            auto writer =
-                ProjectWriter::append(
-                    output,
-                    AppendOptions{
-                        .compatibility = {},
-                        .index_compression =
-                            IndexCompression::Zstd,
-                        .disk_reserve_bytes = 0,
-                        .boundary_observer = {},
-                    });
-            ASSERT_TRUE(writer)
-                << lfs::format_for_developer(
-                       writer.error());
-            require_status(
-                writer->plan_commit(
-                    CommitOptions{
-                        .kind = CommitKind::Explicit,
-                        .commit_uuid =
-                            lfs::core::
-                                generate_uuid_v4(),
-                        .snapshot_uuid =
-                            source_checkpoint
-                                .key.instance_uuid,
-                        .wallclock_unix_ns = 1,
-                    }));
-            require_status(
-                writer->preflight(
-                    expanded_bytes));
-            for (const auto& proof :
-                 carry_proofs) {
-                require_status(
-                    writer->reuse_if_clean(
-                        proof, 1));
+            const auto publish_started = std::chrono::steady_clock::now();
+            auto writer = ProjectWriter::append(output, AppendOptions{
+                                                            .compatibility = {},
+                                                            .index_compression = IndexCompression::Zstd,
+                                                            .disk_reserve_bytes = 0,
+                                                            .boundary_observer = {},
+                                                        });
+            ASSERT_TRUE(writer) << lfs::format_for_developer(writer.error());
+            require_status(writer->plan_commit(CommitOptions{
+                .kind = CommitKind::Explicit,
+                .commit_uuid = lfs::core::generate_uuid_v4(),
+                .snapshot_uuid = source_checkpoint.key.instance_uuid,
+                .wallclock_unix_ns = 1,
+            }));
+            require_status(writer->preflight(expanded_bytes));
+            for (const auto& proof : carry_proofs) {
+                require_status(writer->reuse_if_clean(proof, 1));
             }
-            auto destination =
-                writer->begin_chunk(
-                    source_checkpoint.key,
-                    ChunkWriteOptions{
-                        .chunk_version =
-                            source_checkpoint
-                                .chunk_version,
-                        .compression =
-                            Compression::Stored,
-                        .tensor_payload = true,
-                        .block_crcs = true,
-                        .expected_stream_bytes =
-                            expanded_bytes,
-                    });
-            ASSERT_TRUE(destination)
-                << lfs::format_for_developer(
-                       destination.error());
+            auto destination = writer->begin_chunk(source_checkpoint.key, ChunkWriteOptions{
+                                                                              .chunk_version = source_checkpoint.chunk_version,
+                                                                              .compression = Compression::Stored,
+                                                                              .tensor_payload = true,
+                                                                              .block_crcs = true,
+                                                                              .expected_stream_bytes = expanded_bytes,
+                                                                          });
+            ASSERT_TRUE(destination) << lfs::format_for_developer(destination.error());
 
-            std::ifstream source_stream(
-                source, std::ios::binary);
+            std::ifstream source_stream(source, std::ios::binary);
             ASSERT_TRUE(source_stream);
-            std::vector<char> buffer(
-                8ull * 1024 * 1024);
-            for (std::uint64_t repeat = 0;
-                 repeat < repeats; ++repeat) {
+            std::vector<char> buffer(8ull * 1024 * 1024);
+            for (std::uint64_t repeat = 0; repeat < repeats; ++repeat) {
                 source_stream.clear();
-                source_stream.seekg(
-                    static_cast<std::streamoff>(
-                        source_checkpoint
-                            .payload_offset));
+                source_stream.seekg(static_cast<std::streamoff>(source_checkpoint.payload_offset));
                 ASSERT_TRUE(source_stream);
-                std::uint64_t remaining =
-                    source_checkpoint
-                        .stored_bytes;
+                std::uint64_t remaining = source_checkpoint.stored_bytes;
                 while (remaining != 0) {
-                    const auto requested =
-                        static_cast<
-                            std::streamsize>(
-                            std::min<
-                                std::uint64_t>(
-                                remaining,
-                                buffer.size()));
-                    source_stream.read(
-                        buffer.data(), requested);
-                    ASSERT_EQ(
-                        source_stream.gcount(),
-                        requested);
+                    const auto requested = static_cast<std::streamsize>(
+                        std::min<std::uint64_t>(remaining, buffer.size()));
+                    source_stream.read(buffer.data(), requested);
+                    ASSERT_EQ(source_stream.gcount(), requested);
                     (*destination)->write(buffer.data(), requested);
                     ASSERT_TRUE(**destination);
-                    remaining -=
-                        static_cast<
-                            std::uint64_t>(
-                            requested);
+                    remaining -= static_cast<std::uint64_t>(requested);
                 }
             }
             require_status(writer->end_chunk());
             require_status(writer->commit());
-            publish_ms =
-                std::chrono::duration<
-                    double, std::milli>(
-                    std::chrono::
-                        steady_clock::now() -
-                    publish_started)
-                    .count();
+            publish_ms = std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - publish_started)
+                             .count();
         }
 
         {
-            auto reader =
-                ProjectReader::open(output);
-            ASSERT_TRUE(reader)
-                << lfs::format_for_developer(
-                       reader.error());
-            const auto* checkpoint =
-                reader->find(
-                    source_checkpoint.key);
+            auto reader = ProjectReader::open(output);
+            ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());
+            const auto* checkpoint = reader->find(source_checkpoint.key);
             ASSERT_NE(checkpoint, nullptr);
-            EXPECT_EQ(
-                checkpoint->stored_bytes,
-                expanded_bytes);
-            EXPECT_EQ(
-                checkpoint->row_kind,
-                RowKind::Live);
+            EXPECT_EQ(checkpoint->stored_bytes, expanded_bytes);
+            EXPECT_EQ(checkpoint->row_kind, RowKind::Live);
         }
 
-        const auto drop_file_cache =
-            [&output] {
+        const auto drop_file_cache = [&output] {
 #if defined(__linux__)
-                const int file =
-                    ::open(
-                        output.c_str(), O_RDONLY);
-                ASSERT_GE(file, 0);
-                EXPECT_EQ(
-                    ::posix_fadvise(
-                        file, 0, 0,
-                        POSIX_FADV_DONTNEED),
-                    0);
-                EXPECT_EQ(::close(file), 0);
+            const int file = ::open(output.c_str(), O_RDONLY);
+            ASSERT_GE(file, 0);
+            EXPECT_EQ(::posix_fadvise(file, 0, 0, POSIX_FADV_DONTNEED), 0);
+            EXPECT_EQ(::close(file), 0);
 #endif
-            };
+        };
 
         std::vector<double> cold_shell_ms;
         std::vector<double> cold_open_ms;
-        for (int sample = 0; sample < 5;
-             ++sample) {
+        for (int sample = 0; sample < 5; ++sample) {
             drop_file_cache();
-            const auto started =
-                std::chrono::steady_clock::now();
-            auto document =
-                ProjectDocument::open(
-                    output,
-                    ProjectDocumentOpenOptions{
-                        .reader = {},
-                        .geometry = {},
-                        .defer_geometry_payloads =
-                            true,
-                    });
-            ASSERT_TRUE(document)
-                << lfs::format_for_developer(
-                       document.error());
-            cold_open_ms.push_back(
-                std::chrono::duration<
-                    double, std::milli>(
-                    std::chrono::
-                        steady_clock::now() -
-                    started)
-                    .count());
-            auto session =
-                lfs::vis::project::
-                    prepareGuiSessionRestore(
-                        {
-                            .gui_layout =
-                                document
-                                    ->gui_layout(),
-                            .editor =
-                                document->editor(),
-                            .view =
-                                document->view(),
-                            .sequencer =
-                                document
-                                    ->sequencer(),
-                            .metrics =
-                                document
-                                    ->metrics(),
-                        });
-            ASSERT_TRUE(session)
-                << lfs::format_for_developer(
-                       session.error());
-            auto parameters =
-                document->parameters()
-                    .snapshot();
-            ASSERT_TRUE(parameters)
-                << lfs::format_for_developer(
-                       parameters.error());
+            const auto started = std::chrono::steady_clock::now();
+            auto document = ProjectDocument::open(output, ProjectDocumentOpenOptions{
+                                                              .reader = {},
+                                                              .geometry = {},
+                                                              .defer_geometry_payloads = true,
+                                                          });
+            ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+            const auto elapsed_ms = [&] {
+                return std::chrono::duration<double, std::milli>(
+                           std::chrono::steady_clock::now() - started)
+                    .count();
+            };
+            cold_open_ms.push_back(elapsed_ms());
+            auto session = lfs::vis::project::prepareGuiSessionRestore({
+                .gui_layout = document->gui_layout(),
+                .editor = document->editor(),
+                .view = document->view(),
+                .sequencer = document->sequencer(),
+                .metrics = document->metrics(),
+            });
+            ASSERT_TRUE(session) << lfs::format_for_developer(session.error());
+            auto parameters = document->parameters().snapshot();
+            ASSERT_TRUE(parameters) << lfs::format_for_developer(parameters.error());
             Scene shell_scene;
-            auto shell =
-                lfs::io::project::
-                    stage_scene_shell(
-                        document
-                            ->scene_graph(),
-                        shell_scene);
-            ASSERT_TRUE(shell)
-                << lfs::format_for_developer(
-                       shell.error());
-            cold_shell_ms.push_back(
-                std::chrono::duration<
-                    double, std::milli>(
-                    std::chrono::
-                        steady_clock::now() -
-                    started)
-                    .count());
+            auto shell = lfs::io::project::stage_scene_shell(
+                document->scene_graph(), shell_scene);
+            ASSERT_TRUE(shell) << lfs::format_for_developer(shell.error());
+            cold_shell_ms.push_back(elapsed_ms());
         }
         std::ranges::sort(cold_shell_ms);
         std::ranges::sort(cold_open_ms);
-        const double p50_shell_ms =
-            cold_shell_ms[cold_shell_ms.size() / 2];
-        const double max_shell_ms =
-            cold_shell_ms.back();
-        const auto join_samples =
-            [](const std::vector<double>& samples) {
-                std::ostringstream result;
-                for (std::size_t index = 0;
-                     index < samples.size();
-                     ++index) {
-                    if (index != 0) {
-                        result << ',';
-                    }
-                    result << samples[index];
+        const double p50_shell_ms = cold_shell_ms[cold_shell_ms.size() / 2];
+        const double max_shell_ms = cold_shell_ms.back();
+        const auto join_samples = [](const std::vector<double>& samples) {
+            std::ostringstream result;
+            for (std::size_t index = 0; index < samples.size(); ++index) {
+                if (index != 0) {
+                    result << ',';
                 }
-                return result.str();
-            };
-        std::cout
-            << "P6_SHELL_SAMPLES"
-            << " open_cold_ms="
-            << join_samples(cold_open_ms)
-            << " shell_cold_ms="
-            << join_samples(cold_shell_ms)
-            << '\n';
+                result << samples[index];
+            }
+            return result.str();
+        };
+        std::cout << "P6_SHELL_SAMPLES open_cold_ms=" << join_samples(cold_open_ms)
+                  << " shell_cold_ms=" << join_samples(cold_shell_ms) << '\n';
         EXPECT_LT(max_shell_ms, 100.0);
 
-        auto partial =
-            ProjectDocument::open(
-                output,
-                ProjectDocumentOpenOptions{
-                    .reader = {},
-                    .geometry = {},
-                    .defer_geometry_payloads =
-                        true,
-                });
-        ASSERT_TRUE(partial)
-            << lfs::format_for_developer(
-                   partial.error());
-        partial->edit_metrics()
-            .accumulated_training_seconds += 1.0;
-        const auto save_started =
-            std::chrono::steady_clock::now();
-        auto partial_save_options =
-            save_options(1100, 600);
-        partial_save_options.commit
-            .commit_uuid =
-            lfs::core::generate_uuid_v4();
-        partial_save_options.commit
-            .snapshot_uuid =
-            source_checkpoint
-                .key.instance_uuid;
-        partial_save_options.commit
-            .wallclock_unix_ns =
-            static_cast<std::uint64_t>(
-                std::chrono::duration_cast<
-                    std::chrono::nanoseconds>(
-                    std::chrono::
-                        system_clock::now()
-                            .time_since_epoch())
-                    .count());
-        auto saved =
-            partial->save(
-                output,
-                partial_save_options);
+        auto partial = ProjectDocument::open(output, ProjectDocumentOpenOptions{
+                                                         .reader = {},
+                                                         .geometry = {},
+                                                         .defer_geometry_payloads = true,
+                                                     });
+        ASSERT_TRUE(partial) << lfs::format_for_developer(partial.error());
+        partial->edit_metrics().accumulated_training_seconds += 1.0;
+        const auto save_started = std::chrono::steady_clock::now();
+        auto partial_save_options = save_options(1100, 600);
+        partial_save_options.commit.commit_uuid = lfs::core::generate_uuid_v4();
+        partial_save_options.commit.snapshot_uuid = source_checkpoint.key.instance_uuid;
+        partial_save_options.commit.wallclock_unix_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count());
+        auto saved = partial->save(output, partial_save_options);
         if (!saved) {
-            for (const auto& suppressed :
-                 saved.error().suppressed()) {
-                std::cerr
-                    << "P6_SAVE_SUPPRESSED\n"
-                    << lfs::format_for_developer(
-                           suppressed);
+            for (const auto& suppressed : saved.error().suppressed()) {
+                std::cerr << "P6_SAVE_SUPPRESSED\n"
+                          << lfs::format_for_developer(suppressed);
             }
         }
-        ASSERT_TRUE(saved)
-            << lfs::format_for_developer(
-                   saved.error());
-        const double partial_save_ms =
-            std::chrono::duration<
-                double, std::milli>(
-                std::chrono::
-                    steady_clock::now() -
-                save_started)
-                .count();
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+        const double partial_save_ms = std::chrono::duration<double, std::milli>(
+                                           std::chrono::steady_clock::now() - save_started)
+                                           .count();
         EXPECT_LT(partial_save_ms, 250.0);
         EXPECT_GT(saved->reused_chunks, 0u);
 
-        std::cout
-            << "P6_PERF"
-            << " ckpt_bytes="
-            << expanded_bytes
-            << " publish_ms=" << publish_ms
-            << " open_cold_ms=";
-        for (std::size_t index = 0;
-             index < cold_open_ms.size();
-             ++index) {
-            if (index != 0) {
-                std::cout << ',';
-            }
-            std::cout
-                << cold_open_ms[index];
-        }
-        std::cout
-            << " shell_cold_ms=";
-        for (std::size_t index = 0;
-             index < cold_shell_ms.size();
-             ++index) {
-            if (index != 0) {
-                std::cout << ',';
-            }
-            std::cout
-                << cold_shell_ms[index];
-        }
-        std::cout
-            << " shell_p50_ms="
-            << p50_shell_ms
-            << " shell_max_ms="
-            << max_shell_ms
-            << " partial_save_ms="
-            << partial_save_ms
-            << '\n';
+        std::cout << "P6_PERF ckpt_bytes=" << expanded_bytes
+                  << " publish_ms=" << publish_ms
+                  << " open_cold_ms=" << join_samples(cold_open_ms)
+                  << " shell_cold_ms=" << join_samples(cold_shell_ms)
+                  << " shell_p50_ms=" << p50_shell_ms
+                  << " shell_max_ms=" << max_shell_ms
+                  << " partial_save_ms=" << partial_save_ms << '\n';
     }
 
     TEST(ProjectDocumentTest,
@@ -1833,7 +1389,7 @@ namespace {
                 .point_cloud = point_cloud,
             });
         ASSERT_NE(point, lfs::core::NULL_NODE);
-        auto mesh = make_mesh();
+        auto mesh = make_triangle_mesh();
         const auto mesh_node = source.restoreNodeWithUuid(
             Scene::RestoreNodeDesc{
                 .uuid = mesh_uuid,
@@ -1897,9 +1453,7 @@ namespace {
         ASSERT_TRUE(splat_payload)
             << lfs::format_for_developer(splat_payload.error());
 
-        auto document = ProjectDocument::create(project_uuid, 100);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(document.error());
+        auto document = make_empty_document(project_uuid, 100);
         document->edit_scene_graph() = std::move(*scene_chapter);
         document->edit_selection() = std::move(*selection_chapter);
         require_status(document->set_splat(
@@ -2036,9 +1590,7 @@ namespace {
         EXPECT_EQ(first->generation, 1u);
         EXPECT_EQ(first->rewritten_chunks, 14u);
 
-        auto reopened = ProjectDocument::open(path);
-        ASSERT_TRUE(reopened)
-            << lfs::format_for_developer(reopened.error());
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
         EXPECT_EQ(reopened->splat_uuids(),
                   (std::vector<Uuid>{imported_uuid}));
         EXPECT_EQ(reopened->point_cloud_uuids(),
@@ -2140,9 +1692,7 @@ namespace {
         const Uuid dataset_node_uuid = fixed_uuid(204);
         const Uuid rad_node_uuid = fixed_uuid(205);
 
-        auto document = ProjectDocument::create(project_uuid, 1000);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(document.error());
+        auto document = make_empty_document(project_uuid, 1000);
         auto& references = document->edit_references();
         for (const auto& [uuid, key, kind, locator, tag] :
              std::array{
@@ -2217,9 +1767,7 @@ namespace {
         auto first_bytes = first_reader->read_chunk(first_refs);
         ASSERT_TRUE(first_bytes);
 
-        auto reopened = ProjectDocument::open(path);
-        ASSERT_TRUE(reopened)
-            << lfs::format_for_developer(reopened.error());
+        auto reopened = require_result_ptr(ProjectDocument::open(path));
         auto records = reopened->references().records();
         ASSERT_TRUE(records);
         ASSERT_EQ(records->size(), 3u);
@@ -2268,8 +1816,7 @@ namespace {
         ASSERT_TRUE(second_bytes);
         EXPECT_EQ(*second_bytes, *first_bytes);
 
-        auto relink_document = ProjectDocument::open(path);
-        ASSERT_TRUE(relink_document);
+        auto relink_document = require_result_ptr(ProjectDocument::open(path));
         const auto before =
             relink_document->references().find(dataset_uuid);
         ASSERT_TRUE(before);
@@ -2302,10 +1849,7 @@ namespace {
             read_file_bytes(master);
         ProjectReader base =
             ProjectReader::open(master).value();
-        auto document = ProjectDocument::open(master);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(
-                   document.error());
+        auto document = require_result_ptr(ProjectDocument::open(master));
         require_status(
             document->edit_view().dom().set(
                 "recovery_marker",
@@ -2513,10 +2057,8 @@ namespace {
                         .required_reader_capabilities.contains(100));
         ASSERT_TRUE(elevated_master.commit()
                         .required_writer_capabilities.contains(101));
-        auto document = ProjectDocument::open(
-            master, ProjectDocumentOpenOptions{.reader = compatibility});
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(document.error());
+        auto document = require_result_ptr(ProjectDocument::open(
+            master, ProjectDocumentOpenOptions{.reader = compatibility}));
         require_status(document->edit_view().dom().set(
             "compatibility_marker", std::string{"autosaved"}));
         auto saved = document->save_autosave(
@@ -2553,9 +2095,7 @@ namespace {
         const fs::path sidecar = autosave_sidecar_path(master);
         write_phase_a_fixture(master);
         ProjectReader base = require_result(ProjectReader::open(master));
-        auto autosave_document = ProjectDocument::open(master);
-        ASSERT_TRUE(autosave_document)
-            << lfs::format_for_developer(autosave_document.error());
+        auto autosave_document = require_result_ptr(ProjectDocument::open(master));
         require_status(autosave_document->edit_view().dom().set(
             "held_recovery_marker", std::string{"recovered"}));
         auto autosaved = autosave_document->save_autosave(
@@ -2577,9 +2117,7 @@ namespace {
         const fs::path staging = recovery_session_temp_path(master);
         require_status(materialize_recovered_project(
             master, sidecar, staging, session));
-        auto recovered = ProjectDocument::open(staging);
-        ASSERT_TRUE(recovered)
-            << lfs::format_for_developer(recovered.error());
+        auto recovered = require_result_ptr(ProjectDocument::open(staging));
         const auto recovered_marker =
             recovered->view().dom().get_json("held_recovery_marker");
         ASSERT_TRUE(recovered_marker.has_value());
@@ -2596,9 +2134,7 @@ namespace {
             << lfs::format_for_developer(merged.error());
         ProjectReader durable = require_result(ProjectReader::open(master));
         EXPECT_EQ(durable.commit().kind, CommitKind::Recovered);
-        auto durable_document = ProjectDocument::open(master);
-        ASSERT_TRUE(durable_document)
-            << lfs::format_for_developer(durable_document.error());
+        auto durable_document = require_result_ptr(ProjectDocument::open(master));
         const auto durable_marker =
             durable_document->view().dom().get_json("held_recovery_marker");
         ASSERT_TRUE(durable_marker.has_value());
@@ -2623,11 +2159,7 @@ namespace {
         write_phase_a_fixture(master);
         ProjectReader base =
             require_result(ProjectReader::open(master));
-        auto autosave_document =
-            ProjectDocument::open(master);
-        ASSERT_TRUE(autosave_document)
-            << lfs::format_for_developer(
-                   autosave_document.error());
+        auto autosave_document = require_result_ptr(ProjectDocument::open(master));
         require_status(
             autosave_document->edit_view().dom().set(
                 "headless_recovery_marker",
@@ -2656,14 +2188,11 @@ namespace {
             recovery_session_temp_path(master);
         require_status(materialize_recovered_project(
             master, sidecar, staging, session));
-        auto recovered = ProjectDocument::open(
+        auto recovered = require_result_ptr(ProjectDocument::open(
             staging,
             ProjectDocumentOpenOptions{
                 .defer_geometry_payloads = true,
-            });
-        ASSERT_TRUE(recovered)
-            << lfs::format_for_developer(
-                   recovered.error());
+            }));
         ASSERT_TRUE(std::ranges::all_of(
             recovered->payload_states(),
             [](const auto& state) {
@@ -2681,14 +2210,11 @@ namespace {
         // Mirror the trainer's durable recovered publish with a separate
         // document: the owner must remain bound to the staging file until it
         // explicitly reopens the new master head.
-        auto writer_document = ProjectDocument::open(
+        auto writer_document = require_result_ptr(ProjectDocument::open(
             staging,
             ProjectDocumentOpenOptions{
                 .defer_geometry_payloads = true,
-            });
-        ASSERT_TRUE(writer_document)
-            << lfs::format_for_developer(
-                   writer_document.error());
+            }));
         auto merge_options = save_options(9872, 1500);
         merge_options.commit.kind =
             CommitKind::Recovered;
@@ -2744,11 +2270,7 @@ namespace {
         write_phase_a_fixture(master);
         ProjectReader base =
             require_result(ProjectReader::open(master));
-        auto autosave_document =
-            ProjectDocument::open(master);
-        ASSERT_TRUE(autosave_document)
-            << lfs::format_for_developer(
-                   autosave_document.error());
+        auto autosave_document = require_result_ptr(ProjectDocument::open(master));
         require_status(
             autosave_document->edit_view().dom().set(
                 "headless_teardown_marker",
@@ -2779,14 +2301,11 @@ namespace {
                     master, sidecar));
             require_status(materialize_recovered_project(
                 master, sidecar, staging, session));
-            auto recovered = ProjectDocument::open(
+            auto recovered = require_result_ptr(ProjectDocument::open(
                 staging,
                 ProjectDocumentOpenOptions{
                     .defer_geometry_payloads = true,
-                });
-            ASSERT_TRUE(recovered)
-                << lfs::format_for_developer(
-                       recovered.error());
+                }));
             lfs::app::detail::HeadlessRecoveryDocument owner(
                 std::move(*recovered),
                 std::move(session));
@@ -2879,11 +2398,7 @@ namespace {
                 .selected_node_uuids(),
             std::vector<Uuid>{model_uuid});
 
-        auto document = ProjectDocument::create(
-            project_uuid, 1000);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(
-                   document.error());
+        auto document = make_empty_document(project_uuid, 1000);
         for (const auto& [uuid, key, kind] :
              std::array{
                  std::tuple{
@@ -2939,11 +2454,7 @@ namespace {
                    autosaved.error());
         require_status(materialize_recovered_project(
             master, sidecar, recovered));
-        auto reopened =
-            ProjectDocument::open(recovered);
-        ASSERT_TRUE(reopened)
-            << lfs::format_for_developer(
-                   reopened.error());
+        auto reopened = require_result_ptr(ProjectDocument::open(recovered));
         auto restored =
             reopened->parameters().snapshot();
         ASSERT_TRUE(restored)
@@ -2987,9 +2498,7 @@ namespace {
         write_phase_a_fixture(master);
         auto base = ProjectReader::open(master);
         ASSERT_TRUE(base);
-        auto autosave_document =
-            ProjectDocument::open(master);
-        ASSERT_TRUE(autosave_document);
+        auto autosave_document = require_result_ptr(ProjectDocument::open(master));
         require_status(
             autosave_document->edit_view().dom().set(
                 "headless_recovery_marker",
@@ -3020,9 +2529,7 @@ namespace {
 
         // This is the headless-without---recover policy: open the durable
         // master and leave the valid offer untouched.
-        auto opened_master =
-            ProjectDocument::open(master);
-        ASSERT_TRUE(opened_master);
+        auto opened_master = require_result_ptr(ProjectDocument::open(master));
         EXPECT_TRUE(fs::is_regular_file(sidecar));
         EXPECT_FALSE(
             opened_master->view().dom().get_json(
@@ -3112,9 +2619,7 @@ namespace {
                 ProjectReader::open(master);
             ASSERT_TRUE(base);
             {
-                auto document =
-                    ProjectDocument::open(master);
-                ASSERT_TRUE(document);
+                auto document = require_result_ptr(ProjectDocument::open(master));
                 require_status(
                     document->edit_view()
                         .dom()
@@ -3261,11 +2766,7 @@ namespace {
             require_status(
                 recovered->verify_all());
             auto recovered_document =
-                ProjectDocument::open(
-                    materialized);
-            ASSERT_TRUE(recovered_document)
-                << lfs::format_for_developer(
-                       recovered_document.error());
+                require_result_ptr(ProjectDocument::open(materialized));
             const auto payload_marker =
                 recovered_document->view()
                     .dom()

@@ -365,8 +365,8 @@ GUI-touching phases, compute-sanitizer memcheck for CUDA-touching phases.
   2026-07-30: **bandwidth-scaled SLA** — the normative pause gate is
   `p95 ≤ snapshot_bytes / measured_pinned_D2H × 1.12`, with the pinned-D2H baseline measured
   once per rig by the production snapshot service; the absolute numbers above remain the
-  reference-rig instantiation. Bench: tools/licht_p0/snapshot_bench (contract mode,
-  drain_threads=1, 4×128 MiB).*
+  reference-rig instantiation. The development benchmark used contract mode with one drain
+  thread and 4×128 MiB bands; it is retained in branch history rather than shipped.*
 - **P1 — State & serializer foundations**: node UUIDs through scene/undo/selection/sequencer;
   §5 gap fixes; field-wise Config serialization; retained-DOM chapter plumbing; delete duplicate
   authorities. Exit: every matrix row round-trips independently; no state has two writers.
@@ -447,10 +447,10 @@ folded in above. Do not reopen §1 decisions without new evidence.
 1. **P0 artifacts** — this plan (`PROJECT_FORMAT_PLAN.md`),
    `docs/licht_format_spec.md` (byte grammar + state machines),
    `docs/licht_ownership_matrix.md` (109 rows), `docs/licht_uuid_semantics.md`,
-   `docs/licht_p1_node_uuid_migration.md`, `tools/licht_inspect/` (reference parser +
-   `spec_byte_verifier.py` second reader + golden fixtures + oracle corpus + conformance
-   battery `run_conformance.py`: 137,730 full + 475,952 fuzz + 4,349 quick — all green),
-   `tools/licht_p0/` (snapshot bench + OS-semantics prototype, POSIX 8/8 PASS).
+   `docs/licht_p1_node_uuid_migration.md`, plus development-only parser, input-sweep,
+   snapshot-benchmark, and OS-semantics studies. Those studies completed before the production
+   implementation and remain recoverable in branch history; only product code, C++ tests, and
+   their binary fixtures remain in the shipped tree.
 2. **P1 foundations** — node UUID identity migration S1–S5 (`core/uuid.*`, scene/undo/
    selection/sequencer/python/MCP/TCP, additive APIs only) + all §5 gap fixes (LFKP v2 +
    `CHECKPOINT_MIN_SUPPORTED_VERSION` + per-version flag whitelists, frozen-ranges reapply
@@ -470,20 +470,19 @@ folded in above. Do not reopen §1 decisions without new evidence.
 3. ~~P0 exit review~~ **DONE** — verdict below; conditions (A)–(C) remain live gates on
    later phases.
    *EXIT VERDICT (2026-07-18, fable synthesis): PROCEED to P1/P2 freezes. Read-side format
-   contract complete (grammar/matrix/UUID note/two independent parsers/613k conformance+fuzz
-   cases). Conditions: (A) Windows os_semantics execution blocks P2 exit; (B) owner snapshot-SLA
+   contract complete (grammar/matrix/UUID note and the historical independent parser/input sweep).
+   Conditions: (A) Windows OS-semantics execution blocks P2 exit; (B) owner snapshot-SLA
    decision blocks P4 autosave productionization; (C) writer-side gates (G9–G12, disk-full,
    clean-proof reuse, refuse-write enforcement, dirty-CKPT escalation, real process-kill crash
-   matrix) are P2/P4/P6 acceptance criteria measured against the conformance battery; the P2
-   C++ reader must agree with both Python parsers on the full corpus (decisive third
-   implementation). Bench numbers to be re-proven on the production snapshot service, ≥2 rigs.*
+   matrix) are P2/P4/P6 acceptance criteria now pinned by the production C++ test suites.
+   Bench numbers are re-proven on the production snapshot service, ≥2 rigs.*
 4. ~~P1~~ **DONE** (landed; formal matrix-row round-trip proof arrives with P3 chapters).
 5. **P2 — NEXT.** Dispatch the container core rewrite (§7 P2 scope + prototype disposition)
    against the frozen spec. Acceptance (all mandatory): (i) reproduces every golden fixture in
-   `tools/licht_inspect/fixtures/` byte-for-byte; (ii) every file the writer produces passes
-   the full conformance battery; (iii) the C++ reader agrees with both Python parsers on the
-   complete corpus; (iv) writer-side gates from condition (C) incl. process-kill crash matrix;
-   (v) `lfs::Error`/`Result<T>` conventions + `tools/error_debt_census.py` ratchet clean.
+   `tests/fixtures/licht/` byte-for-byte; (ii) the C++ reader opens and validates every locked
+   production fixture; (iii) malformed-file and unsupported-newer classifications match their
+   fixed C++ oracles; (iv) writer-side gates from condition (C), including the process-kill crash
+   matrix; (v) `lfs::Error`/`Result<T>` conventions + `tools/error_debt_census.py` ratchet clean.
 6. ~~OPEN OWNER DECISIONS~~ **ALL RESOLVED 2026-07-30**:
    (a) snapshot pause SLA = **bandwidth-scaled** (`p95 ≤ snapshot_bytes / measured_pinned_D2H
    × 1.12`, per-rig baseline) — P4 unblocked. (b) gap #12 = **distinct `PCLD`/`MESH` fourccs**

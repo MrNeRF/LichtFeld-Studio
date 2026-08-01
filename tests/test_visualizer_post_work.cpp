@@ -11,6 +11,7 @@
 #include "input/input_controller.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
+#include "licht_test_support.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "training/components/ppisp_file.hpp"
@@ -221,6 +222,49 @@ protected:
         lfs::core::event::bus().clear_all();
         lfs::event::EventBridge::instance().clear_all();
     }
+
+    [[nodiscard]] lfs::vis::ViewerOptions projectOptions() const {
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        options.project_lifecycle_settings_path =
+            temporary_.path / "lifecycle.json";
+        return options;
+    }
+
+    template <typename Predicate>
+    [[nodiscard]] bool pumpUntil(
+        std::mutex& queue_mutex, std::vector<lfs::vis::Visualizer::WorkItem>& queue,
+        Predicate&& predicate,
+        const std::chrono::milliseconds timeout = std::chrono::seconds(10)) {
+        return lfs::test::licht::wait_until(
+            timeout, std::forward<Predicate>(predicate), [&] {
+                lfs::test::licht::drain_work_queue(queue_mutex, queue);
+            });
+    }
+
+    void installModalOverlay(
+        std::unique_ptr<lfs::vis::gui::RmlModalOverlay>& overlay,
+        lfs::vis::gui::RmlUIManager& manager) {
+        overlay =
+            std::make_unique<lfs::vis::gui::RmlModalOverlay>(
+                &manager);
+    }
+
+    [[nodiscard]] lfs::core::ModalRequest
+    takeModalRequest(std::mutex& queue_mutex,
+                     std::deque<lfs::core::ModalRequest>& queue) {
+        std::lock_guard lock(queue_mutex);
+        if (queue.size() != 1) {
+            ADD_FAILURE() << "expected exactly one modal request, got "
+                          << queue.size();
+            return {};
+        }
+        auto request = std::move(queue.front());
+        queue.pop_front();
+        return request;
+    }
+
+    lfs::test::licht::TemporaryDirectory temporary_{"lfs-visualizer-project"};
 };
 
 namespace {
@@ -310,47 +354,16 @@ namespace {
         const std::filesystem::path& path,
         const std::optional<float>
             focal_length_mm = std::nullopt) {
-        auto document =
-            lfs::io::project::ProjectDocument::create(
-                lfs::core::generate_uuid_v4(), 1);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(
-                   document.error());
+        auto document = lfs::test::licht::make_empty_document(
+            lfs::core::generate_uuid_v4(), 1);
         if (focal_length_mm) {
-            const auto updated =
-                document->edit_view().dom().set_json(
-                    "render_settings.focal_length_mm",
-                    *focal_length_mm);
-            ASSERT_TRUE(updated)
-                << lfs::format_for_developer(
-                       updated.error());
+            lfs::test::licht::require_status(document->edit_view().dom().set_json(
+                "render_settings.focal_length_mm", *focal_length_mm));
         }
-        auto saved = document->save(
-            path,
-            lfs::io::project::
-                ProjectDocumentSaveOptions{
-                    .commit =
-                        {
-                            .kind =
-                                lfs::io::project::
-                                    CommitKind::Explicit,
-                            .commit_uuid =
-                                lfs::core::
-                                    generate_uuid_v4(),
-                            .snapshot_uuid = {},
-                            .wallclock_unix_ns = 2,
-                        },
-                    .file_uuid =
-                        lfs::core::generate_uuid_v4(),
-                    .index_compression =
-                        lfs::io::project::
-                            IndexCompression::
-                                StoredForDeterministicTests,
-                    .disk_reserve_bytes = 0,
-                });
-        ASSERT_TRUE(saved)
-            << lfs::format_for_developer(
-                   saved.error());
+        auto options = lfs::test::licht::deterministic_document_save_options(
+            0x76000000, 1, 2);
+        options.commit.snapshot_uuid = {};
+        (void)lfs::test::licht::require_result(document->save(path, options));
     }
 
     void write_recoverable_project(
@@ -360,12 +373,8 @@ namespace {
         lfs::core::Uuid* checkpoint_uuid_out =
             nullptr) {
         write_empty_project(path);
-        auto document =
-            lfs::io::project::ProjectDocument::open(
-                path);
-        ASSERT_TRUE(document)
-            << lfs::format_for_developer(
-                   document.error());
+        auto document = lfs::test::licht::require_result_ptr(
+            lfs::io::project::ProjectDocument::open(path));
         const auto payload_uuid =
             lfs::core::generate_uuid_v4();
         const lfs::training::PPISPFileHeader header{
@@ -381,57 +390,24 @@ namespace {
                 from_owned(
                     std::move(payload_bytes),
                     payload_uuid);
-        ASSERT_TRUE(payload)
-            << lfs::format_for_developer(
-                   payload.error());
-        ASSERT_TRUE(document->set_ppisp(
-            payload_uuid, std::move(*payload)));
-        auto checkpoint_saved = document->save(
-            path,
-            lfs::io::project::
-                ProjectDocumentSaveOptions{
-                    .commit =
-                        {
-                            .kind =
-                                lfs::io::project::
-                                    CommitKind::Explicit,
-                            .commit_uuid =
-                                lfs::core::
-                                    generate_uuid_v4(),
-                            .snapshot_uuid = {},
-                            .wallclock_unix_ns = 3,
-                        },
-                    .file_uuid =
-                        lfs::core::generate_uuid_v4(),
-                    .index_compression =
-                        lfs::io::project::
-                            IndexCompression::
-                                StoredForDeterministicTests,
-                    .disk_reserve_bytes = 0,
-                });
-        ASSERT_TRUE(checkpoint_saved)
-            << lfs::format_for_developer(
-                   checkpoint_saved.error());
-        auto base =
-            lfs::io::project::ProjectReader::open(
-                path);
-        ASSERT_TRUE(base)
-            << lfs::format_for_developer(
-                   base.error());
-        const auto updated =
-            document->edit_view().dom().set(
-                "recovery_marker", marker);
-        ASSERT_TRUE(updated)
-            << lfs::format_for_developer(
-                   updated.error());
-        auto saved = document->save_autosave(
+        lfs::test::licht::require_status(document->set_ppisp(
+            payload_uuid, lfs::test::licht::require_result(std::move(payload))));
+        auto options = lfs::test::licht::deterministic_document_save_options(
+            0x76000000, 10, 3);
+        options.commit.snapshot_uuid = {};
+        (void)lfs::test::licht::require_result(document->save(path, options));
+        const auto base = lfs::test::licht::require_result(
+            lfs::io::project::ProjectReader::open(path));
+        lfs::test::licht::require_status(
+            document->edit_view().dom().set("recovery_marker", marker));
+        (void)lfs::test::licht::require_result(document->save_autosave(
             lfs::io::project::
                 autosave_sidecar_path(path),
             {
                 .file_uuid =
                     lfs::core::generate_uuid_v4(),
                 .base_explicit_commit_uuid =
-                    base->commit().commit_uuid,
+                    base.commit().commit_uuid,
                 .autosave_sequence = 1,
                 .snapshot_uuid =
                     lfs::core::generate_uuid_v4(),
@@ -440,10 +416,7 @@ namespace {
                         IndexCompression::
                             StoredForDeterministicTests,
                 .disk_reserve_bytes = 0,
-            });
-        ASSERT_TRUE(saved)
-            << lfs::format_for_developer(
-                   saved.error());
+            }));
         if (checkpoint_uuid_out) {
             *checkpoint_uuid_out =
                 payload_uuid;
@@ -567,21 +540,12 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            SuccessfulProjectOpenClearsUndoHistory) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p6-open-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "empty.licht";
         write_empty_project(project_path);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_NE(
@@ -605,21 +569,11 @@ namespace lfs::vis {
             EXPECT_EQ(
                 viewer.getScene().getNodeCount(), 0u);
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-recovery-decline-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "decline.licht";
         const auto other_path =
@@ -630,22 +584,15 @@ namespace lfs::vis {
         write_recoverable_project(project_path);
         write_empty_project(other_path);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(
                 viewer.getParameterManager()
                     ->ensureLoaded());
-            auto* const gui =
-                viewer.getGuiManager();
+            auto* const gui = viewer.getGuiManager();
             ASSERT_NE(gui, nullptr);
-            gui->rml_modal_overlay_ =
-                std::make_unique<
-                    gui::RmlModalOverlay>(
-                    &gui->rmlui_manager_);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
 
             auto before_prompt =
                 viewer.projectGetInfo();
@@ -672,18 +619,8 @@ namespace lfs::vis {
                       before_prompt->path);
             EXPECT_EQ(while_pending->project_uuid,
                       before_prompt->project_uuid);
-            lfs::core::ModalRequest request;
-            {
-                auto& overlay =
-                    *gui->rml_modal_overlay_;
-                std::lock_guard lock(
-                    overlay.queue_mutex_);
-                ASSERT_EQ(overlay.queue_.size(),
-                          1u);
-                request = std::move(
-                    overlay.queue_.front());
-                overlay.queue_.pop_front();
-            }
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
             ASSERT_EQ(
                 request.title,
                 "Recover Autosaved Project?");
@@ -711,17 +648,8 @@ namespace lfs::vis {
             EXPECT_EQ(*pending,
                       ProjectOpenOutcome::
                           RecoveryPromptPending);
-            {
-                auto& overlay =
-                    *gui->rml_modal_overlay_;
-                std::lock_guard lock(
-                    overlay.queue_mutex_);
-                ASSERT_EQ(overlay.queue_.size(),
-                          1u);
-                request = std::move(
-                    overlay.queue_.front());
-                overlay.queue_.pop_front();
-            }
+            request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
             ASSERT_TRUE(request.on_result);
             request.on_result(
                 lfs::core::ModalResult{
@@ -740,7 +668,7 @@ namespace lfs::vis {
                       ProjectOpenOutcome::Opened);
             {
                 auto& overlay =
-                    *gui->rml_modal_overlay_;
+                    *viewer.getGuiManager()->rml_modal_overlay_;
                 std::lock_guard lock(
                     overlay.queue_mutex_);
                 EXPECT_TRUE(
@@ -752,28 +680,10 @@ namespace lfs::vis {
                 lfs::core::NULL_NODE);
             ASSERT_TRUE(
                 viewer.projectSave(false));
-            const auto deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       deadline) {
-                std::vector<Visualizer::WorkItem>
-                    work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); },
+                std::chrono::seconds(10)));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             EXPECT_FALSE(
@@ -786,21 +696,11 @@ namespace lfs::vis {
                       lfs::io::project::
                           CommitKind::Explicit);
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            RecoveredPublishUsesRecoveredCommitKind) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-recovered-commit-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "recover.licht";
         const auto sidecar =
@@ -808,22 +708,15 @@ namespace lfs::vis {
                 autosave_sidecar_path(project_path);
         write_recoverable_project(project_path);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(
                 viewer.getParameterManager()
                     ->ensureLoaded());
-            auto* const gui =
-                viewer.getGuiManager();
+            auto* const gui = viewer.getGuiManager();
             ASSERT_NE(gui, nullptr);
-            gui->rml_modal_overlay_ =
-                std::make_unique<
-                    gui::RmlModalOverlay>(
-                    &gui->rmlui_manager_);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
 
             auto pending = viewer.projectOpen(
                 project_path,
@@ -833,18 +726,8 @@ namespace lfs::vis {
             EXPECT_EQ(*pending,
                       ProjectOpenOutcome::
                           RecoveryPromptPending);
-            lfs::core::ModalRequest request;
-            {
-                auto& overlay =
-                    *gui->rml_modal_overlay_;
-                std::lock_guard lock(
-                    overlay.queue_mutex_);
-                ASSERT_EQ(overlay.queue_.size(),
-                          1u);
-                request = std::move(
-                    overlay.queue_.front());
-                overlay.queue_.pop_front();
-            }
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
             ASSERT_TRUE(request.on_result);
             request.on_result(
                 lfs::core::ModalResult{
@@ -866,28 +749,10 @@ namespace lfs::vis {
             ASSERT_TRUE(
                 viewer.projectSave(false));
 
-            const auto deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       deadline) {
-                std::vector<Visualizer::WorkItem>
-                    work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); },
+                std::chrono::seconds(10)));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             auto master =
@@ -907,19 +772,11 @@ namespace lfs::vis {
                 std::filesystem::is_directory(
                     sidecar));
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            RecoveredProjectSwitchDeletesTempOnlyAfterReplacement) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-recovery-switch-" +
-             lfs::core::generate_uuid_v4().to_string());
-        std::filesystem::create_directories(temporary);
+        const auto& temporary = temporary_.path;
         const auto recovered_path =
             temporary / "recovered.licht";
         const auto replacement_path =
@@ -930,19 +787,14 @@ namespace lfs::vis {
             &checkpoint_uuid);
         write_empty_project(replacement_path);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()
                             ->ensureLoaded());
             auto* const gui = viewer.getGuiManager();
             ASSERT_NE(gui, nullptr);
-            gui->rml_modal_overlay_ =
-                std::make_unique<gui::RmlModalOverlay>(
-                    &gui->rmlui_manager_);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
             auto offered = viewer.projectOpen(
                 recovered_path,
                 ProjectSwitchDisposition::DiscardChanges);
@@ -950,17 +802,8 @@ namespace lfs::vis {
             ASSERT_EQ(*offered,
                       ProjectOpenOutcome::
                           RecoveryPromptPending);
-            lfs::core::ModalRequest request;
-            {
-                auto& overlay =
-                    *gui->rml_modal_overlay_;
-                std::lock_guard lock(
-                    overlay.queue_mutex_);
-                ASSERT_EQ(overlay.queue_.size(), 1u);
-                request = std::move(
-                    overlay.queue_.front());
-                overlay.queue_.pop_front();
-            }
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
             request.on_result({.button_label = "Recover"});
             ASSERT_TRUE(viewer.project_lifecycle_
                             ->recovery_session_path_);
@@ -1006,17 +849,11 @@ namespace lfs::vis {
             EXPECT_FALSE(viewer.project_lifecycle_
                              ->recovery_session_);
         }
-        std::error_code ignored;
-        std::filesystem::remove_all(temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            FailedNewProjectKeepsRecoveredSessionTemp) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-recovery-new-fail-" +
-             lfs::core::generate_uuid_v4().to_string());
-        std::filesystem::create_directories(temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "recovered.licht";
         lfs::core::Uuid checkpoint_uuid;
@@ -1024,19 +861,14 @@ namespace lfs::vis {
             project_path, "failed-new",
             &checkpoint_uuid);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()
                             ->ensureLoaded());
             auto* const gui = viewer.getGuiManager();
             ASSERT_NE(gui, nullptr);
-            gui->rml_modal_overlay_ =
-                std::make_unique<gui::RmlModalOverlay>(
-                    &gui->rmlui_manager_);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
             auto offered = viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::DiscardChanges);
@@ -1046,16 +878,8 @@ namespace lfs::vis {
             ASSERT_EQ(*offered,
                       ProjectOpenOutcome::
                           RecoveryPromptPending);
-            lfs::core::ModalRequest request;
-            {
-                auto& overlay =
-                    *gui->rml_modal_overlay_;
-                std::lock_guard lock(
-                    overlay.queue_mutex_);
-                request = std::move(
-                    overlay.queue_.front());
-                overlay.queue_.pop_front();
-            }
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
             request.on_result({.button_label = "Recover"});
             const auto recovery_temp =
                 *viewer.project_lifecycle_
@@ -1085,35 +909,24 @@ namespace lfs::vis {
             ASSERT_TRUE(checkpoint->read_at(0, marker));
             EXPECT_EQ(marker[0], std::byte{0x49});
         }
-        std::error_code ignored;
-        std::filesystem::remove_all(temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            RecoveredCloseDeletesTempAfterDocumentTeardown) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-recovery-close-" +
-             lfs::core::generate_uuid_v4().to_string());
-        std::filesystem::create_directories(temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "recovered.licht";
         write_recoverable_project(
             project_path, "close");
         std::filesystem::path recovery_temp;
         {
-            ViewerOptions options;
-            options.show_startup_overlay = false;
-            options.project_lifecycle_settings_path =
-                temporary / "lifecycle.json";
+            auto options = projectOptions();
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()
                             ->ensureLoaded());
             auto* const gui = viewer.getGuiManager();
             ASSERT_NE(gui, nullptr);
-            gui->rml_modal_overlay_ =
-                std::make_unique<gui::RmlModalOverlay>(
-                    &gui->rmlui_manager_);
+            installModalOverlay(gui->rml_modal_overlay_, gui->rmlui_manager_);
             auto offered = viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::DiscardChanges);
@@ -1123,16 +936,8 @@ namespace lfs::vis {
             ASSERT_EQ(*offered,
                       ProjectOpenOutcome::
                           RecoveryPromptPending);
-            lfs::core::ModalRequest request;
-            {
-                auto& overlay =
-                    *gui->rml_modal_overlay_;
-                std::lock_guard lock(
-                    overlay.queue_mutex_);
-                request = std::move(
-                    overlay.queue_.front());
-                overlay.queue_.pop_front();
-            }
+            auto request = takeModalRequest(
+                gui->rml_modal_overlay_->queue_mutex_, gui->rml_modal_overlay_->queue_);
             request.on_result({.button_label = "Recover"});
             recovery_temp =
                 *viewer.project_lifecycle_
@@ -1142,29 +947,18 @@ namespace lfs::vis {
         }
         EXPECT_FALSE(std::filesystem::exists(
             recovery_temp));
-        std::error_code ignored;
-        std::filesystem::remove_all(temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            AutosaveStartsAfterFirstSaveAsWithoutReopen) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-autosave-first-save-as-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "first-save.licht";
         const auto sidecar =
             lfs::io::project::
                 autosave_sidecar_path(project_path);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(
@@ -1195,29 +989,9 @@ namespace lfs::vis {
             ASSERT_TRUE(saved)
                 << lfs::format_for_developer(
                        saved.error());
-            const auto save_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       save_deadline) {
-                std::vector<Visualizer::WorkItem>
-                    work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(
-                        viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
             ASSERT_FALSE(
                 viewer.jobs().anyRunning(
                     JobType::ProjectWrite));
@@ -1235,29 +1009,9 @@ namespace lfs::vis {
                 lfs::core::NULL_NODE);
             ASSERT_TRUE(viewer.project_lifecycle_
                             ->startAutosave());
-            const auto autosave_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       autosave_deadline) {
-                std::vector<Visualizer::WorkItem>
-                    work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(
-                        viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
             EXPECT_FALSE(
                 viewer.jobs().anyRunning(
                     JobType::ProjectWrite));
@@ -1265,21 +1019,11 @@ namespace lfs::vis {
                 std::filesystem::is_regular_file(
                     sidecar));
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            AutosaveSkipsWhileManualProjectWriteJobIsRunning) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-autosave-exclusive-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "exclusive.licht";
         const auto sidecar =
@@ -1287,42 +1031,20 @@ namespace lfs::vis {
                 autosave_sidecar_path(project_path);
         write_empty_project(project_path);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.projectOpen(
                 project_path,
                 ProjectSwitchDisposition::
                     DiscardChanges));
-            const auto hydration_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (std::chrono::steady_clock::now() <
-                   hydration_deadline) {
-                std::vector<Visualizer::WorkItem>
-                    work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                auto info = viewer.projectGetInfo();
-                ASSERT_TRUE(info);
-                if (info->hydration_state ==
-                    "complete") {
-                    break;
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            ASSERT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] {
+                    const auto info = viewer.projectGetInfo();
+                    EXPECT_TRUE(info);
+                    return info && info->hydration_state == "complete";
+                }));
             auto hydrated =
                 viewer.projectGetInfo();
             ASSERT_TRUE(hydrated);
@@ -1364,55 +1086,25 @@ namespace lfs::vis {
 
             ASSERT_TRUE(viewer.project_lifecycle_
                             ->startAutosave());
-            const auto autosave_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       autosave_deadline) {
-                std::vector<Visualizer::WorkItem>
-                    work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             EXPECT_TRUE(
                 std::filesystem::is_regular_file(
                     sidecar));
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            ProjectWriteSettlementCompletesBeforeNextDocumentWrite) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-settle-order-" +
-             lfs::core::generate_uuid_v4().to_string());
-        std::filesystem::create_directories(temporary);
+        const auto& temporary = temporary_.path;
         const auto first_path =
             temporary / "first.licht";
         const auto second_path =
             temporary / "second.licht";
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()
@@ -1431,21 +1123,14 @@ namespace lfs::vis {
             const auto first_job =
                 *viewer.project_lifecycle_
                      ->project_write_job_;
-            const auto deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (std::chrono::steady_clock::now() <
-                   deadline) {
-                const auto snapshot =
-                    viewer.jobs().peek(first_job);
-                if (snapshot &&
-                    snapshot->status ==
-                        JobStatus::CompletionPending) {
-                    break;
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            ASSERT_TRUE(lfs::test::licht::wait_until(
+                std::chrono::seconds(10),
+                [&] {
+                    const auto snapshot = viewer.jobs().peek(first_job);
+                    return snapshot &&
+                           snapshot->status == JobStatus::CompletionPending;
+                },
+                [] {}));
             auto pending =
                 viewer.jobs().peek(first_job);
             ASSERT_TRUE(pending);
@@ -1460,17 +1145,8 @@ namespace lfs::vis {
             sequence.emplace_back(
                 "new_write_blocked");
 
-            std::vector<Visualizer::WorkItem> work;
-            {
-                std::lock_guard lock(
-                    viewer.work_queue_mutex_);
-                work.swap(viewer.work_queue_);
-            }
-            for (auto& item : work) {
-                if (item.run) {
-                    item.run();
-                }
-            }
+            lfs::test::licht::drain_work_queue(
+                viewer.work_queue_mutex_, viewer.work_queue_);
             ASSERT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             sequence.emplace_back("settled");
@@ -1479,27 +1155,9 @@ namespace lfs::vis {
                 second_path, false));
             sequence.emplace_back(
                 "new_write_started");
-            const auto second_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       second_deadline) {
-                work.clear();
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             EXPECT_EQ(sequence,
@@ -1509,8 +1167,6 @@ namespace lfs::vis {
                           "settled",
                           "new_write_started"}));
         }
-        std::error_code ignored;
-        std::filesystem::remove_all(temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -1518,18 +1174,11 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-request-cleanup-" +
-             lfs::core::generate_uuid_v4().to_string());
-        std::filesystem::create_directories(temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "cleanup.licht";
         write_empty_project(project_path);
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.getParameterManager()
@@ -1573,27 +1222,10 @@ namespace lfs::vis {
                 ->project_write_autosave_sequence_ = 1;
 
             trainer->cleanup();
-            const auto deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(2);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       deadline) {
-                std::vector<Visualizer::WorkItem> work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); },
+                std::chrono::seconds(2)));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             EXPECT_EQ(viewer.project_lifecycle_
@@ -1614,35 +1246,15 @@ namespace lfs::vis {
             ASSERT_TRUE(explicit_save)
                 << lfs::format_for_developer(
                        explicit_save.error());
-            const auto save_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       save_deadline) {
-                std::vector<Visualizer::WorkItem> work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); }));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             auto info = viewer.projectGetInfo();
             ASSERT_TRUE(info);
             EXPECT_TRUE(info->project_write_error.empty());
         }
-        std::error_code ignored;
-        std::filesystem::remove_all(temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -1650,18 +1262,11 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-request-prepare-" +
-             lfs::core::generate_uuid_v4().to_string());
-        std::filesystem::create_directories(temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "prepare.licht";
         write_empty_project(project_path);
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.projectOpen(
@@ -1727,27 +1332,10 @@ namespace lfs::vis {
                 request_id, write_kind, base_uuid,
                 sequence);
 
-            const auto deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(2);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       deadline) {
-                std::vector<Visualizer::WorkItem> work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); },
+                std::chrono::seconds(2)));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             EXPECT_GE(trainer->get_project_snapshot_metrics()
@@ -1764,27 +1352,9 @@ namespace lfs::vis {
             ASSERT_TRUE(explicit_save)
                 << lfs::format_for_developer(
                        explicit_save.error());
-            const auto save_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       save_deadline) {
-                std::vector<Visualizer::WorkItem> work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); }));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             auto info = viewer.projectGetInfo();
@@ -1792,8 +1362,6 @@ namespace lfs::vis {
             EXPECT_TRUE(
                 info->project_write_error.empty());
         }
-        std::error_code ignored;
-        std::filesystem::remove_all(temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -1801,18 +1369,11 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-request-supersede-" +
-             lfs::core::generate_uuid_v4().to_string());
-        std::filesystem::create_directories(temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "supersede.licht";
         write_empty_project(project_path);
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.projectOpen(
@@ -1852,30 +1413,10 @@ namespace lfs::vis {
                     base->commit().commit_uuid, 2);
             ASSERT_GT(second_id, first_id);
 
-            auto drain = [&] {
-                const auto deadline =
-                    std::chrono::steady_clock::now() +
-                    std::chrono::seconds(2);
-                while (viewer.jobs().anyRunning(
-                           JobType::ProjectWrite) &&
-                       std::chrono::steady_clock::now() <
-                           deadline) {
-                    std::vector<Visualizer::WorkItem> work;
-                    {
-                        std::lock_guard lock(
-                            viewer.work_queue_mutex_);
-                        work.swap(viewer.work_queue_);
-                    }
-                    for (auto& item : work) {
-                        if (item.run) {
-                            item.run();
-                        }
-                    }
-                    std::this_thread::sleep_for(
-                        std::chrono::milliseconds(2));
-                }
-            };
-            drain();
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); },
+                std::chrono::seconds(2)));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             EXPECT_GE(trainer->get_project_snapshot_metrics()
@@ -1904,7 +1445,10 @@ namespace lfs::vis {
                 trainer->prestaged_project_chapters_.reset();
                 trainer->prestaged_project_request_id_ = 0;
             }
-            drain();
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.jobs().anyRunning(JobType::ProjectWrite); },
+                std::chrono::seconds(2)));
             EXPECT_FALSE(viewer.jobs().anyRunning(
                 JobType::ProjectWrite));
             EXPECT_GE(trainer->get_project_snapshot_metrics()
@@ -1914,25 +1458,16 @@ namespace lfs::vis {
                           ->autosave_sequence_,
                       2u);
         }
-        std::error_code ignored;
-        std::filesystem::remove_all(temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            TrainingSnapshotCancelTerminalizesBeforeSettlement) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p7-request-cancel-" +
-             lfs::core::generate_uuid_v4().to_string());
-        std::filesystem::create_directories(temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "cancel.licht";
         write_empty_project(project_path);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(viewer.projectOpen(
@@ -1975,28 +1510,10 @@ namespace lfs::vis {
                      ->project_write_job_;
             viewer.jobs().requestCancel(handle);
 
-            const auto deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(2);
-            while (viewer.project_lifecycle_
-                       ->project_write_job_ &&
-                   std::chrono::steady_clock::now() <
-                       deadline) {
-                std::vector<Visualizer::WorkItem>
-                    work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            EXPECT_TRUE(pumpUntil(
+                viewer.work_queue_mutex_, viewer.work_queue_,
+                [&] { return !viewer.project_lifecycle_->project_write_job_; },
+                std::chrono::seconds(2)));
 
             EXPECT_FALSE(viewer.project_lifecycle_
                              ->project_write_job_);
@@ -2011,8 +1528,6 @@ namespace lfs::vis {
                           "Cancelled"),
                       std::string::npos);
         }
-        std::error_code ignored;
-        std::filesystem::remove_all(temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -2063,21 +1578,12 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            FailedOpenOverOpenPreservesCurrentSceneAndUndoHistory) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p6-switch-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "first.licht";
         write_empty_project(project_path);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(
@@ -2101,21 +1607,11 @@ namespace lfs::vis {
             EXPECT_EQ(
                 op::undoHistory().undoCount(), 1u);
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            PhaseAParameterAndSessionFailuresPreserveCurrentProject) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p6-phase-a-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto bad_parameters =
             temporary / "bad-parameters.licht";
         const auto bad_session =
@@ -2125,10 +1621,7 @@ namespace lfs::vis {
         write_invalid_phase_a_project(
             bad_session, true);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_NE(
@@ -2155,29 +1648,16 @@ namespace lfs::vis {
                     1u);
             }
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            DirtyProjectSwitchRequiresExplicitDiscardAuthorization) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p6-dirty-switch-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "candidate.licht";
         write_empty_project(project_path);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(
@@ -2236,26 +1716,13 @@ namespace lfs::vis {
                 viewer.getScene().getNodeCount(),
                 0u);
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            NewProjectDirtyGateRunsBelowEveryCommandEntry) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p6-dirty-new-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(
@@ -2286,21 +1753,11 @@ namespace lfs::vis {
                 viewer.getScene().getNodeCount(),
                 0u);
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            FileExitRoutesThroughCloseSaveStateMachine) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p6-file-exit-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "session.licht";
         constexpr float restored_focal_length =
@@ -2308,10 +1765,7 @@ namespace lfs::vis {
         write_empty_project(
             project_path, restored_focal_length);
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(
@@ -2362,28 +1816,9 @@ namespace lfs::vis {
                 project::ProjectLifecycle::
                     CloseSaveStatus::Saving);
 
-            const auto deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (!viewer.getWindowManager()
-                        ->shouldClose() &&
-                   std::chrono::steady_clock::now() <
-                       deadline) {
-                std::vector<Visualizer::WorkItem>
-                    work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return viewer.getWindowManager()->shouldClose();
+            }));
             ASSERT_TRUE(
                 viewer.getWindowManager()
                     ->shouldClose());
@@ -2419,30 +1854,17 @@ namespace lfs::vis {
                 focal_length->get<float>(),
                 restored_focal_length);
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest,
            CancelExitAndNextWindowAttemptRecoverFromFailedCloseSave) {
-        const auto temporary =
-            std::filesystem::temp_directory_path() /
-            ("lfs-p6-close-retry-" +
-             lfs::core::generate_uuid_v4()
-                 .to_string());
-        std::filesystem::create_directories(
-            temporary);
+        const auto& temporary = temporary_.path;
         const auto project_path =
             temporary / "session.licht";
         const auto backup_path =
             temporary / "session.backup";
 
-        ViewerOptions options;
-        options.show_startup_overlay = false;
-        options.project_lifecycle_settings_path =
-            temporary / "lifecycle.json";
+        auto options = projectOptions();
         {
             VisualizerImpl viewer(options);
             ASSERT_TRUE(
@@ -2461,28 +1883,9 @@ namespace lfs::vis {
             ASSERT_TRUE(initial_save)
                 << lfs::format_for_developer(
                        initial_save.error());
-            const auto initial_save_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(10);
-            while (viewer.jobs().anyRunning(
-                       JobType::ProjectWrite) &&
-                   std::chrono::steady_clock::now() <
-                       initial_save_deadline) {
-                std::vector<Visualizer::WorkItem>
-                    work;
-                {
-                    std::lock_guard lock(
-                        viewer.work_queue_mutex_);
-                    work.swap(viewer.work_queue_);
-                }
-                for (auto& item : work) {
-                    if (item.run) {
-                        item.run();
-                    }
-                }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(2));
-            }
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return !viewer.jobs().anyRunning(JobType::ProjectWrite);
+            }));
             ASSERT_FALSE(
                 viewer.jobs().anyRunning(
                     JobType::ProjectWrite));
@@ -2503,39 +1906,9 @@ namespace lfs::vis {
                     .emit();
             ASSERT_FALSE(viewer.allowclose());
 
-            const auto drain_until_close =
-                [&viewer] {
-                    const auto deadline =
-                        std::chrono::
-                            steady_clock::now() +
-                        std::chrono::seconds(10);
-                    while (!viewer
-                                .getWindowManager()
-                                ->shouldClose() &&
-                           std::chrono::
-                                   steady_clock::now() <
-                               deadline) {
-                        std::vector<
-                            Visualizer::WorkItem>
-                            work;
-                        {
-                            std::lock_guard lock(
-                                viewer
-                                    .work_queue_mutex_);
-                            work.swap(
-                                viewer.work_queue_);
-                        }
-                        for (auto& item : work) {
-                            if (item.run) {
-                                item.run();
-                            }
-                        }
-                        std::this_thread::sleep_for(
-                            std::chrono::
-                                milliseconds(2));
-                    }
-                };
-            drain_until_close();
+            EXPECT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return viewer.getWindowManager()->shouldClose();
+            }));
             ASSERT_TRUE(
                 viewer.getWindowManager()
                     ->shouldClose());
@@ -2565,7 +1938,9 @@ namespace lfs::vis {
                 project::ProjectLifecycle::
                     CloseSaveStatus::Saving);
 
-            drain_until_close();
+            EXPECT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                return viewer.getWindowManager()->shouldClose();
+            }));
             ASSERT_TRUE(
                 viewer.getWindowManager()
                     ->shouldClose());
@@ -2576,10 +1951,6 @@ namespace lfs::vis {
                     CloseSaveStatus::Succeeded);
             EXPECT_TRUE(viewer.allowclose());
         }
-
-        std::error_code ignored;
-        std::filesystem::remove_all(
-            temporary, ignored);
     }
 
     TEST_F(VisualizerImplResetTest, ResetTrainingPreservesExplicitInitPath) {

@@ -6,6 +6,67 @@
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# Container and retained-chapter tests compile the production CPU sources
+# directly so this executable has no CUDA, training, or visualizer link edge.
+set(LICHT_FORMAT_TEST_FILES
+    test_json_chapter_dom.cpp
+    test_project_chapters.cpp
+    test_project_container.cpp
+)
+
+add_executable(lichtfeld_format_tests
+    ${LICHT_FORMAT_TEST_FILES}
+    licht_format_test_runtime.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/error.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/parameters.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/uuid.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/json_chapter_dom.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_chapters.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/crc32c.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_file.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_container.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_writer.cpp
+    ${CMAKE_SOURCE_DIR}/src/io/project/project_recovery.cpp
+)
+target_include_directories(lichtfeld_format_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/include
+    ${CMAKE_SOURCE_DIR}/src/io/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_BINARY_DIR}/include
+)
+target_compile_definitions(lichtfeld_format_tests PRIVATE
+    PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+    $<$<PLATFORM_ID:Windows>:LFS_CORE_EXPORTS>
+)
+target_link_libraries(lichtfeld_format_tests PRIVATE
+    GTest::gtest_main
+    nlohmann_json::nlohmann_json
+    xxHash::xxhash
+    zstd::libzstd
+    Threads::Threads
+)
+if(WIN32)
+    target_link_libraries(lichtfeld_format_tests PRIVATE bcrypt)
+endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+   CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
+    target_link_libraries(lichtfeld_format_tests PRIVATE stdc++exp)
+endif()
+set_target_properties(lichtfeld_format_tests PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+add_test(NAME lichtfeld_format_tests
+    COMMAND $<TARGET_FILE:lichtfeld_format_tests> --gtest_color=no
+)
+set_tests_properties(lichtfeld_format_tests PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast;format"
+    TIMEOUT 300
+)
+
 # Reuse nanobind headers for Python UI regression tests
 if(NOT DEFINED NB_DIR)
     find_package(Python REQUIRED COMPONENTS Interpreter Development Development.Module Development.SABIModule)
@@ -78,6 +139,7 @@ message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tes
 
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
+    licht_test_support.cpp
     test_assert_hardening.cpp
     test_cuda_error.cpp
     test_exportable_storage.cpp
@@ -145,11 +207,8 @@ set(TEST_FILES
     test_component_config_serialization.cpp
     test_training_snapshot_service.cpp
     test_atomic_output.cpp
-    test_json_chapter_dom.cpp
-    test_project_container.cpp
     test_geometry_payload.cpp
     test_selection_chapter.cpp
-    test_project_chapters.cpp
     test_project_document.cpp
     test_project_lifecycle.cpp
     test_p8_compatibility.cpp

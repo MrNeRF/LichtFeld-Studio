@@ -6,6 +6,7 @@
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
+#include "licht_test_support.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -40,97 +41,12 @@ namespace {
     namespace fs = std::filesystem;
     using Json = nlohmann::ordered_json;
     using namespace lfs::io::project;
+    using namespace lfs::test::licht;
 
     constexpr std::uint64_t FIXED_CREATION_NS =
         1'735'689'600'000'000'000;
     constexpr std::uint64_t FIXED_COMMIT_NS =
         1'735'689'601'000'000'000;
-
-    struct TemporaryDirectory {
-        TemporaryDirectory() {
-            static std::atomic_uint64_t counter{0};
-            path = fs::temp_directory_path() /
-                   std::format(
-                       "lfs-p8-{}-{}",
-                       std::chrono::steady_clock::now()
-                           .time_since_epoch()
-                           .count(),
-                       counter.fetch_add(1));
-            fs::create_directories(path);
-        }
-
-        ~TemporaryDirectory() {
-            std::error_code ignored;
-            fs::remove_all(path, ignored);
-        }
-
-        fs::path path;
-    };
-
-    lfs::core::Uuid fixed_uuid(const std::uint64_t tag) {
-        const auto parsed = lfs::core::Uuid::from_string(
-            std::format(
-                "{:08x}-0000-4000-8000-{:012x}", tag,
-                tag));
-        if (!parsed) {
-            std::abort();
-        }
-        return *parsed;
-    }
-
-    lfs::core::Uuid uuid_literal(const std::string_view text) {
-        const auto parsed = lfs::core::Uuid::from_string(text);
-        if (!parsed) {
-            std::abort();
-        }
-        return *parsed;
-    }
-
-    ChunkKey fixed_key(const std::string_view fourcc,
-                       const std::uint64_t tag) {
-        const auto parsed = Fourcc::from_string(fourcc);
-        if (!parsed) {
-            std::abort();
-        }
-        return ChunkKey{
-            .fourcc = *parsed,
-            .instance_uuid = fixed_uuid(tag),
-        };
-    }
-
-    template <typename T>
-    T require_result(lfs::Result<T> result) {
-        if (!result) {
-            throw std::runtime_error(
-                lfs::format_for_developer(result.error()));
-        }
-        return std::move(*result);
-    }
-
-    void require_status(lfs::Result<void> result) {
-        if (!result) {
-            throw std::runtime_error(
-                lfs::format_for_developer(result.error()));
-        }
-    }
-
-    std::vector<std::byte> bytes(const std::string_view text) {
-        const auto view =
-            std::as_bytes(std::span(text.data(), text.size()));
-        return {view.begin(), view.end()};
-    }
-
-    std::vector<std::byte> read_file(const fs::path& path) {
-        std::ifstream stream(path, std::ios::binary);
-        const std::vector<char> raw{
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>()};
-        std::vector<std::byte> result(raw.size());
-        if (!raw.empty()) {
-            std::memcpy(result.data(), raw.data(), raw.size());
-        }
-        return result;
-    }
 
     std::string sha256_file(const fs::path& path) {
         using Context =
@@ -189,81 +105,6 @@ namespace {
             .index_compression = compression,
             .disk_reserve_bytes = 0,
         };
-    }
-
-    std::vector<std::byte> tiny_png() {
-        constexpr std::array<std::uint8_t, 67> data{
-            0x89,
-            0x50,
-            0x4e,
-            0x47,
-            0x0d,
-            0x0a,
-            0x1a,
-            0x0a,
-            0x00,
-            0x00,
-            0x00,
-            0x0d,
-            0x49,
-            0x48,
-            0x44,
-            0x52,
-            0x00,
-            0x00,
-            0x00,
-            0x01,
-            0x00,
-            0x00,
-            0x00,
-            0x01,
-            0x08,
-            0x06,
-            0x00,
-            0x00,
-            0x00,
-            0x1f,
-            0x15,
-            0xc4,
-            0x89,
-            0x00,
-            0x00,
-            0x00,
-            0x0a,
-            0x49,
-            0x44,
-            0x41,
-            0x54,
-            0x78,
-            0x9c,
-            0x63,
-            0x60,
-            0x00,
-            0x00,
-            0x00,
-            0x02,
-            0x00,
-            0x01,
-            0xe5,
-            0x27,
-            0xd4,
-            0xa2,
-            0x00,
-            0x00,
-            0x00,
-            0x00,
-            0x49,
-            0x45,
-            0x4e,
-            0x44,
-            0xae,
-            0x42,
-            0x60,
-            0x82,
-        };
-        std::vector<std::byte> result(data.size());
-        std::memcpy(result.data(), data.data(), data.size());
-        return result;
     }
 
     ProjectDocument create_document(const std::uint64_t tag,
@@ -383,7 +224,7 @@ namespace {
         auto preview_document =
             create_document(80'600, "foreign-preview");
         auto preview_options = save_options(80'610);
-        const auto png = tiny_png();
+        const auto png = one_pixel_png();
         preview_options.preview_png = png;
         auto preview_report = preview_document.save(
             preview, preview_options);
@@ -428,7 +269,7 @@ namespace {
                     IndexCompression::StoredForDeterministicTests,
                 .disk_reserve_bytes = 0,
             }));
-        const auto payload = bytes("synthetic compatibility envelope");
+        const auto payload = byte_vector("synthetic compatibility envelope");
         require_status(writer.plan_commit(commit));
         require_status(writer.preflight(payload.size()));
         require_status(writer.write_chunk(
@@ -516,25 +357,13 @@ namespace {
     }
 
     TEST(P8CompatibilityTest,
-         ProductionReleaseCorpusEmissionPathsOpenAtFormatOneZero) {
-        TemporaryDirectory temporary;
-        const char* requested =
-            std::getenv("LFS_P8_RELEASE_CORPUS_OUTPUT");
-        const fs::path output =
-            requested != nullptr && std::string_view(requested).size() != 0
-                ? fs::path(requested)
-                : temporary.path;
-        emit_release_corpus(output);
-    }
-
-    TEST(P8CompatibilityTest,
          ReleaseCorpusProductionPathsReproduceManifestSha256) {
         TemporaryDirectory temporary;
         emit_release_corpus(temporary.path);
 
         const fs::path release =
             fs::path(PROJECT_ROOT_PATH) /
-            "tools/licht_inspect/fixtures/release_corpus";
+            "tests/fixtures/licht/release_corpus";
         std::ifstream manifest_stream(release / "manifest.json");
         ASSERT_TRUE(manifest_stream.good());
         Json manifest;
@@ -575,7 +404,7 @@ namespace {
          ReleaseCorpusCppReaderOpensEveryLockedArtifact) {
         const fs::path release =
             fs::path(PROJECT_ROOT_PATH) /
-            "tools/licht_inspect/fixtures/release_corpus";
+            "tests/fixtures/licht/release_corpus";
         constexpr std::array<std::string_view, 7> artifacts{
             "save.licht",
             "save.licht.autosave",
@@ -609,7 +438,7 @@ namespace {
         auto preview = require_result(ProjectReader::open(
             release / "foreign-preview.licht", v1));
         ASSERT_TRUE(preview.preview().has_value());
-        EXPECT_EQ(require_result(preview.read_preview()), tiny_png());
+        EXPECT_EQ(require_result(preview.read_preview()), one_pixel_png());
     }
 
     TEST(P8CompatibilityTest,
@@ -746,7 +575,7 @@ namespace {
             const auto prior = require_result(
                 ProjectReader::open(path, old));
             ASSERT_FALSE(prior.write_compatibility().safe);
-            const auto before = read_file(path);
+            const auto before = read_file_bytes(path);
             const auto generation = prior.commit().generation;
 
             auto opened = ProjectDocument::open(
@@ -761,7 +590,7 @@ namespace {
             ASSERT_FALSE(append_save);
             EXPECT_EQ(append_save.error().code(),
                       lfs::ErrorCode::Unsupported);
-            EXPECT_EQ(read_file(path), before);
+            EXPECT_EQ(read_file_bytes(path), before);
 
             const auto save_as = temporary.path /
                                  std::format("gate-{}-save-as.licht", index);
@@ -771,7 +600,7 @@ namespace {
             EXPECT_EQ(save_as_result.error().code(),
                       lfs::ErrorCode::Unsupported);
             EXPECT_FALSE(fs::exists(save_as));
-            EXPECT_EQ(read_file(path), before);
+            EXPECT_EQ(read_file_bytes(path), before);
 
             const auto sidecar = autosave_sidecar_path(path);
             auto autosave = opened->save_autosave(
@@ -789,7 +618,7 @@ namespace {
             EXPECT_EQ(autosave.error().code(),
                       lfs::ErrorCode::Unsupported);
             EXPECT_FALSE(fs::exists(sidecar));
-            EXPECT_EQ(read_file(path), before);
+            EXPECT_EQ(read_file_bytes(path), before);
 
             auto raw_append = ProjectWriter::append(
                 path,
@@ -801,7 +630,7 @@ namespace {
             ASSERT_FALSE(raw_append);
             EXPECT_EQ(raw_append.error().code(),
                       lfs::ErrorCode::Unsupported);
-            EXPECT_EQ(read_file(path), before);
+            EXPECT_EQ(read_file_bytes(path), before);
 
             auto compacted = ProjectWriter::compact(
                 path,
@@ -818,7 +647,7 @@ namespace {
             ASSERT_FALSE(compacted);
             EXPECT_EQ(compacted.error().code(),
                       lfs::ErrorCode::Unsupported);
-            EXPECT_EQ(read_file(path), before);
+            EXPECT_EQ(read_file_bytes(path), before);
             EXPECT_EQ(require_result(ProjectReader::open(path, old))
                           .commit()
                           .generation,
@@ -902,7 +731,7 @@ namespace {
                 OPAQUE_CHUNK_PRESERVATION);
             commit.extra_writer_capabilities.set(
                 RETAINED_JSON_FIELDS);
-            const auto unknown_payload = bytes(
+            const auto unknown_payload = byte_vector(
                 "opaque bytes from a future X8P8 producer");
             require_status(writer.plan_commit(commit));
             require_status(writer.preflight(unknown_payload.size()));
@@ -998,7 +827,7 @@ namespace {
                 .snapshot_uuid = fixed_uuid(84'021),
                 .wallclock_unix_ns = FIXED_COMMIT_NS + 84'020,
             }));
-            const auto payload = bytes("future opaque without declaration");
+            const auto payload = byte_vector("future opaque without declaration");
             require_status(writer.preflight(payload.size()));
             for (std::size_t index = 0; index < rows.size(); ++index) {
                 require_status(writer.reuse_if_clean(
@@ -1012,13 +841,13 @@ namespace {
             ProjectDocument::open(opaque_path));
         require_status(opaque_open.edit_project().dom().set(
             "attempt", true));
-        const auto opaque_before = read_file(opaque_path);
+        const auto opaque_before = read_file_bytes(opaque_path);
         auto opaque_save = opaque_open.save(
             opaque_path, save_options(84'030));
         ASSERT_FALSE(opaque_save);
         EXPECT_EQ(opaque_save.error().code(),
                   lfs::ErrorCode::Unsupported);
-        EXPECT_EQ(read_file(opaque_path), opaque_before);
+        EXPECT_EQ(read_file_bytes(opaque_path), opaque_before);
 
         const auto json_path = temporary.path / "missing-bit6.licht";
         auto json_document = require_result(ProjectDocument::create(
@@ -1040,7 +869,7 @@ namespace {
         proj_json["future_without_bit6"] = Json::array(
             {fixed_uuid(84'111).to_string()});
         const auto future_text = proj_json.dump(2);
-        const auto future_payload = bytes(future_text);
+        const auto future_payload = byte_vector(future_text);
         append_generation_with_requirements(
             json_path,
             CommitOptions{
@@ -1060,13 +889,13 @@ namespace {
             ProjectDocument::open(json_path));
         require_status(json_open.edit_project().set_modified_at_unix_ns(
             FIXED_COMMIT_NS + 84'130));
-        const auto json_before = read_file(json_path);
+        const auto json_before = read_file_bytes(json_path);
         auto json_save = json_open.save(
             json_path, save_options(84'131));
         ASSERT_FALSE(json_save);
         EXPECT_EQ(json_save.error().code(),
                   lfs::ErrorCode::Unsupported);
-        EXPECT_EQ(read_file(json_path), json_before);
+        EXPECT_EQ(read_file_bytes(json_path), json_before);
     }
 
     TEST(P8CompatibilityTest,
@@ -1141,7 +970,7 @@ namespace {
         auto document = create_document(85'000, "lock-holder");
         ASSERT_TRUE(document.save(
             original, save_options(85'010)));
-        const auto before = read_file(original);
+        const auto before = read_file_bytes(original);
         auto lease = require_result(
             WriterLockLease::acquire(original));
 
@@ -1168,7 +997,7 @@ namespace {
             if (blocked_save ||
                 blocked_save.error().code() !=
                     lfs::ErrorCode::Unavailable ||
-                read_file(original) != before) {
+                read_file_bytes(original) != before) {
                 fail_child(13);
             }
             auto blocked_compact = ProjectWriter::compact(
@@ -1186,7 +1015,7 @@ namespace {
             if (blocked_compact ||
                 blocked_compact.error().code() !=
                     lfs::ErrorCode::Unavailable ||
-                read_file(original) != before) {
+                read_file_bytes(original) != before) {
                 fail_child(14);
             }
             const auto sidecar = autosave_sidecar_path(original);
@@ -1205,7 +1034,7 @@ namespace {
                 blocked_autosave.error().code() !=
                     lfs::ErrorCode::Unavailable ||
                 fs::exists(sidecar) ||
-                read_file(original) != before) {
+                read_file_bytes(original) != before) {
                 fail_child(15);
             }
             auto allowed_save_as = contender->save_as(
@@ -1224,15 +1053,8 @@ namespace {
         ASSERT_EQ(::waitpid(child, &status, 0), child);
         ASSERT_TRUE(WIFEXITED(status));
         EXPECT_EQ(WEXITSTATUS(status), 0);
-        EXPECT_EQ(read_file(original), before);
+        EXPECT_EQ(read_file_bytes(original), before);
         EXPECT_TRUE(fs::is_regular_file(save_as));
-    }
-#else
-    TEST(P8LockMatrixTest,
-         WindowsLockFileExCellIsExplicitlyDeferredToP0d) {
-        GTEST_SKIP()
-            << "Windows LockFileEx two-process matrix is OWED by P0d; "
-               "this is an explicit platform deferral, never a success stub";
     }
 #endif
 

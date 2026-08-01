@@ -8,8 +8,7 @@
 #include "core/scene.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "io/project_document.hpp"
-#include "p5_matrix_rows.hpp"
-#include "p8_matrix_session_fixture.hpp"
+#include "licht_test_support.hpp"
 #include "project/session_state.hpp"
 #include "sequencer/timeline.hpp"
 #include "training/control/command_api.hpp"
@@ -17,9 +16,11 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -38,62 +39,19 @@ namespace {
     namespace fs = std::filesystem;
     using Json = lfs::io::JsonChapterDom::Json;
     using namespace lfs::io::project;
+    using lfs::test::licht::json_root;
+    using lfs::test::licht::make_populated_session_chapters;
+    using lfs::test::licht::require_result;
+    using lfs::test::licht::require_status;
+    using lfs::test::licht::rolled_panel_camera;
+    using lfs::test::licht::TemporaryDirectory;
     using namespace lfs::vis::project;
-
-    template <typename T>
-    T require_result(lfs::Result<T> result) {
-        if (!result) {
-            throw std::runtime_error(
-                lfs::format_for_developer(
-                    result.error()));
-        }
-        return std::move(*result);
-    }
-
-    void require_status(lfs::Result<void> result) {
-        if (!result) {
-            throw std::runtime_error(
-                lfs::format_for_developer(
-                    result.error()));
-        }
-    }
-
-    Json root_json(
-        const lfs::io::JsonChapterDom& dom) {
-        return Json::parse(dom.dump());
-    }
-
-    void overwrite_u32_le(
-        std::vector<std::byte>& bytes,
-        const std::size_t offset,
-        const std::uint32_t value) {
-        ASSERT_LE(offset + sizeof(value), bytes.size());
-        for (std::size_t byte = 0;
-             byte < sizeof(value); ++byte) {
-            bytes[offset + byte] =
-                static_cast<std::byte>(
-                    (value >> (byte * 8u)) & 0xffu);
-        }
-    }
-
-    void overwrite_u64_le(
-        std::vector<std::byte>& bytes,
-        const std::size_t offset,
-        const std::uint64_t value) {
-        ASSERT_LE(offset + sizeof(value), bytes.size());
-        for (std::size_t byte = 0;
-             byte < sizeof(value); ++byte) {
-            bytes[offset + byte] =
-                static_cast<std::byte>(
-                    (value >> (byte * 8u)) & 0xffu);
-        }
-    }
 
     void overwrite_f32_le(
         std::vector<std::byte>& bytes,
         const std::size_t offset,
         const float value) {
-        overwrite_u32_le(
+        lfs::test::licht::write_u32_le(
             bytes, offset,
             std::bit_cast<std::uint32_t>(value));
     }
@@ -102,485 +60,15 @@ namespace {
         std::vector<std::byte>& bytes,
         const std::size_t offset,
         const double value) {
-        overwrite_u64_le(
+        lfs::test::licht::write_u64_le(
             bytes, offset,
             std::bit_cast<std::uint64_t>(value));
-    }
-
-    class TemporaryProjectDirectory {
-    public:
-        TemporaryProjectDirectory()
-            : path(
-                  fs::temp_directory_path() /
-                  ("licht-p5-" +
-                   lfs::core::generate_uuid_v4()
-                       .to_string())) {
-            fs::create_directories(path);
-        }
-
-        ~TemporaryProjectDirectory() {
-            std::error_code error;
-            fs::remove_all(path, error);
-        }
-
-        fs::path path;
-    };
-
-    PanelCameraProjectState rolled_camera(
-        const float tag) {
-        PanelCameraProjectState result;
-        // Column-major +90-degree roll. This cannot be reconstructed
-        // losslessly through the viewer's yaw/pitch controls.
-        result.rotation = {
-            0.0f, 1.0f, 0.0f,
-            -1.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, 1.0f};
-        result.translation =
-            {tag, tag + 1.0f, tag + 2.0f};
-        result.pivot =
-            {tag + 3.0f, tag + 4.0f,
-             tag + 5.0f};
-        result.home_rotation = {
-            1.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, 1.0f,
-            0.0f, -1.0f, 0.0f};
-        result.home_translation =
-            {tag + 6.0f, tag + 7.0f,
-             tag + 8.0f};
-        result.home_pivot =
-            {tag + 9.0f, tag + 10.0f,
-             tag + 11.0f};
-        result.home_saved = true;
-        result.zoom_speed = 12.0f + tag;
-        result.max_zoom_speed = 80.0f + tag;
-        result.rotate_speed = 0.002f + tag * 0.0001f;
-        result.centre_speed = 0.003f + tag * 0.0001f;
-        result.roll_speed = 0.02f + tag * 0.001f;
-        result.translate_speed =
-            0.004f + tag * 0.0001f;
-        result.wasd_speed = 9.0f + tag;
-        result.max_wasd_speed = 90.0f + tag;
-        result.ortho_scale = 120.0f + tag;
-        return result;
-    }
-
-    ReferenceFingerprint fake_reference_fingerprint(
-        const FingerprintKind kind,
-        const std::uint8_t tag) {
-        ReferenceFingerprint result;
-        result.kind = kind;
-        result.size = 1000 + tag;
-        result.mtime_unix_ns = 2000 + tag;
-        result.head_xxh3.bytes.fill(tag);
-        result.tail_xxh3.bytes.fill(
-            static_cast<std::uint8_t>(tag + 1));
-        return result;
-    }
-
-    ProjectSessionChapters make_matrix_session() {
-        ProjectSessionChapters session;
-
-        Json gui = root_json(
-            session.gui_layout.dom());
-        auto& spaces =
-            gui["layouts"][0]["areas"][0]["spaces"];
-        auto& fixed =
-            spaces[0]["opaque_payload"];
-        fixed["right_panel_width"] = 417.0f;
-        fixed["scene_panel_ratio"] = 0.61f;
-        fixed["python_console_width"] = 511.0f;
-        fixed["bottom_dock_height"] = 288.0f;
-        fixed["left_dock_width"] = 271.0f;
-        fixed["sequencer_visible"] = true;
-        fixed["python_console_visible"] = true;
-        fixed["window"] = {
-            {"x", 101},
-            {"y", 202},
-            {"width", 1440},
-            {"height", 900},
-            {"fullscreen", false},
-            {"maximized", true},
-            {"restore_x", 11},
-            {"restore_y", 22},
-            {"restore_width", 1280},
-            {"restore_height", 720},
-        };
-        auto& registry =
-            spaces[1]["opaque_payload"];
-        registry["panels"] = Json::array({
-            {
-                {"id", "plugin.matrix"},
-                {"parent_id", "main"},
-                {"space", "floating"},
-                {"order", 7},
-                {"enabled", true},
-                {"float_x", 31.0f},
-                {"float_y", 47.0f},
-                {"float_user_height", 333.0f},
-                {"float_last_bounds_valid", true},
-                {"float_last_x", 31.0f},
-                {"float_last_y", 47.0f},
-                {"float_last_w", 640.0f},
-                {"float_last_h", 333.0f},
-                {"float_auto_center", false},
-                {"float_stack_order", 12},
-                {"vendor_extension", "retained"},
-            },
-        });
-        registry["active_tabs"] = {
-            {"main_panel", "training"},
-            {"scene_panel", "history"},
-        };
-        spaces[2]["opaque_payload"] = {
-            {"active_tab", 1},
-            {"font_scale", 1.7f},
-        };
-        session.gui_layout =
-            require_result(
-                GuiLayoutChapter::parse(
-                    gui.dump()));
-
-        const Json editor{
-            {"version", 2},
-            {"open_files",
-             Json::array({
-                 {
-                     {"locator",
-                      "project://scripts/a.py"},
-                     {"modified", false},
-                     {"cursor_byte", 4},
-                     {"selection_anchor_byte", 1},
-                     {"scroll_x", 12.5f},
-                     {"scroll_y", 44.0f},
-                     {"folds",
-                      Json::array({
-                          {
-                              {"start_byte", 0},
-                              {"end_byte", 8},
-                              {"collapsed", true},
-                          },
-                      })},
-                 },
-                 {
-                     {"locator",
-                      "project://scripts/b.py"},
-                     {"modified", true},
-                     {"embedded_buffer",
-                      "token = 'secret'\\n"},
-                     {"share_warning", true},
-                     {"cursor_byte", 18},
-                     {"selection_anchor_byte",
-                      nullptr},
-                     {"scroll_x", 2.0f},
-                     {"scroll_y", 91.0f},
-                     {"folds", Json::array()},
-                 },
-             })},
-            {"active_file",
-             "project://scripts/b.py"},
-            {"vim_mode", true},
-            {"contains_embedded_secrets", true},
-        };
-        session.editor =
-            require_result(
-                EditorSessionChapter::parse(
-                    editor.dump()));
-
-        lfs::vis::RenderSettings settings;
-        settings.focal_length_mm = 73.0f;
-        settings.scaling_modifier = 0.73f;
-        settings.antialiasing = true;
-        settings.mip_filter = true;
-        settings.sh_degree = 2;
-        settings.render_scale = 0.75f;
-        settings.camera_metrics_mode =
-            lfs::vis::RenderSettings::
-                CameraMetricsMode::PSNRSSIM;
-        settings.show_crop_box = true;
-        settings.use_crop_box = true;
-        settings.show_ellipsoid = true;
-        settings.use_ellipsoid = true;
-        settings.desaturate_unselected = true;
-        settings.desaturate_cropping = true;
-        settings.hide_outside_depth_box = true;
-        settings.crop_filter_for_selection = true;
-        settings.apply_appearance_correction = true;
-        settings.ppisp_mode =
-            lfs::vis::RenderSettings::PPISPMode::MANUAL;
-        settings.ppisp_overrides.exposure_offset =
-            1.25f;
-        settings.ppisp_overrides.vignette_strength =
-            1.4f;
-        settings.ppisp_overrides.wb_temperature =
-            0.2f;
-        settings.ppisp_overrides.gamma_multiplier =
-            1.3f;
-        settings.background_color =
-            {0.1f, 0.2f, 0.3f};
-        settings.environment_mode =
-            lfs::vis::
-                EnvironmentBackgroundMode::
-                    Equirectangular;
-        settings.environment_map_path.clear();
-        settings.environment_exposure = 1.75f;
-        settings.environment_rotation_degrees =
-            42.0f;
-        settings.show_coord_axes = true;
-        settings.axes_size = 3.5f;
-        settings.axes_visibility =
-            {true, false, true};
-        settings.show_grid = true;
-        settings.grid_plane = 2;
-        settings.grid_opacity = 0.65f;
-        settings.point_cloud_mode = true;
-        settings.voxel_size = 0.025f;
-        settings.show_rings = true;
-        settings.ring_width = 0.04f;
-        settings.show_center_markers = true;
-        settings.show_camera_frustums = true;
-        settings.camera_frustum_scale = 0.9f;
-        settings.train_camera_color =
-            {0.3f, 0.4f, 0.5f};
-        settings.eval_camera_color =
-            {0.6f, 0.7f, 0.8f};
-        settings.show_pivot = true;
-        settings.split_view_mode =
-            lfs::vis::SplitViewMode::
-                IndependentDual;
-        settings.gt_comparison_mode =
-            lfs::vis::GTComparisonMode::Depth;
-        settings.split_position = 0.37f;
-        settings.split_view_offset = 5;
-        settings.raster_backend =
-            lfs::rendering::
-                GaussianRasterBackend::ThreeDgut;
-        settings.gut = false;
-        settings.equirectangular = true;
-        settings.orthographic = true;
-        settings.ortho_scale = 77.0f;
-        settings.depth_view = true;
-        settings.depth_view_min = 0.5f;
-        settings.depth_view_max = 55.0f;
-        settings.depth_visualization_mode =
-            lfs::rendering::
-                DepthVisualizationMode::Grayscale;
-        settings.selection_color_committed =
-            {0.11f, 0.22f, 0.33f};
-        settings.selection_color_preview =
-            {0.44f, 0.55f, 0.66f};
-        settings.selection_color_center_marker =
-            {0.77f, 0.88f, 0.99f};
-        settings.depth_clip_enabled = true;
-        settings.depth_clip_far = 34.0f;
-        settings.mesh_wireframe = true;
-        settings.mesh_wireframe_color =
-            {0.2f, 0.4f, 0.6f};
-        settings.mesh_wireframe_width = 2.5f;
-        settings.mesh_light_dir =
-            {0.6f, 0.7f, 0.8f};
-        settings.mesh_light_intensity = 0.85f;
-        settings.mesh_ambient = 0.25f;
-        settings.mesh_backface_culling = false;
-        settings.mesh_shadow_enabled = true;
-        settings.mesh_shadow_resolution = 4096;
-        settings.depth_filter_enabled = true;
-        settings.depth_filter_min =
-            {-8.0f, -7.0f, -6.0f};
-        settings.depth_filter_max =
-            {6.0f, 7.0f, 8.0f};
-        settings.depth_filter_transform =
-            lfs::geometry::EuclideanTransform(
-                glm::angleAxis(
-                    glm::half_pi<float>(),
-                    glm::vec3{0.0f, 0.0f, 1.0f}),
-                glm::vec3{1.0f, 2.0f, 3.0f});
-        settings.lod_enabled = true;
-        settings.lod_auto_enable_rad = true;
-        settings.lod_max_splats = 1'234'567;
-        settings.lod_render_scale = 0.8f;
-        settings.lod_behind_camera_penalty =
-            0.31f;
-        settings.lod_cone_foveation = 0.51f;
-        settings.lod_cone_inner_degrees = 61.0f;
-        settings.lod_cone_outer_degrees = 111.0f;
-        settings.lod_page_pool_splats = 765'432;
-        settings.lod_pool_vram_fraction = 0.22f;
-        settings.lod_fade_frames = 19;
-        settings.lod_debug_colors = true;
-
-        auto render_settings =
-            renderSettingsToProjectJson(settings);
-        render_settings
-            ["environment_reference_uuid"] =
-                lfs::core::generate_uuid_v4()
-                    .to_string();
-        render_settings["environment_builtin"] =
-            nullptr;
-
-        auto primary = panelCameraProjectStateToJson(
-            "primary", rolled_camera(1.0f));
-        auto secondary =
-            panelCameraProjectStateToJson(
-                "secondary",
-                rolled_camera(20.0f));
-        auto bookmark = panelCameraProjectStateToJson(
-            "bookmark", rolled_camera(40.0f));
-        bookmark.erase("panel");
-        bookmark["id"] = "bookmark.matrix";
-        bookmark["name"] = "Rolled view";
-
-        Json view = root_json(session.view.dom());
-        view["render_settings"] =
-            std::move(render_settings);
-        view["panel_cameras"] =
-            Json::array(
-                {std::move(primary),
-                 std::move(secondary)});
-        view["navigation"] = {
-            {"mode", "drone"},
-            {"view_snap", true},
-        };
-        view["split"] = {
-            {"focused_panel", "right"},
-            {"gt_camera_id", 41},
-            {"panel_grid_planes",
-             Json::array({0, 2})},
-        };
-        view["camera_bookmarks"] =
-            Json::array({std::move(bookmark)});
-        view["tools"] = {
-            {"active_tool_id", "crop"},
-            {"active_submode_id", "brush"},
-            {"selection_submode", "add"},
-            {"gizmo_operation", "rotate"},
-            {"transform_space", "local"},
-            {"pivot_mode", "bounds"},
-            {"multi_transform_mode", "group"},
-            {"crop_shape", "sphere"},
-            {"crop_operation", "subtract"},
-            {"selection",
-             {
-                 {"brush_radius", 37.0f},
-                 {"crop_filter", true},
-                 {"depth_filter", true},
-                 {"restrict_to_selected_nodes",
-                  true},
-             }},
-        };
-        view["sequencer_view"] = {
-            {"show_camera_path", false},
-        };
-        session.view =
-            require_result(
-                ViewSessionChapter::parse(
-                    view.dump()));
-
-        lfs::sequencer::Timeline timeline;
-        timeline.setClipDuration(48.0f);
-        timeline.addKeyframe({
-            .time = 3.5f,
-            .position = {1.0f, 2.0f, 3.0f},
-            .rotation =
-                glm::angleAxis(
-                    glm::quarter_pi<float>(),
-                    glm::vec3{0.0f, 1.0f, 0.0f}),
-            .focal_length_mm = 61.0f,
-            .easing =
-                lfs::sequencer::EasingType::
-                    EASE_IN_OUT,
-        });
-        auto& animation =
-            timeline.ensureAnimationClip();
-        animation.setName("Matrix animation");
-        const auto track_id = animation.addTrack(
-            lfs::sequencer::ValueType::Float,
-            "node.opacity");
-        animation.getTrack(track_id)
-            ->addKeyframe(
-                1.25f, 0.75f,
-                lfs::sequencer::EasingType::
-                    EASE_OUT);
-
-        const auto clip_uuid =
-            lfs::core::generate_uuid_v4();
-        const auto frame_uuid =
-            lfs::core::generate_uuid_v4();
-        const Json sequencer{
-            {"version", 1},
-            {"timeline",
-             Json::parse(
-                 timeline.saveToJson().dump())},
-            {"ply_sequences",
-             Json::array({
-                 {
-                     {"node_name",
-                      "Matrix sequence"},
-                     {"node_uuid",
-                      clip_uuid.to_string()},
-                     {"directory_reference_uuid",
-                      lfs::core::generate_uuid_v4()
-                          .to_string()},
-                     {"directory_hint",
-                      "matrix-frames"},
-                     {"frames",
-                      Json::array({
-                          {
-                              {"locator",
-                               "frame_0007.ply"},
-                              {"node_name",
-                               "Frame 7"},
-                              {"node_uuid",
-                               frame_uuid.to_string()},
-                          },
-                      })},
-                     {"fps", 17.5f},
-                 },
-             })},
-            {"playhead", 3.5f},
-            {"loop_mode", "ping_pong"},
-            {"playback_speed", 1.75f},
-            {"preferences",
-             {
-                 {"snap_to_grid", true},
-                 {"snap_interval", 0.25f},
-                 {"follow_playback", true},
-                 {"show_pip_preview", false},
-                 {"pip_preview_scale", 1.4f},
-                 {"show_film_strip", false},
-             }},
-        };
-        session.sequencer =
-            require_result(
-                SequencerSessionChapter::parse(
-                    sequencer.dump()));
-
-        session.metrics.loss_history = {
-            {.iteration = 10, .value = 0.42f},
-            {.iteration = 20, .value = 0.21f},
-        };
-        session.metrics.psnr_history = {
-            {.iteration = 10, .value = 21.5f},
-            {.iteration = 20, .value = 24.75f},
-        };
-        session.metrics
-            .accumulated_training_seconds = 37.5;
-        session.metrics.last_evaluation = {
-            .iteration = 20,
-            .psnr = 24.75f,
-            .ssim = 0.91f,
-        };
-        require_status(
-            session.metrics.validate());
-
-        require_result(
-            prepareGuiSessionRestore(session));
-        return session;
     }
 
     TEST(P5SessionChapterTest,
          GuilUsesFrozenAreaTreeAndStripsExcludedStateOnLoad) {
         GuiLayoutChapter chapter;
-        const Json root = root_json(chapter.dom());
+        const Json root = json_root(chapter.dom());
         ASSERT_EQ(root["layouts"].size(), 1u);
         const auto& layout = root["layouts"][0];
         ASSERT_TRUE(layout["active"].get<bool>());
@@ -629,7 +117,7 @@ namespace {
             ASSERT_TRUE(loaded)
                 << key;
             const auto sanitized =
-                root_json(loaded->dom());
+                json_root(loaded->dom());
             EXPECT_FALSE(
                 sanitized["layouts"][0]["areas"][0]
                          ["spaces"][0]
@@ -641,7 +129,7 @@ namespace {
 
     TEST(P5SessionChapterTest,
          GuilSaveRefusesExcludedUserGlobalState) {
-        TemporaryProjectDirectory temporary;
+        TemporaryDirectory temporary{"licht-p5"};
         auto document = ProjectDocument::create(
             lfs::core::generate_uuid_v4(), 100);
         ASSERT_TRUE(document)
@@ -670,7 +158,7 @@ namespace {
     TEST(P5SessionChapterTest,
          GuilRetainsUnknownSpaceTypeRoundTrip) {
         GuiLayoutChapter chapter;
-        Json root = root_json(chapter.dom());
+        Json root = json_root(chapter.dom());
         const Json unknown{
             {"type", "vendor.future_graph"},
             {"version", 7},
@@ -729,7 +217,7 @@ namespace {
             << lfs::format_for_developer(
                    reopened.error());
         const auto retained =
-            root_json(reopened->dom());
+            json_root(reopened->dom());
         const auto& spaces =
             retained["layouts"][0]["areas"][0]
                     ["spaces"];
@@ -746,7 +234,7 @@ namespace {
         EXPECT_EQ(*found, unknown);
 
         ProjectSessionChapters session =
-            make_matrix_session();
+            make_populated_session_chapters();
         session.gui_layout =
             std::move(*reopened);
         EXPECT_TRUE(
@@ -773,7 +261,7 @@ namespace {
         };
 
         GuiLayoutChapter chapter;
-        const Json baseline = root_json(chapter.dom());
+        const Json baseline = json_root(chapter.dom());
         const Json implicit_area = baseline["layouts"][0]["areas"][0];
 
         Json cycle = baseline;
@@ -953,7 +441,7 @@ namespace {
 
     TEST(P5SessionChapterTest,
          RetainedDomPreservesUnknownFieldsOnKnownPanel) {
-        auto session = make_matrix_session();
+        auto session = make_populated_session_chapters();
         const Json known{
             {"version", 1},
             {"layouts",
@@ -997,7 +485,7 @@ namespace {
         require_status(
             session.gui_layout
                 .merge_known_state(known));
-        const auto merged = root_json(
+        const auto merged = json_root(
             session.gui_layout.dom());
         const auto& panels =
             merged["layouts"][0]["areas"][0]
@@ -1013,8 +501,8 @@ namespace {
 
     TEST(P5SessionChapterTest,
          MissingViewOrSequencerReferenceFailsDocumentValidation) {
-        const auto session = make_matrix_session();
-        TemporaryProjectDirectory temporary;
+        const auto session = make_populated_session_chapters();
+        TemporaryDirectory temporary{"licht-p5"};
 
         auto missing_environment =
             ProjectDocument::create(
@@ -1079,7 +567,7 @@ namespace {
         EXPECT_TRUE(restored->gut);
 
         Viewport viewport;
-        const auto expected = rolled_camera(7.0f);
+        const auto expected = rolled_panel_camera(7.0f);
         applyPanelCameraProjectState(
             viewport, expected);
         EXPECT_EQ(
@@ -1090,7 +578,7 @@ namespace {
 
     TEST(P5SessionChapterTest,
          RestoreCoordinatorRequiresBothEventGates) {
-        auto session = make_matrix_session();
+        auto session = make_populated_session_chapters();
         GuiSessionRestoreCoordinator coordinator;
         require_status(
             coordinator.stage(session));
@@ -1120,34 +608,33 @@ namespace {
         GuiSessionRestoreCoordinator coordinator;
         require_status(
             coordinator.stage(
-                make_matrix_session()));
+                make_populated_session_chapters()));
         coordinator.onFirstGuiFrame();
 
-        EXPECT_FALSE(
-            pluginPreloadTerminalForGuiPanels(
-                false, "not_started"));
-        EXPECT_FALSE(
-            pluginPreloadTerminalForGuiPanels(
-                true, "discovering"));
-        EXPECT_FALSE(
-            pluginPreloadTerminalForGuiPanels(
-                true, "loading"));
-        EXPECT_TRUE(
-            pluginPreloadTerminalForGuiPanels(
-                true, "completed"));
-        EXPECT_TRUE(
-            pluginPreloadTerminalForGuiPanels(
-                true, "cancelled"));
-        ASSERT_TRUE(
-            pluginPreloadTerminalForGuiPanels(
-                true, "not_started"));
+        struct PreloadCase {
+            bool autoload;
+            std::string_view status;
+            bool terminal;
+        };
+        for (const auto& test : std::to_array<PreloadCase>({
+                 {false, "not_started", false},
+                 {true, "discovering", false},
+                 {true, "loading", false},
+                 {true, "completed", true},
+                 {true, "cancelled", true},
+                 {true, "not_started", true},
+             })) {
+            SCOPED_TRACE(test.status);
+            EXPECT_EQ(pluginPreloadTerminalForGuiPanels(test.autoload, test.status),
+                      test.terminal);
+        }
 
         coordinator.onPanelsReady(91);
         auto restored = coordinator.takeReady();
         ASSERT_TRUE(restored);
         EXPECT_EQ(
             restored->chapters.editor.dom().dump(),
-            make_matrix_session()
+            make_populated_session_chapters()
                 .editor.dom()
                 .dump());
     }
@@ -1182,71 +669,52 @@ namespace {
             require_result(metrics.to_bytes());
         ASSERT_EQ(valid.size(), 68u);
 
-        const auto expect_data_loss =
-            [](const std::vector<std::byte>& bytes) {
-                auto parsed =
-                    MetricsChapter::from_bytes(
-                        bytes);
-                ASSERT_FALSE(parsed);
-                EXPECT_EQ(
-                    parsed.error().code(),
-                    lfs::ErrorCode::DataLoss);
-            };
-
-        auto truncated_header = valid;
-        truncated_header.resize(31);
-        expect_data_loss(truncated_header);
-
-        auto truncated_payload = valid;
-        truncated_payload.pop_back();
-        expect_data_loss(truncated_payload);
-
-        auto oversized = valid;
-        overwrite_u64_le(
-            oversized, LOSS_COUNT_OFFSET,
-            MetricsChapter::MAX_HISTORY_SAMPLES +
-                1ull);
-        auto oversized_result =
-            MetricsChapter::from_bytes(
-                oversized);
-        ASSERT_FALSE(oversized_result);
-        EXPECT_EQ(
-            oversized_result.error().code(),
-            lfs::ErrorCode::ResourceExhausted);
-
-        auto nan_accumulated = valid;
-        overwrite_f64_le(
-            nan_accumulated,
-            ACCUMULATED_OFFSET,
-            std::numeric_limits<double>::
-                quiet_NaN());
-        expect_data_loss(nan_accumulated);
-
-        auto infinite_last = valid;
-        overwrite_f32_le(
-            infinite_last, LAST_PSNR_OFFSET,
-            std::numeric_limits<float>::
-                infinity());
-        expect_data_loss(infinite_last);
-
-        auto nan_loss = valid;
-        overwrite_f32_le(
-            nan_loss, LOSS_VALUE_OFFSET,
-            std::numeric_limits<float>::
-                quiet_NaN());
-        expect_data_loss(nan_loss);
-
-        auto infinite_psnr = valid;
-        overwrite_f32_le(
-            infinite_psnr, PSNR_VALUE_OFFSET,
-            -std::numeric_limits<float>::
-                infinity());
-        expect_data_loss(infinite_psnr);
-
-        auto misaligned = valid;
-        misaligned.push_back(
-            std::byte{0x7f});
-        expect_data_loss(misaligned);
+        struct InvalidMetricsCase {
+            std::string_view name;
+            lfs::ErrorCode code;
+            std::function<void(std::vector<std::byte>&)> mutate;
+        };
+        const auto cases = std::to_array<InvalidMetricsCase>({
+            {"truncated header", lfs::ErrorCode::DataLoss,
+             [](auto& bytes) { bytes.resize(31); }},
+            {"truncated payload", lfs::ErrorCode::DataLoss,
+             [](auto& bytes) { bytes.pop_back(); }},
+            {"oversized history", lfs::ErrorCode::ResourceExhausted,
+             [](auto& bytes) {
+                 lfs::test::licht::write_u64_le(bytes, LOSS_COUNT_OFFSET,
+                                                MetricsChapter::MAX_HISTORY_SAMPLES + 1ull);
+             }},
+            {"NaN accumulated time", lfs::ErrorCode::DataLoss,
+             [](auto& bytes) {
+                 overwrite_f64_le(bytes, ACCUMULATED_OFFSET,
+                                  std::numeric_limits<double>::quiet_NaN());
+             }},
+            {"infinite last PSNR", lfs::ErrorCode::DataLoss,
+             [](auto& bytes) {
+                 overwrite_f32_le(bytes, LAST_PSNR_OFFSET,
+                                  std::numeric_limits<float>::infinity());
+             }},
+            {"NaN loss", lfs::ErrorCode::DataLoss,
+             [](auto& bytes) {
+                 overwrite_f32_le(bytes, LOSS_VALUE_OFFSET,
+                                  std::numeric_limits<float>::quiet_NaN());
+             }},
+            {"infinite PSNR", lfs::ErrorCode::DataLoss,
+             [](auto& bytes) {
+                 overwrite_f32_le(bytes, PSNR_VALUE_OFFSET,
+                                  -std::numeric_limits<float>::infinity());
+             }},
+            {"misaligned tail", lfs::ErrorCode::DataLoss,
+             [](auto& bytes) { bytes.push_back(std::byte{0x7f}); }},
+        });
+        for (const auto& test : cases) {
+            SCOPED_TRACE(test.name);
+            auto bytes = valid;
+            test.mutate(bytes);
+            const auto parsed = MetricsChapter::from_bytes(bytes);
+            ASSERT_FALSE(parsed);
+            EXPECT_EQ(parsed.error().code(), test.code);
+        }
     }
 
     class P5MetricsRestoreTest
@@ -1340,8 +808,8 @@ namespace {
 
     TEST(P5MatrixProof,
          EveryAssignedRowSurvivesSaveLoadAndStagesBeforeMutation) {
-        const auto session = make_matrix_session();
-        TemporaryProjectDirectory temporary;
+        const auto session = make_populated_session_chapters();
+        TemporaryDirectory temporary{"licht-p5"};
         const auto project_path =
             temporary.path / "p5-matrix.licht";
 
@@ -1351,14 +819,14 @@ namespace {
             << lfs::format_for_developer(
                    document.error());
         const Json session_view =
-            root_json(session.view.dom());
+            json_root(session.view.dom());
         const auto environment_reference =
             lfs::core::Uuid::from_string(
                 session_view["render_settings"]
                             ["environment_reference_uuid"]
                                 .get<std::string>());
         const Json session_sequencer =
-            root_json(session.sequencer.dom());
+            json_root(session.sequencer.dom());
         const auto sequence_reference =
             lfs::core::Uuid::from_string(
                 session_sequencer["ply_sequences"][0]
@@ -1380,9 +848,8 @@ namespace {
                                 LocatorBase::Project,
                         },
                     .fingerprint =
-                        fake_reference_fingerprint(
-                            FingerprintKind::File,
-                            31),
+                        lfs::test::licht::fingerprint(
+                            31, FingerprintKind::File),
                     .unresolved = true,
                 }));
         require_status(
@@ -1401,9 +868,8 @@ namespace {
                                 LocatorBase::Project,
                         },
                     .fingerprint =
-                        fake_reference_fingerprint(
-                            FingerprintKind::Directory,
-                            32),
+                        lfs::test::licht::fingerprint(
+                            32, FingerprintKind::Directory),
                     .unresolved = true,
                 }));
         document->edit_gui_layout() =
@@ -1503,466 +969,217 @@ namespace {
         EXPECT_TRUE(hydration.gui_session_pending);
         EXPECT_EQ(live_scene.getNodeCount(), 0u);
 
-        const Json gui =
-            root_json(reopened->gui_layout().dom());
-        const auto& spaces =
-            gui["layouts"][0]["areas"][0]["spaces"];
-        const auto& fixed =
-            spaces[0]["opaque_payload"];
-        const auto& registry =
-            spaces[1]["opaque_payload"];
-        const auto& panel =
-            registry["panels"][0];
-        const auto& console =
-            spaces[2]["opaque_payload"];
-
         std::set<std::string> proven;
-        const auto prove =
-            [&proven](
-                const std::string_view row) {
-                EXPECT_TRUE(
-                    proven
-                        .emplace(row)
-                        .second)
-                    << row;
-            };
+        const auto prove = [&proven](const std::string_view row) {
+            EXPECT_TRUE(proven.emplace(row).second) << row;
+        };
+        const auto at = [](const Json& root, const std::string_view path)
+            -> const Json& {
+            return root.at(Json::json_pointer(std::string(path)));
+        };
+        const auto expect_json = [&](const Json& root, const std::string_view path,
+                                     Json expected) {
+            EXPECT_EQ(at(root, path), expected) << path;
+        };
+        const auto expect_float = [&](const Json& root, const std::string_view path,
+                                      const float expected) {
+            EXPECT_FLOAT_EQ(at(root, path).get<float>(), expected) << path;
+        };
+        const auto expect_bool = [&](const Json& root, const std::string_view path,
+                                     const bool expected) {
+            EXPECT_EQ(at(root, path).get<bool>(), expected) << path;
+        };
 
-        EXPECT_FLOAT_EQ(
-            fixed["right_panel_width"]
-                .get<float>(),
-            417.0f);
-        EXPECT_FLOAT_EQ(
-            fixed["scene_panel_ratio"]
-                .get<float>(),
-            0.61f);
-        EXPECT_FLOAT_EQ(
-            fixed["python_console_width"]
-                .get<float>(),
-            511.0f);
-        EXPECT_FLOAT_EQ(
-            fixed["bottom_dock_height"]
-                .get<float>(),
-            288.0f);
-        EXPECT_FLOAT_EQ(
-            fixed["left_dock_width"]
-                .get<float>(),
-            271.0f);
+        const Json gui = json_root(reopened->gui_layout().dom());
+        const auto& spaces = gui["layouts"][0]["areas"][0]["spaces"];
+        const auto& fixed = spaces[0]["opaque_payload"];
+        const auto& registry = spaces[1]["opaque_payload"];
+        const auto& panel = registry["panels"][0];
+        const auto& console = spaces[2]["opaque_payload"];
+
+        expect_float(fixed, "/right_panel_width", 417.0f);
+        expect_float(fixed, "/scene_panel_ratio", 0.61f);
+        expect_float(fixed, "/python_console_width", 511.0f);
+        expect_float(fixed, "/bottom_dock_height", 288.0f);
+        expect_float(fixed, "/left_dock_width", 271.0f);
         prove("GUIL-166");
-        EXPECT_TRUE(
-            fixed["sequencer_visible"]
-                .get<bool>());
-        EXPECT_TRUE(
-            fixed["python_console_visible"]
-                .get<bool>());
-        EXPECT_TRUE(panel["enabled"].get<bool>());
+        expect_bool(fixed, "/sequencer_visible", true);
+        expect_bool(fixed, "/python_console_visible", true);
+        expect_bool(panel, "/enabled", true);
         prove("GUIL-167");
-        EXPECT_EQ(panel["parent_id"], "main");
-        EXPECT_EQ(panel["space"], "floating");
-        EXPECT_EQ(panel["order"], 7);
-        EXPECT_EQ(
-            registry["active_tabs"]
-                    ["main_panel"],
-            "training");
-        EXPECT_EQ(
-            registry["active_tabs"]
-                    ["scene_panel"],
-            "history");
+        expect_json(panel, "/parent_id", "main");
+        expect_json(panel, "/space", "floating");
+        expect_json(panel, "/order", 7);
+        expect_json(registry, "/active_tabs/main_panel", "training");
+        expect_json(registry, "/active_tabs/scene_panel", "history");
         prove("GUIL-168");
-        EXPECT_FLOAT_EQ(
-            panel["float_x"].get<float>(),
-            31.0f);
-        EXPECT_FLOAT_EQ(
-            panel["float_last_w"].get<float>(),
-            640.0f);
-        EXPECT_EQ(
-            panel["float_stack_order"], 12);
-        EXPECT_EQ(
-            panel["vendor_extension"],
-            "retained");
+        expect_float(panel, "/float_x", 31.0f);
+        expect_float(panel, "/float_last_w", 640.0f);
+        expect_json(panel, "/float_stack_order", 12);
+        expect_json(panel, "/vendor_extension", "retained");
         prove("GUIL-169");
-        EXPECT_EQ(fixed["window"]["x"], 101);
-        EXPECT_EQ(
-            fixed["window"]["width"], 1440);
-        EXPECT_TRUE(
-            fixed["window"]["maximized"]
-                .get<bool>());
-        EXPECT_EQ(
-            fixed["window"]["restore_width"],
-            1280);
+        expect_json(fixed, "/window/x", 101);
+        expect_json(fixed, "/window/width", 1440);
+        expect_bool(fixed, "/window/maximized", true);
+        expect_json(fixed, "/window/restore_width", 1280);
         prove("GUIL-170");
-        EXPECT_EQ(console["active_tab"], 1);
-        EXPECT_FLOAT_EQ(
-            console["font_scale"].get<float>(),
-            1.7f);
+        expect_json(console, "/active_tab", 1);
+        expect_float(console, "/font_scale", 1.7f);
         prove("GUIL-171");
 
-        const Json editor =
-            root_json(reopened->editor().dom());
+        const Json editor = json_root(reopened->editor().dom());
         ASSERT_EQ(editor["open_files"].size(), 2u);
-        EXPECT_EQ(
-            editor["open_files"][0]["locator"],
-            "project://scripts/a.py");
-        EXPECT_EQ(
-            editor["open_files"][1]["locator"],
-            "project://scripts/b.py");
+        expect_json(editor, "/open_files/0/locator", "project://scripts/a.py");
+        expect_json(editor, "/open_files/1/locator", "project://scripts/b.py");
         prove("EDTR-179");
-        EXPECT_EQ(
-            editor["active_file"],
-            "project://scripts/b.py");
+        expect_json(editor, "/active_file", "project://scripts/b.py");
         prove("EDTR-180");
-        EXPECT_TRUE(
-            editor["open_files"][1]["modified"]
-                .get<bool>());
-        EXPECT_EQ(
-            editor["open_files"][1]
-                  ["embedded_buffer"],
-            "token = 'secret'\\n");
-        EXPECT_TRUE(
-            editor["open_files"][1]
-                  ["share_warning"]
-                      .get<bool>());
-        EXPECT_TRUE(
-            editor["contains_embedded_secrets"]
-                .get<bool>());
+        expect_bool(editor, "/open_files/1/modified", true);
+        expect_json(editor, "/open_files/1/embedded_buffer", "token = 'secret'\\n");
+        expect_bool(editor, "/open_files/1/share_warning", true);
+        expect_bool(editor, "/contains_embedded_secrets", true);
         prove("EDTR-181");
-        EXPECT_EQ(
-            editor["open_files"][0]
-                  ["cursor_byte"],
-            4);
-        EXPECT_EQ(
-            editor["open_files"][0]
-                  ["selection_anchor_byte"],
-            1);
+        expect_json(editor, "/open_files/0/cursor_byte", 4);
+        expect_json(editor, "/open_files/0/selection_anchor_byte", 1);
         prove("EDTR-182");
-        EXPECT_FLOAT_EQ(
-            editor["open_files"][0]
-                  ["scroll_y"]
-                      .get<float>(),
-            44.0f);
-        EXPECT_TRUE(
-            editor["open_files"][0]["folds"][0]
-                  ["collapsed"]
-                      .get<bool>());
+        expect_float(editor, "/open_files/0/scroll_y", 44.0f);
+        expect_bool(editor, "/open_files/0/folds/0/collapsed", true);
         prove("EDTR-183");
-        EXPECT_TRUE(
-            editor["vim_mode"].get<bool>());
+        expect_bool(editor, "/vim_mode", true);
         prove("EDTR-184");
 
-        const Json view =
-            root_json(reopened->view().dom());
+        const Json view = json_root(reopened->view().dom());
         const auto& render =
             view["render_settings"];
-        EXPECT_FLOAT_EQ(
-            render["focal_length_mm"]
-                .get<float>(),
-            73.0f);
-        EXPECT_TRUE(
-            render["antialiasing"].get<bool>());
-        EXPECT_TRUE(
-            render["mip_filter"].get<bool>());
-        EXPECT_EQ(render["sh_degree"], 2);
-        EXPECT_EQ(
-            render["camera_metrics_mode"], 2);
+        expect_float(render, "/focal_length_mm", 73.0f);
+        expect_bool(render, "/antialiasing", true);
+        expect_bool(render, "/mip_filter", true);
+        expect_json(render, "/sh_degree", 2);
+        expect_json(render, "/camera_metrics_mode", 2);
         prove("VIEW-192");
-        EXPECT_TRUE(
-            render["show_crop_box"].get<bool>());
-        EXPECT_TRUE(
-            render["use_ellipsoid"].get<bool>());
-        EXPECT_TRUE(
-            render["desaturate_cropping"]
-                .get<bool>());
-        EXPECT_TRUE(
-            render["crop_filter_for_selection"]
-                .get<bool>());
+        expect_bool(render, "/show_crop_box", true);
+        expect_bool(render, "/use_ellipsoid", true);
+        expect_bool(render, "/desaturate_cropping", true);
+        expect_bool(render, "/crop_filter_for_selection", true);
         prove("VIEW-193");
-        EXPECT_TRUE(
-            render["apply_appearance_correction"]
-                .get<bool>());
-        EXPECT_EQ(render["ppisp_mode"], 0);
-        EXPECT_FLOAT_EQ(
-            render["ppisp_overrides"]
-                  ["exposure_offset"]
-                      .get<float>(),
-            1.25f);
-        EXPECT_FLOAT_EQ(
-            render["ppisp_overrides"]
-                  ["gamma_multiplier"]
-                      .get<float>(),
-            1.3f);
+        expect_bool(render, "/apply_appearance_correction", true);
+        expect_json(render, "/ppisp_mode", 0);
+        expect_float(render, "/ppisp_overrides/exposure_offset", 1.25f);
+        expect_float(render, "/ppisp_overrides/gamma_multiplier", 1.3f);
         prove("VIEW-194");
-        EXPECT_EQ(
-            render["background_color"],
-            Json::array({0.1f, 0.2f, 0.3f}));
-        EXPECT_TRUE(
-            render["environment_reference_uuid"]
-                .is_string());
-        EXPECT_TRUE(
-            render["environment_builtin"]
-                .is_null());
-        EXPECT_FLOAT_EQ(
-            render["environment_exposure"]
-                .get<float>(),
-            1.75f);
+        expect_json(render, "/background_color", Json::array({0.1f, 0.2f, 0.3f}));
+        EXPECT_TRUE(at(render, "/environment_reference_uuid").is_string());
+        EXPECT_TRUE(at(render, "/environment_builtin").is_null());
+        expect_float(render, "/environment_exposure", 1.75f);
         prove("VIEW-195");
-        EXPECT_TRUE(
-            render["show_coord_axes"].get<bool>());
-        EXPECT_EQ(
-            render["axes_visibility"],
-            Json::array({true, false, true}));
-        EXPECT_EQ(render["grid_plane"], 2);
+        expect_bool(render, "/show_coord_axes", true);
+        expect_json(render, "/axes_visibility", Json::array({true, false, true}));
+        expect_json(render, "/grid_plane", 2);
         prove("VIEW-196");
-        EXPECT_TRUE(
-            render["point_cloud_mode"].get<bool>());
-        EXPECT_TRUE(
-            render["show_rings"].get<bool>());
-        EXPECT_TRUE(
-            render["show_camera_frustums"]
-                .get<bool>());
-        EXPECT_TRUE(
-            render["show_pivot"].get<bool>());
+        expect_bool(render, "/point_cloud_mode", true);
+        expect_bool(render, "/show_rings", true);
+        expect_bool(render, "/show_camera_frustums", true);
+        expect_bool(render, "/show_pivot", true);
         prove("VIEW-197");
-        EXPECT_EQ(render["split_view_mode"], 3);
-        EXPECT_EQ(
-            render["gt_comparison_mode"], 2);
-        EXPECT_EQ(
-            render["raster_backend"], "3dgut");
+        expect_json(render, "/split_view_mode", 3);
+        expect_json(render, "/gt_comparison_mode", 2);
+        expect_json(render, "/raster_backend", "3dgut");
         EXPECT_FALSE(render.contains("gut"));
-        EXPECT_TRUE(
-            render["orthographic"].get<bool>());
-        EXPECT_TRUE(
-            render["depth_view"].get<bool>());
+        expect_bool(render, "/orthographic", true);
+        expect_bool(render, "/depth_view", true);
         prove("VIEW-198");
-        EXPECT_EQ(
-            render["selection_color_committed"],
-            Json::array(
-                {0.11f, 0.22f, 0.33f}));
-        EXPECT_TRUE(
-            render["depth_clip_enabled"]
-                .get<bool>());
-        EXPECT_FLOAT_EQ(
-            render["depth_clip_far"].get<float>(),
-            34.0f);
+        expect_json(render, "/selection_color_committed", Json::array({0.11f, 0.22f, 0.33f}));
+        expect_bool(render, "/depth_clip_enabled", true);
+        expect_float(render, "/depth_clip_far", 34.0f);
         prove("VIEW-199");
-        EXPECT_TRUE(
-            render["mesh_wireframe"].get<bool>());
-        EXPECT_FLOAT_EQ(
-            render["mesh_wireframe_width"]
-                .get<float>(),
-            2.5f);
-        EXPECT_TRUE(
-            render["mesh_shadow_enabled"]
-                .get<bool>());
-        EXPECT_EQ(
-            render["mesh_shadow_resolution"],
-            4096);
+        expect_bool(render, "/mesh_wireframe", true);
+        expect_float(render, "/mesh_wireframe_width", 2.5f);
+        expect_bool(render, "/mesh_shadow_enabled", true);
+        expect_json(render, "/mesh_shadow_resolution", 4096);
         prove("VIEW-200");
-        EXPECT_TRUE(
-            render["depth_filter_enabled"]
-                .get<bool>());
-        EXPECT_EQ(
-            render["depth_filter_transform"]
-                  ["translation"],
-            Json::array({1.0f, 2.0f, 3.0f}));
-        EXPECT_EQ(
-            render["depth_filter_transform"]
-                  ["rotation"]
-                      .size(),
-            9u);
+        expect_bool(render, "/depth_filter_enabled", true);
+        expect_json(render, "/depth_filter_transform/translation",
+                    Json::array({1.0f, 2.0f, 3.0f}));
+        EXPECT_EQ(at(render, "/depth_filter_transform/rotation").size(), 9u);
         prove("VIEW-201");
-        EXPECT_TRUE(
-            render["lod_enabled"].get<bool>());
-        EXPECT_EQ(
-            render["lod_max_splats"],
-            1'234'567);
-        EXPECT_EQ(
-            render["lod_page_pool_splats"],
-            765'432);
-        EXPECT_TRUE(
-            render["lod_debug_colors"].get<bool>());
+        expect_bool(render, "/lod_enabled", true);
+        expect_json(render, "/lod_max_splats", 1'234'567);
+        expect_json(render, "/lod_page_pool_splats", 765'432);
+        expect_bool(render, "/lod_debug_colors", true);
         prove("VIEW-202");
-        EXPECT_EQ(
-            view["split"]["panel_grid_planes"],
-            Json::array({0, 2}));
+        expect_json(view, "/split/panel_grid_planes", Json::array({0, 2}));
         prove("VIEW-203");
-        ASSERT_EQ(
-            view["panel_cameras"].size(), 2u);
-        EXPECT_EQ(
-            view["panel_cameras"][0]["R"],
-            Json::array({0.0f, 1.0f, 0.0f,
-                         -1.0f, 0.0f, 0.0f,
-                         0.0f, 0.0f, 1.0f}));
-        EXPECT_TRUE(
-            view["panel_cameras"][1]
-                ["ortho_scale"]
-                    .is_number());
+        ASSERT_EQ(at(view, "/panel_cameras").size(), 2u);
+        expect_json(view, "/panel_cameras/0/R",
+                    Json::array({0.0f, 1.0f, 0.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f}));
+        EXPECT_TRUE(at(view, "/panel_cameras/1/ortho_scale").is_number());
         prove("VIEW-204");
-        EXPECT_EQ(
-            view["navigation"]["mode"],
-            "drone");
-        EXPECT_TRUE(
-            view["navigation"]["view_snap"]
-                .get<bool>());
+        expect_json(view, "/navigation/mode", "drone");
+        expect_bool(view, "/navigation/view_snap", true);
         prove("VIEW-205");
-        EXPECT_EQ(
-            view["split"]["focused_panel"],
-            "right");
-        EXPECT_EQ(
-            view["split"]["gt_camera_id"], 41);
+        expect_json(view, "/split/focused_panel", "right");
+        expect_json(view, "/split/gt_camera_id", 41);
         prove("VIEW-206");
-        ASSERT_EQ(
-            view["camera_bookmarks"].size(), 1u);
-        EXPECT_EQ(
-            view["camera_bookmarks"][0]["id"],
-            "bookmark.matrix");
-        EXPECT_EQ(
-            view["camera_bookmarks"][0]["name"],
-            "Rolled view");
+        ASSERT_EQ(at(view, "/camera_bookmarks").size(), 1u);
+        expect_json(view, "/camera_bookmarks/0/id", "bookmark.matrix");
+        expect_json(view, "/camera_bookmarks/0/name", "Rolled view");
         prove("VIEW-207");
-        EXPECT_EQ(
-            view["tools"]["active_tool_id"],
-            "crop");
-        EXPECT_EQ(
-            view["tools"]["active_submode_id"],
-            "brush");
-        EXPECT_EQ(
-            view["tools"]["gizmo_operation"],
-            "rotate");
-        EXPECT_EQ(
-            view["tools"]["transform_space"],
-            "local");
+        expect_json(view, "/tools/active_tool_id", "crop");
+        expect_json(view, "/tools/active_submode_id", "brush");
+        expect_json(view, "/tools/gizmo_operation", "rotate");
+        expect_json(view, "/tools/transform_space", "local");
         prove("VIEW-208");
-        EXPECT_FLOAT_EQ(
-            view["tools"]["selection"]
-                ["brush_radius"]
-                    .get<float>(),
-            37.0f);
-        EXPECT_TRUE(
-            view["tools"]["selection"]
-                ["restrict_to_selected_nodes"]
-                    .get<bool>());
+        expect_float(view, "/tools/selection/brush_radius", 37.0f);
+        expect_bool(view, "/tools/selection/restrict_to_selected_nodes", true);
         prove("VIEW-209");
-        EXPECT_FALSE(
-            view["sequencer_view"]
-                ["show_camera_path"]
-                    .get<bool>());
+        expect_bool(view, "/sequencer_view/show_camera_path", false);
         prove("VIEW-210");
 
-        const Json sequencer = root_json(
-            reopened->sequencer().dom());
-        EXPECT_FLOAT_EQ(
-            sequencer["timeline"]
-                     ["clip_duration"]
-                         .get<float>(),
-            48.0f);
-        ASSERT_EQ(
-            sequencer["timeline"]["keyframes"]
-                .size(),
-            1u);
-        EXPECT_EQ(
-            sequencer["timeline"]["keyframes"][0]
-                     ["position"],
-            Json::array({1.0f, 2.0f, 3.0f}));
+        const Json sequencer = json_root(reopened->sequencer().dom());
+        expect_float(sequencer, "/timeline/clip_duration", 48.0f);
+        ASSERT_EQ(at(sequencer, "/timeline/keyframes").size(), 1u);
+        expect_json(sequencer, "/timeline/keyframes/0/position",
+                    Json::array({1.0f, 2.0f, 3.0f}));
         prove("SEQR-218");
-        EXPECT_EQ(
-            sequencer["timeline"]
-                     ["animation_clip"]["name"],
-            "Matrix animation");
-        ASSERT_EQ(
-            sequencer["timeline"]
-                     ["animation_clip"]["tracks"]
-                         .size(),
-            1u);
-        EXPECT_EQ(
-            sequencer["timeline"]
-                     ["animation_clip"]["tracks"][0]
-                     ["target"],
-            "node.opacity");
+        expect_json(sequencer, "/timeline/animation_clip/name", "Matrix animation");
+        ASSERT_EQ(at(sequencer, "/timeline/animation_clip/tracks").size(), 1u);
+        expect_json(sequencer, "/timeline/animation_clip/tracks/0/target", "node.opacity");
         prove("SEQR-219");
-        ASSERT_EQ(
-            sequencer["ply_sequences"].size(),
-            1u);
-        EXPECT_EQ(
-            sequencer["ply_sequences"][0]
-                     ["frames"][0]["locator"],
-            "frame_0007.ply");
-        EXPECT_FLOAT_EQ(
-            sequencer["ply_sequences"][0]["fps"]
-                .get<float>(),
-            17.5f);
-        EXPECT_FALSE(
-            sequencer["ply_sequences"][0]
-                .contains("sequence_fps"));
+        ASSERT_EQ(at(sequencer, "/ply_sequences").size(), 1u);
+        expect_json(sequencer, "/ply_sequences/0/frames/0/locator", "frame_0007.ply");
+        expect_float(sequencer, "/ply_sequences/0/fps", 17.5f);
+        EXPECT_FALSE(at(sequencer, "/ply_sequences/0").contains("sequence_fps"));
         prove("SEQR-220");
-        EXPECT_FLOAT_EQ(
-            sequencer["playhead"].get<float>(),
-            3.5f);
-        EXPECT_EQ(
-            sequencer["loop_mode"],
-            "ping_pong");
-        EXPECT_FLOAT_EQ(
-            sequencer["playback_speed"]
-                .get<float>(),
-            1.75f);
+        expect_float(sequencer, "/playhead", 3.5f);
+        expect_json(sequencer, "/loop_mode", "ping_pong");
+        expect_float(sequencer, "/playback_speed", 1.75f);
         prove("SEQR-221");
-        EXPECT_TRUE(
-            sequencer["preferences"]
-                     ["snap_to_grid"]
-                         .get<bool>());
-        EXPECT_TRUE(
-            sequencer["preferences"]
-                     ["follow_playback"]
-                         .get<bool>());
-        EXPECT_FALSE(
-            sequencer["preferences"]
-                     ["show_film_strip"]
-                         .get<bool>());
+        expect_bool(sequencer, "/preferences/snap_to_grid", true);
+        expect_bool(sequencer, "/preferences/follow_playback", true);
+        expect_bool(sequencer, "/preferences/show_film_strip", false);
         prove("SEQR-222");
 
         const auto& metrics = reopened->metrics();
         ASSERT_EQ(metrics.loss_history.size(), 2u);
-        EXPECT_EQ(
-            metrics.loss_history[1].iteration,
-            20);
-        EXPECT_FLOAT_EQ(
-            metrics.loss_history[1].value,
-            0.21f);
+        EXPECT_EQ(metrics.loss_history[1].iteration, 20);
+        EXPECT_FLOAT_EQ(metrics.loss_history[1].value, 0.21f);
         prove("METR-230");
         ASSERT_EQ(metrics.psnr_history.size(), 2u);
-        EXPECT_FLOAT_EQ(
-            metrics.psnr_history[1].value,
-            24.75f);
+        EXPECT_FLOAT_EQ(metrics.psnr_history[1].value, 24.75f);
         prove("METR-231");
-        EXPECT_DOUBLE_EQ(
-            metrics.accumulated_training_seconds,
-            37.5);
+        EXPECT_DOUBLE_EQ(metrics.accumulated_training_seconds, 37.5);
         prove("METR-232");
         ASSERT_TRUE(metrics.last_evaluation);
-        EXPECT_EQ(
-            metrics.last_evaluation->iteration,
-            20);
-        EXPECT_FLOAT_EQ(
-            metrics.last_evaluation->psnr,
-            24.75f);
-        EXPECT_FLOAT_EQ(
-            metrics.last_evaluation->ssim,
-            0.91f);
+        EXPECT_EQ(metrics.last_evaluation->iteration, 20);
+        EXPECT_FLOAT_EQ(metrics.last_evaluation->psnr, 24.75f);
+        EXPECT_FLOAT_EQ(metrics.last_evaluation->ssim, 0.91f);
         prove("METR-233");
 
-        const std::set<std::string> registered(
-            lfs::test::P5_MATRIX_ROWS.begin(),
-            lfs::test::P5_MATRIX_ROWS.end());
+        const auto registered = lfs::test::licht::word_set(
+            lfs::test::licht::P5_MATRIX_ROW_DATA);
         EXPECT_EQ(proven, registered)
             << "Every registered P5 row must reach an explicit "
                "save->load->Phase-A assertion";
     }
 
 } // namespace
-
-namespace lfs::test {
-
-    io::project::ProjectSessionChapters
-    make_p8_matrix_session() {
-        return make_matrix_session();
-    }
-
-} // namespace lfs::test

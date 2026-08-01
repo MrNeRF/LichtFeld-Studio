@@ -60,6 +60,7 @@ set(CORE_SOURCES
         failure_report.cpp
         cuda/memory_arena_owner.cpp
         memory_pressure.cpp
+        memory_domain.cpp
         operator_callbacks.cpp
         animatable_property.cpp
         argument_parser.cpp

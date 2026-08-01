@@ -24,23 +24,6 @@
 
 namespace lfs::core {
 
-    const char* to_string(MemoryDomain domain) noexcept {
-        switch (domain) {
-        case MemoryDomain::CudaDevice: return "cuda-device";
-        case MemoryDomain::CudaVmm: return "cuda-vmm";
-        case MemoryDomain::VulkanDevice: return "vulkan-device";
-        case MemoryDomain::PinnedHost: return "pinned-host";
-        case MemoryDomain::PageableHost: return "pageable-host";
-        }
-        return "unknown";
-    }
-
-    bool is_device_heap(MemoryDomain domain) noexcept {
-        return domain == MemoryDomain::CudaDevice ||
-               domain == MemoryDomain::CudaVmm ||
-               domain == MemoryDomain::VulkanDevice;
-    }
-
     namespace {
 
         std::string format_bytes(size_t bytes) {

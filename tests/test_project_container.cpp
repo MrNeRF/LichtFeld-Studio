@@ -4,6 +4,7 @@
 #include "io/project/crc32c.hpp"
 #include "io/project_container.hpp"
 #include "io/project_recovery.hpp"
+#include "licht_test_support.hpp"
 
 #include <algorithm>
 #include <array>
@@ -20,7 +21,6 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
-#include <nlohmann/json.hpp>
 #include <ostream>
 #include <span>
 #include <stdexcept>
@@ -42,194 +42,29 @@ namespace {
 
     namespace fs = std::filesystem;
     using namespace lfs::io::project;
+    using namespace lfs::test::licht;
     using namespace std::string_view_literals;
 
     const fs::path FIXTURES =
-        fs::path(PROJECT_ROOT_PATH) / "tools/licht_inspect/fixtures";
+        fs::path(PROJECT_ROOT_PATH) / "tests/fixtures/licht";
     constexpr std::uint64_t FIXED_CREATION_TIME_NS =
         1'735'689'600'000'000'000;
     constexpr std::uint64_t FIXED_COMMIT_TIME_NS =
         1'735'689'601'000'000'000;
 
-    struct TemporaryDirectory {
-        TemporaryDirectory() {
-            static std::atomic_uint64_t counter{0};
-            path = fs::temp_directory_path() /
-                   std::format("lfs-project-container-{}-{}",
-                               std::chrono::steady_clock::now()
-                                   .time_since_epoch()
-                                   .count(),
-                               counter.fetch_add(1));
-            fs::create_directories(path);
-        }
-
-        ~TemporaryDirectory() {
-            std::error_code ignored;
-            fs::remove_all(path, ignored);
-        }
-
-        fs::path path;
-    };
-
-    lfs::core::Uuid fixed_uuid(const std::uint64_t tag) {
-        const auto parsed = lfs::core::Uuid::from_string(
-            std::format("{:08x}-0000-4000-8000-{:012x}", tag, tag));
-        if (!parsed.has_value()) {
-            std::abort();
-        }
-        return *parsed;
-    }
-
-    ChunkKey fixed_key(const std::string_view fourcc,
-                       const std::uint64_t instance_tag) {
-        const auto parsed_fourcc = Fourcc::from_string(fourcc);
-        if (!parsed_fourcc.has_value()) {
-            std::abort();
-        }
-        return ChunkKey{
-            .fourcc = *parsed_fourcc,
-            .instance_uuid = fixed_uuid(instance_tag),
-        };
-    }
-
-    std::vector<std::byte> byte_vector(const std::string_view text) {
-        const auto bytes = std::as_bytes(std::span(text.data(), text.size()));
-        return {bytes.begin(), bytes.end()};
-    }
-
-    std::vector<std::byte> hex_bytes(const std::string_view text) {
-        auto nibble = [](const char value) -> std::uint8_t {
-            if (value >= '0' && value <= '9') {
-                return static_cast<std::uint8_t>(value - '0');
-            }
-            if (value >= 'a' && value <= 'f') {
-                return static_cast<std::uint8_t>(value - 'a' + 10);
-            }
-            std::abort();
-        };
-        if (text.size() % 2 != 0) {
-            std::abort();
-        }
-        std::vector<std::byte> result(text.size() / 2);
-        for (std::size_t index = 0; index < result.size(); ++index) {
-            result[index] = static_cast<std::byte>(
-                (nibble(text[index * 2]) << 4) | nibble(text[index * 2 + 1]));
-        }
-        return result;
-    }
-
-    std::vector<std::byte> read_file_bytes(const fs::path& path) {
-        std::ifstream input(path, std::ios::binary);
-        const std::vector<char> raw{std::istreambuf_iterator<char>(input),
-                                    std::istreambuf_iterator<char>()};
-        std::vector<std::byte> bytes(raw.size());
-        std::memcpy(bytes.data(), raw.data(), raw.size());
-        return bytes;
-    }
-
-    std::vector<std::byte> read_file_range(const fs::path& path,
-                                           const std::uint64_t offset,
-                                           const std::size_t count) {
-        std::ifstream input(path, std::ios::binary);
-        input.seekg(static_cast<std::streamoff>(offset));
-        std::vector<std::byte> bytes(count);
-        input.read(reinterpret_cast<char*>(bytes.data()),
-                   static_cast<std::streamsize>(bytes.size()));
-        if (!input) {
-            throw std::runtime_error(
-                std::format("failed to read {} bytes from {} at 0x{:x}",
-                            count, path.string(), offset));
-        }
-        return bytes;
-    }
-
-    void write_file_bytes(const fs::path& path,
-                          const std::span<const std::byte> bytes) {
-        std::ofstream output(path, std::ios::binary | std::ios::trunc);
-        output.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(bytes.size()));
-        if (!output) {
-            throw std::runtime_error(
-                std::format("failed to write {}", path.string()));
-        }
-    }
-
-    void write_file_range(const fs::path& path, const std::uint64_t offset,
-                          const std::span<const std::byte> bytes) {
-        std::fstream output(path,
-                            std::ios::binary | std::ios::in | std::ios::out);
-        output.seekp(static_cast<std::streamoff>(offset));
-        output.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(bytes.size()));
-        if (!output) {
-            throw std::runtime_error(
-                std::format("failed to write {} at 0x{:x}", path.string(),
-                            offset));
-        }
-    }
-
-    template <typename T>
-    T require_result(lfs::Result<T> result) {
-        if (!result) {
-            throw std::runtime_error(
-                lfs::format_for_developer(result.error()));
-        }
-        return std::move(*result);
-    }
-
-    void require_status(lfs::Result<void> result) {
-        if (!result) {
-            throw std::runtime_error(
-                lfs::format_for_developer(result.error()));
-        }
-    }
-
     CreateOptions fixture_create_options(const std::uint64_t file_tag) {
-        return CreateOptions{
-            .project_uuid = fixed_uuid(1),
-            .file_uuid = fixed_uuid(file_tag),
-            .role = ContainerRole::Master,
-            .creation_time_unix_ns = FIXED_CREATION_TIME_NS,
-            .index_compression =
-                IndexCompression::StoredForDeterministicTests,
-            .disk_reserve_bytes = 0,
-        };
+        return deterministic_create_options(file_tag, FIXED_CREATION_TIME_NS);
     }
 
     CommitOptions fixture_commit_options(const std::uint64_t commit_tag,
                                          const std::uint64_t snapshot_tag,
                                          const std::uint64_t generation) {
-        return CommitOptions{
-            .kind = CommitKind::Explicit,
-            .commit_uuid = fixed_uuid(commit_tag),
-            .snapshot_uuid = fixed_uuid(snapshot_tag),
-            .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + generation,
-        };
+        return deterministic_commit_options(
+            commit_tag, snapshot_tag, FIXED_COMMIT_TIME_NS + generation);
     }
 
     AppendOptions fixture_append_options() {
-        return AppendOptions{
-            .compatibility = {},
-            .index_compression =
-                IndexCompression::StoredForDeterministicTests,
-            .disk_reserve_bytes = 0,
-        };
-    }
-
-    void put_u32(std::span<std::byte> bytes, const std::size_t offset,
-                 const std::uint32_t value) {
-        for (std::size_t index = 0; index < 4; ++index) {
-            bytes[offset + index] =
-                static_cast<std::byte>(value >> (index * 8));
-        }
-    }
-
-    void put_u64(std::span<std::byte> bytes, const std::size_t offset,
-                 const std::uint64_t value) {
-        for (std::size_t index = 0; index < 8; ++index) {
-            bytes[offset + index] =
-                static_cast<std::byte>(value >> (index * 8));
-        }
+        return deterministic_append_options();
     }
 
     std::uint32_t crc_range(const std::span<const std::byte> bytes,
@@ -245,19 +80,19 @@ namespace {
         const std::uint32_t index_crc = crc_range(
             bytes, static_cast<std::size_t>(commit.index_offset),
             static_cast<std::size_t>(commit.index_stored_bytes));
-        put_u32(bytes, static_cast<std::size_t>(commit.offset + 160),
-                index_crc);
-        put_u32(bytes, static_cast<std::size_t>(commit.offset + 164),
-                index_crc);
+        write_u32_le(bytes, static_cast<std::size_t>(commit.offset + 160),
+                     index_crc);
+        write_u32_le(bytes, static_cast<std::size_t>(commit.offset + 164),
+                     index_crc);
         const std::uint32_t commit_crc =
             crc_range(bytes, static_cast<std::size_t>(commit.offset), 252);
-        put_u32(bytes, static_cast<std::size_t>(commit.offset + 252),
-                commit_crc);
+        write_u32_le(bytes, static_cast<std::size_t>(commit.offset + 252),
+                     commit_crc);
         for (const std::uint32_t slot : head_slots) {
             const std::size_t head =
                 static_cast<std::size_t>(HEAD_SLOT_OFFSETS[slot]);
-            put_u32(bytes, head + 104, commit_crc);
-            put_u32(bytes, head + 4092, crc_range(bytes, head, 4092));
+            write_u32_le(bytes, head + 104, commit_crc);
+            write_u32_le(bytes, head + 4092, crc_range(bytes, head, 4092));
         }
     }
 
@@ -562,9 +397,9 @@ namespace {
         ProjectReader original =
             require_result(ProjectReader::open(huge_index_path));
         std::vector<std::byte> hostile = read_file_bytes(huge_index_path);
-        put_u64(hostile,
-                static_cast<std::size_t>(original.commit().offset + 144),
-                4ull * 1024 * 1024 * 1024);
+        write_u64_le(hostile,
+                     static_cast<std::size_t>(original.commit().offset + 144),
+                     4ull * 1024 * 1024 * 1024);
         constexpr std::array<std::uint32_t, 1> SLOT_A = {0};
         refresh_generation_envelope(hostile, original, SLOT_A);
         write_file_bytes(huge_index_path, hostile);
@@ -588,19 +423,19 @@ namespace {
             source.begin() +
                 static_cast<std::size_t>(original.commit().offset),
             commit_raw.size(), commit_raw.begin());
-        put_u64(commit_raw, 176, sparse_end);
-        put_u32(commit_raw, 252,
-                crc32c(0, commit_raw.data(), commit_raw.size() - 4));
+        write_u64_le(commit_raw, 176, sparse_end);
+        write_u32_le(commit_raw, 252,
+                     crc32c(0, commit_raw.data(), commit_raw.size() - 4));
         std::array<std::byte, HEAD_SLOT_BYTES> head_raw{};
         std::copy_n(source.begin() +
                         static_cast<std::size_t>(HEAD_SLOT_OFFSETS[0]),
                     head_raw.size(), head_raw.begin());
-        put_u64(head_raw, 80, sparse_commit_offset);
-        put_u64(head_raw, 96, sparse_end);
-        put_u32(head_raw, 104,
-                crc32c(0, commit_raw.data(), commit_raw.size() - 4));
-        put_u32(head_raw, 4092,
-                crc32c(0, head_raw.data(), head_raw.size() - 4));
+        write_u64_le(head_raw, 80, sparse_commit_offset);
+        write_u64_le(head_raw, 96, sparse_end);
+        write_u32_le(head_raw, 104,
+                     crc32c(0, commit_raw.data(), commit_raw.size() - 4));
+        write_u32_le(head_raw, 4092,
+                     crc32c(0, head_raw.data(), head_raw.size() - 4));
         fs::resize_file(huge_padding_path, sparse_end);
         write_file_range(huge_padding_path, sparse_commit_offset, commit_raw);
         write_file_range(huge_padding_path, HEAD_SLOT_OFFSETS[0], head_raw);
@@ -664,10 +499,10 @@ namespace {
         const auto locator_path = temporary.path / "locator-mismatch.licht";
         fs::copy_file(source, locator_path);
         auto locator_bytes = read_file_bytes(locator_path);
-        put_u64(locator_bytes, active_head + 112,
-                original.preview()->offset + 64);
-        put_u32(locator_bytes, active_head + 4092,
-                crc_range(locator_bytes, active_head, 4092));
+        write_u64_le(locator_bytes, active_head + 112,
+                     original.preview()->offset + 64);
+        write_u32_le(locator_bytes, active_head + 4092,
+                     crc_range(locator_bytes, active_head, 4092));
         write_file_bytes(locator_path, locator_bytes);
         expect_fallback(locator_path);
 
@@ -689,110 +524,15 @@ namespace {
             static_cast<std::byte>(Compression::Zstd);
         compression_bytes[index_row + 7] =
             static_cast<std::byte>(Compression::Zstd);
-        put_u32(compression_bytes,
-                static_cast<std::size_t>(row->header_offset + 60),
-                crc_range(compression_bytes,
-                          static_cast<std::size_t>(row->header_offset), 60));
+        write_u32_le(compression_bytes,
+                     static_cast<std::size_t>(row->header_offset + 60),
+                     crc_range(compression_bytes,
+                               static_cast<std::size_t>(row->header_offset), 60));
         const std::array<std::uint32_t, 1> active_slots = {active_slot};
         refresh_generation_envelope(
             compression_bytes, original, active_slots);
         write_file_bytes(compression_path, compression_bytes);
         expect_fallback(compression_path);
-    }
-
-    TEST(ProjectContainerReader, UnsupportedAuthorityIsInspectOnly) {
-        ReaderOptions options;
-        options.allow_unsupported_inspection = true;
-        auto reader =
-            ProjectReader::open(FIXTURES / "unsupported-newer-single-head.licht",
-                                options);
-        ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());
-        EXPECT_EQ(reader->open_state(), OpenState::UnsupportedNewer);
-        ASSERT_FALSE(reader->chunks().empty());
-        auto payload = reader->read_chunk(reader->chunks().front());
-        EXPECT_FALSE(payload);
-        EXPECT_EQ(payload.error().code(), lfs::ErrorCode::Unsupported);
-    }
-
-    TEST(ProjectContainerReader, WriteSafetyUsesIndependentVersionAndCapabilityGates) {
-        auto reader = ProjectReader::open(FIXTURES / "write-unsafe.licht");
-        ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());
-        const WriteCompatibility compatibility = reader->write_compatibility();
-        EXPECT_FALSE(compatibility.safe);
-        EXPECT_EQ(compatibility.reasons.size(), 2u);
-    }
-
-    TEST(ProjectContainerReader, FullMaterializedOracleCorpusParity) {
-        const char* manifest_environment =
-            std::getenv("LFS_LICHT_ORACLE_MANIFEST");
-        if (manifest_environment == nullptr ||
-            std::string_view(manifest_environment).empty()) {
-            GTEST_SKIP()
-                << "set LFS_LICHT_ORACLE_MANIFEST to a materialized "
-                   "oracle_corpus.py manifest";
-        }
-        const fs::path manifest_path = manifest_environment;
-        std::ifstream input(manifest_path);
-        ASSERT_TRUE(input) << manifest_path;
-        const nlohmann::json manifest = nlohmann::json::parse(input);
-        ASSERT_EQ(manifest.at("schema").get<int>(), 1);
-        const auto& cases = manifest.at("cases");
-        ASSERT_EQ(cases.size(), manifest.at("case_count").get<std::size_t>());
-        ASSERT_GE(cases.size(), 10'000u);
-
-        for (const auto& record : cases) {
-            const std::string case_id =
-                record.at("case_id").get<std::string>();
-            SCOPED_TRACE(case_id);
-            const fs::path path =
-                manifest_path.parent_path() /
-                record.at("mutated_file").get<std::string>();
-            const std::string expected =
-                record.at("expected_outcome").get<std::string>();
-            const OpenClassification actual =
-                ProjectReader::classify(path);
-            EXPECT_EQ(actual.outcome_name(), expected)
-                << actual.diagnostic;
-        }
-    }
-
-    TEST(ProjectContainerWriter, ReproducesMinimalGoldenFixtureByteForByte) {
-        TemporaryDirectory temporary;
-        const fs::path path = temporary.path / "minimal.licht";
-        CreateOptions create{
-            .project_uuid = fixed_uuid(1),
-            .file_uuid = fixed_uuid(10),
-            .role = ContainerRole::Master,
-            .creation_time_unix_ns = FIXED_CREATION_TIME_NS,
-            .index_compression =
-                IndexCompression::StoredForDeterministicTests,
-            .disk_reserve_bytes = 0,
-        };
-        auto writer = ProjectWriter::create(path, create);
-        ASSERT_TRUE(writer) << lfs::format_for_developer(writer.error());
-        const auto payload =
-            byte_vector(R"({"fixture":"minimal","generation":1})");
-        CommitOptions commit{
-            .kind = CommitKind::Explicit,
-            .commit_uuid = fixed_uuid(100),
-            .snapshot_uuid = fixed_uuid(200),
-            .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + 1,
-        };
-        auto planned = writer->plan_commit(commit);
-        ASSERT_TRUE(planned)
-            << lfs::format_for_developer(planned.error());
-        auto preflight = writer->preflight(payload.size());
-        ASSERT_TRUE(preflight)
-            << lfs::format_for_developer(preflight.error());
-        auto write = writer->write_chunk(fixed_key("PROJ", 300), payload);
-        ASSERT_TRUE(write) << lfs::format_for_developer(write.error());
-        auto published = writer->commit();
-        ASSERT_TRUE(published)
-            << lfs::format_for_developer(published.error());
-
-        EXPECT_EQ(read_file_bytes(path),
-                  read_file_bytes(
-                      FIXTURES / "minimal-valid-single-generation.licht"));
     }
 
     TEST(ProjectContainerWriter, ReproducesCompleteGoldenCatalogueByteForByte) {
@@ -911,9 +651,9 @@ namespace {
             std::copy_n(duplicate.begin() + head_a,
                         static_cast<std::size_t>(HEAD_SLOT_BYTES),
                         duplicate.begin() + head_b);
-            put_u32(duplicate, head_b + 8, 1);
-            put_u32(duplicate, head_b + 4092,
-                    crc_range(duplicate, head_b, 4092));
+            write_u32_le(duplicate, head_b + 8, 1);
+            write_u32_le(duplicate, head_b + 4092,
+                         crc_range(duplicate, head_b, 4092));
         }
         generated["duplicate-slot-write.licht"] =
             std::move(duplicate);
@@ -1072,8 +812,8 @@ namespace {
                 read_file_bytes(out_of_bounds_path);
             const std::size_t row_offset = static_cast<std::size_t>(
                 reader.commit().index_offset + INDEX_HEADER_BYTES);
-            put_u64(bytes, row_offset + 40,
-                    reader.commit().committed_file_end + 64);
+            write_u64_le(bytes, row_offset + 40,
+                         reader.commit().committed_file_end + 64);
             constexpr std::array<std::uint32_t, 1> SLOTS = {0};
             refresh_generation_envelope(bytes, reader, SLOTS);
             generated["out-of-bounds-index-row.licht"] =
@@ -1115,20 +855,20 @@ namespace {
             const std::uint32_t expanded_crc = crc_range(
                 bytes, static_cast<std::size_t>(first->payload_offset),
                 static_cast<std::size_t>(expanded_size));
-            put_u64(bytes,
-                    static_cast<std::size_t>(first->header_offset + 32),
-                    expanded_size);
-            put_u64(bytes,
-                    static_cast<std::size_t>(first->header_offset + 40),
-                    expanded_size);
-            put_u32(bytes,
-                    static_cast<std::size_t>(first->header_offset + 56),
-                    expanded_crc);
+            write_u64_le(bytes,
+                         static_cast<std::size_t>(first->header_offset + 32),
+                         expanded_size);
+            write_u64_le(bytes,
+                         static_cast<std::size_t>(first->header_offset + 40),
+                         expanded_size);
+            write_u32_le(bytes,
+                         static_cast<std::size_t>(first->header_offset + 56),
+                         expanded_crc);
             const std::uint32_t header_crc = crc_range(
                 bytes, static_cast<std::size_t>(first->header_offset), 60);
-            put_u32(bytes,
-                    static_cast<std::size_t>(first->header_offset + 60),
-                    header_crc);
+            write_u32_le(bytes,
+                         static_cast<std::size_t>(first->header_offset + 60),
+                         header_crc);
             const auto row_position =
                 static_cast<std::size_t>(std::distance(
                     reader.chunks().begin(),
@@ -1140,10 +880,10 @@ namespace {
             const std::size_t row_offset = static_cast<std::size_t>(
                 reader.commit().index_offset + INDEX_HEADER_BYTES +
                 row_position * INDEX_ROW_BYTES);
-            put_u64(bytes, row_offset + 48, expanded_size);
-            put_u64(bytes, row_offset + 56, expanded_size);
-            put_u32(bytes, row_offset + 72, expanded_crc);
-            put_u32(bytes, row_offset + 76, header_crc);
+            write_u64_le(bytes, row_offset + 48, expanded_size);
+            write_u64_le(bytes, row_offset + 56, expanded_size);
+            write_u32_le(bytes, row_offset + 72, expanded_crc);
+            write_u32_le(bytes, row_offset + 76, header_crc);
             constexpr std::array<std::uint32_t, 1> SLOTS = {0};
             refresh_generation_envelope(bytes, reader, SLOTS);
             generated["overlapping-rows.licht"] = std::move(bytes);
@@ -1191,10 +931,10 @@ namespace {
                 view_index * INDEX_ROW_BYTES;
             split.insert(split.end(), source.begin() + source_row,
                          source.begin() + source_row + INDEX_ROW_BYTES);
-            put_u64(split, index_offset + 16, 1);
-            put_u64(split, index_offset + 24, 1);
-            put_u32(split, index_offset + 48, 0);
-            put_u64(split, index_offset + INDEX_HEADER_BYTES + 64, 1);
+            write_u64_le(split, index_offset + 16, 1);
+            write_u64_le(split, index_offset + 24, 1);
+            write_u32_le(split, index_offset + 48, 0);
+            write_u64_le(split, index_offset + INDEX_HEADER_BYTES + 64, 1);
             while (split.size() % CHUNK_ALIGNMENT != 0) {
                 split.push_back(std::byte{0});
             }
@@ -1204,39 +944,39 @@ namespace {
             split.insert(split.end(), source.begin() + source_commit,
                          source.begin() + source_commit +
                              COMMIT_RECORD_BYTES);
-            put_u64(split, commit_offset + 64, 1);
+            write_u64_le(split, commit_offset + 64, 1);
             std::fill(split.begin() + commit_offset + 72,
                       split.begin() + commit_offset + 96, std::byte{0});
-            put_u64(split, commit_offset + 128,
-                    FIXED_COMMIT_TIME_NS + 1);
-            put_u64(split, commit_offset + 136, index_offset);
-            put_u64(split, commit_offset + 144,
-                    INDEX_HEADER_BYTES + INDEX_ROW_BYTES);
-            put_u64(split, commit_offset + 152,
-                    INDEX_HEADER_BYTES + INDEX_ROW_BYTES);
+            write_u64_le(split, commit_offset + 128,
+                         FIXED_COMMIT_TIME_NS + 1);
+            write_u64_le(split, commit_offset + 136, index_offset);
+            write_u64_le(split, commit_offset + 144,
+                         INDEX_HEADER_BYTES + INDEX_ROW_BYTES);
+            write_u64_le(split, commit_offset + 152,
+                         INDEX_HEADER_BYTES + INDEX_ROW_BYTES);
             const std::uint32_t index_crc = crc_range(
                 split, index_offset,
                 INDEX_HEADER_BYTES + INDEX_ROW_BYTES);
-            put_u32(split, commit_offset + 160, index_crc);
-            put_u32(split, commit_offset + 164, index_crc);
+            write_u32_le(split, commit_offset + 160, index_crc);
+            write_u32_le(split, commit_offset + 164, index_crc);
             const std::uint64_t committed_end =
                 commit_offset + COMMIT_RECORD_BYTES;
-            put_u64(split, commit_offset + 176, committed_end);
+            write_u64_le(split, commit_offset + 176, committed_end);
             std::fill(split.begin() + commit_offset + 192,
                       split.begin() + commit_offset + 208, std::byte{0});
             const std::uint32_t commit_crc =
                 crc_range(split, commit_offset, 252);
-            put_u32(split, commit_offset + 252, commit_crc);
+            write_u32_le(split, commit_offset + 252, commit_crc);
 
             const std::size_t head_b =
                 static_cast<std::size_t>(HEAD_SLOT_OFFSETS[1]);
-            put_u64(split, head_b + 16, 1);
-            put_u64(split, head_b + 24, 1);
-            put_u64(split, head_b + 80, commit_offset);
-            put_u64(split, head_b + 96, committed_end);
-            put_u32(split, head_b + 104, commit_crc);
-            put_u32(split, head_b + 4092,
-                    crc_range(split, head_b, 4092));
+            write_u64_le(split, head_b + 16, 1);
+            write_u64_le(split, head_b + 24, 1);
+            write_u64_le(split, head_b + 80, commit_offset);
+            write_u64_le(split, head_b + 96, committed_end);
+            write_u32_le(split, head_b + 104, commit_crc);
+            write_u32_le(split, head_b + 4092,
+                         crc_range(split, head_b, 4092));
             generated["split-brain.licht"] = std::move(split);
         }
 
@@ -1916,11 +1656,11 @@ namespace {
         auto chunk_header =
             read_file_range(master, seed_row.header_offset,
                             CHUNK_HEADER_BYTES);
-        put_u64(chunk_header, 32, SHAPED_PAYLOAD_BYTES);
-        put_u64(chunk_header, 40, SHAPED_PAYLOAD_BYTES);
+        write_u64_le(chunk_header, 32, SHAPED_PAYLOAD_BYTES);
+        write_u64_le(chunk_header, 40, SHAPED_PAYLOAD_BYTES);
         const std::uint32_t chunk_header_crc =
             crc_range(chunk_header, 0, 60);
-        put_u32(chunk_header, 60, chunk_header_crc);
+        write_u32_le(chunk_header, 60, chunk_header_crc);
 
         auto block_header = read_file_range(
             master, seed_row.block_crc_table->offset,
@@ -1946,24 +1686,24 @@ namespace {
                 block_crc =
                     crc32c(0, zero_tail.data(), zero_tail.size());
             }
-            put_u32(block_entries,
-                    static_cast<std::size_t>(block_index) *
-                        sizeof(std::uint32_t),
-                    block_crc);
+            write_u32_le(block_entries,
+                         static_cast<std::size_t>(block_index) *
+                             sizeof(std::uint32_t),
+                         block_crc);
         }
-        put_u64(block_header, 32, SHAPED_PAYLOAD_BYTES);
-        put_u64(block_header, 40, block_count);
-        put_u32(block_header, 48,
-                crc32c(0, block_entries.data(), block_entries.size()));
-        put_u32(block_header, 60, crc_range(block_header, 0, 60));
+        write_u64_le(block_header, 32, SHAPED_PAYLOAD_BYTES);
+        write_u64_le(block_header, 40, block_count);
+        write_u32_le(block_header, 48,
+                     crc32c(0, block_entries.data(), block_entries.size()));
+        write_u32_le(block_header, 60, crc_range(block_header, 0, 60));
 
         auto index = read_file_range(
             master, seed.commit().index_offset,
             static_cast<std::size_t>(seed.commit().index_stored_bytes));
         constexpr std::size_t ROW_OFFSET = INDEX_HEADER_BYTES;
-        put_u64(index, ROW_OFFSET + 48, SHAPED_PAYLOAD_BYTES);
-        put_u64(index, ROW_OFFSET + 56, SHAPED_PAYLOAD_BYTES);
-        put_u32(index, ROW_OFFSET + 76, chunk_header_crc);
+        write_u64_le(index, ROW_OFFSET + 48, SHAPED_PAYLOAD_BYTES);
+        write_u64_le(index, ROW_OFFSET + 56, SHAPED_PAYLOAD_BYTES);
+        write_u32_le(index, ROW_OFFSET + 76, chunk_header_crc);
 
         const auto align_chunk = [](const std::uint64_t value) {
             return (value + CHUNK_ALIGNMENT - 1) &
@@ -1978,22 +1718,22 @@ namespace {
 
         auto commit = read_file_range(master, seed.commit().offset,
                                       COMMIT_RECORD_BYTES);
-        put_u64(commit, 136, shaped_index_offset);
+        write_u64_le(commit, 136, shaped_index_offset);
         const std::uint32_t index_crc =
             crc32c(0, index.data(), index.size());
-        put_u32(commit, 160, index_crc);
-        put_u32(commit, 164, index_crc);
-        put_u64(commit, 176, shaped_file_end);
+        write_u32_le(commit, 160, index_crc);
+        write_u32_le(commit, 164, index_crc);
+        write_u64_le(commit, 176, shaped_file_end);
         const std::uint32_t commit_crc = crc_range(commit, 0, 252);
-        put_u32(commit, 252, commit_crc);
+        write_u32_le(commit, 252, commit_crc);
 
         auto head = read_file_range(
             master, HEAD_SLOT_OFFSETS[seed.selected_head().slot_id],
             HEAD_SLOT_BYTES);
-        put_u64(head, 80, shaped_commit_offset);
-        put_u64(head, 96, shaped_file_end);
-        put_u32(head, 104, commit_crc);
-        put_u32(head, 4092, crc_range(head, 0, 4092));
+        write_u64_le(head, 80, shaped_commit_offset);
+        write_u64_le(head, 96, shaped_file_end);
+        write_u32_le(head, 104, commit_crc);
+        write_u32_le(head, 4092, crc_range(head, 0, 4092));
 
         fs::resize_file(master, shaped_file_end);
         write_file_range(master, seed_row.header_offset, chunk_header);
@@ -2175,53 +1915,6 @@ namespace {
         EXPECT_FALSE(fs::exists(sidecar));
     }
 
-    TEST(ProjectContainerWriter, RefuseWriteMatrixMutatesNoProjectBytes) {
-        TemporaryDirectory temporary;
-        const fs::path path = temporary.path / "write-unsafe.licht";
-        fs::copy_file(FIXTURES / "write-unsafe.licht", path);
-        const std::vector<std::byte> before = read_file_bytes(path);
-
-        auto attempt = [&](const ReaderOptions& compatibility) {
-            AppendOptions append = fixture_append_options();
-            append.compatibility = compatibility;
-            auto writer = ProjectWriter::append(path, append);
-            EXPECT_FALSE(writer);
-            if (!writer) {
-                EXPECT_EQ(writer.error().code(),
-                          lfs::ErrorCode::Unsupported);
-            }
-            EXPECT_EQ(read_file_bytes(path), before);
-        };
-
-        ReaderOptions default_options;
-        attempt(default_options);
-
-        ReaderOptions version_only;
-        version_only.writer_version = Version{1, 1};
-        attempt(version_only);
-
-        ReaderOptions capability_only;
-        capability_only.writer_capabilities.set(8);
-        attempt(capability_only);
-
-        ReaderOptions both;
-        both.writer_version = Version{1, 1};
-        both.writer_capabilities.set(8);
-        {
-            AppendOptions append = fixture_append_options();
-            append.compatibility = both;
-            auto allowed = ProjectWriter::append(path, append);
-            ASSERT_TRUE(allowed)
-                << lfs::format_for_developer(allowed.error());
-        }
-        EXPECT_EQ(read_file_bytes(path), before);
-
-        auto compacted = ProjectWriter::compact(path);
-        ASSERT_FALSE(compacted);
-        EXPECT_EQ(compacted.error().code(), lfs::ErrorCode::Unsupported);
-        EXPECT_EQ(read_file_bytes(path), before);
-    }
-
     TEST(ProjectContainerWriter, HeldOsLockNotLockfileExistenceControlsWriters) {
         TemporaryDirectory temporary;
         const fs::path path = temporary.path / "locked.licht";
@@ -2383,12 +2076,6 @@ namespace {
         EXPECT_EQ(require_result(
                       compacted.read_chunk(*compacted_compressed)),
                   compressed_payload);
-        if (const char* output =
-                std::getenv("LFS_LICHT_PRODUCTION_OUTPUT");
-            output != nullptr && std::string_view(output).size() != 0) {
-            fs::copy_file(path, output,
-                          fs::copy_options::overwrite_existing);
-        }
     }
 
     TEST(ProjectContainerWriter,
@@ -2802,10 +2489,8 @@ namespace {
             fs::copy_file(
                 FIXTURES / "minimal-valid-single-generation.licht", path);
 
-            const pid_t child = ::fork();
-            ASSERT_GE(child, 0);
-            if (child == 0) {
-                try {
+            const int status = run_child_process(
+                [&] {
                     ProjectReader prior =
                         require_result(ProjectReader::open(path));
                     const ChunkInfo* proj =
@@ -2833,14 +2518,8 @@ namespace {
                     require_status(writer.write_chunk(
                         fixed_key("VIEW", 801), payload));
                     require_status(writer.commit());
-                } catch (...) {
-                    ::_exit(102);
-                }
-                ::_exit(103);
-            }
-
-            int status = 0;
-            ASSERT_EQ(::waitpid(child, &status, 0), child);
+                },
+                102, 103);
             ASSERT_TRUE(WIFSIGNALED(status));
             EXPECT_EQ(WTERMSIG(status), SIGKILL);
             const OpenClassification classification =
@@ -2892,10 +2571,8 @@ namespace {
                 fixed_uuid(
                     1200 + boundary_value);
 
-            const pid_t child = ::fork();
-            ASSERT_GE(child, 0);
-            if (child == 0) {
-                try {
+            const int status = run_child_process(
+                [&] {
                     auto compacted =
                         ProjectWriter::compact(
                             path,
@@ -2939,16 +2616,8 @@ namespace {
                                     },
                             });
                     (void)compacted;
-                } catch (...) {
-                    ::_exit(111);
-                }
-                ::_exit(112);
-            }
-
-            int status = 0;
-            ASSERT_EQ(
-                ::waitpid(child, &status, 0),
-                child);
+                },
+                111, 112);
             ASSERT_TRUE(WIFSIGNALED(status));
             EXPECT_EQ(
                 WTERMSIG(status), SIGKILL);

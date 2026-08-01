@@ -4,6 +4,7 @@
  */
 
 #include "io/project_chapters.hpp"
+#include "licht_test_support.hpp"
 
 #include <gtest/gtest.h>
 
@@ -20,28 +21,7 @@ namespace {
 
     namespace fs = std::filesystem;
     using namespace lfs::io::project;
-
-    lfs::core::Uuid uuid(const std::string_view text) {
-        const auto result = lfs::core::Uuid::from_string(text);
-        EXPECT_TRUE(result);
-        return result.value_or(lfs::core::Uuid{});
-    }
-
-    class TemporaryDirectory {
-    public:
-        TemporaryDirectory()
-            : path(fs::temp_directory_path() /
-                   ("lfs-p3-chapters-" + lfs::core::generate_uuid_v4().to_string())) {
-            fs::create_directories(path);
-        }
-
-        ~TemporaryDirectory() {
-            std::error_code ignored;
-            fs::remove_all(path, ignored);
-        }
-
-        fs::path path;
-    };
+    using namespace lfs::test::licht;
 
     ParameterManagerSnapshot parameter_snapshot() {
         ParameterManagerSnapshot result;
@@ -56,27 +36,18 @@ namespace {
         result.mrnf_current = result.mrnf_session;
         result.igs_current = result.igs_session;
         result.mrnf_current_references.background_image_reference =
-            uuid("10000000-0000-4000-8000-000000000090");
+            uuid_literal("10000000-0000-4000-8000-000000000090");
         result.mrnf_current_references.ppisp_reference =
-            uuid("10000000-0000-4000-8000-000000000091");
+            uuid_literal("10000000-0000-4000-8000-000000000091");
         result.dataset.centralize_dataset = "cameras";
         result.dataset.timelapse_images = {"frame-a.png", "frame-b.png"};
         return result;
     }
 
-    ReferenceFingerprint fake_fingerprint(const std::uint8_t tag) {
-        ReferenceFingerprint result;
-        result.size = 100 + tag;
-        result.mtime_unix_ns = 200 + tag;
-        result.head_xxh3.bytes.fill(tag);
-        result.tail_xxh3.bytes.fill(static_cast<std::uint8_t>(tag + 1));
-        return result;
-    }
-
     TEST(ProjectChapterTest, ProjectTypedMutationRetainsUnknownSubtrees) {
-        const auto project_id = uuid("10000000-0000-4000-8000-000000000001");
-        const auto decision_id = uuid("10000000-0000-4000-8000-000000000002");
-        const auto node_id = uuid("10000000-0000-4000-8000-000000000003");
+        const auto project_id = uuid_literal("10000000-0000-4000-8000-000000000001");
+        const auto decision_id = uuid_literal("10000000-0000-4000-8000-000000000002");
+        const auto node_id = uuid_literal("10000000-0000-4000-8000-000000000003");
         const std::string source = std::format(
             R"({{
   "schema_version": 1,
@@ -151,7 +122,7 @@ namespace {
     }
 
     TEST(ProjectChapterTest, ReferencesRetainUnresolvedRowsAndUnknownMembers) {
-        const auto ref_id = uuid("20000000-0000-4000-8000-000000000001");
+        const auto ref_id = uuid_literal("20000000-0000-4000-8000-000000000001");
         ReferencesChapter chapter;
         ReferenceRecord record{
             .uuid = ref_id,
@@ -159,7 +130,7 @@ namespace {
             .kind = "dataset",
             .locator =
                 {.preferred = "../missing", .base = LocatorBase::Project, .absolute_fallback = "/old/missing"},
-            .fingerprint = fake_fingerprint(3),
+            .fingerprint = fingerprint(3, FingerprintKind::File, 100, 200),
             .unresolved = true,
         };
         ASSERT_TRUE(chapter.upsert(record));
@@ -171,7 +142,7 @@ namespace {
         const auto before = chapter.to_bytes();
 
         ProjectChapter project;
-        const auto project_id = uuid("20000000-0000-4000-8000-000000000002");
+        const auto project_id = uuid_literal("20000000-0000-4000-8000-000000000002");
         ASSERT_TRUE(project.set_project_uuid(project_id));
         ASSERT_TRUE(project.set_created_at_unix_ns(1));
         ASSERT_TRUE(project.set_modified_at_unix_ns(2));
@@ -210,7 +181,7 @@ namespace {
         ASSERT_TRUE(baseline) << lfs::format_for_developer(baseline.error());
 
         ReferencesChapter chapter;
-        const auto ref_id = uuid("30000000-0000-4000-8000-000000000001");
+        const auto ref_id = uuid_literal("30000000-0000-4000-8000-000000000001");
         ASSERT_TRUE(chapter.upsert(ReferenceRecord{
             .uuid = ref_id,
             .key = "background",
@@ -299,9 +270,9 @@ namespace {
     }
 
     TEST(ProjectChapterTest, SceneGraphRetentionHierarchyAndReverseOwners) {
-        const auto ref_id = uuid("40000000-0000-4000-8000-000000000001");
-        const auto root_id = uuid("40000000-0000-4000-8000-000000000002");
-        const auto splat_id = uuid("40000000-0000-4000-8000-000000000003");
+        const auto ref_id = uuid_literal("40000000-0000-4000-8000-000000000001");
+        const auto root_id = uuid_literal("40000000-0000-4000-8000-000000000002");
+        const auto splat_id = uuid_literal("40000000-0000-4000-8000-000000000003");
         SceneGraphChapter scene;
         ASSERT_TRUE(scene.upsert_node(SceneNodeRecord{
             .uuid = root_id,
@@ -347,12 +318,12 @@ namespace {
             .key = "rad.live",
             .kind = "rad",
             .locator = {.preferred = "missing.rad", .base = LocatorBase::Project},
-            .fingerprint = fake_fingerprint(5),
+            .fingerprint = fingerprint(5, FingerprintKind::File, 100, 200),
             .unresolved = true,
         }));
         ProjectChapter project;
         ASSERT_TRUE(project.set_project_uuid(
-            uuid("40000000-0000-4000-8000-000000000004")));
+            uuid_literal("40000000-0000-4000-8000-000000000004")));
         ASSERT_TRUE(project.set_created_at_unix_ns(1));
         ASSERT_TRUE(project.set_modified_at_unix_ns(2));
         auto index = build_reverse_reference_index(
@@ -372,9 +343,9 @@ namespace {
 
     TEST(ProjectChapterTest, SceneGraphRejectsParentCyclesAndDuplicateNodeUuids) {
         const auto root_id =
-            uuid("41000000-0000-4000-8000-000000000001");
+            uuid_literal("41000000-0000-4000-8000-000000000001");
         const auto child_id =
-            uuid("41000000-0000-4000-8000-000000000002");
+            uuid_literal("41000000-0000-4000-8000-000000000002");
         SceneGraphChapter chapter;
         ASSERT_TRUE(chapter.upsert_node(SceneNodeRecord{
             .uuid = root_id,

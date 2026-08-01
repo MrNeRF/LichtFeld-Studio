@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/selection_chapter.hpp"
+#include "licht_test_support.hpp"
 
 #include <gtest/gtest.h>
 
@@ -30,18 +31,7 @@ namespace {
     using lfs::io::project::SelectionEncodeOptions;
     using lfs::io::project::SelectionMaskEncoding;
     using lfs::io::project::SelectionMaskSlice;
-
-    Uuid fixed_uuid(const std::uint64_t tag) {
-        const auto parsed = Uuid::from_string(
-            std::format(
-                "{:08x}-0000-4000-8000-{:012x}",
-                tag,
-                tag));
-        if (!parsed) {
-            throw std::runtime_error("fixed UUID is invalid");
-        }
-        return *parsed;
-    }
+    using lfs::test::licht::fixed_uuid;
 
     std::shared_ptr<lfs::core::PointCloud> point_cloud(
         const std::size_t count) {

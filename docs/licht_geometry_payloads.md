@@ -99,4 +99,5 @@ here. `MeshData::generation_` is derived and never serialized.
   compare planes; unknown-property carry-forward proven.
 - Hostile-descriptor battery cases: overlapping planes, out-of-bounds offsets, absurd counts
   rejected before allocation, dtype/component mismatches.
-- The independent Python parser gains a `PCLD`/`MESH` decoder used by the conformance battery.
+- The C++ project reader and document tests decode `PCLD`/`MESH`, reject malformed descriptors
+  before allocation, and prove unknown-property preservation across save and compaction.

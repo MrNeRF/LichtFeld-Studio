@@ -176,6 +176,11 @@ jobs:
       - name: Build
         run: cmake --build build -j $(nproc)
 
+      - name: Build and run CPU-only format tests
+        run: |
+          cmake --build build --target lichtfeld_format_tests -j $(nproc)
+          ctest --test-dir build --output-on-failure -R '^lichtfeld_format_tests$'
+
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'

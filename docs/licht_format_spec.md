@@ -757,9 +757,9 @@ These decisions freeze details on which the plan was intentionally silent:
     remain byte-identical. Evidence: Krita's `mergedimage.png` foreign-reader
     surface — a post-release fourcc reservation could never deliver this
     property precisely because of item 15.
-    Golden fixtures use `STORED` indexes for deterministic stdlib-only tests;
-    production indexes use `ZSTD`, and the reference parser validates them when
-    the package is installed.
+    Golden fixtures use `STORED` indexes for deterministic byte comparisons;
+    production indexes use `ZSTD`, and the production C++ reader validates both
+    encodings in the project-container tests.
 18. The reference outcome taxonomy is `open_gen_N`, `unsupported_newer`,
     `hard_fail`, or `repair_only`; `unsupported_newer` is the inspectable,
     non-corrupt, non-repairable terminal for a structurally valid authority

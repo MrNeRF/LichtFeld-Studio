@@ -3,15 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "checkpoint_fixture.hpp"
-#include "ppisp_fixture.hpp"
-
 #include "core/checkpoint_format.hpp"
-#include "core/tensor.hpp"
 #include "gui/layout_state.hpp"
 #include "io/project_document.hpp"
+#include "licht_test_support.hpp"
+#include "training/components/ppisp.hpp"
 #include "training/components/ppisp_file.hpp"
-#include "training/strategies/mcmc.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -25,7 +22,6 @@
 #include <format>
 #include <fstream>
 #include <iterator>
-#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -40,69 +36,13 @@ namespace {
 
     namespace fs = std::filesystem;
     using Json = nlohmann::ordered_json;
-    using lfs::core::DataType;
-    using lfs::core::Device;
-    using lfs::core::Tensor;
     using lfs::core::Uuid;
     using namespace lfs::io::project;
-
-    constexpr std::string_view AUTHORITY_SHA =
-        "8ca8028e6214b1f424c373b24d479cd90ff2e918";
-
-    Uuid fixed_uuid(const std::uint64_t tag) {
-        const auto parsed = Uuid::from_string(std::format(
-            "{:08x}-0000-4000-8000-{:012x}", tag, tag));
-        if (!parsed) {
-            std::abort();
-        }
-        return *parsed;
-    }
-
-    template <typename T>
-    T require_result(lfs::Result<T> result) {
-        if (!result) {
-            throw std::runtime_error(
-                lfs::format_for_developer(result.error()));
-        }
-        return std::move(*result);
-    }
-
-    void require_status(lfs::Result<void> result) {
-        ASSERT_TRUE(result)
-            << (result ? std::string{}
-                       : lfs::format_for_developer(result.error()));
-    }
-
-    std::vector<std::byte> read_bytes(const fs::path& path) {
-        std::ifstream stream(path, std::ios::binary);
-        if (!stream) {
-            throw std::runtime_error("cannot read " + path.string());
-        }
-        const std::vector<char> raw{
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>()};
-        std::vector<std::byte> result(raw.size());
-        if (!raw.empty()) {
-            std::memcpy(result.data(), raw.data(), raw.size());
-        }
-        return result;
-    }
-
-    void write_text(const fs::path& path, const std::string_view text) {
-        fs::create_directories(path.parent_path());
-        std::ofstream stream(path, std::ios::binary | std::ios::trunc);
-        if (!stream) {
-            throw std::runtime_error("cannot write " + path.string());
-        }
-        stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-        if (!stream) {
-            throw std::runtime_error("cannot finish " + path.string());
-        }
-    }
+    using namespace lfs::test::licht;
 
     fs::path fixture_root() {
         return fs::path(PROJECT_ROOT_PATH) /
-               "tools/licht_inspect/fixtures/migration";
+               "tests/fixtures/licht/migration";
     }
 
     Json oracle() {
@@ -111,29 +51,6 @@ namespace {
             throw std::runtime_error("migration oracle is missing");
         }
         return Json::parse(stream);
-    }
-
-    std::unique_ptr<lfs::core::SplatData> make_splat(
-        const std::size_t count) {
-        std::vector<float> means(count * 3, 0.0f);
-        std::vector<float> rotations(count * 4, 0.0f);
-        for (std::size_t index = 0; index < count; ++index) {
-            means[index * 3] = static_cast<float>(index);
-            rotations[index * 4] = 1.0f;
-        }
-        return std::make_unique<lfs::core::SplatData>(
-            0,
-            Tensor::from_vector(means, {count, std::size_t{3}}, Device::CPU),
-            Tensor::zeros({count, std::size_t{1}, std::size_t{3}},
-                          Device::CPU, DataType::Float32),
-            Tensor{},
-            Tensor::zeros({count, std::size_t{3}}, Device::CPU,
-                          DataType::Float32),
-            Tensor::from_vector(rotations, {count, std::size_t{4}},
-                                Device::CPU),
-            Tensor::zeros({count, std::size_t{1}}, Device::CPU,
-                          DataType::Float32),
-            1.0f);
     }
 
     lfs::core::param::TrainingParameters migration_parameters() {
@@ -181,23 +98,6 @@ namespace {
         };
     }
 
-    class TemporaryDirectory {
-    public:
-        TemporaryDirectory()
-            : path(fs::temp_directory_path() /
-                   ("lfs-p8-migration-" +
-                    lfs::core::generate_uuid_v4().to_string())) {
-            fs::create_directories(path);
-        }
-
-        ~TemporaryDirectory() {
-            std::error_code ignored;
-            fs::remove_all(path, ignored);
-        }
-
-        fs::path path;
-    };
-
 #ifndef _WIN32
     class ScopedXdgConfigHome {
     public:
@@ -233,75 +133,6 @@ namespace {
             }
         }
         throw std::runtime_error("GUIL oracle has no fixed arrangement");
-    }
-
-    void emit_frozen_inputs(const fs::path& output) {
-        fs::create_directories(output);
-        auto model = make_splat(2);
-        lfs::training::MCMC strategy(*model);
-        auto parameters = migration_parameters();
-        strategy.initialize(parameters.optimization);
-        lfs::training::PPISP checkpoint_ppisp(
-            parameters.optimization.iterations);
-        checkpoint_ppisp.register_frame(101, 10);
-        checkpoint_ppisp.register_frame(102, 20);
-        checkpoint_ppisp.register_frame(103, 20);
-        checkpoint_ppisp.finalize();
-        const auto checkpoint = lfs::test::write_checkpoint_fixture(
-            output, 37, strategy, parameters, nullptr, &checkpoint_ppisp,
-            nullptr, nullptr);
-        if (!checkpoint) {
-            throw std::runtime_error(checkpoint.error());
-        }
-
-        const lfs::training::PPISPFileMetadata metadata{
-            .dataset_path_utf8 = "/p8/frozen/dataset",
-            .images_folder = "images",
-            .frame_image_names = {"a.png", "b.png", "c.png"},
-            .frame_camera_ids = {10, 20, 20},
-            .camera_ids = {10, 20},
-        };
-        const auto ppisp = lfs::test::write_ppisp_fixture(
-            output / "appearance.ppisp", checkpoint_ppisp, nullptr,
-            &metadata);
-        if (!ppisp) {
-            throw std::runtime_error(ppisp.error());
-        }
-
-        write_text(
-            output / "layout_config/LichtFeldStudio/layout.json",
-            R"({"right_panel_width":451.0,"scene_panel_ratio":0.61,"python_console_width":377.0,"bottom_dock_height":222.0,"left_dock_width":417.0,"show_sequencer":true})");
-        write_text(output / "live.rad",
-                   "LichtFeld P8 external RAD reference witness\n");
-        write_text(
-            output / "half_migrated/LichtFeldStudio/layout.json",
-            R"({"left_dock_width":999.0,"bottom_dock_height":888.0,"scene_panel_ratio":0.77,"show_sequencer":true})");
-        fs::create_directories(output / "half_migrated");
-        fs::copy_file(
-            fs::path(PROJECT_ROOT_PATH) /
-                "tools/licht_inspect/fixtures/release_corpus/save.licht",
-            output / "half_migrated/project.licht",
-            fs::copy_options::overwrite_existing);
-    }
-
-    TEST(P8MigrationFixtureTest, FrozenInputManifestIsAuthorityLocked) {
-        if (const char* requested =
-                std::getenv("LFS_P8_MIGRATION_CORPUS_OUTPUT");
-            requested != nullptr && std::string_view(requested).size() != 0) {
-            emit_frozen_inputs(requested);
-            return;
-        }
-        const Json expected = oracle();
-        EXPECT_EQ(expected.at("authority_sha").get<std::string>(),
-                  AUTHORITY_SHA);
-        ASSERT_EQ(expected.at("inputs").size(), 6u);
-        for (const auto& input : expected.at("inputs")) {
-            const auto path = fixture_root() /
-                              input.at("path").get<std::string>();
-            ASSERT_TRUE(fs::is_regular_file(path)) << path;
-            EXPECT_EQ(fs::file_size(path), input.at("bytes").get<std::uint64_t>())
-                << path;
-        }
     }
 
     TEST(P8MigrationFixtureTest,
@@ -345,7 +176,7 @@ namespace {
             }));
         require_status(document.edit_scene_graph().set_training_model_uuid(
             *checkpoint_uuid));
-        const auto source_bytes = read_bytes(path);
+        const auto source_bytes = read_file_bytes(path);
         auto lazy = require_result(LazyChunkValue::from_owned(
             source_bytes, *checkpoint_uuid));
         require_status(document.set_checkpoint(
@@ -355,7 +186,7 @@ namespace {
         const auto converted = temporary.path / "checkpoint.licht";
         auto options = save_options(0xC301);
         options.commit.snapshot_uuid = *checkpoint_uuid;
-        require_result(document.save(converted, options));
+        (void)require_result(document.save(converted, options));
         const auto reader = require_result(ProjectReader::open(converted));
         EXPECT_NE(reader.find(FOURCC_CKPT, *checkpoint_uuid), nullptr);
         EXPECT_NE(reader.find(FOURCC_PRMS, *project_uuid), nullptr);
@@ -402,14 +233,14 @@ namespace {
         const auto parameters = migration_parameters();
         require_status(document.edit_parameters().set_snapshot(
             parameter_snapshot(parameters)));
-        const auto source_bytes = read_bytes(path);
+        const auto source_bytes = read_file_bytes(path);
         auto lazy = require_result(LazyChunkValue::from_owned(
             source_bytes, *ppisp_uuid));
         require_status(document.set_ppisp(*ppisp_uuid, std::move(lazy)));
 
         TemporaryDirectory temporary;
         const auto converted = temporary.path / "ppisp.licht";
-        require_result(document.save(converted, save_options(0xC311)));
+        (void)require_result(document.save(converted, save_options(0xC311)));
         const auto reader = require_result(ProjectReader::open(converted));
         EXPECT_NE(reader.find(FOURCC_PPIS, *ppisp_uuid), nullptr);
         EXPECT_NE(reader.find(FOURCC_PRMS, *project_uuid), nullptr);
@@ -532,7 +363,7 @@ namespace {
 
         TemporaryDirectory temporary;
         const auto converted = temporary.path / "rad.licht";
-        require_result(document.save(converted, save_options(0xC321)));
+        (void)require_result(document.save(converted, save_options(0xC321)));
         auto reopened = require_result(ProjectDocument::open(converted));
         auto records = require_result(reopened.references().records());
         ASSERT_EQ(records.size(), 1u);
@@ -554,7 +385,7 @@ namespace {
                 .base = LocatorBase::Project,
             },
             relinked, false));
-        require_result(reopened.save(converted, save_options(0xC331)));
+        (void)require_result(reopened.save(converted, save_options(0xC331)));
         const auto after = require_result(ProjectDocument::open(converted));
         const auto updated = require_result(after.references().find(
             *reference_uuid));

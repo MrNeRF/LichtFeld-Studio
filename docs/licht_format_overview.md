@@ -44,11 +44,11 @@ crashes are real, and files outlive programs.
 
 The format was chosen over Zip64 and SQLite in an adversarial three-design review, then the
 original footer-authority grammar was itself refuted and replaced by the head-slot design in a
-second review round. The read-side contract is frozen and defended by a conformance battery:
-two independent Python parsers, golden fixtures, a 10k-case corruption corpus scored against a
-spec oracle, and ~600k truncation/fuzz cases — all green before the first C++ writer line landed.
-The C++ reader/writer (P2) must agree with both parsers on the full corpus and reproduce the
-golden fixtures byte-for-byte.
+second review round. The read-side contract is frozen and defended in the shipped tree by C++
+reader/writer tests: locked binary fixtures, byte-for-byte writer reproduction, malformed-file
+classification, bounded reads, publication crash matrices, and document-level chapter
+validation. Earlier independent development tooling was removed once those guarantees were
+covered by the product implementation and tests.
 
 ## Chapters: single authority for every field
 
@@ -133,13 +133,14 @@ bit-exact RNG replay; no RNG state exists to capture, and the format does not pr
 
 ## Where it stands (2026-07-30)
 
-- **P0** (invariants, byte grammar, ownership matrix, conformance battery, snapshot + OS-semantics
-  prototypes): done, exited with a formal verdict.
+- **P0** (invariants, byte grammar, ownership matrix, snapshot and OS-semantics studies): done,
+  exited with a formal verdict; its development-only executables are retained in branch history,
+  not the shipped tree.
 - **P1** (node UUID identity through scene/undo/selection/sequencer, serializer gap fixes,
   field-wise config serialization, retained-DOM layer): landed.
 - **P2** (the production C++ container core, `src/io/project/`): in build — the v1 prototype it
   replaces implemented the refuted footer grammar and serves as input only.
 - **P3–P8**: chapters, training snapshot productionization, GUI session chapters, lifecycle
   (File menu / `--project` / restore-last-session / save-on-close), autosave & recovery,
-  compatibility hardening — in that order, each gated on builds, targeted gtests, GUI validation,
-  and the conformance battery.
+  compatibility hardening — in that order, each gated on builds, targeted C++ gtests, and GUI
+  validation.
