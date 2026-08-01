@@ -2805,7 +2805,7 @@ namespace lfs::io::project {
         if (!file_result) {
             return status_failure(std::move(file_result).error());
         }
-        impl->file = *file_result;
+        impl->file = std::move(*file_result);
         if (auto truncate = impl->file->truncate(APPEND_REGION_OFFSET);
             !truncate) {
             return truncate;
