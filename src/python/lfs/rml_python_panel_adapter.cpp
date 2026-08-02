@@ -597,6 +597,11 @@ namespace lfs::vis::gui {
         if (!host_)
             return false;
 
+        const std::string current_language =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        if (!current_language.empty() && current_language != last_language_)
+            return true;
+
         if (!dirty_driven_updates_) {
             const auto now = std::chrono::steady_clock::now();
             if (next_update_at_ == std::chrono::steady_clock::time_point{} ||

@@ -219,6 +219,13 @@ def test_operator_property_registration_preserves_localization_keys():
     assert "localization.get(label)" not in registration
 
 
+def test_cached_python_panels_request_a_frame_on_language_change():
+    source = (ROOT / "src" / "python" / "lfs" / "rml_python_panel_adapter.cpp").read_text(encoding="utf-8")
+    needs_frame = source[source.index("bool RmlPythonPanelAdapter::needsAnimationFrame() const"):]
+    assert "current_language != last_language_" in needs_frame
+    assert "return true;" in needs_frame.split("if (!dirty_driven_updates_)", 1)[0]
+
+
 if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
@@ -236,6 +243,7 @@ if __name__ == "__main__":
         test_pending_localization_refresh_uses_the_full_interaction_guard,
         test_rendering_labels_preserve_fullwidth_colons,
         test_operator_property_registration_preserves_localization_keys,
+        test_cached_python_panels_request_a_frame_on_language_change,
     ]
     for contract in contracts:
         contract()
