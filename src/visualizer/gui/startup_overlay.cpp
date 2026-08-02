@@ -70,11 +70,8 @@ namespace lfs::vis::gui {
                 return;
 
             const auto& lang = available[idx];
-            if (loc.setLanguage(lang)) {
+            if (loc.setLanguage(lang))
                 lfs::vis::publish_language_generation();
-                if (mgr_)
-                    mgr_->requestLocalizationUiRefresh();
-            }
             if (mgr_ && (lang == "ja" || lang == "ko" || lang == "zh"))
                 mgr_->ensureCjkFontsLoaded();
         }
