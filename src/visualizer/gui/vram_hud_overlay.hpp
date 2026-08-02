@@ -107,6 +107,8 @@ namespace lfs::vis::gui {
 
         State state_;
         std::uint64_t last_sequence_ = 0;
+        std::uint64_t last_language_generation_ = 0;
+        bool has_language_generation_ = false;
         bool last_visible_ = false;
         bool default_collapse_applied_ = false;
 
