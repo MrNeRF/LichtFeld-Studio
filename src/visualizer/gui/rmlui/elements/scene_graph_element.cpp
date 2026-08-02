@@ -2415,7 +2415,8 @@ namespace lfs::vis::gui {
                 std::format("<span class=\"dim-text\">{} </span>", LOC(lichtfeld::Strings::Runtime::FOLDER_LABEL)) +
                 encode(output_path_text) +
                 "</div>"
-                "<div class=\"warning-text\" style=\"margin-top: 8dp;\">" encode(LOC("export_dialog.colmap_writes_sparse")) +
+                "<div class=\"warning-text\" style=\"margin-top: 8dp;\">" +
+                encode(LOC("export_dialog.colmap_writes_sparse")) +
                 "</div>";
             request.buttons = {
                 {LOC(lichtfeld::Strings::Common::CANCEL), "secondary"},
