@@ -17,3 +17,22 @@ Starting Python completions...
 Python completions unavailable
 Restarting Python completions...
 Python completions ready
+
+# Python editor outline labels are structural diagnostics, not translatable UI copy.
+re:\{\}\{\} \{\}  L\{\}
+re:\{\} \{\} block  L\{\}-\{\}
+
+# Language-server launch labels identify the selected technical implementation.
+custom Python language server
+basedpyright via uv
+re:Starting .+\.\.\.
+Starting
+
+# Canonical keyboard, URL and renderer-backend identifiers must match their protocols.
+Esc
+owner/repo
+3DGS
+3DGUT
+
+# CSS class passed through the widget helper; it is not user-facing copy.
+setting-row__control-col
