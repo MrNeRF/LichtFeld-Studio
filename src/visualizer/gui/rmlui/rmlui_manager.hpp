@@ -150,9 +150,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool wantsCaptureKeyboard() const;
         [[nodiscard]] bool wantsTextInput() const;
         [[nodiscard]] bool anyItemActive() const;
-        // Releases focus retained by completed button/select interactions while preserving
-        // editable fields, so a pending localization reload can reach a safe frame.
-        void clearNonTextInputFocus();
 
     private:
         struct VulkanContextCommand {

@@ -204,15 +204,7 @@ def test_startup_language_picker_refreshes_after_forwarded_input():
 def test_pending_localization_refresh_uses_the_full_interaction_guard():
     source = (ROOT / "src" / "visualizer" / "gui" / "gui_manager.cpp").read_text(encoding="utf-8")
     pending_refresh = source[source.index("if (pending_localization_ui_refresh_"):]
-    assert "rmlui_manager_.clearNonTextInputFocus();" in pending_refresh.split("}", 1)[0]
     assert "!shouldDeferDevResourceHotReload()" in pending_refresh.split("}", 1)[0]
-
-
-def test_runtime_language_switches_clear_only_non_text_focus():
-    manager = (ROOT / "src" / "visualizer" / "gui" / "rmlui" / "rmlui_manager.cpp").read_text(encoding="utf-8")
-    focus_reset = manager[manager.index("void RmlUIManager::clearNonTextInputFocus()") :]
-    assert "rml_input::wantsTextInput(focused)" in focus_reset
-    assert "focused->Blur();" in focus_reset
 
 
 def test_rendering_labels_preserve_fullwidth_colons():
@@ -249,7 +241,6 @@ if __name__ == "__main__":
         test_localized_formatting_does_not_bypass_safe_locale_fallback,
         test_startup_language_picker_refreshes_after_forwarded_input,
         test_pending_localization_refresh_uses_the_full_interaction_guard,
-        test_runtime_language_switches_clear_only_non_text_focus,
         test_rendering_labels_preserve_fullwidth_colons,
         test_operator_property_registration_preserves_localization_keys,
         test_cached_python_panels_request_a_frame_on_language_change,
