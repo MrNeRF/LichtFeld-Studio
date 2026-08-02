@@ -46,17 +46,27 @@ def test_shipped_locales_match_english_keys_and_placeholders():
 
 def test_locale_json_uses_one_key_per_line():
     key_pattern = re.compile(r'"(?:\\.|[^"\\])+"\s*:')
+    indented_key = re.compile(r'^( +)"(?:\\.|[^"\\])+"\s*:')
     for path in sorted(LOCALES.glob("*.json")):
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             assert len(key_pattern.findall(line)) <= 1, f"{path.name}:{line_number} has multiple keys"
+            match = indented_key.match(line)
+            if match:
+                assert len(match.group(1)) % 2 == 0, f"{path.name}:{line_number} has odd indentation"
 
 
 def test_rml_translation_directives_resolve():
-    keys = set(dict(_flatten(_load("en"))))
     directive = re.compile(r"@tr:([A-Za-z0-9_.-]+)")
-    for path in (ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources").rglob("*.rml"):
-        for key in directive.findall(path.read_text(encoding="utf-8")):
-            assert key in keys, f"{path}: missing {key}"
+    directives = {
+        path: directive.findall(path.read_text(encoding="utf-8"))
+        for path in (ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources").rglob("*.rml")
+    }
+    for locale_path in sorted(LOCALES.glob("*.json")):
+        localized = dict(_flatten(json.loads(locale_path.read_text(encoding="utf-8"))))
+        for path, keys in directives.items():
+            for key in keys:
+                assert key in localized, f"{locale_path.name}: {path}: missing {key}"
+                assert str(localized[key]).strip(), f"{locale_path.name}: {path}: empty {key}"
 
 
 def test_literal_localization_calls_resolve():

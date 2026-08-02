@@ -47,6 +47,10 @@ def _ui_label(key: str, fallback: str) -> str:
     return fallback
 
 
+def _format_ui_label(key: str, fallback: str, **values) -> str:
+    return _ui_label(key, fallback).format(**values)
+
+
 def _parse_int(value, fallback):
     try:
         parsed = int(round(float(value)))
@@ -343,7 +347,7 @@ class ViewportExportControlsController:
         if self._is_exporting:
             return
         if not self._has_scene:
-            self._set_status("Load a scene first.")
+            self._set_status(_ui_label("ui.viewport_export_load_scene_first", "Load a scene first."))
             return
 
         extension = "png" if self._format == "png" else "jpg"
@@ -363,7 +367,7 @@ class ViewportExportControlsController:
 
         width, height = self._export_dimensions()
         self._is_exporting = True
-        self._set_status("Exporting...", transient=False)
+        self._set_status(_ui_label("ui.viewport_export_exporting", "Exporting..."), transient=False)
         self._dirty_all()
         try:
             result = lf.export_viewport_image(
@@ -376,11 +380,16 @@ class ViewportExportControlsController:
             result_width = int(result.get("width", 0) or 0)
             result_height = int(result.get("height", 0) or 0)
             if result_width > 0 and result_height > 0:
-                self._set_status(f"Saved {result_width} x {result_height}")
+                self._set_status(_format_ui_label(
+                    "ui.viewport_export_saved_dimensions",
+                    "Saved {width} x {height}",
+                    width=result_width,
+                    height=result_height,
+                ))
             else:
-                self._set_status("Saved")
+                self._set_status(_ui_label("ui.viewport_export_saved", "Saved"))
         except Exception as exc:
-            self._set_status("Export failed.")
+            self._set_status(_ui_label("ui.viewport_export_failed", "Export failed."))
             self._report_error(str(exc).strip() or "Viewport export failed.")
         finally:
             self._is_exporting = False
