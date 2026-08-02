@@ -2131,6 +2131,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "history_summary": "{0} annulations / {1} rétablissements · {2} au total",
+    "history_summary_gpu": "{0} annulations / {1} rétablissements · {2} au total · {3} GPU",
     "transaction_active": "Transaction active: {} (depth {})",
     "history_next": "NEXT {} · Top of stack",
     "history_detail": "{} · {} · Size: {}",

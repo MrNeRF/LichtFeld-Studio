@@ -2131,6 +2131,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "history_summary": "{0} cofnięć / {1} ponowień · łącznie {2}",
+    "history_summary_gpu": "{0} cofnięć / {1} ponowień · łącznie {2} · GPU {3}",
     "transaction_active": "Transakcja aktywna: {} (głębokość {})",
     "history_next": "NASTĘPNE {} · Szczyt stosu",
     "history_detail": "{} · {} · Rozmiar: {}",

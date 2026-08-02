@@ -189,15 +189,12 @@ namespace lfs::vis::gui {
                 return LOC(lichtfeld::Strings::Scene::HISTORY_EMPTY);
 
             if (total_gpu_bytes < total_bytes) {
-                return std::format("{} undo / {} redo · {} total · {} GPU",
-                                   undo_items.size(), redo_items.size(),
-                                   formatBytes(total_bytes),
-                                   formatBytes(total_gpu_bytes));
+                return LOCF("runtime.history_summary_gpu", undo_items.size(), redo_items.size(),
+                            formatBytes(total_bytes), formatBytes(total_gpu_bytes));
             }
 
-            return std::format("{} undo / {} redo · {}",
-                               undo_items.size(), redo_items.size(),
-                               formatBytes(total_bytes));
+            return LOCF("runtime.history_summary", undo_items.size(), redo_items.size(),
+                        formatBytes(total_bytes));
         }
 
         [[nodiscard]] std::string formatHistoryTransaction(const op::UndoHistory& history) {

@@ -2131,6 +2131,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "history_summary": "元に戻す {0} 件 / やり直す {1} 件 · 合計 {2}",
+    "history_summary_gpu": "元に戻す {0} 件 / やり直す {1} 件 · 合計 {2} · GPU {3}",
     "transaction_active": "トランザクション実行中：{}（深さ {}）",
     "history_next": "次 {} · スタックの先頭",
     "history_detail": "{} · {} · サイズ：{}",

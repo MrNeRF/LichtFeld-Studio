@@ -2131,6 +2131,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "history_summary": "실행 취소 {0}개 / 다시 실행 {1}개 · 총 {2}",
+    "history_summary_gpu": "실행 취소 {0}개 / 다시 실행 {1}개 · 총 {2} · GPU {3}",
     "transaction_active": "트랜잭션 활성화: {} (깊이 {})",
     "history_next": "다음 {} · 스택 맨 위",
     "history_detail": "{} · {} · 크기: {}",

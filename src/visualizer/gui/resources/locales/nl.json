@@ -2131,6 +2131,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "history_summary": "{0} ongedaan maken / {1} opnieuw uitvoeren · {2} totaal",
+    "history_summary_gpu": "{0} ongedaan maken / {1} opnieuw uitvoeren · {2} totaal · {3} GPU",
     "transaction_active": "Transactie actief: {} (diepte {})",
     "history_next": "VOLGENDE {} · Bovenaan de stapel",
     "history_detail": "{} · {} · Grootte: {}",
