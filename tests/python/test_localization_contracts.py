@@ -168,6 +168,12 @@ def test_localized_formatting_does_not_bypass_safe_locale_fallback():
         assert "fmt::runtime(LOC(" not in source, path
 
 
+def test_startup_language_picker_refreshes_after_forwarded_input():
+    source = (ROOT / "src" / "visualizer" / "gui" / "startup_overlay.cpp").read_text(encoding="utf-8")
+    assert "language_generation_after_input" in source
+    assert "updateLocalizedText();" in source[source.index("language_generation_after_input"):]
+
+
 if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
@@ -180,6 +186,7 @@ if __name__ == "__main__":
         test_language_generation_is_part_of_cached_localized_ui_state,
         test_mcp_task_status_uses_stable_outcomes_not_localized_stages,
         test_localized_formatting_does_not_bypass_safe_locale_fallback,
+        test_startup_language_picker_refreshes_after_forwarded_input,
     ]
     for contract in contracts:
         contract()

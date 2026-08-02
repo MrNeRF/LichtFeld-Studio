@@ -712,6 +712,13 @@ namespace lfs::vis::gui {
             input_event_forwarded = input_result.event_forwarded;
             rml_select_open = rml_select_open || isLanguageSelectOpen();
         }
+        const auto language_generation_after_input = app_store().language_generation.get();
+        if (language_generation_after_input != last_language_generation_) {
+            updateLocalizedText();
+            last_language_generation_ = language_generation_after_input;
+            has_language_generation_ = true;
+            refresh_cache = true;
+        }
         if (input_event_forwarded || (refresh_cache && !updated_this_frame))
             rml_context_->Update();
 
