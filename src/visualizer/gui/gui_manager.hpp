@@ -369,6 +369,7 @@ namespace lfs::vis {
 
             DevResourceWatchState dev_resource_watch_;
             bool pending_localization_ui_refresh_ = false;
+            std::uint64_t localized_rml_language_generation_ = 0;
 
             // Native ErrorBus surfacing (Phase 8). Declared last so
             // error_subscription_ unsubscribes before any other member (the

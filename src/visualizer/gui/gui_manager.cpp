@@ -4556,9 +4556,17 @@ namespace lfs::vis::gui {
             pollDevResourceHotReload();
         }
 
-        if (pending_localization_ui_refresh_ && !shouldDeferDevResourceHotReload()) {
+        const auto language_generation = app_store().language_generation.get();
+        if (language_generation != localized_rml_language_generation_)
+            pending_localization_ui_refresh_ = true;
+
+        if (pending_localization_ui_refresh_) {
             pending_localization_ui_refresh_ = false;
-            reloadRmlResources();
+            localized_rml_language_generation_ = language_generation;
+            if (rmlui_manager_.refreshLocalizedDocuments()) {
+                if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
+                    rendering->markDirty(DirtyFlag::OVERLAY);
+            }
         }
 
         // Hot-reload themes (check once per second)

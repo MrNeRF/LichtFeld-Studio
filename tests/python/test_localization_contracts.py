@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCALES = ROOT / "src" / "visualizer" / "gui" / "resources" / "locales"
+RML_DIR = ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
 
 
 def _flatten(value, prefix=""):
@@ -201,10 +202,30 @@ def test_startup_language_picker_refreshes_after_forwarded_input():
     assert "updateLocalizedText();" in source[source.index("language_generation_after_input"):]
 
 
-def test_pending_localization_refresh_uses_the_full_interaction_guard():
+def test_runtime_localization_refresh_updates_live_rml_documents():
     source = (ROOT / "src" / "visualizer" / "gui" / "gui_manager.cpp").read_text(encoding="utf-8")
     pending_refresh = source[source.index("if (pending_localization_ui_refresh_"):]
-    assert "!shouldDeferDevResourceHotReload()" in pending_refresh.split("}", 1)[0]
+    refresh_block = pending_refresh.split("// Hot-reload themes", 1)[0]
+    assert "refreshLocalizedDocuments()" in refresh_block
+    assert "reloadRmlResources()" not in refresh_block
+
+    documents = (ROOT / "src" / "visualizer" / "gui" / "rmlui" / "rml_document_utils.cpp").read_text(encoding="utf-8")
+    assert "preserveTranslationDirectives" in documents
+    assert 'data-lfs-i18n-' in documents
+    assert "bool refreshLocalizedContent" in documents
+
+    translated_text = re.compile(
+        r"<[A-Za-z][^>]*>[ \t\r\n]*@tr:[A-Za-z0-9_.-]+[ \t\r\n]*</[A-Za-z][^>]*>"
+    )
+    translated_attribute = re.compile(
+        r"(?:title|placeholder)\s*=\s*([\"'])@tr:[A-Za-z0-9_.-]+\1",
+        re.IGNORECASE,
+    )
+    for path in RML_DIR.rglob("*.rml"):
+        rml = path.read_text(encoding="utf-8")
+        remaining = translated_text.sub("", rml)
+        remaining = translated_attribute.sub("", remaining)
+        assert "@tr:" not in remaining, f"{path}: unsupported runtime translation directive shape"
 
 
 def test_rendering_labels_preserve_fullwidth_colons():
@@ -240,7 +261,7 @@ if __name__ == "__main__":
         test_mcp_task_status_uses_stable_outcomes_not_localized_stages,
         test_localized_formatting_does_not_bypass_safe_locale_fallback,
         test_startup_language_picker_refreshes_after_forwarded_input,
-        test_pending_localization_refresh_uses_the_full_interaction_guard,
+        test_runtime_localization_refresh_updates_live_rml_documents,
         test_rendering_labels_preserve_fullwidth_colons,
         test_operator_property_registration_preserves_localization_keys,
         test_cached_python_panels_request_a_frame_on_language_change,

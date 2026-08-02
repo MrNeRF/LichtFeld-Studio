@@ -598,6 +598,17 @@ namespace lfs::vis::gui {
         return false;
     }
 
+    bool RmlUIManager::refreshLocalizedDocuments() {
+        bool changed = false;
+        for (const auto& [_, context] : contexts_) {
+            if (!context)
+                continue;
+            for (int i = 0; i < context->GetNumDocuments(); ++i)
+                changed |= rml_documents::refreshLocalizedContent(context->GetDocument(i));
+        }
+        return changed;
+    }
+
     void RmlUIManager::queueVulkanContext(Rml::Context* const context,
                                           const float offset_x,
                                           const float offset_y,
