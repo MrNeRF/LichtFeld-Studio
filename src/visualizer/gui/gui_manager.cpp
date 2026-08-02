@@ -4563,6 +4563,7 @@ namespace lfs::vis::gui {
         if (pending_localization_ui_refresh_) {
             pending_localization_ui_refresh_ = false;
             localized_rml_language_generation_ = language_generation;
+            ui_layout_settle_frames_ = std::max<uint8_t>(ui_layout_settle_frames_, 3);
             if (rmlui_manager_.refreshLocalizedDocuments()) {
                 if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
                     rendering->markDirty(DirtyFlag::OVERLAY);

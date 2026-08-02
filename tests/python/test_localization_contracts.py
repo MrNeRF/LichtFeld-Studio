@@ -208,6 +208,7 @@ def test_runtime_localization_refresh_updates_live_rml_documents():
     refresh_block = pending_refresh.split("// Hot-reload themes", 1)[0]
     assert "refreshLocalizedDocuments()" in refresh_block
     assert "reloadRmlResources()" not in refresh_block
+    assert "ui_layout_settle_frames_" in refresh_block
 
     documents = (ROOT / "src" / "visualizer" / "gui" / "rmlui" / "rml_document_utils.cpp").read_text(encoding="utf-8")
     assert "preserveTranslationDirectives" in documents
