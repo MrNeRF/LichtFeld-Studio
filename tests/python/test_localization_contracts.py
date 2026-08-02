@@ -3,6 +3,7 @@
 """Headless contracts for shipped localization resources and UI bindings."""
 
 import json
+import importlib.util
 import re
 import subprocess
 import string
@@ -134,6 +135,32 @@ def test_watch_directory_scan_messages_format_in_every_locale():
                 text.format(**values)
 
 
+def test_counted_messages_use_supported_plural_forms():
+    spec = importlib.util.spec_from_file_location(
+        "localization_helpers", ROOT / "src" / "python" / "lfs_plugins" / "localization.py"
+    )
+    helpers = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(helpers)
+
+    assert helpers.plural_form("en", 1) == "one"
+    assert helpers.plural_form("en", 2) == "other"
+    assert helpers.plural_form("pl", 1) == "one"
+    assert helpers.plural_form("pl", 2) == "few"
+    assert helpers.plural_form("pl", 5) == "other"
+    assert helpers.plural_form("pl", 22) == "few"
+    assert helpers.plural_form("pl", 12) == "other"
+
+    keys = dict(_flatten(_load("en")))
+    for key in (
+        "asset_manager.status.showing_assets",
+        "plugin_marketplace.registry_loaded",
+        "plugin_marketplace.registry_unavailable",
+    ):
+        for form in ("one", "few", "other"):
+            assert f"{key}.{form}" in keys
+
+
 def test_language_generation_is_part_of_cached_localized_ui_state():
     required = {
         "src/python/lfs_plugins/toolbar.py": "language_generation",
@@ -183,6 +210,7 @@ if __name__ == "__main__":
         test_hardcoded_ui_audit_has_no_candidates,
         test_hardcoded_ui_audit_detects_common_bypasses,
         test_watch_directory_scan_messages_format_in_every_locale,
+        test_counted_messages_use_supported_plural_forms,
         test_language_generation_is_part_of_cached_localized_ui_state,
         test_mcp_task_status_uses_stable_outcomes_not_localized_stages,
         test_localized_formatting_does_not_bypass_safe_locale_fallback,

@@ -197,7 +197,9 @@
     "status.select_item": "Wählen Sie ein Element aus, um Details anzuzeigen",
     "status.one_item_selected": "1 Element ausgewählt",
     "status.multi_items_selected": "{count} Elemente ausgewählt",
-    "status.showing_assets": "{count} Assets angezeigt",
+    "status.showing_assets.one": "{count} Asset angezeigt",
+    "status.showing_assets.few": "{count} Assets angezeigt",
+    "status.showing_assets.other": "{count} Assets angezeigt",
     "title": "Asset Manager",
     "panel_title": "Asset-Manager",
     "import_button": "Importieren",
@@ -1704,8 +1706,12 @@
     "load_on_startup": "Beim Start laden",
     "view.grid": "Rasteransicht",
     "view.list": "Listenansicht",
-    "registry_loaded": "Registry geladen: {count} Plugins im Marketplace-Katalog.",
-    "registry_unavailable": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt."
+    "registry_loaded.one": "Registry geladen: {count} Plugin im Marketplace-Katalog.",
+    "registry_loaded.few": "Registry geladen: {count} Plugins im Marketplace-Katalog.",
+    "registry_loaded.other": "Registry geladen: {count} Plugins im Marketplace-Katalog.",
+    "registry_unavailable.one": "Registry nicht verfügbar: {count} Fallback-Plugin wird angezeigt.",
+    "registry_unavailable.few": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt.",
+    "registry_unavailable.other": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt."
   },
   "sequencer": {
     "edit_focal_length": "Brennweite bearbeiten...",

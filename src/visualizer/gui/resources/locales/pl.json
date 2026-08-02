@@ -197,7 +197,9 @@
     "status.select_item": "Wybierz element, aby wyświetlić szczegóły",
     "status.one_item_selected": "1 element wybrany",
     "status.multi_items_selected": "{count} elementów wybranych",
-    "status.showing_assets": "Wyświetlono {count} zasobów",
+    "status.showing_assets.one": "Wyświetlono {count} zasób",
+    "status.showing_assets.few": "Wyświetlono {count} zasoby",
+    "status.showing_assets.other": "Wyświetlono {count} zasobów",
     "title": "Menedżer zasobów",
     "toolbar.import": "Importuj",
     "toolbar.search_icon": "Szukaj",
@@ -1704,8 +1706,12 @@
     "load_on_startup": "Ładuj przy starcie",
     "view.grid": "Widok siatki",
     "view.list": "Widok listy",
-    "registry_loaded": "Rejestr załadowany: {count} wtyczek w katalogu marketplace.",
-    "registry_unavailable": "Rejestr niedostępny: wyświetlono {count} zastępczych wtyczek."
+    "registry_loaded.one": "Rejestr załadowany: {count} wtyczka w katalogu marketplace.",
+    "registry_loaded.few": "Rejestr załadowany: {count} wtyczki w katalogu marketplace.",
+    "registry_loaded.other": "Rejestr załadowany: {count} wtyczek w katalogu marketplace.",
+    "registry_unavailable.one": "Rejestr niedostępny: wyświetlono {count} zastępczą wtyczkę.",
+    "registry_unavailable.few": "Rejestr niedostępny: wyświetlono {count} zastępcze wtyczki.",
+    "registry_unavailable.other": "Rejestr niedostępny: wyświetlono {count} zastępczych wtyczek."
   },
   "sequencer": {
     "edit_focal_length": "Edytuj ogniskowa...",

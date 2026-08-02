@@ -18,6 +18,7 @@ from .marketplace import (
     MarketplacePluginEntry,
     PluginMarketplaceCatalog,
 )
+from .localization import localized_count
 from .plugin import PluginInfo, PluginState
 from .types import Panel
 from .ui import RuntimeState
@@ -944,10 +945,10 @@ class PluginMarketplacePanel(Panel):
             text = lf.ui.tr("plugin_marketplace.loading")
             tone = "status-info"
         elif registry_loaded:
-            text = lf.ui.tr("plugin_marketplace.registry_loaded").format(count=entry_count)
+            text = localized_count("plugin_marketplace.registry_loaded", entry_count)
             tone = "status-success" if entry_count > 0 else "status-info"
         else:
-            text = lf.ui.tr("plugin_marketplace.registry_unavailable").format(count=entry_count)
+            text = localized_count("plugin_marketplace.registry_unavailable", entry_count)
             tone = "status-warning"
 
         status_el.set_text(text)

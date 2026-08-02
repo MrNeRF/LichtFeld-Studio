@@ -197,7 +197,9 @@
     "status.select_item": "세부정보를 보려면 항목을 선택하세요",
     "status.one_item_selected": "1개 항목 선택됨",
     "status.multi_items_selected": "{count}개 항목 선택됨",
-    "status.showing_assets": "{count}개 에셋 표시 중",
+    "status.showing_assets.one": "{count}개 에셋 표시 중",
+    "status.showing_assets.few": "{count}개 에셋 표시 중",
+    "status.showing_assets.other": "{count}개 에셋 표시 중",
     "title": "에셋 매니저",
     "panel_title": "에셋 관리자",
     "import_button": "가져오기",
@@ -1704,8 +1706,12 @@
     "load_on_startup": "시작 시 로드",
     "view.grid": "그리드 보기",
     "view.list": "목록 보기",
-    "registry_loaded": "레지스트리를 불러왔습니다: 마켓플레이스 카탈로그에 플러그인 {count}개가 있습니다.",
-    "registry_unavailable": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다."
+    "registry_loaded.one": "레지스트리를 불러왔습니다: 마켓플레이스 카탈로그에 플러그인 {count}개가 있습니다.",
+    "registry_loaded.few": "레지스트리를 불러왔습니다: 마켓플레이스 카탈로그에 플러그인 {count}개가 있습니다.",
+    "registry_loaded.other": "레지스트리를 불러왔습니다: 마켓플레이스 카탈로그에 플러그인 {count}개가 있습니다.",
+    "registry_unavailable.one": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다.",
+    "registry_unavailable.few": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다.",
+    "registry_unavailable.other": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다."
   },
   "sequencer": {
     "edit_focal_length": "초점 거리 편집...",

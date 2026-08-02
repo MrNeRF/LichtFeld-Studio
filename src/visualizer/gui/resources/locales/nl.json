@@ -197,7 +197,9 @@
     "status.select_item": "Selecteer een item om details te bekijken",
     "status.one_item_selected": "1 item geselecteerd",
     "status.multi_items_selected": "{count} items geselecteerd",
-    "status.showing_assets": "{count} assets weergegeven",
+    "status.showing_assets.one": "{count} asset weergegeven",
+    "status.showing_assets.few": "{count} assets weergegeven",
+    "status.showing_assets.other": "{count} assets weergegeven",
     "title": "Assetbeheer",
     "toolbar.import": "Importeren",
     "toolbar.search_icon": "Zoeken",
@@ -1704,8 +1706,12 @@
     "load_on_startup": "Laden bij opstarten",
     "view.grid": "Rasterweergave",
     "view.list": "Lijstweergave",
-    "registry_loaded": "Register geladen: {count} plugins in de marketplacecatalogus.",
-    "registry_unavailable": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven."
+    "registry_loaded.one": "Register geladen: {count} plugin in de marketplacecatalogus.",
+    "registry_loaded.few": "Register geladen: {count} plugins in de marketplacecatalogus.",
+    "registry_loaded.other": "Register geladen: {count} plugins in de marketplacecatalogus.",
+    "registry_unavailable.one": "Register niet beschikbaar: {count} fallbackplugin wordt weergegeven.",
+    "registry_unavailable.few": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven.",
+    "registry_unavailable.other": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven."
   },
   "sequencer": {
     "edit_focal_length": "Brandpuntsafstand bewerken...",
