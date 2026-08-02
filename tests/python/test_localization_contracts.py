@@ -162,6 +162,12 @@ def test_mcp_task_status_uses_stable_outcomes_not_localized_stages():
         assert outcome_getter in source
 
 
+def test_localized_formatting_does_not_bypass_safe_locale_fallback():
+    for path in (ROOT / "src").rglob("*.cpp"):
+        source = path.read_text(encoding="utf-8", errors="ignore")
+        assert "fmt::runtime(LOC(" not in source, path
+
+
 if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
@@ -173,6 +179,7 @@ if __name__ == "__main__":
         test_watch_directory_scan_messages_format_in_every_locale,
         test_language_generation_is_part_of_cached_localized_ui_state,
         test_mcp_task_status_uses_stable_outcomes_not_localized_stages,
+        test_localized_formatting_does_not_bypass_safe_locale_fallback,
     ]
     for contract in contracts:
         contract()
