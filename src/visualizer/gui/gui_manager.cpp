@@ -4556,9 +4556,12 @@ namespace lfs::vis::gui {
             pollDevResourceHotReload();
         }
 
-        if (pending_localization_ui_refresh_ && !shouldDeferDevResourceHotReload()) {
-            pending_localization_ui_refresh_ = false;
-            reloadRmlResources();
+        if (pending_localization_ui_refresh_) {
+            rmlui_manager_.clearNonTextInputFocus();
+            if (!shouldDeferDevResourceHotReload()) {
+                pending_localization_ui_refresh_ = false;
+                reloadRmlResources();
+            }
         }
 
         // Hot-reload themes (check once per second)

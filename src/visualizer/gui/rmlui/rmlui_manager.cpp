@@ -598,6 +598,20 @@ namespace lfs::vis::gui {
         return false;
     }
 
+    void RmlUIManager::clearNonTextInputFocus() {
+        for (const auto& [_, context] : contexts_) {
+            if (!context)
+                continue;
+
+            auto* const focused = context->GetFocusElement();
+            if (!rml_input::hasFocusedKeyboardTarget(focused) ||
+                rml_input::wantsTextInput(focused)) {
+                continue;
+            }
+            focused->Blur();
+        }
+    }
+
     void RmlUIManager::queueVulkanContext(Rml::Context* const context,
                                           const float offset_x,
                                           const float offset_y,
