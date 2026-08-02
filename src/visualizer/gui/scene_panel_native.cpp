@@ -309,14 +309,16 @@ namespace lfs::vis::gui {
                                                        const size_t displayed_entry_count,
                                                        const core::LogLevel level) {
             const std::string level_label(logLevelLabel(level));
+            const char* const entry_word_key =
+                entry_count == 1 ? "runtime.log_entry_word" : "runtime.log_entries_word";
+            const std::string entry_word = LOC(entry_word_key);
             if (entry_count == 0)
                 return LOCF("runtime.cli_no_logs", level_label);
             if (displayed_entry_count < entry_count) {
                 return LOCF("runtime.cli_logs_latest", entry_count,
-                            entry_count == 1 ? "entry" : "entries", displayed_entry_count, level_label);
+                            entry_word, displayed_entry_count, level_label);
             }
-            return LOCF("runtime.cli_logs_summary", entry_count,
-                        entry_count == 1 ? "entry" : "entries", level_label);
+            return LOCF("runtime.cli_logs_summary", entry_count, entry_word, level_label);
         }
 
         [[nodiscard]] int optionalMetricMilli(const std::optional<float>& value) {

@@ -103,7 +103,7 @@ class DepthViewControlsController:
         model.bind_func("depth_view_has_scene", lambda: self._has_scene)
         model.bind_func(
             "depth_view_disable_label",
-            lambda: _ui_label("toolbar.depth_mode_disable", "Disable Depth Map"),
+            lambda: _ui_label("toolbar.depth_map_disable", "Disable Depth Map"),
         )
         model.bind(
             "depth_view_mode_value",

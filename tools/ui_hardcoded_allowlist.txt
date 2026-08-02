@@ -36,3 +36,5 @@ owner/repo
 
 # CSS class passed through the widget helper; it is not user-facing copy.
 setting-row__control-col
+# Stable operator metadata exposed outside the localized GUI registry.
+Play/Pause

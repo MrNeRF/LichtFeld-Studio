@@ -41,7 +41,9 @@ class UpdateKeyframeOperator(Operator):
 class PlayPauseOperator(Operator):
     """Toggle sequencer playback."""
 
-    label = "action.sequencer_play_pause"
+    # Operator metadata is exposed to non-GUI callers verbatim. Keep this as a
+    # stable product label until the operator registry gains localized labels.
+    label = "Play/Pause"
     shortcut = ""
 
     def execute(self, context):

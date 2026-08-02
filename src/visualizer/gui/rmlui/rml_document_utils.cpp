@@ -313,11 +313,23 @@ namespace lfs::vis::gui::rml_documents {
             changed |= refreshLocalizedContent(root->GetChild(i));
 
         // RmlUI stores the closed select label separately from its option elements.
-        // Re-applying the current selection synchronizes that cached label after the
-        // translated option contents have been refreshed in place.
+        // Re-apply the selected option content after translated option nodes have
+        // been refreshed in place; SetSelection(current) is a no-op in some RmlUI
+        // versions and therefore cannot refresh that cached label reliably.
         if (changed) {
-            if (auto* const select = dynamic_cast<Rml::ElementFormControlSelect*>(root))
-                select->SetSelection(select->GetSelection());
+            if (auto* const select = dynamic_cast<Rml::ElementFormControlSelect*>(root)) {
+                const auto* const option = select->GetOption(select->GetSelection());
+                if (option) {
+                    const auto selected_rml = option->GetInnerRML();
+                    for (int i = 0; i < select->GetNumChildren(true); ++i) {
+                        auto* const child = select->GetChild(i);
+                        if (child && child->GetTagName() == "selectvalue") {
+                            child->SetInnerRML(selected_rml);
+                            break;
+                        }
+                    }
+                }
+            }
         }
         return changed;
     }
