@@ -46,6 +46,9 @@ RML_ELEMENT_ID = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$")
 RML_BINDING = re.compile(r"^\{\{?[A-Za-z_][A-Za-z0-9_]*\}?\}$")
 URL_LITERAL = re.compile(r"^(?:https?://|github:)[^\s]+$")
 HTML_TAG_LITERAL = re.compile(r"^</?[A-Za-z][A-Za-z0-9-]*>$")
+LOCALIZED_FALLBACK_LITERAL = re.compile(
+    r'\b(?:_ui_label|_tr|_trf)\(\s*["\'][^"\']+["\']\s*,\s*["\']((?:\\.|[^"\\])*)["\']'
+)
 
 
 @dataclass(frozen=True)
@@ -123,11 +126,14 @@ def scan_source(path: Path, allowlist: set[str], allow_patterns: list[re.Pattern
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if IGNORE_LINE.search(line) or not UI_SINK.search(line):
             continue
+        localized_fallbacks = set(LOCALIZED_FALLBACK_LITERAL.findall(line))
         for match in STRING_LITERAL.finditer(line):
             # Keep UTF-8 literals intact. Decoding the UTF-8 byte sequence with
             # ``unicode_escape`` turns symbols such as ° into ``Â°``, which then
             # looks like a textual candidate to the heuristic.
             text = match.group(1)
+            if text in localized_fallbacks:
+                continue
             if is_candidate(text, allowlist, allow_patterns):
                 findings.append(Finding(path, line_number, text, "source"))
     return findings

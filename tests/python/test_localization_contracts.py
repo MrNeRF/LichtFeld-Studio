@@ -99,14 +99,17 @@ def test_hardcoded_ui_audit_detects_common_bypasses():
         root = Path(directory)
         source = root / "panel.py"
         source.write_text(
-            'self._set_status(f"Export {count}")\nlabel = "Overview"\non_progress("Working")\n',
+            'self._set_status(f"Export {count}")\nlabel = "Overview"\non_progress("Working")\n'
+            'title = _ui_label("ui.overview", "Overview")\n',
             encoding="utf-8",
         )
         rml = root / "panel.rml"
         rml.write_text('<button title="Cancel">Export</button>\n', encoding="utf-8")
-        source_texts = {finding.text for finding in audit.scan_source(source, allowlist, patterns)}
+        source_findings = audit.scan_source(source, allowlist, patterns)
+        source_texts = {finding.text for finding in source_findings}
         rml_texts = {finding.text for finding in audit.scan_rml(rml, allowlist, patterns)}
         assert {"Export {count}", "Overview", "Working"} <= source_texts
+        assert sum(finding.text == "Overview" for finding in source_findings) == 1
         assert {"Cancel", "Export"} <= rml_texts
 
 
