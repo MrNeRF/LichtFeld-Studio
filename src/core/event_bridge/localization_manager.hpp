@@ -5,7 +5,9 @@
 
 #include "event_bridge.hpp"
 
+#include <array>
 #include <format>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -25,7 +27,7 @@ namespace lfs::event {
         std::vector<std::string> getAvailableLanguages() const;
         std::vector<std::string> getAvailableLanguageNames() const;
         bool setLanguage(const std::string& language_code);
-        const std::string& getCurrentLanguage() const { return current_language_; }
+        std::string getCurrentLanguage() const;
         std::string getCurrentLanguageName() const;
         bool reload();
 
@@ -44,6 +46,7 @@ namespace lfs::event {
         bool parseLocaleFile(const std::string& filepath,
                              std::unordered_map<std::string, std::string>& strings) const;
 
+        mutable std::mutex mutex_;
         std::string locales_dir_;
         std::string current_language_;
         std::unordered_map<std::string, std::string> current_strings_;
@@ -56,7 +59,12 @@ namespace lfs::event {
 
     template <typename... Args>
     [[nodiscard]] inline std::string formatLocalized(const std::string_view key, Args&&... args) {
-        return std::vformat(LocalizationManager::getInstance().get(key), std::make_format_args(args...));
+        const char* const localized = LocalizationManager::getInstance().get(key);
+        try {
+            return std::vformat(localized, std::make_format_args(args...));
+        } catch (const std::format_error&) {
+            return localized;
+        }
     }
 
 #define LOC(key)       lfs::event::LocalizationManager::getInstance().get(key)

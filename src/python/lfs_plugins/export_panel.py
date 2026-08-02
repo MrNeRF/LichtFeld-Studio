@@ -755,7 +755,7 @@ class ExportPanel(Panel):
             self._exporting = False
             self._selection_seeded = False
             # Register export with Asset Manager if successful
-            completed = state.get("stage") == "Complete" and not state.get("error")
+            completed = state.get("outcome") == "completed" and not state.get("error")
             if completed and self._last_export_path and self._last_export_format is not None:
                 self._register_export(self._last_export_path, self._last_export_format)
             self._last_export_path = None

@@ -770,7 +770,7 @@
                             data-value="gt_compare_mode_value"
                             data-tooltip="tooltip.gt_compare_mode">
                         <option value="rgb">RGB</option>
-                        <option value="normal">Normal</option>
+                        <option value="normal">@tr:ui.normal</option>
                         <option value="depth">@tr:ui.depth</option>
                     </select>
                 </div>
@@ -1021,10 +1021,10 @@
                 </span>
             </div>
             <div id="vram-hud-tabs" class="vram-hud-tabs">
-                <button id="vram-hud-tab-overview" class="vram-hud-tab active" data-vram-tab="overview">Overview</button>
-                <button id="vram-hud-tab-allocations" class="vram-hud-tab" data-vram-tab="allocations">Allocations</button>
-                <button id="vram-hud-tab-annotations" class="vram-hud-tab" data-vram-tab="annotations">Annotations</button>
-                <button id="vram-hud-tab-tree" class="vram-hud-tab" data-vram-tab="tree">Drill-down</button>
+                <button id="vram-hud-tab-overview" class="vram-hud-tab active" data-vram-tab="overview">@tr:ui.vram_tab_overview</button>
+                <button id="vram-hud-tab-allocations" class="vram-hud-tab" data-vram-tab="allocations">@tr:ui.vram_tab_allocations</button>
+                <button id="vram-hud-tab-annotations" class="vram-hud-tab" data-vram-tab="annotations">@tr:ui.vram_tab_annotations</button>
+                <button id="vram-hud-tab-tree" class="vram-hud-tab" data-vram-tab="tree">@tr:ui.vram_tab_drill_down</button>
             </div>
             <div id="vram-hud-panel-overview" class="vram-hud-panel">
                 <div id="vram-hud-summary" class="vram-hud-summary"></div>

@@ -136,6 +136,19 @@ def test_language_generation_is_part_of_cached_localized_ui_state():
         assert evidence in source, f"{relative}: missing language-change invalidation"
 
 
+def test_mcp_task_status_uses_stable_outcomes_not_localized_stages():
+    source = (ROOT / "src" / "app" / "mcp_runtime_tools.cpp").read_text(encoding="utf-8")
+    for localized_stage in ("Complete", "Failed", "Cancelled"):
+        assert f'stage == "{localized_stage}"' not in source
+    for outcome_getter in (
+        "getExportOutcome()",
+        "getImportOutcome()",
+        "getVideoExportOutcome()",
+        "getMesh2SplatOutcome()",
+    ):
+        assert outcome_getter in source
+
+
 if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
@@ -146,6 +159,7 @@ if __name__ == "__main__":
         test_hardcoded_ui_audit_detects_common_bypasses,
         test_watch_directory_scan_messages_format_in_every_locale,
         test_language_generation_is_part_of_cached_localized_ui_state,
+        test_mcp_task_status_uses_stable_outcomes_not_localized_stages,
     ]
     for contract in contracts:
         contract()

@@ -889,6 +889,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(export_state_.mutex);
             export_state_.format = ExportFormat::COLMAP;
             export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_STARTING);
+            export_state_.outcome = "running";
             export_state_.error.clear();
             export_state_.path = path;
         }
@@ -929,7 +930,7 @@ namespace lfs::vis::gui {
                             io::ColmapWriteOptions{.format = io::ColmapWriteFormat::Auto});
                         if (result) {
                             success = true;
-                            update_stage(1.0f, "Complete");
+                            update_stage(1.0f, LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE));
                         } else {
                             error_msg = result.error().message;
                         }
@@ -948,6 +949,11 @@ namespace lfs::vis::gui {
 
                 if (success) {
                     LOG_INFO("COLMAP export completed: {}", lfs::core::path_to_utf8(path));
+                    {
+                        const std::lock_guard lock(export_state_.mutex);
+                        export_state_.outcome = "completed";
+                    }
+                    publishExportState();
                     lfs::core::events::state::ExportCompleted{
                         .path = path,
                         .format = ExportFormat::COLMAP}
@@ -958,6 +964,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.error = error_msg;
                         export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED);
+                        export_state_.outcome = "cancelled";
                     }
                     publishExportState();
                     lfs::core::events::state::ExportFailed{.error = error_msg, .cancelled = true}.emit();
@@ -967,6 +974,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.error = error_msg;
                         export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                        export_state_.outcome = "failed";
                     }
                     publishExportState();
                     lfs::core::events::state::ExportFailed{.error = error_msg}.emit();
@@ -1002,6 +1010,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(export_state_.mutex);
             export_state_.format = format;
             export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_STARTING);
+            export_state_.outcome = "running";
             export_state_.error.clear();
             export_state_.path = path;
         }
@@ -1030,6 +1039,7 @@ namespace lfs::vis::gui {
                         {
                             const std::lock_guard lock(export_state_.mutex);
                             export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED);
+                            export_state_.outcome = "cancelled";
                         }
                         publishExportState();
                         if (auto* window_manager = services().windowOrNull()) {
@@ -1224,6 +1234,7 @@ namespace lfs::vis::gui {
                     {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE);
+                        export_state_.outcome = "completed";
                     }
                     publishExportState();
                     lfs::core::events::state::ExportCompleted{
@@ -1236,6 +1247,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.error = error_msg;
                         export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED);
+                        export_state_.outcome = "cancelled";
                     }
                     publishExportState();
                     lfs::core::events::state::ExportFailed{
@@ -1248,6 +1260,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.error = error_msg;
                         export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                        export_state_.outcome = "failed";
                     }
                     publishExportState();
                     lfs::core::events::state::ExportFailed{
@@ -1287,6 +1300,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(export_state_.mutex);
             export_state_.format = format;
             export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+            export_state_.outcome = "failed";
             export_state_.error = std::move(error);
             export_state_.path = path;
         }
@@ -1300,6 +1314,7 @@ namespace lfs::vis::gui {
         {
             const std::lock_guard lock(export_state_.mutex);
             state.stage = export_state_.stage;
+            state.outcome = export_state_.outcome;
             state.format = exportProgressFormatName(export_state_.format);
             state.error = export_state_.error;
             state.path = lfs::core::path_to_utf8(export_state_.path);
@@ -1481,6 +1496,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(import_state_.mutex);
             import_state_.path = path;
             import_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_INITIALIZING);
+            import_state_.outcome = "running";
             import_state_.error.clear();
             import_state_.num_images = 0;
             import_state_.num_points = 0;
@@ -1502,6 +1518,7 @@ namespace lfs::vis::gui {
                         import_state_.success = false;
                         import_state_.load_result.reset();
                         import_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                        import_state_.outcome = "failed";
                         import_state_.error.clear();
                     } catch (...) {
                     }
@@ -1617,6 +1634,7 @@ namespace lfs::vis::gui {
                             import_state_.success = false;
                             import_state_.error = result.error().format();
                             import_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                            import_state_.outcome = "failed";
                             LOG_ERROR("Import failed: {}", import_state_.error);
                         }
                     }
@@ -1662,6 +1680,10 @@ namespace lfs::vis::gui {
         if (!scene_manager) {
             LOG_ERROR("No scene manager");
             import_state_.active.store(false);
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                import_state_.outcome = "failed";
+            }
             publishImportOverlayState();
             return;
         }
@@ -1680,6 +1702,10 @@ namespace lfs::vis::gui {
         if (!load_result) {
             LOG_ERROR("No load result");
             import_state_.active.store(false);
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                import_state_.outcome = "failed";
+            }
             publishImportOverlayState();
             return;
         }
@@ -1700,6 +1726,7 @@ namespace lfs::vis::gui {
             import_state_.success = result.has_value();
             import_state_.stage = result ? LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE)
                                          : LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+            import_state_.outcome = result ? "completed" : "failed";
             if (!result)
                 import_state_.error = result.error();
             success_val = import_state_.success;
@@ -1760,6 +1787,7 @@ namespace lfs::vis::gui {
         {
             std::lock_guard lock(video_export_state_.mutex);
             video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING);
+            video_export_state_.outcome = "cancelling";
         }
         publishVideoExportOverlayState();
         if (video_export_state_.thread) {
@@ -1779,6 +1807,7 @@ namespace lfs::vis::gui {
             {
                 std::lock_guard lock(video_export_state_.mutex);
                 video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                video_export_state_.outcome = "failed";
                 video_export_state_.error = error;
                 video_export_state_.path = path;
             }
@@ -1853,6 +1882,7 @@ namespace lfs::vis::gui {
         {
             std::lock_guard lock(video_export_state_.mutex);
             video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_INITIALIZING);
+            video_export_state_.outcome = "running";
             video_export_state_.error.clear();
             video_export_state_.path = path;
         }
@@ -1891,6 +1921,7 @@ namespace lfs::vis::gui {
                         std::lock_guard lock(video_export_state_.mutex);
                         video_export_state_.error = LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE);
                         video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                        video_export_state_.outcome = "failed";
                     }
                     video_export_state_.active.store(false);
                     publishVideoExportOverlayState();
@@ -1913,6 +1944,7 @@ namespace lfs::vis::gui {
                         std::lock_guard lock(video_export_state_.mutex);
                         video_export_state_.error = result.error();
                         video_export_state_.stage = LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, result.error());
+                        video_export_state_.outcome = "failed";
                     }
                     LOG_ERROR("Failed to open encoder: {}", result.error());
                     lfs::core::events::state::VideoExportFailed{
@@ -1952,6 +1984,7 @@ namespace lfs::vis::gui {
                             std::lock_guard lock(video_export_state_.mutex);
                             video_export_state_.error = LOCF(lichtfeld::Strings::Runtime::TASK_FAILED_DETAIL, frame_tensor.error());
                             video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_RENDER_ERROR);
+                            video_export_state_.outcome = "failed";
                         }
                         publishVideoExportOverlayState();
                         break;
@@ -1973,6 +2006,7 @@ namespace lfs::vis::gui {
                             std::lock_guard lock(video_export_state_.mutex);
                             video_export_state_.error = write_result.error();
                             video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_ENCODE_ERROR);
+                            video_export_state_.outcome = "failed";
                         }
                         publishVideoExportOverlayState();
                         LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error());
@@ -1993,6 +2027,7 @@ namespace lfs::vis::gui {
                     std::lock_guard lock(video_export_state_.mutex);
                     if (cancelled) {
                         video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED);
+                        video_export_state_.outcome = "cancelled";
                     } else if (video_export_state_.error.empty()) {
                         video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FINALIZING);
                     }
@@ -2004,6 +2039,7 @@ namespace lfs::vis::gui {
                         std::lock_guard lock(video_export_state_.mutex);
                         video_export_state_.error = close_result.error();
                         video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                        video_export_state_.outcome = "failed";
                     }
                     publishVideoExportOverlayState();
                     LOG_ERROR("Failed to close encoder: {}", close_result.error());
@@ -2013,8 +2049,10 @@ namespace lfs::vis::gui {
                         std::lock_guard lock(video_export_state_.mutex);
                         if (cancelled) {
                             video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_CANCELLED);
+                            video_export_state_.outcome = "cancelled";
                         } else if (video_export_state_.error.empty() && !video_export_state_.cancel_requested.load()) {
                             video_export_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE);
+                            video_export_state_.outcome = "completed";
                             LOG_INFO("Video export completed: {}", lfs::core::path_to_utf8(path));
                             emit_completed = true;
                         }
@@ -2064,6 +2102,7 @@ namespace lfs::vis::gui {
         {
             const std::lock_guard lock(mesh2splat_state_.mutex);
             mesh2splat_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_STARTING_ELLIPSIS);
+            mesh2splat_state_.outcome = "running";
             mesh2splat_state_.error.clear();
             mesh2splat_state_.source_name = source_name;
             mesh2splat_state_.pending_mesh = std::move(mesh);
@@ -2120,8 +2159,12 @@ namespace lfs::vis::gui {
             options = mesh2splat_state_.pending_options;
         }
 
-        if (!mesh)
+        if (!mesh) {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            mesh2splat_state_.error = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+            mesh2splat_state_.outcome = "failed";
             return;
+        }
 
         auto result = lfs::rendering::mesh_to_splat(
             *mesh,
@@ -2142,10 +2185,12 @@ namespace lfs::vis::gui {
                 mesh2splat_state_.result = std::move(*result);
                 mesh2splat_state_.error.clear();
                 mesh2splat_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE);
+                mesh2splat_state_.outcome = "completed";
             } else {
                 mesh2splat_state_.result.reset();
                 mesh2splat_state_.error = result.error();
                 mesh2splat_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                mesh2splat_state_.outcome = "failed";
                 LOG_ERROR("Mesh2Splat conversion failed: {}", mesh2splat_state_.error);
             }
         }
@@ -2156,6 +2201,9 @@ namespace lfs::vis::gui {
         auto* const scene_manager = viewer_->getSceneManager();
         if (!scene_manager) {
             LOG_ERROR("Mesh2Splat: no scene manager");
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            mesh2splat_state_.error = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+            mesh2splat_state_.outcome = "failed";
             return;
         }
 
@@ -2169,6 +2217,9 @@ namespace lfs::vis::gui {
 
         if (!splat_data) {
             LOG_ERROR("Mesh2Splat: no result data");
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            mesh2splat_state_.error = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+            mesh2splat_state_.outcome = "failed";
             return;
         }
 
@@ -2185,6 +2236,9 @@ namespace lfs::vis::gui {
             scene_manager->addGeneratedSplatNode(std::move(splat_data), source_name, node_name, true);
         if (added_name.empty()) {
             LOG_ERROR("Mesh2Splat: failed to add splat node '{}'", node_name);
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            mesh2splat_state_.error = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+            mesh2splat_state_.outcome = "failed";
             return;
         }
 
