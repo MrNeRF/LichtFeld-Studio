@@ -1474,6 +1474,7 @@
     "run": "Ausführen",
     "stop": "Stopp",
     "running": "Wird ausgeführt...",
+    "already_running": "Ein Skript wird bereits ausgeführt.",
     "python": "Python",
     "syntax": "Syntax",
     "outline": "Gliederung",

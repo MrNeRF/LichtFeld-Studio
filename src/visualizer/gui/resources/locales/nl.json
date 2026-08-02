@@ -1474,6 +1474,7 @@
     "run": "Uitvoeren",
     "stop": "Stoppen",
     "running": "Wordt uitgevoerd...",
+    "already_running": "Er wordt al een script uitgevoerd.",
     "python": "Python",
     "syntax": "Syntaxis",
     "outline": "Overzicht",

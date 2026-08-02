@@ -1474,6 +1474,7 @@
     "run": "Uruchom",
     "stop": "Zatrzymaj",
     "running": "Uruchamianie...",
+    "already_running": "Skrypt jest już uruchomiony.",
     "python": "Python",
     "syntax": "Składnia",
     "outline": "Zarys",

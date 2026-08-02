@@ -1503,7 +1503,7 @@ namespace lfs::vis::gui::panels {
 
     void PythonConsoleState::runScriptAsync(const std::string& code) {
         if (script_running_.load()) {
-            addError(LOC("python_console.running"));
+            addError(LOC("python_console.already_running"));
             return;
         }
 

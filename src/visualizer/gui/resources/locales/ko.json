@@ -1474,6 +1474,7 @@
     "run": "실행",
     "stop": "중지",
     "running": "실행 중...",
+    "already_running": "스크립트가 이미 실행 중입니다.",
     "python": "Python",
     "syntax": "구문",
     "outline": "개요",

@@ -1474,6 +1474,7 @@
     "run": "Esegui",
     "stop": "Interrompi",
     "running": "In esecuzione...",
+    "already_running": "Uno script è già in esecuzione.",
     "python": "Python",
     "syntax": "Sintassi",
     "outline": "Struttura",

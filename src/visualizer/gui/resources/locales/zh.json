@@ -1493,6 +1493,7 @@
     "run": "运行",
     "stop": "停止",
     "running": "运行中...",
+    "already_running": "脚本已在运行。",
     "python": "Python",
     "syntax": "语法",
     "outline": "大纲",

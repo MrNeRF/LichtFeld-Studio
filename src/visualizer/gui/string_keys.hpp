@@ -842,6 +842,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* STOP = "python_console.stop";
         inline constexpr const char* PYTHON = "python_console.python";
         inline constexpr const char* RUNNING = "python_console.running";
+        inline constexpr const char* ALREADY_RUNNING = "python_console.already_running";
         inline constexpr const char* SYNTAX = "python_console.syntax";
         inline constexpr const char* OUTLINE = "python_console.outline";
         inline constexpr const char* SCOPE = "python_console.scope";

@@ -261,6 +261,7 @@
     "run": "Ejecutar",
     "stop": "Detener",
     "running": "En ejecución...",
+    "already_running": "Ya se está ejecutando un script.",
     "python": "Python",
     "syntax": "Sintaxis",
     "outline": "Esquema",

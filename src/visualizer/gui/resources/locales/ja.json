@@ -1474,6 +1474,7 @@
     "run": "実行",
     "stop": "停止",
     "running": "実行中...",
+    "already_running": "スクリプトはすでに実行中です。",
     "python": "Python",
     "syntax": "構文",
     "outline": "アウトライン",
