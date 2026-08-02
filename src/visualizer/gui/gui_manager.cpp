@@ -4556,8 +4556,7 @@ namespace lfs::vis::gui {
             pollDevResourceHotReload();
         }
 
-        if (pending_localization_ui_refresh_ && !rmlui_manager_.wantsTextInput() &&
-            !rmlui_manager_.anyItemActive()) {
+        if (pending_localization_ui_refresh_ && !shouldDeferDevResourceHotReload()) {
             pending_localization_ui_refresh_ = false;
             reloadRmlResources();
         }

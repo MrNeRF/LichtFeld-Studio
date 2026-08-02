@@ -201,6 +201,12 @@ def test_startup_language_picker_refreshes_after_forwarded_input():
     assert "updateLocalizedText();" in source[source.index("language_generation_after_input"):]
 
 
+def test_pending_localization_refresh_uses_the_full_interaction_guard():
+    source = (ROOT / "src" / "visualizer" / "gui" / "gui_manager.cpp").read_text(encoding="utf-8")
+    pending_refresh = source[source.index("if (pending_localization_ui_refresh_"):]
+    assert "!shouldDeferDevResourceHotReload()" in pending_refresh.split("}", 1)[0]
+
+
 if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
@@ -215,6 +221,7 @@ if __name__ == "__main__":
         test_mcp_task_status_uses_stable_outcomes_not_localized_stages,
         test_localized_formatting_does_not_bypass_safe_locale_fallback,
         test_startup_language_picker_refreshes_after_forwarded_input,
+        test_pending_localization_refresh_uses_the_full_interaction_guard,
     ]
     for contract in contracts:
         contract()
