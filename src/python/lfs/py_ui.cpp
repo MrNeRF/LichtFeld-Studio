@@ -5298,15 +5298,8 @@ namespace lfs::python {
                     register_python_operator_to_cpp(cls);
                     std::string idname = get_class_id(cls);
                     std::string label = idname;
-                    if (nb::hasattr(cls, "label")) {
+                    if (nb::hasattr(cls, "label"))
                         label = nb::cast<std::string>(cls.attr("label"));
-                        if (label.find('.') != std::string::npos) {
-                            nb::object ui = nb::module_::import_("lichtfeld").attr("ui");
-                            const std::string localized = nb::cast<std::string>(ui.attr("tr")(label));
-                            if (!localized.empty() && localized != label)
-                                label = localized;
-                        }
-                    }
                     register_python_property_group("operator." + idname, label, cls);
                 } else if (nb::cast<bool>(issubclass(cls, Menu_type))) {
                     PyMenuRegistry::instance().register_menu(cls);

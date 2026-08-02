@@ -212,6 +212,13 @@ def test_rendering_labels_preserve_fullwidth_colons():
     assert 'text.endswith((":", "："))' in source
 
 
+def test_operator_property_registration_preserves_localization_keys():
+    source = (ROOT / "src" / "python" / "lfs" / "py_ui.cpp").read_text(encoding="utf-8")
+    registration = source[source.index("void register_class_api"):source.index('m.def(\n            "unregister_class"')]
+    assert 'register_python_property_group("operator." + idname, label, cls);' in registration
+    assert "localization.get(label)" not in registration
+
+
 if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
@@ -228,6 +235,7 @@ if __name__ == "__main__":
         test_startup_language_picker_refreshes_after_forwarded_input,
         test_pending_localization_refresh_uses_the_full_interaction_guard,
         test_rendering_labels_preserve_fullwidth_colons,
+        test_operator_property_registration_preserves_localization_keys,
     ]
     for contract in contracts:
         contract()
