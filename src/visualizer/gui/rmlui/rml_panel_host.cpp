@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rmlui/rml_panel_host.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
@@ -258,6 +259,21 @@ namespace lfs::vis::gui {
         return ensureContext() && loadDocument();
     }
 
+    bool RmlPanelHost::syncLocalization() {
+        const std::string current_language =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        if (current_language.empty() || current_language == last_language_)
+            return true;
+        return reloadDocument();
+    }
+
+    bool RmlPanelHost::needsAnimationFrame() const {
+        const std::string current_language =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        return (!current_language.empty() && current_language != last_language_) ||
+               render_needed_ || content_dirty_ || animation_active_ || tooltip_.revealDue();
+    }
+
     bool RmlPanelHost::reloadDocument() {
         if (!ensureContext())
             return false;
@@ -313,6 +329,8 @@ namespace lfs::vis::gui {
                 document_->Show();
                 cacheContentElements();
                 applyPanelSpaceClass();
+                last_language_ =
+                    lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
                 render_needed_ = true;
             } else {
                 LOG_ERROR("RmlUI: failed to load {}", rml_path_);
@@ -421,6 +439,8 @@ namespace lfs::vis::gui {
             return;
 
         if (!ensureDocumentLoaded())
+            return;
+        if (!syncLocalization())
             return;
 
         const bool theme_dirty = syncThemeProperties();
@@ -605,6 +625,8 @@ namespace lfs::vis::gui {
 
         if (!ensureDocumentLoaded())
             return;
+        if (!syncLocalization())
+            return;
 
         const int w = static_cast<int>(avail_w);
 
@@ -686,6 +708,8 @@ namespace lfs::vis::gui {
 
         if (!ensureDocumentLoaded())
             return;
+        if (!syncLocalization())
+            return;
 
         const int pw = static_cast<int>(w);
         int ph = 0;
@@ -700,6 +724,8 @@ namespace lfs::vis::gui {
             return;
 
         if (!ensureDocumentLoaded())
+            return;
+        if (!syncLocalization())
             return;
 
         const int pw = static_cast<int>(w);
@@ -718,6 +744,8 @@ namespace lfs::vis::gui {
 
     bool RmlPanelHost::drawDirectCached(float x, float y, float w, float h) {
         if (w <= 0 || h <= 0)
+            return false;
+        if (!syncLocalization())
             return false;
         if (!document_ || !rml_context_ || last_fbo_w_ <= 0 || last_fbo_h_ <= 0)
             return false;
