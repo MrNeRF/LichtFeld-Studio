@@ -541,7 +541,8 @@ namespace lfs::vis::gui {
     }
 
     bool SequencerUIManager::needsAnimationFrame() const {
-        return controller_.isPlaying() ||
+        return (panel_ && panel_->needsLocalizationFrame()) ||
+               controller_.isPlaying() ||
                controller_.state() == PlaybackState::SCRUBBING ||
                plySequenceStreamHasWork() ||
                keyframe_gizmo_active_ ||

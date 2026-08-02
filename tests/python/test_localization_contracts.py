@@ -228,6 +228,18 @@ def test_runtime_localization_refresh_updates_live_rml_documents():
         assert "@tr:" not in remaining, f"{path}: unsupported runtime translation directive shape"
 
 
+def test_cached_native_panels_request_a_frame_for_language_changes():
+    video = (ROOT / "src" / "visualizer" / "gui" / "windows" / "video_extractor_dialog.cpp").read_text(encoding="utf-8")
+    video_demand = video[video.index("bool VideoExtractorDialog::needsAnimationFrame() const") :]
+    assert "current_language != last_language_" in video_demand.split("return hasDynamicState()", 1)[0]
+
+    sequencer_panel = (ROOT / "src" / "visualizer" / "sequencer" / "rml_sequencer_panel.cpp").read_text(encoding="utf-8")
+    assert "bool RmlSequencerPanel::needsLocalizationFrame() const" in sequencer_panel
+    sequencer_manager = (ROOT / "src" / "visualizer" / "gui" / "sequencer_ui_manager.cpp").read_text(encoding="utf-8")
+    sequencer_demand = sequencer_manager[sequencer_manager.index("bool SequencerUIManager::needsAnimationFrame() const") :]
+    assert "panel_->needsLocalizationFrame()" in sequencer_demand.split("controller_.isPlaying()", 1)[0]
+
+
 def test_rendering_labels_preserve_fullwidth_colons():
     source = (ROOT / "src" / "python" / "lfs_plugins" / "rendering_panel.py").read_text(encoding="utf-8")
     assert 'text.endswith((":", "："))' in source
@@ -262,6 +274,7 @@ if __name__ == "__main__":
         test_localized_formatting_does_not_bypass_safe_locale_fallback,
         test_startup_language_picker_refreshes_after_forwarded_input,
         test_runtime_localization_refresh_updates_live_rml_documents,
+        test_cached_native_panels_request_a_frame_for_language_changes,
         test_rendering_labels_preserve_fullwidth_colons,
         test_operator_property_registration_preserves_localization_keys,
         test_cached_python_panels_request_a_frame_on_language_change,

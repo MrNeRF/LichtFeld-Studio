@@ -307,6 +307,10 @@ namespace lfs::gui {
     }
 
     bool VideoExtractorDialog::needsAnimationFrame() const {
+        const std::string current_language =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        if (!current_language.empty() && current_language != last_language_)
+            return true;
         return hasDynamicState() || (host_ && host_->needsAnimationFrame());
     }
 

@@ -143,6 +143,7 @@ namespace lfs::vis {
 
         [[nodiscard]] bool isHovered() const { return hovered_; }
         [[nodiscard]] bool wantsKeyboard() const { return wants_keyboard_; }
+        [[nodiscard]] bool needsLocalizationFrame() const;
 
         [[nodiscard]] float cachedPanelY() const { return cached_panel_y_; }
         [[nodiscard]] float getDisplayEndTime() const;

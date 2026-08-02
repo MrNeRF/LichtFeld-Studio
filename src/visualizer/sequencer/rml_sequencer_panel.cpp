@@ -302,6 +302,12 @@ namespace lfs::vis {
     void RmlSequencerPanel::clearPendingComposite() {
     }
 
+    bool RmlSequencerPanel::needsLocalizationFrame() const {
+        const std::string current_language =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        return !current_language.empty() && current_language != last_language_;
+    }
+
     void RmlSequencerPanel::clearElementCache() {
         elements_cached_ = false;
         el_panel_ = nullptr;
