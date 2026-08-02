@@ -565,7 +565,7 @@ class SelectionControlsController:
 
         dirty_fields = []
         for changed in changed_fields:
-            if changed == "active_tool":
+            if changed in {"active_tool", "language_generation"}:
                 self._dirty_all()
                 return
             dirty_fields.extend(field_map.get(changed, ()))

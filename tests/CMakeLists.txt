@@ -23,7 +23,9 @@ if(BUILD_LOCALIZATION_TESTS)
         USES_TERMINAL
     )
     message(STATUS "Registered headless localization contract tests (no LibTorch)")
-    return()
+    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY)
+        return()
+    endif()
 endif()
 
 # Find GTest
@@ -81,7 +83,9 @@ if(BUILD_UNICODE_TEST_ONLY)
     )
 
     message(STATUS "Building standalone Unicode path test (no CUDA)")
-    return()  # Skip the rest of the file
+    if(NOT BUILD_TESTS)
+        return()  # Skip LibTorch-dependent tests when only Unicode coverage was requested.
+    endif()
 endif()
 
 # Find LibTorch for tensor comparison tests

@@ -24,20 +24,28 @@ SOURCE_SUFFIXES = {".cpp", ".hpp", ".h", ".py"}
 RML_SUFFIXES = {".rml"}
 STRING_LITERAL = re.compile(r'"((?:\\.|[^"\\])*)"')
 RML_TEXT = re.compile(r">([^<>{}][^<>{}]*[A-Za-z][^<>{}]*)<")
+RML_TEXT_ATTRIBUTE = re.compile(r'\b(?:title|placeholder|aria-label)\s*=\s*"((?:\\.|[^"\\])*)"')
 UI_SINK = re.compile(
     r"\b(SetText|SetInnerRML|body_rml|\.title\s*=|\.label\s*=|bind_func\(|"
-    r"\.stage\s*=|\.error\s*=|\bstatus\s*=|_set_scan_log_entry\(|addError\(|fail_start\(|std::unexpected\(|"
+    r"\blabel\s*=|\.stage\s*=|\.error\s*=|\bstatus\s*=|_set_status\(|on_progress\(|"
+    r"_set_scan_log_entry\(|addError\(|fail_start\(|std::unexpected\(|"
     r"set_text\(|set_inner_rml\(|message_dialog\()"
 )
 IGNORE_LINE = re.compile(r"\b(LOG_(?:TRACE|DEBUG|INFO|WARN|ERROR)|#include)\b")
 TECHNICAL_LITERAL = re.compile(
-    r"^(?:[A-Za-z_][A-Za-z0-9_./:-]*|[A-Z0-9_]{2,}|"
+    r"^(?:[A-Z][A-Z0-9_]{1,}|"
     r"(?:PLY|SOG|SPZ|USDZ?|RAD|COLMAP|HTML|CUDA|GPU|RML|LSP))$"
 )
 FORMAT_ONLY_LITERAL = re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*:[^{}]+\}$")
 INTERPOLATION_ONLY_LITERAL = re.compile(r"^[^A-Za-z{}]*\{[^{}]+\}[^A-Za-z{}]*$")
 STYLE_INTERPOLATION_LITERAL = re.compile(r"^\{[^{}]+\}(?:dp|px)$")
 DYNAMIC_MODEL_FIELD_LITERAL = re.compile(r"^_?label_\{[^{}]+\}$")
+LOCALIZATION_KEY = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+INTERNAL_IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]*$")
+RML_ELEMENT_ID = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$")
+RML_BINDING = re.compile(r"^\{\{?[A-Za-z_][A-Za-z0-9_]*\}?\}$")
+URL_LITERAL = re.compile(r"^(?:https?://|github:)[^\s]+$")
+HTML_TAG_LITERAL = re.compile(r"^</?[A-Za-z][A-Za-z0-9-]*>$")
 
 
 @dataclass(frozen=True)
@@ -85,13 +93,17 @@ def load_allowlist(path: Path) -> tuple[set[str], list[re.Pattern[str]]]:
 
 def is_candidate(text: str, allowlist: set[str], allow_patterns: list[re.Pattern[str]]) -> bool:
     text = text.strip()
-    if not text or text in allowlist or "LOC(" in text:
+    if not text or text in allowlist or LOCALIZATION_KEY.fullmatch(text):
+        return False
+    if (INTERNAL_IDENTIFIER.fullmatch(text) or RML_ELEMENT_ID.fullmatch(text)
+            or RML_BINDING.fullmatch(text) or URL_LITERAL.fullmatch(text)
+            or HTML_TAG_LITERAL.fullmatch(text)):
         return False
     # Numeric format specifications and composed status lines that already call
     # the localization API do not introduce user-facing hardcoded copy.
     if (FORMAT_ONLY_LITERAL.fullmatch(text) or INTERPOLATION_ONLY_LITERAL.fullmatch(text)
             or STYLE_INTERPOLATION_LITERAL.fullmatch(text)
-            or DYNAMIC_MODEL_FIELD_LITERAL.fullmatch(text) or "lf.ui.tr(" in text):
+            or DYNAMIC_MODEL_FIELD_LITERAL.fullmatch(text)):
         return False
     if any(pattern.fullmatch(text) for pattern in allow_patterns):
         return False
@@ -99,7 +111,7 @@ def is_candidate(text: str, allowlist: set[str], allow_patterns: list[re.Pattern
         return False
     if re.fullmatch(r"(?:\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|\\x[0-9a-fA-F]{2})+", text):
         return False
-    if re.fullmatch(r"(?:\d+(?:\.\d+)?(?:x|\s*fps|\s*FPS|p)?|\d+x\d+|\{:[^}]+\}%?)", text):
+    if re.fullmatch(r"(?:\d+(?:\.\d+)?(?:K|x|\s*fps|\s*FPS|p)?|\d+x\d+|\{:[^}]+\}%?)", text):
         return False
     if TECHNICAL_LITERAL.fullmatch(text):
         return False
@@ -109,8 +121,7 @@ def is_candidate(text: str, allowlist: set[str], allow_patterns: list[re.Pattern
 def scan_source(path: Path, allowlist: set[str], allow_patterns: list[re.Pattern[str]]) -> list[Finding]:
     findings: list[Finding] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if (IGNORE_LINE.search(line) or not UI_SINK.search(line) or "LOC(" in line
-                or any(marker in line for marker in ("_ui_label(", "_tr(", "_trf(", "_format_ui_label("))):
+        if IGNORE_LINE.search(line) or not UI_SINK.search(line):
             continue
         for match in STRING_LITERAL.finditer(line):
             # Keep UTF-8 literals intact. Decoding the UTF-8 byte sequence with
@@ -129,6 +140,10 @@ def scan_rml(path: Path, allowlist: set[str], allow_patterns: list[re.Pattern[st
             text = match.group(1).strip()
             if is_candidate(text, allowlist, allow_patterns):
                 findings.append(Finding(path, line_number, text, "rml"))
+        for match in RML_TEXT_ATTRIBUTE.finditer(line):
+            text = match.group(1).strip()
+            if is_candidate(text, allowlist, allow_patterns):
+                findings.append(Finding(path, line_number, text, "rml-attribute"))
     return findings
 
 
@@ -136,8 +151,13 @@ def main() -> int:
     args = parse_args()
     allowlist, allow_patterns = load_allowlist(args.allowlist)
     findings: list[Finding] = []
-    roots = args.root or [GUI_ROOT, PYTHON_GUI_ROOT]
+    roots = [
+        (root if root.is_absolute() else PROJECT_ROOT / root).resolve()
+        for root in (args.root or [GUI_ROOT, PYTHON_GUI_ROOT])
+    ]
     for root in roots:
+        if not root.is_relative_to(PROJECT_ROOT):
+            raise ValueError(f"scan root must be inside the project: {root}")
         for path in sorted(root.rglob("*")):
             if not path.is_file():
                 continue

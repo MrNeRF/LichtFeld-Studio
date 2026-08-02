@@ -6,6 +6,8 @@ import json
 import re
 import subprocess
 import string
+import sys
+import tempfile
 from pathlib import Path
 
 
@@ -26,7 +28,11 @@ def _load(locale):
 
 
 def _fields(text):
-    return {name.split(".", 1)[0].split("[", 1)[0] for _, name, _, _ in string.Formatter().parse(text) if name}
+    return tuple(sorted(
+        f"{{{field_name}{f'!{conversion}' if conversion else ''}{f':{format_spec}' if format_spec else ''}}}"
+        for _, field_name, format_spec, conversion in string.Formatter().parse(text)
+        if field_name is not None
+    ))
 
 
 def test_shipped_locales_match_english_keys_and_placeholders():
@@ -71,9 +77,37 @@ def test_literal_localization_calls_resolve():
 
 
 def test_hardcoded_ui_audit_has_no_candidates():
-    result = subprocess.run(["python", str(ROOT / "tools" / "check_ui_hardcoded.py")],
+    result = subprocess.run([sys.executable, str(ROOT / "tools" / "check_ui_hardcoded.py")],
                             cwd=ROOT, capture_output=True, text=True, check=True)
     assert "No likely hardcoded UI strings found." in result.stdout
+
+
+def test_hardcoded_ui_audit_detects_common_bypasses():
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        import check_ui_hardcoded as audit
+    finally:
+        sys.path.pop(0)
+
+    allowlist, patterns = set(), []
+    assert audit.is_candidate("Cancel", allowlist, patterns)
+    assert audit.is_candidate("Export {count}", allowlist, patterns)
+    assert not audit.is_candidate("COLMAP", allowlist, patterns)
+    assert not audit.is_candidate("{count:,}", allowlist, patterns)
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "panel.py"
+        source.write_text(
+            'self._set_status(f"Export {count}")\nlabel = "Overview"\non_progress("Working")\n',
+            encoding="utf-8",
+        )
+        rml = root / "panel.rml"
+        rml.write_text('<button title="Cancel">Export</button>\n', encoding="utf-8")
+        source_texts = {finding.text for finding in audit.scan_source(source, allowlist, patterns)}
+        rml_texts = {finding.text for finding in audit.scan_rml(rml, allowlist, patterns)}
+        assert {"Export {count}", "Overview", "Working"} <= source_texts
+        assert {"Cancel", "Export"} <= rml_texts
 
 
 def test_watch_directory_scan_messages_format_in_every_locale():
@@ -88,17 +122,18 @@ def test_watch_directory_scan_messages_format_in_every_locale():
 
 
 def test_language_generation_is_part_of_cached_localized_ui_state():
-    required = [
-        "src/python/lfs_plugins/toolbar.py",
-        "src/python/lfs_plugins/depth_view_controls.py",
-        "src/python/lfs_plugins/viewport_export_controls.py",
-        "src/python/lfs_plugins/selection_controls.py",
-        "src/python/lfs_plugins/transform_controls.py",
-        "src/python/lfs_plugins/gt_compare_controls.py",
-        "src/python/lfs_plugins/overlays/__init__.py",
-    ]
-    for relative in required:
-        assert "language_generation" in (ROOT / relative).read_text(encoding="utf-8"), relative
+    required = {
+        "src/python/lfs_plugins/toolbar.py": "language_generation",
+        "src/python/lfs_plugins/depth_view_controls.py": "language_generation",
+        "src/python/lfs_plugins/viewport_export_controls.py": "language_generation",
+        "src/python/lfs_plugins/selection_controls.py": 'changed in {"active_tool", "language_generation"}',
+        "src/python/lfs_plugins/transform_controls.py": "language_generation",
+        "src/python/lfs_plugins/gt_compare_controls.py": "language_generation",
+        "src/python/lfs_plugins/overlays/__init__.py": "language_generation",
+    }
+    for relative, evidence in required.items():
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        assert evidence in source, f"{relative}: missing language-change invalidation"
 
 
 if __name__ == "__main__":
@@ -108,6 +143,7 @@ if __name__ == "__main__":
         test_rml_translation_directives_resolve,
         test_literal_localization_calls_resolve,
         test_hardcoded_ui_audit_has_no_candidates,
+        test_hardcoded_ui_audit_detects_common_bypasses,
         test_watch_directory_scan_messages_format_in_every_locale,
         test_language_generation_is_part_of_cached_localized_ui_state,
     ]
