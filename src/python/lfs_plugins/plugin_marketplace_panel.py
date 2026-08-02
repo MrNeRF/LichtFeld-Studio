@@ -439,11 +439,15 @@ class PluginMarketplacePanel(Panel):
         status_text = ""
         status_class = "status-muted"
         if is_installed:
-            state_str = (
-                tr("plugin_manager.status_active")
-                if plugin_state == PluginState.ACTIVE
-                else tr("plugin_manager.status_not_loaded")
-            )
+            state_keys = {
+                PluginState.UNLOADED: "plugin_manager.status_not_loaded",
+                PluginState.INSTALLING: "plugin_manager.status_installing",
+                PluginState.LOADING: "plugin_manager.status_loading",
+                PluginState.ACTIVE: "plugin_manager.status_active",
+                PluginState.ERROR: "plugin_manager.status_error",
+                PluginState.DISABLED: "plugin_manager.status_disabled",
+            }
+            state_str = tr(state_keys.get(plugin_state, "plugin_manager.status_not_loaded"))
             status_text = f"{tr('plugin_manager.status')}: {state_str}"
             if plugin_state == PluginState.ACTIVE:
                 status_class = "status-success"
