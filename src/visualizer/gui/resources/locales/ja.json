@@ -785,6 +785,15 @@
     "environment": "環境",
     "preset": "プリセット"
   },
+  "tool_defs": {
+    "select": "選択",
+    "move": "移動",
+    "rotate": "回転",
+    "scale": "拡大縮小",
+    "mirror": "ミラー",
+    "crop": "切り抜き",
+    "align": "整列"
+  },
   "toolbar": {
     "selection": "選択",
     "translate": "移動",
@@ -1767,6 +1776,7 @@
     "simplify_output": "出力"
   },
   "scripts_panel": {
+    "title": "Python スクリプト",
     "actions": "アクション",
     "reload_all": "すべて再読み込み",
     "clear_all": "すべてクリア",

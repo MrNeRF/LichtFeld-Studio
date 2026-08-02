@@ -785,6 +785,15 @@
     "environment": "Omgeving",
     "preset": "Voorinstelling"
   },
+  "tool_defs": {
+    "select": "Selecteren",
+    "move": "Verplaatsen",
+    "rotate": "Draaien",
+    "scale": "Schalen",
+    "mirror": "Spiegelen",
+    "crop": "Bijsnijden",
+    "align": "Uitlijnen"
+  },
   "toolbar": {
     "selection": "Selectie",
     "translate": "Verplaatsen",
@@ -1767,6 +1776,7 @@
     "simplify_output": "Uitvoer"
   },
   "scripts_panel": {
+    "title": "Python-scripts",
     "actions": "Acties",
     "reload_all": "Alles herladen",
     "clear_all": "Alles wissen",

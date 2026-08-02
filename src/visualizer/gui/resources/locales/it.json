@@ -785,6 +785,15 @@
     "environment": "Ambiente",
     "preset": "Predefinito"
   },
+  "tool_defs": {
+    "select": "Seleziona",
+    "move": "Sposta",
+    "rotate": "Ruota",
+    "scale": "Scala",
+    "mirror": "Specchia",
+    "crop": "Ritaglia",
+    "align": "Allinea"
+  },
   "toolbar": {
     "selection": "Selezione",
     "translate": "Trasla",
@@ -1767,6 +1776,7 @@
     "simplify_output": "Output"
   },
   "scripts_panel": {
+    "title": "Script Python",
     "actions": "Azioni",
     "reload_all": "Ricarica tutto",
     "clear_all": "Cancella tutto",

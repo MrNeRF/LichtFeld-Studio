@@ -37,7 +37,7 @@ class ScriptsPanel(Panel):
         if model is None:
             return
 
-        model.bind_func("panel_label", lambda: self.label)
+        model.bind_func("panel_label", lambda: lf.ui.tr("scripts_panel.title"))
         model.bind_func("show_empty_state", lambda: not self._has_scripts)
         model.bind_func("show_script_list", lambda: self._has_scripts)
         model.bind_func("has_scripts", lambda: self._has_scripts)

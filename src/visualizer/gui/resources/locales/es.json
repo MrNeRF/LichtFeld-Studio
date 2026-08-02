@@ -155,6 +155,15 @@
     "log_critical": "Crítico",
     "log_off": "Desactivado"
   },
+  "tool_defs": {
+    "select": "Seleccionar",
+    "move": "Mover",
+    "rotate": "Rotar",
+    "scale": "Escalar",
+    "mirror": "Reflejar",
+    "crop": "Recortar",
+    "align": "Alinear"
+  },
   "toolbar": {
     "selection": "Selección",
     "translate": "Trasladar",
@@ -1701,6 +1710,7 @@
     "select_output_location": "Seleccionar Ubicación de Salida"
   },
   "scripts_panel": {
+    "title": "Scripts de Python",
     "actions": "Acciones",
     "reload_all": "Recargar todo",
     "clear_all": "Limpiar todo",

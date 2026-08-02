@@ -29,6 +29,18 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
 
+def _localized_text(key: str, fallback: str) -> str:
+    if not key:
+        return fallback
+    try:
+        import lichtfeld as lf
+
+        value = lf.ui.tr(key)
+        return value if value and value != key else fallback
+    except Exception:
+        return fallback
+
+
 @runtime_checkable
 class ContextLike(Protocol):
     """Protocol for context objects passed to poll functions."""
@@ -55,6 +67,10 @@ class SubmodeDef:
     label: str
     icon: str
     shortcut: str = ""
+    label_key: str = ""
+
+    def localized_label(self) -> str:
+        return _localized_text(self.label_key, self.label)
 
 
 @dataclass(frozen=True)
@@ -72,6 +88,10 @@ class PivotModeDef:
     id: str
     label: str
     icon: str
+    label_key: str = ""
+
+    def localized_label(self) -> str:
+        return _localized_text(self.label_key, self.label)
 
 
 @dataclass(frozen=True)
@@ -116,6 +136,14 @@ class ToolDef:
     plugin_path: str = ""
     action_only: bool = False
     selected: Callable[[Any], bool] | None = None
+    label_key: str = ""
+    description_key: str = ""
+
+    def localized_label(self) -> str:
+        return _localized_text(self.label_key, self.label)
+
+    def localized_description(self) -> str:
+        return _localized_text(self.description_key, self.description)
 
     def can_activate(self, context: Any) -> bool:
         """Check if this tool can be activated in the given context.
@@ -134,20 +162,20 @@ class ToolDef:
         """Convert to dictionary for C++ interop."""
         return {
             "id": self.id,
-            "label": self.label,
+            "label": self.localized_label(),
             "icon": self.icon,
             "group": self.group,
             "order": self.order,
-            "description": self.description,
+            "description": self.localized_description(),
             "shortcut": self.shortcut,
             "gizmo": self.gizmo,
             "operator": self.operator,
             "submodes": [
-                {"id": s.id, "label": s.label, "icon": s.icon}
+                {"id": s.id, "label": s.localized_label(), "icon": s.icon}
                 for s in self.submodes
             ],
             "pivot_modes": [
-                {"id": p.id, "label": p.label, "icon": p.icon}
+                {"id": p.id, "label": p.localized_label(), "icon": p.icon}
                 for p in self.pivot_modes
             ],
             "plugin_name": self.plugin_name,

@@ -785,6 +785,15 @@
     "environment": "환경",
     "preset": "프리셋"
   },
+  "tool_defs": {
+    "select": "선택",
+    "move": "이동",
+    "rotate": "회전",
+    "scale": "크기 조절",
+    "mirror": "미러",
+    "crop": "자르기",
+    "align": "정렬"
+  },
   "toolbar": {
     "selection": "선택",
     "translate": "이동",
@@ -1767,6 +1776,7 @@
     "simplify_output": "출력"
   },
   "scripts_panel": {
+    "title": "Python 스크립트",
     "actions": "작업",
     "reload_all": "모두 다시 로드",
     "clear_all": "모두 지우기",

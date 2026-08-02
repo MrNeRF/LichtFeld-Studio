@@ -785,6 +785,15 @@
     "environment": "Umgebung",
     "preset": "Voreinstellung"
   },
+  "tool_defs": {
+    "select": "Auswählen",
+    "move": "Verschieben",
+    "rotate": "Drehen",
+    "scale": "Skalieren",
+    "mirror": "Spiegeln",
+    "crop": "Zuschneiden",
+    "align": "Ausrichten"
+  },
   "toolbar": {
     "selection": "Auswahl",
     "translate": "Verschieben",
@@ -1767,6 +1776,7 @@
     "simplify_output": "Ausgabe"
   },
   "scripts_panel": {
+    "title": "Python-Skripte",
     "actions": "Aktionen",
     "reload_all": "Alle neu laden",
     "clear_all": "Alle loeschen",

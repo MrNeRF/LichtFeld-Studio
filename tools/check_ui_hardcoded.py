@@ -12,6 +12,7 @@ reviewed exceptions and enable --fail-on-candidates once the baseline is clean.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,8 +48,9 @@ RML_BINDING = re.compile(r"^\{\{?[A-Za-z_][A-Za-z0-9_]*\}?\}$")
 URL_LITERAL = re.compile(r"^(?:https?://|github:)[^\s]+$")
 HTML_TAG_LITERAL = re.compile(r"^</?[A-Za-z][A-Za-z0-9-]*>$")
 STATIC_PANEL_LABEL = re.compile(r'^\s*label\s*=\s*["\']')
+LOCALIZED_DEFINITION_LABEL = re.compile(r'^\s*label\s*=\s*["\']')
 LOCALIZED_PANEL_LABEL = re.compile(
-    r"(?:bind_func\(\s*[\"']panel_label[\"'].*?(?:@tr:|\btr\()|set_panel_label\()",
+    r"(?:bind_func\(\s*[\"']panel_label[\"'].*?(?:@tr:|\b_?tr\()|set_panel_label\()",
     re.DOTALL,
 )
 LOCALIZED_FALLBACK_LITERAL = re.compile(
@@ -126,14 +128,41 @@ def is_candidate(text: str, allowlist: set[str], allow_patterns: list[re.Pattern
     return any(character.isalpha() for character in text)
 
 
+def python_docstring_lines(path: Path, source: str) -> set[int]:
+    if path.suffix != ".py":
+        return set()
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError:
+        return set()
+
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list) or not body or not isinstance(body[0], ast.Expr):
+            continue
+        value = body[0].value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            lines.update(range(value.lineno, value.end_lineno + 1))
+    return lines
+
+
 def scan_source(path: Path, allowlist: set[str], allow_patterns: list[re.Pattern[str]]) -> list[Finding]:
     findings: list[Finding] = []
     source = path.read_text(encoding="utf-8")
     has_localized_panel_label = bool(LOCALIZED_PANEL_LABEL.search(source))
-    for line_number, line in enumerate(source.splitlines(), start=1):
+    docstring_lines = python_docstring_lines(path, source)
+    lines = source.splitlines()
+    for line_number, line in enumerate(lines, start=1):
+        if line_number in docstring_lines:
+            continue
         if IGNORE_LINE.search(line) or not UI_SINK.search(line):
             continue
         if has_localized_panel_label and STATIC_PANEL_LABEL.match(line):
+            continue
+        if LOCALIZED_DEFINITION_LABEL.match(line) and any(
+            "label_key=" in following_line for following_line in lines[line_number:line_number + 4]
+        ):
             continue
         localized_fallbacks = set(LOCALIZED_FALLBACK_LITERAL.findall(line))
         for match in STRING_LITERAL.finditer(line):

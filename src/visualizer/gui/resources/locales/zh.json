@@ -792,6 +792,15 @@
     "environment": "环境",
     "preset": "预设"
   },
+  "tool_defs": {
+    "select": "选择",
+    "move": "移动",
+    "rotate": "旋转",
+    "scale": "缩放",
+    "mirror": "镜像",
+    "crop": "裁剪",
+    "align": "对齐"
+  },
   "toolbar": {
     "selection": "选择",
     "translate": "移动",
@@ -1708,6 +1717,7 @@
     "simplify_output": "输出"
   },
   "scripts_panel": {
+    "title": "Python 脚本",
     "actions": "操作",
     "reload_all": "全部重新加载",
     "clear_all": "全部清除",

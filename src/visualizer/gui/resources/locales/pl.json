@@ -785,6 +785,15 @@
     "environment": "Środowisko",
     "preset": "Ustawienie wstępne"
   },
+  "tool_defs": {
+    "select": "Wybierz",
+    "move": "Przenieś",
+    "rotate": "Obróć",
+    "scale": "Skaluj",
+    "mirror": "Odbij",
+    "crop": "Przytnij",
+    "align": "Wyrównaj"
+  },
   "toolbar": {
     "selection": "Zaznaczenie",
     "translate": "Przesunięcie",
@@ -1767,6 +1776,7 @@
     "simplify_output": "Wyjście"
   },
   "scripts_panel": {
+    "title": "Skrypty Python",
     "actions": "Akcje",
     "reload_all": "Przeladuj wszystko",
     "clear_all": "Wyczysc wszystko",
