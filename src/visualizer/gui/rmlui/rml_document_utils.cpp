@@ -12,6 +12,7 @@
 #include "internal/resource_paths.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 
 #include <format>
 #include <fstream>
@@ -310,6 +311,14 @@ namespace lfs::vis::gui::rml_documents {
 
         for (int i = 0; i < root->GetNumChildren(); ++i)
             changed |= refreshLocalizedContent(root->GetChild(i));
+
+        // RmlUI stores the closed select label separately from its option elements.
+        // Re-applying the current selection synchronizes that cached label after the
+        // translated option contents have been refreshed in place.
+        if (changed) {
+            if (auto* const select = dynamic_cast<Rml::ElementFormControlSelect*>(root))
+                select->SetSelection(select->GetSelection());
+        }
         return changed;
     }
 

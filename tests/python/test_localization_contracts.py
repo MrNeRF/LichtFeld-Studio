@@ -214,6 +214,7 @@ def test_runtime_localization_refresh_updates_live_rml_documents():
     assert "preserveTranslationDirectives" in documents
     assert 'data-lfs-i18n-' in documents
     assert "bool refreshLocalizedContent" in documents
+    assert "select->SetSelection(select->GetSelection())" in documents
 
     translated_text = re.compile(
         r"<[A-Za-z][^>]*>[ \t\r\n]*@tr:[A-Za-z0-9_.-]+[ \t\r\n]*</[A-Za-z][^>]*>"
