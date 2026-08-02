@@ -2131,6 +2131,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "grouped_changes": "Gruppierte Änderungen",
+    "untitled_change": "Unbenannte Änderung",
     "history_summary": "{0} Rückgängig / {1} Wiederholen · {2} gesamt",
     "history_summary_gpu": "{0} Rückgängig / {1} Wiederholen · {2} gesamt · {3} GPU",
     "transaction_active": "Transaction active: {} (depth {})",

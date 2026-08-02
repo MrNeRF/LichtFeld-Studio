@@ -2131,6 +2131,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "grouped_changes": "グループ化された変更",
+    "untitled_change": "無題の変更",
     "history_summary": "元に戻す {0} 件 / やり直す {1} 件 · 合計 {2}",
     "history_summary_gpu": "元に戻す {0} 件 / やり直す {1} 件 · 合計 {2} · GPU {3}",
     "transaction_active": "トランザクション実行中：{}（深さ {}）",

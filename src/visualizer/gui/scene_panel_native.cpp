@@ -202,7 +202,7 @@ namespace lfs::vis::gui {
                 return {};
 
             const std::string name = history.activeTransactionName().empty()
-                                         ? "Grouped changes"
+                                         ? LOC("runtime.grouped_changes")
                                          : history.activeTransactionName();
             return LOCF("runtime.transaction_active", name, history.transactionDepth());
         }
@@ -226,10 +226,12 @@ namespace lfs::vis::gui {
                 const std::string source =
                     item.metadata.source.empty() ? std::string("system") : item.metadata.source;
                 const std::string label =
-                    item.metadata.label.empty() ? std::string("Untitled Change") : item.metadata.label;
+                    item.metadata.label.empty() ? LOC("runtime.untitled_change") : item.metadata.label;
                 const bool is_next = index == 0;
                 const std::string stack_line = is_next
-                                                   ? LOCF("runtime.history_next", kind == "undo" ? "UNDO" : "REDO")
+                                                   ? LOCF("runtime.history_next",
+                                                          kind == "undo" ? LOC(lichtfeld::Strings::Common::UNDO)
+                                                                         : LOC(lichtfeld::Strings::Common::REDO))
                                                    : std::format("{} · {}", scope, source);
                 const std::string detail_line = is_next
                                                     ? LOCF("runtime.history_detail", scope, source, size_meta)

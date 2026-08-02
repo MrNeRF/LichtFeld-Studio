@@ -2131,6 +2131,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "grouped_changes": "Modifications groupées",
+    "untitled_change": "Modification sans titre",
     "history_summary": "{0} annulations / {1} rétablissements · {2} au total",
     "history_summary_gpu": "{0} annulations / {1} rétablissements · {2} au total · {3} GPU",
     "transaction_active": "Transaction active: {} (depth {})",

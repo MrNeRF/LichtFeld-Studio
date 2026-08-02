@@ -2131,6 +2131,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "grouped_changes": "Cambios agrupados",
+    "untitled_change": "Cambio sin título",
     "history_summary": "{0} deshacer / {1} rehacer · {2} en total",
     "history_summary_gpu": "{0} deshacer / {1} rehacer · {2} en total · {3} GPU",
     "transaction_active": "Transaction active: {} (depth {})",

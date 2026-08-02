@@ -2138,6 +2138,8 @@
     "gpu": "GPU"
   },
   "runtime": {
+    "grouped_changes": "已分组的更改",
+    "untitled_change": "未命名更改",
     "history_summary": "撤销 {0} 次 / 重做 {1} 次 · 共计 {2}",
     "history_summary_gpu": "撤销 {0} 次 / 重做 {1} 次 · 共计 {2} · GPU {3}",
     "transaction_active": "事务活动：{}（深度 {}）",
