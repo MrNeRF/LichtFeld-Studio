@@ -226,17 +226,6 @@ def test_cached_python_panels_request_a_frame_on_language_change():
     assert "return true;" in needs_frame.split("if (!dirty_driven_updates_)", 1)[0]
 
 
-def test_native_rml_panels_refresh_cached_documents_on_language_change():
-    source = (ROOT / "src" / "visualizer" / "gui" / "rmlui" / "rml_panel_host.cpp").read_text(encoding="utf-8")
-    assert "bool RmlPanelHost::syncLocalization()" in source
-    assert "current_language == last_language_" in source
-    assert "last_language_ =" in source[source.index("bool RmlPanelHost::loadDocument()"):]
-    direct_draw = source[source.index("void RmlPanelHost::drawDirect") : source.index("bool RmlPanelHost::drawDirectCached")]
-    assert "if (!syncLocalization())" in direct_draw
-    cached_draw = source[source.index("bool RmlPanelHost::drawDirectCached") :]
-    assert "if (!syncLocalization())" in cached_draw.split("if (!document_", 1)[0]
-
-
 if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
@@ -255,7 +244,6 @@ if __name__ == "__main__":
         test_rendering_labels_preserve_fullwidth_colons,
         test_operator_property_registration_preserves_localization_keys,
         test_cached_python_panels_request_a_frame_on_language_change,
-        test_native_rml_panels_refresh_cached_documents_on_language_change,
     ]
     for contract in contracts:
         contract()

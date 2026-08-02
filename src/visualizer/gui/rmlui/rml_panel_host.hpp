@@ -69,7 +69,9 @@ namespace lfs::vis::gui {
             clip_y_min_ = y_min;
             clip_y_max_ = y_max;
         }
-        bool needsAnimationFrame() const;
+        bool needsAnimationFrame() const {
+            return render_needed_ || content_dirty_ || animation_active_ || tooltip_.revealDue();
+        }
 
         Rml::ElementDocument* getDocument() { return document_; }
         Rml::Context* getContext() { return rml_context_; }
@@ -84,7 +86,6 @@ namespace lfs::vis::gui {
         void applyHoverTooltip(int pw, float panel_y, float display_h);
         bool hitTestPanelShape(float local_x, float local_y, float logical_w, float logical_h) const;
         bool forwardInput(float panel_x, float panel_y);
-        bool syncLocalization();
         bool syncThemeProperties();
         bool loadDocument();
         void cacheContentElements();
@@ -116,7 +117,6 @@ namespace lfs::vis::gui {
         float last_content_el_height_ = 0.0f;
         int last_measure_w_ = 0;
         bool content_dirty_ = true;
-        std::string last_language_;
 
         std::string base_rcss_;
         bool base_rcss_loaded_ = false;
