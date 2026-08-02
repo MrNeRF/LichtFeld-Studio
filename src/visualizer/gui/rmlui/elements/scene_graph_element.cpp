@@ -2174,7 +2174,7 @@ namespace lfs::vis::gui {
             case core::NodeType::DATASET:
                 if (colmapSparseSourcePath(*scene_manager)) {
                     items.push_back(makeAction(
-                        "Export COLMAP sparse...",
+                        tr("export.format.colmap_sparse") + "...",
                         prefixedAction("export_colmap")));
                 }
                 break;
@@ -2396,9 +2396,6 @@ namespace lfs::vis::gui {
             // sparse root to sparse/0; overwrite checks and writes must hit the same folder.
             const auto output_path = selected_path;
             const std::string output_path_text = lfs::core::path_to_utf8(output_path);
-            const auto output_format = colmapSparseOutputFormat(*path_result);
-            const auto output_file_names = colmapSparseOutputFileNames(output_format);
-            const std::string output_file_list = colmapSparseOutputFileList(output_file_names);
 
             if (!colmapSparseDataExists(output_path)) {
                 gui->asyncTasks().performExport(core::ExportFormat::COLMAP, output_path, {}, 0);
@@ -2407,7 +2404,7 @@ namespace lfs::vis::gui {
 
             LOG_INFO("Confirming COLMAP sparse overwrite folder: {}", output_path_text);
 
-            const std::string export_button = "Overwrite";
+            const std::string export_button = LOC("export.overwrite");
             lfs::core::ModalRequest request;
             request.title = LOC(lichtfeld::Strings::Window::EXPORT);
             request.style = lfs::core::ModalStyle::Warning;
@@ -2418,12 +2415,10 @@ namespace lfs::vis::gui {
                 std::format("<span class=\"dim-text\">{} </span>", LOC(lichtfeld::Strings::Runtime::FOLDER_LABEL)) +
                 encode(output_path_text) +
                 "</div>"
-                "<div class=\"warning-text\" style=\"margin-top: 8dp;\">"
-                "This writes " +
-                encode(output_file_list) +
+                "<div class=\"warning-text\" style=\"margin-top: 8dp;\">" encode(LOC("export_dialog.colmap_writes_sparse")) +
                 "</div>";
             request.buttons = {
-                {"Cancel", "secondary"},
+                {LOC(lichtfeld::Strings::Common::CANCEL), "secondary"},
                 {export_button, "warning"},
             };
             request.on_result = [gui, output_path, export_button](const lfs::core::ModalResult& result) {

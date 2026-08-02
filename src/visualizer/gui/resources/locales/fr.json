@@ -615,6 +615,7 @@
     "log_off": "Désactivé"
   },
   "export": {
+    "overwrite": "Écraser",
     "title": "Exporter",
     "format.ply_standard": "PLY (Standard)",
     "format.sog_supersplat": "SOG (SuperSplat)",

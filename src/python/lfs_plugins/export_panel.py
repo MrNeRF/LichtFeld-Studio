@@ -655,22 +655,22 @@ class ExportPanel(Panel):
         return None
 
     def _confirm_colmap_overwrite(self, path, selected_nodes):
-        file_names = self._get_colmap_output_file_names()
-        file_list = f"{file_names[0]}, {file_names[1]}, and {file_names[2]}"
+        tr = lf.ui.tr
         message = (
-            "COLMAP export will overwrite existing sparse reconstruction data in:\n"
+            f"{tr('runtime.colmap_overwrite_message')}\n"
             f"{path}\n\n"
-            f"This writes {file_list}."
+            f"{tr('export_dialog.colmap_writes_sparse')}."
         )
+        overwrite_label = tr("export.overwrite")
 
         def on_result(button_label):
-            if button_label == "Overwrite":
+            if button_label == overwrite_label:
                 self._start_export(path, selected_nodes)
 
         lf.ui.confirm_dialog(
-            "Export COLMAP sparse",
+            tr("export.format.colmap_sparse"),
             message,
-            ["Overwrite", "Cancel"],
+            [overwrite_label, tr("common.cancel")],
             on_result,
         )
 

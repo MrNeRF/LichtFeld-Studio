@@ -615,6 +615,7 @@
     "log_off": "Disattivato"
   },
   "export": {
+    "overwrite": "Sovrascrivi",
     "title": "Esporta",
     "format.ply_standard": "PLY (Standard)",
     "format.sog_supersplat": "SOG (SuperSplat)",

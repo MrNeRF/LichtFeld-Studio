@@ -622,6 +622,7 @@
     "log_off": "关闭"
   },
   "export": {
+    "overwrite": "覆盖",
     "title": "导出",
     "format.ply_standard": "PLY（标准）",
     "format.sog_supersplat": "SOG（SuperSplat）",

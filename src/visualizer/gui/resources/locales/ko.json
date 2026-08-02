@@ -615,6 +615,7 @@
     "log_off": "끔"
   },
   "export": {
+    "overwrite": "덮어쓰기",
     "title": "내보내기",
     "format.ply_standard": "PLY (표준)",
     "format.sog_supersplat": "SOG (SuperSplat)",

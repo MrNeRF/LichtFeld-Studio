@@ -615,6 +615,7 @@
     "log_off": "オフ"
   },
   "export": {
+    "overwrite": "上書き",
     "title": "エクスポート",
     "format.ply_standard": "PLY (標準)",
     "format.sog_supersplat": "SOG (SuperSplat)",
