@@ -75,7 +75,13 @@ jobs:
           echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null
           apt-get update
 
-          apt-get install -y git curl unzip cmake gcc-14 g++-14 ccache ninja-build \
+          # CMake is pinned: 4.4.1 regressed check_symbol_exists, which stops
+          # honouring CMAKE_REQUIRED_FLAGS and silently fails feature detection
+          # (upstream: gitlab.kitware.com/cmake/cmake/-/work_items/28001).
+          # Unpinned installs silently misconfigure ports rather than failing loudly.
+          apt-get install -y git curl unzip \
+            cmake=4.4.0-0kitware1ubuntu24.04.1 cmake-data=4.4.0-0kitware1ubuntu24.04.1 \
+            gcc-14 g++-14 ccache ninja-build \
             zip tar pkg-config python3 python3-dev libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
             libwayland-dev libxkbcommon-dev libegl-dev libdecor-0-dev libibus-1.0-dev libdbus-1-dev \
             libsystemd-dev libgtk-3-dev \

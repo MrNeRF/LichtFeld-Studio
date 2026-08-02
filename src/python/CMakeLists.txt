@@ -186,6 +186,7 @@ nanobind_add_module(
     lfs/py_packages.cpp
     lfs/py_params.cpp
     lfs/py_plugins.cpp
+    lfs/py_operator_properties.cpp
     lfs/py_ui.cpp
     lfs/py_ui_context.cpp
     lfs/py_ui_theme.cpp

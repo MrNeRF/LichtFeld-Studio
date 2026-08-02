@@ -299,7 +299,9 @@ set(TEST_SOURCES test_main.cpp ${TEST_FILES})
 
 # PyModalRegistry and its native-modal dispatch path for regression tests.
 list(APPEND TEST_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_error.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_modal_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_operator_properties.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_ui_modals.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
@@ -382,6 +384,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
 
     # System libraries
     spdlog::spdlog
+    SDL3::SDL3
 )
 
 target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulkan)
