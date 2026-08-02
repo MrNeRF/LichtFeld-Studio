@@ -207,6 +207,11 @@ def test_pending_localization_refresh_uses_the_full_interaction_guard():
     assert "!shouldDeferDevResourceHotReload()" in pending_refresh.split("}", 1)[0]
 
 
+def test_rendering_labels_preserve_fullwidth_colons():
+    source = (ROOT / "src" / "python" / "lfs_plugins" / "rendering_panel.py").read_text(encoding="utf-8")
+    assert 'text.endswith((":", "："))' in source
+
+
 if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
@@ -222,6 +227,7 @@ if __name__ == "__main__":
         test_localized_formatting_does_not_bypass_safe_locale_fallback,
         test_startup_language_picker_refreshes_after_forwarded_input,
         test_pending_localization_refresh_uses_the_full_interaction_guard,
+        test_rendering_labels_preserve_fullwidth_colons,
     ]
     for contract in contracts:
         contract()

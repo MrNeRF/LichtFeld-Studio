@@ -2039,11 +2039,13 @@ class WatchDirsDialogPanel(Panel):
 
     def _get_scan_save_label(self) -> str:
         with self._scan_state_lock:
-            if self._scan_active:
-                return lf.ui.tr("watch_dirs.scanning")
-            if self._scan_terminal:
-                return lf.ui.tr("watch_dirs.done")
-            return lf.ui.tr("watch_dirs.save_scan")
+            active = self._scan_active
+            terminal = self._scan_terminal
+        if active:
+            return lf.ui.tr("watch_dirs.scanning")
+        if terminal:
+            return lf.ui.tr("watch_dirs.done")
+        return lf.ui.tr("watch_dirs.save_scan")
 
     def _get_scan_terminal(self) -> bool:
         with self._scan_state_lock:
@@ -2139,9 +2141,10 @@ class WatchDirsDialogPanel(Panel):
         self._queue_dirty_scan_model()
 
     def _set_scan_log_entry(self, index: int, path: str, status: str) -> None:
+        queued_status = _tr("watch_dirs.scan_log_queued")
         with self._scan_state_lock:
             while len(self._scan_log) <= index:
-                self._scan_log.append({"status": _tr("watch_dirs.scan_log_queued"), "path": ""})
+                self._scan_log.append({"status": queued_status, "path": ""})
             self._scan_log[index] = {"status": status, "path": path}
         self._queue_dirty_scan_model()
 

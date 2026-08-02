@@ -253,7 +253,7 @@ def _entry_label(text: str) -> str:
     text = str(text).strip()
     if not text:
         return ":"
-    return text if text.endswith(":") else f"{text}:"
+    return text if text.endswith((":", "：")) else f"{text}:"
 
 
 def _normalize_raster_backend(value):
