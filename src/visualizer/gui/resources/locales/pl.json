@@ -1655,6 +1655,16 @@
     "all": "Wszystkie"
   },
   "plugin_marketplace": {
+    "progress": {
+      "download_url": "Pobieranie {url}...",
+      "download_archive": "Pobieranie archiwum {owner}/{repo}{ref}...",
+      "create_environment": "Tworzenie środowiska wtyczki ({label})...",
+      "sync_dependencies": "Synchronizowanie zależności z uv...",
+      "cloning": "Klonowanie {owner}/{repo}...",
+      "cloned": "Sklonowano {name}",
+      "updating": "Aktualizowanie {name}...",
+      "updated": "Zaktualizowano {name}"
+    },
     "title_line": "Przeglądaj instalowalne wtyczki z rejestru wtyczek.",
     "warning_body": "OSTRZEŻENIE: LFS nie udziela bezpośredniej rekomendacji ani nie ponosi odpowiedzialności. Używasz na własne ryzyko.",
     "filter_label": "Filtr",

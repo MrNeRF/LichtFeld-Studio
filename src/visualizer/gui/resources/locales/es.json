@@ -1762,6 +1762,16 @@
     "status.uninstall_failed": "Error de desinstalación"
   },
   "plugin_marketplace": {
+    "progress": {
+      "download_url": "Descargando {url}...",
+      "download_archive": "Descargando el archivo {owner}/{repo}{ref}...",
+      "create_environment": "Creando entorno del plugin ({label})...",
+      "sync_dependencies": "Sincronizando dependencias con uv...",
+      "cloning": "Clonando {owner}/{repo}...",
+      "cloned": "Se clonó {name}",
+      "updating": "Actualizando {name}...",
+      "updated": "Se actualizó {name}"
+    },
     "title_line": "Explora los complementos instalables desde el registro de complementos.",
     "warning_body": "ADVERTENCIA: LFS no respalda directamente ni asume responsabilidad. Uso bajo tu propio riesgo.",
     "filter_label": "Filtro",

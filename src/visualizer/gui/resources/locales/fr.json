@@ -1655,6 +1655,16 @@
     "all": "Tous"
   },
   "plugin_marketplace": {
+    "progress": {
+      "download_url": "Téléchargement de {url}...",
+      "download_archive": "Téléchargement de l’archive {owner}/{repo}{ref}...",
+      "create_environment": "Création de l’environnement du plugin ({label})...",
+      "sync_dependencies": "Synchronisation des dépendances avec uv...",
+      "cloning": "Clonage de {owner}/{repo}...",
+      "cloned": "{name} cloné",
+      "updating": "Mise à jour de {name}...",
+      "updated": "{name} mis à jour"
+    },
     "title_line": "Parcourez les plugins installables depuis le registre de plugins.",
     "warning_body": "AVERTISSEMENT : LFS n'approuve pas directement et n'assume aucune responsabilité. Utilisation à vos risques.",
     "filter_label": "Filtre",

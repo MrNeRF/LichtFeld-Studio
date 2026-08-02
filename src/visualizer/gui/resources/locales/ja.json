@@ -1655,6 +1655,16 @@
     "all": "すべて"
   },
   "plugin_marketplace": {
+    "progress": {
+      "download_url": "{url} をダウンロード中...",
+      "download_archive": "{owner}/{repo}{ref} のアーカイブをダウンロード中...",
+      "create_environment": "プラグイン環境を作成中（{label}）...",
+      "sync_dependencies": "uv で依存関係を同期中...",
+      "cloning": "{owner}/{repo} を複製中...",
+      "cloned": "{name} を複製しました",
+      "updating": "{name} を更新中...",
+      "updated": "{name} を更新しました"
+    },
     "title_line": "プラグインレジストリからインストール可能なプラグインを参照します。",
     "warning_body": "警告: LFS は直接的な推奨や責任の負担を行いません。利用は自己責任で行ってください。",
     "filter_label": "フィルター",

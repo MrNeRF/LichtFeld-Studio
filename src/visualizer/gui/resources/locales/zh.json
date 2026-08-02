@@ -1769,6 +1769,16 @@
     "status.uninstall_failed": "卸载失败"
   },
   "plugin_marketplace": {
+    "progress": {
+      "download_url": "正在下载 {url}...",
+      "download_archive": "正在下载 {owner}/{repo}{ref} 归档文件...",
+      "create_environment": "正在创建插件环境（{label}）...",
+      "sync_dependencies": "正在使用 uv 同步依赖项...",
+      "cloning": "正在克隆 {owner}/{repo}...",
+      "cloned": "已克隆 {name}",
+      "updating": "正在更新 {name}...",
+      "updated": "已更新 {name}"
+    },
     "title_line": "浏览可从插件源安装的插件",
     "warning_body": "警告：LFS 不直接背书也不承担责任。使用风险自负",
     "filter_label": "筛选",

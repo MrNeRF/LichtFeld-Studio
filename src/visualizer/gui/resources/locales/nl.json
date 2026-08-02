@@ -1655,6 +1655,16 @@
     "all": "Alle"
   },
   "plugin_marketplace": {
+    "progress": {
+      "download_url": "{url} downloaden...",
+      "download_archive": "Archief {owner}/{repo}{ref} downloaden...",
+      "create_environment": "Pluginomgeving maken ({label})...",
+      "sync_dependencies": "Afhankelijkheden synchroniseren met uv...",
+      "cloning": "{owner}/{repo} klonen...",
+      "cloned": "{name} gekloond",
+      "updating": "{name} bijwerken...",
+      "updated": "{name} bijgewerkt"
+    },
     "title_line": "Bekijk installeerbare plug-ins uit het plugin-register.",
     "warning_body": "WAARSCHUWING: LFS keurt niet direct goed en neemt geen verantwoordelijkheid. Gebruik op eigen risico.",
     "filter_label": "Filter",

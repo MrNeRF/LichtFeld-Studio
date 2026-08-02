@@ -1762,6 +1762,16 @@
     "status.uninstall_failed": "Uninstall failed"
   },
   "plugin_marketplace": {
+    "progress": {
+      "download_url": "Downloading {url}...",
+      "download_archive": "Downloading {owner}/{repo}{ref} archive...",
+      "create_environment": "Creating plugin environment ({label})...",
+      "sync_dependencies": "Syncing dependencies with uv...",
+      "cloning": "Cloning {owner}/{repo}...",
+      "cloned": "Cloned {name}",
+      "updating": "Updating {name}...",
+      "updated": "Updated {name}"
+    },
     "title_line": "Browse installable plugins from the plugin registry.",
     "warning_body": "WARNING: LFS does not directly endorse or assume responsibility. Use at your own risk.",
     "filter_label": "Filter",

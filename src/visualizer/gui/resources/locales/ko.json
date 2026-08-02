@@ -1655,6 +1655,16 @@
     "all": "모두"
   },
   "plugin_marketplace": {
+    "progress": {
+      "download_url": "{url} 다운로드 중...",
+      "download_archive": "{owner}/{repo}{ref} 아카이브 다운로드 중...",
+      "create_environment": "플러그인 환경 생성 중 ({label})...",
+      "sync_dependencies": "uv로 종속성 동기화 중...",
+      "cloning": "{owner}/{repo} 복제 중...",
+      "cloned": "{name} 복제됨",
+      "updating": "{name} 업데이트 중...",
+      "updated": "{name} 업데이트됨"
+    },
     "title_line": "플러그인 레지스트리에서 설치 가능한 플러그인을 찾아보세요.",
     "warning_body": "경고: LFS는 직접 보증하지 않으며 책임을 지지 않습니다. 사용은 본인 책임입니다.",
     "filter_label": "필터",

@@ -46,8 +46,13 @@ RML_ELEMENT_ID = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$")
 RML_BINDING = re.compile(r"^\{\{?[A-Za-z_][A-Za-z0-9_]*\}?\}$")
 URL_LITERAL = re.compile(r"^(?:https?://|github:)[^\s]+$")
 HTML_TAG_LITERAL = re.compile(r"^</?[A-Za-z][A-Za-z0-9-]*>$")
+STATIC_PANEL_LABEL = re.compile(r'^\s*label\s*=\s*["\']')
+LOCALIZED_PANEL_LABEL = re.compile(
+    r"(?:bind_func\(\s*[\"']panel_label[\"'].*?(?:@tr:|\btr\()|set_panel_label\()",
+    re.DOTALL,
+)
 LOCALIZED_FALLBACK_LITERAL = re.compile(
-    r'\b(?:_ui_label|_tr|_trf)\(\s*["\'][^"\']+["\']\s*,\s*["\']((?:\\.|[^"\\])*)["\']'
+    r'\b(?:_ui_label|_tr|_trf|_localized_progress)\(\s*["\'][^"\']+["\']\s*,\s*["\']((?:\\.|[^"\\])*)["\']'
 )
 
 
@@ -123,8 +128,12 @@ def is_candidate(text: str, allowlist: set[str], allow_patterns: list[re.Pattern
 
 def scan_source(path: Path, allowlist: set[str], allow_patterns: list[re.Pattern[str]]) -> list[Finding]:
     findings: list[Finding] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    source = path.read_text(encoding="utf-8")
+    has_localized_panel_label = bool(LOCALIZED_PANEL_LABEL.search(source))
+    for line_number, line in enumerate(source.splitlines(), start=1):
         if IGNORE_LINE.search(line) or not UI_SINK.search(line):
+            continue
+        if has_localized_panel_label and STATIC_PANEL_LABEL.match(line):
             continue
         localized_fallbacks = set(LOCALIZED_FALLBACK_LITERAL.findall(line))
         for match in STRING_LITERAL.finditer(line):
