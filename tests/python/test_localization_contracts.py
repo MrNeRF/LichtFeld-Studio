@@ -235,6 +235,13 @@ def test_cached_native_panels_request_a_frame_for_language_changes():
     video = (ROOT / "src" / "visualizer" / "gui" / "windows" / "video_extractor_dialog.cpp").read_text(encoding="utf-8")
     video_demand = video[video.index("bool VideoExtractorDialog::needsAnimationFrame() const") :]
     assert "current_language != last_language_" in video_demand.split("return hasDynamicState()", 1)[0]
+    assert "setCachedSelectLabels" in video
+    for key in (
+        "video_extractor.mode_interval",
+        "video_extractor.format_png",
+        "video_extractor.res_original",
+    ):
+        assert key in video
 
     sequencer_panel = (ROOT / "src" / "visualizer" / "sequencer" / "rml_sequencer_panel.cpp").read_text(encoding="utf-8")
     assert "bool RmlSequencerPanel::needsLocalizationFrame() const" in sequencer_panel
