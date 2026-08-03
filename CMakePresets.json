@@ -7,39 +7,53 @@
   },
   "configurePresets": [
     {
-      "name": "dev-release",
-      "displayName": "Full-featured developer Release",
-      "description": "Full application dependency set, one locally detected CUDA architecture, tests off, compiler cache on",
+      "name": "base",
+      "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/dev-release",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "BUILD_TESTS": "OFF",
-        "BUILD_UNICODE_TEST_ONLY": "OFF",
-        "ENABLE_COMPILER_CACHE": "ON"
+        "CMAKE_CUDA_ARCHITECTURES": "native"
       }
     },
     {
-      "name": "measure-release",
-      "displayName": "Full-featured clean-build measurement",
-      "description": "Same production feature set as dev-release, with compiler caching disabled for reproducible timing",
-      "inherits": "dev-release",
-      "binaryDir": "${sourceDir}/build/measure-release",
+      "name": "release",
+      "displayName": "Release",
+      "description": "Optimised build in build/",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
-        "ENABLE_COMPILER_CACHE": "OFF"
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "description": "Debug build in debug/",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "dev-release",
-      "configurePreset": "dev-release",
-      "jobs": 6
+      "name": "release",
+      "configurePreset": "release",
+      "jobs": 16
     },
     {
-      "name": "measure-release",
-      "configurePreset": "measure-release",
-      "jobs": 6
+      "name": "debug",
+      "configurePreset": "debug",
+      "jobs": 16
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

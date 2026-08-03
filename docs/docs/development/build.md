@@ -4,38 +4,41 @@ sidebar_position: 4
 
 # Building LichtFeld Studio
 
-The standard developer preset builds the complete application feature set. It
-keeps tests out of the normal app graph, compiles for one native CUDA
-architecture, uses at most six parallel jobs, and automatically uses
-`sccache` or `ccache` when either launcher is installed.
+The `release` preset builds the complete application feature set into `build/`.
+It compiles for one native CUDA architecture and automatically uses `sccache`
+or `ccache` when either launcher is installed. Its build preset requests 16
+parallel jobs; see [Parallelism and vcpkg](#parallelism-and-vcpkg) before using
+that on a memory-constrained machine.
 
 ```sh
-cmake --preset dev-release
-cmake --build --preset dev-release
+cmake --preset release
+cmake --build --preset release
 ```
+
+A matching `debug` preset builds into `debug/`. These are the only two presets;
+anything else is an explicit `-S`/`-B` invocation.
 
 This is a full-featured build: it does not disable USD, FFmpeg, OpenImageIO,
 RmlUi, Python, MCP, or GUI support. The compiler cache can be disabled without
 changing the feature set:
 
 ```sh
-cmake -S . -B build/dev-release -DENABLE_COMPILER_CACHE=OFF
-cmake --build build/dev-release -j6
+cmake -S . -B build -DENABLE_COMPILER_CACHE=OFF
+cmake --build build -j6
 ```
 
 ## Reproducible build measurements
 
-Use the measurement preset for compiler or dependency work. It has the same
-application features as the developer preset but disables compiler caching, so
-clean and incremental timings describe work performed by the compiler rather
-than cache hits.
+For compiler or dependency work, configure a throwaway tree with compiler
+caching disabled, so clean and incremental timings describe work performed by
+the compiler rather than cache hits.
 
 ```sh
-cmake --preset measure-release
-/usr/bin/time -v cmake --build --preset measure-release
+cmake -S . -B build-measure -G Ninja -DENABLE_COMPILER_CACHE=OFF -DBUILD_TESTS=OFF
+/usr/bin/time -v cmake --build build-measure -j6
 ```
 
-Delete `build/measure-release` before measuring clean configure time. Keep
+Delete `build-measure` before measuring clean configure time. Keep
 `BUILD_TESTS=OFF`: tests are a separate opt-in graph and are not representative
 of the application build.
 
@@ -53,7 +56,7 @@ worktrees. Consequently, `__FILE__` is repository-relative (for example,
 behavior independently when exact checkout paths are required:
 
 ```sh
-cmake -S . -B build/dev-release -DCOMPILER_CACHE_PATH_INDEPENDENT=OFF
+cmake -S . -B build -DCOMPILER_CACHE_PATH_INDEPENDENT=OFF
 ```
 
 Debug, RelWithDebInfo, multi-config, MSVC, and Windows builds retain their
@@ -83,7 +86,7 @@ configure the equivalent disk-cache size in sccache's configuration file.
 Use no more than six build jobs on a 31 GiB development machine:
 
 ```sh
-cmake --build build/dev-release -j6
+cmake --build build -j6
 ```
 
 vcpkg runs during configure rather than during the Ninja build. Its automatic
@@ -91,7 +94,7 @@ package-build concurrency is capped at six. Override it explicitly only on a
 machine with enough memory:
 
 ```sh
-cmake -S . -B build/dev-release -DLFS_VCPKG_MAX_CONCURRENCY=4
+cmake -S . -B build -DLFS_VCPKG_MAX_CONCURRENCY=4
 ```
 
 An explicit `VCPKG_MAX_CONCURRENCY` environment value remains supported for
