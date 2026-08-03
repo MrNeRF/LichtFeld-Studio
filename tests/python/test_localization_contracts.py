@@ -221,6 +221,26 @@ def test_runtime_localization_refresh_updates_live_rml_documents():
     assert "bool refreshLocalizedContent" in documents
     assert 'GetTagName() == "selectvalue"' in documents
     assert "option->GetInnerRML()" in documents
+    assert "GetNumChildren(true)" in documents
+    assert "previous_text.empty() || current_text == previous_text" in documents
+    assert "previous_value.empty() || current_value == previous_value" in documents
+
+    # Once a translated value has been recorded, application-owned content must
+    # survive later language refreshes instead of being replaced by stale copy.
+    should_refresh = lambda current, previous: not previous or current == previous
+    assert should_refresh("Translated", "")
+    assert should_refresh("Translated", "Translated")
+    assert not should_refresh("Dynamic runtime value", "Translated")
+
+    # Attribute and text directives must remain a single source traversal.
+    directive_scan = documents[
+        documents.index("std::string preserveTranslationDirectives") : documents.index(
+            "std::string injectParseTimeFontFallback"
+        )
+    ]
+    assert directive_scan.count("std::sregex_iterator") == 1
+    assert 'translated_document += " data-lfs-i18n-"' in directive_scan
+    assert 'translated_document += " data-lfs-i18n=\\\""' in directive_scan
 
     translated_text = re.compile(
         r"<[A-Za-z][^>]*>[ \t\r\n]*@tr:[A-Za-z0-9_.-]+[ \t\r\n]*</[A-Za-z][^>]*>"
@@ -234,6 +254,24 @@ def test_runtime_localization_refresh_updates_live_rml_documents():
         remaining = translated_text.sub("", rml)
         remaining = translated_attribute.sub("", remaining)
         assert "@tr:" not in remaining, f"{path}: unsupported runtime translation directive shape"
+
+
+def test_colmap_overwrite_lists_the_actual_sparse_format():
+    export_panel = (ROOT / "src" / "python" / "lfs_plugins" / "export_panel.py").read_text(encoding="utf-8")
+    assert '(path / "cameras.bin").exists() and (path / "images.bin").exists()' in export_panel
+    assert "except OSError:" in export_panel
+    assert 'self._get_colmap_export_extension(),' in export_panel
+
+    scene_graph = (
+        ROOT / "src" / "visualizer" / "gui" / "rmlui" / "elements" / "scene_graph_element.cpp"
+    ).read_text(encoding="utf-8")
+    assert 'source_path / "cameras.bin"' in scene_graph
+    assert 'source_path / "images.bin"' in scene_graph
+    assert "std::error_code ec;" in scene_graph
+    assert 'LOCF("export_dialog.colmap_writes_sparse", colmapExportExtension(*path_result))' in scene_graph
+
+    english = _load("en")
+    assert english["export_dialog"]["colmap_writes_sparse"].count("{0}") == 3
 
 
 def test_cached_native_panels_request_a_frame_for_language_changes():
@@ -302,6 +340,7 @@ if __name__ == "__main__":
         test_localized_formatting_does_not_bypass_safe_locale_fallback,
         test_startup_language_picker_refreshes_after_forwarded_input,
         test_runtime_localization_refresh_updates_live_rml_documents,
+        test_colmap_overwrite_lists_the_actual_sparse_format,
         test_cached_native_panels_request_a_frame_for_language_changes,
         test_rendering_labels_preserve_fullwidth_colons,
         test_localized_toolbar_and_hud_labels_are_cached,

@@ -422,6 +422,7 @@ namespace lfs::vis::gui {
 
         if (!ensureDocumentLoaded())
             return;
+
         const bool theme_dirty = syncThemeProperties();
 
         const int pw = static_cast<int>(w);
@@ -604,6 +605,7 @@ namespace lfs::vis::gui {
 
         if (!ensureDocumentLoaded())
             return;
+
         const int w = static_cast<int>(avail_w);
 
         int h;
@@ -684,6 +686,7 @@ namespace lfs::vis::gui {
 
         if (!ensureDocumentLoaded())
             return;
+
         const int pw = static_cast<int>(w);
         int ph = 0;
         float display_h = 0.0f;
@@ -698,6 +701,7 @@ namespace lfs::vis::gui {
 
         if (!ensureDocumentLoaded())
             return;
+
         const int pw = static_cast<int>(w);
         int ph;
         float display_h;

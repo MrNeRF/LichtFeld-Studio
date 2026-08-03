@@ -30,9 +30,9 @@ def localized_count(key: str, count: int) -> str:
     return safe_format(lf.ui.tr(f"{key}.{form}"), count=count)
 
 
-def safe_format(text: str, **values: object) -> str:
+def safe_format(text: str, *args: object, **values: object) -> str:
     """Format translator-controlled text without allowing malformed braces to escape."""
     try:
-        return text.format(**values)
+        return text.format(*args, **values)
     except (IndexError, KeyError, ValueError):
         return text

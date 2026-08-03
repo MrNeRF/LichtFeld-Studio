@@ -229,9 +229,10 @@ namespace lfs::app {
 
         std::string operator_cancel_message(const vis::op::OperatorDescriptor& descriptor) {
             if (!descriptor.label.empty()) {
-                return descriptor.label + " could not be performed";
+                const std::string label = lfs::event::LocalizationManager::getInstance().get(descriptor.label);
+                return lfs::event::formatLocalized("runtime.operator_could_not_be_performed", label);
             }
-            return "Operator was cancelled";
+            return LOC("runtime.operator_cancelled");
         }
 
         const char* operator_source_to_string(const vis::op::OperatorSource source) {

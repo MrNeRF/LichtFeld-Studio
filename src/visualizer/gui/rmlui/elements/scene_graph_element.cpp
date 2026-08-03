@@ -130,6 +130,15 @@ namespace lfs::vis::gui {
             return lfs::io::find_colmap_sparse_model_path(dataset_path);
         }
 
+        [[nodiscard]] std::string_view colmapExportExtension(const std::filesystem::path& source_path) {
+            std::error_code ec;
+            const bool has_binary_cameras = std::filesystem::exists(source_path / "cameras.bin", ec);
+            ec.clear();
+            const bool has_binary_images = std::filesystem::exists(source_path / "images.bin", ec);
+            const bool has_binary_metadata = has_binary_cameras && has_binary_images;
+            return has_binary_metadata ? "bin" : "txt";
+        }
+
         [[nodiscard]] bool colmapSparseDataExists(const std::filesystem::path& output_path) {
             constexpr std::array<std::string_view, 6> file_names{
                 "cameras.bin",
@@ -2377,6 +2386,8 @@ namespace lfs::vis::gui {
             LOG_INFO("Confirming COLMAP sparse overwrite folder: {}", output_path_text);
 
             const std::string export_button = LOC("export.overwrite");
+            const std::string written_files =
+                LOCF("export_dialog.colmap_writes_sparse", colmapExportExtension(*path_result));
             lfs::core::ModalRequest request;
             request.title = LOC(lichtfeld::Strings::Window::EXPORT);
             request.style = lfs::core::ModalStyle::Warning;
@@ -2388,7 +2399,7 @@ namespace lfs::vis::gui {
                 encode(output_path_text) +
                 "</div>"
                 "<div class=\"warning-text\" style=\"margin-top: 8dp;\">" +
-                encode(LOC("export_dialog.colmap_writes_sparse")) +
+                encode(written_files) +
                 "</div>";
             request.buttons = {
                 {LOC(lichtfeld::Strings::Common::CANCEL), "secondary"},

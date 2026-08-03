@@ -386,6 +386,18 @@ class ExportPanel(Panel):
         except Exception:
             return ""
 
+    def _get_colmap_export_extension(self):
+        source_path = self._get_colmap_sparse_path_raw()
+        if not source_path:
+            return "txt"
+
+        path = Path(source_path)
+        try:
+            has_binary_metadata = (path / "cameras.bin").exists() and (path / "images.bin").exists()
+        except OSError:
+            has_binary_metadata = False
+        return "bin" if has_binary_metadata else "txt"
+
     def _get_colmap_suggested_export_path_raw(self):
         source_path = self._get_colmap_sparse_path_raw()
         if not source_path:
@@ -650,10 +662,16 @@ class ExportPanel(Panel):
 
     def _confirm_colmap_overwrite(self, path, selected_nodes):
         tr = lf.ui.tr
+        from .localization import safe_format
+
+        written_files = safe_format(
+            tr("export_dialog.colmap_writes_sparse"),
+            self._get_colmap_export_extension(),
+        )
         message = (
             f"{tr('runtime.colmap_overwrite_message')}\n"
             f"{path}\n\n"
-            f"{tr('export_dialog.colmap_writes_sparse')}."
+            f"{written_files}."
         )
         overwrite_label = tr("export.overwrite")
 
