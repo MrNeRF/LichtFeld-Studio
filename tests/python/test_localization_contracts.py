@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Headless contracts for shipped localization resources and UI bindings."""
 
+import ast
 import json
 import importlib.util
 import re
@@ -87,6 +88,18 @@ def test_literal_localization_calls_resolve():
             for pattern in patterns:
                 for key in pattern.findall(source):
                     assert key in keys, f"{path}: missing {key}"
+            if path.suffix == ".py":
+                tree = ast.parse(source, filename=str(path))
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Assign) or not any(
+                        isinstance(target, ast.Name) and target.id == "LOCALE_KEY"
+                        for target in node.targets
+                    ):
+                        continue
+                    assert isinstance(node.value, ast.Dict), f"{path}: LOCALE_KEY must remain a literal dictionary"
+                    for value in node.value.values:
+                        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                            assert value.value in keys, f"{path}: missing {value.value}"
 
 
 def test_hardcoded_ui_audit_has_no_candidates():

@@ -792,6 +792,9 @@
     "theme_vignette_radius": "Raggio vignettatura",
     "theme_vignette_softness": "Morbidezza vignettatura",
     "environment": "Ambiente",
+    "environment_map_path": "Mappa ambiente",
+    "environment_exposure": "Esposizione",
+    "environment_rotation": "Rotazione",
     "preset": "Predefinito"
   },
   "tool_defs": {

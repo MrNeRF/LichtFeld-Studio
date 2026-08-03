@@ -792,6 +792,9 @@
     "theme_vignette_radius": "ビネット半径",
     "theme_vignette_softness": "ビネットの柔らかさ",
     "environment": "環境",
+    "environment_map_path": "環境マップ",
+    "environment_exposure": "露出",
+    "environment_rotation": "回転",
     "preset": "プリセット"
   },
   "tool_defs": {

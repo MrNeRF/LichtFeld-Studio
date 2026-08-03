@@ -1520,6 +1520,9 @@
     "theme_vignette_radius": "Radio del viñeteado",
     "theme_vignette_softness": "Suavidad del viñeteado",
     "environment": "Entorno",
+    "environment_map_path": "Mapa de entorno",
+    "environment_exposure": "Exposición",
+    "environment_rotation": "Rotación",
     "preset": "Preajuste"
   },
   "ellipsoid": {

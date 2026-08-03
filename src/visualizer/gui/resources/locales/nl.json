@@ -792,6 +792,9 @@
     "theme_vignette_radius": "Vignetstraal",
     "theme_vignette_softness": "Vignetzachtheid",
     "environment": "Omgeving",
+    "environment_map_path": "Omgevingskaart",
+    "environment_exposure": "Belichting",
+    "environment_rotation": "Rotatie",
     "preset": "Voorinstelling"
   },
   "tool_defs": {

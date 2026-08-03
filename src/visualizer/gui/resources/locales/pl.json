@@ -792,6 +792,9 @@
     "theme_vignette_radius": "Promień winietowania",
     "theme_vignette_softness": "Miękkość winietowania",
     "environment": "Środowisko",
+    "environment_map_path": "Mapa środowiska",
+    "environment_exposure": "Ekspozycja",
+    "environment_rotation": "Obrót",
     "preset": "Ustawienie wstępne"
   },
   "tool_defs": {

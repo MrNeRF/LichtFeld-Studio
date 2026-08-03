@@ -792,6 +792,9 @@
     "theme_vignette_radius": "Rayon du vignettage",
     "theme_vignette_softness": "Douceur du vignettage",
     "environment": "Environnement",
+    "environment_map_path": "Carte d’environnement",
+    "environment_exposure": "Exposition",
+    "environment_rotation": "Rotation",
     "preset": "Préréglage"
   },
   "tool_defs": {

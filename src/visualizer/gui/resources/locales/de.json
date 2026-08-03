@@ -792,6 +792,9 @@
     "theme_vignette_radius": "Vignette-Radius",
     "theme_vignette_softness": "Vignette-Weichheit",
     "environment": "Umgebung",
+    "environment_map_path": "Umgebungskarte",
+    "environment_exposure": "Belichtung",
+    "environment_rotation": "Drehung",
     "preset": "Voreinstellung"
   },
   "tool_defs": {

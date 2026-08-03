@@ -799,6 +799,9 @@
     "theme_vignette_radius": "暗角半径",
     "theme_vignette_softness": "暗角柔和度",
     "environment": "环境",
+    "environment_map_path": "环境贴图",
+    "environment_exposure": "曝光",
+    "environment_rotation": "旋转",
     "preset": "预设"
   },
   "tool_defs": {

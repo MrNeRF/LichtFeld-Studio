@@ -792,6 +792,9 @@
     "theme_vignette_radius": "비네팅 반경",
     "theme_vignette_softness": "비네팅 부드러움",
     "environment": "환경",
+    "environment_map_path": "환경 맵",
+    "environment_exposure": "노출",
+    "environment_rotation": "회전",
     "preset": "프리셋"
   },
   "tool_defs": {
