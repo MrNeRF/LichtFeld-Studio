@@ -451,6 +451,7 @@ namespace lfs::vis {
                 state.active = tasks.isExporting();
                 state.progress = tasks.getExportProgress();
                 state.stage = tasks.getExportStage();
+                state.outcome = tasks.getExportOutcome();
                 const auto fmt = tasks.getExportFormat();
                 state.format = fmt == core::ExportFormat::PLY           ? "PLY"
                                : fmt == core::ExportFormat::SOG         ? "SOG"
