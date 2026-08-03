@@ -22,6 +22,7 @@ namespace lfs::event {
 
         bool initialize(const std::string& locales_dir);
         const char* get(std::string_view key) const;
+        const char* getEnglishFallback(std::string_view key) const;
         const char* operator[](std::string_view key) const { return get(key); }
 
         std::vector<std::string> getAvailableLanguages() const;
@@ -63,7 +64,12 @@ namespace lfs::event {
         try {
             return std::vformat(localized, std::make_format_args(args...));
         } catch (const std::format_error&) {
-            return localized;
+            const char* const fallback = LocalizationManager::getInstance().getEnglishFallback(key);
+            try {
+                return std::vformat(fallback, std::make_format_args(args...));
+            } catch (const std::format_error&) {
+                return fallback;
+            }
         }
     }
 

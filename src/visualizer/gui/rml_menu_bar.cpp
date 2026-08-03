@@ -19,6 +19,7 @@
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
+#include "visualizer/app_store.hpp"
 #include "window/window_manager.hpp"
 
 #include <RmlUi/Core.h>
@@ -715,24 +716,39 @@ namespace lfs::vis::gui {
             };
         };
 
+        const auto language_generation = lfs::vis::app_store().language_generation.get();
+        if (!has_navigation_tooltip_language_generation_ ||
+            language_generation != navigation_tooltip_language_generation_) {
+            auto& localization = lfs::event::LocalizationManager::getInstance();
+            navigation_tooltips_ = {
+                localization.get("toolbar.orbit_camera"),
+                localization.get("toolbar.free_orbit_camera"),
+                localization.get("toolbar.fly_camera"),
+                localization.get("toolbar.drone_camera"),
+            };
+            navigation_tooltip_language_generation_ = language_generation;
+            has_navigation_tooltip_language_generation_ = true;
+        }
+
         if (const auto* ic = lfs::vis::InputController::instance()) {
             using NavMode = lfs::vis::InputController::CameraNavigationMode;
             struct NavButtonSpec {
                 NavMode mode;
                 const char* icon;
-                std::string tooltip;
+                size_t tooltip_index;
             };
             const NavButtonSpec kNavButtons[] = {
-                {NavMode::Orbit, "camera-orbit", lfs::event::LocalizationManager::getInstance().get("toolbar.orbit_camera")},
-                {NavMode::Trackball, "world", lfs::event::LocalizationManager::getInstance().get("toolbar.free_orbit_camera")},
-                {NavMode::FPV, "camera-fpv", lfs::event::LocalizationManager::getInstance().get("toolbar.fly_camera")},
-                {NavMode::Drone, "drone", lfs::event::LocalizationManager::getInstance().get("toolbar.drone_camera")},
+                {NavMode::Orbit, "camera-orbit", 0},
+                {NavMode::Trackball, "world", 1},
+                {NavMode::FPV, "camera-fpv", 2},
+                {NavMode::Drone, "drone", 3},
             };
             const auto mode = ic->cameraNavigationMode();
             for (const auto& spec : kNavButtons) {
                 const std::string name = lfs::vis::InputController::cameraNavigationModeName(spec.mode);
                 camera_buttons.push_back(make("menu-camera-" + name, "set_camera_navigation_mode", name,
-                                              spec.icon, "", spec.tooltip, mode == spec.mode));
+                                              spec.icon, "", navigation_tooltips_[spec.tooltip_index],
+                                              mode == spec.mode));
             }
         }
 

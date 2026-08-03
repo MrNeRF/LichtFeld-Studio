@@ -671,7 +671,7 @@
     "empty": "空",
     "mode": "モード:",
     "gaussians": "ガウシアン:",
-    "iteration": "イテレーション:",
+    "iteration": "イテレーション",
     "fps": "FPS",
     "step": "ステップ",
     "loss": "損失",

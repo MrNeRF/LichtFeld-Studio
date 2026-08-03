@@ -974,6 +974,7 @@ namespace lfs::vis::gui {
             last_language_generation_ = language_generation;
             has_language_generation_ = true;
             cached_iteration_text_.clear();
+            cached_iteration_label_ = LOC(lichtfeld::Strings::Status::ITERATION);
             if (empty_row_) {
                 empty_row_->SetInnerRML(
                     lfs::event::LocalizationManager::getInstance().get("toolbar.waiting_training_diagnostics"));
@@ -1008,7 +1009,7 @@ namespace lfs::vis::gui {
 
         if (iteration_label_) {
             setText(iteration_label_, cached_iteration_text_,
-                    std::format("{} {}", LOC(lichtfeld::Strings::Status::ITERATION), s.iteration));
+                    std::format("{} {}", cached_iteration_label_, s.iteration));
         }
 
         if (throughput_label_) {

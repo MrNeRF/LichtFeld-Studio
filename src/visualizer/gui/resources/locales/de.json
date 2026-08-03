@@ -671,7 +671,7 @@
     "empty": "Leer",
     "mode": "Modus:",
     "gaussians": "Gaussians:",
-    "iteration": "Iteration:",
+    "iteration": "Iteration",
     "fps": "FPS",
     "step": "Schritt",
     "loss": "Verlust",

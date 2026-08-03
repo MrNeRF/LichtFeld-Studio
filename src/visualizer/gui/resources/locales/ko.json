@@ -671,7 +671,7 @@
     "empty": "비어있음",
     "mode": "모드:",
     "gaussians": "가우시안:",
-    "iteration": "반복:",
+    "iteration": "반복",
     "fps": "FPS",
     "step": "단계",
     "loss": "손실",

@@ -118,6 +118,22 @@ namespace lfs::event {
         return result.c_str();
     }
 
+    const char* LocalizationManager::getEnglishFallback(std::string_view key) const {
+        thread_local std::array<std::string, 8> result_buffers;
+        thread_local size_t next_result_buffer = 0;
+        std::string& result = result_buffers[next_result_buffer++ % result_buffers.size()];
+
+        const std::lock_guard lock(mutex_);
+        const auto fallback_it = fallback_strings_.find(std::string(key));
+        if (fallback_it != fallback_strings_.end()) {
+            result = fallback_it->second;
+            return result.c_str();
+        }
+
+        result.assign(key);
+        return result.c_str();
+    }
+
     void LocalizationManager::setOverride(const std::string& key, const std::string& value) {
         const std::lock_guard lock(mutex_);
         overrides_[key] = value;

@@ -1404,7 +1404,7 @@
     "empty": "Vacío",
     "mode": "Modo:",
     "gaussians": "Gaussianas:",
-    "iteration": "Iteración:",
+    "iteration": "Iteración",
     "fps": "FPS",
     "step": "Paso",
     "loss": "Pérdida",

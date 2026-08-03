@@ -678,7 +678,7 @@
     "empty": "空",
     "mode": "模式：",
     "gaussians": "高斯：",
-    "iteration": "迭代：",
+    "iteration": "迭代",
     "fps": "FPS",
     "step": "步骤",
     "loss": "损失",

@@ -9,7 +9,9 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 
 #include <RmlUi/Core/DataModelHandle.h>
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -148,6 +150,9 @@ namespace lfs::vis::gui {
         std::vector<MenuToolbarButtonView> camera_buttons_;
         std::vector<MenuToolbarButtonView> render_buttons_;
         std::vector<MenuToolbarButtonView> projection_buttons_;
+        std::array<std::string, 4> navigation_tooltips_;
+        std::uint64_t navigation_tooltip_language_generation_ = 0;
+        bool has_navigation_tooltip_language_generation_ = false;
         int active_index_ = -1;
 
         Rml::Element* menu_items_ = nullptr;

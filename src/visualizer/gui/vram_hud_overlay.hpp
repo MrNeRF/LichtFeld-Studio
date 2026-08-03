@@ -231,6 +231,7 @@ namespace lfs::vis::gui {
         };
         std::unordered_map<std::string, SummaryEntry> summary_by_key_;
         std::string cached_iteration_text_;
+        std::string cached_iteration_label_;
         std::string cached_device_text_;
         Rml::Element* device_label_ = nullptr;
 

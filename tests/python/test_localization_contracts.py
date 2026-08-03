@@ -195,6 +195,10 @@ def test_localized_formatting_does_not_bypass_safe_locale_fallback():
         source = path.read_text(encoding="utf-8", errors="ignore")
         assert "fmt::runtime(LOC(" not in source, path
 
+    header = (ROOT / "src" / "core" / "event_bridge" / "localization_manager.hpp").read_text(encoding="utf-8")
+    assert "getEnglishFallback(key)" in header
+    assert "return std::vformat(fallback" in header
+
 
 def test_startup_language_picker_refreshes_after_forwarded_input():
     source = (ROOT / "src" / "visualizer" / "gui" / "startup_overlay.cpp").read_text(encoding="utf-8")
@@ -255,6 +259,19 @@ def test_rendering_labels_preserve_fullwidth_colons():
     assert 'text.endswith((":", "："))' in source
 
 
+def test_localized_toolbar_and_hud_labels_are_cached():
+    menu = (ROOT / "src" / "visualizer" / "gui" / "rml_menu_bar.cpp").read_text(encoding="utf-8")
+    assert "navigation_tooltip_language_generation_" in menu
+    assert "navigation_tooltips_" in menu
+
+    hud = (ROOT / "src" / "visualizer" / "gui" / "vram_hud_overlay.cpp").read_text(encoding="utf-8")
+    assert "cached_iteration_label_ = LOC(" in hud
+    assert 'std::format("{} {}", cached_iteration_label_, s.iteration)' in hud
+
+    for path in sorted(LOCALES.glob("*.json")):
+        assert not str(_load(path.stem)["status"]["iteration"]).endswith((":", "：")), path.name
+
+
 def test_operator_property_registration_preserves_localization_keys():
     source = (ROOT / "src" / "python" / "lfs" / "py_ui.cpp").read_text(encoding="utf-8")
     registration = source[source.index("void register_class_api"):source.index('m.def(\n            "unregister_class"')]
@@ -286,6 +303,7 @@ if __name__ == "__main__":
         test_runtime_localization_refresh_updates_live_rml_documents,
         test_cached_native_panels_request_a_frame_for_language_changes,
         test_rendering_labels_preserve_fullwidth_colons,
+        test_localized_toolbar_and_hud_labels_are_cached,
         test_operator_property_registration_preserves_localization_keys,
         test_cached_python_panels_request_a_frame_on_language_change,
     ]
