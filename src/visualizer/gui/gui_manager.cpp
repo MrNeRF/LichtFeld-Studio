@@ -156,7 +156,8 @@ namespace lfs::vis::gui {
             } else if (stats.active) {
                 state.status_text = stats.async_result_ready ? "Active, async ready" : "Active";
             } else if (stats.has_tree || stats.available) {
-                state.status_text = stats.enabled ? "Waiting for frame" : "Tree loaded, off";
+                state.status_text = LOC(stats.enabled ? "runtime.lod_waiting_for_frame"
+                                                      : "runtime.lod_tree_loaded_off");
             } else {
                 state.status_text = LOC(stats.enabled ? "runtime.lod_enabled_no_tree" : "runtime.lod_disabled");
             }
@@ -272,7 +273,7 @@ namespace lfs::vis::gui {
                                                  formatLodFloat(stats.pixel_scale_limit),
                                                  formatLodFloat(stats.min_pixel_scale));
             state.render_text = stats.full_quality_reference
-                                    ? "leaf-only reference"
+                                    ? LOC("runtime.lod_leaf_only_reference")
                                     : LOCF("runtime.lod_scale", stats.lod_render_scale);
             state.foveation_text = stats.gpu_selection
                                        ? std::format("cone {:.0f}/{:.0f} deg | edge x{:.2f} | behind x{:.2f}",

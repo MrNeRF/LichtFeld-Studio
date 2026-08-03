@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, Optional
 import lichtfeld as lf
 
 from .http import urlopen
+from .localization import safe_format
 
 logger = logging.getLogger(__name__)
 
@@ -212,14 +213,14 @@ def _download_with_progress(
                     speed_str = _format_bytes(speed) + "/s"
                     eta_str = _format_time(eta_seconds) if eta_seconds > 0 else ""
                     
-                    status = lf.ui.tr("asset_manager.download_progress_known").format(
+                    status = safe_format(lf.ui.tr("asset_manager.download_progress_known"),
                         percent=int(percent * 100),
                         downloaded=_format_bytes(downloaded),
                         total=_format_bytes(total_size),
                         speed=speed_str,
                     )
                     if eta_str:
-                        status += lf.ui.tr("asset_manager.download_eta").format(eta=eta_str)
+                        status += safe_format(lf.ui.tr("asset_manager.download_eta"), eta=eta_str)
                     
                     on_progress(min(percent, 0.99), status)
                 else:
@@ -292,9 +293,14 @@ def _download_http(
             
             if on_progress:
                 if total_size:
-                    on_progress(0.0, lf.ui.tr("asset_manager.download_progress_known").format(
-                        percent=0, downloaded="0", total=_format_bytes(total_size), speed=""
-                    ))
+                    status = safe_format(
+                        lf.ui.tr("asset_manager.download_progress_known"),
+                        percent=0,
+                        downloaded="0",
+                        total=_format_bytes(total_size),
+                        speed="",
+                    )
+                    on_progress(0.0, status.rstrip())
                 else:
                     on_progress(0.0, lf.ui.tr("asset_manager.download_unknown_size"))
             

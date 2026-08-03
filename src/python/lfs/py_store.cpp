@@ -202,6 +202,7 @@ namespace lfs::python {
             state["active"] = value.active;
             state["progress"] = value.progress;
             state["stage"] = value.stage;
+            state["outcome"] = value.outcome;
             state["format"] = value.format;
             state["error"] = value.error;
             state["path"] = value.path;
@@ -219,6 +220,7 @@ namespace lfs::python {
             state.active = dict_value(dict, "active", false);
             state.progress = dict_value(dict, "progress", 0.0f);
             state.stage = dict_value(dict, "stage", std::string{});
+            state.outcome = dict_value(dict, "outcome", std::string{"idle"});
             state.format = dict_value(dict, "format", std::string{});
             state.error = dict_value(dict, "error", std::string{});
             state.path = dict_value(dict, "path", std::string{});

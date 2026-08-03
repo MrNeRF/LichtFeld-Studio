@@ -130,29 +130,6 @@ namespace lfs::vis::gui {
             return lfs::io::find_colmap_sparse_model_path(dataset_path);
         }
 
-        enum class ColmapSparseOutputFormat : uint8_t {
-            Binary,
-            Text,
-        };
-
-        [[nodiscard]] ColmapSparseOutputFormat colmapSparseOutputFormat(
-            const std::filesystem::path& source_sparse_path) {
-            std::error_code ec;
-            const bool has_binary_pair =
-                std::filesystem::exists(source_sparse_path / "cameras.bin", ec) &&
-                std::filesystem::exists(source_sparse_path / "images.bin", ec);
-            return has_binary_pair ? ColmapSparseOutputFormat::Binary
-                                   : ColmapSparseOutputFormat::Text;
-        }
-
-        [[nodiscard]] std::array<std::string_view, 3> colmapSparseOutputFileNames(
-            const ColmapSparseOutputFormat format) {
-            if (format == ColmapSparseOutputFormat::Binary) {
-                return {"cameras.bin", "images.bin", "points3D.bin"};
-            }
-            return {"cameras.txt", "images.txt", "points3D.txt"};
-        }
-
         [[nodiscard]] bool colmapSparseDataExists(const std::filesystem::path& output_path) {
             constexpr std::array<std::string_view, 6> file_names{
                 "cameras.bin",
@@ -169,11 +146,6 @@ namespace lfs::vis::gui {
                 }
             }
             return false;
-        }
-
-        [[nodiscard]] std::string colmapSparseOutputFileList(
-            const std::array<std::string_view, 3>& file_names) {
-            return std::format("{}, {}, and {}", file_names[0], file_names[1], file_names[2]);
         }
 
         [[nodiscard]] float currentDpRatio(const Rml::Element* element) {

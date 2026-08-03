@@ -4458,6 +4458,7 @@ namespace lfs::python {
                 state["active"] = export_state.active;
                 state["progress"] = export_state.progress;
                 state["stage"] = export_state.stage;
+                state["outcome"] = export_state.outcome;
                 state["format"] = export_state.format;
                 return state;
             },

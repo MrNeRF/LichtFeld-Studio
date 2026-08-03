@@ -75,7 +75,8 @@ def test_literal_localization_calls_resolve():
     keys = set(dict(_flatten(_load("en"))))
     patterns = [re.compile(r'\bLOC(?:F)?\(\s*"([A-Za-z0-9_.-]+)"'),
                 re.compile(r'\blf\.ui\.tr\(\s*"([A-Za-z0-9_.-]+)"'),
-                re.compile(r'\b_tr(?:_format)?\(\s*"([A-Za-z0-9_.-]+)"')]
+                re.compile(r'\b_tr(?:_format)?\(\s*"([A-Za-z0-9_.-]+)"'),
+                re.compile(r'LocalizationManager::getInstance\(\)\.get\(\s*"([A-Za-z0-9_.-]+)"')]
     roots = [ROOT / "src" / "visualizer" / "gui", ROOT / "src" / "visualizer" / "sequencer",
              ROOT / "src" / "python" / "lfs_plugins"]
     for source_root in roots:

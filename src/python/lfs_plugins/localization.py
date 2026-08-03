@@ -27,4 +27,12 @@ def localized_count(key: str, count: int) -> str:
     import lichtfeld as lf
 
     form = plural_form(lf.ui.get_current_language(), count)
-    return lf.ui.tr(f"{key}.{form}").format(count=count)
+    return safe_format(lf.ui.tr(f"{key}.{form}"), count=count)
+
+
+def safe_format(text: str, **values: object) -> str:
+    """Format translator-controlled text without allowing malformed braces to escape."""
+    try:
+        return text.format(**values)
+    except (IndexError, KeyError, ValueError):
+        return text

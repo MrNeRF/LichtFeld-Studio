@@ -4,6 +4,7 @@
 #include "app/mcp_operator_tools.hpp"
 #include "app/mcp_app_utils.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "visualizer/operator/operator_flags.hpp"
 #include "visualizer/operator/operator_properties.hpp"
@@ -296,7 +297,7 @@ namespace lfs::app {
                                       const std::optional<bool> poll_without_args) {
             json result{
                 {"id", descriptor.id()},
-                {"label", descriptor.label},
+                {"label", lfs::event::LocalizationManager::getInstance().get(descriptor.label)},
                 {"description", descriptor.description},
                 {"source", operator_source_to_string(descriptor.source)},
                 {"builtin", descriptor.builtin_id.has_value()},

@@ -33,11 +33,13 @@
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -369,7 +371,7 @@ namespace lfs::vis {
 
             DevResourceWatchState dev_resource_watch_;
             bool pending_localization_ui_refresh_ = false;
-            std::uint64_t localized_rml_language_generation_ = 0;
+            std::uint64_t localized_rml_language_generation_ = std::numeric_limits<std::uint64_t>::max();
 
             // Native ErrorBus surfacing (Phase 8). Declared last so
             // error_subscription_ unsubscribes before any other member (the

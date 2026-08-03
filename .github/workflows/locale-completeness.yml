@@ -18,7 +18,7 @@ jobs:
         run: python3 tools/check_locale_completeness.py
 
       - name: Audit hardcoded UI text
-        run: python3 tools/check_ui_hardcoded.py
+        run: python3 tools/check_ui_hardcoded.py --fail-on-candidates
 
       - name: Run headless localization contracts
         run: python3 tests/python/test_localization_contracts.py

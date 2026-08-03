@@ -742,6 +742,7 @@ namespace lfs::vis::gui {
                 const std::lock_guard lock(import_state_.mutex);
                 import_state_.path = e.path;
                 import_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_INITIALIZING);
+                import_state_.outcome = "running";
                 import_state_.error.clear();
                 import_state_.num_images = 0;
                 import_state_.num_points = 0;
@@ -779,6 +780,7 @@ namespace lfs::vis::gui {
                 import_state_.error = e.error.value_or("");
                 import_state_.stage = e.success ? LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE)
                                                 : LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
+                import_state_.outcome = e.success ? "completed" : "failed";
                 import_state_.progress.store(1.0f);
             }
             import_state_.active.store(false);

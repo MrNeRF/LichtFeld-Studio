@@ -396,12 +396,6 @@ class ExportPanel(Panel):
             return str(path.parent)
         return source_path
 
-    def _get_colmap_output_file_names(self):
-        source_path = Path(self._get_colmap_sparse_path_raw())
-        if (source_path / "cameras.bin").exists() and (source_path / "images.bin").exists():
-            return ("cameras.bin", "images.bin", "points3D.bin")
-        return ("cameras.txt", "images.txt", "points3D.txt")
-
     def _colmap_sparse_data_exists(self, folder):
         path = Path(folder)
         for file_name in (

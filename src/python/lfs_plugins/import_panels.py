@@ -277,7 +277,9 @@ def _tr(key: str) -> str:
 
 
 def _tr_format(key: str, **values) -> str:
-    return _tr(key).format(**values)
+    from .localization import safe_format
+
+    return safe_format(_tr(key), **values)
 
 
 def _index_library_path(index) -> str:

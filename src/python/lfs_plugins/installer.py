@@ -45,15 +45,17 @@ PROCESS_OUTPUT_TAIL_LINES = 100
 
 
 def _localized_progress(key: str, fallback: str, **values: object) -> str:
+    from .localization import safe_format
+
     try:
         import lichtfeld as lf
 
         text = lf.ui.tr(key)
         if text and text != key:
-            return text.format(**values)
+            return safe_format(text, **values)
     except Exception:
         pass
-    return fallback.format(**values)
+    return safe_format(fallback, **values)
 
 
 def _is_windows() -> bool:

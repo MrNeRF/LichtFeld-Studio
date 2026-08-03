@@ -1039,8 +1039,10 @@ namespace lfs::vis::gui {
 
         const std::string log_text = logger.buffered_logs_as_text();
         SDL_SetClipboardText(log_text.c_str());
+        const char* const entry_word_key =
+            entry_count == 1 ? "runtime.log_entry_word" : "runtime.log_entries_word";
         setLoggingFeedback(LOCF("runtime.logs_copied", entry_count,
-                                entry_count == 1 ? "entry" : "entries"),
+                                LOC(entry_word_key)),
                            FeedbackTone::Success);
     }
 

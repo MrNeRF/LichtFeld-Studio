@@ -974,7 +974,7 @@ namespace lfs::vis::gui {
             last_language_generation_ = language_generation;
             has_language_generation_ = true;
             cached_iteration_text_.clear();
-            cached_iteration_label_ = LOC(lichtfeld::Strings::Status::ITERATION);
+            cached_iteration_label_ = LOC("status.iteration_label");
             if (empty_row_) {
                 empty_row_->SetInnerRML(
                     lfs::event::LocalizationManager::getInstance().get("toolbar.waiting_training_diagnostics"));

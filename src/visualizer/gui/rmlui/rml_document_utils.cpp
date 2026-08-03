@@ -296,8 +296,17 @@ namespace lfs::vis::gui::rml_documents {
 
         const auto text_key = root->GetAttribute<Rml::String>("data-lfs-i18n", "");
         if (!text_key.empty()) {
-            root->SetInnerRML(localization.get(text_key));
-            changed = true;
+            constexpr std::string_view kLastTextAttribute = "data-lfs-i18n-last";
+            const auto localized_text = std::string(localization.get(text_key));
+            const auto previous_text = root->GetAttribute<Rml::String>(kLastTextAttribute.data(), "");
+            const auto current_text = root->GetInnerRML();
+            if (previous_text.empty() || current_text == previous_text) {
+                if (current_text != localized_text) {
+                    root->SetInnerRML(localized_text);
+                    changed = true;
+                }
+                root->SetAttribute(kLastTextAttribute.data(), localized_text);
+            }
         }
 
         for (const std::string_view attribute : {"title", "placeholder"}) {
@@ -305,11 +314,20 @@ namespace lfs::vis::gui::rml_documents {
             const auto key = root->GetAttribute<Rml::String>(metadata_name, "");
             if (key.empty())
                 continue;
-            root->SetAttribute(std::string(attribute), localization.get(key));
-            changed = true;
+            const std::string last_value_name = std::format("data-lfs-i18n-{}-last", attribute);
+            const auto localized_value = std::string(localization.get(key));
+            const auto previous_value = root->GetAttribute<Rml::String>(last_value_name, "");
+            const auto current_value = root->GetAttribute<Rml::String>(std::string(attribute), "");
+            if (previous_value.empty() || current_value == previous_value) {
+                if (current_value != localized_value) {
+                    root->SetAttribute(std::string(attribute), localized_value);
+                    changed = true;
+                }
+                root->SetAttribute(last_value_name, localized_value);
+            }
         }
 
-        for (int i = 0; i < root->GetNumChildren(); ++i)
+        for (int i = 0; i < root->GetNumChildren(true); ++i)
             changed |= refreshLocalizedContent(root->GetChild(i));
 
         // RmlUI stores the closed select label separately from its option elements.
