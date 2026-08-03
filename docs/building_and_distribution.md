@@ -126,9 +126,10 @@ ctest --test-dir build/tests --output-on-failure -L nightly
 
 The localization contracts are a small, headless validation suite. They validate
 locale key and placeholder parity, one-key-per-line JSON formatting, literal
-translation-key references, RML directives, the hardcoded-UI-text audit, and
-localized cached UI state. They do not build or execute the GUI, LibTorch, or
-CUDA test targets.
+translation-key references, RML directives, count-sensitive plural-form rules,
+the hardcoded-UI-text audit, and localized cached UI state. They do not build
+or execute the GUI, LibTorch, or CUDA test targets. The contributor guide
+documents the locale conventions and language-specific grammar policy.
 
 Register the contracts in an existing build directory:
 

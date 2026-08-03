@@ -89,6 +89,27 @@ make the cache invalidation depend on `RuntimeState.language_generation` (or
 the equivalent native language-generation signal). Otherwise the text can stay
 in the previous language until an unrelated interaction rebuilds the UI.
 
+### Count-sensitive messages and language-specific grammar
+
+Count-sensitive Python UI messages use
+`src/python/lfs_plugins/localization.py`. Store every variant in each locale
+bundle with a shared base key and the `.one`, `.few`, and `.other` suffixes,
+then call `localized_count(base_key, count)` rather than selecting English
+singular or plural text in the panel.
+
+The helper currently implements the shipped rules needed by Polish:
+
+- `one`: absolute count is `1`.
+- `few`: the last digit is `2` through `4`, except values ending in `12`
+  through `14`.
+- `other`: every remaining value, including `0`, `5`, and `12` through `14`.
+
+Other shipped languages currently select `one` for `1` and `other` otherwise.
+They still provide `.few` entries to preserve locale-key parity. Add future
+language-specific grammar in this module, keep the locale files declarative,
+and extend `test_counted_messages_use_supported_plural_forms` with boundary
+values before using the new rule in UI code.
+
 ## Code Style
 
 - Use `clang-format` for formatting

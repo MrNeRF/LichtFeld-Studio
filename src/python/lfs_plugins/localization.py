@@ -1,6 +1,13 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Small helpers for localized messages whose grammar depends on a count."""
+"""Localized count helpers and the central extension point for grammar rules.
+
+Locale JSON files keep their text declarative as ``<base>.one``, ``<base>.few``,
+and ``<base>.other``. This module selects the form needed by the active language.
+Polish currently uses its three shipped forms; other shipped languages use the
+``one``/``other`` subset. Add future language-specific grammar here and cover its
+boundary values in ``test_localization_contracts.py`` before using it in UI code.
+"""
 
 
 def plural_form(language: str, count: int) -> str:
