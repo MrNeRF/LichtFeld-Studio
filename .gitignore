@@ -16,6 +16,7 @@ data
 *.py
 !scripts/lichtfeld_mcp_bridge.py
 !scripts/licht_compat_matrix.py
+!tools/gdb/lfs_pretty_printers.py
 !scripts/licht_compat_policy.py
 !scripts/licht_compat_recovery.py
 !scripts/licht_ownership_inventory.py

@@ -1,0 +1,24 @@
+# LichtFeld tensor pretty printers for gdb and cuda-gdb.
+#
+# Per-session:   gdb -x tools/gdb/gdbinit ./build/LichtFeld-Studio
+# Always on:     add to ~/.gdbinit (or ~/.config/gdb/gdbinit):
+#                  source /path/to/repo/tools/gdb/gdbinit
+#
+# gdb does not expose the sourcing script's own path, so the printer is looked up
+# relative to the cwd first (the usual "run from the repo root" case) and then at
+# an absolute fallback. Loading is guarded so a stale path in a global gdbinit
+# cannot break unrelated debug sessions.
+
+python
+import os
+
+for _p in (
+    os.path.join(os.getcwd(), "tools", "gdb", "lfs_pretty_printers.py"),
+    "/home/paja/projects/gaussian-splatting-cuda/tools/gdb/lfs_pretty_printers.py",
+):
+    if os.path.exists(_p):
+        gdb.execute("source " + _p)
+        break
+else:
+    print("[lfs] lfs_pretty_printers.py not found; tensor printers unavailable")
+end
