@@ -332,12 +332,6 @@ namespace lfs::vis::gui {
         return state.cached_environment_resolved_path;
     }
 
-    lfs::core::Tensor orientVideoExportFrameForEncoder(const lfs::core::Tensor& image) {
-        if (!image.is_valid() || image.ndim() != 3) {
-            return image;
-        }
-        return image.contiguous();
-    }
     [[nodiscard]] const VideoExportCropBoxSnapshot* activeVideoExportPointCloudCropBox(
         const VideoExportSceneSnapshot& snapshot) {
         const VideoExportCropBoxSnapshot* selected = nullptr;
@@ -1954,7 +1948,7 @@ namespace lfs::vis::gui {
                         break;
                     }
 
-                    auto export_frame = orientVideoExportFrameForEncoder(*frame_tensor);
+                    auto export_frame = frame_tensor->contiguous();
                     auto image_hwc = export_frame.permute({1, 2, 0}).contiguous();
 
                     if (frame == 0) {
