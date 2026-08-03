@@ -49,6 +49,10 @@
 #include <windows.h>
 #endif
 
+#ifndef LFS_MIN_SM
+#define LFS_MIN_SM 75
+#endif
+
 namespace lfs::app {
 
     namespace {
@@ -513,7 +517,13 @@ namespace lfs::app {
 
             LOG_INFO("CUDA driver version: {}.{}", info.major, info.minor);
             if (!info.supported) {
-                LOG_WARN("CUDA {}.{} unsupported. Requires 12.8+ (driver 570+)", info.major, info.minor);
+                LOG_ERROR("CUDA driver too old. Requires 12.8+ (driver 570+)");
+#ifdef WIN32
+                MessageBoxW(NULL,
+                    L"NVIDIA driver too old. Please update to driver 570 or newer.",
+                    L"LichtFeld Studio - Incompatible Driver",
+                    MB_ICONERROR | MB_OK);
+#endif
                 return false;
             }
             return true;
@@ -531,6 +541,22 @@ namespace lfs::app {
             if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
                 LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
                          prop.totalGlobalMem / (1024 * 1024));
+
+                const int device_sm = prop.major * 10 + prop.minor;
+                if (device_sm < LFS_MIN_SM) {
+                    std::string msg = std::format(
+                        "This PC's GPU ({}) doesn't meet the minimum requirement — an NVIDIA RTX 20-series card or newer is needed.",
+                        prop.name);
+#ifdef WIN32
+                    std::wstring wmsg(msg.begin(), msg.end());
+                    MessageBoxW(NULL, wmsg.c_str(),
+                        L"LichtFeld Studio - Incompatible GPU",
+                        MB_ICONERROR | MB_OK);
+#endif
+                    LOG_ERROR("{}", msg);
+                    std::exit(1);
+
+                }
             }
 
             LOG_INFO("Initializing CUDA...");
@@ -545,6 +571,21 @@ namespace lfs::app {
             if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
                 LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
                          prop.totalGlobalMem / (1024 * 1024));
+
+                const int device_sm = prop.major * 10 + prop.minor;
+                if (device_sm < LFS_MIN_SM) {
+                    std::string msg = std::format(
+                        "This PC's GPU ({}) doesn't meet the minimum requirement — an NVIDIA RTX 20-series card or newer is needed.",
+                        prop.name);
+#ifdef WIN32
+                    std::wstring wmsg(msg.begin(), msg.end());
+                    MessageBoxW(NULL, wmsg.c_str(),
+                        L"LichtFeld Studio - Incompatible GPU",
+                        MB_ICONERROR | MB_OK);
+#endif
+                    LOG_ERROR("{}", msg);
+                    std::exit(1);
+                }
             }
 
             LOG_INFO("Initializing CUDA (async)...");

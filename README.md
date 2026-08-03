@@ -75,6 +75,14 @@ LichtFeld Studio is free and open source. If it is useful in your research, prod
 [![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/MrNeRF)
 [![Support on Donorbox](https://img.shields.io/badge/Donate-Donorbox-27A9E1?style=for-the-badge)](https://donorbox.org/lichtfeld-studio)
 
+## Requirements
+
+- NVIDIA RTX 20-series or newer (compute capability 7.5+)
+- NVIDIA driver 570+
+- Windows
+
+GTX 10-series and older, AMD, and Intel GPUs are not supported.
+
 ## Installation
 
 Windows binaries are now available through the Lichtfeld Portal. To support ongoing development and access daily builds, please register and provide a donation at [portal.lichtfeld.io](https://portal.lichtfeld.io/). Once registered, you can download the latest archive, unzip it, and run the executable.

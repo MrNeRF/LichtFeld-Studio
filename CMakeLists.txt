@@ -329,6 +329,9 @@ endif()
 # Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
 set(BUILD_CUDA_MIN_SM "75" CACHE STRING "Minimum SM for PTX-only builds")
 
+# Bake the minimum SM into the binary so runtime can fail-fast on unsupported GPUs.
+add_compile_definitions(LFS_MIN_SM=${BUILD_CUDA_MIN_SM})
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
