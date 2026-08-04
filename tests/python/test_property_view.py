@@ -3,17 +3,487 @@
 """Contracts for registry-backed retained-mode property rows."""
 
 import json
+import math
 import re
 from pathlib import Path
 
 import pytest
 
 from lfs_plugins import property_view
-from lfs_plugins.environment import flag as environment_flag
 
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCALES = ROOT / "src" / "visualizer" / "gui" / "resources" / "locales"
+TRAINING_RML = (
+    ROOT
+    / "src"
+    / "visualizer"
+    / "gui"
+    / "rmlui"
+    / "resources"
+    / "training.rml"
+)
+
+
+# id: (locale key, tooltip key, precision, step, registry min, registry max, int)
+EXPECTED_NUMBER_ROWS = {
+    "iterations": (
+        "training_params.iterations",
+        "training.tooltip.iterations",
+        0,
+        100,
+        1,
+        1_000_000,
+        True,
+    ),
+    "max_cap": (
+        "training_params.max_gaussians",
+        "training.tooltip.max_gaussians",
+        0,
+        100_000,
+        1_000,
+        200_000_000,
+        True,
+    ),
+    "steps_scaler": (
+        "training_params.steps_scaler",
+        "training.tooltip.steps_scaler",
+        2,
+        0.1,
+        0.0,
+        10.0,
+        False,
+    ),
+    "means_lr": (
+        "training.opt.lr.position",
+        "training.tooltip.lr_position",
+        6,
+        0.000001,
+        0.0,
+        0.001,
+        False,
+    ),
+    "shs_lr": (
+        "training.opt.lr.sh_coeff",
+        "training.tooltip.lr_sh_coeff",
+        4,
+        0.0001,
+        0.0,
+        0.1,
+        False,
+    ),
+    "opacity_lr": (
+        "training.opt.lr.opacity",
+        "training.tooltip.lr_opacity",
+        4,
+        0.001,
+        0.0,
+        1.0,
+        False,
+    ),
+    "scaling_lr": (
+        "training.opt.lr.scaling",
+        "training.tooltip.lr_scaling",
+        4,
+        0.0001,
+        0.0,
+        0.1,
+        False,
+    ),
+    "rotation_lr": (
+        "training.opt.lr.rotation",
+        "training.tooltip.lr_rotation",
+        4,
+        0.0001,
+        0.0,
+        0.1,
+        False,
+    ),
+    "refine_every": (
+        "training.refinement.refine_every",
+        "training.tooltip.refine_every",
+        0,
+        10,
+        1,
+        1_000,
+        True,
+    ),
+    "start_refine": (
+        "training.refinement.start_refine",
+        "training.tooltip.start_refine",
+        0,
+        100,
+        0,
+        10_000,
+        True,
+    ),
+    "stop_refine": (
+        "training.refinement.stop_refine",
+        "training.tooltip.stop_refine",
+        0,
+        1_000,
+        0,
+        100_000,
+        True,
+    ),
+    "grow_until_iter": (
+        "training.refinement.grow_until_iter",
+        "training.tooltip.grow_until_iter",
+        0,
+        1_000,
+        0,
+        100_000,
+        True,
+    ),
+    "grad_threshold": (
+        "training.refinement.gradient_thr",
+        "training.tooltip.gradient_thr",
+        6,
+        0.00001,
+        0.0,
+        0.01,
+        False,
+    ),
+    "reset_every": (
+        "training.refinement.reset_every",
+        "training.tooltip.reset_every",
+        0,
+        100,
+        100,
+        10_000,
+        True,
+    ),
+    "sh_degree_interval": (
+        "training.refinement.sh_upgrade_every",
+        "training.tooltip.sh_upgrade_every",
+        0,
+        100,
+        100,
+        10_000,
+        True,
+    ),
+    "bilateral_grid_x": (
+        "training.bilateral.grid_x",
+        "training.tooltip.bilateral_grid_x",
+        0,
+        1,
+        4,
+        64,
+        True,
+    ),
+    "bilateral_grid_y": (
+        "training.bilateral.grid_y",
+        "training.tooltip.bilateral_grid_y",
+        0,
+        1,
+        4,
+        64,
+        True,
+    ),
+    "bilateral_grid_w": (
+        "training.bilateral.grid_w",
+        "training.tooltip.bilateral_grid_w",
+        0,
+        1,
+        2,
+        32,
+        True,
+    ),
+    "bilateral_grid_lr": (
+        "training.bilateral.learning_rate",
+        "training.tooltip.bilateral_grid_lr",
+        6,
+        0.00001,
+        0.0,
+        0.1,
+        False,
+    ),
+    "mask_opacity_penalty_weight": (
+        "training.masking.penalty_weight",
+        "training.tooltip.penalty_weight",
+        3,
+        0.1,
+        0.0,
+        10.0,
+        False,
+    ),
+    "mask_opacity_penalty_power": (
+        "training.masking.penalty_power",
+        "training.tooltip.penalty_power",
+        3,
+        0.1,
+        0.5,
+        4.0,
+        False,
+    ),
+    "mask_threshold": (
+        "training.masking.threshold",
+        "training.tooltip.mask_threshold",
+        3,
+        0.05,
+        0.0,
+        1.0,
+        False,
+    ),
+    "depth_loss_weight": (
+        "training_params.depth_loss_weight",
+        "training.tooltip.depth_loss_weight",
+        3,
+        0.1,
+        0.0,
+        100.0,
+        False,
+    ),
+    "normal_loss_weight": (
+        "training_params.normal_loss_weight",
+        "training.tooltip.normal_loss_weight",
+        3,
+        0.01,
+        0.0,
+        100.0,
+        False,
+    ),
+    "normal_consistency_weight": (
+        "training_params.normal_consistency_weight",
+        "training.tooltip.normal_consistency_weight",
+        3,
+        0.01,
+        0.0,
+        100.0,
+        False,
+    ),
+    "normal_flatten_weight": (
+        "training_params.normal_flatten_weight",
+        "training.tooltip.normal_flatten_weight",
+        3,
+        0.1,
+        0.0,
+        1_000.0,
+        False,
+    ),
+    "opacity_reg": (
+        "training.losses.opacity_reg",
+        "training.tooltip.opacity_reg",
+        4,
+        0.001,
+        0.0,
+        1.0,
+        False,
+    ),
+    "scale_reg": (
+        "training.losses.scale_reg",
+        "training.tooltip.scale_reg",
+        4,
+        0.001,
+        0.0,
+        1.0,
+        False,
+    ),
+    "tv_loss_weight": (
+        "training.losses.tv_loss_weight",
+        "training.tooltip.tv_loss_weight",
+        1,
+        0.5,
+        0.0,
+        100.0,
+        False,
+    ),
+    "init_scaling": (
+        "training.init.init_scaling",
+        "training.tooltip.init_scaling",
+        3,
+        0.01,
+        0.0,
+        1.0,
+        False,
+    ),
+    "init_num_pts": (
+        "training.init.num_points",
+        "training.tooltip.num_points",
+        0,
+        10_000,
+        1_000,
+        1_000_000,
+        True,
+    ),
+    "init_extent": (
+        "training.init.extent",
+        "training.tooltip.extent",
+        1,
+        0.5,
+        0.1,
+        10.0,
+        False,
+    ),
+    "min_opacity": (
+        "training.thresholds.min_opacity",
+        "training.tooltip.min_opacity",
+        4,
+        0.001,
+        0.0,
+        math.inf,
+        False,
+    ),
+    "prune_opacity": (
+        "training.thresholds.prune_opacity",
+        "training.tooltip.prune_opacity",
+        4,
+        0.001,
+        0.0,
+        math.inf,
+        False,
+    ),
+    "grow_scale3d": (
+        "training.thresholds.grow_scale_3d",
+        "training.tooltip.grow_scale_3d",
+        4,
+        0.001,
+        0.0,
+        math.inf,
+        False,
+    ),
+    "grow_scale2d": (
+        "training.thresholds.grow_scale_2d",
+        "training.tooltip.grow_scale_2d",
+        3,
+        0.01,
+        0.0,
+        math.inf,
+        False,
+    ),
+    "prune_scale3d": (
+        "training.thresholds.prune_scale_3d",
+        "training.tooltip.prune_scale_3d",
+        3,
+        0.01,
+        0.0,
+        math.inf,
+        False,
+    ),
+    "prune_scale2d": (
+        "training.thresholds.prune_scale_2d",
+        "training.tooltip.prune_scale_2d",
+        3,
+        0.01,
+        0.0,
+        math.inf,
+        False,
+    ),
+    "pause_refine_after_reset": (
+        "training.thresholds.pause_after_reset",
+        "training.tooltip.pause_refine_after_reset",
+        0,
+        100,
+        0.0,
+        1.8446744073709552e19,
+        True,
+    ),
+    "sparsify_steps": (
+        "training_params.sparsify_steps",
+        "training.tooltip.sparsify_steps",
+        0,
+        1_000,
+        1_000,
+        50_000,
+        True,
+    ),
+    "init_rho": (
+        "training_params.init_rho",
+        "training.tooltip.init_rho",
+        4,
+        0.001,
+        0.0,
+        0.01,
+        False,
+    ),
+    "ppisp_controller_lr": (
+        "training_params.ppisp_controller_lr",
+        "training.tooltip.ppisp_controller_lr",
+        5,
+        0.0001,
+        0.00001,
+        0.1,
+        False,
+    ),
+}
+
+
+EXPECTED_CHECKBOX_ROWS = {
+    "use_bilateral_grid": (
+        "training_params.bilateral_grid",
+        "training.tooltip.bilateral_grid",
+    ),
+    "invert_masks": (
+        "training_params.invert_masks",
+        "training.tooltip.invert_masks",
+    ),
+    "use_alpha_as_mask": (
+        "training_params.use_alpha_as_mask",
+        "training.tooltip.use_alpha_as_mask",
+    ),
+    "use_depth_loss": (
+        "training_params.use_depth_loss",
+        "training.tooltip.use_depth_loss",
+    ),
+    "use_normal_loss": (
+        "training_params.use_normal_loss",
+        "training.tooltip.use_normal_loss",
+    ),
+    "enable_sparsity": (
+        "training_params.sparsity",
+        "training.tooltip.sparsity",
+    ),
+    "gut": ("training_params.gut", "training.tooltip.gut"),
+    "undistort": ("training_params.undistort", "training.tooltip.undistort"),
+    "mip_filter": ("training_params.mip_filter", "training.tooltip.mip_filter"),
+    "ppisp": ("training_params.ppisp", "training.tooltip.ppisp"),
+    "ppisp_use_controller": (
+        "training_params.ppisp_controller",
+        "training.tooltip.ppisp_controller",
+    ),
+    "ppisp_freeze_from_sidecar": (
+        "training_params.ppisp_freeze_from_sidecar",
+        "training.tooltip.ppisp_freeze_from_sidecar",
+    ),
+    "ppisp_freeze_gaussians": (
+        "training_params.ppisp_freeze_gaussians",
+        "training.tooltip.ppisp_freeze_gaussians",
+    ),
+    "random": ("training.init.random_init", "training.tooltip.random_init"),
+    "revised_opacity": (
+        "training.thresholds.revised_opacity",
+        "training.tooltip.revised_opacity",
+    ),
+    "enable_eval": (
+        "training_params.enable_eval",
+        "training.tooltip.enable_eval",
+    ),
+}
+
+
+EXPECTED_SELECT_ROWS = {
+    "mask_mode": (
+        "training_params.mask_mode",
+        "training.tooltip.mask_mode",
+        (
+            (0, "training.options.mask.none"),
+            (1, "training.options.mask.segment"),
+            (2, "training.options.mask.ignore"),
+            (3, "training.options.mask.segment_and_ignore"),
+            (4, "training.options.mask.alpha_consistent"),
+        ),
+    ),
+    "bg_mode": (
+        "training_params.bg_mode",
+        "training.tooltip.bg_modulation",
+        (
+            (0, "training.options.bg.color"),
+            (1, "training.options.bg.modulation"),
+            (2, "training.options.bg.image"),
+            (3, "training.options.bg.random"),
+        ),
+    ),
+}
 
 
 def _flatten(value, prefix=""):
@@ -25,67 +495,33 @@ def _flatten(value, prefix=""):
         yield prefix, value
 
 
-def test_learning_rate_rows_match_registry_declarations(lf):
-    group_info = lf.ui.property_group_info("optimization")
-    rows = property_view.build_rows(
-        group_info,
-        property_view.LEARNING_RATES,
+def _all_rows(lf):
+    return property_view.build_rows(
+        lf.ui.property_group_info("optimization"),
+        property_view.MIGRATED_PROP_IDS,
         lf.optimization_params,
     )
 
-    expected = [
-        (
-            "means_lr",
-            "training.opt.lr.position",
-            "training.tooltip.lr_position",
-            6,
-            1e-6,
-            0.0,
-            0.001,
-        ),
-        (
-            "shs_lr",
-            "training.opt.lr.sh_coeff",
-            "training.tooltip.lr_sh_coeff",
-            4,
-            1e-4,
-            0.0,
-            0.1,
-        ),
-        (
-            "opacity_lr",
-            "training.opt.lr.opacity",
-            "training.tooltip.lr_opacity",
-            4,
-            0.001,
-            0.0,
-            1.0,
-        ),
-        (
-            "scaling_lr",
-            "training.opt.lr.scaling",
-            "training.tooltip.lr_scaling",
-            4,
-            1e-4,
-            0.0,
-            0.1,
-        ),
-        (
-            "rotation_lr",
-            "training.opt.lr.rotation",
-            "training.tooltip.lr_rotation",
-            4,
-            1e-4,
-            0.0,
-            0.1,
-        ),
-    ]
 
-    assert len(rows) == len(expected)
+def test_full_migration_inventory_and_schema_are_exact():
+    assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
+    assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
+    assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
+    assert len(property_view.MIGRATED_PROP_IDS) == 60
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 60
+
+    rendered = tuple(prop for run in property_view.RUNS for prop in run.prop_ids)
+    assert len(rendered) == len(set(rendered)) == 59
+    assert set(rendered) == set(property_view.MIGRATED_PROP_IDS) - {"steps_scaler"}
+
+
+def test_all_number_rows_match_registry_declarations(lf):
+    rows = {row["id"]: row for row in _all_rows(lf)}
     params = lf.optimization_params()
-    for row, declaration in zip(rows, expected):
-        prop_id, label, tooltip, precision, step, min_value, max_value = declaration
-        assert row["id"] == prop_id
+
+    for prop_id, expected in EXPECTED_NUMBER_ROWS.items():
+        label, tooltip, precision, step, min_value, max_value, is_int = expected
+        row = rows[prop_id]
         assert row["kind"] == "number"
         assert row["label_key"] == label
         assert row["tooltip_key"] == tooltip
@@ -93,20 +529,59 @@ def test_learning_rate_rows_match_registry_declarations(lf):
         assert row["step"] == pytest.approx(step)
         assert row["min"] == pytest.approx(min_value)
         assert row["max"] == pytest.approx(max_value)
-        assert row["is_int"] is False
+        assert row["is_int"] is is_int
 
         prop_info = params.prop_info(prop_id)
         assert prop_info["locale_key"] == label
         assert prop_info["tooltip_key"] == tooltip
         assert prop_info["precision"] == precision
         assert prop_info["step"] == pytest.approx(step)
-        assert prop_info["live_update"] is True
+        if prop_id in property_view.LEARNING_RATES:
+            assert prop_info["live_update"] is True
+
+
+def test_checkbox_and_select_rows_match_registry_declarations(lf):
+    rows = {row["id"]: row for row in _all_rows(lf)}
+    params = lf.optimization_params()
+
+    for prop_id, (label, tooltip) in EXPECTED_CHECKBOX_ROWS.items():
+        row = rows[prop_id]
+        assert row["kind"] == "checkbox"
+        assert row["label_key"] == label
+        assert row["tooltip_key"] == tooltip
+        if prop_id in {"use_bilateral_grid", "random", "undistort"}:
+            assert params.prop_info(prop_id)["needs_restart"] is True
+
+    for prop_id, (label, tooltip, expected_items) in EXPECTED_SELECT_ROWS.items():
+        row = rows[prop_id]
+        assert row["kind"] == "select"
+        assert row["label_key"] == label
+        assert row["tooltip_key"] == tooltip
+        assert tuple(
+            (item["value"], item["locale_key"]) for item in row["items"]
+        ) == expected_items
 
 
 def test_number_formatting_matches_training_panel_rules():
     assert property_view.format_number(2e-5, precision=6) == "0.000020"
     assert property_view.format_number(0.0025, precision=4) == "0.0025"
     assert property_view.format_number(1234567, is_int=True) == "1,234,567"
+
+
+def _number_row():
+    return {
+        "id": "amount",
+        "kind": "number",
+        "label_key": "",
+        "tooltip_key": "",
+        "precision": 2,
+        "step": 0.1,
+        "min": 0.0,
+        "max": 1.0,
+        "is_int": False,
+        "name": "Amount",
+        "items": [],
+    }
 
 
 def test_parse_clamp_and_invalid_commit_behavior():
@@ -123,25 +598,13 @@ def test_parse_clamp_and_invalid_commit_behavior():
 
     params = {"amount": 0.25}
     buffers = {}
+    queued = []
     binding = property_view.SectionBinding(
         "test",
-        [
-            {
-                "id": "amount",
-                "kind": "number",
-                "label_key": "",
-                "tooltip_key": "",
-                "precision": 2,
-                "step": 0.1,
-                "min": 0.0,
-                "max": 1.0,
-                "is_int": False,
-                "name": "Amount",
-                "items": [],
-            }
-        ],
+        [_number_row()],
         lambda: params,
         buffers,
+        queued.append,
     )
 
     binding.update_draft("amount", "2.5")
@@ -160,7 +623,87 @@ def test_parse_clamp_and_invalid_commit_behavior():
     assert buffers[binding.input_key("amount")] == "1.00"
 
 
-def test_optimization_registry_locale_keys_resolve_in_every_locale(lf):
+class _RecordHandle:
+    def __init__(self):
+        self.updates = []
+
+    def update_record_list(self, key, records):
+        self.updates.append((key, records))
+
+
+def test_event_reachable_updates_use_the_deferred_publisher():
+    params = {"amount": 0.25, "enabled": False, "mode": 0}
+    queued = []
+    rows = [
+        _number_row(),
+        {
+            "id": "enabled",
+            "kind": "checkbox",
+            "label_key": "",
+            "tooltip_key": "",
+            "precision": None,
+            "step": 1,
+            "min": None,
+            "max": None,
+            "is_int": False,
+            "name": "Enabled",
+            "items": [],
+        },
+        {
+            "id": "mode",
+            "kind": "select",
+            "label_key": "",
+            "tooltip_key": "",
+            "precision": None,
+            "step": 1,
+            "min": None,
+            "max": None,
+            "is_int": False,
+            "name": "Mode",
+            "items": [
+                {
+                    "name": "Zero",
+                    "value": 0,
+                    "locale_key": "",
+                    "tooltip_key": "",
+                },
+                {
+                    "name": "One",
+                    "value": 1,
+                    "locale_key": "",
+                    "tooltip_key": "",
+                },
+            ],
+        },
+    ]
+    binding = property_view.SectionBinding(
+        "deferred", rows, lambda: params, {}, queued.append
+    )
+    handle = _RecordHandle()
+    binding.attach_handle(handle)
+    assert len(handle.updates) == 2
+
+    def assert_queued(action):
+        queued.clear()
+        update_count = len(handle.updates)
+        action()
+        assert queued == [binding]
+        assert len(handle.updates) == update_count
+
+    binding.update_draft("amount", "0.5")
+    assert_queued(lambda: binding.commit("amount"))
+    binding.begin_edit("amount")
+    assert_queued(lambda: binding.cancel_edit("amount"))
+    assert_queued(lambda: binding.step("amount", 1))
+    assert_queued(lambda: binding.set_value("enabled", True))
+    assert_queued(lambda: binding.set_value("mode", 1))
+    assert_queued(binding.sync_text_bufs)
+
+    with pytest.raises(TypeError, match="deferred publisher"):
+        property_view.SectionBinding("unsafe", [_number_row()], params, {}, None)
+
+
+def test_all_declaration_and_schema_locale_keys_resolve_in_every_locale(lf):
     group_info = lf.ui.property_group_info("optimization")
     keys = set()
     for meta in group_info["properties"]:
@@ -170,6 +713,8 @@ def test_optimization_registry_locale_keys_resolve_in_every_locale(lf):
         for item in meta.get("items", []):
             if item.get("locale_key"):
                 keys.add(item["locale_key"])
+    keys.update(section.header_locale_key for section in property_view.SECTIONS)
+    keys.update(property_view._ENUM_OPTION_TOOLTIP_KEYS.values())
 
     assert keys
     locale_paths = sorted(LOCALES.glob("*.json"))
@@ -183,33 +728,22 @@ def test_optimization_registry_locale_keys_resolve_in_every_locale(lf):
             assert str(localized[key]).strip(), f"{locale_path.name}: empty {key}"
 
 
-@pytest.mark.parametrize("value", ["1", "TRUE", " yes ", "On"])
-def test_environment_flag_uses_native_truthy_spellings(monkeypatch, value):
-    monkeypatch.setenv("LFS_TEST_PROPERTY_VIEW_FLAG", value)
-    assert environment_flag("LFS_TEST_PROPERTY_VIEW_FLAG") is True
+def test_training_rml_mounts_every_run_with_writable_records():
+    rml = TRAINING_RML.read_text(encoding="utf-8")
+    positions = []
+    for run in property_view.RUNS:
+        marker = f'data-for="row : pv_{run.id}_rows"'
+        assert marker in rml
+        positions.append(rml.index(marker))
+        if any(prop in property_view.SELECT_PROPS for prop in run.prop_ids):
+            assert f'data-for="item : pv_{run.id}_options"' in rml
+    assert positions == sorted(positions)
 
-
-@pytest.mark.parametrize("value", [None, "0", "FALSE", " no ", "Off"])
-def test_environment_flag_defaults_off(monkeypatch, value):
-    if value is None:
-        monkeypatch.delenv("LFS_TEST_PROPERTY_VIEW_FLAG", raising=False)
-    else:
-        monkeypatch.setenv("LFS_TEST_PROPERTY_VIEW_FLAG", value)
-    assert environment_flag("LFS_TEST_PROPERTY_VIEW_FLAG") is False
-
-
-def test_training_rml_uses_writable_record_text_and_dynamic_tooltip_key():
-    rml = (
-        ROOT
-        / "src"
-        / "visualizer"
-        / "gui"
-        / "rmlui"
-        / "resources"
-        / "training.rml"
-    ).read_text(encoding="utf-8")
-    assert 'data-for="row : pv_lr_rows"' in rml
     assert 'data-value="row.text"' in rml
+    assert 'data-checked="row.checked"' in rml
+    assert 'data-value="row.value"' in rml
+    assert 'data-event-change="pv_value_change(row.id, row.checked)"' in rml
+    assert 'data-event-change="pv_value_change(row.id, ev.value)"' in rml
     assert 'data-pv-input="1"' in rml
     assert 'data-attr-data-pv-id="row.id"' in rml
     assert 'data-attr-data-tooltip="row.tooltip_key"' in rml
@@ -218,3 +752,7 @@ def test_training_rml_uses_writable_record_text_and_dynamic_tooltip_key():
     assert 'data-event-blur="pv_blur(row.id, row.text)"' in rml
     assert 'data-event-escapecancel="pv_escape(row.id)"' in rml
     assert re.search(r'(?<!data-attr-)data-tooltip="row\.tooltip_key"', rml) is None
+
+    assert 'data-if="row.id == \'iterations\'"' in rml
+    assert 'data-class-steps-scale-lock-row="row.id == \'iterations\'"' in rml
+    assert "steps_scaler" not in rml

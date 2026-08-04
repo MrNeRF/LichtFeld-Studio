@@ -8,6 +8,9 @@
 
 #include <any>
 #include <array>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -35,6 +38,26 @@ namespace {
     template <typename T>
     T resolved(const OptimizationParameters& source, const std::string& id) {
         return std::any_cast<T>(lfs::python::resolve_optimization_default(optimization_meta(id), source));
+    }
+
+    std::filesystem::path eval_config_path(const std::string_view filename) {
+        return std::filesystem::path(PROJECT_ROOT_PATH) / "eval" / filename;
+    }
+
+    std::uint64_t frozen_config_fingerprint(const std::filesystem::path& path) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input)
+            throw std::runtime_error("Cannot read frozen config: " + path.string());
+
+        std::uint64_t hash = 0xcbf29ce484222325ULL;
+        char byte = 0;
+        while (input.get(byte)) {
+            if (byte == '\r')
+                continue;
+            hash ^= static_cast<unsigned char>(byte);
+            hash *= 0x100000001b3ULL;
+        }
+        return hash;
     }
 
     void expect_same_value(const PropertyMeta& meta, const std::any& actual, const std::any& expected) {
@@ -208,6 +231,77 @@ namespace {
             const std::string& json_key = renamed == property_to_json.end() ? property_id : renamed->second;
             EXPECT_TRUE(serialized.contains(json_key))
                 << "registered property has no serialized key: " << property_id;
+        }
+    }
+
+    TEST_F(TrainingParametersTest, EvalBenchmarkConfigsParseAsIs) {
+        const auto mcmc_path = eval_config_path("mcmc_optimization_params.json");
+        EXPECT_EQ(frozen_config_fingerprint(mcmc_path), 0x5296bbd8725d137eULL);
+        const auto mcmc_result = lfs::core::param::read_optim_params_from_json(mcmc_path);
+        ASSERT_TRUE(mcmc_result.has_value()) << mcmc_result.error();
+        EXPECT_FLOAT_EQ(mcmc_result->opacity_lr, 0.0335f);
+        EXPECT_FLOAT_EQ(mcmc_result->shs_lr, 0.0024f);
+        EXPECT_FLOAT_EQ(mcmc_result->opacity_reg, 0.0042f);
+        EXPECT_EQ(mcmc_result->strategy, "mcmc");
+        EXPECT_EQ(mcmc_result->max_cap, 1'000'000);
+
+        const auto mrnf_path = eval_config_path("mrnf_optimization_params.json");
+        EXPECT_EQ(frozen_config_fingerprint(mrnf_path), 0x40c65afdecde5828ULL);
+        const auto mrnf_result = lfs::core::param::read_optim_params_from_json(mrnf_path);
+        ASSERT_TRUE(mrnf_result.has_value()) << mrnf_result.error();
+        EXPECT_FLOAT_EQ(mrnf_result->means_lr, 0.000128f);
+        EXPECT_EQ(mrnf_result->start_refine, 500u);
+        EXPECT_EQ(mrnf_result->stop_refine, 28'500u);
+        EXPECT_FLOAT_EQ(mrnf_result->min_opacity, 0.0039215689f);
+        EXPECT_TRUE(mrnf_result->revised_opacity);
+
+        const auto igs_path = eval_config_path("improvedGSplus_optimization_params.json");
+        EXPECT_EQ(frozen_config_fingerprint(igs_path), 0x2cf8daf2e3da1198ULL);
+        const auto igs_result = lfs::core::param::read_optim_params_from_json(igs_path);
+        ASSERT_TRUE(igs_result.has_value()) << igs_result.error();
+        EXPECT_FLOAT_EQ(igs_result->init_opacity, 0.3f);
+        EXPECT_FLOAT_EQ(igs_result->init_scaling, 0.2f);
+        EXPECT_EQ(igs_result->refine_every, 500u);
+        EXPECT_FLOAT_EQ(igs_result->tv_loss_weight, 5.0f);
+        EXPECT_EQ(igs_result->strategy, "igs+");
+    }
+
+    TEST_F(TrainingParametersTest, SaveLoadRoundTripPreservesParameters) {
+        std::array<std::pair<std::string_view, OptimizationParameters>, 3> factories = {{
+            {"mcmc", OptimizationParameters::mcmc_defaults()},
+            {"mrnf", OptimizationParameters::mrnf_defaults()},
+            {"igs_plus", OptimizationParameters::igs_plus_defaults()},
+        }};
+        factories[0].second.opacity_lr = 0.03125f;
+        factories[1].second.max_cap = 123'456'789;
+        factories[2].second.init_extent = 4.25f;
+
+        const auto* group = PropertyRegistry::instance().get_group("optimization");
+        ASSERT_NE(group, nullptr);
+
+        for (auto& [strategy, expected] : factories) {
+            SCOPED_TRACE(strategy);
+            const auto path = std::filesystem::temp_directory_path() /
+                              ("lfs_training_parameters_roundtrip_" + std::string(strategy) + ".json");
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+
+            lfs::core::param::TrainingParameters training;
+            training.optimization = expected;
+            const auto save_result = lfs::core::param::save_training_parameters_to_json(training, path);
+            ASSERT_TRUE(save_result.has_value()) << save_result.error();
+
+            auto load_result = lfs::core::param::read_optim_params_from_json(path);
+            std::filesystem::remove(path, ec);
+            ASSERT_TRUE(load_result.has_value()) << load_result.error();
+
+            auto actual_ref = PropertyObjectRef::cpp(&*load_result);
+            auto expected_ref = PropertyObjectRef::cpp(&expected);
+            for (const auto& meta : group->properties) {
+                SCOPED_TRACE(meta.id);
+                ASSERT_TRUE(meta.getter);
+                expect_same_value(meta, meta.getter(actual_ref), meta.getter(expected_ref));
+            }
         }
     }
 

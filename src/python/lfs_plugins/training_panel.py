@@ -11,8 +11,6 @@ import lichtfeld as lf
 
 from . import rml_widgets as w
 from . import property_view
-from .environment import flag as environment_flag
-from .property_view import format_legacy_number as _fmt_num
 from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
@@ -32,9 +30,6 @@ except ImportError:
 
 __lfs_panel_classes__ = ["TrainingPanel"]
 __lfs_panel_ids__ = ["lfs.training"]
-
-_PROPERTY_VIEW_ENABLED = environment_flag("LFS_TRAINING_PROPERTY_VIEW")
-
 
 def tr(key):
     result = lf.ui.tr(key)
@@ -88,132 +83,6 @@ def _depth_loss_mode_or_default(mode):
     return mode if mode in DEPTH_LOSS_MODE_VALUES else DEFAULT_DEPTH_LOSS_MODE
 
 
-LOCALE_KEYS = {
-    "hdr_basic_params": "training.section.basic_params",
-    "hdr_advanced_params": "training.section.advanced_params",
-    "hdr_dataset": "training.section.dataset",
-    "hdr_optimization": "training.section.optimization",
-    "hdr_bilateral": "training.section.bilateral_grid",
-    "hdr_losses": "training.section.losses",
-    "hdr_init": "training.section.initialization",
-    "hdr_pruning_growing": "training_panel.pruning_growing",
-    "hdr_mrnf": "training_panel.mrnf_params",
-    "hdr_sparsity": "training_panel.sparsity",
-    "hdr_save_steps": "training_panel.save_eval_steps",
-    "strategy": "training_params.strategy",
-    "iterations": "training_params.iterations",
-    "max_cap": "training_params.max_gaussians",
-    "sh_degree": "training_params.sh_degree",
-    "tile_mode": "training_params.tile_mode",
-    "steps_scaler": "training_params.steps_scaler",
-    "bilateral_grid": "training_params.bilateral_grid",
-    "mask_mode": "training_params.mask_mode",
-    "invert_masks": "training_params.invert_masks",
-    "opacity_penalty_weight": "training.masking.penalty_weight",
-    "opacity_penalty_power": "training.masking.penalty_power",
-    "mask_threshold": "training.masking.threshold",
-    "use_alpha_as_mask": "training_params.use_alpha_as_mask",
-    "use_depth_loss": "training_params.use_depth_loss",
-    "depth_loss_mode": "training_params.depth_loss_mode",
-    "depth_loss_weight": "training_params.depth_loss_weight",
-    "use_normal_loss": "training_params.use_normal_loss",
-    "normal_loss_weight": "training_params.normal_loss_weight",
-    "normal_consistency_weight": "training_params.normal_consistency_weight",
-    "normal_flatten_weight": "training_params.normal_flatten_weight",
-    "sparsity": "training_params.sparsity",
-    "gut": "training_params.gut",
-    "undistort": "training_params.undistort",
-    "mip_filter": "training_params.mip_filter",
-    "ppisp": "training_params.ppisp",
-    "ppisp_controller": "training_params.ppisp_controller",
-    "ppisp_freeze_from_sidecar": "training_params.ppisp_freeze_from_sidecar",
-    "ppisp_sidecar_path": "training_params.ppisp_sidecar_path",
-    "ppisp_activation_step": "training_params.ppisp_activation_step",
-    "ppisp_controller_lr": "training_params.ppisp_controller_lr",
-    "ppisp_freeze_gaussians": "training_params.ppisp_freeze_gaussians",
-    "bg_mode": "training_params.bg_mode",
-    "bg_color": "training_params.bg_color",
-    "bg_image": "training_params.bg_image",
-    "dataset_path": "training.dataset.path",
-    "dataset_images": "training.dataset.images",
-    "resize_factor": "training.dataset.resize_factor",
-    "max_width": "training.dataset.max_width",
-    "cpu_cache": "training.dataset.cpu_cache",
-    "fs_cache": "training.dataset.fs_cache",
-    "use_16bit_color": "training.dataset.use_16bit_color",
-    "dataset_output": "training.dataset.output",
-    "auto": "common.auto",
-    "no_dataset": "training_panel.no_dataset_loaded",
-    "opt_strategy": "training_params.strategy",
-    "lr_header": "training.opt.learning_rates",
-    "means_lr": "training.opt.lr.position",
-    "shs_lr": "training.opt.lr.sh_coeff",
-    "opacity_lr": "training.opt.lr.opacity",
-    "scaling_lr": "training.opt.lr.scaling",
-    "rotation_lr": "training.opt.lr.rotation",
-    "refinement_header": "training.section.refinement",
-    "refine_every": "training.refinement.refine_every",
-    "start_refine": "training.refinement.start_refine",
-    "stop_refine": "training.refinement.stop_refine",
-    "grow_until_iter": "training.refinement.grow_until_iter",
-    "grad_threshold": "training.refinement.gradient_thr",
-    "reset_every": "training.refinement.reset_every",
-    "sh_degree_interval": "training.refinement.sh_upgrade_every",
-    "bilateral_grid_x": "training.bilateral.grid_x",
-    "bilateral_grid_y": "training.bilateral.grid_y",
-    "bilateral_grid_w": "training.bilateral.grid_w",
-    "bilateral_grid_lr": "training.bilateral.learning_rate",
-    "lambda_dssim": "training.losses.lambda_dssim",
-    "opacity_reg": "training.losses.opacity_reg",
-    "scale_reg": "training.losses.scale_reg",
-    "tv_loss_weight": "training.losses.tv_loss_weight",
-    "init_opacity": "training.init.init_opacity",
-    "init_scaling": "training.init.init_scaling",
-    "random_init": "training.init.random_init",
-    "init_num_pts": "training.init.num_points",
-    "init_extent": "training.init.extent",
-    "min_opacity": "training.thresholds.min_opacity",
-    "prune_opacity": "training.thresholds.prune_opacity",
-    "grow_scale3d": "training.thresholds.grow_scale_3d",
-    "grow_scale2d": "training.thresholds.grow_scale_2d",
-    "prune_scale3d": "training.thresholds.prune_scale_3d",
-    "prune_scale2d": "training.thresholds.prune_scale_2d",
-    "pause_refine_after_reset": "training.thresholds.pause_after_reset",
-    "revised_opacity": "training.thresholds.revised_opacity",
-    "sparsify_steps": "training_params.sparsify_steps",
-    "init_rho": "training_params.init_rho",
-    "prune_ratio": "training_params.prune_ratio",
-    "no_trainer": "training_panel.no_trainer_loaded",
-    "no_params": "training_panel.parameters_unavailable",
-    "no_save_steps": "training_panel.no_save_steps",
-    "save_checkpoint": "training_panel.save_checkpoint",
-    "checkpoint_saved": "training_panel.checkpoint_saved",
-    "add": "common.add",
-    "remove": "common.remove",
-    "bg_browse": "training_params.bg_image_browse",
-    "bg_clear": "training_params.bg_image_clear",
-    "strategy_mcmc": "training.options.strategy.mcmc",
-    "strategy_mrnf": "training.options.strategy.mrnf",
-    "strategy_igs_plus": "training.options.strategy.igs_plus",
-    "tile_full": "training.options.tile.full",
-    "tile_half": "training.options.tile.half",
-    "tile_quarter": "training.options.tile.quarter",
-    "mask_none": "training.options.mask.none",
-    "mask_segment": "training.options.mask.segment",
-    "mask_ignore": "training.options.mask.ignore",
-    "mask_segment_and_ignore": "training.options.mask.segment_and_ignore",
-    "mask_alpha_consistent": "training.options.mask.alpha_consistent",
-    "depth_loss_ssi": "training.options.depth_loss.ssi",
-    "depth_loss_ssi_disparity": "training.options.depth_loss.ssi_disparity",
-    "depth_loss_ssi_depth": "training.options.depth_loss.ssi_depth",
-    "bg_option_color": "training.options.bg.color",
-    "bg_option_modulation": "training.options.bg.modulation",
-    "bg_option_image": "training.options.bg.image",
-    "bg_option_random": "training.options.bg.random",
-    "enable_eval": "training_params.enable_eval",
-    "test_every": "training.dataset.test_every",
-}
-
 STRATEGY_LABEL_KEYS = {
     "mcmc": "training.options.strategy.mcmc",
     "mrnf": "training.options.strategy.mrnf",
@@ -222,78 +91,7 @@ STRATEGY_LABEL_KEYS = {
     "igs+": "training.options.strategy.igs_plus",
 }
 
-PARAM_BOOL_PROPS = [
-    "use_bilateral_grid",
-    "invert_masks",
-    "use_alpha_as_mask",
-    "use_depth_loss",
-    "use_normal_loss",
-    "enable_sparsity",
-    "gut",
-    "undistort",
-    "mip_filter",
-    "ppisp",
-    "ppisp_use_controller",
-    "ppisp_freeze_from_sidecar",
-    "ppisp_freeze_gaussians",
-    "random",
-    "revised_opacity",
-    "enable_eval",
-]
-
 DATASET_BOOL_PROPS = ["use_cpu_cache", "use_fs_cache", "use_16bit_color"]
-
-# (prop, type, format, min, max)
-NUM_PROP_DEFS = [
-    # (name, dtype, format, min, max, step)
-    ("iterations", int, "%d", 1, None, 100),
-    ("max_cap", int, "%d", 1, None, 100000),
-    ("steps_scaler", float, "%.2f", 0.01, None, 0.1),
-    ("means_lr", float, "%.6f", 0, None, 0.000001),
-    ("shs_lr", float, "%.4f", 0, None, 0.0001),
-    ("opacity_lr", float, "%.4f", 0, None, 0.001),
-    ("scaling_lr", float, "%.4f", 0, None, 0.0001),
-    ("rotation_lr", float, "%.4f", 0, None, 0.0001),
-    ("refine_every", int, "%d", 1, None, 10),
-    ("start_refine", int, "%d", 0, None, 100),
-    ("stop_refine", int, "%d", 0, None, 1000),
-    ("grow_until_iter", int, "%d", 0, None, 1000),
-    ("grad_threshold", float, "%.6f", 0, None, 0.00001),
-    ("reset_every", int, "%d", 1, None, 100),
-    ("sh_degree_interval", int, "%d", 1, None, 100),
-    ("bilateral_grid_x", int, "%d", 1, None, 1),
-    ("bilateral_grid_y", int, "%d", 1, None, 1),
-    ("bilateral_grid_w", int, "%d", 1, None, 1),
-    ("bilateral_grid_lr", float, "%.6f", 0, None, 0.00001),
-    ("mask_opacity_penalty_weight", float, "%.3f", 0, None, 0.1),
-    ("mask_opacity_penalty_power", float, "%.3f", 0.5, None, 0.1),
-    ("mask_threshold", float, "%.3f", 0, 1, 0.05),
-    ("depth_loss_weight", float, "%.3f", 0, 100, 0.1),
-    ("normal_loss_weight", float, "%.3f", 0, 100, 0.01),
-    ("normal_consistency_weight", float, "%.3f", 0, 100, 0.01),
-    ("normal_flatten_weight", float, "%.3f", 0, 1000, 0.1),
-    ("opacity_reg", float, "%.4f", 0, None, 0.001),
-    ("scale_reg", float, "%.4f", 0, None, 0.001),
-    ("tv_loss_weight", float, "%.1f", 0, None, 0.5),
-    ("init_scaling", float, "%.3f", 0.001, None, 0.01),
-    ("init_num_pts", int, "%d", 1, None, 10000),
-    ("init_extent", float, "%.1f", 0.1, None, 0.5),
-    ("min_opacity", float, "%.4f", 0, None, 0.001),
-    ("prune_opacity", float, "%.4f", 0, None, 0.001),
-    ("grow_scale3d", float, "%.4f", 0, None, 0.001),
-    ("grow_scale2d", float, "%.3f", 0, None, 0.01),
-    ("prune_scale3d", float, "%.3f", 0, None, 0.01),
-    ("prune_scale2d", float, "%.3f", 0, None, 0.01),
-    ("pause_refine_after_reset", int, "%d", 0, None, 100),
-    ("sparsify_steps", int, "%d", 1, None, 1000),
-    ("init_rho", float, "%.4f", 0, None, 0.001),
-    ("ppisp_controller_lr", float, "%.5f", 0, None, 0.0001),
-]
-
-_NUM_PROP_LOOKUP = {
-    name: (dtype, fmt, min_v, max_v, step)
-    for name, dtype, fmt, min_v, max_v, step in NUM_PROP_DEFS
-}
 
 def _resolved_ppisp_activation_step(
     params,
@@ -375,9 +173,11 @@ class TrainingPanel(Panel):
     update_policy = "dirty"
 
     def __init__(self):
-        self._pv_enabled = _PROPERTY_VIEW_ENABLED
-        self._pv_lr_binding = None
-        self._pv_publish_pending = False
+        self._pv_bindings = ()
+        self._pv_binding_by_prop = {}
+        self._pv_publish_pending = []
+        self._pv_publish_pending_ids = set()
+        self._pv_publish_scheduled = False
         self._handle = None
         self._checkpoint_saved_time = 0.0
         self._new_save_step = 7000
@@ -416,6 +216,7 @@ class TrainingPanel(Panel):
         self._psnr_tick_mid = ""
         self._psnr_tick_min = ""
         self._last_panel_label = ""
+        self._last_language_generation = -1
         self._reactive_binding = PanelStateBinding()
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
@@ -442,31 +243,30 @@ class TrainingPanel(Panel):
         self._bind_labels(model)
         self._bind_visibility(model, p, d)
         self._bind_disabled(model, p)
-        self._bind_bool_props(model, p)
         self._bind_dataset_bools(model, d)
         self._bind_select_props(model, p, d)
         self._bind_text_props(model, p)
-        self._bind_num_props(model, p, d)
+        self._bind_bespoke_num_props(model, p, d)
         self._bind_slider_props(model, p)
         self._bind_color(model, p)
         self._bind_status(model, p)
         self._bind_display(model, p, d)
-        if self._pv_enabled:
-            self._pv_lr_binding = property_view.bind_section(
-                model,
-                "lr",
-                property_view.LEARNING_RATES,
-                p,
-                self._text_bufs,
-            )
-        else:
-            # RmlUi resolves data-for addresses when the document is parsed,
-            # even below a false data-if branch. Keep the disabled array empty.
-            model.bind_record_list("pv_lr_rows")
+        self._pv_bindings = property_view.bind_sections(
+            model,
+            p,
+            self._text_bufs,
+            publisher=self._queue_pv_publish,
+            value_setter=self._set_property_view_value,
+        )
+        self._pv_binding_by_prop = {
+            row["id"]: binding
+            for binding in self._pv_bindings
+            for row in binding.rows
+        }
         self._bind_events(model)
         self._handle = model.get_handle()
-        if self._pv_lr_binding is not None:
-            self._pv_lr_binding.attach_handle(self._handle)
+        for binding in self._pv_bindings:
+            binding.attach_handle(self._handle)
         self._sync_panel_label()
 
         params = lf.optimization_params()
@@ -481,9 +281,12 @@ class TrainingPanel(Panel):
             self._last_panel_label = label
 
     def _bind_labels(self, model):
-        for label_id, key in LOCALE_KEYS.items():
-            model.bind_func(f"label_{label_id}", lambda k=key: tr(k))
-
+        model.bind_func(
+            "label_no_trainer", lambda: tr("training_panel.no_trainer_loaded")
+        )
+        model.bind_func(
+            "label_no_params", lambda: tr("training_panel.parameters_unavailable")
+        )
         model.bind_func("label_reset", lambda: tr("training_panel.reset"))
         model.bind_func("label_clear", lambda: tr("training_panel.clear"))
         model.bind_func("label_pause", lambda: tr("training_panel.pause"))
@@ -496,7 +299,93 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
+        model.bind_func(
+            "label_save_checkpoint", lambda: tr("training_panel.save_checkpoint")
+        )
+        model.bind_func(
+            "label_checkpoint_saved", lambda: tr("training_panel.checkpoint_saved")
+        )
+        model.bind_func("label_strategy", lambda: tr("training_params.strategy"))
+        model.bind_func(
+            "label_strategy_mrnf", lambda: tr("training.options.strategy.mrnf")
+        )
+        model.bind_func(
+            "label_strategy_igs_plus",
+            lambda: tr("training.options.strategy.igs_plus"),
+        )
+        model.bind_func(
+            "label_strategy_mcmc", lambda: tr("training.options.strategy.mcmc")
+        )
+        model.bind_func("label_sh_degree", lambda: tr("training_params.sh_degree"))
+        model.bind_func(
+            "label_depth_loss_mode", lambda: tr("training_params.depth_loss_mode")
+        )
+        model.bind_func(
+            "label_depth_loss_ssi", lambda: tr("training.options.depth_loss.ssi")
+        )
+        model.bind_func(
+            "label_depth_loss_ssi_disparity",
+            lambda: tr("training.options.depth_loss.ssi_disparity"),
+        )
+        model.bind_func(
+            "label_depth_loss_ssi_depth",
+            lambda: tr("training.options.depth_loss.ssi_depth"),
+        )
+        model.bind_func(
+            "label_ppisp_sidecar_path",
+            lambda: tr("training_params.ppisp_sidecar_path"),
+        )
+        model.bind_func(
+            "label_ppisp_activation_step",
+            lambda: tr("training_params.ppisp_activation_step"),
+        )
         model.bind_func("label_ppisp_sidecar_clear", lambda: tr("training_panel.clear"))
+        model.bind_func("label_bg_color", lambda: tr("training_params.bg_color"))
+        model.bind_func("label_bg_image", lambda: tr("training_params.bg_image"))
+        model.bind_func(
+            "label_bg_browse", lambda: tr("training_params.bg_image_browse")
+        )
+        model.bind_func(
+            "label_bg_clear", lambda: tr("training_params.bg_image_clear")
+        )
+        model.bind_func("label_dataset_path", lambda: tr("training.dataset.path"))
+        model.bind_func(
+            "label_dataset_images", lambda: tr("training.dataset.images")
+        )
+        model.bind_func(
+            "label_resize_factor", lambda: tr("training.dataset.resize_factor")
+        )
+        model.bind_func("label_max_width", lambda: tr("training.dataset.max_width"))
+        model.bind_func("label_cpu_cache", lambda: tr("training.dataset.cpu_cache"))
+        model.bind_func("label_fs_cache", lambda: tr("training.dataset.fs_cache"))
+        model.bind_func(
+            "label_use_16bit_color", lambda: tr("training.dataset.use_16bit_color")
+        )
+        model.bind_func(
+            "label_dataset_output", lambda: tr("training.dataset.output")
+        )
+        model.bind_func("label_auto", lambda: tr("common.auto"))
+        model.bind_func(
+            "label_no_dataset", lambda: tr("training_panel.no_dataset_loaded")
+        )
+        model.bind_func("label_opt_strategy", lambda: tr("training_params.strategy"))
+        model.bind_func(
+            "label_test_every", lambda: tr("training.dataset.test_every")
+        )
+        model.bind_func(
+            "label_lambda_dssim", lambda: tr("training.losses.lambda_dssim")
+        )
+        model.bind_func(
+            "label_init_opacity", lambda: tr("training.init.init_opacity")
+        )
+        model.bind_func(
+            "label_prune_ratio", lambda: tr("training_params.prune_ratio")
+        )
+        model.bind_func(
+            "label_no_save_steps", lambda: tr("training_panel.no_save_steps")
+        )
+        model.bind_func("label_add", lambda: tr("common.add"))
+        model.bind_func("label_remove", lambda: tr("common.remove"))
         model.bind_func(
             "steps_scaling_lock_label", self._step_scaling_lock_label
         )
@@ -526,7 +415,6 @@ class TrainingPanel(Panel):
             return RuntimeState.iteration.value
 
         model.bind_func("show_no_trainer", lambda: not RuntimeState.has_trainer.value)
-        model.bind_func("pv_enabled", lambda: self._pv_enabled)
         model.bind_func(
             "show_no_params",
             lambda: RuntimeState.has_trainer.value and not (p() and p().has_params()),
@@ -713,16 +601,6 @@ class TrainingPanel(Panel):
             ),
         )
 
-    def _bind_bool_props(self, model, p):
-        for prop in PARAM_BOOL_PROPS:
-            model.bind(
-                prop,
-                lambda pr=prop: (
-                    getattr(p(), pr, False) if p() and p().has_params() else False
-                ),
-                lambda v, pr=prop: self._set_bool_prop(pr, v),
-            )
-
     def _bind_dataset_bools(self, model, d):
         def _set_dataset_bool(v, pr):
             dp = d()
@@ -753,16 +631,6 @@ class TrainingPanel(Panel):
             lambda v: self._set_int_param("sh_degree", v),
         )
         model.bind(
-            "tile_mode_str",
-            lambda: str(p().tile_mode) if p() and p().has_params() else "1",
-            lambda v: self._set_int_param("tile_mode", v),
-        )
-        model.bind(
-            "mask_mode_str",
-            lambda: str(p().mask_mode.value) if p() and p().has_params() else "0",
-            lambda v: self._set_mask_mode(v),
-        )
-        model.bind(
             "depth_loss_mode_str",
             lambda: (
                 _depth_loss_mode_or_default(p().depth_loss_mode)
@@ -770,11 +638,6 @@ class TrainingPanel(Panel):
                 else DEFAULT_DEPTH_LOSS_MODE
             ),
             lambda v: self._set_depth_loss_mode(v),
-        )
-        model.bind(
-            "bg_mode_str",
-            lambda: str(p().bg_mode.value) if p() and p().has_params() else "0",
-            lambda v: self._set_bg_mode(v),
         )
         model.bind(
             "resize_factor_str",
@@ -789,25 +652,7 @@ class TrainingPanel(Panel):
             lambda v: self._set_ppisp_sidecar_path(v),
         )
 
-    def _bind_num_props(self, model, p, d):
-        for prop, dtype, fmt, min_v, max_v, _step in NUM_PROP_DEFS:
-            key = f"{prop}_str"
-            self._text_bufs[key] = None
-
-            def getter(k=key, pr=prop, dt=dtype, f=fmt):
-                if self._text_bufs[k] is None:
-                    self._text_bufs[k] = (
-                        _fmt_num(getattr(p(), pr, 0), dt, f)
-                        if p() and p().has_params()
-                        else ""
-                    )
-                return self._text_bufs[k]
-
-            def setter(v, k=key):
-                self._text_bufs[k] = str(v)
-
-            model.bind(key, getter, setter)
-
+    def _bind_bespoke_num_props(self, model, p, d):
         self._text_bufs["ppisp_activation_step_str"] = None
 
         def ppisp_activation_step_getter():
@@ -914,17 +759,6 @@ class TrainingPanel(Panel):
         p = lf.optimization_params()
         d = lf.dataset_params()
 
-        if key.endswith("_str"):
-            prop = key[:-4]
-            entry = _NUM_PROP_LOOKUP.get(prop)
-            if entry:
-                dtype, fmt, _min_v, _max_v, _step = entry
-                return (
-                    _fmt_num(getattr(p, prop, 0), dtype, fmt)
-                    if p and p.has_params()
-                    else ""
-                )
-
         if key == "ppisp_activation_step_str":
             if p and p.has_params():
                 return f"{_display_ppisp_activation_step(p):,}"
@@ -957,11 +791,7 @@ class TrainingPanel(Panel):
         buf_val = self._text_bufs.get(key)
         if buf_val is not None and buf_val.strip() and key.endswith("_str"):
             prop = key[:-4]
-            entry = _NUM_PROP_LOOKUP.get(prop)
-            if entry:
-                dtype, _fmt, min_v, max_v, _step = entry
-                self._set_num_prop(prop, buf_val, dtype, min_v, max_v)
-            elif prop == "ppisp_activation_step":
+            if prop == "ppisp_activation_step":
                 self._set_ppisp_activation_step(buf_val)
             elif prop == "max_width":
                 self._set_max_width(buf_val)
@@ -999,13 +829,6 @@ class TrainingPanel(Panel):
     def _sync_text_bufs(self):
         p = lf.optimization_params()
         d = lf.dataset_params()
-        for prop, dtype, fmt, _min_v, _max_v, _step in NUM_PROP_DEFS:
-            key = f"{prop}_str"
-            self._text_bufs[key] = (
-                _fmt_num(getattr(p, prop, 0), dtype, fmt)
-                if p and p.has_params()
-                else ""
-            )
         if p and p.has_params():
             self._text_bufs["ppisp_activation_step_str"] = (
                 f"{_display_ppisp_activation_step(p):,}"
@@ -1020,8 +843,8 @@ class TrainingPanel(Panel):
         )
         self._text_bufs["new_step_str"] = f"{self._new_save_step:,}"
         self._sync_bg_color_text_bufs(p)
-        if self._pv_lr_binding is not None:
-            self._pv_lr_binding.sync_text_bufs()
+        for binding in self._pv_bindings:
+            binding.sync_text_bufs()
 
     def _sync_bg_color_text_bufs(self, params=None):
         if params is None:
@@ -1205,12 +1028,12 @@ class TrainingPanel(Panel):
         model.bind_event("action", self._on_action)
         model.bind_event("remove_step", self._on_remove_step_event)
         model.bind_event("num_step", self._on_num_step)
-        if self._pv_enabled:
-            model.bind_event("pv_step", self._on_num_step)
-            model.bind_event("pv_focus", self._on_pv_number_input_focus)
-            model.bind_event("pv_change", self._on_pv_number_input_change)
-            model.bind_event("pv_blur", self._on_pv_number_input_blur)
-            model.bind_event("pv_escape", self._on_pv_number_input_escape)
+        model.bind_event("pv_step", self._on_num_step)
+        model.bind_event("pv_focus", self._on_pv_number_input_focus)
+        model.bind_event("pv_change", self._on_pv_number_input_change)
+        model.bind_event("pv_blur", self._on_pv_number_input_blur)
+        model.bind_event("pv_escape", self._on_pv_number_input_escape)
+        model.bind_event("pv_value_change", self._on_pv_value_change)
         model.bind_event(
             "toggle_step_scaling_lock", self._on_step_scaling_lock_toggle
         )
@@ -1395,6 +1218,13 @@ class TrainingPanel(Panel):
         self._sync_auto_scale_markers()
 
         dirty = self._flush_pv_publish()
+        language_generation = RuntimeState.language_generation.value
+        if language_generation != self._last_language_generation:
+            self._last_language_generation = language_generation
+            for binding in self._pv_bindings:
+                binding.publish()
+            self._handle.dirty_all()
+            dirty = True
         state = RuntimeState.trainer_state.value
         if state != self._last_state:
             self._last_state = state
@@ -1518,8 +1348,11 @@ class TrainingPanel(Panel):
         self._cancel_deferred_updates()
         doc.remove_data_model("training")
         self._handle = None
-        self._pv_lr_binding = None
-        self._pv_publish_pending = False
+        self._pv_bindings = ()
+        self._pv_binding_by_prop = {}
+        self._pv_publish_pending = []
+        self._pv_publish_pending_ids.clear()
+        self._pv_publish_scheduled = False
         self._doc = None
         self._escape_revert.clear()
         self._scrub_fields.unmount()
@@ -1664,9 +1497,9 @@ class TrainingPanel(Panel):
     def _set_bool_prop(self, prop, val):
         params = lf.optimization_params()
         if not params or not params.has_params():
-            return
+            return False
         if not hasattr(params, prop):
-            return
+            return False
         if prop == "ppisp_freeze_from_sidecar" and val:
             params.ppisp = True
         elif prop == "ppisp" and not val:
@@ -1676,7 +1509,7 @@ class TrainingPanel(Panel):
             and val
             and not self._clamp_current_test_every_for_eval()
         ):
-            return
+            return False
         setattr(params, prop, val)
         if prop == "enable_eval" and val:
             self._sync_eval_steps_with_save_steps(params)
@@ -1685,6 +1518,7 @@ class TrainingPanel(Panel):
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
+        return True
 
     def _set_ppisp_sidecar_path(self, val):
         params = lf.optimization_params()
@@ -1735,14 +1569,15 @@ class TrainingPanel(Panel):
     def _set_mask_mode(self, val_str):
         params = lf.optimization_params()
         if not params or not params.has_params():
-            return
+            return False
         try:
             params.mask_mode = lf.MaskMode(int(val_str))
         except (ValueError, TypeError):
-            pass
+            return False
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
+        return True
 
     def _set_depth_loss_mode(self, val_str):
         params = lf.optimization_params()
@@ -1755,14 +1590,15 @@ class TrainingPanel(Panel):
     def _set_bg_mode(self, val_str):
         params = lf.optimization_params()
         if not params or not params.has_params():
-            return
+            return False
         try:
             params.bg_mode = lf.BackgroundMode(int(val_str))
         except (ValueError, TypeError):
-            pass
+            return False
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
+        return True
 
     def _set_resize_factor(self, val_str):
         d = lf.dataset_params()
@@ -1773,33 +1609,21 @@ class TrainingPanel(Panel):
         except (ValueError, TypeError, RuntimeError):
             pass
 
-    def _set_num_prop(self, prop, val_str, dtype, min_v, max_v):
+    def _set_property_view_value(self, prop, value):
         params = lf.optimization_params()
         if not params or not params.has_params():
             return False
+        if prop in property_view.BOOL_PROPS:
+            return self._set_bool_prop(prop, bool(value))
+        if prop == "mask_mode":
+            return self._set_mask_mode(value)
+        if prop == "bg_mode":
+            return self._set_bg_mode(value)
+        if prop == "iterations":
+            return self._set_iterations(params, int(value))
         try:
-            val = dtype(_parse_num(str(val_str), dtype))
-        except (ValueError, TypeError):
-            return False
-        if min_v is not None:
-            val = max(val, dtype(min_v))
-        if max_v is not None:
-            val = min(val, dtype(max_v))
-
-        try:
-            if prop == "steps_scaler":
-                current_scaler = float(getattr(params, "steps_scaler", 1.0))
-                params.apply_step_scaling(val)
-                if abs(val - current_scaler) > 0.005:
-                    self._auto_scale_user_override = True
-                if self._handle:
-                    self._sync_text_bufs()
-                    self._handle.dirty_all()
-            elif prop == "iterations":
-                return self._set_iterations(params, val)
-            else:
-                params.set(prop, val)
-        except (ValueError, TypeError, RuntimeError):
+            params.set(prop, value)
+        except (ValueError, TypeError, OverflowError, RuntimeError):
             return False
         return True
 
@@ -1995,7 +1819,10 @@ class TrainingPanel(Panel):
         self._commit_number_input_key(target.get_attribute("data-value", ""))
 
     def _on_pv_number_input_focus(self, _handle, event, args):
-        if self._pv_lr_binding is None or not args:
+        if not args:
+            return
+        binding = self._pv_binding_by_prop.get(str(args[0]))
+        if binding is None:
             return
         target = event.current_target()
         if target is not None:
@@ -2003,47 +1830,60 @@ class TrainingPanel(Panel):
                 target.select()
             except Exception:
                 pass
-        self._pv_lr_binding.begin_edit(str(args[0]))
+        binding.begin_edit(str(args[0]))
 
     def _on_pv_number_input_change(self, _handle, event, args):
-        if self._pv_lr_binding is None or not args:
+        if not args:
             return
         prop = str(args[0])
-        self._pv_lr_binding.update_draft(
+        binding = self._pv_binding_by_prop.get(prop)
+        if binding is None:
+            return
+        binding.update_draft(
             prop,
             args[1] if len(args) > 1 else event.get_parameter("value", ""),
         )
         if event.get_bool_parameter("linebreak", False):
-            self._pv_lr_binding.commit(prop, publish=False)
-            self._queue_pv_publish()
+            binding.commit(prop)
 
     def _on_pv_number_input_blur(self, _handle, _event, args):
-        if self._pv_lr_binding is None or not args:
+        if not args:
             return
         prop = str(args[0])
+        binding = self._pv_binding_by_prop.get(prop)
+        if binding is None:
+            return
         if len(args) > 1:
-            self._pv_lr_binding.update_draft(prop, args[1])
-        self._pv_lr_binding.commit(prop)
-        self._pv_lr_binding.finish_edit(prop)
+            binding.update_draft(prop, args[1])
+        binding.commit(prop)
+        binding.finish_edit(prop)
 
     def _on_pv_number_input_escape(self, _handle, event, args):
-        if self._pv_lr_binding is None or not args:
+        if not args:
             return
-        if self._pv_lr_binding.cancel_edit(str(args[0])):
+        binding = self._pv_binding_by_prop.get(str(args[0]))
+        if binding is not None and binding.cancel_edit(str(args[0])):
             event.stop_propagation()
 
-    def _queue_pv_publish(self):
-        binding = self._pv_lr_binding
-        if binding is None or self._pv_publish_pending:
+    def _on_pv_value_change(self, _handle, _event, args):
+        if len(args) < 2:
             return
-        self._pv_publish_pending = True
+        prop = str(args[0])
+        binding = self._pv_binding_by_prop.get(prop)
+        if binding is not None:
+            binding.set_value(prop, args[1])
+
+    def _queue_pv_publish(self, binding):
+        binding_id = id(binding)
+        if binding_id not in self._pv_publish_pending_ids:
+            self._pv_publish_pending_ids.add(binding_id)
+            self._pv_publish_pending.append(binding)
+        if self._pv_publish_scheduled:
+            return
+        self._pv_publish_scheduled = True
 
         def publish_after_event():
-            if not self._pv_publish_pending:
-                return
-            self._pv_publish_pending = False
-            if self._pv_lr_binding is binding:
-                binding.publish()
+            self._flush_pv_publish()
 
         scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
         if scheduler is None:
@@ -2055,12 +1895,19 @@ class TrainingPanel(Panel):
 
     def _flush_pv_publish(self):
         if not self._pv_publish_pending:
+            self._pv_publish_scheduled = False
             return False
-        self._pv_publish_pending = False
-        if self._pv_lr_binding is not None:
-            self._pv_lr_binding.publish()
-            return True
-        return False
+        pending = self._pv_publish_pending
+        self._pv_publish_pending = []
+        self._pv_publish_pending_ids.clear()
+        self._pv_publish_scheduled = False
+        active_ids = {id(binding) for binding in self._pv_bindings}
+        published = False
+        for binding in pending:
+            if id(binding) in active_ids:
+                binding.publish()
+                published = True
+        return published
 
     def _on_color_channel_input_change(self, event):
         if not event.get_bool_parameter("linebreak", False):
@@ -2088,29 +1935,9 @@ class TrainingPanel(Panel):
         self._set_auto_scale_steps_locked(not self._auto_scale_steps_locked)
 
     def _apply_num_step(self, prop, direction):
-        if (
-            self._pv_lr_binding is not None
-            and self._pv_lr_binding.contains(prop)
-        ):
-            self._pv_lr_binding.step(prop, direction)
-            return
-
-        entry = _NUM_PROP_LOOKUP.get(prop)
-        if entry:
-            params = lf.optimization_params()
-            if not params or not params.has_params():
-                return
-            dtype, fmt, min_v, max_v, step = entry
-            current = getattr(params, prop, 0)
-            new_val = dtype(current + step * direction)
-            if min_v is not None:
-                new_val = max(new_val, dtype(min_v))
-            if max_v is not None:
-                new_val = min(new_val, dtype(max_v))
-            self._set_num_prop(prop, str(new_val), dtype, min_v, max_v)
-            self._text_bufs[f"{prop}_str"] = _fmt_num(new_val, dtype, fmt)
-            if self._handle:
-                self._handle.dirty(f"{prop}_str")
+        binding = self._pv_binding_by_prop.get(prop)
+        if binding is not None:
+            binding.step(prop, direction)
             return
 
         if prop == "ppisp_activation_step":

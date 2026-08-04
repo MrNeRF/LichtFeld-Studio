@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <variant>
 #include <vector>
@@ -85,6 +86,43 @@ TEST(ArgumentParserTest, MaxWidthZeroDisablesCapExplicitly) {
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_EQ((*parsed)->dataset.max_width, 0);
+}
+
+TEST(ArgumentParserTest, CommandLineOverridesConfigAfterLoading) {
+    const auto dir = std::filesystem::path(make_test_path("lfs_arg_parser_config_precedence"));
+    const auto data_path = dir / "data";
+    const auto output_path = dir / "output";
+    const auto config_path = dir / "optimization.json";
+    std::filesystem::create_directories(data_path);
+    std::filesystem::create_directories(output_path);
+
+    auto config = lfs::core::param::OptimizationParameters::mcmc_defaults().to_json();
+    config["iterations"] = 12'345;
+    config["opacity_lr"] = 0.0375f;
+    std::ofstream(config_path) << config.dump(2);
+
+    const auto data_str = data_path.string();
+    const auto output_str = output_path.string();
+    const auto config_str = config_path.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_str.c_str(),
+        "--output-path",
+        output_str.c_str(),
+        "--config",
+        config_str.c_str(),
+        "-i",
+        "777"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    std::error_code ec;
+    std::filesystem::remove(config_path, ec);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_EQ((*parsed)->optimization.iterations, 777u);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.opacity_lr, 0.0375f);
 }
 
 TEST(ArgumentParserTest, Mesh2SplatParsesOutputPathAndOptions) {
