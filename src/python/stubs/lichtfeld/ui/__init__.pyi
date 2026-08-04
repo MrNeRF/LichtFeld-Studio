@@ -2487,8 +2487,10 @@ def clear_keyframes() -> None:
 def set_playback_speed(speed: float) -> None:
     """Set sequencer playback speed"""
 
-def export_video(width: int, height: int, framerate: int, crf: int) -> None:
-    """Export video with specified settings"""
+def export_video(width: int, height: int, framerate: int, crf: int, path: str = '') -> None:
+    """
+    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly.
+    """
 
 def add_keyframe() -> None:
     """Add a keyframe at current camera position"""

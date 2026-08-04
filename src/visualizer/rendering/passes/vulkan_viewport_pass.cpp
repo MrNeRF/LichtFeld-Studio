@@ -1294,7 +1294,8 @@ namespace lfs::vis {
                                           PipelineVertexLayout vertex_layout,
                                           VkPipelineLayout& pipeline_layout,
                                           VkPipeline& pipeline,
-                                          VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE) {
+                                          VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE,
+                                          bool depth_test = false) {
             VkShaderModule vertex_module = lfs::vis::createShaderModule(device, vertex_spv, "Viewport");
             VkShaderModule fragment_module = lfs::vis::createShaderModule(device, fragment_spv, "Viewport");
             if (vertex_module == VK_NULL_HANDLE || fragment_module == VK_NULL_HANDLE) {
@@ -1417,7 +1418,10 @@ namespace lfs::vis {
 
             VkPipelineDepthStencilStateCreateInfo depth{};
             depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-            depth.depthTestEnable = VK_FALSE;
+            // World-space passes opt in so geometry drawn earlier in the frame occludes
+            // them. They never write depth: they are blended overlays, and occluding the
+            // overlays that follow them in the same phase is not wanted.
+            depth.depthTestEnable = depth_test ? VK_TRUE : VK_FALSE;
             depth.depthWriteEnable = VK_FALSE;
             depth.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
@@ -1560,7 +1564,7 @@ namespace lfs::vis {
                                   vignette_pipeline_layout, vignette_pipeline) &&
                    createPipeline(kGridVertSpv, kGridFragSpv, "grid",
                                   grid_descriptor_layout, &grid_push, true, PipelineVertexLayout::PositionOnly,
-                                  grid_pipeline_layout, grid_pipeline) &&
+                                  grid_pipeline_layout, grid_pipeline, VK_NULL_HANDLE, /*depth_test=*/true) &&
                    createPipeline(kOverlayVertSpv, kOverlayFragSpv, "overlay",
                                   VK_NULL_HANDLE, nullptr, true, PipelineVertexLayout::ColorOverlay,
                                   overlay_pipeline_layout, overlay_pipeline) &&

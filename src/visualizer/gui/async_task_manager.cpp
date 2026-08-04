@@ -20,7 +20,10 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "python/runner.hpp"
 #include "rendering/mesh2splat.hpp"
+#include "rendering/mesh_offscreen_renderer.hpp"
+#include "rendering/passes/vulkan_mesh_pass.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -32,15 +35,18 @@
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
+#include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <future>
 #include <shared_mutex>
+#include <string_view>
 #include <type_traits>
 
 namespace lfs::vis::gui {
@@ -312,6 +318,32 @@ namespace lfs::vis::gui {
         std::filesystem::path cached_environment_resolved_path;
     };
 
+    struct VideoExportMeshRendererState {
+        std::unique_ptr<MeshOffscreenRenderer> renderer;
+
+        void shutdown() {
+            if (renderer) {
+                renderer->shutdown();
+                renderer.reset();
+            }
+        }
+    };
+
+    [[nodiscard]] bool isValidVideoExportMeshLayer(
+        const MeshLayer& layer,
+        const int width,
+        const int height) {
+        return layer.rgba.is_valid() && layer.rgba.dtype() == lfs::core::DataType::Float32 &&
+               layer.rgba.ndim() == 3 && layer.rgba.size(0) == 4u &&
+               layer.rgba.size(1) == static_cast<std::size_t>(height) &&
+               layer.rgba.size(2) == static_cast<std::size_t>(width) &&
+               layer.view_depth.is_valid() &&
+               layer.view_depth.dtype() == lfs::core::DataType::Float32 &&
+               layer.view_depth.ndim() == 2 &&
+               layer.view_depth.size(0) == static_cast<std::size_t>(height) &&
+               layer.view_depth.size(1) == static_cast<std::size_t>(width);
+    }
+
     [[nodiscard]] std::filesystem::path resolveVideoExportEnvironmentPath(
         VideoExportEnvironmentState& state,
         const std::string& path_value) {
@@ -334,12 +366,6 @@ namespace lfs::vis::gui {
         return state.cached_environment_resolved_path;
     }
 
-    lfs::core::Tensor orientVideoExportFrameForEncoder(const lfs::core::Tensor& image) {
-        if (!image.is_valid() || image.ndim() != 3) {
-            return image;
-        }
-        return image.contiguous();
-    }
     [[nodiscard]] const VideoExportCropBoxSnapshot* activeVideoExportPointCloudCropBox(
         const VideoExportSceneSnapshot& snapshot) {
         const VideoExportCropBoxSnapshot* selected = nullptr;
@@ -499,6 +525,8 @@ namespace lfs::vis::gui {
         RenderingManager& rendering_manager,
         rendering::RenderingEngine& engine,
         VideoExportEnvironmentState& environment_state,
+        VideoExportMeshRendererState* mesh_renderer_state,
+        VulkanContext* vulkan_context,
         const VideoExportSceneSnapshot& snapshot,
         const RenderSettings& render_settings,
         const lfs::sequencer::CameraState& cam_state,
@@ -628,17 +656,76 @@ namespace lfs::vis::gui {
                                               snapshot.selected_node_mask.end(),
                                               [](const bool selected) { return selected; });
 
-        std::vector<rendering::MeshFrameItem> mesh_items;
-        mesh_items.reserve(snapshot.meshes.size());
-        for (const auto& mesh_snapshot : snapshot.meshes) {
-            if (!mesh_snapshot.mesh)
-                continue;
-            mesh_items.push_back(rendering::MeshFrameItem{
-                .mesh = mesh_snapshot.mesh.get(),
-                .transform = mesh_snapshot.transform,
-                .options = makeVideoExportMeshOptions(
-                    render_settings, any_selected, mesh_snapshot.is_selected),
-            });
+        std::optional<MeshLayer> prerendered_meshes;
+        if (!snapshot.meshes.empty()) {
+            if (mesh_renderer_state == nullptr) {
+                return std::unexpected(
+                    "Failed to render GPU mesh layer: renderer state is unavailable");
+            }
+            if (vulkan_context == nullptr) {
+                return std::unexpected(
+                    "Failed to render GPU mesh layer: no Vulkan context is available");
+            }
+
+            try {
+                if (!mesh_renderer_state->renderer) {
+                    mesh_renderer_state->renderer = std::make_unique<MeshOffscreenRenderer>();
+                }
+
+                const glm::mat4 projection = viewport.getProjectionMatrix();
+                VulkanMeshPassParams mesh_params{
+                    .view_projection = projection * viewport.getViewMatrix(),
+                    .camera_position = viewport.translation,
+                    .items = {},
+                    .frame_slot = 0,
+                    .draw_group = 0,
+                    .draw_group_count = 1,
+                };
+                mesh_params.items.reserve(snapshot.meshes.size());
+                for (const auto& mesh_snapshot : snapshot.meshes) {
+                    if (!mesh_snapshot.mesh) {
+                        return std::unexpected(
+                            "Failed to render GPU mesh layer: mesh snapshot is invalid");
+                    }
+
+                    const auto options = makeVideoExportMeshOptions(
+                        render_settings, any_selected, mesh_snapshot.is_selected);
+                    mesh_params.items.push_back(VulkanMeshDrawItem{
+                        .mesh = mesh_snapshot.mesh.get(),
+                        .model = mesh_snapshot.transform,
+                        .light_dir = options.light_dir,
+                        .light_intensity = options.light_intensity,
+                        .ambient = options.ambient,
+                        .backface_culling = options.backface_culling,
+                        .is_emphasized = options.is_emphasized,
+                        .dim_non_emphasized = options.dim_non_emphasized,
+                        .flash_intensity = options.flash_intensity,
+                        .wireframe_overlay = options.wireframe_overlay,
+                        .wireframe_color = options.wireframe_color,
+                        .wireframe_width = options.wireframe_width,
+                        .shadow_enabled = options.shadow_enabled,
+                        .shadow_map_resolution = options.shadow_map_resolution,
+                    });
+                }
+
+                auto mesh_layer = mesh_renderer_state->renderer->render(
+                    *vulkan_context, mesh_params, projection, width, height);
+                if (!mesh_layer) {
+                    return std::unexpected(std::format(
+                        "Failed to render GPU mesh layer: {}", mesh_layer.error()));
+                }
+                if (!isValidVideoExportMeshLayer(*mesh_layer, width, height)) {
+                    return std::unexpected(
+                        "Failed to render GPU mesh layer: renderer returned an invalid mesh layer");
+                }
+                prerendered_meshes = std::move(*mesh_layer);
+            } catch (const std::exception& error) {
+                return std::unexpected(std::format(
+                    "Failed to render GPU mesh layer: {}", error.what()));
+            } catch (...) {
+                return std::unexpected(
+                    "Failed to render GPU mesh layer: an unknown exception occurred");
+            }
         }
 
         rendering::VideoCompositeFrameRequest composite_request{
@@ -654,7 +741,7 @@ namespace lfs::vis::gui {
                  .exposure = render_settings.environment_exposure,
                  .rotation_degrees = render_settings.environment_rotation_degrees,
                  .equirectangular = render_settings.equirectangular},
-            .meshes = std::move(mesh_items),
+            .prerendered_meshes = prerendered_meshes ? &*prerendered_meshes : nullptr,
         };
         return engine.renderVideoCompositeFrame(primary_frame, composite_request);
     }
@@ -668,6 +755,13 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::resetVideoExportEnvironmentState() {
         video_export_environment_state_.reset();
+    }
+
+    void AsyncTaskManager::resetVideoExportMeshRendererState() {
+        if (video_export_mesh_renderer_state_) {
+            video_export_mesh_renderer_state_->shutdown();
+            video_export_mesh_renderer_state_.reset();
+        }
     }
 
     void AsyncTaskManager::shutdown() {
@@ -684,6 +778,7 @@ namespace lfs::vis::gui {
         video_export_state_.thread.reset();
         if (viewer_ && viewer_->isOnViewerThread()) {
             resetVideoExportEnvironmentState();
+            resetVideoExportMeshRendererState();
         }
 
         if (import_state_.thread) {
@@ -791,7 +886,9 @@ namespace lfs::vis::gui {
         });
 
         cmd::SequencerExportVideo::when([this](const auto& evt) {
-            const auto path = SaveMp4FileDialog("camera_path");
+            const auto path = evt.path.empty()
+                                  ? SaveMp4FileDialog("camera_path")
+                                  : std::filesystem::path(evt.path);
             if (path.empty())
                 return;
 
@@ -1892,28 +1989,34 @@ namespace lfs::vis::gui {
 
         resetVideoExportEnvironmentState();
         video_export_environment_state_ = std::make_unique<VideoExportEnvironmentState>();
+        resetVideoExportMeshRendererState();
+        if (!snapshot_result->meshes.empty()) {
+            video_export_mesh_renderer_state_ = std::make_unique<VideoExportMeshRendererState>();
+        }
 
         LOG_INFO("Starting video export: {} frames at {}x{}", total_frames, width, height);
 
         video_export_state_.thread.emplace(
             [this, viewer = viewer_, path, export_options, total_frames, width, height,
-             engine, rendering_manager, render_settings,
+             engine, scene_manager, rendering_manager, render_settings, start_time, time_step,
              environment_state = video_export_environment_state_.get(),
+             mesh_renderer_state = video_export_mesh_renderer_state_.get(),
              snapshot = *snapshot_result,
              frame_states = std::move(frame_states)](std::stop_token stop_token) mutable {
                 bool cancelled = false;
-                auto cleanup_environment_state = [this, viewer]() {
-                    if (!video_export_environment_state_) {
+                auto cleanup_video_export_state = [this, viewer]() {
+                    if (!video_export_environment_state_ && !video_export_mesh_renderer_state_) {
                         return;
                     }
                     auto cleanup_result = postToViewerAndWait(
                         viewer,
                         [this]() -> std::expected<void, std::string> {
+                            resetVideoExportMeshRendererState();
                             resetVideoExportEnvironmentState();
                             return {};
                         });
                     if (!cleanup_result) {
-                        LOG_DEBUG("Skipping video export environment cleanup: {}", cleanup_result.error());
+                        LOG_DEBUG("Skipping video export state cleanup: {}", cleanup_result.error());
                     }
                 };
 
@@ -1930,7 +2033,7 @@ namespace lfs::vis::gui {
                     lfs::core::events::state::VideoExportFailed{
                         .error = LOC(lichtfeld::Strings::Runtime::VIDEO_ENCODER_UNAVAILABLE)}
                         .emit();
-                    cleanup_environment_state();
+                    cleanup_video_export_state();
                     return;
                 }
 
@@ -1954,7 +2057,7 @@ namespace lfs::vis::gui {
                         .emit();
                     video_export_state_.active.store(false);
                     publishVideoExportOverlayState();
-                    cleanup_environment_state();
+                    cleanup_video_export_state();
                     return;
                 }
 
@@ -1967,13 +2070,26 @@ namespace lfs::vis::gui {
 
                     auto frame_tensor = postToViewerAndWait(
                         viewer,
-                        [engine, rendering_manager, environment_state, snapshot, render_settings, width, height,
-                         cam_state = frame_states[frame]]() -> std::expected<lfs::core::Tensor, std::string> {
+                        [viewer, engine, scene_manager, rendering_manager, environment_state,
+                         mesh_renderer_state, snapshot_ptr = &snapshot, render_settings, width, height,
+                         cam_state = frame_states[frame],
+                         clip_time = start_time + static_cast<float>(frame) * time_step]()
+                            -> std::expected<lfs::core::Tensor, std::string> {
+                            if (lfs::python::has_scene_time_callback()) {
+                                lfs::python::tick_scene_time_callback(clip_time);
+                                refreshVideoExportMeshTransforms(
+                                    *snapshot_ptr, scene_manager->getScene());
+                            }
+                            auto* const window_manager = viewer->getWindowManager();
+                            auto* const vulkan_context =
+                                window_manager != nullptr ? window_manager->getVulkanContext() : nullptr;
                             return renderVideoExportFrame(
                                 *rendering_manager,
                                 *engine,
                                 *environment_state,
-                                snapshot,
+                                mesh_renderer_state,
+                                vulkan_context,
+                                *snapshot_ptr,
                                 render_settings,
                                 cam_state,
                                 width,
@@ -1992,7 +2108,7 @@ namespace lfs::vis::gui {
                         break;
                     }
 
-                    auto export_frame = orientVideoExportFrameForEncoder(*frame_tensor);
+                    auto export_frame = frame_tensor->contiguous();
                     auto image_hwc = export_frame.permute({1, 2, 0}).contiguous();
 
                     if (frame == 0) {
@@ -2080,7 +2196,7 @@ namespace lfs::vis::gui {
                             .emit();
                     }
                 }
-                cleanup_environment_state();
+                cleanup_video_export_state();
                 video_export_state_.active.store(false);
                 publishVideoExportOverlayState();
             });

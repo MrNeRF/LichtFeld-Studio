@@ -6,7 +6,6 @@
 #include "control/command_api.hpp"
 #include "core/camera.hpp"
 #include "core/cuda_error.hpp"
-#include "core/cuda_version.hpp"
 #include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -3025,15 +3024,6 @@ namespace lfs::vis::gui {
         async_tasks_.setupEvents();
         sequencer_ui_.setupEvents();
         gizmo_manager_.setupEvents();
-        checkCudaVersionAndNotify();
-    }
-
-    void GuiManager::checkCudaVersionAndNotify() {
-        using namespace lfs::core;
-        const auto info = check_cuda_version();
-        if (!info.query_failed && !info.supported) {
-            pending_cuda_warning_ = info;
-        }
     }
 
     void GuiManager::promptFileAssociation() {
@@ -3988,8 +3978,7 @@ namespace lfs::vis::gui {
             appendScreenOverlayCommandOverlays(params, rendering_manager->getScreenOverlayRenderer());
 
             // Pull GPU mesh / environment frame populated by renderVulkanFrame.
-            // vulkan_viewport_pass rasterizes these on the GPU instead of the
-            // auxiliary CPU mesh / environment paths.
+            // vulkan_viewport_pass rasterizes these on the GPU.
             auto mesh_frame = rendering_manager->getVulkanMeshFrame();
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
@@ -4432,18 +4421,6 @@ namespace lfs::vis::gui {
             cpu_ui_before_vulkan_timer.emplace("gui_render.cpu_ui_before_vulkan_begin",
                                                ::lfs::core::LogLevel::Performance,
                                                LFS_SOURCE_SITE_CURRENT());
-        }
-
-        if (pending_cuda_warning_) {
-            constexpr int MIN_MAJOR = lfs::core::MIN_CUDA_VERSION / 1000;
-            constexpr int MIN_MINOR = (lfs::core::MIN_CUDA_VERSION % 1000) / 10;
-            lfs::core::events::state::CudaVersionUnsupported{
-                .major = pending_cuda_warning_->major,
-                .minor = pending_cuda_warning_->minor,
-                .min_major = MIN_MAJOR,
-                .min_minor = MIN_MINOR}
-                .emit();
-            pending_cuda_warning_.reset();
         }
 
         if (!cuda_unavailable_notified_ && lfs::core::cuda_is_unavailable()) {

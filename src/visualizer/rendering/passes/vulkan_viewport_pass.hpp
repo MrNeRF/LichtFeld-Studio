@@ -145,7 +145,7 @@ namespace lfs::vis {
         std::vector<VulkanViewportFrustumBatch> frustum_batches;
 
         // GPU-rendered meshes drawn into the same color/depth attachments as the
-        // viewport pass. Replaces the old CPU `rasterizeMeshTriangle` fallback path.
+        // viewport pass.
         glm::mat4 mesh_view_projection{1.0f};
         glm::vec3 mesh_camera_position{0.0f};
         std::vector<VulkanMeshDrawItem> mesh_items;

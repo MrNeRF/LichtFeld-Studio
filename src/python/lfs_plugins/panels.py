@@ -63,6 +63,15 @@ def register_builtin_panels():
         lf.register_class(AboutPanel)
         lf.ui.set_panel_enabled("lfs.about", False)
 
+        from .account_panel import AccountPanel
+
+        lf.register_class(AccountPanel)
+        lf.ui.set_panel_enabled("lfs.account", False)
+
+        from .portal_account import initialize_portal_account
+
+        initialize_portal_account()
+
         from .getting_started_panel import GettingStartedPanel
 
         lf.register_class(GettingStartedPanel)

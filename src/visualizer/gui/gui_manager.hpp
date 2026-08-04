@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "core/cuda_version.hpp"
 #include "core/error_bus.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
@@ -174,7 +173,6 @@ namespace lfs::vis {
                                       VkExtent2D extent,
                                       const VulkanViewportPassParams& params);
             void setupEventHandlers();
-            void checkCudaVersionAndNotify();
             void applyDefaultStyle();
             void initMenuBar();
             void registerNativePanels();
@@ -310,8 +308,6 @@ namespace lfs::vis {
             float current_ui_scale_ = 1.0f;
             float pending_ui_scale_ = 0.0f;
 
-            // Deferred CUDA version warning (emitted on first drawFrame)
-            std::optional<lfs::core::CudaVersionInfo> pending_cuda_warning_;
             bool cuda_unavailable_notified_ = false;
 
             // File association prompt (Windows only, one-shot)

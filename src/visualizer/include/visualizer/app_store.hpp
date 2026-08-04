@@ -72,6 +72,17 @@ namespace lfs::vis {
             bool operator==(const ImportOverlayState&) const = default;
         };
 
+        struct LFS_VIS_API AccountState {
+            bool signed_in = false;
+            bool linking = false;
+            bool membership_required = false;
+            std::string label;
+            std::string tier;
+            std::string tooltip;
+
+            bool operator==(const AccountState&) const = default;
+        };
+
         struct LFS_VIS_API VideoExportOverlayState {
             bool active = false;
             float progress = 0.0f;
@@ -144,6 +155,7 @@ namespace lfs::vis {
             PivotModeValue,
             MultiTransformModeValue,
             ImportOverlayStateValue,
+            AccountStateValue,
             VideoExportOverlayStateValue,
             ExportProgressStateValue,
             Mesh2SplatStateValue,
@@ -182,6 +194,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<int> pivot_mode;
         lfs::core::reactive::Observable<int> multi_transform_mode;
         lfs::core::reactive::Observable<ImportOverlayState> import_overlay_state;
+        lfs::core::reactive::Observable<AccountState> account_state;
         lfs::core::reactive::Observable<VideoExportOverlayState> video_export_overlay_state;
         lfs::core::reactive::Observable<ExportProgressState> export_progress_state;
         lfs::core::reactive::Observable<TaskProgressState> mesh2splat_state;

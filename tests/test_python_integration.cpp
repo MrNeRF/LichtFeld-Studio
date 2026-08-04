@@ -458,6 +458,30 @@ TEST_F(PythonIntegrationTest, InitializationSucceeds) {
     EXPECT_NO_THROW((void)lfs::python::ensure_initialized());
 }
 
+TEST_F(PythonIntegrationTest, SceneTimeCallbackSupportsSetTickClearAndUnsetTick) {
+    struct SceneTimeCallbackReset {
+        ~SceneTimeCallbackReset() { lfs::python::clear_scene_time_callback(); }
+    } reset;
+
+    lfs::python::clear_scene_time_callback();
+    EXPECT_FALSE(lfs::python::has_scene_time_callback());
+    EXPECT_NO_THROW(lfs::python::tick_scene_time_callback(-1.0f));
+
+    std::vector<float> clip_times;
+    lfs::python::set_scene_time_callback(
+        [&clip_times](const float clip_time) { clip_times.push_back(clip_time); });
+    EXPECT_TRUE(lfs::python::has_scene_time_callback());
+
+    lfs::python::tick_scene_time_callback(0.0f);
+    lfs::python::tick_scene_time_callback(1.25f);
+    EXPECT_EQ(clip_times, (std::vector<float>{0.0f, 1.25f}));
+
+    lfs::python::clear_scene_time_callback();
+    EXPECT_FALSE(lfs::python::has_scene_time_callback());
+    EXPECT_NO_THROW(lfs::python::tick_scene_time_callback(2.0f));
+    EXPECT_EQ(clip_times, (std::vector<float>{0.0f, 1.25f}));
+}
+
 TEST_F(PythonIntegrationTest, ForcedInitFailureLatchesQueryableError) {
     // The forced-failure latch is terminal; the RAII guard restores the real
     // (Ready) latch even if an ASSERT below returns early, so sibling tests in

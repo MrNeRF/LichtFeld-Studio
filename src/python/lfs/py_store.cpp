@@ -171,6 +171,34 @@ namespace lfs::python {
             return state;
         }
 
+        nb::dict account_state_to_dict(const lfs::vis::AppStore::AccountState& value) {
+            nb::dict state;
+            state["signed_in"] = value.signed_in;
+            state["linking"] = value.linking;
+            state["membership_required"] = value.membership_required;
+            state["label"] = value.label;
+            state["tier"] = value.tier;
+            state["tooltip"] = value.tooltip;
+            return state;
+        }
+
+        lfs::vis::AppStore::AccountState account_state_from_object(const nb::object& value) {
+            if (value.is_none())
+                return {};
+            if (!nb::isinstance<nb::dict>(value))
+                throw nb::type_error("account_state must be a dict");
+
+            const nb::dict dict = nb::cast<nb::dict>(value);
+            lfs::vis::AppStore::AccountState state;
+            state.signed_in = dict_value(dict, "signed_in", false);
+            state.linking = dict_value(dict, "linking", false);
+            state.membership_required = dict_value(dict, "membership_required", false);
+            state.label = dict_value(dict, "label", std::string{});
+            state.tier = dict_value(dict, "tier", std::string{});
+            state.tooltip = dict_value(dict, "tooltip", std::string{});
+            return state;
+        }
+
         nb::dict video_export_overlay_state_to_dict(const lfs::vis::AppStore::VideoExportOverlayState& value) {
             nb::dict state;
             state["active"] = value.active;
@@ -299,6 +327,8 @@ namespace lfs::python {
                 store.multi_transform_mode.set(nb::cast<int>(value));
             else if (field == "import_overlay_state")
                 store.import_overlay_state.set(import_overlay_state_from_object(value));
+            else if (field == "account_state")
+                store.account_state.set(account_state_from_object(value));
             else if (field == "video_export_overlay_state")
                 store.video_export_overlay_state.set(video_export_overlay_state_from_object(value));
             else if (field == "export_progress_state")
@@ -359,6 +389,8 @@ namespace lfs::python {
                 return nb::cast(store.multi_transform_mode.get());
             if (field == "import_overlay_state")
                 return import_overlay_state_to_dict(store.import_overlay_state.get());
+            if (field == "account_state")
+                return account_state_to_dict(store.account_state.get());
             if (field == "video_export_overlay_state")
                 return video_export_overlay_state_to_dict(store.video_export_overlay_state.get());
             if (field == "export_progress_state")
@@ -419,6 +451,9 @@ namespace lfs::python {
             if (field == "import_overlay_state")
                 return subscribe_observable_as(
                     store.import_overlay_state, std::move(callback), import_overlay_state_to_dict);
+            if (field == "account_state")
+                return subscribe_observable_as(
+                    store.account_state, std::move(callback), account_state_to_dict);
             if (field == "video_export_overlay_state")
                 return subscribe_observable_as(
                     store.video_export_overlay_state, std::move(callback), video_export_overlay_state_to_dict);

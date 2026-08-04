@@ -1011,6 +1011,14 @@ namespace lfs::vis {
 
         const auto framebuffer_region =
             resolveFramebufferViewportRegion(context.viewport, context.logical_screen_size, context.viewport_region);
+        if (framebuffer_region.valid()) {
+            // resolveFramebufferViewportRegion reports a GL bottom-left origin; window
+            // readbacks are top-left, so store the flipped form callers actually crop with.
+            framebuffer_viewport_rect_ = {
+                .top_left = {framebuffer_region.gl_pos.x,
+                             context.viewport.frameBufferSize.y - framebuffer_region.gl_pos.y - framebuffer_region.size.y},
+                .size = framebuffer_region.size};
+        }
         glm::ivec2 current_size = context.viewport.frameBufferSize;
         if (context.viewport_region) {
             current_size = framebuffer_region.size;
@@ -2760,7 +2768,6 @@ namespace lfs::vis {
                                      .exposure = frame_settings.environment_exposure,
                                      .rotation_degrees = frame_settings.environment_rotation_degrees,
                                      .equirectangular = frame_settings.equirectangular},
-                                .meshes = {},
                             };
                         };
 

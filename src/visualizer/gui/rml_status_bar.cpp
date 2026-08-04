@@ -69,6 +69,13 @@ namespace lfs::vis::gui {
             }
         };
 
+        class AccountPanelOpenListener final : public Rml::EventListener {
+        public:
+            void ProcessEvent(Rml::Event& /*event*/) override {
+                PanelRegistry::instance().set_panel_enabled("lfs.account", true);
+            }
+        };
+
         std::string fmtCount(int64_t n) {
             if (n >= 1'000'000)
                 return std::format("{:.2f}M", n / 1e6);
@@ -288,6 +295,7 @@ namespace lfs::vis::gui {
         model_.wasd_sep_color = colorToRml(palette.text_dim);
         model_.zoom_color = colorToRml(palette.info);
         model_.zoom_sep_color = colorToRml(palette.text_dim);
+        model_.account_color = colorToRml(palette.text_dim);
         model_.lfs_mem_color = colorToRml(palette.info);
         model_.gpu_mem_color = colorToRml(palette.text);
         model_.fps_color = colorToRml(palette.success);
@@ -332,6 +340,12 @@ namespace lfs::vis::gui {
         ctor.Bind("zoom_text", &model_.zoom_text);
         ctor.Bind("zoom_color", &model_.zoom_color);
         ctor.Bind("zoom_sep_color", &model_.zoom_sep_color);
+        ctor.Bind("account_label", &model_.account_label);
+        ctor.Bind("account_tier", &model_.account_tier);
+        ctor.Bind("account_tooltip", &model_.account_tooltip);
+        ctor.Bind("account_color", &model_.account_color);
+        ctor.Bind("account_show_tier", &model_.account_show_tier);
+        ctor.Bind("account_membership_required", &model_.account_membership_required);
         ctor.Bind("lfs_mem_text", &model_.lfs_mem_text);
         ctor.Bind("lfs_mem_color", &model_.lfs_mem_color);
         ctor.Bind("show_gpu_model", &model_.show_gpu_model);
@@ -405,6 +419,8 @@ namespace lfs::vis::gui {
         git_commit_listener_ = nullptr;
         delete gpu_icon_listener_;
         gpu_icon_listener_ = nullptr;
+        delete account_listener_;
+        account_listener_ = nullptr;
     }
 
     void RmlStatusBar::reloadResources() {
@@ -476,6 +492,7 @@ namespace lfs::vis::gui {
             markModelDirty();
         }));
         bind(store.mode_text);
+        bind(store.account_state);
     }
 
     void RmlStatusBar::markModelDirty() {
@@ -542,6 +559,11 @@ namespace lfs::vis::gui {
             gpu_icon_listener_ = new VramHudToggleListener();
         if (auto* el = document_->GetElementById("gpu-icon"))
             el->AddEventListener(Rml::EventId::Click, gpu_icon_listener_);
+
+        if (!account_listener_)
+            account_listener_ = new AccountPanelOpenListener();
+        if (auto* el = document_->GetElementById("account-chip"))
+            el->AddEventListener(Rml::EventId::Click, account_listener_);
     }
 
     void RmlStatusBar::setModelString(const char* name, std::string& field, std::string value) {
@@ -1011,6 +1033,43 @@ namespace lfs::vis::gui {
             setModelString("status_message_color", model_.status_message_color,
                            colorToRmlAlpha(status_col, status_msg.alpha));
         }
+
+        const auto account = lfs::vis::app_store().account_state.get();
+        std::string account_label = account.label;
+        if (account.linking) {
+            account_label = LOC("account.status.linking");
+        } else if (!account.signed_in) {
+            account_label = LOC("account.status.sign_in");
+        } else if (account_label.empty()) {
+            account_label = "LF";
+        }
+        setModelString("account_label", model_.account_label, std::move(account_label));
+        setModelString("account_tier", model_.account_tier, account.tier);
+        std::string account_tooltip;
+        if (account.membership_required) {
+            account_tooltip = LOC("account.status.membership_required");
+        } else if (account.linking) {
+            account_tooltip = LOC("account.status.linking");
+        } else if (!account.signed_in) {
+            account_tooltip = LOC("account.status.tooltip");
+        }
+        if (!account.tooltip.empty()) {
+            if (!account_tooltip.empty())
+                account_tooltip += " — ";
+            account_tooltip += account.tooltip;
+        }
+        if (account_tooltip.empty())
+            account_tooltip = LOC("account.status.tooltip");
+        setModelString("account_tooltip", model_.account_tooltip, std::move(account_tooltip));
+        setModelBool("account_show_tier", model_.account_show_tier,
+                     account.signed_in && !account.tier.empty());
+        setModelBool("account_membership_required", model_.account_membership_required,
+                     account.membership_required);
+        const ThemeColor& account_color = account.membership_required ? p.warning
+                                          : account.linking           ? p.info
+                                          : account.signed_in         ? p.text
+                                                                      : p.text_dim;
+        setModelString("account_color", model_.account_color, colorToRml(account_color));
 
         // Right section: GPU memory
         pollGpuMemoryQuery(now);

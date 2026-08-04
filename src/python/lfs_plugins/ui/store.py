@@ -17,6 +17,15 @@ DirtySpec: TypeAlias = str | Iterable[str] | None
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_ACCOUNT_STATE: dict[str, object] = {
+    "signed_in": False,
+    "linking": False,
+    "membership_required": False,
+    "label": "",
+    "tier": "",
+    "tooltip": "",
+}
+
 
 def _native_store():
     try:
@@ -231,6 +240,10 @@ class RuntimeState:
     pivot_mode = StateSignal[int]("pivot_mode", 0)
     multi_transform_mode = StateSignal[int]("multi_transform_mode", 0)
     import_overlay_state = StateSignal[dict[str, object]]("import_overlay_state", {})
+    account_state = StateSignal[dict[str, object]](
+        "account_state",
+        DEFAULT_ACCOUNT_STATE.copy(),
+    )
     video_export_overlay_state = StateSignal[dict[str, object]](
         "video_export_overlay_state",
         {},
@@ -300,6 +313,7 @@ class RuntimeState:
         cls.transform_space.value = 0
         cls.pivot_mode.value = 0
         cls.import_overlay_state.value = {}
+        cls.account_state.value = DEFAULT_ACCOUNT_STATE.copy()
         cls.video_export_overlay_state.value = {}
         cls.export_progress_state.value = {}
         cls.mesh2splat_state.value = {}

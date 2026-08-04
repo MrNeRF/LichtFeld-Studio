@@ -148,6 +148,7 @@ set(TEST_FILES
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
+    test_training_parameters.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
@@ -248,6 +249,7 @@ set(TEST_FILES
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
+    test_ppisp_checkpoint_roundtrip.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp
     test_export_env_composite.cpp
@@ -255,6 +257,7 @@ set(TEST_FILES
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
     test_mesh_data.cpp
+    test_mesh_offscreen_renderer.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
@@ -310,6 +313,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
 )
 
 # Create test executable

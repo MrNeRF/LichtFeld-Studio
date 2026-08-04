@@ -55,6 +55,20 @@ namespace lfs::vis {
             return std::string(outcome.error().detail());
         }
 
+        [[nodiscard]] constexpr bool hasStencilAspect(const VkFormat format) noexcept {
+            return format == VK_FORMAT_D16_UNORM_S8_UINT ||
+                   format == VK_FORMAT_D24_UNORM_S8_UINT ||
+                   format == VK_FORMAT_D32_SFLOAT_S8_UINT;
+        }
+
+        [[nodiscard]] constexpr VkImageAspectFlags depthAspectMask(const VkFormat format) noexcept {
+            VkImageAspectFlags aspects = VK_IMAGE_ASPECT_DEPTH_BIT;
+            if (hasStencilAspect(format)) {
+                aspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            }
+            return aspects;
+        }
+
         struct MeshVertex {
             float position[3];
             float normal[3];
@@ -204,7 +218,7 @@ namespace lfs::vis {
         // sampler2DShadow descriptor without the validation layer complaining.
         ShadowTarget shadow_dummy{};
 
-        std::unordered_map<const lfs::core::MeshData*, GpuMesh> mesh_cache;
+        std::unordered_map<std::uint64_t, GpuMesh> mesh_cache;
         std::uint64_t frame_counter = 0;
 
         ~Impl() { destroy(); }
@@ -765,7 +779,7 @@ namespace lfs::vis {
                 destroyShadow(out);
                 return false;
             }
-            cmdImageBarrier2(cb, out.image, context->depthStencilAspectMask(),
+            cmdImageBarrier2(cb, out.image, depthAspectMask(shadow_format),
                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                              VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -1400,7 +1414,8 @@ namespace lfs::vis {
             rendering_info.colorAttachmentCount = 1;
             rendering_info.pColorAttachmentFormats = &color_format;
             rendering_info.depthAttachmentFormat = depth_format;
-            rendering_info.stencilAttachmentFormat = depth_format;
+            rendering_info.stencilAttachmentFormat =
+                hasStencilAspect(depth_format) ? depth_format : VK_FORMAT_UNDEFINED;
 
             // Build cull and no-cull variants by tweaking only the rasterization state.
             // Mesh vertices use the same GL-convention projection matrices as FastGS,
@@ -1576,7 +1591,8 @@ namespace lfs::vis {
             rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
             rendering_info.colorAttachmentCount = 0;
             rendering_info.depthAttachmentFormat = depth_format;
-            rendering_info.stencilAttachmentFormat = depth_format;
+            rendering_info.stencilAttachmentFormat =
+                hasStencilAspect(depth_format) ? depth_format : VK_FORMAT_UNDEFINED;
 
             VkGraphicsPipelineCreateInfo pipeline_info{};
             pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -1735,7 +1751,8 @@ namespace lfs::vis {
             rendering_info.colorAttachmentCount = 1;
             rendering_info.pColorAttachmentFormats = &color_format;
             rendering_info.depthAttachmentFormat = depth_format;
-            rendering_info.stencilAttachmentFormat = depth_format;
+            rendering_info.stencilAttachmentFormat =
+                hasStencilAspect(depth_format) ? depth_format : VK_FORMAT_UNDEFINED;
 
             VkGraphicsPipelineCreateInfo pipeline_info{};
             pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -2316,7 +2333,7 @@ namespace lfs::vis {
                 return false;
             }
 
-            cmdImageBarrier2(cb, gpu.shadow.image, context->depthStencilAspectMask(),
+            cmdImageBarrier2(cb, gpu.shadow.image, depthAspectMask(shadow_format),
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
@@ -2368,7 +2385,7 @@ namespace lfs::vis {
 
             vkCmdEndRendering(cb);
 
-            cmdImageBarrier2(cb, gpu.shadow.image, context->depthStencilAspectMask(),
+            cmdImageBarrier2(cb, gpu.shadow.image, depthAspectMask(shadow_format),
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                              VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
@@ -2394,12 +2411,12 @@ namespace lfs::vis {
             for (const auto& item : params.items) {
                 if (!item.mesh)
                     continue;
-                auto it = mesh_cache.find(item.mesh);
+                auto it = mesh_cache.find(item.mesh->id());
                 if (it == mesh_cache.end()) {
                     GpuMesh gpu{};
                     if (uploadMesh(*item.mesh, gpu)) {
                         gpu.last_used_frame = frame_counter;
-                        mesh_cache.emplace(item.mesh, std::move(gpu));
+                        mesh_cache.emplace(item.mesh->id(), std::move(gpu));
                     }
                 } else if (it->second.generation != item.mesh->generation()) {
                     if (uploadMesh(*item.mesh, it->second)) {
@@ -2414,7 +2431,7 @@ namespace lfs::vis {
                 if (!item.mesh || !item.shadow_enabled || item.shadow_map_resolution <= 0) {
                     continue;
                 }
-                auto it = mesh_cache.find(item.mesh);
+                auto it = mesh_cache.find(item.mesh->id());
                 if (it == mesh_cache.end() || it->second.vertex_buffer == VK_NULL_HANDLE) {
                     continue;
                 }
@@ -2540,7 +2557,7 @@ namespace lfs::vis {
                 const auto& item = params.items[item_index];
                 if (!item.mesh)
                     continue;
-                auto it = mesh_cache.find(item.mesh);
+                auto it = mesh_cache.find(item.mesh->id());
                 if (it == mesh_cache.end() || it->second.vertex_buffer == VK_NULL_HANDLE) {
                     continue;
                 }

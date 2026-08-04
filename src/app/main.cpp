@@ -54,6 +54,16 @@ namespace {
 #endif
     }
 
+    // Every mode that touches CUDA gates here, before the primary context exists: with
+    // CUDA_MODULE_LOADING=EAGER pre-set in the environment, context creation itself loads
+    // modules the card cannot run, which would beat the check to the crash.
+    void preflightGpuOrExit(const bool show_dialog) {
+        if (!lfs::app::preflightGpu(show_dialog)) {
+            lfs::core::teardown_gpu_before_exit();
+            lfs::core::flush_and_exit(1);
+        }
+    }
+
     // Probe what the CUDA driver allocates during context creation, *attributed to this
     // process* (NVML per-PID, not device-wide cudaMemGetInfo). Each phase is the delta
     // against the previous probe so the sum reconstructs the total context cost.
@@ -194,14 +204,18 @@ namespace {
                 return 0;
             } else if constexpr (std::is_same_v<T, lfs::core::args::WarmupMode>) {
                 applyCudaContextTuning();
+                preflightGpuOrExit(false);
                 analyzeCudaContextDistribution();
                 return 0;
             } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
+                preflightGpuOrExit(false);
                 configure_usd_plugins();
                 return lfs::app::run_converter(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
+                preflightGpuOrExit(false);
                 return lfs::app::run_mesh2splat(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
+                preflightGpuOrExit(false);
                 return lfs::preprocessing::run_preprocess(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
@@ -209,9 +223,13 @@ namespace {
                 LOG_INFO("LichtFeld Studio");
                 LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
 
-                // Driver-level tuning must precede *any* CUDA call, including the
-                // cudaFree(nullptr) inside analyzeCudaContextDistribution.
+                // Driver-level tuning must precede *any* CUDA call, including the pre-flight
+                // gate and the cudaFree(nullptr) inside analyzeCudaContextDistribution.
                 applyCudaContextTuning();
+
+                const bool interactive =
+                    !mode.params->optimization.headless && !mode.params->render_path;
+                preflightGpuOrExit(interactive);
 
                 // Probe and decompose the CUDA driver's context-creation cost only for the
                 // GPU app path. CLI-only modes such as --help, convert, preprocess,

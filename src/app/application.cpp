@@ -43,17 +43,21 @@
 #include <cuda_runtime.h>
 #include <future>
 #include <mutex>
+#include <print>
 #include <rasterization_api.h>
+#include <string_view>
 
 #ifdef WIN32
 #include <windows.h>
 #endif
 
+#ifndef LFS_MIN_SM
+#error "LFS_MIN_SM must be defined by the build (CMakeLists.txt)"
+#endif
+
 namespace lfs::app {
 
     namespace {
-
-        bool checkCudaDriverVersion();
 
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
             LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params.resume_checkpoint));
@@ -112,7 +116,6 @@ namespace lfs::app {
                 return 1;
             }
 
-            checkCudaDriverVersion();
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
             HeadlessRunCoordinator coordinator;
 
@@ -263,7 +266,6 @@ namespace lfs::app {
                 return 1;
             }
 
-            checkCudaDriverVersion();
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
             HeadlessRunCoordinator coordinator;
 
@@ -377,8 +379,6 @@ namespace lfs::app {
         // Renders a sequencer camera path against a trained scene to a video file, headless.
         int runHeadlessRender(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             const auto& cfg = *params->render_path;
-
-            checkCudaDriverVersion();
 
             // Load the trained scene.
             std::shared_ptr<core::SplatData> model;
@@ -504,49 +504,92 @@ namespace lfs::app {
             return 0;
         }
 
-        bool checkCudaDriverVersion() {
-            const auto info = lfs::core::check_cuda_version();
-            if (info.query_failed) {
-                LOG_WARN("Failed to query CUDA driver version");
-                return true;
-            }
+        // Only an accurate paraphrase of SM 7.5 — Turing also covers the GTX 16-series and T4,
+        // so this must not say "RTX only". Drop the hint if the floor ever moves.
+        constexpr std::string_view kMinGpuHint =
+            LFS_MIN_SM == 75 ? " Cards from the GTX 16-series, RTX 20-series and newer qualify." : "";
 
+        // English literals on purpose: this runs before the visualizer exists, so
+        // LocalizationManager has no catalog loaded yet. Do not convert to LOC(...).
+        void reportFatalStartupError(const std::string& title, const std::string& message,
+                                     const bool show_dialog) {
+            // Only the training argument path reaches Logger::init, so for convert, mesh2splat,
+            // preprocess and --warmup a LOG_ERROR would be dropped and the refusal would look
+            // like a silent exit. Same fallback contract as error_reporter.cpp.
+            if (core::Logger::get().is_ready()) {
+                LOG_ERROR("{}", message);
+            } else {
+                std::println(stderr, "{}", message);
+            }
+#ifdef WIN32
+            if (show_dialog) {
+                MessageBoxW(nullptr, core::utf8_to_wstring(message).c_str(),
+                            core::utf8_to_wstring(title).c_str(), MB_ICONERROR | MB_OK);
+            }
+#else
+            (void)title;
+            (void)show_dialog;
+#endif
+        }
+
+    } // namespace
+
+    // The binary only carries code for SM >= LFS_MIN_SM, so a lower card can never JIT our
+    // kernels. Without this gate the first launch inside warmup_kernels dies with no
+    // user-facing message (#1540). show_dialog is false for CLI-only modes: a modal in a
+    // non-interactive process blocks it forever.
+    bool preflightGpu(const bool show_dialog) {
+        const auto info = lfs::core::check_cuda_version();
+        if (info.query_failed) {
+            LOG_WARN("Failed to query CUDA driver version");
+        } else {
             LOG_INFO("CUDA driver version: {}.{}", info.major, info.minor);
             if (!info.supported) {
-                LOG_WARN("CUDA {}.{} unsupported. Requires 12.8+ (driver 570+)", info.major, info.minor);
+                reportFatalStartupError(
+                    "LichtFeld Studio - Incompatible driver",
+                    std::format("CUDA {}.{} is too old. LichtFeld Studio requires CUDA 12.8 or "
+                                "newer, which needs NVIDIA driver 570 or newer.",
+                                info.major, info.minor),
+                    show_dialog);
                 return false;
             }
-            return true;
         }
+
+        cudaDeviceProp prop{};
+        if (const cudaError_t err = cudaGetDeviceProperties(&prop, 0); err != cudaSuccess) {
+            reportFatalStartupError(
+                "LichtFeld Studio - No usable GPU",
+                std::format("No usable NVIDIA GPU found ({}). LichtFeld Studio requires an "
+                            "NVIDIA GPU with compute capability {}.{} or newer.{}",
+                            cudaGetErrorString(err), LFS_MIN_SM / 10, LFS_MIN_SM % 10, kMinGpuHint),
+                show_dialog);
+            return false;
+        }
+
+        LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
+                 prop.totalGlobalMem / (1024 * 1024));
+
+        if (const int device_sm = prop.major * 10 + prop.minor; device_sm < LFS_MIN_SM) {
+            reportFatalStartupError(
+                "LichtFeld Studio - Incompatible GPU",
+                std::format("This PC's GPU ({}) has compute capability {}.{}, below the {}.{} "
+                            "this build requires.{}",
+                            prop.name, prop.major, prop.minor, LFS_MIN_SM / 10, LFS_MIN_SM % 10,
+                            kMinGpuHint),
+                show_dialog);
+            return false;
+        }
+        return true;
+    }
+
+    namespace {
 
         std::future<void>& cudaWarmupFuture() {
             static std::future<void> fut;
             return fut;
         }
 
-        void warmupCudaSync() {
-            checkCudaDriverVersion();
-
-            cudaDeviceProp prop;
-            if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
-                LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
-                         prop.totalGlobalMem / (1024 * 1024));
-            }
-
-            LOG_INFO("Initializing CUDA...");
-            fast_lfs::rasterization::warmup_kernels();
-            lfs::diagnostics::VramProfiler::instance().captureCudaWarmupDelta();
-        }
-
         void warmupCudaAsync() {
-            checkCudaDriverVersion();
-
-            cudaDeviceProp prop;
-            if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
-                LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
-                         prop.totalGlobalMem / (1024 * 1024));
-            }
-
             LOG_INFO("Initializing CUDA (async)...");
             cudaWarmupFuture() = std::async(std::launch::async, [] {
                 fast_lfs::rasterization::warmup_kernels();
@@ -569,7 +612,8 @@ namespace lfs::app {
             // Warm up on every path, not just import/resume: warmup_kernels forces the
             // lazily-loaded cubins to upload so captureCudaWarmupDelta can attribute that
             // module memory (the cuda.modules row). Without it the modules land in the
-            // unattributed NVML residual. warmupCudaAsync runs checkCudaDriverVersion itself.
+            // unattributed NVML residual. The pre-flight gate in run_mode covers
+            // hardware compatibility before this warmup starts.
             warmupCudaAsync();
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());

@@ -46,6 +46,15 @@ class AboutOperator(Operator):
         return {"FINISHED"}
 
 
+class AccountOperator(Operator):
+    label = "account.menu"
+    description = "Open portal account"
+
+    def execute(self, context) -> set:
+        lf.ui.set_panel_enabled("lfs.account", True)
+        return {"FINISHED"}
+
+
 @register_menu
 class HelpMenu:
     """Help menu for the menu bar."""
@@ -60,6 +69,7 @@ class HelpMenu:
             items.append(menu_separator())
             items.append(menu_operator(SetDefaultAppOperator))
         items.append(menu_separator())
+        items.append(menu_operator(AccountOperator))
         items.append(menu_operator(AboutOperator))
         return items
 
@@ -68,6 +78,7 @@ _operator_classes = [
     GettingStartedOperator,
     SetDefaultAppOperator,
     UnsetDefaultAppOperator,
+    AccountOperator,
     AboutOperator,
 ]
 

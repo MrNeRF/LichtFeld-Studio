@@ -387,6 +387,19 @@ namespace lfs::vis {
         glm::ivec2 getRenderedSize() const { return viewport_artifact_service_.renderedSize(); }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
+
+        // Where the 3D viewport sat inside the window framebuffer on the last frame,
+        // top-left origin. Lets callers crop a full-window readback down to the viewport
+        // when no render path published an offscreen image to capture.
+        struct FramebufferViewportRect {
+            glm::ivec2 top_left{0, 0};
+            glm::ivec2 size{0, 0};
+
+            [[nodiscard]] bool valid() const { return size.x > 0 && size.y > 0; }
+        };
+        [[nodiscard]] FramebufferViewportRect framebufferViewportRect() const {
+            return framebuffer_viewport_rect_;
+        }
         [[nodiscard]] uint64_t getViewportArtifactGeneration() const {
             return viewport_artifact_service_.artifactGeneration();
         }
@@ -475,7 +488,6 @@ namespace lfs::vis {
 
         // Vulkan mesh frame — populated by `renderVulkanFrame` when there are meshes in
         // the scene, consumed by gui_manager to feed `vulkan_viewport_pass.mesh_items`.
-        // Replaces the old CPU `renderVideoCompositeFrame` mesh path.
         struct VulkanMeshFrame {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
@@ -735,6 +747,7 @@ namespace lfs::vis {
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
 
         RenderAnimationState animation_state_;
+        FramebufferViewportRect framebuffer_viewport_rect_;
         ViewportArtifactService viewport_artifact_service_;
         std::unique_ptr<ViewportInteropService> viewport_interop_;
 

@@ -1,0 +1,67 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="account_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="account">
+
+  <span class="panel-title">@tr:account.title</span>
+  <div class="separator"></div>
+
+  <div id="account-portal-host" class="account-portal-host hidden" data-class-hidden="!show_portal_host">{{ portal_host }}</div>
+
+  <div id="account-signed-out" class="account-state hidden" data-class-hidden="!show_signed_out">
+    <span class="account-heading">@tr:account.signed_out.title</span>
+    <span class="description">@tr:account.signed_out.description</span>
+    <span class="status-text status-error hidden" data-class-hidden="!show_error">{{ error_message }}</span>
+    <button id="account-sign-in" type="button" class="btn btn--primary account-primary-action">@tr:account.sign_in</button>
+  </div>
+
+  <div id="account-linking" class="account-state hidden" data-class-hidden="!show_linking">
+    <span class="account-heading">@tr:account.linking.title</span>
+    <span class="description">@tr:account.linking.description</span>
+    <span class="account-user-code">{{ user_code }}</span>
+    <span class="account-countdown"><span>@tr:account.expires_in</span><span class="account-countdown-value">{{ countdown }}</span></span>
+    <div class="account-actions">
+      <button id="account-open-link" type="button" class="btn btn--primary">@tr:account.open_portal</button>
+      <button id="account-copy-code" type="button" class="btn btn--secondary">@tr:account.copy_code</button>
+      <button id="account-cancel" type="button" class="btn btn--secondary">@tr:account.cancel</button>
+    </div>
+  </div>
+
+  <div id="account-signed-in" class="account-state hidden" data-class-hidden="!show_signed_in">
+    <span class="account-heading">@tr:account.signed_in.title</span>
+    <div class="account-info-table">
+      <div class="account-info-row">
+        <span class="account-info-key">@tr:account.name</span>
+        <span class="account-info-value">{{ display_name }}</span>
+      </div>
+      <div class="account-info-row">
+        <span class="account-info-key">@tr:account.email</span>
+        <span class="account-info-value">{{ email }}</span>
+      </div>
+      <div class="account-info-row">
+        <span class="account-info-key">@tr:account.tier</span>
+        <span class="account-info-value">{{ tier }}</span>
+      </div>
+      <div class="account-info-row">
+        <span class="account-info-key">@tr:account.connected_since</span>
+        <span class="account-info-value">{{ connected_since }}</span>
+      </div>
+    </div>
+    <div class="account-actions">
+      <button id="account-open-portal" type="button" class="btn btn--primary">@tr:account.open_portal</button>
+      <button id="account-sign-out" type="button" class="btn btn--secondary">@tr:account.sign_out</button>
+    </div>
+  </div>
+
+  <div id="account-membership-required" class="account-state hidden" data-class-hidden="!show_membership_required">
+    <span class="account-heading status-warning">@tr:account.membership_required.title</span>
+    <span class="description">@tr:account.membership_required.description</span>
+    <div class="account-actions">
+      <button id="account-open-billing" type="button" class="btn btn--warning">@tr:account.manage_membership</button>
+      <button id="account-membership-sign-out" type="button" class="btn btn--secondary">@tr:account.sign_out</button>
+    </div>
+  </div>
+</body>
+</rml>

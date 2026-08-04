@@ -4546,16 +4546,19 @@ namespace lfs::python {
 
         m.def(
             "export_video",
-            [](int width, int height, int framerate, int crf) {
+            [](int width, int height, int framerate, int crf, const std::string& path) {
                 lfs::core::events::cmd::SequencerExportVideo{
                     .width = width,
                     .height = height,
                     .framerate = framerate,
-                    .crf = crf}
+                    .crf = crf,
+                    .path = path}
                     .emit();
             },
             nb::arg("width"), nb::arg("height"), nb::arg("framerate"), nb::arg("crf"),
-            "Export video with specified settings");
+            nb::arg("path") = std::string{},
+            "Export video with specified settings. Without a path a save dialog opens, "
+            "which a script cannot answer; pass one to export directly.");
 
         m.def(
             "add_keyframe",

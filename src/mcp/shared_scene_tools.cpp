@@ -208,7 +208,7 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "render.capture",
-                .description = "Capture the current scene. Omit camera_index to grab the live viewport region only; pass camera_index to render from a dataset camera.",
+                .description = "Capture the current scene. Omit camera_index to grab the live viewport region only; pass camera_index to render from a dataset camera. Scenes with no Gaussian or point-cloud content (meshes and environment backgrounds alone) are composited straight into the window, so their capture is cropped from it and includes any viewport overlays such as the axis gizmo and floating toolbars.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{

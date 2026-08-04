@@ -103,9 +103,11 @@ endif()
 find_package(Boost REQUIRED)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nvImageCodec/CMakeLists.txt")
     message(STATUS "Adding nvImageCodec")
-    if(DEFINED DETECTED_COMPUTE_CAP)
-        string(REPLACE "." "" _arch "${DETECTED_COMPUTE_CAP}")
-        set(CUDA_TARGET_ARCHS "${_arch}" CACHE STRING "" FORCE)
+    # Keep the codec's architectures consistent with the floor the app advertises at startup
+    # (LFS_MIN_SM). A portable PTX-only build must not ship a codec built only for the
+    # architecture of whatever machine produced it.
+    if(DEFINED LFS_RUNTIME_MIN_SM)
+        set(CUDA_TARGET_ARCHS "${LFS_RUNTIME_MIN_SM}" CACHE STRING "" FORCE)
     endif()
     set(BUILD_NVJPEG_EXT ON CACHE BOOL "" FORCE)
     set(BUILD_NVJPEG2K_EXT ON CACHE BOOL "" FORCE)

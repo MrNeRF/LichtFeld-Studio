@@ -345,9 +345,9 @@ namespace lfs::vis::gui {
                 ui_state_.equirectangular = *event.equirectangular;
         });
 
-        cmd::SequencerAddKeyframe::when([this](const auto&) {
+        cmd::SequencerAddKeyframe::when([this](const auto& event) {
             const auto& cam = viewer_->getViewport().camera;
-            const float time = controller_.playhead();
+            const float time = std::max(event.time.value_or(controller_.playhead()), 0.0f);
             const glm::vec3 position = cam.t;
             const glm::quat rotation = glm::quat_cast(cam.R);
 

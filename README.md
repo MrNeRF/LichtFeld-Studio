@@ -87,9 +87,10 @@ contributor setup and test commands in the repo-local
 Current project notes:
 
 - Windows is the primary prebuilt distribution target today
-- LichtFeld Studio targets NVIDIA GPUs
+- LichtFeld Studio requires an NVIDIA GPU with compute capability 7.5 or newer (GTX 16-series,
+  RTX 20-series and up). GTX 10-series and older, AMD, and Intel GPUs are not supported
+- NVIDIA driver 570 or newer is required (CUDA 12.8+)
 - Source builds use modern C++23 and CUDA 12.8+ toolchains
-- Use a recent NVIDIA driver for current Windows builds
 
 ## Docs
 

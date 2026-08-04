@@ -32,6 +32,7 @@ namespace lfs::vis {
           pivot_mode(store_, Field::PivotModeValue, "pivot_mode", 0),
           multi_transform_mode(store_, Field::MultiTransformModeValue, "multi_transform_mode", 0),
           import_overlay_state(store_, Field::ImportOverlayStateValue, "import_overlay_state", ImportOverlayState{}),
+          account_state(store_, Field::AccountStateValue, "account_state", AccountState{}),
           video_export_overlay_state(store_,
                                      Field::VideoExportOverlayStateValue,
                                      "video_export_overlay_state",

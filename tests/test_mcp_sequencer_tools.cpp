@@ -117,7 +117,7 @@ namespace {
                 .is_visible = [this]() { return visible; },
                 .set_visible = [this](const bool value) { visible = value; },
                 .ui_state = [this]() { return &ui_state; },
-                .add_keyframe = [this]() { add_keyframe(); },
+                .add_keyframe = [this](const std::optional<float> time) { add_keyframe(time); },
                 .update_selected_keyframe = [this]() { update_selected_keyframe(); },
                 .select_keyframe = [this](const size_t index) { select_keyframe(index); },
                 .go_to_keyframe = [this](const size_t index) { go_to_keyframe(index); },
@@ -175,8 +175,10 @@ namespace {
         }
 
     private:
-        void add_keyframe() {
-            const float time = static_cast<float>(controller.timeline().realKeyframeCount());
+        void add_keyframe(const std::optional<float> requested_time) {
+            const float time = std::max(
+                requested_time.value_or(static_cast<float>(controller.timeline().realKeyframeCount())),
+                0.0f);
             controller.addKeyframeAtTime(
                 lfs::sequencer::Keyframe{
                     .time = time,
@@ -386,6 +388,40 @@ TEST_F(McpSequencerToolsTest, SetEasingAndDeleteResolveByIdAfterReorder) {
     EXPECT_EQ(delete_result["keyframe_count"], 2);
     EXPECT_EQ(delete_result["keyframes"][0]["id"], id_c);
     EXPECT_EQ(delete_result["keyframes"][1]["id"], id_b);
+}
+
+// Without an explicit time a keyframe lands at the playhead, and seeking is clamped to
+// the clip duration, so scripted paths could not place a keyframe past the clip end at
+// all -- successive adds collapsed onto the clamped playhead. Catches dropping the
+// argument anywhere between the tool schema and the backend callback.
+TEST_F(McpSequencerToolsTest, AddKeyframeHonoursExplicitTimePastTheClipEnd) {
+    const float beyond_clip = backend_.controller.timeline().clipDuration() + 25.0f;
+
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "sequencer.add_keyframe",
+        json{
+            {"time", beyond_clip},
+            {"eye", json::array({4.0f, 5.0f, 6.0f})},
+            {"target", json::array({0.0f, 0.0f, 0.0f})},
+            {"show_sequencer", false},
+        });
+
+    ASSERT_TRUE(result["success"].get<bool>());
+    ASSERT_EQ(result["keyframe_count"], 1);
+    const auto id = result["keyframes"][0]["id"].get<lfs::sequencer::KeyframeId>();
+    const auto* const keyframe = backend_.controller.timeline().getKeyframeById(id);
+    ASSERT_NE(keyframe, nullptr);
+    EXPECT_FLOAT_EQ(keyframe->time, beyond_clip);
+    EXPECT_GE(backend_.controller.timeline().clipDuration(), beyond_clip);
+}
+
+TEST_F(McpSequencerToolsTest, AddKeyframeRejectsNegativeTime) {
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool(
+        "sequencer.add_keyframe",
+        json{{"time", -1.0f}, {"show_sequencer", false}});
+
+    EXPECT_TRUE(result.contains("error"));
+    EXPECT_EQ(backend_.controller.timeline().realKeyframeCount(), 0u);
 }
 
 TEST_F(McpSequencerToolsTest, AddUpdateAndGoToUseCurrentCameraAndStableIds) {

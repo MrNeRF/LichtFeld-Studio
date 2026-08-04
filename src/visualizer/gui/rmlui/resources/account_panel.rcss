@@ -1,0 +1,89 @@
+.panel-title {
+    display: block;
+    font-size: 12dp;
+    font-weight: bold;
+    margin-bottom: 6dp;
+}
+
+.account-portal-host {
+    display: block;
+    margin: 2dp 0 6dp;
+    font-size: 11dp;
+    opacity: 0.75;
+}
+
+.account-portal-host.hidden {
+    display: none;
+}
+
+.account-state {
+    display: block;
+    margin-top: 4dp;
+}
+
+.account-state.hidden {
+    display: none;
+}
+
+.account-heading {
+    display: block;
+    margin-bottom: 6dp;
+    font-size: 14dp;
+    font-weight: bold;
+}
+
+.account-primary-action {
+    margin-top: 6dp;
+}
+
+.account-user-code {
+    display: block;
+    margin: 12dp 0 4dp 0;
+    font-size: 30dp;
+    font-weight: bold;
+    letter-spacing: 4dp;
+    text-align: center;
+}
+
+.account-countdown {
+    display: block;
+    margin-bottom: 12dp;
+    text-align: center;
+    opacity: 0.75;
+}
+
+.account-actions {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-top: 10dp;
+}
+
+.account-actions .btn {
+    margin-right: 6dp;
+}
+
+.account-info-table {
+    display: block;
+    margin-top: 4dp;
+}
+
+.account-info-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2dp 0;
+}
+
+.account-info-key {
+    width: 128dp;
+    opacity: 0.75;
+}
+
+.account-info-value {
+    flex: 1;
+}
+
+.account-countdown-value {
+    margin-left: 4dp;
+}

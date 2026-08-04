@@ -60,7 +60,7 @@ namespace lfs::python {
                         "Learning rate for spherical harmonics")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::opacity_lr,
-                        "opacity_lr", "Opacity LR", 0.05f, 0.0f, 1.0f,
+                        "opacity_lr", "Opacity LR", 0.025f, 0.0f, 1.0f,
                         "Learning rate for opacity")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::scaling_lr,
@@ -254,7 +254,7 @@ namespace lfs::python {
                        "mip_filter", "Mip Filter", false,
                        "Enable mip filtering (anti-aliasing)")
             .bool_prop(&OptimizationParameters::use_ppisp,
-                       "ppisp", "PPISP", true,
+                       "ppisp", "PPISP", false,
                        "Per-pixel image signal processing")
             .bool_prop(&OptimizationParameters::ppisp_use_controller,
                        "ppisp_use_controller", "Controller", false,
@@ -305,7 +305,7 @@ namespace lfs::python {
                         "prune_ratio", "Prune Ratio", 0.6f, 0.0f, 1.0f,
                         "Target pruning ratio for sparsification")
             .float_prop(&OptimizationParameters::init_rho,
-                        "init_rho", "Init Rho", 0.001f, 0.0f, 0.01f,
+                        "init_rho", "Init Rho", 0.0005f, 0.0f, 0.01f,
                         "Initial rho for sparsity optimization")
             .float_prop(&OptimizationParameters::steps_scaler,
                         "steps_scaler", "Steps Scaler", 1.0f, 0.0f, 10.0f,

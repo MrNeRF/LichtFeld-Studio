@@ -2067,6 +2067,31 @@ NB_MODULE(lichtfeld, m) {
         },
         "Stop any running animation (clears frame callback)");
 
+    m.def(
+        "on_scene_time", [](nb::callable cb) {
+            nb::object ocb = nb::cast<nb::object>(cb);
+            lfs::python::set_scene_time_callback([ocb](float clip_time) {
+                try {
+                    ocb(clip_time);
+                } catch (nb::python_error& e) {
+                    (void)lfs::python::contain_python_callback(e, lfs::python::PyCallbackPolicy::DisableAndReport);
+                    lfs::python::clear_scene_time_callback();
+                } catch (const std::exception& e) {
+                    (void)lfs::python::contain_cxx_callback(e.what(), lfs::python::PyCallbackPolicy::DisableAndReport);
+                    lfs::python::clear_scene_time_callback();
+                }
+            });
+            LOG_INFO("Scene-time callback registered");
+        },
+        nb::arg("callback"), "Register a callback evaluated with the absolute scene clip time (seconds)");
+
+    m.def(
+        "clear_scene_time", []() {
+            lfs::python::clear_scene_time_callback();
+            LOG_INFO("Scene-time callback cleared");
+        },
+        "Clear the scene-time callback");
+
     // GPU colormap: maps [N] normalized values in [0,1] to [N,3] RGB via jet colormap
     m.def(
         "colormap", [](const lfs::python::PyTensor& values, const std::string& name) -> lfs::python::PyTensor {
@@ -2331,7 +2356,7 @@ Example:
         "cancel_splat_simplify", "is_splat_simplify_active",
         "get_splat_simplify_progress", "get_splat_simplify_stage", "get_splat_simplify_error",
         // Animation
-        "on_frame", "stop_animation",
+        "on_frame", "stop_animation", "on_scene_time", "clear_scene_time",
         // Utilities
         "run", "list_scene", "mat4", "colormap", "help",
         // Submodules

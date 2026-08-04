@@ -148,6 +148,10 @@ namespace lfs::training {
                                             color_params_.ptr<float>(), crf_params_.ptr<float>(), num_cameras_,
                                             num_frames_, nullptr);
 
+        init_color_pinv_block_diag();
+    }
+
+    void PPISP::init_color_pinv_block_diag() {
         // ZCA pinv block-diagonal matrix for color mean regularization
         // 8x8 block-diagonal: [Blue 2x2, Red 2x2, Green 2x2, Neutral 2x2]
         // From Python: _COLOR_PINV_BLOCK_DIAG
@@ -1169,6 +1173,7 @@ namespace lfs::training {
         ctrl_bwd_rgb_h_ = 0;
         ctrl_bwd_rgb_w_ = 0;
 
+        init_color_pinv_block_diag();
         finalized_ = true;
     }
 
@@ -1208,7 +1213,6 @@ namespace lfs::training {
         uid_to_frame_idx_.swap(loaded.uid_to_frame_idx_);
         uid_to_camera_id_.swap(loaded.uid_to_camera_id_);
         std::swap(finalized_, loaded.finalized_);
-        std::swap(color_pinv_block_diag_, loaded.color_pinv_block_diag_);
     }
 
     void PPISP::serialize_inference(std::ostream& os) const {
@@ -1265,6 +1269,7 @@ namespace lfs::training {
             uid_to_frame_idx_[i] = i;
             uid_to_camera_id_[i] = 0;
         }
+        init_color_pinv_block_diag();
         finalized_ = true;
     }
 

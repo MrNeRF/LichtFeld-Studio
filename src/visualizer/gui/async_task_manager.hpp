@@ -35,6 +35,7 @@ namespace lfs::vis {
     namespace gui {
 
         struct VideoExportEnvironmentState;
+        struct VideoExportMeshRendererState;
 
         class LFS_VIS_API AsyncTaskManager {
         public:
@@ -208,6 +209,7 @@ namespace lfs::vis {
             void startVideoExport(const std::filesystem::path& path,
                                   const io::video::VideoExportOptions& options);
             void resetVideoExportEnvironmentState();
+            void resetVideoExportMeshRendererState();
             void cancelImportCompletionDismiss();
             void scheduleImportCompletionDismiss();
             void publishExportFailureState(lfs::core::ExportFormat format,
@@ -251,6 +253,7 @@ namespace lfs::vis {
             };
             VideoExportState video_export_state_;
             std::unique_ptr<VideoExportEnvironmentState> video_export_environment_state_;
+            std::unique_ptr<VideoExportMeshRendererState> video_export_mesh_renderer_state_;
 
             struct ImportState {
                 std::atomic<bool> active{false};

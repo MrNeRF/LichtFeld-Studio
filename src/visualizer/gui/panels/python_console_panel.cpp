@@ -497,6 +497,7 @@ namespace {
 
     bool can_stop_python_work(lfs::vis::gui::panels::PythonConsoleState& state) {
         return lfs::python::has_frame_callback() ||
+               lfs::python::has_scene_time_callback() ||
                state.isScriptRunning() ||
                (state.getOutputTerminal() && state.getOutputTerminal()->is_running()) ||
                lfs::python::PackageManager::instance().has_running_operation();
@@ -505,6 +506,8 @@ namespace {
     void stop_python_work(lfs::vis::gui::panels::PythonConsoleState& state) {
         if (lfs::python::has_frame_callback())
             lfs::python::clear_frame_callback();
+        if (lfs::python::has_scene_time_callback())
+            lfs::python::clear_scene_time_callback();
         if (state.isScriptRunning())
             state.interruptScript();
         if (lfs::python::PackageManager::instance().has_running_operation())

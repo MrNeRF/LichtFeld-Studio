@@ -50,6 +50,10 @@
         </div>
     </div>
     <div id="status-right">
+        <div id="account-chip" data-class-warning="account_membership_required" data-attr-title="account_tooltip" data-style-color="account_color">
+            <span id="account-label">{{ account_label }}</span>
+            <span id="account-tier" class="hidden" data-class-hidden="!account_show_tier">{{ account_tier }}</span>
+        </div>
         <span id="gpu-model" class="dim hidden" data-class-hidden="!show_gpu_model">{{ gpu_model_text }}</span>
         <img id="gpu-icon" data-class-active="gpu_panel_active" src="../icon/gpu.png" />
         <span id="lfs-mem" data-style-color="lfs_mem_color">{{ lfs_mem_text }}</span>

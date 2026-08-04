@@ -321,6 +321,7 @@ namespace lfs::vis {
         std::chrono::nanoseconds plugin_preload_max_update_stall_{};
         bool update_work_processed_ = false;
         std::chrono::high_resolution_clock::time_point last_frame_time_ = std::chrono::high_resolution_clock::now();
+        float live_scene_clip_time_ = 0.0f;
         bool sequencer_ui_initialized_ = false;
         std::unique_ptr<python::SequencerUIStateData> sequencer_ui_state_;
         std::vector<std::filesystem::path> pending_view_paths_;

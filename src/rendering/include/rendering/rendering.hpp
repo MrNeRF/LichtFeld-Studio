@@ -21,7 +21,6 @@
 namespace lfs::core {
     class SplatData;
     struct PointCloud;
-    struct MeshData;
     class Camera;
     class Tensor;
 } // namespace lfs::core
@@ -30,6 +29,14 @@ namespace lfs::rendering {
 
     // Import Tensor into this namespace for convenience
     using lfs::core::Tensor;
+
+    // A mesh layer rasterized ahead of the composite. Defined here rather than beside
+    // its GPU producer in lfs::vis so this layer does not have to include a header from
+    // the layer above it.
+    struct MeshLayer {
+        Tensor rgba;       // [4,H,W] float32; alpha is 1 where a mesh was drawn.
+        Tensor view_depth; // [H,W] float32; positive linear view depth or +INF.
+    };
 
     // Error handling with std::expected (C++23)
     template <typename T>
@@ -385,18 +392,12 @@ namespace lfs::rendering {
         bool equirectangular = false;
     };
 
-    struct MeshFrameItem {
-        const lfs::core::MeshData* mesh = nullptr;
-        glm::mat4 transform{1.0f};
-        MeshRenderOptions options{};
-    };
-
     struct VideoCompositeFrameRequest {
         ViewportData viewport;
         FrameView frame_view;
         glm::vec3 background_color{0.0f};
         EnvironmentRenderOptions environment;
-        std::vector<MeshFrameItem> meshes;
+        const MeshLayer* prerendered_meshes = nullptr;
     };
 
     struct CameraFrustumPickRequest {

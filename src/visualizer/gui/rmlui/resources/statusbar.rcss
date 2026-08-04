@@ -134,6 +134,23 @@ body {
     line-height: 16dp;
 }
 
+#account-chip {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 16dp;
+    margin-right: 12dp;
+    padding: 0 6dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+    cursor: pointer;
+}
+
+#account-tier {
+    margin-left: 4dp;
+    font-size: 10dp;
+}
+
 #gpu-icon {
     width: 14dp;
     height: 14dp;

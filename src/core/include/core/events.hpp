@@ -127,10 +127,15 @@ namespace lfs::core {
             EVENT(SelectByDescription, std::string description; int camera_index;);
             EVENT(ApplySelectionMask, std::vector<uint8_t> mask;);
             // Sequencer
-            EVENT(SequencerAddKeyframe, );
+            // Empty time places the keyframe at the playhead. An explicit time is the
+            // only way to author a keyframe past the current clip duration, because
+            // seeking there first is clamped to that duration.
+            EVENT(SequencerAddKeyframe, std::optional<float> time;);
             EVENT(SequencerUpdateKeyframe, ); // Update selected keyframe to current camera
             EVENT(SequencerPlayPause, );
-            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf;);
+            // Empty path opens the save dialog; a path set by a script exports straight
+            // to it, since a modal dialog cannot be answered from an automation client.
+            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path;);
             EVENT(SequencerGoToKeyframe, size_t keyframe_index;);
             EVENT(SequencerSelectKeyframe, size_t keyframe_index;);
             EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);
