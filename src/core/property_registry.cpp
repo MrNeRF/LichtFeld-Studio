@@ -70,17 +70,6 @@ namespace lfs::core::prop {
         return *meta;
     }
 
-    std::vector<std::string> PropertyRegistry::get_group_ids() const {
-        std::lock_guard lock(mutex_);
-
-        std::vector<std::string> ids;
-        ids.reserve(groups_.size());
-        for (const auto& [id, _] : groups_) {
-            ids.push_back(id);
-        }
-        return ids;
-    }
-
     void PropertyRegistry::register_operator_args(const std::string& operator_id,
                                                   std::vector<PropertyMeta> args) {
         for (auto& arg : args) {

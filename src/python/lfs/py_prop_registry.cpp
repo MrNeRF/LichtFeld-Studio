@@ -117,8 +117,8 @@ namespace lfs::python {
 
     } // namespace
 
-    core::prop::PropertyMeta python_property_to_meta(nb::object descriptor, const std::string& prop_id,
-                                                     const bool operator_arg) {
+    static core::prop::PropertyMeta python_property_to_meta(nb::object descriptor, const std::string& prop_id,
+                                                            const bool operator_arg) {
         core::prop::PropertyMeta meta;
         meta.id = prop_id;
         meta.source = core::prop::PropSource::PYTHON;

@@ -14,13 +14,6 @@ namespace nb = nanobind;
 
 namespace lfs::python {
 
-    // Convert Python Property descriptor to C++ PropertyMeta
-    // Supports scalar, enum, vector, tensor, and fallback descriptor metadata.
-    core::prop::PropertyMeta python_property_to_meta(
-        nb::object descriptor,
-        const std::string& prop_id,
-        bool operator_arg = false);
-
     // Register a Python PropertyGroup (or operator class) with the C++ PropertyRegistry
     // group_id format: "operator.<idname>" for operators, "<type>.<name>" for other classes
     void register_python_property_group(

@@ -123,12 +123,6 @@ namespace lfs::core::prop {
         [[nodiscard]] bool is_live_update() const { return has_flag(PROP_LIVE_UPDATE); }
         [[nodiscard]] bool needs_restart() const { return has_flag(PROP_NEEDS_RESTART); }
         [[nodiscard]] bool is_animatable() const { return has_flag(PROP_ANIMATABLE); }
-
-        [[nodiscard]] bool is_geometric_type() const {
-            return type == PropType::Vec2 || type == PropType::Vec3 || type == PropType::Vec4 ||
-                   type == PropType::Quat || type == PropType::Mat4 ||
-                   type == PropType::Color3 || type == PropType::Color4;
-        }
     };
 
     struct PropertyGroup {

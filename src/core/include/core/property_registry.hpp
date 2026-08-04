@@ -42,7 +42,6 @@ namespace lfs::core::prop {
         [[nodiscard]] std::optional<PropertyGroup> get_group_snapshot(const std::string& group_id) const;
         [[nodiscard]] std::optional<PropertyMeta> get_property(const std::string& group_id,
                                                                const std::string& prop_id) const;
-        [[nodiscard]] std::vector<std::string> get_group_ids() const;
 
         void register_operator_args(const std::string& operator_id, std::vector<PropertyMeta> args);
         void unregister_operator_args(const std::string& operator_id);
