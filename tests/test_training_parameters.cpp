@@ -1,19 +1,67 @@
-/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/include/core/parameters.hpp"
-#include "core/include/core/property_registry.hpp"
+#include "core/parameters.hpp"
+#include "core/property_registry.hpp"
 #include "python/lfs/py_params.hpp"
-#include <any>
-#include <gtest/gtest.h>
-#include <string>
 
+#include <any>
+#include <array>
+#include <gtest/gtest.h>
+#include <map>
+#include <nlohmann/json.hpp>
+#include <set>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+
+using lfs::core::param::OptimizationParameters;
+using lfs::core::prop::PropertyMeta;
 using lfs::core::prop::PropertyObjectRef;
 using lfs::core::prop::PropertyRegistry;
 using lfs::core::prop::PropType;
 
 namespace {
+
+    PropertyMeta optimization_meta(const std::string& id) {
+        auto meta = PropertyRegistry::instance().get_property("optimization", id);
+        if (!meta)
+            throw std::runtime_error("Missing registered optimization property: " + id);
+        return *meta;
+    }
+
+    template <typename T>
+    T resolved(const OptimizationParameters& source, const std::string& id) {
+        return std::any_cast<T>(lfs::python::resolve_optimization_default(optimization_meta(id), source));
+    }
+
+    void expect_same_value(const PropertyMeta& meta, const std::any& actual, const std::any& expected) {
+        switch (meta.type) {
+        case PropType::Float:
+            EXPECT_FLOAT_EQ(std::any_cast<float>(actual), std::any_cast<float>(expected));
+            break;
+        case PropType::Int:
+            EXPECT_EQ(std::any_cast<int>(actual), std::any_cast<int>(expected));
+            break;
+        case PropType::SizeT:
+            EXPECT_EQ(std::any_cast<size_t>(actual), std::any_cast<size_t>(expected));
+            break;
+        case PropType::Bool:
+            EXPECT_EQ(std::any_cast<bool>(actual), std::any_cast<bool>(expected));
+            break;
+        case PropType::String:
+            EXPECT_EQ(std::any_cast<std::string>(actual), std::any_cast<std::string>(expected));
+            break;
+        case PropType::Enum:
+            EXPECT_EQ(std::any_cast<int>(actual), std::any_cast<int>(expected));
+            break;
+        default:
+            ADD_FAILURE() << "unsupported registered property type";
+            break;
+        }
+    }
 
     class TrainingParametersTest : public ::testing::Test {
     protected:
@@ -26,55 +74,140 @@ namespace {
         }
     };
 
-    /* Registry defaults and OptimizationParameters member defaults are written
-    independently; reset serves the registry copy, so drift must fail here. */
+    // The MRNF sentinels cross several member types and factory overrides, catching wrong-member
+    // getter wiring, MRNF factory drift, and a resolver that falls back to stored constants.
+    TEST_F(TrainingParametersTest, ResolvesMrnfFactorySentinels) {
+        const auto defaults = OptimizationParameters::defaults_for_strategy("mrnf");
 
-    TEST_F(TrainingParametersTest, RegistryDefaultsMatchStructDefaults) {
-        auto group = PropertyRegistry::instance().get_group("optimization");
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
+        EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
+        EXPECT_TRUE(resolved<bool>(defaults, "revised_opacity"));
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
+        EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 200u);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "grad_threshold"), 0.003f);
+    }
+
+    // These values discriminate MCMC from MRNF and pin both strategy dispatch and MCMC factory
+    // values while continuing to exercise the production resolver seam.
+    TEST_F(TrainingParametersTest, ResolvesMcmcFactorySentinels) {
+        const auto defaults = OptimizationParameters::defaults_for_strategy("mcmc");
+
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.025f);
+        EXPECT_EQ(resolved<int>(defaults, "max_cap"), 1'000'000);
+        EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 100u);
+        EXPECT_FALSE(resolved<bool>(defaults, "revised_opacity"));
+    }
+
+    // The IGS+ block pins its distinct override set, catching IGS+ factory drift and resolution
+    // that incorrectly uses either the bare struct or another strategy's source instance.
+    TEST_F(TrainingParametersTest, ResolvesIgsPlusFactorySentinels) {
+        const auto defaults = OptimizationParameters::defaults_for_strategy("igs+");
+
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "scaling_lr"), 0.02f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "shs_lr"), 0.005f);
+        EXPECT_EQ(resolved<int>(defaults, "max_cap"), 4'000'000);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "tv_loss_weight"), 5.0f);
+        EXPECT_FLOAT_EQ(resolved<float>(defaults, "init_opacity"), 0.1f);
+        EXPECT_EQ(resolved<size_t>(defaults, "stop_refine"), 15'000u);
+    }
+
+    TEST_F(TrainingParametersTest, ResolvesEveryRegisteredPropertyFromStrategySource) {
+        const auto* group = PropertyRegistry::instance().get_group("optimization");
         ASSERT_NE(group, nullptr);
         ASSERT_FALSE(group->properties.empty());
 
-        lfs::core::param::OptimizationParameters defaults;
-        const auto ref = PropertyObjectRef::cpp(&defaults);
+        std::array<std::pair<std::string_view, OptimizationParameters>, 3> direct_factories = {{
+            {"mcmc", OptimizationParameters::mcmc_defaults()},
+            {"mrnf", OptimizationParameters::mrnf_defaults()},
+            {"igs+", OptimizationParameters::igs_plus_defaults()},
+        }};
 
-        for (const auto& meta : group->properties) {
-            SCOPED_TRACE(meta.id);
+        for (auto& [strategy, direct_factory] : direct_factories) {
+            const auto dispatched = OptimizationParameters::defaults_for_strategy(strategy);
+            for (const auto& meta : group->properties) {
+                SCOPED_TRACE(std::string(strategy) + ":" + meta.id);
+                ASSERT_TRUE(meta.getter);
 
-            if (!meta.getter) {
-                ADD_FAILURE() << "property has no getter";
-                continue;
+                const auto actual = lfs::python::resolve_optimization_default(meta, dispatched);
+                auto direct_ref = PropertyObjectRef::cpp(&direct_factory);
+                const auto expected = meta.getter(direct_ref);
+                expect_same_value(meta, actual, expected);
             }
-            const std::any from_struct = meta.getter(ref);
+        }
+    }
 
-            switch (meta.type) {
-            case PropType::Float:
-                EXPECT_FLOAT_EQ(static_cast<float>(meta.default_value),
-                                std::any_cast<float>(from_struct));
-                break;
-            case PropType::Int:
-                EXPECT_EQ(static_cast<int>(meta.default_value),
-                          std::any_cast<int>(from_struct));
-                break;
-            case PropType::SizeT:
-                EXPECT_EQ(static_cast<size_t>(meta.default_value),
-                          std::any_cast<size_t>(from_struct));
-                break;
-            case PropType::Bool:
-                EXPECT_EQ(meta.default_value > 0.5,
-                          std::any_cast<bool>(from_struct));
-                break;
-            case PropType::String:
-                EXPECT_EQ(meta.default_string,
-                          std::any_cast<std::string>(from_struct));
-                break;
-            case PropType::Enum:
-                EXPECT_EQ(meta.default_enum,
-                          std::any_cast<int>(from_struct));
-                break;
-            default:
-                ADD_FAILURE() << "unhandled property type";
-                break;
-            }
+    TEST_F(TrainingParametersTest, DefaultsForStrategyCanonicalizesAliasesAndFallbacks) {
+        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("mnrf").opacity_lr, 0.012f);
+        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("lfs").opacity_lr, 0.012f);
+        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("").opacity_lr, 0.012f);
+        EXPECT_FLOAT_EQ(OptimizationParameters::defaults_for_strategy("garbage").opacity_lr, 0.012f);
+    }
+
+    // This checks the serialized surface, not C++ struct completeness: a member absent from both
+    // serialization and registration is intentionally out of scope. bg_image_path is emitted only
+    // when non-empty, so the probe sets it explicitly before enumerating JSON keys.
+    TEST_F(TrainingParametersTest, SerializedSurfaceHasRegistryCoverage) {
+        OptimizationParameters serialization_probe{};
+        serialization_probe.bg_image_path = "coverage-background.png";
+        const auto serialized = serialization_probe.to_json();
+
+        const auto* group = PropertyRegistry::instance().get_group("optimization");
+        ASSERT_NE(group, nullptr);
+
+        std::set<std::string> registered_ids;
+        for (const auto& meta : group->properties)
+            ASSERT_TRUE(registered_ids.insert(meta.id).second) << "duplicate property id: " << meta.id;
+
+        const std::map<std::string, std::string> json_to_property = {
+            {"bilateral_grid_W", "bilateral_grid_w"},
+            {"bilateral_grid_X", "bilateral_grid_x"},
+            {"bilateral_grid_Y", "bilateral_grid_y"},
+            {"ppisp_freeze_gaussians_on_distill", "ppisp_freeze_gaussians"},
+            {"use_ppisp", "ppisp"},
+        };
+
+        const std::map<std::string, std::string> allowlist = {
+            {"bg_color", "background color uses its dedicated Python binding"},
+            {"bg_image_path", "background image path uses its dedicated Python binding"},
+            {"enable_save_eval_images", "evaluation image output is not a registry property"},
+            {"eval_steps", "vector-valued evaluation schedule is managed separately"},
+            {"ppisp_lr", "PPISP optimizer tuning is not registered yet"},
+            {"ppisp_reg_weight", "PPISP optimizer tuning is not registered yet"},
+            {"ppisp_sidecar_path", "PPISP sidecar path uses its dedicated Python binding"},
+            {"ppisp_warmup_steps", "PPISP optimizer tuning is not registered yet"},
+            {"save_steps", "vector-valued save schedule is managed separately"},
+        };
+
+        std::map<std::string, std::string> property_to_json;
+        for (const auto& [json_key, property_id] : json_to_property) {
+            SCOPED_TRACE(json_key);
+            EXPECT_TRUE(serialized.contains(json_key));
+            EXPECT_TRUE(registered_ids.contains(property_id));
+            EXPECT_TRUE(property_to_json.emplace(property_id, json_key).second);
+        }
+
+        for (const auto& [json_key, reason] : allowlist) {
+            SCOPED_TRACE(json_key);
+            EXPECT_TRUE(serialized.contains(json_key));
+            EXPECT_FALSE(reason.empty());
+            EXPECT_FALSE(registered_ids.contains(json_key));
+            EXPECT_FALSE(json_to_property.contains(json_key));
+        }
+
+        for (auto it = serialized.begin(); it != serialized.end(); ++it) {
+            const std::string& json_key = it.key();
+            const auto renamed = json_to_property.find(json_key);
+            const std::string& property_id = renamed == json_to_property.end() ? json_key : renamed->second;
+            EXPECT_TRUE(registered_ids.contains(property_id) || allowlist.contains(json_key))
+                << "serialized key has no registered property or allow-list reason: " << json_key;
+        }
+
+        for (const auto& property_id : registered_ids) {
+            const auto renamed = property_to_json.find(property_id);
+            const std::string& json_key = renamed == property_to_json.end() ? property_id : renamed->second;
+            EXPECT_TRUE(serialized.contains(json_key))
+                << "registered property has no serialized key: " << property_id;
         }
     }
 

@@ -14,13 +14,14 @@
 
 namespace lfs::vis {
 
-    // Session defaults come from the most recent explicit parameter source, current params are user-editable.
+    // Session defaults come from the most recent explicit source (CLI, JSON, checkpoint/import); current params are user-editable.
     class LFS_VIS_API ParameterManager {
     public:
         std::expected<void, std::string> ensureLoaded();
 
         [[nodiscard]] lfs::core::param::OptimizationParameters& getCurrentParams(std::string_view strategy);
         [[nodiscard]] const lfs::core::param::OptimizationParameters& getCurrentParams(std::string_view strategy) const;
+        [[nodiscard]] lfs::core::param::OptimizationParameters copySessionParams(std::string_view strategy = {});
 
         [[nodiscard]] lfs::core::param::DatasetConfig& getDatasetConfig() { return dataset_config_; }
         [[nodiscard]] const lfs::core::param::DatasetConfig& getDatasetConfig() const { return dataset_config_; }

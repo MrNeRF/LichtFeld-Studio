@@ -223,6 +223,7 @@ namespace lfs::core {
             static OptimizationParameters mcmc_defaults();
             static OptimizationParameters mrnf_defaults();
             static OptimizationParameters igs_plus_defaults();
+            static OptimizationParameters defaults_for_strategy(std::string_view strategy);
         };
 
         struct LFS_CORE_API LoadingParams {

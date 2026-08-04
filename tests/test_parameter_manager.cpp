@@ -22,6 +22,48 @@ namespace {
         EXPECT_EQ(lfs::core::param::OptimizationParameters::mcmc_defaults().strategy, "mcmc");
     }
 
+    TEST(ParameterManagerTest, SessionCopyTracksExplicitSourcesAndResetBaseline) {
+        lfs::vis::ParameterManager manager;
+        const auto load_result = manager.ensureLoaded();
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+
+        const auto factory_defaults = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        const auto initial_session = manager.copySessionParams();
+        EXPECT_EQ(initial_session.strategy, factory_defaults.strategy);
+        EXPECT_FLOAT_EQ(initial_session.opacity_lr, factory_defaults.opacity_lr);
+        EXPECT_EQ(initial_session.max_cap, factory_defaults.max_cap);
+
+        lfs::core::param::TrainingParameters cli_params;
+        cli_params.optimization = factory_defaults;
+        cli_params.optimization.opacity_lr = 0.123f;
+        cli_params.optimization.max_cap = 1'234'567;
+        manager.setSessionDefaults(cli_params);
+
+        const auto cli_session = manager.copySessionParams();
+        EXPECT_FLOAT_EQ(cli_session.opacity_lr, 0.123f);
+        EXPECT_EQ(cli_session.max_cap, 1'234'567);
+
+        manager.modifyActiveParams([](auto& params) {
+            params.opacity_lr = 0.75f;
+            params.max_cap = 42;
+        });
+        manager.resetToDefaults("mrnf");
+        const auto reset_current = manager.copyActiveParams();
+        EXPECT_FLOAT_EQ(reset_current.opacity_lr, 0.123f);
+        EXPECT_EQ(reset_current.max_cap, 1'234'567);
+
+        lfs::core::param::TrainingParameters checkpoint_params;
+        checkpoint_params.optimization = lfs::core::param::OptimizationParameters::igs_plus_defaults();
+        checkpoint_params.optimization.opacity_lr = 0.321f;
+        checkpoint_params.optimization.max_cap = 765'432;
+        manager.importTrainingParams(checkpoint_params);
+
+        const auto checkpoint_session = manager.copySessionParams();
+        EXPECT_EQ(checkpoint_session.strategy, "igs+");
+        EXPECT_FLOAT_EQ(checkpoint_session.opacity_lr, 0.321f);
+        EXPECT_EQ(checkpoint_session.max_cap, 765'432);
+    }
+
     TEST(ParameterManagerTest, ImportTrainingParamsRestoresResolvedCheckpointState) {
         lfs::vis::ParameterManager manager;
         const auto load_result = manager.ensureLoaded();

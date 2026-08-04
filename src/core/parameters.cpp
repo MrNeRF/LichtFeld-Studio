@@ -465,6 +465,15 @@ namespace lfs::core {
             return p;
         }
 
+        OptimizationParameters OptimizationParameters::defaults_for_strategy(const std::string_view strategy) {
+            const auto canonical_strategy = canonical_strategy_name(strategy);
+            if (canonical_strategy == kStrategyMCMC)
+                return mcmc_defaults();
+            if (canonical_strategy == kStrategyIGSPlus)
+                return igs_plus_defaults();
+            return mrnf_defaults();
+        }
+
         OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
 
             OptimizationParameters params;

@@ -30,97 +30,107 @@ namespace lfs::python {
     using namespace lfs::core::prop;
     using lfs::training::CommandCenter;
 
+    std::any resolve_optimization_default(
+        const PropertyMeta& meta,
+        const OptimizationParameters& source) {
+        if (!meta.getter)
+            throw std::runtime_error("Optimization property has no getter: " + meta.id);
+        auto ref = PropertyObjectRef::cpp(const_cast<OptimizationParameters*>(&source));
+        return meta.getter(ref);
+    }
+
     void register_optimization_properties() {
+        const OptimizationParameters d{};
         PropertyGroupBuilder<OptimizationParameters>("optimization", "Optimization")
             // Training control
             .size_prop(&OptimizationParameters::iterations,
-                       "iterations", "Max Iterations", 30000, 1, 1000000,
+                       "iterations", "Max Iterations", d.iterations, 1, 1000000,
                        "Maximum number of training iterations")
             .int_prop(&OptimizationParameters::sh_degree,
-                      "sh_degree", "SH Degree", 3, 0, 3,
+                      "sh_degree", "SH Degree", d.sh_degree, 0, 3,
                       "Spherical harmonics degree (0-3)")
             .size_prop(&OptimizationParameters::sh_degree_interval,
-                       "sh_degree_interval", "SH Interval", 1000, 100, 10000,
+                       "sh_degree_interval", "SH Interval", d.sh_degree_interval, 100, 10000,
                        "Iterations between SH degree increases")
             .int_prop(&OptimizationParameters::max_cap,
-                      "max_cap", "Max Gaussians", 1000000, 1000, 10000000,
+                      "max_cap", "Max Gaussians", d.max_cap, 1000, 10000000,
                       "Maximum number of gaussians")
 
             // Learning rates
             .float_prop(&OptimizationParameters::means_lr,
-                        "means_lr", "Position LR", 0.000016f, 0.0f, 0.001f,
+                        "means_lr", "Position LR", d.means_lr, 0.0f, 0.001f,
                         "Learning rate for gaussian positions")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::means_lr_end,
-                        "means_lr_end", "Position LR End", 0.00000016f, 0.0f, 0.001f,
+                        "means_lr_end", "Position LR End", d.means_lr_end, 0.0f, 0.001f,
                         "Target end learning rate for gaussian positions")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::shs_lr,
-                        "shs_lr", "SH LR", 0.0025f, 0.0f, 0.1f,
+                        "shs_lr", "SH LR", d.shs_lr, 0.0f, 0.1f,
                         "Learning rate for spherical harmonics")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::opacity_lr,
-                        "opacity_lr", "Opacity LR", 0.025f, 0.0f, 1.0f,
+                        "opacity_lr", "Opacity LR", d.opacity_lr, 0.0f, 1.0f,
                         "Learning rate for opacity")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::scaling_lr,
-                        "scaling_lr", "Scale LR", 0.005f, 0.0f, 0.1f,
+                        "scaling_lr", "Scale LR", d.scaling_lr, 0.0f, 0.1f,
                         "Learning rate for gaussian scales")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::scaling_lr_end,
-                        "scaling_lr_end", "Scale LR End", 0.005f, 0.0f, 0.1f,
+                        "scaling_lr_end", "Scale LR End", d.scaling_lr_end, 0.0f, 0.1f,
                         "Target end learning rate for gaussian scales")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::rotation_lr,
-                        "rotation_lr", "Rotation LR", 0.001f, 0.0f, 0.1f,
+                        "rotation_lr", "Rotation LR", d.rotation_lr, 0.0f, 0.1f,
                         "Learning rate for rotations")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::cropbox_lr_scale,
-                        "cropbox_lr_scale", "Rejected splat LR scale", 0.1f, 0.0f, 1.0f,
+                        "cropbox_lr_scale", "Rejected splat LR scale", d.cropbox_lr_scale, 0.0f, 1.0f,
                         "Scales Adam steps and refinement signals for rejected splats; strategy noise, decay, and resets remain active")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::cropbox_loss_weight,
-                        "cropbox_loss_weight", "Outside ROI loss weight", 0.1f, 0.0f, 1.0f,
+                        "cropbox_loss_weight", "Outside ROI loss weight", d.cropbox_loss_weight, 0.0f, 1.0f,
                         "Scales pixel losses for camera rays outside the active crop box")
             .flags(PROP_LIVE_UPDATE)
 
             // Loss parameters
             .float_prop(&OptimizationParameters::lambda_dssim,
-                        "lambda_dssim", "DSSIM Weight", 0.2f, 0.0f, 1.0f,
+                        "lambda_dssim", "DSSIM Weight", d.lambda_dssim, 0.0f, 1.0f,
                         "Weight for structural similarity loss")
             .float_prop(&OptimizationParameters::opacity_reg,
-                        "opacity_reg", "Opacity Reg", 0.01f, 0.0f, 1.0f,
+                        "opacity_reg", "Opacity Reg", d.opacity_reg, 0.0f, 1.0f,
                         "Opacity regularization weight")
             .float_prop(&OptimizationParameters::scale_reg,
-                        "scale_reg", "Scale Reg", 0.01f, 0.0f, 1.0f,
+                        "scale_reg", "Scale Reg", d.scale_reg, 0.0f, 1.0f,
                         "Scale regularization weight")
 
             // Refinement
             .size_prop(&OptimizationParameters::refine_every,
-                       "refine_every", "Refine Every", 100, 1, 1000,
+                       "refine_every", "Refine Every", d.refine_every, 1, 1000,
                        "Interval for adaptive density control")
             .size_prop(&OptimizationParameters::start_refine,
-                       "start_refine", "Start Refine", 500, 0, 10000,
+                       "start_refine", "Start Refine", d.start_refine, 0, 10000,
                        "Iteration to start refinement")
             .size_prop(&OptimizationParameters::stop_refine,
-                       "stop_refine", "Stop Refine", 25000, 0, 100000,
+                       "stop_refine", "Stop Refine", d.stop_refine, 0, 100000,
                        "Iteration to stop refinement")
             .float_prop(&OptimizationParameters::grad_threshold,
-                        "grad_threshold", "Grad Threshold", 0.0002f, 0.0f, 0.01f,
+                        "grad_threshold", "Grad Threshold", d.grad_threshold, 0.0f, 0.01f,
                         "Gradient threshold for densification")
             .float_prop(&OptimizationParameters::min_opacity,
-                        "min_opacity", "Min Opacity", 0.005f, 0.0f, std::numeric_limits<float>::infinity(),
+                        "min_opacity", "Min Opacity", d.min_opacity, 0.0f, std::numeric_limits<float>::infinity(),
                         "Minimum opacity for pruning")
             .float_prop(&OptimizationParameters::init_opacity,
-                        "init_opacity", "Init Opacity", 0.5f, 0.0f, 1.0f,
+                        "init_opacity", "Init Opacity", d.init_opacity, 0.0f, 1.0f,
                         "Initial opacity for new gaussians")
             .float_prop(&OptimizationParameters::init_scaling,
-                        "init_scaling", "Init Scale", 0.1f, 0.0f, 1.0f,
+                        "init_scaling", "Init Scale", d.init_scaling, 0.0f, 1.0f,
                         "Initial scale for new gaussians")
 
             // Mask parameters
             .enum_prop(&OptimizationParameters::mask_mode,
-                       "mask_mode", "Mask Mode", MaskMode::None,
+                       "mask_mode", "Mask Mode", d.mask_mode,
                        {{"None", MaskMode::None},
                         {"Segment", MaskMode::Segment},
                         {"Ignore", MaskMode::Ignore},
@@ -128,197 +138,197 @@ namespace lfs::python {
                         {"AlphaConsistent", MaskMode::AlphaConsistent}},
                        "Attention mask behavior during training")
             .bool_prop(&OptimizationParameters::invert_masks,
-                       "invert_masks", "Invert Masks", false,
+                       "invert_masks", "Invert Masks", d.invert_masks,
                        "Swap object and background in masks")
             .float_prop(&OptimizationParameters::mask_threshold,
-                        "mask_threshold", "Mask Threshold", 0.5f, 0.0f, 1.0f,
+                        "mask_threshold", "Mask Threshold", d.mask_threshold, 0.0f, 1.0f,
                         "Threshold for mask binarization")
             .float_prop(&OptimizationParameters::mask_opacity_penalty_weight,
-                        "mask_opacity_penalty_weight", "Penalty Weight", 1.0f, 0.0f, 10.0f,
+                        "mask_opacity_penalty_weight", "Penalty Weight", d.mask_opacity_penalty_weight, 0.0f, 10.0f,
                         "Opacity penalty weight for segment mode")
             .float_prop(&OptimizationParameters::mask_opacity_penalty_power,
-                        "mask_opacity_penalty_power", "Penalty Power", 2.0f, 0.5f, 4.0f,
+                        "mask_opacity_penalty_power", "Penalty Power", d.mask_opacity_penalty_power, 0.5f, 4.0f,
                         "Power for opacity penalty in segment mode")
             .bool_prop(&OptimizationParameters::use_alpha_as_mask,
-                       "use_alpha_as_mask", "Use Alpha as Mask", true,
+                       "use_alpha_as_mask", "Use Alpha as Mask", d.use_alpha_as_mask,
                        "Use alpha channel from RGBA images as mask source")
             .bool_prop(&OptimizationParameters::use_depth_loss,
-                       "use_depth_loss", "Use Depth Loss", false,
+                       "use_depth_loss", "Use Depth Loss", d.use_depth_loss,
                        "Use dataset depth maps for depth supervision")
             .float_prop(&OptimizationParameters::depth_loss_weight,
-                        "depth_loss_weight", "Depth Loss Weight", 2.0f, 0.0f, 100.0f,
+                        "depth_loss_weight", "Depth Loss Weight", d.depth_loss_weight, 0.0f, 100.0f,
                         "Weight for depth supervision")
             .string_prop(&OptimizationParameters::depth_loss_mode,
-                         "depth_loss_mode", "Depth Loss Mode", "ssi",
+                         "depth_loss_mode", "Depth Loss Mode", d.depth_loss_mode,
                          "Depth prior convention: ssi (auto-detect), ssi-disparity, or ssi-depth")
             .bool_prop(&OptimizationParameters::use_normal_loss,
-                       "use_normal_loss", "Use Normal Loss", false,
+                       "use_normal_loss", "Use Normal Loss", d.use_normal_loss,
                        "Use dataset normal maps for normal supervision")
             .float_prop(&OptimizationParameters::normal_loss_weight,
-                        "normal_loss_weight", "Normal Loss Weight", 0.05f, 0.0f, 100.0f,
+                        "normal_loss_weight", "Normal Loss Weight", d.normal_loss_weight, 0.0f, 100.0f,
                         "Weight for prior normal supervision")
             .float_prop(&OptimizationParameters::normal_consistency_weight,
-                        "normal_consistency_weight", "Normal Consistency Weight", 0.05f, 0.0f, 100.0f,
+                        "normal_consistency_weight", "Normal Consistency Weight", d.normal_consistency_weight, 0.0f, 100.0f,
                         "Weight for depth-normal consistency")
             .float_prop(&OptimizationParameters::normal_flatten_weight,
-                        "normal_flatten_weight", "Normal Flatten Weight", 1.0f, 0.0f, 1000.0f,
+                        "normal_flatten_weight", "Normal Flatten Weight", d.normal_flatten_weight, 0.0f, 1000.0f,
                         "Min-axis scale flattening weight while normal supervision is active")
             .string_prop(&OptimizationParameters::normal_loss_space,
-                         "normal_loss_space", "Normal Loss Space", "auto",
+                         "normal_loss_space", "Normal Loss Space", d.normal_loss_space,
                          "Normal prior coordinate space: auto, camera-opencv, camera-opengl, or world")
 
             // Bilateral grid
             .bool_prop(&OptimizationParameters::use_bilateral_grid,
-                       "use_bilateral_grid", "Bilateral Grid", false,
+                       "use_bilateral_grid", "Bilateral Grid", d.use_bilateral_grid,
                        "Enable bilateral grid color correction")
             .flags(PROP_NEEDS_RESTART)
             .int_prop(&OptimizationParameters::bilateral_grid_X,
-                      "bilateral_grid_x", "Grid X", 16, 4, 64,
+                      "bilateral_grid_x", "Grid X", d.bilateral_grid_X, 4, 64,
                       "Bilateral grid X resolution")
             .int_prop(&OptimizationParameters::bilateral_grid_Y,
-                      "bilateral_grid_y", "Grid Y", 16, 4, 64,
+                      "bilateral_grid_y", "Grid Y", d.bilateral_grid_Y, 4, 64,
                       "Bilateral grid Y resolution")
             .int_prop(&OptimizationParameters::bilateral_grid_W,
-                      "bilateral_grid_w", "Grid W", 8, 2, 32,
+                      "bilateral_grid_w", "Grid W", d.bilateral_grid_W, 2, 32,
                       "Bilateral grid intensity bins")
             .float_prop(&OptimizationParameters::bilateral_grid_lr,
-                        "bilateral_grid_lr", "Grid LR", 0.002f, 0.0f, 0.1f,
+                        "bilateral_grid_lr", "Grid LR", d.bilateral_grid_lr, 0.0f, 0.1f,
                         "Bilateral grid learning rate")
             .float_prop(&OptimizationParameters::tv_loss_weight,
-                        "tv_loss_weight", "TV Loss Weight", 10.0f, 0.0f, 100.0f,
+                        "tv_loss_weight", "TV Loss Weight", d.tv_loss_weight, 0.0f, 100.0f,
                         "Total variation loss weight")
 
             // Strategy
             .string_prop(&OptimizationParameters::strategy,
-                         "strategy", "Strategy", "mrnf",
+                         "strategy", "Strategy", d.strategy,
                          "Optimization strategy: mcmc, mrnf, or igs+")
             .flags(PROP_NEEDS_RESTART)
 
             // Shared densification parameters
             .float_prop(&OptimizationParameters::prune_opacity,
-                        "prune_opacity", "Prune Opacity", 0.005f, 0.0f, std::numeric_limits<float>::infinity(),
+                        "prune_opacity", "Prune Opacity", d.prune_opacity, 0.0f, std::numeric_limits<float>::infinity(),
                         "Opacity threshold for pruning")
             .float_prop(&OptimizationParameters::grow_scale3d,
-                        "grow_scale3d", "Grow Scale 3D", 0.01f, 0.0f, std::numeric_limits<float>::infinity(),
+                        "grow_scale3d", "Grow Scale 3D", d.grow_scale3d, 0.0f, std::numeric_limits<float>::infinity(),
                         "3D scale threshold for growing")
             .float_prop(&OptimizationParameters::grow_scale2d,
-                        "grow_scale2d", "Grow Scale 2D", 0.05f, 0.0f, std::numeric_limits<float>::infinity(),
+                        "grow_scale2d", "Grow Scale 2D", d.grow_scale2d, 0.0f, std::numeric_limits<float>::infinity(),
                         "2D scale threshold for growing")
             .size_prop(&OptimizationParameters::reset_every,
-                       "reset_every", "Reset Every", 3000, 100, 10000,
+                       "reset_every", "Reset Every", d.reset_every, 100, 10000,
                        "Iteration interval for opacity reset")
             .float_prop(&OptimizationParameters::prune_scale3d,
-                        "prune_scale3d", "Prune Scale 3D", 0.1f, 0.0f, std::numeric_limits<float>::infinity(),
+                        "prune_scale3d", "Prune Scale 3D", d.prune_scale3d, 0.0f, std::numeric_limits<float>::infinity(),
                         "3D scale threshold for pruning")
             .float_prop(&OptimizationParameters::prune_scale2d,
-                        "prune_scale2d", "Prune Scale 2D", 0.15f, 0.0f, std::numeric_limits<float>::infinity(),
+                        "prune_scale2d", "Prune Scale 2D", d.prune_scale2d, 0.0f, std::numeric_limits<float>::infinity(),
                         "2D scale threshold for pruning")
             .size_prop(&OptimizationParameters::pause_refine_after_reset,
-                       "pause_refine_after_reset", "Pause After Reset", 0, 0, std::numeric_limits<size_t>::max(),
+                       "pause_refine_after_reset", "Pause After Reset", d.pause_refine_after_reset, 0, std::numeric_limits<size_t>::max(),
                        "Iterations to pause refinement after opacity reset")
             .bool_prop(&OptimizationParameters::revised_opacity,
-                       "revised_opacity", "Revised Opacity", false,
+                       "revised_opacity", "Revised Opacity", d.revised_opacity,
                        "Use revised opacity calculation during densification")
 
             // MRNF strategy parameters
             .float_prop(&OptimizationParameters::growth_grad_threshold,
-                        "growth_grad_threshold", "Growth Grad Threshold", 0.003f, 0.0f, 1.0f,
+                        "growth_grad_threshold", "Growth Grad Threshold", d.growth_grad_threshold, 0.0f, 1.0f,
                         "Min refine weight for growth candidacy (MRNF)")
             .float_prop(&OptimizationParameters::grow_fraction,
-                        "grow_fraction", "Grow Fraction", 0.07f, 0.0f, 1.0f,
+                        "grow_fraction", "Grow Fraction", d.grow_fraction, 0.0f, 1.0f,
                         "Fraction of above-threshold splats to grow (MRNF)")
             .size_prop(&OptimizationParameters::grow_until_iter,
-                       "grow_until_iter", "Grow Until Iter", 15000, 0, 100000,
+                       "grow_until_iter", "Grow Until Iter", d.grow_until_iter, 0, 100000,
                        "Stop MRNF growth after this iteration")
             .float_prop(&OptimizationParameters::opacity_decay,
-                        "opacity_decay", "Opacity Decay", 0.004f, 0.0f, 0.1f,
+                        "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,
                         "Opacity decay rate per refine (MRNF)")
             .float_prop(&OptimizationParameters::scale_decay,
-                        "scale_decay", "Scale Decay", 0.002f, 0.0f, 0.1f,
+                        "scale_decay", "Scale Decay", d.scale_decay, 0.0f, 0.1f,
                         "Scale decay rate per refine (MRNF)")
             .float_prop(&OptimizationParameters::means_noise_weight,
-                        "means_noise_weight", "Means Noise Weight", 50.0f, 0.0f, 200.0f,
+                        "means_noise_weight", "Means Noise Weight", d.means_noise_weight, 0.0f, 200.0f,
                         "Exploration noise multiplier for means updates (MRNF)")
             .float_prop(&OptimizationParameters::bounds_percentile,
-                        "bounds_percentile", "Bounds Percentile", 0.8f, 0.5f, 1.0f,
+                        "bounds_percentile", "Bounds Percentile", d.bounds_percentile, 0.5f, 1.0f,
                         "Percentile for bounds computation (MRNF)")
             .bool_prop(&OptimizationParameters::use_error_map,
-                       "use_error_map", "Error Map", true,
+                       "use_error_map", "Error Map", d.use_error_map,
                        "Weight MRNF refine signal by per-pixel SSIM error map")
             .bool_prop(&OptimizationParameters::use_edge_map,
-                       "use_edge_map", "Edge Map", true,
+                       "use_edge_map", "Edge Map", d.use_edge_map,
                        "Weight MRNF refine signal by Sobel edge map on GT images")
 
             // Flags
             .bool_prop(&OptimizationParameters::mip_filter,
-                       "mip_filter", "Mip Filter", false,
+                       "mip_filter", "Mip Filter", d.mip_filter,
                        "Enable mip filtering (anti-aliasing)")
             .bool_prop(&OptimizationParameters::use_ppisp,
-                       "ppisp", "PPISP", false,
+                       "ppisp", "PPISP", d.use_ppisp,
                        "Per-pixel image signal processing")
             .bool_prop(&OptimizationParameters::ppisp_use_controller,
-                       "ppisp_use_controller", "Controller", false,
+                       "ppisp_use_controller", "Controller", d.ppisp_use_controller,
                        "Enable PPISP controller for novel view synthesis")
             .bool_prop(&OptimizationParameters::ppisp_freeze_from_sidecar,
-                       "ppisp_freeze_from_sidecar", "Freeze From Sidecar", false,
+                       "ppisp_freeze_from_sidecar", "Freeze From Sidecar", d.ppisp_freeze_from_sidecar,
                        "Load PPISP weights from a sidecar and freeze PPISP learning during training")
             .int_prop(&OptimizationParameters::ppisp_controller_activation_step,
-                      "ppisp_controller_activation_step", "Controller Step", -1, -1, 100000,
+                      "ppisp_controller_activation_step", "Controller Step", d.ppisp_controller_activation_step, -1, 100000,
                       "Iteration to start controller distillation (negative = final 5000 planned steps)")
             .float_prop(&OptimizationParameters::ppisp_controller_lr,
-                        "ppisp_controller_lr", "Controller LR", 2e-3f, 1e-5f, 1e-1f,
+                        "ppisp_controller_lr", "Controller LR", d.ppisp_controller_lr, 1e-5f, 1e-1f,
                         "Learning rate for PPISP controller")
             .bool_prop(&OptimizationParameters::ppisp_freeze_gaussians_on_distill,
-                       "ppisp_freeze_gaussians", "Freeze Gaussians", true,
+                       "ppisp_freeze_gaussians", "Freeze Gaussians", d.ppisp_freeze_gaussians_on_distill,
                        "Freeze Gaussians during controller distillation")
             .bool_prop(&OptimizationParameters::bg_modulation,
-                       "bg_modulation", "BG Modulation", false,
+                       "bg_modulation", "BG Modulation", d.bg_modulation,
                        "Enable sinusoidal background modulation")
             .bool_prop(&OptimizationParameters::headless,
-                       "headless", "Headless", false,
+                       "headless", "Headless", d.headless,
                        "Run without visualization")
             .flags(PROP_READONLY)
             .bool_prop(&OptimizationParameters::enable_eval,
-                       "enable_eval", "Enable Eval", false,
+                       "enable_eval", "Enable Eval", d.enable_eval,
                        "Run evaluation at specified steps")
 
             // Random initialization
             .bool_prop(&OptimizationParameters::random,
-                       "random", "Random Init", false,
+                       "random", "Random Init", d.random,
                        "Use random initialization instead of SfM")
             .flags(PROP_NEEDS_RESTART)
             .int_prop(&OptimizationParameters::init_num_pts,
-                      "init_num_pts", "Init Points", 100000, 1000, 1000000,
+                      "init_num_pts", "Init Points", d.init_num_pts, 1000, 1000000,
                       "Number of random points to initialize")
             .float_prop(&OptimizationParameters::init_extent,
-                        "init_extent", "Init Extent", 3.0f, 0.1f, 10.0f,
+                        "init_extent", "Init Extent", d.init_extent, 0.1f, 10.0f,
                         "Extent of random point cloud")
 
             // Sparsity
             .bool_prop(&OptimizationParameters::enable_sparsity,
-                       "enable_sparsity", "Enable Sparsity", false,
+                       "enable_sparsity", "Enable Sparsity", d.enable_sparsity,
                        "Enable sparsity optimization")
             .int_prop(&OptimizationParameters::sparsify_steps,
-                      "sparsify_steps", "Sparsify Steps", 15000, 1000, 50000,
+                      "sparsify_steps", "Sparsify Steps", d.sparsify_steps, 1000, 50000,
                       "Number of sparsification steps to run after regular training")
             .float_prop(&OptimizationParameters::prune_ratio,
-                        "prune_ratio", "Prune Ratio", 0.6f, 0.0f, 1.0f,
+                        "prune_ratio", "Prune Ratio", d.prune_ratio, 0.0f, 1.0f,
                         "Target pruning ratio for sparsification")
             .float_prop(&OptimizationParameters::init_rho,
-                        "init_rho", "Init Rho", 0.0005f, 0.0f, 0.01f,
+                        "init_rho", "Init Rho", d.init_rho, 0.0f, 0.01f,
                         "Initial rho for sparsity optimization")
             .float_prop(&OptimizationParameters::steps_scaler,
-                        "steps_scaler", "Steps Scaler", 1.0f, 0.0f, 10.0f,
+                        "steps_scaler", "Steps Scaler", d.steps_scaler, 0.0f, 10.0f,
                         "Scale training step counts")
             .bool_prop(&OptimizationParameters::gut,
-                       "gut", "GUT", false,
+                       "gut", "GUT", d.gut,
                        "Gaussian Unscented Transform")
             .bool_prop(&OptimizationParameters::undistort,
-                       "undistort", "Undistort", false,
+                       "undistort", "Undistort", d.undistort,
                        "Undistort images on-the-fly before training")
             .flags(PROP_NEEDS_RESTART)
             .enum_prop(&OptimizationParameters::bg_mode,
-                       "bg_mode", "Background Mode", BackgroundMode::SolidColor,
+                       "bg_mode", "Background Mode", d.bg_mode,
                        {{"SolidColor", BackgroundMode::SolidColor},
                         {"Modulation", BackgroundMode::Modulation},
                         {"Image", BackgroundMode::Image},
@@ -488,8 +498,15 @@ namespace lfs::python {
         }
 
         core::param::OptimizationParameters& get_default_params() {
-            static core::param::OptimizationParameters default_params{};
+            static core::param::OptimizationParameters default_params =
+                core::param::OptimizationParameters::mrnf_defaults();
             return default_params;
+        }
+
+        core::param::OptimizationParameters copy_optimization_default_source() {
+            if (auto* pm = get_parameter_manager())
+                return pm->copySessionParams();
+            return core::param::OptimizationParameters::defaults_for_strategy(get_default_params().strategy);
         }
 
         void mark_params_dirty() {
@@ -615,36 +632,39 @@ namespace lfs::python {
         info["live_update"] = meta->is_live_update();
         info["needs_restart"] = meta->needs_restart();
 
+        const auto default_source = copy_optimization_default_source();
+        const std::any default_value = resolve_optimization_default(*meta, default_source);
+
         switch (meta->type) {
         case PropType::Float:
             info["type"] = "float";
             info["min"] = meta->min_value;
             info["max"] = meta->max_value;
-            info["default"] = meta->default_value;
+            info["default"] = std::any_cast<float>(default_value);
             break;
         case PropType::Int:
             info["type"] = "int";
             info["min"] = static_cast<int>(meta->min_value);
             info["max"] = static_cast<int>(meta->max_value);
-            info["default"] = static_cast<int>(meta->default_value);
+            info["default"] = std::any_cast<int>(default_value);
             break;
         case PropType::SizeT:
             info["type"] = "int";
             info["min"] = static_cast<int64_t>(meta->min_value);
             info["max"] = static_cast<int64_t>(meta->max_value);
-            info["default"] = static_cast<int64_t>(meta->default_value);
+            info["default"] = static_cast<int64_t>(std::any_cast<size_t>(default_value));
             break;
         case PropType::Bool:
             info["type"] = "bool";
-            info["default"] = meta->default_value > 0.5;
+            info["default"] = std::any_cast<bool>(default_value);
             break;
         case PropType::String:
             info["type"] = "string";
-            info["default"] = meta->default_string;
+            info["default"] = std::any_cast<std::string>(default_value);
             break;
         case PropType::Enum:
             info["type"] = "enum";
-            info["default"] = meta->default_enum;
+            info["default"] = std::any_cast<int>(default_value);
             {
                 nb::list items;
                 for (const auto& ei : meta->enum_items) {
@@ -670,34 +690,14 @@ namespace lfs::python {
             throw std::runtime_error("Unknown property: " + prop_id);
         }
 
-        std::any default_val;
-        switch (meta->type) {
-        case PropType::Float:
-            default_val = static_cast<float>(meta->default_value);
-            break;
-        case PropType::Int:
-            default_val = static_cast<int>(meta->default_value);
-            break;
-        case PropType::SizeT:
-            default_val = static_cast<size_t>(meta->default_value);
-            break;
-        case PropType::Bool:
-            default_val = meta->default_value > 0.5;
-            break;
-        case PropType::String:
-            default_val = meta->default_string;
-            break;
-        case PropType::Enum:
-            default_val = meta->default_enum;
-            break;
-        default:
-            throw std::runtime_error("Unsupported property type for reset");
-        }
-
-        auto& p = params();
-        auto ref = PropertyObjectRef::cpp(&p);
-        std::any old_value = meta->getter(ref);
-        meta->setter(ref, default_val);
+        const auto default_source = copy_optimization_default_source();
+        const std::any default_val = resolve_optimization_default(*meta, default_source);
+        std::any old_value;
+        modify_params([&](auto& p) {
+            auto ref = PropertyObjectRef::cpp(&p);
+            old_value = meta->getter(ref);
+            meta->setter(ref, default_val);
+        });
         PropertyRegistry::instance().notify("optimization", prop_id, old_value, default_val);
     }
 
@@ -727,15 +727,17 @@ namespace lfs::python {
         }
 
         nb::module_ props_module = nb::module_::import_("lfs_plugins.props");
+        const auto default_source = copy_optimization_default_source();
 
         for (const auto& meta : group->properties) {
             nb::object prop_obj;
+            const std::any default_value = resolve_optimization_default(meta, default_source);
 
             switch (meta.type) {
             case PropType::Float: {
                 nb::object cls = props_module.attr("FloatProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<float>(meta.default_value),
+                    nb::arg("default") = std::any_cast<float>(default_value),
                     nb::arg("min") = static_cast<float>(meta.min_value),
                     nb::arg("max") = static_cast<float>(meta.max_value),
                     nb::arg("step") = static_cast<float>(meta.step),
@@ -746,7 +748,7 @@ namespace lfs::python {
             case PropType::Int: {
                 nb::object cls = props_module.attr("IntProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<int>(meta.default_value),
+                    nb::arg("default") = std::any_cast<int>(default_value),
                     nb::arg("min") = static_cast<int>(meta.min_value),
                     nb::arg("max") = static_cast<int>(meta.max_value),
                     nb::arg("step") = static_cast<int>(meta.step),
@@ -757,7 +759,7 @@ namespace lfs::python {
             case PropType::SizeT: {
                 nb::object cls = props_module.attr("IntProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<int>(meta.default_value),
+                    nb::arg("default") = static_cast<int>(std::any_cast<size_t>(default_value)),
                     nb::arg("min") = static_cast<int>(meta.min_value),
                     nb::arg("max") = static_cast<int>(meta.max_value),
                     nb::arg("step") = static_cast<int>(meta.step),
@@ -768,7 +770,7 @@ namespace lfs::python {
             case PropType::Bool: {
                 nb::object cls = props_module.attr("BoolProperty");
                 prop_obj = cls(
-                    nb::arg("default") = meta.default_value != 0.0,
+                    nb::arg("default") = std::any_cast<bool>(default_value),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
@@ -776,7 +778,7 @@ namespace lfs::python {
             case PropType::String: {
                 nb::object cls = props_module.attr("StringProperty");
                 prop_obj = cls(
-                    nb::arg("default") = meta.default_string,
+                    nb::arg("default") = std::any_cast<std::string>(default_value),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
@@ -785,10 +787,10 @@ namespace lfs::python {
                 nb::object cls = props_module.attr("EnumProperty");
                 nb::list items;
                 std::string default_id;
-                for (size_t i = 0; i < meta.enum_items.size(); ++i) {
-                    const auto& item = meta.enum_items[i];
+                const int default_enum = std::any_cast<int>(default_value);
+                for (const auto& item : meta.enum_items) {
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
-                    if (static_cast<int>(i) == meta.default_enum) {
+                    if (item.value == default_enum) {
                         default_id = item.identifier;
                     }
                 }

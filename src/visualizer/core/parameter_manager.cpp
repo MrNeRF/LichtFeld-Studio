@@ -61,6 +61,20 @@ namespace lfs::vis {
         return mrnf_current_;
     }
 
+    lfs::core::param::OptimizationParameters ParameterManager::copySessionParams(const std::string_view strategy) {
+        ensureLoaded().value();
+
+        std::lock_guard lock(params_mutex_);
+        const std::string_view resolved_strategy = strategy.empty() ? std::string_view(active_strategy_) : strategy;
+        if (resolved_strategy == "mcmc")
+            return mcmc_session_;
+        if (lfs::core::param::is_mrnf_strategy(resolved_strategy))
+            return mrnf_session_;
+        if (resolved_strategy == "igs+")
+            return igs_session_;
+        return mrnf_session_;
+    }
+
     void ParameterManager::resetToDefaults(const std::string_view strategy) {
         std::lock_guard lock(params_mutex_);
         if (strategy.empty() || strategy == "mcmc") {
@@ -99,6 +113,7 @@ namespace lfs::vis {
             LOG_ERROR("Failed to load params: {}", result.error());
             return;
         }
+        std::lock_guard lock(params_mutex_);
         const auto& opt = params.optimization;
         if (!opt.strategy.empty())
             setActiveStrategy(opt.strategy);
