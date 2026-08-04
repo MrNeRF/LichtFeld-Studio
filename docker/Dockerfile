@@ -30,6 +30,7 @@ RUN apt-get update && \
         libxcursor-dev \
         xorg-dev \
         libglu1-mesa-dev \
+        libgtk-3-dev \
         vim \
         nano \
         htop \
