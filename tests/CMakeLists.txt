@@ -121,6 +121,7 @@ set(TEST_FILES
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
+    test_training_parameters.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
@@ -285,6 +286,7 @@ list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
 )
 
 # Create test executable
