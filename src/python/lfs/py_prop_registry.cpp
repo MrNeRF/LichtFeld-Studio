@@ -463,6 +463,12 @@ namespace lfs::python {
             property["type"] = prop_type_string(meta.type);
             property["flags"] = meta.flags;
             property["operator_arg"] = meta.has_flag(core::prop::PROP_OPERATOR_ARG);
+            property["locale_key"] = meta.ui_locale_key;
+            property["tooltip_key"] = meta.ui_tooltip_key;
+            property["step"] = meta.step;
+            if (meta.ui_precision) {
+                property["precision"] = *meta.ui_precision;
+            }
             if (meta.vector_size) {
                 property["vector_size"] = *meta.vector_size;
             }
@@ -474,6 +480,18 @@ namespace lfs::python {
             }
             if (meta.default_value) {
                 property["default"] = prop_default_to_python(*meta.default_value);
+            }
+            if (!meta.enum_items.empty()) {
+                nb::list items;
+                for (const auto& enum_item : meta.enum_items) {
+                    nb::dict item;
+                    item["name"] = enum_item.name;
+                    item["identifier"] = enum_item.identifier;
+                    item["value"] = enum_item.value;
+                    item["locale_key"] = enum_item.locale_key;
+                    items.append(std::move(item));
+                }
+                property["items"] = std::move(items);
             }
             properties.append(std::move(property));
         }

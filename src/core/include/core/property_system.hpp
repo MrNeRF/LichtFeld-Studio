@@ -79,6 +79,7 @@ namespace lfs::core::prop {
         std::string name;
         std::string identifier;
         int value;
+        std::string locale_key;
     };
 
     using PropDefault = std::variant<bool, int64_t, double, std::string,
@@ -94,6 +95,10 @@ namespace lfs::core::prop {
         PropUIHint ui_hint = PropUIHint::Default;
         uint32_t flags = PROP_NONE;
         PropSource source = PropSource::CPP;
+
+        std::string ui_locale_key;
+        std::string ui_tooltip_key;
+        std::optional<int> ui_precision;
 
         std::optional<int> vector_size;
         std::optional<double> min_value;

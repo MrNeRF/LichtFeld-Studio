@@ -13,6 +13,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <mutex>
+#include <tuple>
 #include <unordered_map>
 
 namespace lfs::core::prop {
@@ -168,33 +169,37 @@ namespace lfs::core::prop {
                                         EnumT default_val,
                                         std::initializer_list<std::pair<std::string, EnumT>> items,
                                         const std::string& desc = "") {
-            PropertyMeta meta;
-            meta.id = id;
-            meta.name = name;
-            meta.description = desc;
-            meta.type = PropType::Enum;
-            meta.ui_hint = PropUIHint::Combo;
-            meta.default_value = static_cast<int64_t>(default_val);
-
+            std::vector<EnumItem> enum_items;
+            enum_items.reserve(items.size());
             for (const auto& [item_name, item_val] : items) {
-                EnumItem ei;
-                ei.name = item_name;
-                ei.identifier = item_name;
-                ei.value = static_cast<int>(item_val);
-                meta.enum_items.push_back(std::move(ei));
+                enum_items.push_back(EnumItem{
+                    .name = item_name,
+                    .identifier = item_name,
+                    .value = static_cast<int>(item_val),
+                });
             }
+            return enum_prop_impl(member, id, name, default_val, std::move(enum_items), desc);
+        }
 
-            meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
-                assert(ref.is_cpp() && "Cannot call C++ property getter with Python object");
-                return static_cast<int>(static_cast<const StructT*>(ref.ptr)->*member);
-            };
-            meta.setter = [member](PropertyObjectRef& ref, const std::any& val) {
-                assert(ref.is_cpp() && "Cannot call C++ property setter with Python object");
-                static_cast<StructT*>(ref.ptr)->*member = static_cast<EnumT>(std::any_cast<int>(val));
-            };
-
-            group_.properties.push_back(std::move(meta));
-            return *this;
+        template <typename EnumT>
+        PropertyGroupBuilder& enum_prop(
+            EnumT StructT::*member,
+            const std::string& id,
+            const std::string& name,
+            EnumT default_val,
+            std::initializer_list<std::tuple<std::string, EnumT, std::string>> items,
+            const std::string& desc = "") {
+            std::vector<EnumItem> enum_items;
+            enum_items.reserve(items.size());
+            for (const auto& [item_name, item_val, locale_key] : items) {
+                enum_items.push_back(EnumItem{
+                    .name = item_name,
+                    .identifier = item_name,
+                    .value = static_cast<int>(item_val),
+                    .locale_key = locale_key,
+                });
+            }
+            return enum_prop_impl(member, id, name, default_val, std::move(enum_items), desc);
         }
 
         // AnimatableProperty<T> with undo/animation support
@@ -351,6 +356,34 @@ namespace lfs::core::prop {
             return *this;
         }
 
+        PropertyGroupBuilder& locale(const std::string& key) {
+            if (!group_.properties.empty()) {
+                group_.properties.back().ui_locale_key = key;
+            }
+            return *this;
+        }
+
+        PropertyGroupBuilder& tooltip(const std::string& key) {
+            if (!group_.properties.empty()) {
+                group_.properties.back().ui_tooltip_key = key;
+            }
+            return *this;
+        }
+
+        PropertyGroupBuilder& precision(int value) {
+            if (!group_.properties.empty()) {
+                group_.properties.back().ui_precision = value;
+            }
+            return *this;
+        }
+
+        PropertyGroupBuilder& ui_step(double value) {
+            if (!group_.properties.empty()) {
+                group_.properties.back().step = value;
+            }
+            return *this;
+        }
+
         PropertyGroupBuilder& on_update(
             std::function<void(StructT*, const std::any&, const std::any&)> cb) {
             if (!group_.properties.empty()) {
@@ -367,6 +400,35 @@ namespace lfs::core::prop {
         [[nodiscard]] PropertyGroup get() const { return group_; }
 
     private:
+        template <typename EnumT>
+        PropertyGroupBuilder& enum_prop_impl(EnumT StructT::*member,
+                                             const std::string& id,
+                                             const std::string& name,
+                                             EnumT default_val,
+                                             std::vector<EnumItem> items,
+                                             const std::string& desc) {
+            PropertyMeta meta;
+            meta.id = id;
+            meta.name = name;
+            meta.description = desc;
+            meta.type = PropType::Enum;
+            meta.ui_hint = PropUIHint::Combo;
+            meta.default_value = static_cast<int64_t>(default_val);
+            meta.enum_items = std::move(items);
+
+            meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
+                assert(ref.is_cpp() && "Cannot call C++ property getter with Python object");
+                return static_cast<int>(static_cast<const StructT*>(ref.ptr)->*member);
+            };
+            meta.setter = [member](PropertyObjectRef& ref, const std::any& val) {
+                assert(ref.is_cpp() && "Cannot call C++ property setter with Python object");
+                static_cast<StructT*>(ref.ptr)->*member = static_cast<EnumT>(std::any_cast<int>(val));
+            };
+
+            group_.properties.push_back(std::move(meta));
+            return *this;
+        }
+
         template <typename MemberT, typename GetFn, typename SetFn>
         PropertyGroupBuilder& add_prop(MemberT StructT::*member,
                                        const std::string& id,

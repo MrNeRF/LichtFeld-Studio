@@ -3,7 +3,6 @@
 """Training Panel - RmlUI with native data binding."""
 
 import os
-import re
 import threading
 import time
 from typing import Any, Optional
@@ -11,6 +10,10 @@ from typing import Any, Optional
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from . import property_view
+from .environment import flag as environment_flag
+from .property_view import format_legacy_number as _fmt_num
+from .property_view import parse_number as _parse_num
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui import RuntimeState, PanelStateBinding
@@ -29,6 +32,8 @@ except ImportError:
 
 __lfs_panel_classes__ = ["TrainingPanel"]
 __lfs_panel_ids__ = ["lfs.training"]
+
+_PROPERTY_VIEW_ENABLED = environment_flag("LFS_TRAINING_PROPERTY_VIEW")
 
 
 def tr(key):
@@ -290,42 +295,6 @@ _NUM_PROP_LOOKUP = {
     for name, dtype, fmt, min_v, max_v, step in NUM_PROP_DEFS
 }
 
-_INT_INPUT_RE = re.compile(r"^\s*[+-]?\d[\d,]*\s*$")
-
-_FLOAT_INPUT_RE = re.compile(
-    r"""
-    ^\s*
-    [+-]?
-    (?:
-        (?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d*)?
-        |
-        \.\d+
-    )
-    (?:[eE][+-]?\d+)?
-    \s*$
-    """,
-    re.VERBOSE,
-)
-
-
-def _fmt_num(val, dtype, fmt):
-    if dtype == int:
-        return f"{int(val):,}"
-    return fmt % val
-
-
-def _parse_num(val_str, dtype):
-    value = str(val_str).strip()
-    if dtype == int:
-        if not _INT_INPUT_RE.fullmatch(value):
-            raise ValueError(f"invalid integer input: {val_str!r}")
-        return value.replace(",", "")
-
-    if not _FLOAT_INPUT_RE.fullmatch(value):
-        raise ValueError(f"invalid numeric input: {val_str!r}")
-    return value.replace(",", "")
-
-
 def _resolved_ppisp_activation_step(
     params,
 ):  # Must match OptimizationParameters::resolved_ppisp_controller_activation_step()
@@ -406,6 +375,9 @@ class TrainingPanel(Panel):
     update_policy = "dirty"
 
     def __init__(self):
+        self._pv_enabled = _PROPERTY_VIEW_ENABLED
+        self._pv_lr_binding = None
+        self._pv_publish_pending = False
         self._handle = None
         self._checkpoint_saved_time = 0.0
         self._new_save_step = 7000
@@ -479,8 +451,22 @@ class TrainingPanel(Panel):
         self._bind_color(model, p)
         self._bind_status(model, p)
         self._bind_display(model, p, d)
+        if self._pv_enabled:
+            self._pv_lr_binding = property_view.bind_section(
+                model,
+                "lr",
+                property_view.LEARNING_RATES,
+                p,
+                self._text_bufs,
+            )
+        else:
+            # RmlUi resolves data-for addresses when the document is parsed,
+            # even below a false data-if branch. Keep the disabled array empty.
+            model.bind_record_list("pv_lr_rows")
         self._bind_events(model)
         self._handle = model.get_handle()
+        if self._pv_lr_binding is not None:
+            self._pv_lr_binding.attach_handle(self._handle)
         self._sync_panel_label()
 
         params = lf.optimization_params()
@@ -540,6 +526,7 @@ class TrainingPanel(Panel):
             return RuntimeState.iteration.value
 
         model.bind_func("show_no_trainer", lambda: not RuntimeState.has_trainer.value)
+        model.bind_func("pv_enabled", lambda: self._pv_enabled)
         model.bind_func(
             "show_no_params",
             lambda: RuntimeState.has_trainer.value and not (p() and p().has_params()),
@@ -1033,6 +1020,8 @@ class TrainingPanel(Panel):
         )
         self._text_bufs["new_step_str"] = f"{self._new_save_step:,}"
         self._sync_bg_color_text_bufs(p)
+        if self._pv_lr_binding is not None:
+            self._pv_lr_binding.sync_text_bufs()
 
     def _sync_bg_color_text_bufs(self, params=None):
         if params is None:
@@ -1216,6 +1205,12 @@ class TrainingPanel(Panel):
         model.bind_event("action", self._on_action)
         model.bind_event("remove_step", self._on_remove_step_event)
         model.bind_event("num_step", self._on_num_step)
+        if self._pv_enabled:
+            model.bind_event("pv_step", self._on_num_step)
+            model.bind_event("pv_focus", self._on_pv_number_input_focus)
+            model.bind_event("pv_change", self._on_pv_number_input_change)
+            model.bind_event("pv_blur", self._on_pv_number_input_blur)
+            model.bind_event("pv_escape", self._on_pv_number_input_escape)
         model.bind_event(
             "toggle_step_scaling_lock", self._on_step_scaling_lock_toggle
         )
@@ -1251,6 +1246,11 @@ class TrainingPanel(Panel):
             body.add_event_listener("click", self._on_body_click)
             body.add_event_listener("mouseup", self._on_step_mouseup)
         for el in doc.query_selector_all("input.number-input"):
+            if el.get_attribute("data-pv-input", "") == "1":
+                # data-for rows may be materialized after on_mount. Their inline
+                # data-event handlers provide the equivalent behavior without
+                # relying on mount-time DOM discovery.
+                continue
             w.bind_select_all_on_focus(el)
             key = el.get_attribute("data-value", "")
             if key:
@@ -1394,7 +1394,7 @@ class TrainingPanel(Panel):
         self._sync_panel_label()
         self._sync_auto_scale_markers()
 
-        dirty = False
+        dirty = self._flush_pv_publish()
         state = RuntimeState.trainer_state.value
         if state != self._last_state:
             self._last_state = state
@@ -1518,6 +1518,8 @@ class TrainingPanel(Panel):
         self._cancel_deferred_updates()
         doc.remove_data_model("training")
         self._handle = None
+        self._pv_lr_binding = None
+        self._pv_publish_pending = False
         self._doc = None
         self._escape_revert.clear()
         self._scrub_fields.unmount()
@@ -1992,6 +1994,74 @@ class TrainingPanel(Panel):
             return
         self._commit_number_input_key(target.get_attribute("data-value", ""))
 
+    def _on_pv_number_input_focus(self, _handle, event, args):
+        if self._pv_lr_binding is None or not args:
+            return
+        target = event.current_target()
+        if target is not None:
+            try:
+                target.select()
+            except Exception:
+                pass
+        self._pv_lr_binding.begin_edit(str(args[0]))
+
+    def _on_pv_number_input_change(self, _handle, event, args):
+        if self._pv_lr_binding is None or not args:
+            return
+        prop = str(args[0])
+        self._pv_lr_binding.update_draft(
+            prop,
+            args[1] if len(args) > 1 else event.get_parameter("value", ""),
+        )
+        if event.get_bool_parameter("linebreak", False):
+            self._pv_lr_binding.commit(prop, publish=False)
+            self._queue_pv_publish()
+
+    def _on_pv_number_input_blur(self, _handle, _event, args):
+        if self._pv_lr_binding is None or not args:
+            return
+        prop = str(args[0])
+        if len(args) > 1:
+            self._pv_lr_binding.update_draft(prop, args[1])
+        self._pv_lr_binding.commit(prop)
+        self._pv_lr_binding.finish_edit(prop)
+
+    def _on_pv_number_input_escape(self, _handle, event, args):
+        if self._pv_lr_binding is None or not args:
+            return
+        if self._pv_lr_binding.cancel_edit(str(args[0])):
+            event.stop_propagation()
+
+    def _queue_pv_publish(self):
+        binding = self._pv_lr_binding
+        if binding is None or self._pv_publish_pending:
+            return
+        self._pv_publish_pending = True
+
+        def publish_after_event():
+            if not self._pv_publish_pending:
+                return
+            self._pv_publish_pending = False
+            if self._pv_lr_binding is binding:
+                binding.publish()
+
+        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+        if scheduler is None:
+            scheduler = getattr(lf.ui, "_run_on_ui_thread", None)
+        if callable(scheduler):
+            scheduler(publish_after_event)
+        else:
+            self._request_reactive_update()
+
+    def _flush_pv_publish(self):
+        if not self._pv_publish_pending:
+            return False
+        self._pv_publish_pending = False
+        if self._pv_lr_binding is not None:
+            self._pv_lr_binding.publish()
+            return True
+        return False
+
     def _on_color_channel_input_change(self, event):
         if not event.get_bool_parameter("linebreak", False):
             return
@@ -2018,6 +2088,13 @@ class TrainingPanel(Panel):
         self._set_auto_scale_steps_locked(not self._auto_scale_steps_locked)
 
     def _apply_num_step(self, prop, direction):
+        if (
+            self._pv_lr_binding is not None
+            and self._pv_lr_binding.contains(prop)
+        ):
+            self._pv_lr_binding.step(prop, direction)
+            return
+
         entry = _NUM_PROP_LOOKUP.get(prop)
         if entry:
             params = lf.optimization_params()

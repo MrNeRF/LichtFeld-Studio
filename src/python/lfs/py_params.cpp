@@ -60,6 +60,10 @@ namespace lfs::python {
             .float_prop(&OptimizationParameters::means_lr,
                         "means_lr", "Position LR", d.means_lr, 0.0f, 0.001f,
                         "Learning rate for gaussian positions")
+            .locale("training.opt.lr.position")
+            .tooltip("training.tooltip.lr_position")
+            .precision(6)
+            .ui_step(1e-6)
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::means_lr_end,
                         "means_lr_end", "Position LR End", d.means_lr_end, 0.0f, 0.001f,
@@ -68,14 +72,26 @@ namespace lfs::python {
             .float_prop(&OptimizationParameters::shs_lr,
                         "shs_lr", "SH LR", d.shs_lr, 0.0f, 0.1f,
                         "Learning rate for spherical harmonics")
+            .locale("training.opt.lr.sh_coeff")
+            .tooltip("training.tooltip.lr_sh_coeff")
+            .precision(4)
+            .ui_step(1e-4)
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::opacity_lr,
                         "opacity_lr", "Opacity LR", d.opacity_lr, 0.0f, 1.0f,
                         "Learning rate for opacity")
+            .locale("training.opt.lr.opacity")
+            .tooltip("training.tooltip.lr_opacity")
+            .precision(4)
+            .ui_step(0.001)
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::scaling_lr,
                         "scaling_lr", "Scale LR", d.scaling_lr, 0.0f, 0.1f,
                         "Learning rate for gaussian scales")
+            .locale("training.opt.lr.scaling")
+            .tooltip("training.tooltip.lr_scaling")
+            .precision(4)
+            .ui_step(1e-4)
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::scaling_lr_end,
                         "scaling_lr_end", "Scale LR End", d.scaling_lr_end, 0.0f, 0.1f,
@@ -84,6 +100,10 @@ namespace lfs::python {
             .float_prop(&OptimizationParameters::rotation_lr,
                         "rotation_lr", "Rotation LR", d.rotation_lr, 0.0f, 0.1f,
                         "Learning rate for rotations")
+            .locale("training.opt.lr.rotation")
+            .tooltip("training.tooltip.lr_rotation")
+            .precision(4)
+            .ui_step(1e-4)
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::cropbox_lr_scale,
                         "cropbox_lr_scale", "Rejected splat LR scale", d.cropbox_lr_scale, 0.0f, 1.0f,
@@ -631,6 +651,12 @@ namespace lfs::python {
         info["readonly"] = meta->is_readonly();
         info["live_update"] = meta->is_live_update();
         info["needs_restart"] = meta->needs_restart();
+        info["locale_key"] = meta->ui_locale_key;
+        info["tooltip_key"] = meta->ui_tooltip_key;
+        info["step"] = meta->step;
+        if (meta->ui_precision) {
+            info["precision"] = *meta->ui_precision;
+        }
 
         const auto default_source = copy_optimization_default_source();
         const std::any default_value = resolve_optimization_default(*meta, default_source);
@@ -670,7 +696,9 @@ namespace lfs::python {
                 for (const auto& ei : meta->enum_items) {
                     nb::dict item;
                     item["name"] = ei.name;
+                    item["identifier"] = ei.identifier;
                     item["value"] = ei.value;
+                    item["locale_key"] = ei.locale_key;
                     items.append(item);
                 }
                 info["items"] = items;

@@ -357,35 +357,52 @@
             <span class="text-disabled">{{opt_strategy_display}}</span>
           </div>
           <span class="status-text status-muted">{{label_lr_header}}</span>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_position">
+          <div class="setting-row" data-if="!pv_enabled" data-tooltip="training.tooltip.lr_position">
             <span class="prop-label">{{label_means_lr}}</span>
             <input type="text" class="number-input" data-value="means_lr_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('means_lr', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('means_lr', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_sh_coeff">
+          <div class="setting-row" data-if="!pv_enabled" data-tooltip="training.tooltip.lr_sh_coeff">
             <span class="prop-label">{{label_shs_lr}}</span>
             <input type="text" class="number-input" data-value="shs_lr_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('shs_lr', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('shs_lr', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_opacity">
+          <div class="setting-row" data-if="!pv_enabled" data-tooltip="training.tooltip.lr_opacity">
             <span class="prop-label">{{label_opacity_lr}}</span>
             <input type="text" class="number-input" data-value="opacity_lr_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('opacity_lr', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('opacity_lr', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_scaling">
+          <div class="setting-row" data-if="!pv_enabled" data-tooltip="training.tooltip.lr_scaling">
             <span class="prop-label">{{label_scaling_lr}}</span>
             <input type="text" class="number-input" data-value="scaling_lr_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('scaling_lr', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('scaling_lr', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_rotation">
+          <div class="setting-row" data-if="!pv_enabled" data-tooltip="training.tooltip.lr_rotation">
             <span class="prop-label">{{label_rotation_lr}}</span>
             <input type="text" class="number-input" data-value="rotation_lr_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('rotation_lr', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('rotation_lr', 1)">+</button>
+          </div>
+          <div class="setting-row"
+               data-for="row : pv_lr_rows"
+               data-if="pv_enabled &amp;&amp; row.kind == 'number'"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text"
+                   class="number-input"
+                   data-pv-input="1"
+                   data-value="row.text"
+                   data-attr-data-pv-id="row.id"
+                   data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
           <span class="status-text status-muted">{{label_refinement_header}}</span>
           <div class="setting-row" data-tooltip="training.tooltip.refine_every" data-class-disabled-overlay="step_scaling_params_locked">
