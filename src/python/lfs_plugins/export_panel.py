@@ -716,7 +716,7 @@ class ExportPanel(Panel):
             self._cached_export_state = {
                 "active": True,
                 "progress": 0.0,
-                "stage": "Starting",
+                "stage": lf.ui.tr("runtime.task_starting"),
                 "format": _progress_format_name(self._format),
             }
             self._dirty_model(

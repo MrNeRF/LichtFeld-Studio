@@ -38,3 +38,8 @@ owner/repo
 setting-row__control-col
 # Stable operator metadata exposed outside the localized GUI registry.
 Play/Pause
+
+# Dynamic UI composition templates contain no fixed user-facing words.
+{error_prefix}: {detail}
+{tr('plugin_manager.status.unload_failed')}: {e}
+{group.name} ({group.count})

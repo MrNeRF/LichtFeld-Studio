@@ -422,7 +422,7 @@ class PortalAccountService:
             self._cancel_event.clear()
             self._snapshot = AccountSnapshot(
                 linking=True,
-                label="Linking",
+                label="",
                 tooltip=self._with_portal_host(""),
                 portal_host=self.portal_host,
                 custom_portal=self.is_custom_portal,
@@ -914,7 +914,7 @@ class PortalAccountService:
         with self._lock:
             self._snapshot = AccountSnapshot(
                 linking=True,
-                label="Linking",
+                label="",
                 tooltip=self._with_portal_host(f"{remaining // 60}:{remaining % 60:02d}"),
                 user_code=user_code,
                 verification_uri=verification_uri,
@@ -945,7 +945,7 @@ class PortalAccountService:
     def _set_signed_out(self, error: str) -> None:
         with self._lock:
             self._snapshot = AccountSnapshot(
-                label="Sign in",
+                label="",
                 tooltip=self._with_portal_host(""),
                 error=error,
                 portal_host=self.portal_host,

@@ -26,6 +26,12 @@ RML_SUFFIXES = {".rml"}
 STRING_LITERAL = re.compile(r'"((?:\\.|[^"\\])*)"')
 RML_TEXT = re.compile(r">([^<>{}][^<>{}]*[A-Za-z][^<>{}]*)<")
 RML_TEXT_ATTRIBUTE = re.compile(r'\b(?:title|placeholder|aria-label)\s*=\s*"((?:\\.|[^"\\])*)"')
+UI_FIELD_NAMES = frozenset(
+    {"status_text", "stage", "label", "message", "title", "tooltip", "placeholder", "hint", "caption"}
+)
+UI_FIELD_ASSIGNMENT = re.compile(
+    r"\.(?:status_text|stage|label|message|title|tooltip|placeholder|hint|caption)\s*="
+)
 UI_SINK = re.compile(
     r"\b(SetText|SetInnerRML|body_rml|\.title\s*=|\.label\s*=|bind_func\(|"
     r"\blabel\s*=|\.stage\s*=|\.error\s*=|\bstatus\s*=|_set_status\(|on_progress\(|"
@@ -147,16 +153,48 @@ def python_docstring_lines(path: Path, source: str) -> set[int]:
     return lines
 
 
-def scan_source(path: Path, allowlist: set[str], allow_patterns: list[re.Pattern[str]]) -> list[Finding]:
+def python_dict_value_findings(
+    path: Path, source: str, allowlist: set[str], allow_patterns: list[re.Pattern[str]]
+) -> list[Finding]:
+    if path.suffix != ".py":
+        return []
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError:
+        return []
+
     findings: list[Finding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values):
+            if not (isinstance(key, ast.Constant) and key.value in UI_FIELD_NAMES):
+                continue
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                text = value.value
+            elif isinstance(value, ast.JoinedStr):
+                expression = ast.get_source_segment(source, value)
+                match = re.fullmatch(r"[fFrRuUbB]*(\"\"\"|'''|\"|')(.*)\1", expression or "", re.DOTALL)
+                if not match:
+                    continue
+                text = match.group(2)
+            else:
+                continue
+            if is_candidate(text, allowlist, allow_patterns):
+                findings.append(Finding(path, value.lineno, text, "source"))
+    return findings
+
+
+def scan_source(path: Path, allowlist: set[str], allow_patterns: list[re.Pattern[str]]) -> list[Finding]:
     source = path.read_text(encoding="utf-8")
+    findings = python_dict_value_findings(path, source, allowlist, allow_patterns)
     has_localized_panel_label = bool(LOCALIZED_PANEL_LABEL.search(source))
     docstring_lines = python_docstring_lines(path, source)
     lines = source.splitlines()
     for line_number, line in enumerate(lines, start=1):
         if line_number in docstring_lines:
             continue
-        if IGNORE_LINE.search(line) or not UI_SINK.search(line):
+        if IGNORE_LINE.search(line) or not (UI_SINK.search(line) or UI_FIELD_ASSIGNMENT.search(line)):
             continue
         if has_localized_panel_label and STATIC_PANEL_LABEL.match(line):
             continue

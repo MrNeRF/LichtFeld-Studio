@@ -34,5 +34,5 @@ def safe_format(text: str, *args: object, **values: object) -> str:
     """Format translator-controlled text without allowing malformed braces to escape."""
     try:
         return text.format(*args, **values)
-    except (IndexError, KeyError, ValueError):
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError):
         return text

@@ -149,11 +149,12 @@ namespace lfs::vis::gui {
                 return state;
 
             if (stats.full_quality_reference) {
-                state.status_text = "Full quality reference";
+                state.status_text = LOC("runtime.lod_full_quality_reference");
             } else if (stats.active && stats.gpu_selection) {
-                state.status_text = "Active, GPU select";
+                state.status_text = LOC("runtime.lod_active_gpu_select");
             } else if (stats.active) {
-                state.status_text = stats.async_result_ready ? "Active, async ready" : "Active";
+                state.status_text = LOC(stats.async_result_ready ? "runtime.lod_active_async_ready"
+                                                                 : "runtime.lod_active");
             } else if (stats.has_tree || stats.available) {
                 state.status_text = LOC(stats.enabled ? "runtime.lod_waiting_for_frame"
                                                       : "runtime.lod_tree_loaded_off");
@@ -4426,7 +4427,7 @@ namespace lfs::vis::gui {
         if (!cuda_unavailable_notified_ && lfs::core::cuda_is_unavailable()) {
             cuda_unavailable_notified_ = true;
             lfs::core::events::state::CudaUnavailable{
-                .message = "CUDA unavailable — GPU features disabled. A driver restart may be required."}
+                .message = LOC("runtime.cuda_unavailable_message")}
                 .emit();
         }
 

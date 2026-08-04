@@ -58,6 +58,14 @@ def test_locale_json_uses_one_key_per_line():
                 assert len(match.group(1)) % 2 == 0, f"{path.name}:{line_number} has odd indentation"
 
 
+def test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_characters():
+    for path in sorted(LOCALES.glob("*.json")):
+        contents = path.read_bytes()
+        assert not contents.startswith(b"\xef\xbb\xbf"), f"{path.name}: UTF-8 BOM"
+        decoded = contents.decode("utf-8", errors="strict")
+        assert "\ufffd" not in decoded, f"{path.name}: replacement character"
+
+
 def test_rml_translation_directives_resolve():
     directive = re.compile(r"@tr:([A-Za-z0-9_.-]+)")
     directives = {
@@ -126,16 +134,21 @@ def test_hardcoded_ui_audit_detects_common_bypasses():
         source = root / "panel.py"
         source.write_text(
             'self._set_status(f"Export {count}")\nlabel = "Overview"\non_progress("Working")\n'
+            'state.status_text = "Degraded"\npayload = {"stage": "Queued", \'hint\': \'Choose a file\'}\n'
             'title = _ui_label("ui.overview", "Overview")\n',
             encoding="utf-8",
         )
         rml = root / "panel.rml"
         rml.write_text('<button title="Cancel">Export</button>\n', encoding="utf-8")
+        cpp = root / "panel.cpp"
+        cpp.write_text('State state{.message = "Visible notice"};\n', encoding="utf-8")
         source_findings = audit.scan_source(source, allowlist, patterns)
         source_texts = {finding.text for finding in source_findings}
+        cpp_texts = {finding.text for finding in audit.scan_source(cpp, allowlist, patterns)}
         rml_texts = {finding.text for finding in audit.scan_rml(rml, allowlist, patterns)}
-        assert {"Export {count}", "Overview", "Working"} <= source_texts
+        assert {"Export {count}", "Overview", "Working", "Degraded", "Queued", "Choose a file"} <= source_texts
         assert sum(finding.text == "Overview" for finding in source_findings) == 1
+        assert "Visible notice" in cpp_texts
         assert {"Cancel", "Export"} <= rml_texts
 
 
@@ -245,15 +258,101 @@ def test_runtime_localization_refresh_updates_live_rml_documents():
     assert should_refresh("Translated", "Translated")
     assert not should_refresh("Dynamic runtime value", "Translated")
 
-    # Attribute and text directives must remain a single source traversal.
+    # Lazily created documents are localized when they are loaded, not only on the
+    # next language change, so the stamp exists before the application writes content.
+    load_document = documents[documents.index("Rml::ElementDocument* loadDocument("):]
+    load_document = load_document[: load_document.index("bool refreshLocalizedContent")]
+    assert "refreshLocalizedContent(document)" in load_document
+
+    # Translations are text: they must be encoded before they are written as RML, and
+    # the recorded value must be the DOM readback so the comparison round-trips.
+    assert "Rml::StringUtilities::EncodeRml(std::string(localization.get(text_key)))" in documents
+    assert "SetAttribute(kLastTextAttribute.data(), root->GetInnerRML())" in documents
+
+    def encode_rml(text):
+        for raw, encoded in (("&", "&amp;"), ("<", "&lt;"), (">", "&gt;"), ('"', "&quot;")):
+            text = text.replace(raw, encoded)
+        return text
+
+    for value in ("WIKI & FAQ", "Use --python-script <path> to load scripts.", 'Say "hello"'):
+        stamped = encode_rml(value)
+        assert should_refresh(stamped, stamped), value
+
+    # Panel hosts cache their rendered document in a texture, so a language change has
+    # to invalidate that cache or the panel keeps showing the previous language.
+    panel_host = (ROOT / "src" / "visualizer" / "gui" / "rmlui" / "rml_panel_host.cpp").read_text(encoding="utf-8")
+    sync_localized = panel_host[panel_host.index("void RmlPanelHost::syncLocalizedContent"):]
+    sync_localized = sync_localized[: sync_localized.index("\n    }")]
+    assert "language_generation.get()" in sync_localized
+    assert "refreshLocalizedContent(document_)" in sync_localized
+    assert "content_dirty_ = true" in sync_localized
+    assert "render_needed_ = true" in sync_localized
+    assert "syncLocalizedContent();" in panel_host[panel_host.index("bool RmlPanelHost::ensureDocumentLoaded"):]
+
     directive_scan = documents[
         documents.index("std::string preserveTranslationDirectives") : documents.index(
             "std::string injectParseTimeFontFallback"
         )
     ]
-    assert directive_scan.count("std::sregex_iterator") == 1
-    assert 'translated_document += " data-lfs-i18n-"' in directive_scan
-    assert 'translated_document += " data-lfs-i18n=\\\""' in directive_scan
+
+    def extract_raw_pattern(name):
+        match = re.search(
+            rf'static const std::regex {name}\(\s*R"\((.*?)\)"',
+            directive_scan,
+            re.DOTALL,
+        )
+        assert match, f"missing raw-string pattern {name}"
+        return match.group(1)
+
+    attribute_directive = re.compile(
+        extract_raw_pattern("kTranslatedAttributePattern"), re.IGNORECASE
+    )
+    text_directive = re.compile(extract_raw_pattern("kTranslatedTextPattern"))
+
+    def preserve_translation_directives(rml):
+        with_attribute_metadata = attribute_directive.sub(
+            lambda match: (
+                f'{match.group(0)} data-lfs-i18n-{match.group(2)}="{match.group(4)}"'
+            ),
+            rml,
+        )
+        return text_directive.sub(
+            lambda match: (
+                f'{match.group(1)} data-lfs-i18n="{match.group(4)}"'
+                f'{match.group(2)}{match.group(3)}@tr:{match.group(4)}'
+                f'{match.group(5)}{match.group(6)}'
+            ),
+            with_attribute_metadata,
+        )
+
+    for path in RML_DIR.rglob("*.rml"):
+        source_rml = path.read_text(encoding="utf-8")
+        stamped_rml = preserve_translation_directives(source_rml)
+        directive_counts = {
+            "title": sum(
+                match.group(2).lower() == "title"
+                for match in attribute_directive.finditer(source_rml)
+            ),
+            "placeholder": sum(
+                match.group(2).lower() == "placeholder"
+                for match in attribute_directive.finditer(source_rml)
+            ),
+            "text": sum(1 for _ in text_directive.finditer(source_rml)),
+        }
+        stamp_counts = {
+            "title": stamped_rml.count('data-lfs-i18n-title="'),
+            "placeholder": stamped_rml.count('data-lfs-i18n-placeholder="'),
+            "text": stamped_rml.count('data-lfs-i18n="'),
+        }
+        assert stamp_counts == directive_counts, path
+
+    mixed_directives = (
+        '<button title="@tr:video_extractor.set_start">'
+        "@tr:video_extractor.set</button>"
+    )
+    stamped_mixed_directives = preserve_translation_directives(mixed_directives)
+    assert 'data-lfs-i18n-title="video_extractor.set_start"' in stamped_mixed_directives
+    assert 'data-lfs-i18n="video_extractor.set"' in stamped_mixed_directives
 
     translated_text = re.compile(
         r"<[A-Za-z][^>]*>[ \t\r\n]*@tr:[A-Za-z0-9_.-]+[ \t\r\n]*</[A-Za-z][^>]*>"
@@ -342,6 +441,7 @@ if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
         test_locale_json_uses_one_key_per_line,
+        test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_characters,
         test_rml_translation_directives_resolve,
         test_literal_localization_calls_resolve,
         test_hardcoded_ui_audit_has_no_candidates,

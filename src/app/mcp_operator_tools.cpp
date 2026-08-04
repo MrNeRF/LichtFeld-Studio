@@ -227,12 +227,17 @@ namespace lfs::app {
             };
         }
 
+        std::string operator_label(const vis::op::OperatorDescriptor& descriptor) {
+            auto& localization = lfs::event::LocalizationManager::getInstance();
+            return localization.hasKey(descriptor.label) ? localization.get(descriptor.label)
+                                                         : descriptor.label;
+        }
+
         std::string operator_cancel_message(const vis::op::OperatorDescriptor& descriptor) {
-            if (!descriptor.label.empty()) {
-                const std::string label = lfs::event::LocalizationManager::getInstance().get(descriptor.label);
-                return lfs::event::formatLocalized("runtime.operator_could_not_be_performed", label);
-            }
-            return LOC("runtime.operator_cancelled");
+            return descriptor.label.empty()
+                       ? LOC("runtime.operator_cancelled")
+                       : lfs::event::formatLocalized("runtime.operator_could_not_be_performed",
+                                                     operator_label(descriptor));
         }
 
         const char* operator_source_to_string(const vis::op::OperatorSource source) {
@@ -298,7 +303,7 @@ namespace lfs::app {
                                       const std::optional<bool> poll_without_args) {
             json result{
                 {"id", descriptor.id()},
-                {"label", lfs::event::LocalizationManager::getInstance().get(descriptor.label)},
+                {"label", operator_label(descriptor)},
                 {"description", descriptor.description},
                 {"source", operator_source_to_string(descriptor.source)},
                 {"builtin", descriptor.builtin_id.has_value()},

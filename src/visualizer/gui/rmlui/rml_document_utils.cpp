@@ -26,49 +26,64 @@ namespace lfs::vis::gui::rml_documents {
         constexpr std::string_view kFallbackFontResource = "rmlui/font_fallback.rcss";
 
         std::string preserveTranslationDirectives(std::string document_rml) {
-            // Keep both directive forms in one scan. This runs while RML
-            // documents are loaded, so avoiding two full regex traversals is
-            // noticeable for documents containing many translated controls.
-            static const std::regex kTranslationDirectivePattern(
-                R"((\s)(title|placeholder)\s*=\s*(["'])@tr:([A-Za-z0-9_.-]+)\3|(<[A-Za-z][^>]*)(>)([ \t\r\n]*)@tr:([A-Za-z0-9_.-]+)([ \t\r\n]*)(</[A-Za-z][^>]*>))",
+            static const std::regex kTranslatedAttributePattern(
+                R"((\s)(title|placeholder)\s*=\s*(["'])@tr:([A-Za-z0-9_.-]+)\3)",
                 std::regex_constants::icase);
+            static const std::regex kTranslatedTextPattern(
+                R"((<[A-Za-z][^>]*)(>)([ \t\r\n]*)@tr:([A-Za-z0-9_.-]+)([ \t\r\n]*)(</[A-Za-z][^>]*>))");
 
-            std::string translated_document;
-            translated_document.reserve(document_rml.size());
+            std::string with_attribute_metadata;
             std::size_t last_pos = 0;
             for (std::sregex_iterator it(document_rml.begin(), document_rml.end(),
-                                         kTranslationDirectivePattern),
+                                         kTranslatedAttributePattern),
                  end;
                  it != end; ++it) {
                 const auto& match = *it;
                 const auto match_pos = static_cast<std::size_t>(match.position());
                 const auto match_end = match_pos + static_cast<std::size_t>(match.length());
-                translated_document.append(document_rml, last_pos, match_pos - last_pos);
-                if (match[1].matched) {
-                    translated_document.append(document_rml, match_pos, match.length());
-                    translated_document += " data-lfs-i18n-";
-                    translated_document += match[2].str();
-                    translated_document += "=\"";
-                    translated_document += match[4].str();
-                    translated_document += '"';
-                } else {
-                    translated_document += match[5].str();
-                    translated_document += " data-lfs-i18n=\"";
-                    translated_document += match[8].str();
-                    translated_document += '"';
-                    translated_document += match[6].str();
-                    translated_document += match[7].str();
-                    translated_document += "@tr:";
-                    translated_document += match[8].str();
-                    translated_document += match[9].str();
-                    translated_document += match[10].str();
-                }
+                with_attribute_metadata.append(document_rml, last_pos, match_end - last_pos);
+                with_attribute_metadata += " data-lfs-i18n-";
+                with_attribute_metadata += match[2].str();
+                with_attribute_metadata += "=\"";
+                with_attribute_metadata += match[4].str();
+                with_attribute_metadata += '"';
                 last_pos = match_end;
             }
-            if (translated_document.empty())
-                return document_rml;
-            translated_document.append(document_rml, last_pos, std::string::npos);
-            return translated_document;
+            if (with_attribute_metadata.empty()) {
+                with_attribute_metadata = std::move(document_rml);
+            } else {
+                with_attribute_metadata.append(document_rml, last_pos, std::string::npos);
+            }
+
+            std::string with_text_metadata;
+            last_pos = 0;
+            for (std::sregex_iterator it(with_attribute_metadata.begin(),
+                                         with_attribute_metadata.end(),
+                                         kTranslatedTextPattern),
+                 end;
+                 it != end; ++it) {
+                const auto& match = *it;
+                const auto match_pos = static_cast<std::size_t>(match.position());
+                const auto match_end = match_pos + static_cast<std::size_t>(match.length());
+                with_text_metadata.append(with_attribute_metadata, last_pos,
+                                          match_pos - last_pos);
+                with_text_metadata += match[1].str();
+                with_text_metadata += " data-lfs-i18n=\"";
+                with_text_metadata += match[4].str();
+                with_text_metadata += '"';
+                with_text_metadata += match[2].str();
+                with_text_metadata += match[3].str();
+                with_text_metadata += "@tr:";
+                with_text_metadata += match[4].str();
+                with_text_metadata += match[5].str();
+                with_text_metadata += match[6].str();
+                last_pos = match_end;
+            }
+            if (with_text_metadata.empty())
+                return with_attribute_metadata;
+
+            with_text_metadata.append(with_attribute_metadata, last_pos, std::string::npos);
+            return with_text_metadata;
         }
 
         std::string injectParseTimeFontFallback(std::string document_rml,
@@ -264,12 +279,17 @@ namespace lfs::vis::gui::rml_documents {
         if (!context)
             return nullptr;
 
+        Rml::ElementDocument* document = nullptr;
         if (auto document_source = loadDocumentSource(document_path)) {
-            return context->LoadDocumentFromMemory(*document_source,
-                                                   rml_paths::filesystemPathToFileUri(document_path));
+            document = context->LoadDocumentFromMemory(
+                *document_source, rml_paths::filesystemPathToFileUri(document_path));
+        } else {
+            document = context->LoadDocument(rml_paths::filesystemPathToFileUri(document_path));
         }
 
-        return context->LoadDocument(rml_paths::filesystemPathToFileUri(document_path));
+        if (document)
+            refreshLocalizedContent(document);
+        return document;
     }
 
     bool refreshLocalizedContent(Rml::Element* const root) {
@@ -282,7 +302,10 @@ namespace lfs::vis::gui::rml_documents {
         const auto text_key = root->GetAttribute<Rml::String>("data-lfs-i18n", "");
         if (!text_key.empty()) {
             constexpr std::string_view kLastTextAttribute = "data-lfs-i18n-last";
-            const auto localized_text = std::string(localization.get(text_key));
+            // Translations are text, not markup: a value such as "--python-script <path>"
+            // would otherwise be parsed into elements and lost.
+            const auto localized_text =
+                Rml::StringUtilities::EncodeRml(std::string(localization.get(text_key)));
             const auto previous_text = root->GetAttribute<Rml::String>(kLastTextAttribute.data(), "");
             const auto current_text = root->GetInnerRML();
             if (previous_text.empty() || current_text == previous_text) {
@@ -290,7 +313,7 @@ namespace lfs::vis::gui::rml_documents {
                     root->SetInnerRML(localized_text);
                     changed = true;
                 }
-                root->SetAttribute(kLastTextAttribute.data(), localized_text);
+                root->SetAttribute(kLastTextAttribute.data(), root->GetInnerRML());
             }
         }
 
@@ -308,7 +331,8 @@ namespace lfs::vis::gui::rml_documents {
                     root->SetAttribute(std::string(attribute), localized_value);
                     changed = true;
                 }
-                root->SetAttribute(last_value_name, localized_value);
+                root->SetAttribute(last_value_name,
+                                   root->GetAttribute<Rml::String>(std::string(attribute), ""));
             }
         }
 

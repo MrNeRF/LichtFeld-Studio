@@ -383,7 +383,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EMPTY = "status.empty";
         inline constexpr const char* MODE = "status.mode";
         inline constexpr const char* GAUSSIANS = "status.gaussians";
-        inline constexpr const char* ITERATION = "status.iteration";
         inline constexpr const char* FPS = "status.fps";
         inline constexpr const char* STEP = "status.step";
         inline constexpr const char* LOSS = "status.loss";

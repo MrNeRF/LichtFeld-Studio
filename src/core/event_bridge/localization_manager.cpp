@@ -118,6 +118,14 @@ namespace lfs::event {
         return result.c_str();
     }
 
+    bool LocalizationManager::hasKey(std::string_view key) const {
+        const std::lock_guard lock(mutex_);
+        const std::string key_str(key);
+        return overrides_.find(key_str) != overrides_.end() ||
+               current_strings_.find(key_str) != current_strings_.end() ||
+               fallback_strings_.find(key_str) != fallback_strings_.end();
+    }
+
     const char* LocalizationManager::getEnglishFallback(std::string_view key) const {
         thread_local std::array<std::string, 8> result_buffers;
         thread_local size_t next_result_buffer = 0;
