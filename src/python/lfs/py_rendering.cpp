@@ -947,9 +947,9 @@ namespace lfs::python {
             case core::prop::PropType::Float: {
                 nb::object cls = props_module.attr("FloatProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<float>(std::get<double>(*meta.default_value)),
-                    nb::arg("min") = static_cast<float>(*meta.min_value),
-                    nb::arg("max") = static_cast<float>(*meta.max_value),
+                    nb::arg("default") = static_cast<float>(std::get<double>(meta.default_value.value())),
+                    nb::arg("min") = static_cast<float>(meta.min_value.value()),
+                    nb::arg("max") = static_cast<float>(meta.max_value.value()),
                     nb::arg("step") = static_cast<float>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -958,9 +958,9 @@ namespace lfs::python {
             case core::prop::PropType::Int: {
                 nb::object cls = props_module.attr("IntProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<int>(std::get<int64_t>(*meta.default_value)),
-                    nb::arg("min") = static_cast<int>(*meta.min_value),
-                    nb::arg("max") = static_cast<int>(*meta.max_value),
+                    nb::arg("default") = static_cast<int>(std::get<int64_t>(meta.default_value.value())),
+                    nb::arg("min") = static_cast<int>(meta.min_value.value()),
+                    nb::arg("max") = static_cast<int>(meta.max_value.value()),
                     nb::arg("step") = static_cast<int>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -969,7 +969,7 @@ namespace lfs::python {
             case core::prop::PropType::Bool: {
                 nb::object cls = props_module.attr("BoolProperty");
                 prop_obj = cls(
-                    nb::arg("default") = std::get<bool>(*meta.default_value),
+                    nb::arg("default") = std::get<bool>(meta.default_value.value()),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
@@ -977,7 +977,7 @@ namespace lfs::python {
             case core::prop::PropType::String: {
                 nb::object cls = props_module.attr("StringProperty");
                 prop_obj = cls(
-                    nb::arg("default") = std::get<std::string>(*meta.default_value),
+                    nb::arg("default") = std::get<std::string>(meta.default_value.value()),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
@@ -989,7 +989,7 @@ namespace lfs::python {
                 for (size_t i = 0; i < meta.enum_items.size(); ++i) {
                     const auto& item = meta.enum_items[i];
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
-                    if (static_cast<int>(i) == std::get<int64_t>(*meta.default_value)) {
+                    if (static_cast<int>(i) == std::get<int64_t>(meta.default_value.value())) {
                         default_id = item.identifier;
                     }
                 }
@@ -1004,15 +1004,15 @@ namespace lfs::python {
             case core::prop::PropType::Color3: {
                 nb::object cls = props_module.attr("FloatVectorProperty");
                 std::string subtype = (meta.type == core::prop::PropType::Color3) ? "COLOR" : "";
-                const auto& default_value = std::get<std::array<double, 3>>(*meta.default_value);
+                const auto& default_value = std::get<std::array<double, 3>>(meta.default_value.value());
                 prop_obj = cls(
                     nb::arg("default") = nb::make_tuple(
                         static_cast<float>(default_value[0]),
                         static_cast<float>(default_value[1]),
                         static_cast<float>(default_value[2])),
                     nb::arg("size") = 3,
-                    nb::arg("min") = static_cast<float>(*meta.min_value),
-                    nb::arg("max") = static_cast<float>(*meta.max_value),
+                    nb::arg("min") = static_cast<float>(meta.min_value.value()),
+                    nb::arg("max") = static_cast<float>(meta.max_value.value()),
                     nb::arg("subtype") = subtype,
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);

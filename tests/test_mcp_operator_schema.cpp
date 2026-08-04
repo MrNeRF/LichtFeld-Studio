@@ -139,6 +139,9 @@ TEST(McpOperatorSchemaTest, PreservesDeserializationErrorsAndVectorStorage) {
         "test.deserialize",
         {
             arg_bool("enabled", ""),
+            arg_string("label", ""),
+            arg_float("scale", ""),
+            arg_int("count", ""),
             arg_float_vector("point", "", 3),
             arg_float_vector("weights", "", 2),
             arg_int_vector("indices", "", 2),
@@ -148,9 +151,39 @@ TEST(McpOperatorSchemaTest, PreservesDeserializationErrorsAndVectorStorage) {
 
     lfs::vis::op::OperatorProperties props;
     auto result = lfs::app::populate_operator_props(
+        nlohmann::json::array(), "test.deserialize", {}, props);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), "Tool arguments must be a JSON object");
+
+    result = lfs::app::populate_operator_props(
+        nlohmann::json::object(), "test.deserialize", {"label"}, props);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), "Field 'label' must be provided");
+
+    result = lfs::app::populate_operator_props(
         nlohmann::json{{"enabled", 1}}, "test.deserialize", {}, props);
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error(), "Field 'enabled' must be a boolean");
+
+    result = lfs::app::populate_operator_props(
+        nlohmann::json{{"label", 3}}, "test.deserialize", {}, props);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), "Field 'label' must be a string");
+
+    result = lfs::app::populate_operator_props(
+        nlohmann::json{{"scale", "wide"}}, "test.deserialize", {}, props);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), "Field 'scale' must be a number");
+
+    result = lfs::app::populate_operator_props(
+        nlohmann::json{{"count", 1.5}}, "test.deserialize", {}, props);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), "Field 'count' must be an integer");
+
+    result = lfs::app::populate_operator_props(
+        nlohmann::json{{"point", 7}}, "test.deserialize", {}, props);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error(), "Field 'point' must be an array");
 
     result = lfs::app::populate_operator_props(
         nlohmann::json{{"point", nlohmann::json::array({1.0, 2.0})}},
