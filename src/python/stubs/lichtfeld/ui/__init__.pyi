@@ -2793,3 +2793,6 @@ def register_property_group(group_id: str, group_name: str, property_group_class
 
 def unregister_property_group(group_id: str) -> None:
     """Unregister a Python PropertyGroup from the property registry"""
+
+def property_group_info(group_id: str) -> dict:
+    """Get registered property metadata for a property group"""

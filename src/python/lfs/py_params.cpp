@@ -350,7 +350,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::String;
-            meta.default_string = default_val;
+            meta.default_value = default_val;
             if (readonly) {
                 meta.flags = PROP_READONLY;
             }
@@ -375,7 +375,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Int;
-            meta.default_value = default_val;
+            meta.default_value = static_cast<int64_t>(default_val);
             meta.min_value = min_val;
             meta.max_value = max_val;
             meta.soft_min = min_val;
@@ -405,7 +405,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Bool;
-            meta.default_value = default_val ? 1.0 : 0.0;
+            meta.default_value = default_val;
             if (readonly) {
                 meta.flags = PROP_READONLY;
             }
@@ -638,20 +638,20 @@ namespace lfs::python {
         switch (meta->type) {
         case PropType::Float:
             info["type"] = "float";
-            info["min"] = meta->min_value;
-            info["max"] = meta->max_value;
+            info["min"] = *meta->min_value;
+            info["max"] = *meta->max_value;
             info["default"] = std::any_cast<float>(default_value);
             break;
         case PropType::Int:
             info["type"] = "int";
-            info["min"] = static_cast<int>(meta->min_value);
-            info["max"] = static_cast<int>(meta->max_value);
+            info["min"] = static_cast<int>(*meta->min_value);
+            info["max"] = static_cast<int>(*meta->max_value);
             info["default"] = std::any_cast<int>(default_value);
             break;
         case PropType::SizeT:
             info["type"] = "int";
-            info["min"] = static_cast<int64_t>(meta->min_value);
-            info["max"] = static_cast<int64_t>(meta->max_value);
+            info["min"] = static_cast<int64_t>(*meta->min_value);
+            info["max"] = static_cast<int64_t>(*meta->max_value);
             info["default"] = static_cast<int64_t>(std::any_cast<size_t>(default_value));
             break;
         case PropType::Bool:
@@ -738,8 +738,8 @@ namespace lfs::python {
                 nb::object cls = props_module.attr("FloatProperty");
                 prop_obj = cls(
                     nb::arg("default") = std::any_cast<float>(default_value),
-                    nb::arg("min") = static_cast<float>(meta.min_value),
-                    nb::arg("max") = static_cast<float>(meta.max_value),
+                    nb::arg("min") = static_cast<float>(*meta.min_value),
+                    nb::arg("max") = static_cast<float>(*meta.max_value),
                     nb::arg("step") = static_cast<float>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -749,8 +749,8 @@ namespace lfs::python {
                 nb::object cls = props_module.attr("IntProperty");
                 prop_obj = cls(
                     nb::arg("default") = std::any_cast<int>(default_value),
-                    nb::arg("min") = static_cast<int>(meta.min_value),
-                    nb::arg("max") = static_cast<int>(meta.max_value),
+                    nb::arg("min") = static_cast<int>(*meta.min_value),
+                    nb::arg("max") = static_cast<int>(*meta.max_value),
                     nb::arg("step") = static_cast<int>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -760,8 +760,8 @@ namespace lfs::python {
                 nb::object cls = props_module.attr("IntProperty");
                 prop_obj = cls(
                     nb::arg("default") = static_cast<int>(std::any_cast<size_t>(default_value)),
-                    nb::arg("min") = static_cast<int>(meta.min_value),
-                    nb::arg("max") = static_cast<int>(meta.max_value),
+                    nb::arg("min") = static_cast<int>(*meta.min_value),
+                    nb::arg("max") = static_cast<int>(*meta.max_value),
                     nb::arg("step") = static_cast<int>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -931,29 +931,29 @@ namespace lfs::python {
         switch (meta->type) {
         case PropType::Float:
             info["type"] = "float";
-            info["min"] = meta->min_value;
-            info["max"] = meta->max_value;
-            info["default"] = meta->default_value;
+            info["min"] = *meta->min_value;
+            info["max"] = *meta->max_value;
+            info["default"] = std::get<double>(*meta->default_value);
             break;
         case PropType::Int:
             info["type"] = "int";
-            info["min"] = static_cast<int>(meta->min_value);
-            info["max"] = static_cast<int>(meta->max_value);
-            info["default"] = static_cast<int>(meta->default_value);
+            info["min"] = static_cast<int>(*meta->min_value);
+            info["max"] = static_cast<int>(*meta->max_value);
+            info["default"] = static_cast<int>(std::get<int64_t>(*meta->default_value));
             break;
         case PropType::SizeT:
             info["type"] = "int";
-            info["min"] = static_cast<int64_t>(meta->min_value);
-            info["max"] = static_cast<int64_t>(meta->max_value);
-            info["default"] = static_cast<int64_t>(meta->default_value);
+            info["min"] = static_cast<int64_t>(*meta->min_value);
+            info["max"] = static_cast<int64_t>(*meta->max_value);
+            info["default"] = std::get<int64_t>(*meta->default_value);
             break;
         case PropType::Bool:
             info["type"] = "bool";
-            info["default"] = meta->default_value > 0.5;
+            info["default"] = std::get<bool>(*meta->default_value);
             break;
         case PropType::String:
             info["type"] = "string";
-            info["default"] = meta->default_string;
+            info["default"] = std::get<std::string>(*meta->default_value);
             break;
         default:
             info["type"] = "unknown";
@@ -997,9 +997,9 @@ namespace lfs::python {
             case PropType::Float: {
                 nb::object cls = props_module.attr("FloatProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<float>(meta.default_value),
-                    nb::arg("min") = static_cast<float>(meta.min_value),
-                    nb::arg("max") = static_cast<float>(meta.max_value),
+                    nb::arg("default") = static_cast<float>(std::get<double>(*meta.default_value)),
+                    nb::arg("min") = static_cast<float>(*meta.min_value),
+                    nb::arg("max") = static_cast<float>(*meta.max_value),
                     nb::arg("step") = static_cast<float>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -1008,9 +1008,9 @@ namespace lfs::python {
             case PropType::Int: {
                 nb::object cls = props_module.attr("IntProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<int>(meta.default_value),
-                    nb::arg("min") = static_cast<int>(meta.min_value),
-                    nb::arg("max") = static_cast<int>(meta.max_value),
+                    nb::arg("default") = static_cast<int>(std::get<int64_t>(*meta.default_value)),
+                    nb::arg("min") = static_cast<int>(*meta.min_value),
+                    nb::arg("max") = static_cast<int>(*meta.max_value),
                     nb::arg("step") = static_cast<int>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -1019,9 +1019,9 @@ namespace lfs::python {
             case PropType::SizeT: {
                 nb::object cls = props_module.attr("IntProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<int>(meta.default_value),
-                    nb::arg("min") = static_cast<int>(meta.min_value),
-                    nb::arg("max") = static_cast<int>(meta.max_value),
+                    nb::arg("default") = static_cast<int>(std::get<int64_t>(*meta.default_value)),
+                    nb::arg("min") = static_cast<int>(*meta.min_value),
+                    nb::arg("max") = static_cast<int>(*meta.max_value),
                     nb::arg("step") = static_cast<int>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -1030,7 +1030,7 @@ namespace lfs::python {
             case PropType::Bool: {
                 nb::object cls = props_module.attr("BoolProperty");
                 prop_obj = cls(
-                    nb::arg("default") = meta.default_value != 0.0,
+                    nb::arg("default") = std::get<bool>(*meta.default_value),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
@@ -1038,7 +1038,7 @@ namespace lfs::python {
             case PropType::String: {
                 nb::object cls = props_module.attr("StringProperty");
                 prop_obj = cls(
-                    nb::arg("default") = meta.default_string,
+                    nb::arg("default") = std::get<std::string>(*meta.default_value),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;

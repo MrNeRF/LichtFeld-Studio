@@ -45,7 +45,9 @@ namespace lfs::core::prop {
         Color3,
         Color4,
         // GPU tensor type
-        Tensor
+        Tensor,
+        FloatVector,
+        IntVector
     };
 
     enum class PropUIHint { Default,
@@ -62,6 +64,7 @@ namespace lfs::core::prop {
         PROP_LIVE_UPDATE = 1 << 1,
         PROP_NEEDS_RESTART = 1 << 2,
         PROP_ANIMATABLE = 1 << 3,
+        PROP_OPERATOR_ARG = 1 << 4,
     };
 
     inline PropFlags operator|(PropFlags a, PropFlags b) {
@@ -78,6 +81,10 @@ namespace lfs::core::prop {
         int value;
     };
 
+    using PropDefault = std::variant<bool, int64_t, double, std::string,
+                                     std::array<double, 2>, std::array<double, 3>,
+                                     std::array<double, 4>, std::array<double, 16>>;
+
     struct PropertyMeta {
         std::string id;
         std::string name;
@@ -88,22 +95,14 @@ namespace lfs::core::prop {
         uint32_t flags = PROP_NONE;
         PropSource source = PropSource::CPP;
 
-        double min_value = 0.0;
-        double max_value = 1.0;
+        std::optional<int> vector_size;
+        std::optional<double> min_value;
+        std::optional<double> max_value;
         double soft_min = 0.0;
         double soft_max = 1.0;
         double step = 1.0;
-        double default_value = 0.0;
-        std::string default_string;
+        std::optional<PropDefault> default_value;
         std::vector<EnumItem> enum_items;
-        int default_enum = 0;
-
-        // Geometric type defaults
-        std::array<double, 2> default_vec2{};
-        std::array<double, 3> default_vec3{};
-        std::array<double, 4> default_vec4{};
-        std::array<double, 4> default_quat{1.0, 0.0, 0.0, 0.0};                              // w, x, y, z
-        std::array<double, 16> default_mat4{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}; // identity
 
         std::function<std::any(const PropertyObjectRef&)> getter;
         std::function<void(PropertyObjectRef&, const std::any&)> setter;

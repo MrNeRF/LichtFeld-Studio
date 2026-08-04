@@ -4,6 +4,7 @@
 #include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
+#include "core/property_registry.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -16,7 +17,6 @@
 #include "operator/operator_registry.hpp"
 #include "operator/ops/edit_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
-#include "operator/property_schema.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -826,17 +826,59 @@ TEST_F(OperatorRegistryPropsTest, TransformSetOperatorUsesVisualizerWorldCoordin
 }
 
 TEST_F(OperatorRegistryPropsTest, BuiltinOperatorSchemasAreRegistered) {
-    const auto* delete_schema = lfs::vis::op::propertySchemas().getSchema("ed.delete");
-    ASSERT_NE(delete_schema, nullptr);
-    EXPECT_EQ(delete_schema->size(), 2u);
-    EXPECT_EQ(delete_schema->at(0).name, "name");
-    EXPECT_EQ(delete_schema->at(1).name, "keep_children");
+    using lfs::core::prop::PROP_OPERATOR_ARG;
+    using lfs::core::prop::PropType;
 
-    const auto* translate_schema = lfs::vis::op::propertySchemas().getSchema("transform.translate");
-    ASSERT_NE(translate_schema, nullptr);
-    ASSERT_EQ(translate_schema->size(), 2u);
-    EXPECT_EQ(translate_schema->at(0).name, "node");
-    EXPECT_EQ(translate_schema->at(1).name, "value");
+    const auto delete_group =
+        lfs::core::prop::PropertyRegistry::instance().get_group_snapshot("operator.ed.delete");
+    ASSERT_TRUE(delete_group.has_value());
+    ASSERT_EQ(delete_group->properties.size(), 2u);
+    EXPECT_EQ(delete_group->properties[0].id, "name");
+    EXPECT_EQ(delete_group->properties[0].name, "name");
+    EXPECT_EQ(delete_group->properties[0].type, PropType::String);
+    EXPECT_TRUE(delete_group->properties[0].has_flag(PROP_OPERATOR_ARG));
+    EXPECT_EQ(delete_group->properties[1].id, "keep_children");
+    EXPECT_EQ(delete_group->properties[1].name, "keep_children");
+    EXPECT_EQ(delete_group->properties[1].type, PropType::Bool);
+    EXPECT_TRUE(delete_group->properties[1].has_flag(PROP_OPERATOR_ARG));
+
+    const auto translate_group =
+        lfs::core::prop::PropertyRegistry::instance().get_group_snapshot("operator.transform.translate");
+    ASSERT_TRUE(translate_group.has_value());
+    ASSERT_EQ(translate_group->properties.size(), 2u);
+    EXPECT_EQ(translate_group->properties[0].id, "node");
+    EXPECT_EQ(translate_group->properties[0].type, PropType::String);
+    EXPECT_EQ(translate_group->properties[1].id, "value");
+    EXPECT_EQ(translate_group->properties[1].type, PropType::FloatVector);
+    EXPECT_EQ(translate_group->properties[1].vector_size, 3);
+    EXPECT_TRUE(translate_group->properties[1].has_flag(PROP_OPERATOR_ARG));
+}
+
+TEST(PropertyRegistryTest, OperatorArgsRoundTripAndSnapshotIsCopy) {
+    using namespace lfs::core::prop;
+
+    auto& registry = PropertyRegistry::instance();
+    registry.unregister_operator_args("test.snapshot");
+    registry.register_operator_args(
+        "test.snapshot",
+        {
+            arg_string("name", "Name"),
+            arg_float_vector("value", "Value", 5),
+        });
+
+    auto snapshot = registry.get_group_snapshot("operator.test.snapshot");
+    ASSERT_TRUE(snapshot.has_value());
+    ASSERT_EQ(snapshot->properties.size(), 2u);
+    EXPECT_TRUE(snapshot->properties[0].has_flag(PROP_OPERATOR_ARG));
+    EXPECT_EQ(snapshot->properties[1].vector_size, 5);
+
+    snapshot->properties[0].id = "mutated";
+    const auto fresh_snapshot = registry.get_group_snapshot("operator.test.snapshot");
+    ASSERT_TRUE(fresh_snapshot.has_value());
+    EXPECT_EQ(fresh_snapshot->properties[0].id, "name");
+
+    registry.unregister_operator_args("test.snapshot");
+    EXPECT_FALSE(registry.get_group_snapshot("operator.test.snapshot").has_value());
 }
 
 TEST_F(OperatorRegistryPropsTest, CallbackInvokeReleasesRegistryMutexDuringInvoke) {

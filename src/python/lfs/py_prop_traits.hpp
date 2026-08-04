@@ -9,6 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include <any>
 #include <array>
@@ -203,9 +204,29 @@ namespace lfs::python {
             }
         };
 
+        template <>
+        struct PropTraits<core::prop::PropType::FloatVector> {
+            static nb::object to_python(const std::any& v) {
+                return nb::cast(std::any_cast<std::vector<float>>(v));
+            }
+            static std::any from_python(nb::object v) {
+                return nb::cast<std::vector<float>>(v);
+            }
+        };
+
+        template <>
+        struct PropTraits<core::prop::PropType::IntVector> {
+            static nb::object to_python(const std::any& v) {
+                return nb::cast(std::any_cast<std::vector<int>>(v));
+            }
+            static std::any from_python(nb::object v) {
+                return nb::cast<std::vector<int>>(v);
+            }
+        };
+
     } // namespace detail
 
-    inline constexpr std::array<ToPythonFn, 14> g_to_python_table = {
+    inline constexpr std::array<ToPythonFn, 16> g_to_python_table = {
         detail::PropTraits<core::prop::PropType::Bool>::to_python,
         detail::PropTraits<core::prop::PropType::Int>::to_python,
         detail::PropTraits<core::prop::PropType::Float>::to_python,
@@ -220,9 +241,11 @@ namespace lfs::python {
         detail::PropTraits<core::prop::PropType::Color3>::to_python,
         detail::PropTraits<core::prop::PropType::Color4>::to_python,
         detail::PropTraits<core::prop::PropType::Tensor>::to_python,
+        detail::PropTraits<core::prop::PropType::FloatVector>::to_python,
+        detail::PropTraits<core::prop::PropType::IntVector>::to_python,
     };
 
-    inline constexpr std::array<FromPythonFn, 14> g_from_python_table = {
+    inline constexpr std::array<FromPythonFn, 16> g_from_python_table = {
         detail::PropTraits<core::prop::PropType::Bool>::from_python,
         detail::PropTraits<core::prop::PropType::Int>::from_python,
         detail::PropTraits<core::prop::PropType::Float>::from_python,
@@ -237,6 +260,8 @@ namespace lfs::python {
         detail::PropTraits<core::prop::PropType::Color3>::from_python,
         detail::PropTraits<core::prop::PropType::Color4>::from_python,
         detail::PropTraits<core::prop::PropType::Tensor>::from_python,
+        detail::PropTraits<core::prop::PropType::FloatVector>::from_python,
+        detail::PropTraits<core::prop::PropType::IntVector>::from_python,
     };
 
     inline nb::object any_to_python(const std::any& val, core::prop::PropType type) {
@@ -252,12 +277,17 @@ namespace lfs::python {
     }
 
     inline const char* prop_type_string(core::prop::PropType type) {
-        static constexpr std::array<const char*, 14> names = {
+        static constexpr std::array<const char*, 16> names = {
             "bool", "int", "float", "string", "enum", "size_t",
-            "vec2", "vec3", "vec4", "quat", "mat4", "color3", "color4", "tensor"};
+            "vec2", "vec3", "vec4", "quat", "mat4", "color3", "color4", "tensor",
+            "float_vector", "int_vector"};
         const auto idx = static_cast<size_t>(type);
         assert(idx < names.size());
         return names[idx];
+    }
+
+    inline nb::object prop_default_to_python(const core::prop::PropDefault& value) {
+        return std::visit([](const auto& item) { return nb::cast(item); }, value);
     }
 
 } // namespace lfs::python

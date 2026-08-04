@@ -43,6 +43,16 @@ namespace lfs::core::prop {
         return nullptr;
     }
 
+    std::optional<PropertyGroup> PropertyRegistry::get_group_snapshot(const std::string& group_id) const {
+        std::lock_guard lock(mutex_);
+
+        const auto it = groups_.find(group_id);
+        if (it == groups_.end()) {
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
     std::optional<PropertyMeta> PropertyRegistry::get_property(const std::string& group_id,
                                                                const std::string& prop_id) const {
         std::lock_guard lock(mutex_);
@@ -69,6 +79,23 @@ namespace lfs::core::prop {
             ids.push_back(id);
         }
         return ids;
+    }
+
+    void PropertyRegistry::register_operator_args(const std::string& operator_id,
+                                                  std::vector<PropertyMeta> args) {
+        for (auto& arg : args) {
+            arg.flags |= PROP_OPERATOR_ARG;
+            arg.default_value = std::nullopt;
+        }
+        register_group(PropertyGroup{
+            .id = "operator." + operator_id,
+            .name = operator_id,
+            .properties = std::move(args),
+        });
+    }
+
+    void PropertyRegistry::unregister_operator_args(const std::string& operator_id) {
+        unregister_group("operator." + operator_id);
     }
 
     size_t PropertyRegistry::subscribe(PropertyCallback callback) {

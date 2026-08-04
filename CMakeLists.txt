@@ -648,6 +648,7 @@ add_executable(${PROJECT_NAME}
     src/app/main.cpp
     src/app/application.cpp
     src/app/mcp_gui_tools.cpp
+    src/app/mcp_operator_schema.cpp
     src/app/mcp_operator_tools.cpp
     src/app/mcp_runtime_tools.cpp
     src/app/mcp_sequencer_tools.cpp

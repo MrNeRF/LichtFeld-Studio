@@ -39,9 +39,13 @@ namespace lfs::core::prop {
         void register_group(PropertyGroup group);
         void unregister_group(const std::string& group_id);
         [[nodiscard]] const PropertyGroup* get_group(const std::string& group_id) const;
+        [[nodiscard]] std::optional<PropertyGroup> get_group_snapshot(const std::string& group_id) const;
         [[nodiscard]] std::optional<PropertyMeta> get_property(const std::string& group_id,
                                                                const std::string& prop_id) const;
         [[nodiscard]] std::vector<std::string> get_group_ids() const;
+
+        void register_operator_args(const std::string& operator_id, std::vector<PropertyMeta> args);
+        void unregister_operator_args(const std::string& operator_id);
 
         size_t subscribe(PropertyCallback callback);
         size_t subscribe(const std::string& group_id, const std::string& prop_id, PropertyCallback callback);
@@ -79,7 +83,7 @@ namespace lfs::core::prop {
                 [](float v) { return v; },
                 [](const std::any& v) { return std::any_cast<float>(v); });
             auto& meta = group_.properties.back();
-            meta.default_value = default_val;
+            meta.default_value = static_cast<double>(default_val);
             meta.min_value = min_val;
             meta.max_value = max_val;
             meta.soft_min = min_val;
@@ -101,7 +105,7 @@ namespace lfs::core::prop {
                 [](int v) { return v; },
                 [](const std::any& v) { return std::any_cast<int>(v); });
             auto& meta = group_.properties.back();
-            meta.default_value = default_val;
+            meta.default_value = static_cast<int64_t>(default_val);
             meta.min_value = min_val;
             meta.max_value = max_val;
             meta.soft_min = min_val;
@@ -123,7 +127,7 @@ namespace lfs::core::prop {
                 [](size_t v) { return v; },
                 [](const std::any& v) { return std::any_cast<size_t>(v); });
             auto& meta = group_.properties.back();
-            meta.default_value = static_cast<double>(default_val);
+            meta.default_value = static_cast<int64_t>(default_val);
             meta.min_value = static_cast<double>(min_val);
             meta.max_value = static_cast<double>(max_val);
             meta.soft_min = static_cast<double>(min_val);
@@ -141,7 +145,7 @@ namespace lfs::core::prop {
                 member, id, name, PropType::Bool, desc, PropUIHint::Checkbox,
                 [](bool v) { return v; },
                 [](const std::any& v) { return std::any_cast<bool>(v); });
-            group_.properties.back().default_value = default_val ? 1.0 : 0.0;
+            group_.properties.back().default_value = default_val;
             return *this;
         }
 
@@ -154,7 +158,7 @@ namespace lfs::core::prop {
                 member, id, name, PropType::String, desc, PropUIHint::Input,
                 [](const std::string& v) { return v; },
                 [](const std::any& v) { return std::any_cast<std::string>(v); });
-            group_.properties.back().default_string = default_val;
+            group_.properties.back().default_value = default_val;
             return *this;
         }
 
@@ -171,7 +175,7 @@ namespace lfs::core::prop {
             meta.description = desc;
             meta.type = PropType::Enum;
             meta.ui_hint = PropUIHint::Combo;
-            meta.default_enum = static_cast<int>(default_val);
+            meta.default_value = static_cast<int64_t>(default_val);
 
             for (const auto& [item_name, item_val] : items) {
                 EnumItem ei;
@@ -238,7 +242,8 @@ namespace lfs::core::prop {
                     auto arr = std::any_cast<std::array<float, 3>>(v);
                     return glm::vec3{arr[0], arr[1], arr[2]};
                 });
-            group_.properties.back().default_vec3 = {default_val.x, default_val.y, default_val.z};
+            group_.properties.back().default_value =
+                std::array<double, 3>{default_val.x, default_val.y, default_val.z};
             return *this;
         }
 
@@ -254,7 +259,8 @@ namespace lfs::core::prop {
                     auto arr = std::any_cast<std::array<float, 4>>(v);
                     return glm::quat{arr[0], arr[1], arr[2], arr[3]};
                 });
-            group_.properties.back().default_quat = {default_val.w, default_val.x, default_val.y, default_val.z};
+            group_.properties.back().default_value =
+                std::array<double, 4>{default_val.w, default_val.x, default_val.y, default_val.z};
             return *this;
         }
 
@@ -294,7 +300,8 @@ namespace lfs::core::prop {
                     auto arr = std::any_cast<std::array<float, 3>>(v);
                     return glm::vec3{arr[0], arr[1], arr[2]};
                 });
-            group_.properties.back().default_vec3 = {default_val.x, default_val.y, default_val.z};
+            group_.properties.back().default_value =
+                std::array<double, 3>{default_val.x, default_val.y, default_val.z};
             return *this;
         }
 
@@ -307,7 +314,8 @@ namespace lfs::core::prop {
                 member, id, name, PropType::Color3, desc, PropUIHint::Default,
                 [](const std::array<float, 3>& v) { return v; },
                 [](const std::any& v) { return std::any_cast<std::array<float, 3>>(v); });
-            group_.properties.back().default_vec3 = {default_val[0], default_val[1], default_val[2]};
+            group_.properties.back().default_value =
+                std::array<double, 3>{default_val[0], default_val[1], default_val[2]};
             return *this;
         }
 
@@ -391,5 +399,55 @@ namespace lfs::core::prop {
 
         PropertyGroup group_;
     };
+
+    inline PropertyMeta operator_arg(std::string id, std::string description, const PropType type) {
+        PropertyMeta meta;
+        meta.id = std::move(id);
+        meta.name = meta.id;
+        meta.description = std::move(description);
+        meta.type = type;
+        meta.flags = PROP_OPERATOR_ARG;
+        return meta;
+    }
+
+    inline PropertyMeta arg_string(std::string id, std::string description) {
+        return operator_arg(std::move(id), std::move(description), PropType::String);
+    }
+
+    inline PropertyMeta arg_bool(std::string id, std::string description) {
+        return operator_arg(std::move(id), std::move(description), PropType::Bool);
+    }
+
+    inline PropertyMeta arg_float(std::string id, std::string description) {
+        return operator_arg(std::move(id), std::move(description), PropType::Float);
+    }
+
+    inline PropertyMeta arg_int(std::string id, std::string description) {
+        return operator_arg(std::move(id), std::move(description), PropType::Int);
+    }
+
+    inline PropertyMeta arg_enum(std::string id, std::string description, std::vector<EnumItem> items) {
+        auto meta = operator_arg(std::move(id), std::move(description), PropType::Enum);
+        meta.enum_items = std::move(items);
+        return meta;
+    }
+
+    inline PropertyMeta arg_float_vector(std::string id, std::string description,
+                                         std::optional<int> size = std::nullopt) {
+        auto meta = operator_arg(std::move(id), std::move(description), PropType::FloatVector);
+        meta.vector_size = size;
+        return meta;
+    }
+
+    inline PropertyMeta arg_int_vector(std::string id, std::string description,
+                                       std::optional<int> size = std::nullopt) {
+        auto meta = operator_arg(std::move(id), std::move(description), PropType::IntVector);
+        meta.vector_size = size;
+        return meta;
+    }
+
+    inline PropertyMeta arg_tensor(std::string id, std::string description) {
+        return operator_arg(std::move(id), std::move(description), PropType::Tensor);
+    }
 
 } // namespace lfs::core::prop

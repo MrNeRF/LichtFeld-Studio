@@ -622,7 +622,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Color3;
-            meta.default_vec3 = default_val;
+            meta.default_value = default_val;
             meta.min_value = 0.0;
             meta.max_value = 1.0;
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
@@ -642,7 +642,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Bool;
-            meta.default_value = default_val ? 1.0 : 0.0;
+            meta.default_value = default_val;
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
                 return static_cast<const Proxy*>(ref.ptr)->*member;
             };
@@ -679,7 +679,7 @@ namespace lfs::python {
             meta.description = desc;
             meta.type = PropType::Enum;
             meta.enum_items = items;
-            meta.default_enum = default_idx;
+            meta.default_value = static_cast<int64_t>(default_idx);
             meta.getter = [member, items](const PropertyObjectRef& ref) -> std::any {
                 int val = static_cast<const Proxy*>(ref.ptr)->*member;
                 for (const auto& item : items) {
@@ -713,7 +713,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::String;
-            meta.default_string = default_val;
+            meta.default_value = default_val;
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
                 return static_cast<const Proxy*>(ref.ptr)->*member;
             };
@@ -859,7 +859,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Bool;
-            meta.default_value = def ? 1.0 : 0.0;
+            meta.default_value = def;
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
                 return static_cast<const Proxy*>(ref.ptr)->ppisp.*member;
             };
@@ -947,9 +947,9 @@ namespace lfs::python {
             case core::prop::PropType::Float: {
                 nb::object cls = props_module.attr("FloatProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<float>(meta.default_value),
-                    nb::arg("min") = static_cast<float>(meta.min_value),
-                    nb::arg("max") = static_cast<float>(meta.max_value),
+                    nb::arg("default") = static_cast<float>(std::get<double>(*meta.default_value)),
+                    nb::arg("min") = static_cast<float>(*meta.min_value),
+                    nb::arg("max") = static_cast<float>(*meta.max_value),
                     nb::arg("step") = static_cast<float>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -958,9 +958,9 @@ namespace lfs::python {
             case core::prop::PropType::Int: {
                 nb::object cls = props_module.attr("IntProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<int>(meta.default_value),
-                    nb::arg("min") = static_cast<int>(meta.min_value),
-                    nb::arg("max") = static_cast<int>(meta.max_value),
+                    nb::arg("default") = static_cast<int>(std::get<int64_t>(*meta.default_value)),
+                    nb::arg("min") = static_cast<int>(*meta.min_value),
+                    nb::arg("max") = static_cast<int>(*meta.max_value),
                     nb::arg("step") = static_cast<int>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -969,7 +969,7 @@ namespace lfs::python {
             case core::prop::PropType::Bool: {
                 nb::object cls = props_module.attr("BoolProperty");
                 prop_obj = cls(
-                    nb::arg("default") = meta.default_value != 0.0,
+                    nb::arg("default") = std::get<bool>(*meta.default_value),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
@@ -977,7 +977,7 @@ namespace lfs::python {
             case core::prop::PropType::String: {
                 nb::object cls = props_module.attr("StringProperty");
                 prop_obj = cls(
-                    nb::arg("default") = meta.default_string,
+                    nb::arg("default") = std::get<std::string>(*meta.default_value),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
@@ -989,7 +989,7 @@ namespace lfs::python {
                 for (size_t i = 0; i < meta.enum_items.size(); ++i) {
                     const auto& item = meta.enum_items[i];
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
-                    if (static_cast<int>(i) == meta.default_enum) {
+                    if (static_cast<int>(i) == std::get<int64_t>(*meta.default_value)) {
                         default_id = item.identifier;
                     }
                 }
@@ -1004,14 +1004,15 @@ namespace lfs::python {
             case core::prop::PropType::Color3: {
                 nb::object cls = props_module.attr("FloatVectorProperty");
                 std::string subtype = (meta.type == core::prop::PropType::Color3) ? "COLOR" : "";
+                const auto& default_value = std::get<std::array<double, 3>>(*meta.default_value);
                 prop_obj = cls(
                     nb::arg("default") = nb::make_tuple(
-                        static_cast<float>(meta.default_vec3[0]),
-                        static_cast<float>(meta.default_vec3[1]),
-                        static_cast<float>(meta.default_vec3[2])),
+                        static_cast<float>(default_value[0]),
+                        static_cast<float>(default_value[1]),
+                        static_cast<float>(default_value[2])),
                     nb::arg("size") = 3,
-                    nb::arg("min") = static_cast<float>(meta.min_value),
-                    nb::arg("max") = static_cast<float>(meta.max_value),
+                    nb::arg("min") = static_cast<float>(*meta.min_value),
+                    nb::arg("max") = static_cast<float>(*meta.max_value),
                     nb::arg("subtype") = subtype,
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -1719,7 +1720,8 @@ namespace lfs::python {
                     return static_cast<float>(self.height) / self.ortho_scale;
                 },
                 "Vertical view extent in world units (Blender-compatible orthographic scale). Larger when zoomed out, smaller when zoomed in.")
-            .def_prop_ro("position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
+            .def_prop_ro(
+                "position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
                     auto t = self.translation.tensor().cpu();
                     auto acc = t.accessor<float, 1>();
                     return {acc(0), acc(1), acc(2)}; }, "Camera position as (x, y, z) tuple");

@@ -149,7 +149,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_context.cpp
         operator/operator_id.cpp
         operator/operator_registry.cpp
-        operator/property_schema.cpp
         operator/ops/align_ops.cpp
         operator/ops/edit_ops.cpp
         operator/ops/scene_ops.cpp
