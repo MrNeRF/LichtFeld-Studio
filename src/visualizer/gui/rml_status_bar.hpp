@@ -58,7 +58,7 @@ namespace lfs::vis::gui {
         bool has_message_ = false;
     };
 
-    class RmlStatusBar {
+    class LFS_VIS_API RmlStatusBar {
     public:
         void init(RmlUIManager* mgr);
         // Thread-safe one-line transient status text (ErrorBus StatusOnly
