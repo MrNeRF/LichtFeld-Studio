@@ -160,24 +160,20 @@ jobs:
           restore-keys: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-
 
       # LibTorch is only needed to configure the test build; the application
-      # itself is LibTorch-free. Restricted to the Release matrix entry so the
-      # download and the extra test compilation are paid once per run.
-      - name: Cache LibTorch
-        if: matrix.build_type == 'Release'
-        id: libtorch-cache
-        uses: actions/cache@v4
-        with:
-          path: external/libtorch
-          key: libtorch-${{ runner.os }}-2.7.1-cu128
-
+      # itself is LibTorch-free. Restricted to the Release matrix entry.
+      #
+      # Deliberately not cached: the archive is ~6GB against a 10GB per-repo
+      # cache budget that is already full, so storing it evicts the vcpkg and
+      # ccache entries that actually make builds fast. Downloading from the
+      # PyTorch CDN each run is the cheaper trade.
       - name: Download LibTorch
-        if: matrix.build_type == 'Release' && steps.libtorch-cache.outputs.cache-hit != 'true'
+        if: matrix.build_type == 'Release'
         run: |
           curl -fL --retry 3 -o libtorch.zip \
             "https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu128.zip"
           unzip -q libtorch.zip -d external/
           rm -f libtorch.zip
-          df -h
+          df -h /
 
       - name: Configure
         run: |
