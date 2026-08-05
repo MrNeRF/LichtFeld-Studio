@@ -17,6 +17,10 @@ jobs:
   build-ubuntu:
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: write        # prune superseded ccache entries
+      pull-requests: write  # report build failures where they can be read
     container:
       image: nvidia/cuda:12.8.0-devel-ubuntu24.04
     strategy:
@@ -32,6 +36,10 @@ jobs:
       CMAKE_MAKE_PROGRAM: /usr/bin/ninja
       CUDA_PATH: /usr/local/cuda
       CUDNN_ROOT_DIR: /usr/local/cuda
+      # Unbounded ccache defaults to 5GB. Each run stores its own entry, so an
+      # unbounded cache multiplies across runs and evicts everything else from
+      # the 10GB per-repo budget.
+      CCACHE_MAXSIZE: 500M
 
     steps:
       - name: Install Git
@@ -293,3 +301,29 @@ jobs:
             exit 1
           fi
           ctest --test-dir build-tests -L cpu --output-on-failure
+
+      # Each run saves its own ccache entry (the key carries the run id, which is
+      # what keeps it fresh). Without pruning they accumulate: this branch alone
+      # held three 0.8GB entries, pushing the repository past its 10GB cache
+      # budget and evicting the vcpkg archives that keep builds fast.
+      - name: Prune superseded ccache entries
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          prefix="ccache-${RUNNER_OS}-${{ matrix.build_type }}-"
+          keep="${prefix}${GITHUB_RUN_ID}"
+          api="${GITHUB_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/actions/caches"
+          curl -sS -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "${api}?ref=${GITHUB_REF}&per_page=100" \
+            | jq -r --arg p "$prefix" --arg keep "$keep" \
+                '.actions_caches[]? | select(.key | startswith($p)) | select(.key != $keep) | .id' \
+            | while read -r id; do
+                [ -n "$id" ] || continue
+                echo "deleting superseded cache id=$id"
+                curl -sS -X DELETE -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                  -H "Accept: application/vnd.github+json" "${api}/${id}" >/dev/null || true
+              done
