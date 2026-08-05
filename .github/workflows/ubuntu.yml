@@ -200,31 +200,24 @@ jobs:
           rm -rf "$VCPKG_ROOT"/buildtrees "$VCPKG_ROOT"/downloads "$VCPKG_ROOT"/packages
           df -h
 
-      # The application and the test binary are built as separate steps so a
-      # failure is attributable to one or the other, and so the test target can
-      # use fewer jobs: its translation units pull in LibTorch headers and peak
-      # far higher in memory than application sources.
+      # Application and test binary build as separate steps so a failure is
+      # attributable, and so the test target can use fewer jobs: its translation
+      # units include LibTorch headers and peak much higher in memory.
       #
-      # On failure the tail of the log and the disk/memory state are copied into
-      # the job summary. Workflow logs need an authenticated session to read,
-      # the summary does not, so this is what makes a red run diagnosable.
+      # Failures are echoed as ::error:: annotations. Workflow logs require an
+      # authenticated session to read; annotations are exposed by the public
+      # checks API, so this is what makes a red run diagnosable from outside.
+      # Every diagnostic is guarded with || true: this container image is
+      # minimal and a missing tool must never mask the real build error.
       - name: Build application
         run: |
           set -o pipefail
-          echo "::group::disk and memory before build"
-          df -h / ; free -h
-          echo "::endgroup::"
-          # lfs_py is the native extension the Python tests import; it is not
-          # reached through the application target alone.
+          df -h / || true
           if ! cmake --build build --target LichtFeld-Studio lfs_py -j "$(nproc)" 2>&1 | tee /tmp/build-app.log; then
-            {
-              echo "### Application build failed"
-              echo '```'
-              tail -n 60 /tmp/build-app.log
-              echo '```'
-              echo '### disk'; echo '```'; df -h /; echo '```'
-              echo '### memory'; echo '```'; free -h; echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Application build failed"
+            (grep -E "error:|Killed|No space left|virtual memory exhausted" /tmp/build-app.log || tail -n 20 /tmp/build-app.log) 2>/dev/null \
+              | head -n 10 | while IFS= read -r line; do echo "::error::${line}"; done || true
+            df -h / || true
             exit 1
           fi
 
@@ -232,18 +225,13 @@ jobs:
         if: matrix.build_type == 'Release'
         run: |
           set -o pipefail
-          # Deliberately fewer jobs than cores: LibTorch-including test units are
+          # Fewer jobs than cores on purpose: LibTorch-including test units are
           # memory hungry and the runner has far less RAM than a dev machine.
           if ! cmake --build build --target lichtfeld_tests -j 2 2>&1 | tee /tmp/build-tests.log; then
-            {
-              echo "### Test build failed"
-              echo '```'
-              grep -E "error:|Killed|No space left|virtual memory exhausted" /tmp/build-tests.log | head -n 30 \
-                || tail -n 60 /tmp/build-tests.log
-              echo '```'
-              echo '### disk'; echo '```'; df -h /; echo '```'
-              echo '### memory'; echo '```'; free -h; echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Test build failed"
+            (grep -E "error:|Killed|No space left|virtual memory exhausted" /tmp/build-tests.log || tail -n 20 /tmp/build-tests.log) 2>/dev/null \
+              | head -n 10 | while IFS= read -r line; do echo "::error::${line}"; done || true
+            df -h / || true
             exit 1
           fi
 
