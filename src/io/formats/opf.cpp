@@ -4,6 +4,7 @@
 #include "opf.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <format>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -267,5 +268,54 @@ namespace lfs::io::opf {
                 return invalid(path, "OPF project contains a circular source dependency.");
         }
         return project;
+    }
+
+    Result<std::vector<CameraImage>> read_camera_list(const Resource& resource,
+                                                      const std::filesystem::path& project_root) {
+        if (resource.format != "application/opf-camera-list+json")
+            return invalid(resource.resolved_path, "OPF camera list resource has an unexpected format.");
+        std::ifstream input(resource.resolved_path, std::ios::binary);
+        if (!input)
+            return make_error(ErrorCode::READ_FAILURE, "Cannot open OPF camera list.", resource.resolved_path);
+
+        json root;
+        try {
+            root = json::parse(input);
+        } catch (const json::parse_error& error) {
+            return make_error(ErrorCode::MALFORMED_JSON,
+                              std::format("Malformed OPF camera list JSON: {}", error.what()),
+                              resource.resolved_path);
+        }
+        if (!root.is_object())
+            return invalid(resource.resolved_path, "OPF camera list root must be a JSON object.");
+        auto format = required_string(root, "format", resource.resolved_path, "camera list");
+        auto version = required_string(root, "version", resource.resolved_path, "camera list");
+        if (!format)
+            return std::unexpected(format.error());
+        if (!version)
+            return std::unexpected(version.error());
+        if (*format != "application/opf-camera-list+json")
+            return make_error(ErrorCode::UNSUPPORTED_FORMAT, "Unsupported OPF camera list format.", resource.resolved_path);
+        if (!root.contains("cameras") || !root["cameras"].is_array())
+            return invalid(resource.resolved_path, "OPF camera list requires a 'cameras' array.");
+
+        std::vector<CameraImage> cameras;
+        std::unordered_set<std::uint64_t> ids;
+        const auto base = project_root.lexically_normal();
+        for (const auto& value : root["cameras"]) {
+            if (!value.is_object() || !value.contains("id") || !value["id"].is_number_unsigned())
+                return invalid(resource.resolved_path, "OPF camera list entries require an unsigned integer 'id'.");
+            auto uri = required_string(value, "uri", resource.resolved_path, "camera");
+            if (!uri)
+                return std::unexpected(uri.error());
+            const auto id = value["id"].get<std::uint64_t>();
+            if (!ids.insert(id).second)
+                return invalid(resource.resolved_path, std::format("OPF camera id '{}' is duplicated.", id));
+            auto resolved = resolve_resource(base, *uri, resource.resolved_path);
+            if (!resolved)
+                return std::unexpected(resolved.error());
+            cameras.push_back({id, *uri, *resolved});
+        }
+        return cameras;
     }
 } // namespace lfs::io::opf

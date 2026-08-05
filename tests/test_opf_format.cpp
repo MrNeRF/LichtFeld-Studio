@@ -104,3 +104,33 @@ TEST_F(OpfFormatTest, RejectsInvalidItemResourceContract) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
 }
+
+TEST_F(OpfFormatTest, ParsesCameraListAndResolvesImageUris) {
+    write(root / "image.jpg", "test");
+    write(root / "camera-list.json", R"({
+        "format":"application/opf-camera-list+json", "version":"1.0",
+        "cameras":[{"id":42, "uri":"image.jpg"}]
+    })");
+    lfs::io::opf::Resource resource{"camera-list.json",
+                                    "application/opf-camera-list+json",
+                                    root / "camera-list.json"};
+    auto result = lfs::io::opf::read_camera_list(resource, root);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ(result->front().id, 42u);
+    EXPECT_EQ(result->front().resolved_path, root / "image.jpg");
+}
+
+TEST_F(OpfFormatTest, RejectsDuplicateCameraIds) {
+    write(root / "image.jpg", "test");
+    write(root / "camera-list.json", R"({
+        "format":"application/opf-camera-list+json", "version":"1.0",
+        "cameras":[{"id":42, "uri":"image.jpg"}, {"id":42, "uri":"image.jpg"}]
+    })");
+    lfs::io::opf::Resource resource{"camera-list.json",
+                                    "application/opf-camera-list+json",
+                                    root / "camera-list.json"};
+    auto result = lfs::io::opf::read_camera_list(resource, root);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+}

@@ -39,10 +39,18 @@ namespace lfs::io::opf {
         std::vector<std::string> warnings;
     };
 
+    struct CameraImage {
+        std::uint64_t id;
+        std::string uri;
+        std::filesystem::path resolved_path;
+    };
+
     // Parses and validates the OPF project graph. Resource files are resolved
     // relative to the directory containing the project file and must remain
     // inside that directory. Unknown extension items/resources are retained
     // as warnings and never make an otherwise valid project fail.
     [[nodiscard]] Result<Project> read_project(const std::filesystem::path& path);
+    [[nodiscard]] Result<std::vector<CameraImage>> read_camera_list(const Resource& resource,
+                                                                    const std::filesystem::path& project_root);
 
 } // namespace lfs::io::opf
