@@ -643,6 +643,12 @@ namespace lfs::core {
         case cudaErrorInitializationError:
         case cudaErrorInsufficientDriver:
         case cudaErrorNoDevice:
+        // Returned when the loaded libcuda is the toolkit's stub rather than a
+        // real driver. Without this the unavailable state is never latched, so
+        // every allocation retries and fails instead of disabling GPU features
+        // once. CI runners have no driver and load the stub, as does any
+        // machine with a broken driver installation.
+        case cudaErrorStubLibrary:
         case cudaErrorDevicesUnavailable:
         case cudaErrorSystemNotReady:
         case cudaErrorSystemDriverMismatch:

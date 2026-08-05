@@ -544,7 +544,10 @@ set(LFS_CPU_TEST_SUITES
     CudaLaunchCheckTest
     DeferredD1CopyRegistryTest
     DeviceFaultAbi
-    DeviceFaultDeathTest
+    # DeviceFaultDeathTest is deliberately absent: without a CUDA driver its
+    # subprocess exits at the cudaGetDevice guard instead of reaching the device
+    # trap, and the EXPECT_DEATH matcher is empty, so it passes without
+    # exercising anything. A vacuous pass is worse than no coverage.
     DeviceFaultNvccFixtures
     DiagnosticModeParsing
     ErrorBusTest
