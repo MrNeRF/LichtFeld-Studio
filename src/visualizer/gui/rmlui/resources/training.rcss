@@ -21,6 +21,22 @@ body {
     min-width: 0;
 }
 
+.training-search-row {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
+    margin: 6dp 0 2dp;
+}
+
+.training-search-input {
+    flex-grow: 1;
+    min-width: 0;
+}
+
+.training-search-clear {
+    flex-shrink: 0;
+}
+
 .training-panel-title {
     display: flex;
     align-items: center;

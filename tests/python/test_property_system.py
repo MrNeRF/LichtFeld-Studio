@@ -256,6 +256,13 @@ class TestOptimizationParams:
         with pytest.raises(AttributeError):
             params.headless = True
 
+    def test_reset_readonly_raises(self, lf):
+        """Resetting readonly property should match set() semantics."""
+        params = lf.optimization_params()
+
+        with pytest.raises(RuntimeError, match="read-only"):
+            params.reset("headless")
+
     def test_apply_step_scaling_updates_mrnf_growth_horizon(self, lf):
         """apply_step_scaling() should scale MRNF's grow_until_iter alongside stop_refine."""
         params = lf.optimization_params()

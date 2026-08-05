@@ -485,6 +485,25 @@ EXPECTED_SELECT_ROWS = {
     ),
 }
 
+EXPECTED_ADVANCED_IDS = (
+    "means_lr_end",
+    "scaling_lr_end",
+    "cropbox_lr_scale",
+    "cropbox_loss_weight",
+    "growth_grad_threshold",
+    "grow_fraction",
+    "opacity_decay",
+    "scale_decay",
+    "means_noise_weight",
+    "bounds_percentile",
+    "use_error_map",
+    "use_edge_map",
+    "ppisp_lr",
+    "ppisp_reg_weight",
+    "ppisp_warmup_steps",
+    "steps_scaler",
+)
+
 
 def _flatten(value, prefix=""):
     if isinstance(value, dict):
@@ -503,16 +522,109 @@ def _all_rows(lf):
     )
 
 
-def test_full_migration_inventory_and_schema_are_exact():
+def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
     assert len(property_view.MIGRATED_PROP_IDS) == 60
     assert len(set(property_view.MIGRATED_PROP_IDS)) == 60
 
-    rendered = tuple(prop for run in property_view.RUNS for prop in run.prop_ids)
-    assert len(rendered) == len(set(rendered)) == 59
-    assert set(rendered) == set(property_view.MIGRATED_PROP_IDS) - {"steps_scaler"}
+    group_info = lf.ui.property_group_info("optimization")
+    resolved_runs = property_view.resolve_runs(group_info)
+    rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
+    assert len(rendered) == len(set(rendered)) == 75
+    assert set(rendered) == (
+        set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
+    )
+
+
+def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
+    group_info = lf.ui.property_group_info("optimization")
+    assert property_view.auto_advanced_prop_ids(group_info) == EXPECTED_ADVANCED_IDS
+
+    properties = {meta["id"]: meta for meta in group_info["properties"]}
+    for prop_id in EXPECTED_ADVANCED_IDS:
+        assert properties[prop_id]["advanced"] is True
+    assert properties["normal_loss_space"]["advanced"] is True
+    assert set(property_view.BESPOKE_OR_HIDDEN) == {
+        "sh_degree",
+        "lambda_dssim",
+        "init_opacity",
+        "depth_loss_mode",
+        "normal_loss_space",
+        "strategy",
+        "ppisp_controller_activation_step",
+        "bg_modulation",
+        "headless",
+        "prune_ratio",
+    }
+
+    future_group = {
+        "properties": [
+            {"id": "future_scalar", "type": "float"},
+            {"id": "future_enum", "type": "enum"},
+            {"id": "future_string", "type": "string"},
+            {"id": "headless", "type": "bool"},
+        ]
+    }
+    assert property_view.auto_advanced_prop_ids(future_group) == (
+        "future_scalar",
+        "future_enum",
+    )
+
+
+def test_ppisp_advanced_declarations_are_exact(lf):
+    group_info = lf.ui.property_group_info("optimization")
+    params = lf.optimization_params()
+    rows = {
+        row["id"]: row
+        for row in property_view.build_rows(
+            group_info,
+            ("ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps"),
+            lf.optimization_params,
+        )
+    }
+    expected = {
+        "ppisp_lr": (
+            "training_params.ppisp_lr",
+            "training.tooltip.ppisp_lr",
+            5,
+            0.0001,
+            0.0,
+            0.1,
+            False,
+        ),
+        "ppisp_reg_weight": (
+            "training_params.ppisp_reg",
+            "training.tooltip.ppisp_reg",
+            5,
+            0.0001,
+            0.0,
+            0.1,
+            False,
+        ),
+        "ppisp_warmup_steps": (
+            "training_params.ppisp_warmup",
+            "training.tooltip.ppisp_warmup",
+            0,
+            100,
+            0,
+            100_000,
+            True,
+        ),
+    }
+    for prop_id, values in expected.items():
+        label, tooltip, precision, step, minimum, maximum, is_int = values
+        row = rows[prop_id]
+        assert row["kind"] == "number"
+        assert row["label_key"] == label
+        assert row["tooltip_key"] == tooltip
+        assert row["precision"] == precision
+        assert row["step"] == pytest.approx(step)
+        assert row["min"] == pytest.approx(minimum)
+        assert row["max"] == pytest.approx(maximum)
+        assert row["is_int"] is is_int
+        assert params.prop_info(prop_id)["advanced"] is True
 
 
 def test_all_number_rows_match_registry_declarations(lf):
@@ -703,6 +815,109 @@ def test_event_reachable_updates_use_the_deferred_publisher():
         property_view.SectionBinding("unsafe", [_number_row()], params, {}, None)
 
 
+def test_search_filters_localized_labels_ids_and_runtime_conditions():
+    query = {"value": ""}
+    condition = {"visible": True}
+    rows = [
+        _number_row(),
+        {
+            **_number_row(),
+            "id": "position_rate",
+            "name": "Localized Position Rate",
+        },
+    ]
+    binding = property_view.SectionBinding(
+        "search",
+        rows,
+        {"amount": 0.25, "position_rate": 0.5},
+        {},
+        lambda _binding: None,
+        search_accessor=lambda: query["value"],
+        visibility_condition_id="dep_test",
+        visibility_predicate=lambda _condition: condition["visible"],
+    )
+
+    assert [record["id"] for record in binding._records()] == [
+        "amount",
+        "position_rate",
+    ]
+    query["value"] = "POSITION"
+    assert [record["id"] for record in binding._records()] == [
+        "position_rate"
+    ]
+    query["value"] = "AmOuNt"
+    assert [record["id"] for record in binding._records()] == ["amount"]
+    condition["visible"] = False
+    assert binding._records() == []
+    assert binding.is_visible() is False
+    query["value"] = ""
+    assert binding.is_visible() is True
+
+
+def test_search_changes_queue_all_property_runs_without_direct_publish():
+    from lfs_plugins.training_panel import TrainingPanel
+
+    panel = object.__new__(TrainingPanel)
+    panel._pv_search_query = ""
+    panel._pv_bindings = (object(), object())
+    queued = []
+    panel._queue_pv_publish = queued.append
+
+    panel._set_property_search_query("opacity")
+    assert panel._pv_search_query == "opacity"
+    assert queued == list(panel._pv_bindings)
+
+
+def test_search_auto_expand_does_not_mutate_collapse_state(monkeypatch):
+    from lfs_plugins.training_panel import TrainingPanel
+
+    panel = object.__new__(TrainingPanel)
+    panel._pv_search_query = "opacity"
+    panel._pv_bindings = ()
+    panel._collapsed = {"losses"}
+    panel._sync_section_states = lambda: None
+    monkeypatch.setattr(property_view, "section_is_visible", lambda *_args: True)
+
+    panel._on_toggle_section(None, None, ["losses"])
+    assert panel._collapsed == {"losses"}
+
+
+def test_option_records_support_multiple_auto_placed_enums():
+    def enum_row(prop_id):
+        return {
+            "id": prop_id,
+            "kind": "select",
+            "label_key": "",
+            "tooltip_key": "",
+            "precision": None,
+            "step": 1,
+            "min": None,
+            "max": None,
+            "is_int": False,
+            "name": prop_id,
+            "items": [
+                {
+                    "name": "First",
+                    "value": 0,
+                    "locale_key": "",
+                    "tooltip_key": "",
+                }
+            ],
+        }
+
+    binding = property_view.SectionBinding(
+        "enums",
+        [enum_row("first_mode"), enum_row("second_mode")],
+        {"first_mode": 0, "second_mode": 0},
+        {},
+        lambda _binding: None,
+    )
+    assert [item["prop_id"] for item in binding._option_records()] == [
+        "first_mode",
+        "second_mode",
+    ]
+
+
 def test_all_declaration_and_schema_locale_keys_resolve_in_every_locale(lf):
     group_info = lf.ui.property_group_info("optimization")
     keys = set()
@@ -715,6 +930,7 @@ def test_all_declaration_and_schema_locale_keys_resolve_in_every_locale(lf):
                 keys.add(item["locale_key"])
     keys.update(section.header_locale_key for section in property_view.SECTIONS)
     keys.update(property_view._ENUM_OPTION_TOOLTIP_KEYS.values())
+    keys.add("training.search.placeholder")
 
     assert keys
     locale_paths = sorted(LOCALES.glob("*.json"))
@@ -742,6 +958,7 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert 'data-value="row.text"' in rml
     assert 'data-checked="row.checked"' in rml
     assert 'data-value="row.value"' in rml
+    assert 'data-if="item.prop_id == row.id"' in rml
     assert 'data-event-change="pv_value_change(row.id, row.checked)"' in rml
     assert 'data-event-change="pv_value_change(row.id, ev.value)"' in rml
     assert 'data-pv-input="1"' in rml
@@ -756,3 +973,6 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert 'data-if="row.id == \'iterations\'"' in rml
     assert 'data-class-steps-scale-lock-row="row.id == \'iterations\'"' in rml
     assert "steps_scaler" not in rml
+    assert 'data-value="pv_search_query"' in rml
+    assert 'data-event-click="pv_search_clear"' in rml
+    assert 'id="sec-advanced-registry"' in rml

@@ -201,10 +201,7 @@ namespace {
             {"bg_image_path", "background image path uses its dedicated Python binding"},
             {"enable_save_eval_images", "evaluation image output is not a registry property"},
             {"eval_steps", "vector-valued evaluation schedule is managed separately"},
-            {"ppisp_lr", "PPISP optimizer tuning is not registered yet"},
-            {"ppisp_reg_weight", "PPISP optimizer tuning is not registered yet"},
             {"ppisp_sidecar_path", "PPISP sidecar path uses its dedicated Python binding"},
-            {"ppisp_warmup_steps", "PPISP optimizer tuning is not registered yet"},
             {"save_steps", "vector-valued save schedule is managed separately"},
         };
 

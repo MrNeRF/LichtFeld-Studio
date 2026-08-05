@@ -65,6 +65,7 @@ namespace lfs::core::prop {
         PROP_NEEDS_RESTART = 1 << 2,
         PROP_ANIMATABLE = 1 << 3,
         PROP_OPERATOR_ARG = 1 << 4,
+        PROP_ADVANCED = 1 << 5,
     };
 
     inline PropFlags operator|(PropFlags a, PropFlags b) {
@@ -131,6 +132,7 @@ namespace lfs::core::prop {
         [[nodiscard]] bool is_live_update() const { return has_flag(PROP_LIVE_UPDATE); }
         [[nodiscard]] bool needs_restart() const { return has_flag(PROP_NEEDS_RESTART); }
         [[nodiscard]] bool is_animatable() const { return has_flag(PROP_ANIMATABLE); }
+        [[nodiscard]] bool is_advanced() const { return has_flag(PROP_ADVANCED); }
     };
 
     struct PropertyGroup {

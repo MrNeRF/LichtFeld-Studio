@@ -337,6 +337,7 @@ namespace lfs::python {
         info["readonly"] = meta->is_readonly();
         info["live_update"] = meta->is_live_update();
         info["needs_restart"] = meta->needs_restart();
+        info["advanced"] = meta->is_advanced();
         info["locale_key"] = meta->ui_locale_key;
         info["tooltip_key"] = meta->ui_tooltip_key;
         info["step"] = meta->step;
@@ -402,6 +403,9 @@ namespace lfs::python {
         auto meta = PropertyRegistry::instance().get_property("optimization", prop_id);
         if (!meta) {
             throw std::runtime_error("Unknown property: " + prop_id);
+        }
+        if (meta->is_readonly()) {
+            throw std::runtime_error("Property is read-only: " + prop_id);
         }
 
         const auto default_source = copy_optimization_default_source();

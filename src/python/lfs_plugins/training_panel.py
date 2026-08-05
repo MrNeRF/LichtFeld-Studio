@@ -128,6 +128,7 @@ RENDER_SYNC = {
 SECTIONS = [
     "basic_params",
     "advanced_params",
+    "advanced_registry",
     "dataset",
     "optimization",
     "bilateral",
@@ -140,6 +141,7 @@ SECTIONS = [
 
 INITIALLY_COLLAPSED = {
     "advanced_params",
+    "advanced_registry",
     "dataset",
     "optimization",
     "bilateral",
@@ -175,6 +177,7 @@ class TrainingPanel(Panel):
     def __init__(self):
         self._pv_bindings = ()
         self._pv_binding_by_prop = {}
+        self._pv_search_query = ""
         self._pv_publish_pending = []
         self._pv_publish_pending_ids = set()
         self._pv_publish_scheduled = False
@@ -241,6 +244,7 @@ class TrainingPanel(Panel):
         d = lf.dataset_params
 
         self._bind_labels(model)
+        self._bind_property_search(model)
         self._bind_visibility(model, p, d)
         self._bind_disabled(model, p)
         self._bind_dataset_bools(model, d)
@@ -257,6 +261,8 @@ class TrainingPanel(Panel):
             self._text_bufs,
             publisher=self._queue_pv_publish,
             value_setter=self._set_property_view_value,
+            search_accessor=lambda: self._pv_search_query,
+            visibility_predicate=self._property_view_condition_visible,
         )
         self._pv_binding_by_prop = {
             row["id"]: binding
@@ -289,6 +295,10 @@ class TrainingPanel(Panel):
         )
         model.bind_func("label_reset", lambda: tr("training_panel.reset"))
         model.bind_func("label_clear", lambda: tr("training_panel.clear"))
+        model.bind_func(
+            "pv_search_placeholder",
+            lambda: tr("training.search.placeholder"),
+        )
         model.bind_func("label_pause", lambda: tr("training_panel.pause"))
         model.bind_func("label_resume", lambda: tr("training_panel.resume"))
         model.bind_func("label_stop", lambda: tr("training_panel.stop"))
@@ -406,6 +416,50 @@ class TrainingPanel(Panel):
             )
 
         model.bind_func("btn_start", _btn_start)
+
+    def _bind_property_search(self, model):
+        model.bind(
+            "pv_search_query",
+            lambda: self._pv_search_query,
+            self._set_property_search_query,
+        )
+        model.bind_func(
+            "pv_search_active", lambda: bool(self._pv_search_query.strip())
+        )
+
+    def _set_property_search_query(self, value):
+        query = str(value or "")
+        if query == self._pv_search_query:
+            return
+        self._pv_search_query = query
+        for binding in self._pv_bindings:
+            self._queue_pv_publish(binding)
+
+    def _property_view_condition_visible(self, condition_id):
+        if str(condition_id) == "has_dataset":
+            dataset = lf.dataset_params()
+            return bool(dataset and dataset.has_params())
+
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return False
+
+        mask_mode = params.mask_mode.value
+        conditions = {
+            "dep_mask_mode": mask_mode != 0,
+            "dep_mask_segment": mask_mode in (1, 3),
+            "dep_mask_threshold": mask_mode not in (0, 3),
+            "dep_depth_loss": params.use_depth_loss,
+            "dep_normal_loss": params.use_normal_loss,
+            "dep_ppisp": params.ppisp,
+            "dep_ppisp_controller": params.ppisp and params.ppisp_use_controller,
+            "dep_bilateral": params.use_bilateral_grid,
+            "dep_mrnf": _is_mrnf_strategy(params.strategy),
+            "dep_igs": params.strategy == "igs+",
+            "dep_sparsity": params.enable_sparsity,
+            "dep_random": params.random,
+        }
+        return bool(conditions.get(str(condition_id), True))
 
     def _bind_visibility(self, model, p, d):
         def _state():
@@ -1034,6 +1088,7 @@ class TrainingPanel(Panel):
         model.bind_event("pv_blur", self._on_pv_number_input_blur)
         model.bind_event("pv_escape", self._on_pv_number_input_escape)
         model.bind_event("pv_value_change", self._on_pv_value_change)
+        model.bind_event("pv_search_clear", self._on_pv_search_clear)
         model.bind_event(
             "toggle_step_scaling_lock", self._on_step_scaling_lock_toggle
         )
@@ -1224,6 +1279,7 @@ class TrainingPanel(Panel):
             for binding in self._pv_bindings:
                 binding.publish()
             self._handle.dirty_all()
+            self._sync_section_states()
             dirty = True
         state = RuntimeState.trainer_state.value
         if state != self._last_state:
@@ -1873,6 +1929,9 @@ class TrainingPanel(Panel):
         if binding is not None:
             binding.set_value(prop, args[1])
 
+    def _on_pv_search_clear(self, *_args):
+        self._set_property_search_query("")
+
     def _queue_pv_publish(self, binding):
         binding_id = id(binding)
         if binding_id not in self._pv_publish_pending_ids:
@@ -1907,7 +1966,20 @@ class TrainingPanel(Panel):
             if id(binding) in active_ids:
                 binding.publish()
                 published = True
+        if published:
+            self._dirty_property_search_models()
+            self._sync_section_states()
         return published
+
+    def _dirty_property_search_models(self):
+        if not self._handle:
+            return
+        for key in (
+            "pv_search_query",
+            "pv_search_active",
+            *property_view.SEARCH_VISIBILITY_MODEL_KEYS,
+        ):
+            self._handle.dirty(key)
 
     def _on_color_channel_input_change(self, event):
         if not event.get_bool_parameter("linebreak", False):
@@ -2007,11 +2079,18 @@ class TrainingPanel(Panel):
         return header, arrow, content
 
     def _sync_section_states(self):
+        search_active = bool(self._pv_search_query.strip())
         for name in SECTIONS:
             header, arrow, content = self._get_section_elements(name)
             if content:
+                search_expanded = search_active and property_view.section_is_visible(
+                    self._pv_bindings, name
+                )
                 w.sync_section_state(
-                    content, name not in self._collapsed, header, arrow
+                    content,
+                    name not in self._collapsed or search_expanded,
+                    header,
+                    arrow,
                 )
 
     def _on_toggle_section(self, handle, event, args):
@@ -2019,6 +2098,11 @@ class TrainingPanel(Panel):
         if not args:
             return
         name = str(args[0])
+        if self._pv_search_query.strip() and property_view.section_is_visible(
+            self._pv_bindings, name
+        ):
+            self._sync_section_states()
+            return
         expanding = name in self._collapsed
         if expanding:
             self._collapsed.discard(name)

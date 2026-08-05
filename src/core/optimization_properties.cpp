@@ -58,7 +58,11 @@ namespace lfs::core::param {
             .float_prop(&OptimizationParameters::means_lr_end,
                         "means_lr_end", "Position LR End", d.means_lr_end, 0.0f, 0.001f,
                         "Target end learning rate for gaussian positions")
-            .flags(PROP_LIVE_UPDATE)
+            .locale("training.advanced.means_lr_end")
+            .tooltip("training.tooltip.means_lr_end")
+            .precision(8)
+            .ui_step(1e-8)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
             .float_prop(&OptimizationParameters::shs_lr,
                         "shs_lr", "SH LR", d.shs_lr, 0.0f, 0.1f,
                         "Learning rate for spherical harmonics")
@@ -89,7 +93,11 @@ namespace lfs::core::param {
             .float_prop(&OptimizationParameters::scaling_lr_end,
                         "scaling_lr_end", "Scale LR End", d.scaling_lr_end, 0.0f, 0.1f,
                         "Target end learning rate for gaussian scales")
-            .flags(PROP_LIVE_UPDATE)
+            .locale("training.advanced.scaling_lr_end")
+            .tooltip("training.tooltip.scaling_lr_end")
+            .precision(6)
+            .ui_step(1e-5)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
             .float_prop(&OptimizationParameters::rotation_lr,
                         "rotation_lr", "Rotation LR", d.rotation_lr, 0.0f, 0.1f,
                         "Learning rate for rotations")
@@ -102,11 +110,19 @@ namespace lfs::core::param {
             .float_prop(&OptimizationParameters::cropbox_lr_scale,
                         "cropbox_lr_scale", "Rejected splat LR scale", d.cropbox_lr_scale, 0.0f, 1.0f,
                         "Scales Adam steps and refinement signals for rejected splats; strategy noise, decay, and resets remain active")
-            .flags(PROP_LIVE_UPDATE)
+            .locale("training.advanced.cropbox_lr_scale")
+            .tooltip("training.tooltip.cropbox_lr_scale")
+            .precision(3)
+            .ui_step(0.01)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
             .float_prop(&OptimizationParameters::cropbox_loss_weight,
                         "cropbox_loss_weight", "Outside ROI loss weight", d.cropbox_loss_weight, 0.0f, 1.0f,
                         "Scales pixel losses for camera rays outside the active crop box")
-            .flags(PROP_LIVE_UPDATE)
+            .locale("training.advanced.cropbox_loss_weight")
+            .tooltip("training.tooltip.cropbox_loss_weight")
+            .precision(3)
+            .ui_step(0.01)
+            .flags(PROP_LIVE_UPDATE | PROP_ADVANCED)
 
             // Loss parameters
             .float_prop(&OptimizationParameters::lambda_dssim,
@@ -266,6 +282,9 @@ namespace lfs::core::param {
             .string_prop(&OptimizationParameters::normal_loss_space,
                          "normal_loss_space", "Normal Loss Space", d.normal_loss_space,
                          "Normal prior coordinate space: auto, camera-opencv, camera-opengl, or world")
+            .locale("training.advanced.normal_loss_space")
+            .tooltip("training.tooltip.normal_loss_space")
+            .flags(PROP_ADVANCED)
 
             // Bilateral grid
             .bool_prop(&OptimizationParameters::use_bilateral_grid,
@@ -379,9 +398,19 @@ namespace lfs::core::param {
             .float_prop(&OptimizationParameters::growth_grad_threshold,
                         "growth_grad_threshold", "Growth Grad Threshold", d.growth_grad_threshold, 0.0f, 1.0f,
                         "Min refine weight for growth candidacy (MRNF)")
+            .locale("training.advanced.growth_grad_threshold")
+            .tooltip("training.tooltip.growth_grad_threshold")
+            .precision(4)
+            .ui_step(0.0001)
+            .flags(PROP_ADVANCED)
             .float_prop(&OptimizationParameters::grow_fraction,
                         "grow_fraction", "Grow Fraction", d.grow_fraction, 0.0f, 1.0f,
                         "Fraction of above-threshold splats to grow (MRNF)")
+            .locale("training.advanced.grow_fraction")
+            .tooltip("training.tooltip.grow_fraction")
+            .precision(3)
+            .ui_step(0.01)
+            .flags(PROP_ADVANCED)
             .size_prop(&OptimizationParameters::grow_until_iter,
                        "grow_until_iter", "Grow Until Iter", d.grow_until_iter, 0, 100000,
                        "Stop MRNF growth after this iteration")
@@ -392,21 +421,47 @@ namespace lfs::core::param {
             .float_prop(&OptimizationParameters::opacity_decay,
                         "opacity_decay", "Opacity Decay", d.opacity_decay, 0.0f, 0.1f,
                         "Opacity decay rate per refine (MRNF)")
+            .locale("training.advanced.opacity_decay")
+            .tooltip("training.tooltip.opacity_decay")
+            .precision(4)
+            .ui_step(0.0001)
+            .flags(PROP_ADVANCED)
             .float_prop(&OptimizationParameters::scale_decay,
                         "scale_decay", "Scale Decay", d.scale_decay, 0.0f, 0.1f,
                         "Scale decay rate per refine (MRNF)")
+            .locale("training.advanced.scale_decay")
+            .tooltip("training.tooltip.scale_decay")
+            .precision(4)
+            .ui_step(0.0001)
+            .flags(PROP_ADVANCED)
             .float_prop(&OptimizationParameters::means_noise_weight,
                         "means_noise_weight", "Means Noise Weight", d.means_noise_weight, 0.0f, 200.0f,
                         "Exploration noise multiplier for means updates (MRNF)")
+            .locale("training.advanced.means_noise_weight")
+            .tooltip("training.tooltip.means_noise_weight")
+            .precision(2)
+            .ui_step(1.0)
+            .flags(PROP_ADVANCED)
             .float_prop(&OptimizationParameters::bounds_percentile,
                         "bounds_percentile", "Bounds Percentile", d.bounds_percentile, 0.5f, 1.0f,
                         "Percentile for bounds computation (MRNF)")
+            .locale("training.advanced.bounds_percentile")
+            .tooltip("training.tooltip.bounds_percentile")
+            .precision(3)
+            .ui_step(0.01)
+            .flags(PROP_ADVANCED)
             .bool_prop(&OptimizationParameters::use_error_map,
                        "use_error_map", "Error Map", d.use_error_map,
                        "Weight MRNF refine signal by per-pixel SSIM error map")
+            .locale("training.advanced.use_error_map")
+            .tooltip("training.tooltip.use_error_map")
+            .flags(PROP_ADVANCED)
             .bool_prop(&OptimizationParameters::use_edge_map,
                        "use_edge_map", "Edge Map", d.use_edge_map,
                        "Weight MRNF refine signal by Sobel edge map on GT images")
+            .locale("training.advanced.use_edge_map")
+            .tooltip("training.tooltip.use_edge_map")
+            .flags(PROP_ADVANCED)
 
             // Flags
             .bool_prop(&OptimizationParameters::mip_filter,
@@ -416,10 +471,34 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.mip_filter")
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", d.use_ppisp,
-                       "Per-pixel image signal processing")
+                       "Enable per-camera physically plausible image signal processing")
             .json_key("use_ppisp")
             .locale("training_params.ppisp")
             .tooltip("training.tooltip.ppisp")
+            .float_prop(&OptimizationParameters::ppisp_lr,
+                        "ppisp_lr", "PPISP Learning Rate", d.ppisp_lr, 0.0f, 0.1f,
+                        "Learning rate for PPISP parameters")
+            .locale("training_params.ppisp_lr")
+            .tooltip("training.tooltip.ppisp_lr")
+            .precision(5)
+            .ui_step(0.0001)
+            .flags(PROP_ADVANCED)
+            .float_prop(&OptimizationParameters::ppisp_reg_weight,
+                        "ppisp_reg_weight", "PPISP Regularization", d.ppisp_reg_weight, 0.0f, 0.1f,
+                        "Regularization weight for PPISP parameters")
+            .locale("training_params.ppisp_reg")
+            .tooltip("training.tooltip.ppisp_reg")
+            .precision(5)
+            .ui_step(0.0001)
+            .flags(PROP_ADVANCED)
+            .int_prop(&OptimizationParameters::ppisp_warmup_steps,
+                      "ppisp_warmup_steps", "PPISP Warmup Steps", d.ppisp_warmup_steps, 0, 100000,
+                      "Steps before PPISP training starts")
+            .locale("training_params.ppisp_warmup")
+            .tooltip("training.tooltip.ppisp_warmup")
+            .precision(0)
+            .ui_step(100)
+            .flags(PROP_ADVANCED)
             .bool_prop(&OptimizationParameters::ppisp_use_controller,
                        "ppisp_use_controller", "Controller", d.ppisp_use_controller,
                        "Enable PPISP controller for novel view synthesis")
@@ -499,7 +578,7 @@ namespace lfs::core::param {
                         "Target pruning ratio for sparsification")
             .float_prop(&OptimizationParameters::init_rho,
                         "init_rho", "Init Rho", d.init_rho, 0.0f, 0.01f,
-                        "Initial rho for sparsity optimization")
+                        "Initial ADMM penalty rho for sparsity optimization")
             .locale("training_params.init_rho")
             .tooltip("training.tooltip.init_rho")
             .precision(4)
@@ -511,6 +590,7 @@ namespace lfs::core::param {
             .tooltip("training.tooltip.steps_scaler")
             .precision(2)
             .ui_step(0.1)
+            .flags(PROP_ADVANCED)
             .bool_prop(&OptimizationParameters::gut,
                        "gut", "GUT", d.gut,
                        "Gaussian Unscented Transform")

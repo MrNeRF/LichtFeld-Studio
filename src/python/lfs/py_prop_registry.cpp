@@ -463,6 +463,7 @@ namespace lfs::python {
             property["type"] = prop_type_string(meta.type);
             property["flags"] = meta.flags;
             property["operator_arg"] = meta.has_flag(core::prop::PROP_OPERATOR_ARG);
+            property["advanced"] = meta.is_advanced();
             property["locale_key"] = meta.ui_locale_key;
             property["tooltip_key"] = meta.ui_tooltip_key;
             property["step"] = meta.step;

@@ -220,9 +220,6 @@ namespace lfs::core {
             opt_json["eval_steps"] = eval_steps;
             opt_json["save_steps"] = save_steps;
             opt_json["enable_save_eval_images"] = enable_save_eval_images;
-            opt_json["ppisp_lr"] = ppisp_lr;
-            opt_json["ppisp_reg_weight"] = ppisp_reg_weight;
-            opt_json["ppisp_warmup_steps"] = ppisp_warmup_steps;
             opt_json["ppisp_sidecar_path"] = path_to_utf8(ppisp_sidecar_path);
             opt_json["bg_color"] = {bg_color[0], bg_color[1], bg_color[2]};
             if (!bg_image_path.empty())
@@ -532,12 +529,6 @@ namespace lfs::core {
             }
             if (json.contains("enable_save_eval_images"))
                 params.enable_save_eval_images = json.at("enable_save_eval_images");
-            if (json.contains("ppisp_lr"))
-                params.ppisp_lr = json.at("ppisp_lr");
-            if (json.contains("ppisp_reg_weight"))
-                params.ppisp_reg_weight = json.at("ppisp_reg_weight");
-            if (json.contains("ppisp_warmup_steps"))
-                params.ppisp_warmup_steps = json.at("ppisp_warmup_steps");
             if (json.contains("ppisp_sidecar_path")) {
                 params.ppisp_sidecar_path =
                     utf8_to_path(json.at("ppisp_sidecar_path").get<std::string>());

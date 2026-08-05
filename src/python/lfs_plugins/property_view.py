@@ -95,6 +95,23 @@ BOOL_PROPS = (
 SELECT_PROPS = ("mask_mode", "bg_mode")
 MIGRATED_PROP_IDS = NUMBER_PROPS + BOOL_PROPS + SELECT_PROPS
 
+# These registered properties are intentionally represented by bespoke widgets or
+# are runtime-only. Keep the reasons here so registry auto-placement stays auditable.
+BESPOKE_OR_HIDDEN = {
+    "sh_degree": "finite-value select with bespoke labels and tooltips",
+    "lambda_dssim": "scrub slider",
+    "init_opacity": "scrub slider",
+    "depth_loss_mode": "bespoke fixed-value string select",
+    "normal_loss_space": "string property without registry enum items",
+    "strategy": "strategy conflict-confirmation select",
+    "ppisp_controller_activation_step": "derived -1 schedule semantics",
+    "bg_modulation": "legacy mirror controlled by bg_mode",
+    "headless": "runtime-only read-only flag",
+    "prune_ratio": "scrub slider",
+}
+
+AUTO_ADVANCED_RUN_ID = "advanced_registry"
+
 
 def _run(
     run_id,
@@ -170,7 +187,9 @@ BASIC_RUNS = (
     _run("bg_mode", "bg_mode"),
 )
 
-DATASET_RUNS = (_run("dataset_eval", "enable_eval"),)
+DATASET_RUNS = (
+    _run("dataset_eval", "enable_eval", visibility_condition_id="has_dataset"),
+)
 
 OPTIMIZATION_RUNS = (
     _run(
@@ -257,6 +276,11 @@ SPARSITY_RUNS = (
 SECTIONS = (
     SectionSpec("basic_params", "training.section.basic_params", BASIC_RUNS),
     SectionSpec("advanced_params", "training.section.advanced_params"),
+    SectionSpec(
+        "advanced_registry",
+        "training.section.advanced_registry",
+        (_run(AUTO_ADVANCED_RUN_ID),),
+    ),
     SectionSpec("dataset", "training.section.dataset", DATASET_RUNS),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
     SectionSpec("learning_rates", "training.opt.learning_rates"),
@@ -274,6 +298,25 @@ SECTIONS = (
 )
 
 RUNS = tuple(run for section in SECTIONS for run in section.runs)
+
+SEARCH_SECTION_RUN_IDS = {
+    "basic_params": tuple(run.id for run in BASIC_RUNS),
+    "advanced_registry": (AUTO_ADVANCED_RUN_ID,),
+    "dataset": tuple(run.id for run in DATASET_RUNS),
+    "optimization": tuple(run.id for run in OPTIMIZATION_RUNS),
+    "learning_rates": ("learning_rates",),
+    "refinement": tuple(
+        run.id for run in OPTIMIZATION_RUNS if run.id != "learning_rates"
+    ),
+    "bilateral": tuple(run.id for run in BILATERAL_RUNS),
+    "losses": tuple(run.id for run in LOSS_RUNS),
+    "init": tuple(run.id for run in INIT_RUNS),
+    "pruning_growing": tuple(run.id for run in PRUNING_RUNS),
+    "sparsity": tuple(run.id for run in SPARSITY_RUNS),
+}
+SEARCH_VISIBILITY_MODEL_KEYS = tuple(
+    f"pv_section_{section_id}_visible" for section_id in SEARCH_SECTION_RUN_IDS
+) + ("pv_section_advanced_params_visible",)
 
 LEARNING_RATES = list(OPTIMIZATION_RUNS[0].prop_ids)
 
@@ -375,12 +418,50 @@ def _row_kind(meta):
     if prop_type == "enum":
         return "select"
     if prop_type == "float":
-        if meta.get("precision") is None:
-            return "slider"
         return "number"
     if prop_type in {"int", "size_t"}:
         return "number"
-    return "select"
+    return None
+
+
+def auto_advanced_prop_ids(group_info):
+    """Return declaration-ordered scalar properties omitted from curated layout."""
+    placed = {
+        prop_id
+        for run in RUNS
+        if run.id != AUTO_ADVANCED_RUN_ID
+        for prop_id in run.prop_ids
+    }
+    return tuple(
+        str(meta["id"])
+        for meta in group_info.get("properties", [])
+        if str(meta["id"]) not in placed
+        and str(meta["id"]) not in BESPOKE_OR_HIDDEN
+        and _row_kind(meta) is not None
+    )
+
+
+def resolve_runs(group_info):
+    """Resolve dynamic schema runs against one immutable registry snapshot."""
+    advanced_ids = auto_advanced_prop_ids(group_info)
+    return tuple(
+        SectionRunSpec(
+            run.id,
+            advanced_ids if run.id == AUTO_ADVANCED_RUN_ID else run.prop_ids,
+            run.visibility_condition_id,
+            run.disabled_condition_id,
+        )
+        for run in RUNS
+    )
+
+
+def row_matches_query(prop_id, localized_label, query):
+    normalized = str(query or "").strip().casefold()
+    if not normalized:
+        return True
+    return normalized in str(prop_id).casefold() or normalized in str(
+        localized_label
+    ).casefold()
 
 
 def _localized(key, fallback):
@@ -403,7 +484,12 @@ def build_rows(group_info, prop_ids, params_accessor):
         meta = properties[prop_id]
         prop_type = str(meta.get("type", ""))
         is_int = prop_type in {"int", "size_t"}
+        kind = _row_kind(meta)
+        if kind is None:
+            raise ValueError(f"property {prop_id!r} has no retained-mode row kind")
         precision = meta.get("precision")
+        if kind == "number" and prop_type == "float" and precision is None:
+            precision = 3
         items = []
         for item in meta.get("items", []):
             value = int(item["value"])
@@ -418,7 +504,7 @@ def build_rows(group_info, prop_ids, params_accessor):
             )
         row = {
             "id": prop_id,
-            "kind": _row_kind(meta),
+            "kind": kind,
             "label_key": str(meta.get("locale_key", "")),
             "tooltip_key": str(meta.get("tooltip_key", "")),
             "precision": int(precision) if precision is not None else None,
@@ -460,11 +546,15 @@ class SectionBinding:
         text_bufs,
         publisher: Callable,
         value_setter: Optional[Callable] = None,
+        search_accessor: Optional[Callable] = None,
+        visibility_condition_id: Optional[str] = None,
+        visibility_predicate: Optional[Callable] = None,
     ):
         self.section_id = str(section_id)
         self.rows = tuple(rows)
         self.model_key = f"pv_{self.section_id}_rows"
         self.options_model_key = f"pv_{self.section_id}_options"
+        self.visible_model_key = f"pv_{self.section_id}_visible"
         self._rows_by_id = {row["id"]: row for row in self.rows}
         self._params_accessor = params_accessor
         self._text_bufs = text_bufs
@@ -472,12 +562,11 @@ class SectionBinding:
             raise TypeError("SectionBinding requires a deferred publisher callback")
         self._publisher = publisher
         self._value_setter = value_setter
+        self._search_accessor = search_accessor
+        self._visibility_condition_id = visibility_condition_id
+        self._visibility_predicate = visibility_predicate
         self._handle = None
         self._edit_snapshots = {}
-        select_rows = [row for row in self.rows if row["kind"] == "select"]
-        if len(select_rows) > 1:
-            raise ValueError("a generated run may contain at most one select row")
-        self._select_row = select_rows[0] if select_rows else None
         self.sync_text_bufs(publish=False)
 
     def contains(self, prop_id):
@@ -499,6 +588,18 @@ class SectionBinding:
 
     def _request_publish(self):
         self._publisher(self)
+
+    def _search_query(self):
+        if not callable(self._search_accessor):
+            return ""
+        return str(self._search_accessor() or "").strip()
+
+    def _condition_visible(self):
+        if not self._visibility_condition_id:
+            return True
+        if not callable(self._visibility_predicate):
+            return True
+        return bool(self._visibility_predicate(self._visibility_condition_id))
 
     def _write_value(self, prop_id, value):
         try:
@@ -664,12 +765,18 @@ class SectionBinding:
 
     def _records(self):
         records = []
+        query = self._search_query()
+        if query and not self._condition_visible():
+            return records
         params = self._params()
         for row in self.rows:
+            label = _localized(row["label_key"], row["name"])
+            if not row_matches_query(row["id"], label, query):
+                continue
             record = {
                 "id": row["id"],
                 "kind": row["kind"],
-                "label": _localized(row["label_key"], row["name"]),
+                "label": label,
                 "tooltip_key": row["tooltip_key"],
                 "text": "",
                 "checked": False,
@@ -699,21 +806,26 @@ class SectionBinding:
         return records
 
     def _option_records(self):
-        if self._select_row is None:
-            return []
         records = []
-        for item in self._select_row["items"]:
-            records.append(
-                {
-                    "value": str(int(item["value"])),
-                    "label": _localized(
-                        str(item.get("locale_key", "")),
-                        str(item.get("name", item["value"])),
-                    ),
-                    "tooltip_key": str(item.get("tooltip_key", "")),
-                }
-            )
+        for row in self.rows:
+            if row["kind"] != "select":
+                continue
+            for item in row["items"]:
+                records.append(
+                    {
+                        "prop_id": row["id"],
+                        "value": str(int(item["value"])),
+                        "label": _localized(
+                            str(item.get("locale_key", "")),
+                            str(item.get("name", item["value"])),
+                        ),
+                        "tooltip_key": str(item.get("tooltip_key", "")),
+                    }
+                )
         return records
+
+    def is_visible(self):
+        return not self._search_query() or bool(self._records())
 
     def publish(self):
         """Replace bound arrays; callers must not invoke this in event dispatch."""
@@ -740,9 +852,13 @@ def bind_run(
     text_bufs,
     publisher,
     value_setter=None,
+    group_info=None,
+    search_accessor=None,
+    visibility_predicate=None,
 ):
     """Bind one ordered registry-backed row run and return its runtime state."""
-    group_info = lf.ui.property_group_info("optimization")
+    if group_info is None:
+        group_info = lf.ui.property_group_info("optimization")
     rows = build_rows(group_info, run_spec.prop_ids, params_accessor)
     binding = SectionBinding(
         run_spec.id,
@@ -751,10 +867,41 @@ def bind_run(
         text_bufs,
         publisher,
         value_setter,
+        search_accessor,
+        run_spec.visibility_condition_id,
+        visibility_predicate,
     )
     model.bind_record_list(binding.model_key)
     model.bind_record_list(binding.options_model_key)
+    model.bind_func(binding.visible_model_key, binding.is_visible)
     return binding
+
+
+def section_is_visible(bindings, section_id):
+    run_ids = set(SEARCH_SECTION_RUN_IDS.get(str(section_id), ()))
+    selected = [binding for binding in bindings if binding.section_id in run_ids]
+    return any(binding.is_visible() for binding in selected)
+
+
+def _bind_search_visibility(model, bindings, search_accessor):
+    for section_id in SEARCH_SECTION_RUN_IDS:
+        model.bind_func(
+            f"pv_section_{section_id}_visible",
+            lambda section=section_id: section_is_visible(bindings, section),
+        )
+
+    advanced_sections = tuple(
+        section_id
+        for section_id in SEARCH_SECTION_RUN_IDS
+        if section_id != "basic_params"
+    )
+    model.bind_func(
+        "pv_section_advanced_params_visible",
+        lambda: (
+            not str(search_accessor() or "").strip()
+            or any(section_is_visible(bindings, section) for section in advanced_sections)
+        ),
+    )
 
 
 def bind_sections(
@@ -763,10 +910,13 @@ def bind_sections(
     text_bufs,
     publisher,
     value_setter=None,
+    search_accessor=None,
+    visibility_predicate=None,
 ):
     """Bind the complete training property-view schema."""
     bind_headers(model)
-    return tuple(
+    group_info = lf.ui.property_group_info("optimization")
+    bindings = tuple(
         bind_run(
             model,
             run,
@@ -774,9 +924,16 @@ def bind_sections(
             text_bufs,
             publisher,
             value_setter,
+            group_info,
+            search_accessor,
+            visibility_predicate,
         )
-        for run in RUNS
+        for run in resolve_runs(group_info)
     )
+    if not callable(search_accessor):
+        search_accessor = lambda: ""
+    _bind_search_visibility(model, bindings, search_accessor)
+    return bindings
 
 
 def bind_section(
@@ -787,6 +944,8 @@ def bind_section(
     text_bufs,
     publisher,
     value_setter=None,
+    search_accessor=None,
+    visibility_predicate=None,
 ):
     """Compatibility seam for focused property-view tests and plugins."""
     return bind_run(
@@ -796,4 +955,6 @@ def bind_section(
         text_bufs,
         publisher,
         value_setter,
+        search_accessor=search_accessor,
+        visibility_predicate=visibility_predicate,
     )
