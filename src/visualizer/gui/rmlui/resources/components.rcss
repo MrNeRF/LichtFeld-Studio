@@ -127,6 +127,7 @@ scrollbarhorizontal sliderbar:hover {
 button,
 input[type="text"],
 input[type="checkbox"],
+input[type="radio"],
 input[type="range"],
 select,
 textarea,
@@ -147,6 +148,24 @@ input[type="checkbox"] {
     margin: 0 6dp 0 0;
     padding: 0;
     transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
+}
+
+/* ── Form: Radio ────────────────────────────────────────── */
+
+input[type="radio"] {
+    width: 14dp;
+    height: 14dp;
+    border-width: 1dp;
+    border-radius: 7dp;
+    border-color: #585b70;
+    background-color: #313244;
+    margin: 0 6dp 0 0;
+    padding: 0;
+}
+
+input[type="radio"]:checked {
+    background-color: #89b4fa;
+    border-color: #89b4fa;
 }
 
 input[type="checkbox"]:checked {
@@ -197,6 +216,24 @@ input[type="text"] {
     border-color: #45475a;
     padding: 2dp 4dp;
     transition: border-color 0.12s quadratic-out;
+}
+
+textarea {
+    font-size: 12dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 2dp 4dp;
+    transition: border-color 0.12s quadratic-out;
+}
+
+textarea:focus,
+textarea:focus-visible {
+    color: #cdd6f4;
+    background-color: #313244;
+    border-color: #89b4fa;
+    box-shadow: none;
 }
 
 input[type="text"]:focus {

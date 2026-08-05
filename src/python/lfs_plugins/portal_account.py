@@ -52,10 +52,17 @@ class PortalProtocolError(PortalAccountError):
 class PortalHTTPError(PortalAccountError):
     """A contract-shaped HTTP error without response or token material."""
 
-    def __init__(self, status: int, error: str, retry_after: Optional[float] = None) -> None:
+    def __init__(
+        self,
+        status: int,
+        error: str,
+        retry_after: Optional[float] = None,
+        detail: Optional[Mapping[str, object]] = None,
+    ) -> None:
         self.status = status
         self.error = error
         self.retry_after = retry_after
+        self.detail = dict(detail) if detail is not None else None
         super().__init__(f"Portal request failed with HTTP {status}: {error or 'unknown_error'}")
 
 
@@ -204,17 +211,21 @@ def _tier_name(customer_tier: str) -> str:
     }.get(customer_tier, customer_tier)
 
 
-def _error_payload(raw: bytes) -> str:
+def _error_response(raw: bytes) -> tuple[str, Optional[dict[str, object]]]:
     if not raw:
-        return ""
+        return "", None
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return ""
+        return "", None
     if not isinstance(payload, dict):
-        return ""
+        return "", None
     error = payload.get("error")
-    return error if isinstance(error, str) else ""
+    detail = payload.get("detail")
+    return (
+        error if isinstance(error, str) else "",
+        dict(detail) if isinstance(detail, dict) else None,
+    )
 
 
 def _retry_after_seconds(headers: object) -> Optional[float]:
@@ -343,6 +354,26 @@ class PortalAccountService:
     def credentials_file(self) -> Path:
         return self.credentials_path
 
+    def request_json_authenticated(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Mapping[str, object]] = None,
+        timeout: float = 30,
+    ) -> dict[str, object]:
+        """Make one bearer request with the shared single-refresh ladder."""
+        return self._authenticated_request(method, path, body, timeout=timeout)
+
+    def _redaction_tokens(self) -> tuple[str, ...]:
+        credentials = self._current_credentials()
+        if credentials is None:
+            return ()
+        return tuple(
+            token
+            for token in (credentials.access_token, credentials.refresh_token)
+            if token
+        )
+
     def initialize_async(self) -> None:
         """Validate a stored session once, without blocking panel registration."""
         with self._lock:
@@ -363,50 +394,19 @@ class PortalAccountService:
 
     def sync_profile(self) -> bool:
         """Fetch ``/me/``, refreshing exactly once after a bearer 401."""
-        credentials = self._current_credentials()
-        if credentials is None:
-            return False
-
-        failed_access_token = credentials.access_token
         try:
-            payload = self._request_with_bearer("GET", ME_PATH, credentials)
+            payload = self._authenticated_request("GET", ME_PATH)
         except PortalHTTPError as exc:
-            if exc.status == 403 and exc.error == "membership_required":
-                self._set_membership_required(credentials)
-                return False
-            if exc.status != 401 or exc.error != "invalid_token":
+            if not (exc.status == 403 and exc.error == "membership_required"):
                 _log.debug("Portal profile request failed with HTTP %d", exc.status)
-                return False
-
-            refresh_result = self._refresh_tokens(failed_access_token)
-            if refresh_result == "membership_required":
-                return False
-            if refresh_result == "invalid":
-                self._clear_local_credentials()
-                return False
-            if refresh_result == "unavailable":
-                return False
-
-            credentials = self._current_credentials()
-            if credentials is None:
-                self._set_signed_out("invalid_token")
-                return False
-            try:
-                payload = self._request_with_bearer("GET", ME_PATH, credentials)
-            except PortalHTTPError as retry_exc:
-                if retry_exc.status == 403 and retry_exc.error == "membership_required":
-                    self._set_membership_required(credentials)
-                    return False
-                if retry_exc.status == 401 and retry_exc.error == "invalid_token":
-                    self._clear_local_credentials()
-                return False
-            except (OSError, PortalProtocolError):
-                _log.debug("Portal profile retry was unavailable")
-                return False
+            return False
         except (OSError, PortalProtocolError):
             _log.debug("Portal profile request was unavailable")
             return False
 
+        credentials = self._current_credentials()
+        if credentials is None:
+            return False
         updated = self._credentials_with_profile(credentials, payload)
         if updated is None:
             _log.debug("Portal profile response did not match the pinned contract")
@@ -603,7 +603,12 @@ class PortalAccountService:
             self._update_countdown()
         return False
 
-    def _refresh_tokens(self, failed_access_token: str) -> str:
+    def _refresh_tokens(
+        self,
+        failed_access_token: str,
+        *,
+        timeout: Optional[float] = None,
+    ) -> str:
         """Return ``ok``, ``membership_required``, ``invalid``, or ``unavailable``."""
         with self._refresh_lock:
             with _locked_sidecar(self._lock_path):
@@ -622,6 +627,7 @@ class PortalAccountService:
                         "POST",
                         REFRESH_PATH,
                         {"refresh_token": attempted_refresh_token},
+                        timeout=timeout,
                     )
                 except PortalHTTPError as exc:
                     if exc.status == 403 and exc.error == "membership_required":
@@ -652,12 +658,70 @@ class PortalAccountService:
                 self._apply_credentials_state(rotated)
                 return "ok"
 
+    def _authenticated_request(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Mapping[str, object]] = None,
+        *,
+        timeout: Optional[float] = None,
+    ) -> dict[str, object]:
+        credentials = self._current_credentials()
+        if credentials is None:
+            raise PortalHTTPError(401, "invalid_token")
+
+        failed_access_token = credentials.access_token
+        try:
+            return self._request_with_bearer(
+                method,
+                path,
+                credentials,
+                body,
+                timeout=timeout,
+            )
+        except PortalHTTPError as exc:
+            if exc.status == 403 and exc.error == "membership_required":
+                self._set_membership_required(credentials)
+                raise
+            if exc.status != 401 or exc.error != "invalid_token":
+                raise
+
+        refresh_result = self._refresh_tokens(failed_access_token, timeout=timeout)
+        if refresh_result == "membership_required":
+            raise PortalHTTPError(403, "membership_required")
+        if refresh_result == "invalid":
+            self._clear_local_credentials()
+            raise PortalHTTPError(401, "invalid_token")
+        if refresh_result == "unavailable":
+            raise PortalProtocolError("Portal token refresh was unavailable")
+
+        credentials = self._current_credentials()
+        if credentials is None:
+            self._set_signed_out("invalid_token")
+            raise PortalHTTPError(401, "invalid_token")
+        try:
+            return self._request_with_bearer(
+                method,
+                path,
+                credentials,
+                body,
+                timeout=timeout,
+            )
+        except PortalHTTPError as exc:
+            if exc.status == 403 and exc.error == "membership_required":
+                self._set_membership_required(credentials)
+            elif exc.status == 401 and exc.error == "invalid_token":
+                self._clear_local_credentials()
+            raise
+
     def _request_with_bearer(
         self,
         method: str,
         path: str,
         credentials: _Credentials,
         body: Optional[Mapping[str, object]] = None,
+        *,
+        timeout: Optional[float] = None,
     ) -> dict[str, object]:
         self._assert_active_origin(credentials)
         return self._request_json(
@@ -665,6 +729,7 @@ class PortalAccountService:
             path,
             body,
             {"Authorization": f"Bearer {credentials.access_token}"},
+            timeout=timeout,
         )
 
     def _request_json(
@@ -673,6 +738,8 @@ class PortalAccountService:
         path: str,
         body: Optional[Mapping[str, object]] = None,
         headers: Optional[Mapping[str, str]] = None,
+        *,
+        timeout: Optional[float] = None,
     ) -> dict[str, object]:
         request_headers = {"Accept": "application/json"}
         data = None
@@ -690,7 +757,10 @@ class PortalAccountService:
         )
         response_headers = None
         try:
-            with urlopen(request, timeout=self._timeout) as response:
+            with urlopen(
+                request,
+                timeout=self._timeout if timeout is None else timeout,
+            ) as response:
                 response_status = getattr(response, "status", None)
                 if response_status is None:
                     response_status = response.getcode()
@@ -700,12 +770,19 @@ class PortalAccountService:
         except urllib.error.HTTPError as exc:
             raw = exc.read()
             retry_after = _retry_after_seconds(getattr(exc, "headers", None))
-            raise PortalHTTPError(int(exc.code), _error_payload(raw), retry_after) from None
+            error, detail = _error_response(raw)
+            raise PortalHTTPError(int(exc.code), error, retry_after, detail) from None
 
         if status == 204:
             return {}
         if status < 200 or status >= 300:
-            raise PortalHTTPError(status, _error_payload(raw), _retry_after_seconds(response_headers))
+            error, detail = _error_response(raw)
+            raise PortalHTTPError(
+                status,
+                error,
+                _retry_after_seconds(response_headers),
+                detail,
+            )
         try:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:

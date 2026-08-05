@@ -11,6 +11,7 @@
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/session_breadcrumb.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
 #include "gui/gpu_memory_query.hpp"
@@ -263,6 +264,7 @@ int main(int argc, char* argv[]) {
     }
 
     lfs::core::install_crash_handlers();
+    lfs::core::record_session_start();
     lfs::core::initialize_cuda_diagnostics();
 
     auto result = lfs::core::args::parse_args(argc, argv);

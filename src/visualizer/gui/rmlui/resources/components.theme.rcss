@@ -79,6 +79,16 @@ input[type="checkbox"]:checked {
     decorator: image(@{asset.icon.check});
 }
 
+input[type="radio"] {
+    border-color: @{border};
+    background-color: @{surface};
+}
+
+input[type="radio"]:checked {
+    background-color: @{primary};
+    border-color: @{primary};
+}
+
 input[type="range"] slidertrack {
     background-color: @{border};
     border-width: 0;
@@ -101,6 +111,21 @@ input[type="text"]:focus {
 }
 
 input[type="text"]:focus-visible {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{primary};
+    box-shadow: none;
+}
+
+textarea {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{border};
+    padding: @{num(size.frame_padding_y)}dp @{num(size.frame_padding_x)}dp;
+}
+
+textarea:focus,
+textarea:focus-visible {
     color: @{text};
     background-color: @{surface};
     border-color: @{primary};

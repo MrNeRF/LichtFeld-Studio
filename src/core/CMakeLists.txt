@@ -74,6 +74,7 @@ set(CORE_SOURCES
         property_registry.cpp
         reactive_store.cpp
         scene.cpp
+        session_breadcrumb.cpp
         splat_simplify.cpp
         bhatt_lod.cpp
         octree_lod.cpp
@@ -84,6 +85,7 @@ set(CORE_SOURCES
         tensor_debug.cpp
         training_snapshot.cpp
         mesh_data.cpp
+        system_info.cpp
 )
 
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})

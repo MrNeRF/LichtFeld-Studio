@@ -176,6 +176,7 @@ set(TEST_FILES
     test_argument_parser.cpp
     test_crash_handler.cpp
     test_logger.cpp
+    test_system_info.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
     test_mcp_training_state.cpp
@@ -564,6 +565,17 @@ add_test(NAME lichtfeld.discovery
         "--gtest_filter=DiscoveryFuzz.*:DiscoverySweep.*"
         --gtest_color=no
 )
+
+add_test(NAME system_info
+    COMMAND $<TARGET_FILE:lichtfeld_tests>
+        "--gtest_filter=SystemInfoTest.*:SessionBreadcrumbTest.*:LoggerTailTest.*"
+        --gtest_color=no
+)
+set_tests_properties(system_info PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast"
+    TIMEOUT 30
+)
 set_tests_properties(lichtfeld.discovery PROPERTIES
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     LABELS "discovery;gpu"
@@ -573,6 +585,7 @@ set_tests_properties(lichtfeld.discovery PROPERTIES
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_event_keypad_mapping.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py
