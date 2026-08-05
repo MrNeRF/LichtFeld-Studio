@@ -86,8 +86,8 @@ namespace lfs::vis::gui {
         bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
         bool updateTheme();
         bool layoutFits(float reserve_px) const;
-        void fitToAvailableWidth(bool allow_expand);
-        void applyFitLevel(int level);
+        LFS_VIS_API void fitToAvailableWidth(bool allow_expand);
+        LFS_VIS_API void applyFitLevel(int level);
         void queueCachedVulkanContext(float x, float y, float w_px, float h_px,
                                       int screen_w, int screen_h,
                                       int render_w, int render_h,

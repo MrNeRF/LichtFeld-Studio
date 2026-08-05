@@ -195,6 +195,8 @@ add_library(lfs_io STATIC
         formats/colmap.cpp
         formats/transforms.hpp
         formats/transforms.cpp
+        formats/opf.hpp
+        formats/opf.cpp
         formats/sogs.hpp
         formats/sogs.cpp
         formats/html.hpp
