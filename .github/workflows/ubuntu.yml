@@ -79,7 +79,7 @@ jobs:
           # honouring CMAKE_REQUIRED_FLAGS and silently fails feature detection
           # (upstream: gitlab.kitware.com/cmake/cmake/-/work_items/28001).
           # Unpinned installs silently misconfigure ports rather than failing loudly.
-          apt-get install -y git curl unzip \
+          apt-get install -y git curl unzip jq \
             cmake=4.4.0-0kitware1ubuntu24.04.1 cmake-data=4.4.0-0kitware1ubuntu24.04.1 \
             gcc-14 g++-14 ccache ninja-build \
             zip tar pkg-config python3 python3-dev libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
@@ -210,28 +210,36 @@ jobs:
       # Every diagnostic is guarded with || true: this container image is
       # minimal and a missing tool must never mask the real build error.
       - name: Build application
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -o pipefail
           df -h / || true
-          if ! cmake --build build --target LichtFeld-Studio lfs_py -j "$(nproc)" 2>&1 | tee /tmp/build-app.log; then
-            echo "::error::Application build failed"
-            (grep -E "error:|Killed|No space left|virtual memory exhausted" /tmp/build-app.log || tail -n 20 /tmp/build-app.log) 2>/dev/null \
-              | head -n 10 | while IFS= read -r line; do echo "::error::${line}"; done || true
-            df -h / || true
+          set +e
+          cmake --build build --target LichtFeld-Studio lfs_py -j "$(nproc)" 2>&1 | tee /tmp/build-app.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Application build failed with exit $rc"
+            "${GITHUB_WORKSPACE}/.github/report-build-failure.sh" "Application build" /tmp/build-app.log || true
             exit 1
           fi
 
       - name: Build tests
         if: matrix.build_type == 'Release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -o pipefail
           # Fewer jobs than cores on purpose: LibTorch-including test units are
           # memory hungry and the runner has far less RAM than a dev machine.
-          if ! cmake --build build --target lichtfeld_tests -j 2 2>&1 | tee /tmp/build-tests.log; then
-            echo "::error::Test build failed"
-            (grep -E "error:|Killed|No space left|virtual memory exhausted" /tmp/build-tests.log || tail -n 20 /tmp/build-tests.log) 2>/dev/null \
-              | head -n 10 | while IFS= read -r line; do echo "::error::${line}"; done || true
-            df -h / || true
+          set +e
+          cmake --build build --target lichtfeld_tests -j 2 2>&1 | tee /tmp/build-tests.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Test build failed with exit $rc"
+            "${GITHUB_WORKSPACE}/.github/report-build-failure.sh" "Test build" /tmp/build-tests.log || true
             exit 1
           fi
 
