@@ -11,6 +11,7 @@ from . import (
     animation as animation,
     app as app,
     build_info as build_info,
+    diagnostics as diagnostics,
     io as io,
     keymap as keymap,
     log as log,

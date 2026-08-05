@@ -8,7 +8,9 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #if defined(__CUDACC__)
@@ -22,6 +24,14 @@
 #include <vector>
 
 namespace lfs::core {
+
+    [[nodiscard]] LFS_LOGGER_API std::string truncate_log_tail(std::string_view text,
+                                                               std::size_t max_bytes);
+
+    // Resolve the current user's home directory without depending on lfs_core.
+    // This lives in the leaf lfs_logger library so startup code can use the same
+    // location as the durable logger before Logger::init().
+    [[nodiscard]] LFS_LOGGER_API std::filesystem::path lichtfeld_home_directory();
 
     enum class LogLevel : uint8_t {
         Trace = 0,

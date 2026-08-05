@@ -26,6 +26,26 @@ DEFAULT_ACCOUNT_STATE: dict[str, object] = {
     "tooltip": "",
 }
 
+DEFAULT_BUG_REPORT_STATE: dict[str, object] = {
+    "submitting": False,
+    "success": False,
+    "error": "",
+    "retry_after": None,
+    "detail": {},
+    "url": "",
+    "status": "",
+    "completeness_problems": [],
+}
+
+
+def new_bug_report_state() -> dict[str, object]:
+    """Return a fresh bug-report state, including fresh nested containers."""
+    return {
+        **DEFAULT_BUG_REPORT_STATE,
+        "detail": {},
+        "completeness_problems": [],
+    }
+
 
 def _native_store():
     try:
@@ -244,6 +264,7 @@ class RuntimeState:
         "account_state",
         DEFAULT_ACCOUNT_STATE.copy(),
     )
+    bug_report_state = Signal(new_bug_report_state(), "bug_report_state")
     video_export_overlay_state = StateSignal[dict[str, object]](
         "video_export_overlay_state",
         {},
@@ -314,6 +335,7 @@ class RuntimeState:
         cls.pivot_mode.value = 0
         cls.import_overlay_state.value = {}
         cls.account_state.value = DEFAULT_ACCOUNT_STATE.copy()
+        cls.bug_report_state.value = new_bug_report_state()
         cls.video_export_overlay_state.value = {}
         cls.export_progress_state.value = {}
         cls.mesh2splat_state.value = {}

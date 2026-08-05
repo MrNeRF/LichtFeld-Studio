@@ -78,6 +78,11 @@
 #ifdef _WIN32
 #include <shellapi.h>
 #include <windows.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+
+extern char** environ;
 #endif
 
 namespace lfs::python {
@@ -3407,8 +3412,19 @@ namespace lfs::python {
 #ifdef _WIN32
                 ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
-                const std::string cmd = "xdg-open \"" + url + "\" &";
-                std::system(cmd.c_str());
+                std::thread([url] {
+                    pid_t child = -1;
+                    std::array<char*, 3> arguments{
+                        const_cast<char*>("xdg-open"),
+                        const_cast<char*>(url.c_str()),
+                        nullptr,
+                    };
+                    if (posix_spawnp(&child, "xdg-open", nullptr, nullptr,
+                                     arguments.data(), environ) == 0) {
+                        int status = 0;
+                        static_cast<void>(waitpid(child, &status, 0));
+                    }
+                }).detach();
 #endif
             },
             nb::arg("url"), "Open a URL in the default browser.");

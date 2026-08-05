@@ -16,6 +16,7 @@
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/scene.hpp"
+#include "core/session_breadcrumb.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
@@ -363,6 +364,7 @@ namespace lfs::app {
 
                 LOG_INFO("Headless training completed");
                 core::teardown_gpu_before_exit();
+                core::mark_clean_exit();
                 core::flush_and_exit(0);
             }
 
@@ -501,6 +503,7 @@ namespace lfs::app {
             }
 
             LOG_INFO("Wrote {} frame(s) to {}", total_frames, core::path_to_utf8(cfg.output_path));
+            core::mark_clean_exit();
             return 0;
         }
 
@@ -687,6 +690,7 @@ namespace lfs::app {
 
             core::teardown_gpu_before_exit();
 
+            core::mark_clean_exit();
             core::flush_and_exit(0);
         }
 

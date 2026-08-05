@@ -8,14 +8,17 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
+#include <cstdint>
 #include <deque>
 #include <optional>
+#include <stdexcept>
 #include <tuple>
 
 #include "notification_bridge.hpp"
 #include "py_animation.hpp"
 #include "py_cameras.hpp"
 #include "py_command.hpp"
+#include "py_diagnostics.hpp"
 #include "py_error.hpp"
 #include "py_gizmo.hpp"
 #include "py_io.hpp"
@@ -54,6 +57,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/session_breadcrumb.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "internal/resource_paths.hpp"
@@ -1803,6 +1807,9 @@ NB_MODULE(lichtfeld, m) {
     auto io_module = m.def_submodule("io", "File I/O operations");
     lfs::python::register_io(io_module);
 
+    auto diagnostics_module = m.def_submodule("diagnostics", "System diagnostics API");
+    lfs::python::register_diagnostics(diagnostics_module);
+
     // Packages submodule (uses uv for package management)
     lfs::python::register_packages(m);
 
@@ -1893,6 +1900,34 @@ NB_MODULE(lichtfeld, m) {
         [](const std::string& msg) { LOG_ERROR("[Python] {}", msg); },
         nb::arg("message"),
         "Log an error message");
+    log_module.def(
+        "buffered_text",
+        [](const std::int64_t max_bytes) {
+            if (max_bytes < 0)
+                throw std::invalid_argument("max_bytes must be non-negative");
+            std::string text = lfs::core::Logger::get().buffered_logs_as_text();
+            return lfs::core::truncate_log_tail(text, static_cast<std::size_t>(max_bytes));
+        },
+        nb::arg("max_bytes") = 1048576,
+        "Return the tail of the buffered session log at a line boundary.");
+    log_module.def(
+        "log_file_path",
+        [] { return lfs::core::Logger::default_log_file_path(); },
+        "Return the durable session log path.");
+    log_module.def(
+        "previous_session",
+        []() -> std::optional<nb::dict> {
+            const auto previous = lfs::core::previous_session();
+            if (!previous)
+                return std::nullopt;
+            nb::dict result;
+            result["pid"] = previous->pid;
+            result["started_at"] = previous->started_at;
+            result["log_path"] = previous->log_path;
+            result["clean_exit"] = previous->clean_exit;
+            return result;
+        },
+        "Return the previous process session breadcrumb, if available.");
 
     auto app_module = m.def_submodule("app", "Application-level operations");
     app_module.def(

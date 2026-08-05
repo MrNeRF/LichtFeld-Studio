@@ -5,6 +5,7 @@
 import lichtfeld as lf
 from .types import Operator
 from .layouts.menus import register_menu, menu_operator, menu_separator
+from .bug_report_panel import request_bug_report_open
 
 __lfs_menu_classes__ = ["HelpMenu"]
 
@@ -55,6 +56,16 @@ class AccountOperator(Operator):
         return {"FINISHED"}
 
 
+class BugReportOperator(Operator):
+    label = "bugreport.menu"
+    description = "Open the in-app bug report form"
+
+    def execute(self, context) -> set:
+        request_bug_report_open()
+        lf.ui.set_panel_enabled("lfs.bug_report", True)
+        return {"FINISHED"}
+
+
 @register_menu
 class HelpMenu:
     """Help menu for the menu bar."""
@@ -70,6 +81,7 @@ class HelpMenu:
             items.append(menu_operator(SetDefaultAppOperator))
         items.append(menu_separator())
         items.append(menu_operator(AccountOperator))
+        items.append(menu_operator(BugReportOperator))
         items.append(menu_operator(AboutOperator))
         return items
 
@@ -79,6 +91,7 @@ _operator_classes = [
     SetDefaultAppOperator,
     UnsetDefaultAppOperator,
     AccountOperator,
+    BugReportOperator,
     AboutOperator,
 ]
 
