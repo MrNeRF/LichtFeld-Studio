@@ -152,6 +152,11 @@ namespace lfs::io {
                 return true;
             }
 
+            if (ext == ".opf") {
+                LOG_TRACE("OPF project detected as dataset: {}", lfs::core::path_to_utf8(path));
+                return true;
+            }
+
             // SOG files are NOT datasets - they're single splat files like PLY
             if (ext == ".sog") {
                 LOG_TRACE("SOG file detected, not a dataset: {}", lfs::core::path_to_utf8(path));
@@ -236,6 +241,9 @@ namespace lfs::io {
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             if (ext == ".json") {
                 return DatasetType::Transforms;
+            }
+            if (ext == ".opf") {
+                return DatasetType::OPF;
             }
             // SOG files are not datasets
             if (ext == ".sog") {

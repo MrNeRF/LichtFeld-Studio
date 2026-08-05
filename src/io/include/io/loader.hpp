@@ -46,7 +46,8 @@ namespace lfs::io {
     enum class DatasetType {
         Unknown,
         COLMAP,
-        Transforms
+        Transforms,
+        OPF
     };
 
     // Centralize dataset enum

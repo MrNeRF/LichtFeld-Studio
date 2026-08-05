@@ -73,6 +73,7 @@ namespace lfs::vis::gui {
         switch (lfs::io::Loader::getDatasetType(path)) {
         case lfs::io::DatasetType::COLMAP: return "COLMAP";
         case lfs::io::DatasetType::Transforms: return "NeRF/Blender";
+        case lfs::io::DatasetType::OPF: return "OPF";
         default: return "Dataset";
         }
     }

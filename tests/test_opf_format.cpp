@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/formats/opf.hpp"
+#include "io/loader.hpp"
 
 #include <fstream>
 #include <gtest/gtest.h>
@@ -191,4 +192,10 @@ TEST_F(OpfFormatTest, RejectsCaptureWithMissingSensor) {
     auto result = lfs::io::opf::read_input_captures(resource);
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+}
+
+TEST_F(OpfFormatTest, DetectsOpfProjectAsDataset) {
+    write(root / "project.opf", "{}");
+    EXPECT_TRUE(lfs::io::Loader::isDatasetPath(root / "project.opf"));
+    EXPECT_EQ(lfs::io::Loader::getDatasetType(root / "project.opf"), lfs::io::DatasetType::OPF);
 }
