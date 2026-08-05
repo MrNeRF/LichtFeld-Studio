@@ -202,6 +202,28 @@ namespace lfs::core::prop {
             return enum_prop_impl(member, id, name, default_val, std::move(enum_items), desc);
         }
 
+        template <typename EnumT>
+        PropertyGroupBuilder& enum_prop(
+            EnumT StructT::*member,
+            const std::string& id,
+            const std::string& name,
+            EnumT default_val,
+            std::initializer_list<std::tuple<std::string, EnumT, std::string, std::string>> items,
+            const std::string& desc = "") {
+            std::vector<EnumItem> enum_items;
+            enum_items.reserve(items.size());
+            for (const auto& [item_name, item_val, locale_key, wire_value] : items) {
+                enum_items.push_back(EnumItem{
+                    .name = item_name,
+                    .identifier = item_name,
+                    .value = static_cast<int>(item_val),
+                    .locale_key = locale_key,
+                    .wire_value = wire_value,
+                });
+            }
+            return enum_prop_impl(member, id, name, default_val, std::move(enum_items), desc);
+        }
+
         // AnimatableProperty<T> with undo/animation support
         template <typename T>
         PropertyGroupBuilder& animatable_prop(AnimatableProperty<T> StructT::*member,
@@ -380,6 +402,20 @@ namespace lfs::core::prop {
         PropertyGroupBuilder& ui_step(double value) {
             if (!group_.properties.empty()) {
                 group_.properties.back().step = value;
+            }
+            return *this;
+        }
+
+        PropertyGroupBuilder& json_key(const std::string& key) {
+            if (!group_.properties.empty()) {
+                group_.properties.back().json_key = key;
+            }
+            return *this;
+        }
+
+        PropertyGroupBuilder& json_required() {
+            if (!group_.properties.empty()) {
+                group_.properties.back().json_required = true;
             }
             return *this;
         }

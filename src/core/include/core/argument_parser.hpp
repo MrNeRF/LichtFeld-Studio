@@ -9,9 +9,33 @@
 #include "core/parameters.hpp"
 #include <expected>
 #include <memory>
+#include <span>
+#include <string>
+#include <string_view>
 #include <variant>
 
 namespace lfs::core::args {
+
+    enum class OptimizationCliParseType {
+        Bool,
+        Integer,
+        Float,
+        String,
+        Enum,
+    };
+
+    struct OptimizationCliBinding {
+        std::string_view flag;
+        std::string_view property_id;
+        OptimizationCliParseType parse_type;
+        bool inverted = false;
+        std::string_view help_suffix;
+        std::string_view registry_default_alias;
+        std::string_view cli_default_alias;
+    };
+
+    LFS_CORE_API std::span<const OptimizationCliBinding> optimization_cli_bindings();
+    LFS_CORE_API std::string optimization_cli_help(std::string_view flag);
 
     // Parsed argument modes
     struct TrainingMode {

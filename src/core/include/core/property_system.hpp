@@ -80,6 +80,7 @@ namespace lfs::core::prop {
         std::string identifier;
         int value;
         std::string locale_key;
+        std::string wire_value;
     };
 
     using PropDefault = std::variant<bool, int64_t, double, std::string,
@@ -99,6 +100,8 @@ namespace lfs::core::prop {
         std::string ui_locale_key;
         std::string ui_tooltip_key;
         std::optional<int> ui_precision;
+        std::string json_key;
+        bool json_required = false;
 
         std::optional<int> vector_size;
         std::optional<double> min_value;

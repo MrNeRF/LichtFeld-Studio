@@ -11,6 +11,11 @@ output*
 results
 .idea
 data
+!tests/data/
+tests/data/*
+!tests/data/param_json_golden/
+tests/data/param_json_golden/*
+!tests/data/param_json_golden/*.json
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py

@@ -5,11 +5,15 @@
 #include <gtest/gtest.h>
 
 #include "core/argument_parser.hpp"
+#include "core/optimization_properties.hpp"
+#include "core/property_registry.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -23,6 +27,58 @@ namespace {
     }
 
 } // namespace
+
+TEST(ArgumentParserMetadataTest, OptimizationFlagBindingsResolveWithCompatibleTypes) {
+    using lfs::core::args::OptimizationCliParseType;
+    using lfs::core::prop::PropType;
+
+    lfs::core::param::ensure_optimization_properties_registered();
+    std::set<std::string_view> flags;
+    for (const auto& binding : lfs::core::args::optimization_cli_bindings()) {
+        SCOPED_TRACE(binding.flag);
+        EXPECT_TRUE(flags.insert(binding.flag).second);
+
+        const auto meta = lfs::core::prop::PropertyRegistry::instance().get_property(
+            "optimization", std::string(binding.property_id));
+        ASSERT_TRUE(meta.has_value());
+
+        switch (binding.parse_type) {
+        case OptimizationCliParseType::Bool:
+            EXPECT_EQ(meta->type, PropType::Bool);
+            break;
+        case OptimizationCliParseType::Integer:
+            EXPECT_TRUE(meta->type == PropType::Int || meta->type == PropType::SizeT);
+            break;
+        case OptimizationCliParseType::Float:
+            EXPECT_EQ(meta->type, PropType::Float);
+            break;
+        case OptimizationCliParseType::String:
+            EXPECT_EQ(meta->type, PropType::String);
+            break;
+        case OptimizationCliParseType::Enum:
+            EXPECT_EQ(meta->type, PropType::Enum);
+            break;
+        }
+    }
+}
+
+TEST(ArgumentParserMetadataTest, BuiltHelpContainsRegistryDescriptionsAndDefaults) {
+    lfs::core::param::ensure_optimization_properties_registered();
+    for (const std::string_view flag : {"--iter", "--strategy", "--depth-loss-weight"}) {
+        SCOPED_TRACE(flag);
+        const auto binding = std::ranges::find(
+            lfs::core::args::optimization_cli_bindings(), flag,
+            &lfs::core::args::OptimizationCliBinding::flag);
+        ASSERT_NE(binding, lfs::core::args::optimization_cli_bindings().end());
+        const auto meta = lfs::core::prop::PropertyRegistry::instance().get_property(
+            "optimization", std::string(binding->property_id));
+        ASSERT_TRUE(meta.has_value());
+
+        const auto help = lfs::core::args::optimization_cli_help(flag);
+        EXPECT_NE(help.find(meta->description), std::string::npos);
+        EXPECT_NE(help.find("(default: "), std::string::npos);
+    }
+}
 
 TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     const auto data_path = make_test_path("lfs_arg_parser_default_data");

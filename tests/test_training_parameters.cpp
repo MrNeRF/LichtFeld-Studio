@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/property_registry.hpp"
 #include "python/lfs/py_params.hpp"
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -60,6 +62,13 @@ namespace {
         return hash;
     }
 
+    std::string read_file_bytes(const std::filesystem::path& path) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input)
+            throw std::runtime_error("Cannot read fixture: " + path.string());
+        return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    }
+
     void expect_same_value(const PropertyMeta& meta, const std::any& actual, const std::any& expected) {
         switch (meta.type) {
         case PropType::Float:
@@ -89,7 +98,7 @@ namespace {
     class TrainingParametersTest : public ::testing::Test {
     protected:
         void SetUp() override {
-            lfs::python::register_optimization_properties();
+            lfs::core::param::register_optimization_properties();
         }
 
         void TearDown() override {
@@ -136,8 +145,8 @@ namespace {
     }
 
     TEST_F(TrainingParametersTest, ResolvesEveryRegisteredPropertyFromStrategySource) {
-        const auto* group = PropertyRegistry::instance().get_group("optimization");
-        ASSERT_NE(group, nullptr);
+        const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");
+        ASSERT_TRUE(group.has_value());
         ASSERT_FALSE(group->properties.empty());
 
         std::array<std::pair<std::string_view, OptimizationParameters>, 3> direct_factories = {{
@@ -175,20 +184,17 @@ namespace {
         serialization_probe.bg_image_path = "coverage-background.png";
         const auto serialized = serialization_probe.to_json();
 
-        const auto* group = PropertyRegistry::instance().get_group("optimization");
-        ASSERT_NE(group, nullptr);
+        const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");
+        ASSERT_TRUE(group.has_value());
 
         std::set<std::string> registered_ids;
-        for (const auto& meta : group->properties)
+        std::map<std::string, std::string> json_to_property;
+        for (const auto& meta : group->properties) {
             ASSERT_TRUE(registered_ids.insert(meta.id).second) << "duplicate property id: " << meta.id;
-
-        const std::map<std::string, std::string> json_to_property = {
-            {"bilateral_grid_W", "bilateral_grid_w"},
-            {"bilateral_grid_X", "bilateral_grid_x"},
-            {"bilateral_grid_Y", "bilateral_grid_y"},
-            {"ppisp_freeze_gaussians_on_distill", "ppisp_freeze_gaussians"},
-            {"use_ppisp", "ppisp"},
-        };
+            const auto& json_key = meta.json_key.empty() ? meta.id : meta.json_key;
+            ASSERT_TRUE(json_to_property.emplace(json_key, meta.id).second)
+                << "duplicate optimization JSON key: " << json_key;
+        }
 
         const std::map<std::string, std::string> allowlist = {
             {"bg_color", "background color uses its dedicated Python binding"},
@@ -202,14 +208,6 @@ namespace {
             {"save_steps", "vector-valued save schedule is managed separately"},
         };
 
-        std::map<std::string, std::string> property_to_json;
-        for (const auto& [json_key, property_id] : json_to_property) {
-            SCOPED_TRACE(json_key);
-            EXPECT_TRUE(serialized.contains(json_key));
-            EXPECT_TRUE(registered_ids.contains(property_id));
-            EXPECT_TRUE(property_to_json.emplace(property_id, json_key).second);
-        }
-
         for (const auto& [json_key, reason] : allowlist) {
             SCOPED_TRACE(json_key);
             EXPECT_TRUE(serialized.contains(json_key));
@@ -220,17 +218,94 @@ namespace {
 
         for (auto it = serialized.begin(); it != serialized.end(); ++it) {
             const std::string& json_key = it.key();
-            const auto renamed = json_to_property.find(json_key);
-            const std::string& property_id = renamed == json_to_property.end() ? json_key : renamed->second;
-            EXPECT_TRUE(registered_ids.contains(property_id) || allowlist.contains(json_key))
-                << "serialized key has no registered property or allow-list reason: " << json_key;
+            EXPECT_TRUE(json_to_property.contains(json_key) || allowlist.contains(json_key))
+                << "serialized key has no declaration-carried property mapping or allow-list reason: " << json_key;
         }
 
-        for (const auto& property_id : registered_ids) {
-            const auto renamed = property_to_json.find(property_id);
-            const std::string& json_key = renamed == property_to_json.end() ? property_id : renamed->second;
+        for (const auto& [json_key, property_id] : json_to_property) {
             EXPECT_TRUE(serialized.contains(json_key))
                 << "registered property has no serialized key: " << property_id;
+        }
+    }
+
+    TEST_F(TrainingParametersTest, DeclarationPinsRequiredJsonKeys) {
+        const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");
+        ASSERT_TRUE(group.has_value());
+
+        std::set<std::string> required;
+        for (const auto& meta : group->properties) {
+            if (meta.json_required)
+                required.insert(meta.json_key.empty() ? meta.id : meta.json_key);
+        }
+
+        EXPECT_EQ(required, (std::set<std::string>{
+                                "iterations",
+                                "means_lr",
+                                "shs_lr",
+                                "opacity_lr",
+                                "scaling_lr",
+                                "rotation_lr",
+                                "lambda_dssim",
+                                "min_opacity",
+                                "refine_every",
+                                "start_refine",
+                                "stop_refine",
+                                "grad_threshold",
+                                "sh_degree"}));
+    }
+
+    TEST_F(TrainingParametersTest, CoreSerializationEnsuresOptimizationRegistration) {
+        PropertyRegistry::instance().unregister_group("optimization");
+        ASSERT_FALSE(PropertyRegistry::instance().get_group_snapshot("optimization"));
+
+        const auto json = OptimizationParameters::mrnf_defaults().to_json();
+
+        EXPECT_TRUE(json.contains("iterations"));
+        EXPECT_TRUE(PropertyRegistry::instance().get_group_snapshot("optimization"));
+    }
+
+    TEST_F(TrainingParametersTest, MissingRequiredJsonKeyStillThrows) {
+        auto json = OptimizationParameters::mrnf_defaults().to_json();
+        json.erase("iterations");
+        EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::out_of_range);
+    }
+
+    TEST_F(TrainingParametersTest, OldNewToJsonParity) {
+        const std::array<std::pair<std::string_view, OptimizationParameters>, 3> factories = {{
+            {"mcmc", OptimizationParameters::mcmc_defaults()},
+            {"mrnf", OptimizationParameters::mrnf_defaults()},
+            {"igs_plus", OptimizationParameters::igs_plus_defaults()},
+        }};
+
+        for (const auto& [name, params] : factories) {
+            SCOPED_TRACE(name);
+            const auto fixture_path = std::filesystem::path(PROJECT_ROOT_PATH) /
+                                      "tests" / "data" / "param_json_golden" /
+                                      (std::string(name) + ".json");
+            const auto fixture_bytes = read_file_bytes(fixture_path);
+            const auto expected = nlohmann::json::parse(fixture_bytes);
+            const auto actual = params.to_json();
+
+            EXPECT_EQ(actual, expected);
+            EXPECT_EQ(actual.dump(2), expected.dump(2));
+            EXPECT_EQ(actual.dump(2) + '\n', fixture_bytes);
+
+            auto mutated = params;
+            auto mutated_expected = expected;
+            if (name == "mcmc") {
+                mutated.opacity_lr = 0.03125f;
+                mutated_expected["opacity_lr"] = mutated.opacity_lr;
+            } else if (name == "mrnf") {
+                mutated.max_cap = 123'456'789;
+                mutated_expected["max_cap"] = mutated.max_cap;
+            } else {
+                mutated.init_extent = 4.25f;
+                mutated_expected["init_extent"] = mutated.init_extent;
+            }
+
+            const auto mutated_actual = mutated.to_json();
+            EXPECT_EQ(mutated_actual, mutated_expected);
+            EXPECT_EQ(mutated_actual.dump(2), mutated_expected.dump(2));
         }
     }
 
@@ -276,8 +351,8 @@ namespace {
         factories[1].second.max_cap = 123'456'789;
         factories[2].second.init_extent = 4.25f;
 
-        const auto* group = PropertyRegistry::instance().get_group("optimization");
-        ASSERT_NE(group, nullptr);
+        const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");
+        ASSERT_TRUE(group.has_value());
 
         for (auto& [strategy, expected] : factories) {
             SCOPED_TRACE(strategy);
