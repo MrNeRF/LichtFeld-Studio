@@ -34,6 +34,7 @@ namespace lfs::io::opf {
         std::string version;
         std::string id;
         std::string name;
+        std::string description;
         std::vector<Item> items;
         std::vector<std::string> warnings;
     };

@@ -3,9 +3,11 @@
 
 #include "opf.hpp"
 
-#include <fstream>
+#include <algorithm>
 #include <format>
+#include <fstream>
 #include <nlohmann/json.hpp>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace lfs::io::opf {
@@ -13,7 +15,7 @@ namespace lfs::io::opf {
         using json = nlohmann::json;
 
         [[nodiscard]] std::unexpected<Error> invalid(const std::filesystem::path& path,
-                                                       const std::string& message) {
+                                                     const std::string& message) {
             return make_error(ErrorCode::INVALID_DATASET, message, path);
         }
 
@@ -32,9 +34,9 @@ namespace lfs::io::opf {
         }
 
         [[nodiscard]] Result<std::string> required_string(const json& object,
-                                                           const char* key,
-                                                           const std::filesystem::path& path,
-                                                           const std::string& context) {
+                                                          const char* key,
+                                                          const std::filesystem::path& path,
+                                                          const std::string& context) {
             const auto it = object.find(key);
             if (it == object.end() || !it->is_string() || it->get<std::string>().empty())
                 return invalid(path, std::format("OPF {} requires non-empty string '{}'.", context, key));
@@ -101,13 +103,18 @@ namespace lfs::io::opf {
             return make_error(ErrorCode::UNSUPPORTED_FORMAT,
                               std::format("Unsupported OPF project format '{}'.", project.format), path);
 
-        for (const char* key : {"version", "id", "name"}) {
+        for (const char* key : {"version", "id", "name", "description"}) {
             auto value = required_string(root, key, path, "project");
             if (!value)
                 return std::unexpected(value.error());
-            if (std::string_view(key) == "version") project.version = *value;
-            if (std::string_view(key) == "id") project.id = *value;
-            if (std::string_view(key) == "name") project.name = *value;
+            if (std::string_view(key) == "version")
+                project.version = *value;
+            if (std::string_view(key) == "id")
+                project.id = *value;
+            if (std::string_view(key) == "name")
+                project.name = *value;
+            if (std::string_view(key) == "description")
+                project.description = *value;
         }
         if (!root.contains("items") || !root["items"].is_array() || root["items"].empty())
             return invalid(path, "OPF project requires a non-empty 'items' array.");
@@ -115,6 +122,7 @@ namespace lfs::io::opf {
 
         const auto root_dir = path.parent_path().lexically_normal();
         std::unordered_set<std::string> item_ids;
+        std::unordered_map<std::string, std::string> item_types;
         for (size_t index = 0; index < root["items"].size(); ++index) {
             const auto& value = root["items"][index];
             const auto context = std::format("item {}", index);
@@ -124,12 +132,15 @@ namespace lfs::io::opf {
             Item item;
             auto id = required_string(value, "id", path, context);
             auto type = required_string(value, "type", path, context);
-            if (!id) return std::unexpected(id.error());
-            if (!type) return std::unexpected(type.error());
+            if (!id)
+                return std::unexpected(id.error());
+            if (!type)
+                return std::unexpected(type.error());
             item.id = *id;
             item.type = *type;
             if (!item_ids.insert(item.id).second)
                 return invalid(path, std::format("OPF item id '{}' is duplicated.", item.id));
+            item_types.emplace(item.id, item.type);
 
             if (!value.contains("sources") || !value["sources"].is_array())
                 return invalid(path, std::format("OPF {} requires an array 'sources'.", context));
@@ -138,8 +149,10 @@ namespace lfs::io::opf {
                     return invalid(path, std::format("OPF {} contains a non-object source.", context));
                 auto source_id = required_string(source_value, "id", path, "source");
                 auto source_type = required_string(source_value, "type", path, "source");
-                if (!source_id) return std::unexpected(source_id.error());
-                if (!source_type) return std::unexpected(source_type.error());
+                if (!source_id)
+                    return std::unexpected(source_id.error());
+                if (!source_type)
+                    return std::unexpected(source_type.error());
                 item.sources.push_back({*source_id, *source_type});
             }
 
@@ -150,14 +163,51 @@ namespace lfs::io::opf {
                     return invalid(path, std::format("OPF {} contains a non-object resource.", context));
                 auto uri = required_string(resource_value, "uri", path, "resource");
                 auto resource_format = required_string(resource_value, "format", path, "resource");
-                if (!uri) return std::unexpected(uri.error());
-                if (!resource_format) return std::unexpected(resource_format.error());
+                if (!uri)
+                    return std::unexpected(uri.error());
+                if (!resource_format)
+                    return std::unexpected(resource_format.error());
                 auto resolved = resolve_resource(root_dir, *uri, path);
-                if (!resolved) return std::unexpected(resolved.error());
+                if (!resolved)
+                    return std::unexpected(resolved.error());
                 item.resources.push_back({*uri, *resource_format, *resolved});
             }
             collect_extension_warning(value, context.c_str(), project);
             project.items.push_back(std::move(item));
+        }
+
+        for (const auto& item : project.items) {
+            for (const auto& source : item.sources) {
+                const auto source_it = item_types.find(source.id);
+                if (source_it == item_types.end())
+                    return invalid(path, std::format("OPF item '{}' references missing source '{}'.", item.id, source.id));
+                if (source.type != source_it->second)
+                    return invalid(path, std::format("OPF item '{}' source '{}' has type '{}', expected '{}'.",
+                                                     item.id, source.id, source.type, source_it->second));
+            }
+        }
+
+        std::unordered_map<std::string, int> visit_state;
+        const auto visit = [&](const auto& self, const std::string& id) -> bool {
+            auto& state = visit_state[id];
+            if (state == 1)
+                return false;
+            if (state == 2)
+                return true;
+            state = 1;
+            const auto& item = project.items[std::distance(
+                project.items.begin(), std::find_if(project.items.begin(), project.items.end(),
+                                                    [&](const Item& candidate) { return candidate.id == id; }))];
+            for (const auto& source : item.sources) {
+                if (!self(self, source.id))
+                    return false;
+            }
+            state = 2;
+            return true;
+        };
+        for (const auto& item : project.items) {
+            if (!visit(visit, item.id))
+                return invalid(path, "OPF project contains a circular source dependency.");
         }
         return project;
     }

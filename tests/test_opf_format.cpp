@@ -26,7 +26,7 @@ TEST_F(OpfFormatTest, ParsesProjectGraphAndResolvesResources) {
     write(root / "resource.json", "{}");
     write(root / "project.opf", R"({
         "format":"application/opf-project+json", "version":"1.0",
-        "id":"project", "name":"fixture", "extensions":{"vendor":{}},
+        "id":"project", "name":"fixture", "description":"test", "extensions":{"vendor":{}},
         "items":[{"id":"camera", "type":"camera_list", "sources":[],
                    "resources":[{"uri":"./resource.json", "format":"application/json"}]}]
     })");
@@ -48,7 +48,7 @@ TEST_F(OpfFormatTest, RejectsMalformedJson) {
 TEST_F(OpfFormatTest, RejectsMissingResource) {
     write(root / "project.opf", R"({
         "format":"application/opf-project+json", "version":"1.0",
-        "id":"project", "name":"fixture", "items":[{"id":"camera",
+        "id":"project", "name":"fixture", "description":"test", "items":[{"id":"camera",
         "type":"camera_list", "sources":[], "resources":[{"uri":"missing.json",
         "format":"application/json"}]}]
     })");
@@ -60,11 +60,34 @@ TEST_F(OpfFormatTest, RejectsMissingResource) {
 TEST_F(OpfFormatTest, RejectsResourceEscapingProjectRoot) {
     write(root / "project.opf", R"({
         "format":"application/opf-project+json", "version":"1.0",
-        "id":"project", "name":"fixture", "items":[{"id":"camera",
+        "id":"project", "name":"fixture", "description":"test", "items":[{"id":"camera",
         "type":"camera_list", "sources":[], "resources":[{"uri":"../outside.json",
         "format":"application/json"}]}]
     })");
     auto result = lfs::io::opf::read_project(root / "project.opf");
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+}
+
+TEST_F(OpfFormatTest, RejectsMissingSourceAndCycles) {
+    write(root / "project.opf", R"({
+        "format":"application/opf-project+json", "version":"1.0",
+        "id":"project", "name":"fixture", "description":"test",
+        "items":[{"id":"a", "type":"camera_list", "sources":[{"id":"missing", "type":"camera_list"}], "resources":[]}]
+    })");
+    auto missing = lfs::io::opf::read_project(root / "project.opf");
+    ASSERT_FALSE(missing.has_value());
+    EXPECT_EQ(missing.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+
+    write(root / "project.opf", R"({
+        "format":"application/opf-project+json", "version":"1.0",
+        "id":"project", "name":"fixture", "description":"test",
+        "items":[
+            {"id":"a", "type":"camera_list", "sources":[{"id":"b", "type":"camera_list"}], "resources":[]},
+            {"id":"b", "type":"camera_list", "sources":[{"id":"a", "type":"camera_list"}], "resources":[]}
+        ]
+    })");
+    auto cycle = lfs::io::opf::read_project(root / "project.opf");
+    ASSERT_FALSE(cycle.has_value());
+    EXPECT_EQ(cycle.error().code, lfs::io::ErrorCode::INVALID_DATASET);
 }
