@@ -6,6 +6,8 @@
 
 #include "core/logger.hpp"
 
+#include <stdexcept>
+
 namespace lfs::core::prop {
 
     PropertyRegistry& PropertyRegistry::instance() {
@@ -14,6 +16,13 @@ namespace lfs::core::prop {
     }
 
     void PropertyRegistry::register_group(PropertyGroup group) {
+        if (group.id == "optimization") {
+            for (const auto& property : group.properties) {
+                if (!property.strategy_applicability_explicit) {
+                    throw std::logic_error("optimization property missing strategy applicability: " + property.id);
+                }
+            }
+        }
         std::lock_guard lock(mutex_);
         groups_[group.id] = std::move(group);
     }

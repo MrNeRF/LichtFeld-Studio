@@ -254,7 +254,7 @@ namespace lfs::core {
             if (start_refine > stop_refine)
                 return std::format("start_refine must not exceed stop_refine ({} > {})", start_refine, stop_refine);
             if (start_refine > MAX_ITERATION_VALUE || stop_refine > MAX_ITERATION_VALUE ||
-                grow_until_iter > MAX_ITERATION_VALUE || pause_refine_after_reset > MAX_ITERATION_VALUE)
+                grow_until_iter > MAX_ITERATION_VALUE)
                 return "refinement iteration fields must fit in a signed int";
             if (max_cap < 0)
                 return std::format("max_cap must be nonnegative (got {})", max_cap);
@@ -291,7 +291,6 @@ namespace lfs::core {
                 std::pair{"scaling_lr", scaling_lr},
                 std::pair{"scaling_lr_end", scaling_lr_end},
                 std::pair{"rotation_lr", rotation_lr},
-                std::pair{"grad_threshold", grad_threshold},
                 std::pair{"opacity_reg", opacity_reg},
                 std::pair{"scale_reg", scale_reg},
                 std::pair{"mask_opacity_penalty_weight", mask_opacity_penalty_weight},
@@ -301,10 +300,6 @@ namespace lfs::core {
                 std::pair{"ppisp_lr", ppisp_lr},
                 std::pair{"ppisp_reg_weight", ppisp_reg_weight},
                 std::pair{"ppisp_controller_lr", ppisp_controller_lr},
-                std::pair{"grow_scale3d", grow_scale3d},
-                std::pair{"grow_scale2d", grow_scale2d},
-                std::pair{"prune_scale3d", prune_scale3d},
-                std::pair{"prune_scale2d", prune_scale2d},
                 std::pair{"growth_grad_threshold", growth_grad_threshold},
                 std::pair{"means_noise_weight", means_noise_weight},
                 std::pair{"init_rho", init_rho},
@@ -350,10 +345,10 @@ namespace lfs::core {
                 return "PPISP sidecar freeze requires PPISP enabled";
             if (depth_loss_mode != "ssi" && depth_loss_mode != "ssi-disparity" && depth_loss_mode != "ssi-depth")
                 return "depth_loss_mode must be 'ssi', 'ssi-disparity', or 'ssi-depth'";
-            if (normal_loss_space != "auto" &&
-                normal_loss_space != "camera-opencv" &&
-                normal_loss_space != "camera-opengl" &&
-                normal_loss_space != "world")
+            if (normal_loss_space != NormalLossSpace::Auto &&
+                normal_loss_space != NormalLossSpace::CameraOpenCV &&
+                normal_loss_space != NormalLossSpace::CameraOpenGL &&
+                normal_loss_space != NormalLossSpace::World)
                 return "normal_loss_space must be 'auto', 'camera-opencv', 'camera-opengl', or 'world'";
             return {};
         }
@@ -458,7 +453,6 @@ namespace lfs::core {
             p.stop_refine = 28'500;
             p.max_cap = 5'000'000;
             p.min_opacity = 1.0f / 255.0f;
-            p.grad_threshold = 0.003f;
             p.means_lr = 2e-5f;
             p.means_lr_end = 2e-7f;
             p.opacity_lr = 0.012f;
@@ -467,7 +461,6 @@ namespace lfs::core {
             p.rotation_lr = 2e-3f;
             p.shs_lr = 2e-3f;
             p.lambda_dssim = 0.2f;
-            p.revised_opacity = true;
             p.opacity_reg = 0.0f;
             p.scale_reg = 0.0f;
             p.use_error_map = true;
@@ -488,7 +481,6 @@ namespace lfs::core {
             p.scale_reg = 0.0f;
             p.init_opacity = 0.1f;
             p.init_scaling = 0.1f;
-            p.revised_opacity = true;
             p.max_cap = 4'000'000;
             p.tv_loss_weight = 5.0f;
             return p;
@@ -505,16 +497,15 @@ namespace lfs::core {
 
         OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
             OptimizationParameters params;
-            read_registered_optimization_properties(json, params);
-
             if (json.contains("strategy")) {
                 const auto strategy = json.at("strategy").get<std::string>();
                 if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
-                    params.strategy = std::string(canonical);
+                    params = defaults_for_strategy(canonical);
                 } else {
                     LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
                 }
             }
+            read_registered_optimization_properties(json, params);
 
             // Residue not represented by scalar registry properties.
             if (json.contains("eval_steps")) {

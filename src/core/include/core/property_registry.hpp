@@ -11,6 +11,7 @@
 
 #include <cassert>
 #include <glm/glm.hpp>
+#include <initializer_list>
 #include <mutex>
 #include <tuple>
 #include <unordered_map>
@@ -343,6 +344,23 @@ namespace lfs::core::prop {
         PropertyGroupBuilder& json_required() {
             if (!group_.properties.empty()) {
                 group_.properties.back().json_required = true;
+            }
+            return *this;
+        }
+
+        PropertyGroupBuilder& strategies(std::initializer_list<std::string> values) {
+            if (!group_.properties.empty()) {
+                group_.properties.back().strategies.assign(values);
+                group_.properties.back().strategy_applicability_explicit = true;
+            }
+            return *this;
+        }
+
+        PropertyGroupBuilder& all_strategies() {
+            if (!group_.properties.empty() &&
+                !group_.properties.back().strategy_applicability_explicit) {
+                group_.properties.back().strategies.clear();
+                group_.properties.back().strategy_applicability_explicit = true;
             }
             return *this;
         }

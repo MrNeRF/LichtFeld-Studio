@@ -41,7 +41,6 @@ NUMBER_PROPS = (
     "start_refine",
     "stop_refine",
     "grow_until_iter",
-    "grad_threshold",
     "reset_every",
     "sh_degree_interval",
     "bilateral_grid_x",
@@ -63,11 +62,6 @@ NUMBER_PROPS = (
     "init_extent",
     "min_opacity",
     "prune_opacity",
-    "grow_scale3d",
-    "grow_scale2d",
-    "prune_scale3d",
-    "prune_scale2d",
-    "pause_refine_after_reset",
     "sparsify_steps",
     "init_rho",
     "ppisp_controller_lr",
@@ -88,11 +82,10 @@ BOOL_PROPS = (
     "ppisp_freeze_from_sidecar",
     "ppisp_freeze_gaussians",
     "random",
-    "revised_opacity",
     "enable_eval",
 )
 
-SELECT_PROPS = ("mask_mode", "bg_mode")
+SELECT_PROPS = ("mask_mode", "bg_mode", "normal_loss_space")
 MIGRATED_PROP_IDS = NUMBER_PROPS + BOOL_PROPS + SELECT_PROPS
 
 # These registered properties are intentionally represented by bespoke widgets or
@@ -102,7 +95,6 @@ BESPOKE_OR_HIDDEN = {
     "lambda_dssim": "scrub slider",
     "init_opacity": "scrub slider",
     "depth_loss_mode": "bespoke fixed-value string select",
-    "normal_loss_space": "string property without registry enum items",
     "strategy": "strategy conflict-confirmation select",
     "ppisp_controller_activation_step": "derived -1 schedule semantics",
     "bg_modulation": "legacy mirror controlled by bg_mode",
@@ -147,6 +139,7 @@ BASIC_RUNS = (
         "normal_loss_weight",
         "normal_consistency_weight",
         "normal_flatten_weight",
+        "normal_loss_space",
         visibility_condition_id="dep_normal_loss",
     ),
     _run("mask_invert", "invert_masks", visibility_condition_id="dep_mask_mode"),
@@ -214,7 +207,6 @@ OPTIMIZATION_RUNS = (
         visibility_condition_id="dep_mrnf",
         disabled_condition_id="step_scaling_params_locked",
     ),
-    _run("refinement_grad", "grad_threshold"),
     _run(
         "refinement_locked_tail",
         "reset_every",
@@ -224,7 +216,6 @@ OPTIMIZATION_RUNS = (
     _run(
         "refinement_igs",
         "prune_opacity",
-        "revised_opacity",
         visibility_condition_id="dep_igs",
     ),
 )
@@ -252,19 +243,6 @@ INIT_RUNS = (
     ),
 )
 
-PRUNING_RUNS = (
-    _run(
-        "pruning",
-        "min_opacity",
-        "grow_scale3d",
-        "grow_scale2d",
-        "prune_scale3d",
-        "prune_scale2d",
-        "pause_refine_after_reset",
-        visibility_condition_id="dep_igs",
-    ),
-)
-
 SPARSITY_RUNS = (
     _run(
         "sparsity",
@@ -277,11 +255,6 @@ SPARSITY_RUNS = (
 SECTIONS = (
     SectionSpec("basic_params", "training.section.basic_params", BASIC_RUNS),
     SectionSpec("advanced_params", "training.section.advanced_params"),
-    SectionSpec(
-        "advanced_registry",
-        "training.section.advanced_registry",
-        (_run(AUTO_ADVANCED_RUN_ID),),
-    ),
     SectionSpec("dataset", "training.section.dataset", DATASET_RUNS),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
     SectionSpec("learning_rates", "training.opt.learning_rates"),
@@ -289,13 +262,13 @@ SECTIONS = (
     SectionSpec("bilateral", "training.section.bilateral_grid", BILATERAL_RUNS),
     SectionSpec("losses", "training.section.losses", LOSS_RUNS),
     SectionSpec("init", "training.section.initialization", INIT_RUNS),
-    SectionSpec(
-        "pruning_growing",
-        "training_panel.pruning_growing",
-        PRUNING_RUNS,
-    ),
     SectionSpec("sparsity", "training_panel.sparsity", SPARSITY_RUNS),
     SectionSpec("save_steps", "training_panel.save_eval_steps"),
+    SectionSpec(
+        "advanced_registry",
+        "training.section.advanced_registry",
+        (_run(AUTO_ADVANCED_RUN_ID),),
+    ),
 )
 
 RUNS = tuple(run for section in SECTIONS for run in section.runs)
@@ -312,7 +285,6 @@ SEARCH_SECTION_RUN_IDS = {
     "bilateral": tuple(run.id for run in BILATERAL_RUNS),
     "losses": tuple(run.id for run in LOSS_RUNS),
     "init": tuple(run.id for run in INIT_RUNS),
-    "pruning_growing": tuple(run.id for run in PRUNING_RUNS),
     "sparsity": tuple(run.id for run in SPARSITY_RUNS),
 }
 SEARCH_VISIBILITY_MODEL_KEYS = tuple(
@@ -425,6 +397,13 @@ def _row_kind(meta):
     return None
 
 
+def canonical_strategy_name(strategy):
+    strategy = str(strategy or "")
+    if strategy in {"mrnf", "mnrf", "lfs"}:
+        return "mrnf"
+    return strategy
+
+
 def auto_advanced_prop_ids(group_info):
     """Return declaration-ordered scalar properties omitted from curated layout."""
     placed = {
@@ -472,6 +451,23 @@ def _localized(key, fallback):
     return value if value and value != key else fallback
 
 
+def _active_strategy(params):
+    try:
+        return canonical_strategy_name(_params_value(params, "strategy"))
+    except (
+        AttributeError,
+        KeyError,
+        OverflowError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
+        try:
+            return canonical_strategy_name(getattr(params, "strategy"))
+        except (AttributeError, TypeError, ValueError):
+            return ""
+
+
 def build_rows(group_info, prop_ids, params_accessor):
     """Build ordered property-row metadata from a property-group snapshot."""
     properties = {
@@ -515,6 +511,9 @@ def build_rows(group_info, prop_ids, params_accessor):
             "is_int": is_int,
             "name": str(meta.get("name", prop_id)),
             "items": items,
+            "strategies": tuple(
+                str(strategy) for strategy in meta.get("strategies", ())
+            ),
         }
         if row["kind"] == "number":
             try:
@@ -766,7 +765,11 @@ class SectionBinding:
         if query and not self._condition_visible():
             return records
         params = self._params()
+        active_strategy = _active_strategy(params)
         for row in self.rows:
+            allowed_strategies = row.get("strategies", ())
+            if allowed_strategies and active_strategy not in allowed_strategies:
+                continue
             label = _localized(row["label_key"], row["name"])
             if not row_matches_query(row["id"], label, query):
                 continue
@@ -930,5 +933,3 @@ def bind_sections(
         search_accessor = lambda: ""
     _bind_search_visibility(model, bindings, search_accessor)
     return bindings
-
-

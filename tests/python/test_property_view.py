@@ -135,15 +135,6 @@ EXPECTED_NUMBER_ROWS = {
         100_000,
         True,
     ),
-    "grad_threshold": (
-        "training.refinement.gradient_thr",
-        "training.tooltip.gradient_thr",
-        6,
-        0.00001,
-        0.0,
-        0.01,
-        False,
-    ),
     "reset_every": (
         "training.refinement.reset_every",
         "training.tooltip.reset_every",
@@ -333,51 +324,6 @@ EXPECTED_NUMBER_ROWS = {
         math.inf,
         False,
     ),
-    "grow_scale3d": (
-        "training.thresholds.grow_scale_3d",
-        "training.tooltip.grow_scale_3d",
-        4,
-        0.001,
-        0.0,
-        math.inf,
-        False,
-    ),
-    "grow_scale2d": (
-        "training.thresholds.grow_scale_2d",
-        "training.tooltip.grow_scale_2d",
-        3,
-        0.01,
-        0.0,
-        math.inf,
-        False,
-    ),
-    "prune_scale3d": (
-        "training.thresholds.prune_scale_3d",
-        "training.tooltip.prune_scale_3d",
-        3,
-        0.01,
-        0.0,
-        math.inf,
-        False,
-    ),
-    "prune_scale2d": (
-        "training.thresholds.prune_scale_2d",
-        "training.tooltip.prune_scale_2d",
-        3,
-        0.01,
-        0.0,
-        math.inf,
-        False,
-    ),
-    "pause_refine_after_reset": (
-        "training.thresholds.pause_after_reset",
-        "training.tooltip.pause_refine_after_reset",
-        0,
-        100,
-        0.0,
-        1.8446744073709552e19,
-        True,
-    ),
     "sparsify_steps": (
         "training_params.sparsify_steps",
         "training.tooltip.sparsify_steps",
@@ -450,10 +396,6 @@ EXPECTED_CHECKBOX_ROWS = {
         "training.tooltip.ppisp_freeze_gaussians",
     ),
     "random": ("training.init.random_init", "training.tooltip.random_init"),
-    "revised_opacity": (
-        "training.thresholds.revised_opacity",
-        "training.tooltip.revised_opacity",
-    ),
     "enable_eval": (
         "training_params.enable_eval",
         "training.tooltip.enable_eval",
@@ -483,6 +425,16 @@ EXPECTED_SELECT_ROWS = {
             (3, "training.options.bg.random"),
         ),
     ),
+    "normal_loss_space": (
+        "training.advanced.normal_loss_space",
+        "training.tooltip.normal_loss_space",
+        (
+            (0, "training.options.normal_loss_space.auto"),
+            (1, "training.options.normal_loss_space.camera_opencv"),
+            (2, "training.options.normal_loss_space.camera_opengl"),
+            (3, "training.options.normal_loss_space.world"),
+        ),
+    ),
 }
 
 EXPECTED_ADVANCED_IDS = (
@@ -490,6 +442,7 @@ EXPECTED_ADVANCED_IDS = (
     "scaling_lr_end",
     "cropbox_lr_scale",
     "cropbox_loss_weight",
+    "min_opacity",
     "growth_grad_threshold",
     "grow_fraction",
     "opacity_decay",
@@ -525,13 +478,13 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     assert property_view.NUMBER_PROPS == tuple(EXPECTED_NUMBER_ROWS)
     assert property_view.BOOL_PROPS == tuple(EXPECTED_CHECKBOX_ROWS)
     assert property_view.SELECT_PROPS == tuple(EXPECTED_SELECT_ROWS)
-    assert len(property_view.MIGRATED_PROP_IDS) == 60
-    assert len(set(property_view.MIGRATED_PROP_IDS)) == 60
+    assert len(property_view.MIGRATED_PROP_IDS) == 54
+    assert len(set(property_view.MIGRATED_PROP_IDS)) == 54
 
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(rendered) == len(set(rendered)) == 74
+    assert len(rendered) == len(set(rendered)) == 68
     assert set(rendered) == (
         set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
     ) - set(property_view.BESPOKE_OR_HIDDEN)
@@ -544,13 +497,11 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
     properties = {meta["id"]: meta for meta in group_info["properties"]}
     for prop_id in EXPECTED_ADVANCED_IDS:
         assert properties[prop_id]["advanced"] is True
-    assert properties["normal_loss_space"]["advanced"] is True
     assert set(property_view.BESPOKE_OR_HIDDEN) == {
         "sh_degree",
         "lambda_dssim",
         "init_opacity",
         "depth_loss_mode",
-        "normal_loss_space",
         "strategy",
         "ppisp_controller_activation_step",
         "bg_modulation",
@@ -571,6 +522,75 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         "future_scalar",
         "future_enum",
     )
+
+
+def test_strategy_applicability_filters_auto_rows_and_search(lf):
+    group_info = lf.ui.property_group_info("optimization")
+    properties = {meta["id"]: meta for meta in group_info["properties"]}
+    known_mrnf_only = {
+        "means_lr_end",
+        "scaling_lr_end",
+        "growth_grad_threshold",
+        "grow_fraction",
+        "grow_until_iter",
+        "opacity_decay",
+        "scale_decay",
+        "means_noise_weight",
+        "bounds_percentile",
+        "use_error_map",
+        "use_edge_map",
+    }
+    auto_mrnf_only = known_mrnf_only - {"grow_until_iter"}
+    for prop_id in known_mrnf_only:
+        assert properties[prop_id]["strategies"] == ["mrnf"]
+
+    params = {
+        "strategy": "mcmc",
+    }
+    rows = property_view.build_rows(
+        group_info,
+        property_view.auto_advanced_prop_ids(group_info),
+        lambda: params,
+    )
+    binding = property_view.SectionBinding(
+        "strategy_filter",
+        rows,
+        lambda: params,
+        {},
+        lambda _binding: None,
+        search_accessor=lambda: query["value"],
+    )
+
+    query = {"value": ""}
+    assert not ({record["id"] for record in binding._records()} & auto_mrnf_only)
+    assert "min_opacity" in {record["id"] for record in binding._records()}
+    query["value"] = "edge"
+    assert binding._records() == []
+
+    params["strategy"] = "mnrf"
+    query["value"] = ""
+    assert auto_mrnf_only <= {
+        record["id"] for record in binding._records()
+    }
+    assert "min_opacity" not in {record["id"] for record in binding._records()}
+    query["value"] = "edge"
+    assert [record["id"] for record in binding._records()] == ["use_edge_map"]
+
+    curated = property_view.SectionBinding(
+        "curated_strategy_filter",
+        property_view.build_rows(
+            group_info,
+            ("grow_until_iter",),
+            lambda: params,
+        ),
+        lambda: params,
+        {},
+        lambda _binding: None,
+    )
+    params["strategy"] = "mcmc"
+    assert curated._records() == []
+    params["strategy"] = "mrnf"
+    assert [record["id"] for record in curated._records()] == ["grow_until_iter"]
 
 
 def test_ppisp_advanced_declarations_are_exact(lf):
@@ -976,3 +996,4 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert 'data-value="pv_search_query"' in rml
     assert 'data-event-click="pv_search_clear"' in rml
     assert 'id="sec-advanced-registry"' in rml
+    assert rml.index('id="sec-save-steps"') < rml.index('id="sec-advanced-registry"')

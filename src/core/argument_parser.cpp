@@ -61,7 +61,7 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--normal-loss-weight", "normal_loss_weight", Float},
             OptimizationCliBinding{"--normal-consistency-weight", "normal_consistency_weight", Float},
             OptimizationCliBinding{"--normal-flatten-weight", "normal_flatten_weight", Float},
-            OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", String},
+            OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", Enum},
             OptimizationCliBinding{"--enable-sparsity", "enable_sparsity", Bool},
             OptimizationCliBinding{"--sparsify-steps", "sparsify_steps", Integer},
             OptimizationCliBinding{"--init-rho", "init_rho", Float},
@@ -1056,7 +1056,13 @@ namespace {
                 setVal(normal_loss_weight_val, opt.normal_loss_weight);
                 setVal(normal_consistency_weight_val, opt.normal_consistency_weight);
                 setVal(normal_flatten_weight_val, opt.normal_flatten_weight);
-                setVal(normal_loss_space_val, opt.normal_loss_space);
+                if (normal_loss_space_val) {
+                    if (const auto parsed = lfs::core::param::normal_loss_space_from_string(*normal_loss_space_val)) {
+                        opt.normal_loss_space = *parsed;
+                    } else {
+                        opt.normal_loss_space = static_cast<lfs::core::param::NormalLossSpace>(-1);
+                    }
+                }
                 // Also propagate to dataset config for loading
                 ds.invert_masks = opt.invert_masks;
                 ds.mask_threshold = opt.mask_threshold;

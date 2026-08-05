@@ -482,6 +482,9 @@ namespace lfs::python {
             if (meta.default_value) {
                 property["default"] = prop_default_to_python(*meta.default_value);
             }
+            if (!meta.strategies.empty()) {
+                property["strategies"] = meta.strategies;
+            }
             if (!meta.enum_items.empty()) {
                 nb::list items;
                 for (const auto& enum_item : meta.enum_items) {

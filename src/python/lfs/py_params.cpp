@@ -23,6 +23,7 @@
 #include <cmath>
 #include <mutex>
 #include <set>
+#include <stdexcept>
 
 namespace lfs::python {
 
@@ -220,6 +221,18 @@ namespace lfs::python {
             }
             pm->modifyActiveParams(std::forward<F>(fn));
         }
+
+        void set_active_strategy(const std::string_view strategy) {
+            const auto canonical_strategy = core::param::canonical_strategy_name(strategy);
+            if (canonical_strategy.empty())
+                throw std::invalid_argument("Strategy must be 'mcmc', 'mrnf', or 'igs+'");
+
+            if (auto* pm = get_parameter_manager()) {
+                pm->modifyActiveParams([&](auto&) { pm->setActiveStrategy(canonical_strategy); });
+            } else {
+                get_default_params() = core::param::OptimizationParameters::defaults_for_strategy(canonical_strategy);
+            }
+        }
     } // namespace
 
     bool PyOptimizationParams::has_params() const {
@@ -279,6 +292,14 @@ namespace lfs::python {
 
         if (meta->is_readonly()) {
             throw std::runtime_error("Property is read-only: " + prop_id);
+        }
+
+        if (prop_id == "strategy") {
+            const std::any old_value = params().strategy;
+            set_active_strategy(nb::cast<std::string>(value));
+            const std::any new_value = params().strategy;
+            PropertyRegistry::instance().notify("optimization", prop_id, old_value, new_value);
+            return;
         }
 
         std::any new_value;
@@ -773,6 +794,12 @@ namespace lfs::python {
             .value("SEGMENT_AND_IGNORE", MaskMode::SegmentAndIgnore)
             .value("ALPHA_CONSISTENT", MaskMode::AlphaConsistent);
 
+        nb::enum_<NormalLossSpace>(m, "NormalLossSpace")
+            .value("AUTO", NormalLossSpace::Auto)
+            .value("CAMERA_OPENCV", NormalLossSpace::CameraOpenCV)
+            .value("CAMERA_OPENGL", NormalLossSpace::CameraOpenGL)
+            .value("WORLD", NormalLossSpace::World);
+
         nb::enum_<BackgroundMode>(m, "BackgroundMode")
             .value("SOLID_COLOR", BackgroundMode::SolidColor)
             .value("MODULATION", BackgroundMode::Modulation)
@@ -869,16 +896,7 @@ namespace lfs::python {
                 "Active optimization strategy name")
             .def(
                 "set_strategy",
-                [](PyOptimizationParams& /*self*/, const std::string& strategy) {
-                    const auto canonical_strategy = lfs::core::param::canonical_strategy_name(strategy);
-                    if (canonical_strategy.empty()) {
-                        throw std::invalid_argument("Strategy must be 'mcmc', 'mrnf', or 'igs+'");
-                    }
-                    auto* pm = get_parameter_manager();
-                    if (pm) {
-                        pm->modifyActiveParams([&](auto&) { pm->setActiveStrategy(canonical_strategy); });
-                    }
-                },
+                [](PyOptimizationParams& /*self*/, const std::string& strategy) { set_active_strategy(strategy); },
                 nb::arg("strategy"),
                 "Set active strategy ('mcmc', 'mrnf', or 'igs+')")
             .def_prop_ro(
@@ -1056,19 +1074,21 @@ namespace lfs::python {
                 "Min-axis scale flattening weight while normal supervision is active")
             .def_prop_rw(
                 "normal_loss_space",
-                [](PyOptimizationParams& self) { return self.params().normal_loss_space; },
-                [](PyOptimizationParams&, const std::string& v) { modify_params([v](auto& p) { p.normal_loss_space = v; }); },
+                [](PyOptimizationParams& self) { return std::string(normal_loss_space_name(self.params().normal_loss_space)); },
+                [](PyOptimizationParams&, const std::string& v) {
+                    const auto parsed = normal_loss_space_from_string(v);
+                    if (!parsed) {
+                        throw std::invalid_argument(
+                            "normal_loss_space must be 'auto', 'camera-opencv', 'camera-opengl', or 'world'");
+                    }
+                    modify_params([value = *parsed](auto& p) { p.normal_loss_space = value; });
+                },
                 "Normal prior coordinate space: 'auto', 'camera-opencv', 'camera-opengl', or 'world'")
             .def_prop_rw(
                 "undistort",
                 [](PyOptimizationParams& self) { return self.params().undistort; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.undistort = v; }); },
                 "Undistort images on-the-fly before training")
-            .def_prop_rw(
-                "revised_opacity",
-                [](PyOptimizationParams& self) { return self.params().revised_opacity; },
-                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.revised_opacity = v; }); },
-                "Use revised opacity calculation during densification")
             .def_prop_ro(
                 "save_steps",
                 [](PyOptimizationParams& self) -> std::vector<size_t> {

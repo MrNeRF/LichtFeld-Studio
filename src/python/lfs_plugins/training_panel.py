@@ -71,7 +71,7 @@ _rate_tracker = IterationRateTracker()
 
 
 def _is_mrnf_strategy(strategy):
-    return strategy in ("mrnf", "mnrf", "lfs")
+    return property_view.canonical_strategy_name(strategy) == "mrnf"
 
 
 DEPTH_LOSS_MODE_VALUES = ("ssi", "ssi-disparity", "ssi-depth")
@@ -128,15 +128,14 @@ RENDER_SYNC = {
 SECTIONS = [
     "basic_params",
     "advanced_params",
-    "advanced_registry",
     "dataset",
     "optimization",
     "bilateral",
     "losses",
     "init",
-    "pruning_growing",
     "sparsity",
     "save_steps",
+    "advanced_registry",
 ]
 
 INITIALLY_COLLAPSED = {
@@ -147,7 +146,6 @@ INITIALLY_COLLAPSED = {
     "bilateral",
     "losses",
     "init",
-    "pruning_growing",
     "sparsity",
     "save_steps",
 }
@@ -1584,6 +1582,13 @@ class TrainingPanel(Panel):
         if self._handle:
             self._handle.dirty_all()
 
+    def _refresh_strategy_values(self):
+        if not self._handle:
+            return
+        self._sync_text_bufs()
+        self._handle.dirty_all()
+        self._request_reactive_update()
+
     def _set_strategy(self, val):
         params = lf.optimization_params()
         if not params or not params.has_params():
@@ -1597,9 +1602,7 @@ class TrainingPanel(Panel):
                 if button == _gut:
                     p.gut = False
                     p.set_strategy(_val)
-                    if self._handle:
-                        self._sync_text_bufs()
-                        self._handle.dirty_all()
+                    self._refresh_strategy_values()
 
             lf.ui.confirm_dialog(
                 tr("training.error.strategy_gut_title"),
@@ -1609,9 +1612,7 @@ class TrainingPanel(Panel):
             )
         else:
             params.set_strategy(val)
-            if self._handle:
-                self._sync_text_bufs()
-                self._handle.dirty_all()
+            self._refresh_strategy_values()
 
     def _set_int_param(self, prop, val_str):
         params = lf.optimization_params()

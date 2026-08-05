@@ -112,6 +112,8 @@ namespace lfs::core::prop {
         double step = 1.0;
         std::optional<PropDefault> default_value;
         std::vector<EnumItem> enum_items;
+        std::vector<std::string> strategies;
+        bool strategy_applicability_explicit = false;
 
         std::function<std::any(const PropertyObjectRef&)> getter;
         std::function<void(PropertyObjectRef&, const std::any&)> setter;

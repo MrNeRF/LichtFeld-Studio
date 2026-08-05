@@ -1799,6 +1799,15 @@ class MaskMode(enum.Enum):
 
     ALPHA_CONSISTENT = 4
 
+class NormalLossSpace(enum.Enum):
+    AUTO = 0
+
+    CAMERA_OPENCV = 1
+
+    CAMERA_OPENGL = 2
+
+    WORLD = 3
+
 class BackgroundMode(enum.Enum):
     SOLID_COLOR = 0
 
@@ -2160,13 +2169,6 @@ class OptimizationParams:
 
     @undistort.setter
     def undistort(self, arg: bool, /) -> None: ...
-
-    @property
-    def revised_opacity(self) -> bool:
-        """Use revised opacity calculation during densification"""
-
-    @revised_opacity.setter
-    def revised_opacity(self, arg: bool, /) -> None: ...
 
     @property
     def save_steps(self) -> list[int]:

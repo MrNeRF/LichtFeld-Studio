@@ -44,7 +44,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* MENU = "menu.help";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
-    } // namespace Menu
+    }     // namespace Menu
 
     namespace Window {
         inline constexpr const char* ABOUT = "window.about";
@@ -73,7 +73,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* BUILD_TYPE = "about.build_info.build_type";
             inline constexpr const char* PLATFORM = "about.build_info.platform";
         } // namespace BuildInfo
-    } // namespace About
+    }     // namespace About
 
     namespace Training {
         namespace Section {
@@ -89,7 +89,6 @@ namespace lichtfeld::Strings {
             inline constexpr const char* BASIC_PARAMS = "training.section.basic_params";
             inline constexpr const char* ADVANCED_PARAMS = "training.section.advanced_params";
             inline constexpr const char* SPARSITY = "training.section.sparsity";
-            inline constexpr const char* PRUNING_GROWING = "training.section.pruning_growing";
         } // namespace Section
 
         namespace Dataset {
@@ -162,12 +161,6 @@ namespace lichtfeld::Strings {
         namespace Thresholds {
             inline constexpr const char* MIN_OPACITY = "training.thresholds.min_opacity";
             inline constexpr const char* PRUNE_OPACITY = "training.thresholds.prune_opacity";
-            inline constexpr const char* GROW_SCALE_3D = "training.thresholds.grow_scale_3d";
-            inline constexpr const char* GROW_SCALE_2D = "training.thresholds.grow_scale_2d";
-            inline constexpr const char* PRUNE_SCALE_3D = "training.thresholds.prune_scale_3d";
-            inline constexpr const char* PRUNE_SCALE_2D = "training.thresholds.prune_scale_2d";
-            inline constexpr const char* PAUSE_AFTER_RESET = "training.thresholds.pause_after_reset";
-            inline constexpr const char* REVISED_OPACITY = "training.thresholds.revised_opacity";
         } // namespace Thresholds
 
         namespace Tooltip {
@@ -253,7 +246,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ADD = "training.button.add";
             inline constexpr const char* REMOVE = "training.button.remove";
         } // namespace Button
-    } // namespace Training
+    }     // namespace Training
 
     namespace Scene {
         inline constexpr const char* ADD_PLY = "scene.add_ply";
@@ -582,7 +575,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* NEW_STEP = "training_panel.new_step";
         inline constexpr const char* NO_SAVE_STEPS = "training_panel.no_save_steps";
         inline constexpr const char* SPARSITY = "training_panel.sparsity";
-        inline constexpr const char* PRUNING_GROWING = "training_panel.pruning_growing";
         inline constexpr const char* MRNF_PARAMS = "training_panel.mrnf_params";
     } // namespace TrainingPanel
 
@@ -751,11 +743,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* RANDOM_INIT = "training_params.random_init";
         inline constexpr const char* NUM_POINTS = "training_params.num_points";
         inline constexpr const char* EXTENT = "training_params.extent";
-        inline constexpr const char* PRUNE_SCALE_3D = "training_params.prune_scale_3d";
         inline constexpr const char* PRUNE_OPACITY = "training_params.prune_opacity";
-        inline constexpr const char* PRUNE_SCALE_2D = "training_params.prune_scale_2d";
-        inline constexpr const char* PAUSE_AFTER_RESET = "training_params.pause_after_reset";
-        inline constexpr const char* REVISED_OPACITY = "training_params.revised_opacity";
         inline constexpr const char* SPARSIFY_STEPS = "training_params.sparsify_steps";
         inline constexpr const char* INIT_RHO = "training_params.init_rho";
         inline constexpr const char* PRUNE_RATIO = "training_params.prune_ratio";

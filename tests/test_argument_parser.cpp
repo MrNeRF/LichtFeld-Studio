@@ -532,7 +532,9 @@ TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
         "--normal-consistency-weight",
         "0.25",
         "--normal-flatten-weight",
-        "5.0"};
+        "5.0",
+        "--normal-loss-space",
+        "world"};
 
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
@@ -541,6 +543,7 @@ TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_loss_weight, 0.75f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_consistency_weight, 0.25f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_flatten_weight, 5.0f);
+    EXPECT_EQ((*parsed)->optimization.normal_loss_space, lfs::core::param::NormalLossSpace::World);
 }
 
 TEST(ArgumentParserTest, TrainingParsesBackgroundModeModulation) {

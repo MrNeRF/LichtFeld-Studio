@@ -152,7 +152,7 @@
         <input type="checkbox" data-checked="row.checked"
                data-event-change="pv_value_change(row.id, row.checked)" />
       </div>
-      <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss"
+      <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'number'"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
@@ -162,6 +162,14 @@
                data-event-escapecancel="pv_escape(row.id)" />
         <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
         <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+      </div>
+      <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'select'"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
+          <option data-for="item : pv_basic_normal_weights_options" data-if="item.prop_id == row.id"
+                  data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
+        </select>
       </div>
       <div class="mask-settings-group" data-if="dep_mask_mode">
         <div class="setting-row" data-for="row : pv_mask_invert_rows"
@@ -303,37 +311,6 @@
   </div>
   <div class="training-panel-block" data-if="pv_section_advanced_params_visible">
 
-    <!-- Auto-placed registry parameters -->
-    <div class="training-subsection" data-if="pv_section_advanced_registry_visible">
-      <div class="section-header text-accent" id="hdr-advanced-registry" data-event-click="toggle_section('advanced_registry')">
-        <span class="section-arrow text-accent" id="arrow-advanced-registry">&#x25B6;</span>
-        <span class="text-accent">{{pv_header_advanced_registry}}</span>
-      </div>
-      <div class="section-content collapsed" id="sec-advanced-registry">
-        <div data-class-disabled-overlay="adv_disabled">
-          <div class="setting-row" data-for="row : pv_advanced_registry_rows"
-               data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
-            <input type="text" class="number-input" data-if="row.kind == 'number'"
-                   data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
-                   data-event-focus="pv_focus(row.id)"
-                   data-event-change="pv_change(row.id, ev.value)"
-                   data-event-blur="pv_blur(row.id, row.text)"
-                   data-event-escapecancel="pv_escape(row.id)" />
-            <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-                   data-event-change="pv_value_change(row.id, row.checked)" />
-            <select data-if="row.kind == 'select'" data-value="row.value"
-                    data-event-change="pv_value_change(row.id, ev.value)">
-              <option data-for="item : pv_advanced_registry_options" data-if="item.prop_id == row.id"
-                      data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
-            </select>
-            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
-            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- Dataset subsection -->
     <div class="training-subsection" data-if="pv_section_dataset_visible">
       <div class="section-header text-accent" id="hdr-dataset" data-event-click="toggle_section('dataset')">
@@ -438,17 +415,6 @@
           </div>
           <div class="setting-row" data-for="row : pv_refinement_grow_rows" data-if="dep_mrnf"
                data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{row.label}}</span>
-            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-                   data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-                   data-event-change="pv_change(row.id, ev.value)"
-                   data-event-blur="pv_blur(row.id, row.text)"
-                   data-event-escapecancel="pv_escape(row.id)" />
-            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-          </div>
-          <div class="setting-row" data-for="row : pv_refinement_grad_rows"
-               data-attr-data-tooltip="row.tooltip_key">
             <span class="prop-label">{{row.label}}</span>
             <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
                    data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
@@ -577,24 +543,6 @@
       </div>
     </div>
 
-    <!-- Pruning/Growing subsection (conditional) -->
-    <div class="training-subsection" data-if="dep_igs &amp;&amp; pv_section_pruning_growing_visible">
-      <div class="training-subsection-title">{{pv_header_pruning_growing}}</div>
-      <div data-class-disabled-overlay="adv_disabled">
-        <div class="setting-row" data-for="row : pv_pruning_rows"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-                 data-event-change="pv_change(row.id, ev.value)"
-                 data-event-blur="pv_blur(row.id, row.text)"
-                 data-event-escapecancel="pv_escape(row.id)" />
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Sparsity subsection (conditional) -->
     <div class="training-subsection" data-if="dep_sparsity &amp;&amp; pv_section_sparsity_visible">
       <div class="training-subsection-title">{{pv_header_sparsity}}</div>
@@ -644,6 +592,37 @@
         <div data-if="save_readonly_mode">
           <span class="status-text status-info" data-if="has_save_steps">{{save_steps_display}}</span>
           <span class="status-text status-muted" data-if="no_save_steps_ro">{{label_no_save_steps}}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Auto-placed registry parameters -->
+    <div class="training-subsection" data-if="pv_section_advanced_registry_visible">
+      <div class="section-header text-accent" id="hdr-advanced-registry" data-event-click="toggle_section('advanced_registry')">
+        <span class="section-arrow text-accent" id="arrow-advanced-registry">&#x25B6;</span>
+        <span class="text-accent">{{pv_header_advanced_registry}}</span>
+      </div>
+      <div class="section-content collapsed" id="sec-advanced-registry">
+        <div data-class-disabled-overlay="adv_disabled">
+          <div class="setting-row" data-for="row : pv_advanced_registry_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-if="row.kind == 'number'"
+                   data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
+                   data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+                   data-event-change="pv_value_change(row.id, row.checked)" />
+            <select data-if="row.kind == 'select'" data-value="row.value"
+                    data-event-change="pv_value_change(row.id, ev.value)">
+              <option data-for="item : pv_advanced_registry_options" data-if="item.prop_id == row.id"
+                      data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
+            </select>
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          </div>
         </div>
       </div>
     </div>

@@ -128,6 +128,61 @@ class _ParamsStub:
         self.eval_steps.append(step)
 
 
+class _StrategyParamsStub:
+    def __init__(self):
+        self._strategy = "mrnf"
+        self._slots = {
+                "mrnf": {
+                "max_cap": 5_000_000,
+                "means_lr": 2e-5,
+                "scaling_lr": 0.007,
+                "lambda_dssim": 0.2,
+                "init_opacity": 0.5,
+                "prune_ratio": 0.6,
+                "sh_degree": 3,
+                "depth_loss_mode": "ssi",
+                "ppisp_controller_activation_step": 25_000,
+                "bg_color": (0.0, 0.0, 0.0),
+                "save_steps": [7_000, 30_000],
+                "use_edge_map": True,
+            },
+            "igs+": {
+                "max_cap": 4_000_000,
+                "means_lr": 1.6e-5,
+                "scaling_lr": 0.02,
+                "lambda_dssim": 0.35,
+                "init_opacity": 0.1,
+                "prune_ratio": 0.4,
+                "sh_degree": 2,
+                "depth_loss_mode": "ssi-depth",
+                "ppisp_controller_activation_step": 12_000,
+                "bg_color": (0.1, 0.2, 0.3),
+                "save_steps": [5_000],
+                "use_edge_map": False,
+            },
+        }
+        self.gut = False
+
+    def has_params(self):
+        return True
+
+    @property
+    def strategy(self):
+        return self._strategy
+
+    def set_strategy(self, strategy):
+        self._strategy = strategy
+
+    def get(self, prop):
+        return self._slots[self._strategy][prop]
+
+    def __getattr__(self, prop):
+        try:
+            return self._slots[self._strategy][prop]
+        except KeyError as exc:
+            raise AttributeError(prop) from exc
+
+
 class _DatasetStub:
     def __init__(self):
         self.data_path = "/data/scene_a"
@@ -144,6 +199,91 @@ class _ModelStub:
 
     def bind(self, name, getter, setter):
         self.bindings[name] = (getter, setter)
+
+
+def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
+    training_panel_module, monkeypatch
+):
+    params = _StrategyParamsStub()
+    dataset = _DatasetStub()
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "optimization_params",
+        lambda: params,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "dataset_params",
+        lambda: dataset,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "schedule_on_ui_thread",
+        lambda _callback: None,
+        raising=False,
+    )
+
+    def row(prop_id, *, is_int=False, precision=6, strategies=()):
+        return {
+            "id": prop_id,
+            "kind": "number",
+            "label_key": "",
+            "tooltip_key": "",
+            "precision": precision,
+            "step": 1,
+            "min": 0,
+            "max": 10_000_000,
+            "is_int": is_int,
+            "name": prop_id,
+            "items": [],
+            "strategies": strategies,
+        }
+
+    binding = training_panel_module.property_view.SectionBinding(
+        "strategy_values",
+        [
+            row("max_cap", is_int=True, precision=0),
+            row("means_lr"),
+            row("scaling_lr"),
+            {
+                **row("use_edge_map"),
+                "kind": "checkbox",
+                "strategies": ("mrnf",),
+            },
+        ],
+        lambda: params,
+        panel._text_bufs,
+        panel._queue_pv_publish,
+    )
+    panel._pv_bindings = (binding,)
+    model = _ModelStub()
+    panel._bind_select_props(model, lambda: params, lambda: dataset)
+
+    assert "use_edge_map" in {record["id"] for record in binding._records()}
+    panel._set_strategy("igs+")
+
+    assert params.strategy == "igs+"
+    assert "use_edge_map" not in {
+        record["id"] for record in binding._records()
+    }
+    assert panel._text_bufs[binding.input_key("max_cap")] == "4,000,000"
+    assert panel._text_bufs[binding.input_key("means_lr")] == "0.000016"
+    assert panel._text_bufs[binding.input_key("scaling_lr")] == "0.020000"
+    assert panel._get_scrub_value("lambda_dssim") == pytest.approx(0.35)
+    assert panel._get_scrub_value("init_opacity") == pytest.approx(0.1)
+    assert panel._get_scrub_value("prune_ratio") == pytest.approx(0.4)
+    assert model.bindings["sh_degree_str"][0]() == "2"
+    assert model.bindings["depth_loss_mode_str"][0]() == "ssi-depth"
+    assert panel._text_bufs["ppisp_activation_step_str"] == "12,000"
+    assert panel._text_bufs[training_panel_module.BG_COLOR_HEX_KEY] == (
+        training_panel_module.w.color_to_hex(params.bg_color)
+    )
+    assert params.save_steps == [5_000]
+    assert panel._handle.dirty_all_count == 1
+    assert panel._handle.request_update_count == 1
 
 
 def test_auto_scale_marker_survives_reset_but_not_dataset_change(

@@ -114,10 +114,49 @@ namespace {
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.012f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 5'000'000);
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "min_opacity"), 1.0f / 255.0f);
-        EXPECT_TRUE(resolved<bool>(defaults, "revised_opacity"));
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_reg"), 0.0f);
         EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 200u);
-        EXPECT_FLOAT_EQ(resolved<float>(defaults, "grad_threshold"), 0.003f);
+    }
+
+    TEST_F(TrainingParametersTest, StrategyApplicabilityTagsAreCanonicalAndKnown) {
+        const std::set<std::string> canonical = {"mcmc", "mrnf", "igs+"};
+        const std::map<std::string, std::vector<std::string>> expected = {
+            {"means_lr_end", {"mrnf"}},
+            {"scaling_lr_end", {"mrnf"}},
+            {"growth_grad_threshold", {"mrnf"}},
+            {"grow_fraction", {"mrnf"}},
+            {"grow_until_iter", {"mrnf"}},
+            {"opacity_decay", {"mrnf"}},
+            {"scale_decay", {"mrnf"}},
+            {"means_noise_weight", {"mrnf"}},
+            {"bounds_percentile", {"mrnf"}},
+            {"use_error_map", {"mrnf"}},
+            {"use_edge_map", {"mrnf"}},
+            {"prune_opacity", {"igs+"}},
+            {"reset_every", {"igs+"}},
+            {"min_opacity", {"mcmc"}},
+        };
+
+        const auto group = PropertyRegistry::instance().get_group_snapshot("optimization");
+        ASSERT_TRUE(group.has_value());
+        std::set<std::string> tagged;
+        for (const auto& meta : group->properties) {
+            EXPECT_TRUE(meta.strategy_applicability_explicit) << meta.id;
+            for (const auto& strategy : meta.strategies) {
+                EXPECT_TRUE(canonical.contains(strategy)) << meta.id << ": " << strategy;
+                tagged.insert(meta.id);
+            }
+            const auto expected_it = expected.find(meta.id);
+            if (expected_it == expected.end())
+                EXPECT_TRUE(meta.strategies.empty()) << meta.id;
+            else
+                EXPECT_EQ(meta.strategies, expected_it->second);
+        }
+        for (const auto& [prop_id, strategies] : expected) {
+            const auto meta = optimization_meta(prop_id);
+            EXPECT_EQ(meta.strategies, strategies);
+            EXPECT_TRUE(tagged.contains(prop_id));
+        }
     }
 
     // These values discriminate MCMC from MRNF and pin both strategy dispatch and MCMC factory
@@ -128,7 +167,6 @@ namespace {
         EXPECT_FLOAT_EQ(resolved<float>(defaults, "opacity_lr"), 0.025f);
         EXPECT_EQ(resolved<int>(defaults, "max_cap"), 1'000'000);
         EXPECT_EQ(resolved<size_t>(defaults, "refine_every"), 100u);
-        EXPECT_FALSE(resolved<bool>(defaults, "revised_opacity"));
     }
 
     // The IGS+ block pins its distinct override set, catching IGS+ factory drift and resolution
@@ -247,7 +285,6 @@ namespace {
                                 "refine_every",
                                 "start_refine",
                                 "stop_refine",
-                                "grad_threshold",
                                 "sh_degree"}));
     }
 
@@ -265,6 +302,52 @@ namespace {
         auto json = OptimizationParameters::mrnf_defaults().to_json();
         json.erase("iterations");
         EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::out_of_range);
+    }
+
+    TEST_F(TrainingParametersTest, MissingOptionalJsonValuesUseStrategyDefaults) {
+        auto mrnf_json = OptimizationParameters::mrnf_defaults().to_json();
+        mrnf_json.erase("max_cap");
+        EXPECT_EQ(OptimizationParameters::from_json(mrnf_json).max_cap, 5'000'000);
+
+        auto igs_json = OptimizationParameters::igs_plus_defaults().to_json();
+        igs_json.erase("tv_loss_weight");
+        EXPECT_FLOAT_EQ(OptimizationParameters::from_json(igs_json).tv_loss_weight, 5.0f);
+    }
+
+    TEST_F(TrainingParametersTest, RemovedOptimizationJsonKeysAreIgnored) {
+        auto json = OptimizationParameters::mrnf_defaults().to_json();
+        json["grad_threshold"] = 0.003f;
+        json["grow_scale3d"] = 0.01f;
+        json["grow_scale2d"] = 0.05f;
+        json["prune_scale3d"] = 0.1f;
+        json["prune_scale2d"] = 0.15f;
+        json["pause_refine_after_reset"] = 100u;
+        json["revised_opacity"] = true;
+
+        const auto parsed = OptimizationParameters::from_json(json);
+        EXPECT_EQ(parsed.strategy, "mrnf");
+        EXPECT_TRUE(parsed.validate().empty());
+    }
+
+    TEST_F(TrainingParametersTest, NormalLossSpaceKeepsStringWireFormat) {
+        using lfs::core::param::NormalLossSpace;
+        const std::array<std::pair<NormalLossSpace, std::string_view>, 4> values = {{
+            {NormalLossSpace::Auto, "auto"},
+            {NormalLossSpace::CameraOpenCV, "camera-opencv"},
+            {NormalLossSpace::CameraOpenGL, "camera-opengl"},
+            {NormalLossSpace::World, "world"},
+        }};
+
+        for (const auto& [space, wire] : values) {
+            auto params = OptimizationParameters::mrnf_defaults();
+            params.normal_loss_space = space;
+            const auto json = params.to_json();
+            EXPECT_EQ(json.at("normal_loss_space"), wire);
+
+            auto old_json = json;
+            old_json["normal_loss_space"] = wire;
+            EXPECT_EQ(OptimizationParameters::from_json(old_json).normal_loss_space, space);
+        }
     }
 
     TEST_F(TrainingParametersTest, OldNewToJsonParity) {
@@ -325,7 +408,6 @@ namespace {
         EXPECT_EQ(mrnf_result->start_refine, 500u);
         EXPECT_EQ(mrnf_result->stop_refine, 28'500u);
         EXPECT_FLOAT_EQ(mrnf_result->min_opacity, 0.0039215689f);
-        EXPECT_TRUE(mrnf_result->revised_opacity);
 
         const auto igs_path = eval_config_path("improvedGSplus_optimization_params.json");
         EXPECT_EQ(frozen_config_fingerprint(igs_path), 0x2cf8daf2e3da1198ULL);
