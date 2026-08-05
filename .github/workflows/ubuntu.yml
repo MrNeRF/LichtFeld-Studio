@@ -306,8 +306,12 @@ jobs:
       # what keeps it fresh). Without pruning they accumulate: this branch alone
       # held three 0.8GB entries, pushing the repository past its 10GB cache
       # budget and evicting the vcpkg archives that keep builds fast.
+      # success() only: actions/cache saves in a post-step that runs after this
+      # one and only on success. Pruning after a failed job would delete the
+      # previous entries without a replacement ever being written, leaving every
+      # later run cold.
       - name: Prune superseded ccache entries
-        if: always()
+        if: success()
         continue-on-error: true
         shell: bash
         env:
