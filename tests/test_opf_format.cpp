@@ -28,7 +28,7 @@ TEST_F(OpfFormatTest, ParsesProjectGraphAndResolvesResources) {
         "format":"application/opf-project+json", "version":"1.0",
         "id":"project", "name":"fixture", "description":"test", "extensions":{"vendor":{}},
         "items":[{"id":"camera", "type":"camera_list", "sources":[],
-                   "resources":[{"uri":"./resource.json", "format":"application/json"}]}]
+                   "resources":[{"uri":"./resource.json", "format":"application/opf-camera-list+json"}]}]
     })");
 
     auto result = lfs::io::opf::read_project(root / "project.opf");
@@ -90,4 +90,17 @@ TEST_F(OpfFormatTest, RejectsMissingSourceAndCycles) {
     auto cycle = lfs::io::opf::read_project(root / "project.opf");
     ASSERT_FALSE(cycle.has_value());
     EXPECT_EQ(cycle.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+}
+
+TEST_F(OpfFormatTest, RejectsInvalidItemResourceContract) {
+    write(root / "resource.json", "{}");
+    write(root / "project.opf", R"({
+        "format":"application/opf-project+json", "version":"1.0",
+        "id":"project", "name":"fixture", "description":"test",
+        "items":[{"id":"camera", "type":"camera_list", "sources":[],
+                   "resources":[{"uri":"resource.json", "format":"application/json"}]}]
+    })");
+    auto result = lfs::io::opf::read_project(root / "project.opf");
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
 }

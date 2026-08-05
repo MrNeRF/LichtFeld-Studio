@@ -70,6 +70,60 @@ namespace lfs::io::opf {
                                                        context, it->size()));
             }
         }
+
+        [[nodiscard]] bool is_extension_item(const std::string& type) {
+            return type.starts_with("ext_");
+        }
+
+        [[nodiscard]] bool is_extension_resource(const std::string& format) {
+            return format.starts_with("application/ext-");
+        }
+
+        [[nodiscard]] Result<void> validate_item_formats(const Item& item,
+                                                         const std::filesystem::path& path) {
+            static const std::unordered_map<std::string, std::vector<std::string>> required = {
+                {"camera_list", {"application/opf-camera-list+json"}},
+                {"input_cameras", {"application/opf-input-cameras+json"}},
+                {"projected_input_cameras", {"application/opf-projected-input-cameras+json"}},
+                {"scene_reference_frame", {}},
+                {"input_control_points", {"application/opf-input-control-points+json"}},
+                {"projected_control_points", {"application/opf-projected-control-points+json"}},
+                {"constraints", {"application/opf-constraints+json"}},
+                {"calibration", {"application/opf-calibrated-cameras+json"}},
+                {"point_cloud", {"model/gltf+json", "application/gltf-buffer+bin"}},
+            };
+            const auto item_it = required.find(item.type);
+            if (item_it == required.end()) {
+                if (!is_extension_item(item.type))
+                    return invalid(path, std::format("Unsupported OPF item type '{}'.", item.type));
+                return {};
+            }
+
+            std::unordered_set<std::string> formats;
+            for (const auto& resource : item.resources) {
+                formats.insert(resource.format);
+                if (!is_extension_resource(resource.format) &&
+                    resource.format != "application/opf-scene-reference-frame+json" &&
+                    resource.format != "application/opf-camera-list+json" &&
+                    resource.format != "application/opf-input-cameras+json" &&
+                    resource.format != "application/opf-projected-input-cameras+json" &&
+                    resource.format != "application/opf-input-control-points+json" &&
+                    resource.format != "application/opf-projected-control-points+json" &&
+                    resource.format != "application/opf-calibrated-control-points+json" &&
+                    resource.format != "application/opf-constraints+json" &&
+                    resource.format != "application/opf-calibrated-cameras+json" &&
+                    resource.format != "application/opf-gps-bias+json" &&
+                    resource.format != "model/gltf+json" &&
+                    resource.format != "application/gltf-buffer+bin")
+                    return invalid(path, std::format("Unsupported OPF resource format '{}'.", resource.format));
+            }
+            for (const auto& format : item_it->second) {
+                if (!formats.contains(format))
+                    return invalid(path, std::format("OPF item '{}' requires resource format '{}'.",
+                                                     item.id, format));
+            }
+            return {};
+        }
     } // namespace
 
     Result<Project> read_project(const std::filesystem::path& path) {
@@ -173,6 +227,9 @@ namespace lfs::io::opf {
                 item.resources.push_back({*uri, *resource_format, *resolved});
             }
             collect_extension_warning(value, context.c_str(), project);
+            auto format_validation = validate_item_formats(item, path);
+            if (!format_validation)
+                return std::unexpected(format_validation.error());
             project.items.push_back(std::move(item));
         }
 
