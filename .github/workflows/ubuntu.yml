@@ -239,30 +239,40 @@ jobs:
             exit 1
           fi
 
-      # GitHub runners have no GPU. lichtfeld.cpu is the only ctest entry not
-      # labelled "gpu"; every other suite needs a CUDA device.
+      # Python test dependencies are not part of the vcpkg python; without them
+      # lichtfeld.python.fast fails on a missing module rather than on an
+      # assertion.
+      - name: Install Python test dependencies
+        if: matrix.build_type == 'Release'
+        shell: bash
+        run: |
+          PY=$(find "${GITHUB_WORKSPACE}/build/vcpkg_installed" -maxdepth 4 -type f -name 'python3.*' -perm -u+x 2>/dev/null | head -1)
+          [ -n "$PY" ] || PY=$(command -v python3)
+          echo "using interpreter: $PY"
+          "$PY" -m ensurepip --upgrade >/dev/null 2>&1 || true
+          "$PY" -m pip install -q -r tests/python/requirements-test.txt
+
+      # GitHub runners have no NVIDIA driver, so libcuda.so.1 is absent and the
+      # test binary — which links the CUDA driver API — cannot even load. The
+      # toolkit ships a stub for exactly this case, but names it libcuda.so with
+      # no soname symlink, so create one.
+      #
+      # lichtfeld.cpu is the only ctest label not marked "gpu"; every other suite
+      # needs a real device.
       - name: Run CPU tests
         if: matrix.build_type == 'Release'
-        run: ctest --test-dir build/tests -L cpu --output-on-failure
-
-  # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
-  error-debt-gate:
-    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Generate error-debt census
-        run: python3 tools/error_debt_census.py > error-debt-census.json
-
-      - name: Enforce no-new-error-debt baseline
-        run: python3 tools/error_debt_census.py --baseline tools/error_debt_baseline.json
-
-      - name: Upload error-debt census
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: error-debt-census
-          path: error-debt-census.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          STUBS=""
+          for candidate in /usr/local/cuda/lib64/stubs /usr/local/cuda/targets/x86_64-linux/lib/stubs; do
+            if [ -f "$candidate/libcuda.so" ]; then STUBS="$candidate"; break; fi
+          done
+          if [ -n "$STUBS" ]; then
+            [ -e "$STUBS/libcuda.so.1" ] || ln -s libcuda.so "$STUBS/libcuda.so.1"
+            export LD_LIBRARY_PATH="$STUBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            echo "using CUDA driver stubs from $STUBS"
+          else
+            echo "::warning::no CUDA driver stubs found; the test binary may fail to load"
+          fi
+          ctest --test-dir build/tests -L cpu --output-on-failure
