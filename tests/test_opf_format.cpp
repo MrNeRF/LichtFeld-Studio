@@ -107,10 +107,10 @@ TEST_F(OpfFormatTest, RejectsInvalidItemResourceContract) {
 }
 
 TEST_F(OpfFormatTest, ParsesCameraListAndResolvesImageUris) {
-    write(root / "image.jpg", "test");
+    write(root / "Images" / "Nested" / "IMAGE.JPG", "test");
     write(root / "camera-list.json", R"({
         "format":"application/opf-camera-list+json", "version":"1.0",
-        "cameras":[{"id":42, "uri":"image.jpg"}]
+        "cameras":[{"id":42, "uri":"images/nested/image.jpg"}]
     })");
     lfs::io::opf::Resource resource{"camera-list.json",
                                     "application/opf-camera-list+json",
@@ -119,7 +119,7 @@ TEST_F(OpfFormatTest, ParsesCameraListAndResolvesImageUris) {
     ASSERT_TRUE(result.has_value()) << result.error().format();
     ASSERT_EQ(result->size(), 1u);
     EXPECT_EQ(result->front().id, 42u);
-    EXPECT_EQ(result->front().resolved_path, root / "image.jpg");
+    EXPECT_EQ(result->front().resolved_path, root / "Images" / "Nested" / "IMAGE.JPG");
 }
 
 TEST_F(OpfFormatTest, RejectsDuplicateCameraIds) {

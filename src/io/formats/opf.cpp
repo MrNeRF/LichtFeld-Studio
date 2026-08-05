@@ -311,12 +311,29 @@ namespace lfs::io::opf {
             const auto id = value["id"].get<std::uint64_t>();
             if (!ids.insert(id).second)
                 return invalid(resource.resolved_path, std::format("OPF camera id '{}' is duplicated.", id));
-            auto resolved = resolve_resource(base, *uri, resource.resolved_path);
+            auto resolved = resolve_image_uri(base, *uri);
             if (!resolved)
                 return std::unexpected(resolved.error());
             cameras.push_back({id, *uri, *resolved});
         }
         return cameras;
+    }
+
+    Result<std::filesystem::path> resolve_image_uri(const std::filesystem::path& project_root,
+                                                    std::string_view uri) {
+        if (uri.empty())
+            return invalid(project_root, "OPF image URI must not be empty.");
+        const auto requested = std::filesystem::u8path(uri);
+        if (requested.is_absolute() || requested.has_root_name())
+            return invalid(project_root, std::format("OPF image URI '{}' must be relative.", uri));
+        const RecursiveFileCache index(project_root);
+        const auto result = index.lookup(requested);
+        if (result.ambiguous())
+            return invalid(project_root, std::format("OPF image URI '{}' is ambiguous.", uri));
+        if (!result.found())
+            return make_error(ErrorCode::MISSING_REQUIRED_FILES,
+                              std::format("OPF image '{}' was not found.", uri), project_root);
+        return result.path;
     }
 
     Result<std::vector<InputSensor>> read_input_cameras(const Resource& resource) {

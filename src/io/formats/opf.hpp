@@ -4,9 +4,11 @@
 #pragma once
 
 #include "io/error.hpp"
+#include "io/filesystem_utils.hpp"
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::io::opf {
@@ -71,6 +73,8 @@ namespace lfs::io::opf {
     [[nodiscard]] Result<Project> read_project(const std::filesystem::path& path);
     [[nodiscard]] Result<std::vector<CameraImage>> read_camera_list(const Resource& resource,
                                                                     const std::filesystem::path& project_root);
+    [[nodiscard]] Result<std::filesystem::path> resolve_image_uri(const std::filesystem::path& project_root,
+                                                                  std::string_view uri);
     [[nodiscard]] Result<std::vector<InputSensor>> read_input_cameras(const Resource& resource);
     [[nodiscard]] Result<std::vector<InputCapture>> read_input_captures(const Resource& resource);
 
