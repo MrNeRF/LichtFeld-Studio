@@ -217,8 +217,13 @@ jobs:
             -DVCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/build/vcpkg_installed" \
             -DBUILD_PYTHON_STUBS=OFF
 
+      # shell: bash is required. The default run shell in this container does not
+      # support `set -o pipefail` or ${PIPESTATUS[@]}, and exits 2 before running
+      # a single line of the script — see the cuDNN step, which declares it for
+      # the same reason.
       - name: Build tests
         if: matrix.build_type == 'Release'
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
