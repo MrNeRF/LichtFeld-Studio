@@ -159,10 +159,31 @@ jobs:
           key: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
           restore-keys: vcpkg-pkgs-${{ runner.os }}-linux-gui-prebuilt-ort-
 
+      # LibTorch is only needed to configure the test build; the application
+      # itself is LibTorch-free. Restricted to the Release matrix entry so the
+      # download and the extra test compilation are paid once per run.
+      - name: Cache LibTorch
+        if: matrix.build_type == 'Release'
+        id: libtorch-cache
+        uses: actions/cache@v4
+        with:
+          path: external/libtorch
+          key: libtorch-${{ runner.os }}-2.7.1-cu128
+
+      - name: Download LibTorch
+        if: matrix.build_type == 'Release' && steps.libtorch-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fL --retry 3 -o libtorch.zip \
+            "https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu128.zip"
+          unzip -q libtorch.zip -d external/
+          rm -f libtorch.zip
+          df -h
+
       - name: Configure
         run: |
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DBUILD_TESTS=${{ matrix.build_type == 'Release' && 'ON' || 'OFF' }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
@@ -181,6 +202,12 @@ jobs:
 
       - name: Build
         run: cmake --build build -j $(nproc)
+
+      # GitHub runners have no GPU. lichtfeld.cpu is the only ctest entry not
+      # labelled "gpu"; every other suite needs a CUDA device.
+      - name: Run CPU tests
+        if: matrix.build_type == 'Release'
+        run: ctest --test-dir build -L cpu --output-on-failure
 
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:

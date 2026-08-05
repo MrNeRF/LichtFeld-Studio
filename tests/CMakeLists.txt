@@ -515,6 +515,97 @@ string(CONCAT LFS_SLOW_TEST_FILTER
 set(LFS_NON_FAST_TEST_FILTER
     "${LFS_SLOW_TEST_FILTER}:${LFS_NIGHTLY_TEST_FILTER}:DiscoveryFuzz.*:DiscoverySweep.*")
 
+# Suites that pass with no CUDA device present, for CI runners without a GPU.
+#
+# This is a positive allowlist rather than a negative filter on purpose. Without
+# a device most suites fail, one hangs indefinitely
+# (PythonIOTest.PipelinedLoaderStatsRemainResponsiveDuringCompletions), and the
+# binary eventually aborts once GPU allocation failures accumulate — so "run
+# everything except the GPU ones" strands or kills the runner rather than
+# reporting.
+#
+# Entries were selected by running the suite under CUDA_VISIBLE_DEVICES="" and
+# keeping only suites where every test passed. GUI, viewport, and renderer
+# suites are deliberately excluded: they pass against a real display but are
+# unverified headless, and a flaky gate is worse than a smaller one.
+#
+# Verify a candidate before adding it:
+#   CUDA_VISIBLE_DEVICES="" ./build/tests/tests/lichtfeld_tests --gtest_filter='Suite.*'
+set(LFS_CPU_TEST_SUITES
+    # argument and parameter parsing
+    ArgumentParserTest
+    ArgumentParserMetadataTest
+    TrainingParametersTest
+    ParameterValidationTest
+    ParameterManagerTest
+    DiagnosticModeParsing
+    # error handling and reporting
+    ErrorCore
+    ErrorCoreAbi
+    ErrorCoreOom
+    ErrorCoreConcurrency
+    ErrorCoreLegacyBridge
+    ErrorReporterTest
+    ErrorBusTest
+    ErrorEnvelopeTest
+    ErrorEventBridgeTest
+    ErrorDedupTest
+    ErrorLatchTest
+    ErrorFingerprintTest
+    ExceptionCore
+    ResultCore
+    StatusCore
+    CudaLaunchCheckTest
+    # assertion and guard hardening
+    AssertHardeningExpectedFailTest
+    AssertHardeningRegression
+    RunGuardedTest
+    ValidatedIndexToken
+    # paths, logging, serialization
+    UnicodePathTest
+    LoggerTest
+    PlyErrorTaxonomyTest
+    ViewInfoJson
+    HdrFormatClassification
+    CheckpointLoaderProbeTest
+    CheckpointAtomicReplaceFaultTest
+    # tensor logic that does not touch the device
+    TensorLazyIrTest
+    TensorMemoryPlannerTest
+    TensorStorageVersionCPUTest
+    # camera undistortion maths
+    UndistortColmapParity
+    UndistortPacking
+    UndistortBlankPixels
+    ScaleUndistortParams
+    # MCP protocol contracts
+    McpProtocolTest
+    McpSequencerToolsTest
+    McpAppUtilsTest
+    McpOperatorSchemaTest
+    McpSharedSceneToolsTest
+    McpTrainingStateTest
+)
+
+# Join explicitly: a bare CMake list expands with ";" separators, which gtest
+# does not accept as a pattern separator and silently reduces the filter to its
+# first entry.
+list(TRANSFORM LFS_CPU_TEST_SUITES APPEND ".*" OUTPUT_VARIABLE LFS_CPU_TEST_PATTERNS)
+list(JOIN LFS_CPU_TEST_PATTERNS ":" LFS_CPU_TEST_FILTER)
+
+add_test(NAME lichtfeld.cpu
+    COMMAND $<TARGET_FILE:lichtfeld_tests>
+        "--gtest_filter=${LFS_CPU_TEST_FILTER}"
+        --gtest_color=no
+)
+# No "gpu" label: this is the one entry that is expected to pass on a runner
+# with no CUDA device.
+set_tests_properties(lichtfeld.cpu PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "cpu"
+    TIMEOUT 300
+)
+
 add_test(NAME lichtfeld.fast
     COMMAND $<TARGET_FILE:lichtfeld_tests>
         "--gtest_filter=*-${LFS_NON_FAST_TEST_FILTER}"
