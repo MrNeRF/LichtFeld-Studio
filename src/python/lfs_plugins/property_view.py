@@ -108,6 +108,7 @@ BESPOKE_OR_HIDDEN = {
     "bg_modulation": "legacy mirror controlled by bg_mode",
     "headless": "runtime-only read-only flag",
     "prune_ratio": "scrub slider",
+    "steps_scaler": "driven by apply_step_scaling via the iterations lock; raw edits desync step counts",
 }
 
 AUTO_ADVANCED_RUN_ID = "advanced_registry"
@@ -554,7 +555,6 @@ class SectionBinding:
         self.rows = tuple(rows)
         self.model_key = f"pv_{self.section_id}_rows"
         self.options_model_key = f"pv_{self.section_id}_options"
-        self.visible_model_key = f"pv_{self.section_id}_visible"
         self._rows_by_id = {row["id"]: row for row in self.rows}
         self._params_accessor = params_accessor
         self._text_bufs = text_bufs
@@ -873,7 +873,6 @@ def bind_run(
     )
     model.bind_record_list(binding.model_key)
     model.bind_record_list(binding.options_model_key)
-    model.bind_func(binding.visible_model_key, binding.is_visible)
     return binding
 
 
