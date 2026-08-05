@@ -393,4 +393,60 @@ namespace lfs::io::opf {
         }
         return sensors;
     }
+
+    Result<std::vector<InputCapture>> read_input_captures(const Resource& resource) {
+        if (resource.format != "application/opf-input-cameras+json")
+            return invalid(resource.resolved_path, "OPF input cameras resource has an unexpected format.");
+        std::ifstream input(resource.resolved_path, std::ios::binary);
+        if (!input)
+            return make_error(ErrorCode::READ_FAILURE, "Cannot open OPF input cameras.", resource.resolved_path);
+        json root;
+        try {
+            root = json::parse(input);
+        } catch (const json::parse_error& error) {
+            return make_error(ErrorCode::MALFORMED_JSON,
+                              std::format("Malformed OPF input cameras JSON: {}", error.what()),
+                              resource.resolved_path);
+        }
+        if (!root.is_object() || !root.contains("captures") || !root["captures"].is_array())
+            return invalid(resource.resolved_path, "OPF input cameras requires a 'captures' array.");
+
+        std::unordered_set<std::uint64_t> sensor_ids;
+        if (root.contains("sensors") && root["sensors"].is_array()) {
+            for (const auto& sensor : root["sensors"])
+                if (sensor.is_object() && sensor.contains("id") && sensor["id"].is_number_unsigned())
+                    sensor_ids.insert(sensor["id"].get<std::uint64_t>());
+        }
+        std::unordered_set<std::uint64_t> capture_ids;
+        std::unordered_set<std::uint64_t> camera_ids;
+        std::vector<InputCapture> captures;
+        for (const auto& capture : root["captures"]) {
+            if (!capture.is_object() || !capture.contains("id") || !capture["id"].is_number_unsigned() ||
+                !capture.contains("cameras") || !capture["cameras"].is_array() || capture["cameras"].empty())
+                return invalid(resource.resolved_path, "OPF captures require a unique id and non-empty cameras array.");
+            const auto capture_id = capture["id"].get<std::uint64_t>();
+            if (!capture_ids.insert(capture_id).second)
+                return invalid(resource.resolved_path, "OPF capture ids must be unique.");
+            InputCapture parsed{capture_id, 0, {}};
+            for (const auto& camera : capture["cameras"]) {
+                if (!camera.is_object() || !camera.contains("id") || !camera["id"].is_number_unsigned() ||
+                    !camera.contains("sensor_id") || !camera["sensor_id"].is_number_unsigned())
+                    return invalid(resource.resolved_path, "OPF capture cameras require unsigned id and sensor_id.");
+                const auto camera_id = camera["id"].get<std::uint64_t>();
+                const auto sensor_id = camera["sensor_id"].get<std::uint64_t>();
+                if (!sensor_ids.contains(sensor_id))
+                    return invalid(resource.resolved_path, "OPF capture references a missing sensor.");
+                if (!camera_ids.insert(camera_id).second)
+                    return invalid(resource.resolved_path, "OPF camera ids must be unique across captures.");
+                parsed.camera_ids.push_back(camera_id);
+            }
+            if (!capture.contains("reference_camera_id") || !capture["reference_camera_id"].is_number_unsigned())
+                return invalid(resource.resolved_path, "OPF capture requires reference_camera_id.");
+            parsed.reference_camera_id = capture["reference_camera_id"].get<std::uint64_t>();
+            if (!camera_ids.contains(parsed.reference_camera_id))
+                return invalid(resource.resolved_path, "OPF capture reference_camera_id is not in its cameras array.");
+            captures.push_back(std::move(parsed));
+        }
+        return captures;
+    }
 } // namespace lfs::io::opf

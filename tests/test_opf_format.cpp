@@ -165,3 +165,30 @@ TEST_F(OpfFormatTest, RejectsUnsupportedInputCameraModel) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::UNSUPPORTED_FORMAT);
 }
+
+TEST_F(OpfFormatTest, ParsesInputCameraCaptures) {
+    write(root / "input-cameras.json", R"({
+        "format":"application/opf-input-cameras+json", "version":"1.0",
+        "sensors":[{"id":7, "image_size_px":[10,10], "internals":{"type":"spherical", "principal_point_px":[5,5]}}],
+        "captures":[{"id":9, "reference_camera_id":42, "cameras":[{"id":42, "sensor_id":7}]}]
+    })");
+    lfs::io::opf::Resource resource{"input-cameras.json", "application/opf-input-cameras+json",
+                                    root / "input-cameras.json"};
+    auto result = lfs::io::opf::read_input_captures(resource);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ(result->front().reference_camera_id, 42u);
+}
+
+TEST_F(OpfFormatTest, RejectsCaptureWithMissingSensor) {
+    write(root / "input-cameras.json", R"({
+        "format":"application/opf-input-cameras+json", "version":"1.0",
+        "sensors":[{"id":7, "image_size_px":[10,10], "internals":{"type":"spherical", "principal_point_px":[5,5]}}],
+        "captures":[{"id":9, "reference_camera_id":42, "cameras":[{"id":42, "sensor_id":8}]}]
+    })");
+    lfs::io::opf::Resource resource{"input-cameras.json", "application/opf-input-cameras+json",
+                                    root / "input-cameras.json"};
+    auto result = lfs::io::opf::read_input_captures(resource);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+}

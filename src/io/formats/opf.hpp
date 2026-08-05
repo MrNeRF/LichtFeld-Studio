@@ -58,6 +58,12 @@ namespace lfs::io::opf {
         std::vector<double> tangential_distortion;
     };
 
+    struct InputCapture {
+        std::uint64_t id;
+        std::uint64_t reference_camera_id;
+        std::vector<std::uint64_t> camera_ids;
+    };
+
     // Parses and validates the OPF project graph. Resource files are resolved
     // relative to the directory containing the project file and must remain
     // inside that directory. Unknown extension items/resources are retained
@@ -66,5 +72,6 @@ namespace lfs::io::opf {
     [[nodiscard]] Result<std::vector<CameraImage>> read_camera_list(const Resource& resource,
                                                                     const std::filesystem::path& project_root);
     [[nodiscard]] Result<std::vector<InputSensor>> read_input_cameras(const Resource& resource);
+    [[nodiscard]] Result<std::vector<InputCapture>> read_input_captures(const Resource& resource);
 
 } // namespace lfs::io::opf
