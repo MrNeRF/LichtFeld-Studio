@@ -342,7 +342,7 @@ namespace {
             auto params = OptimizationParameters::mrnf_defaults();
             params.normal_loss_space = space;
             const auto json = params.to_json();
-            EXPECT_EQ(json.at("normal_loss_space"), wire);
+            EXPECT_EQ(json.at("normal_loss_space").get<std::string>(), wire);
 
             auto old_json = json;
             old_json["normal_loss_space"] = wire;
@@ -366,7 +366,7 @@ namespace {
             const auto expected = nlohmann::json::parse(fixture_bytes);
             const auto actual = params.to_json();
 
-            EXPECT_EQ(actual, expected);
+            EXPECT_TRUE(actual == expected);
             EXPECT_EQ(actual.dump(2), expected.dump(2));
             EXPECT_EQ(actual.dump(2) + '\n', fixture_bytes);
 
@@ -384,7 +384,7 @@ namespace {
             }
 
             const auto mutated_actual = mutated.to_json();
-            EXPECT_EQ(mutated_actual, mutated_expected);
+            EXPECT_TRUE(mutated_actual == mutated_expected);
             EXPECT_EQ(mutated_actual.dump(2), mutated_expected.dump(2));
         }
     }
