@@ -183,7 +183,6 @@ jobs:
         run: |
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DBUILD_TESTS=${{ matrix.build_type == 'Release' && 'ON' || 'OFF' }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
@@ -200,30 +199,23 @@ jobs:
           rm -rf "$VCPKG_ROOT"/buildtrees "$VCPKG_ROOT"/downloads "$VCPKG_ROOT"/packages
           df -h
 
-      # Application and test binary build as separate steps so a failure is
-      # attributable, and so the test target can use fewer jobs: its translation
-      # units include LibTorch headers and peak much higher in memory.
-      #
-      # Failures are echoed as ::error:: annotations. Workflow logs require an
-      # authenticated session to read; annotations are exposed by the public
-      # checks API, so this is what makes a red run diagnosable from outside.
-      # Every diagnostic is guarded with || true: this container image is
-      # minimal and a missing tool must never mask the real build error.
       - name: Build application
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cmake --build build -j $(nproc)
+
+      # Tests are configured into their own build tree. Turning BUILD_TESTS on in
+      # the application's tree makes find_package(Torch) run during the app
+      # configure and changes how the application itself is built; the source
+      # build guide keeps them separate for that reason. VCPKG_INSTALLED_DIR is
+      # reused so this does not restore the whole dependency set a second time.
+      - name: Configure tests
+        if: matrix.build_type == 'Release'
         run: |
-          set -o pipefail
-          df -h / || true
-          set +e
-          cmake --build build --target LichtFeld-Studio lfs_py -j "$(nproc)" 2>&1 | tee /tmp/build-app.log
-          rc=${PIPESTATUS[0]}
-          set -e
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::Application build failed with exit $rc"
-            "${GITHUB_WORKSPACE}/.github/report-build-failure.sh" "Application build" /tmp/build-app.log || true
-            exit 1
-          fi
+          cmake -S . -B build/tests -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
+            -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+            -DVCPKG_INSTALLED_DIR="${GITHUB_WORKSPACE}/build/vcpkg_installed" \
+            -DBUILD_PYTHON_STUBS=OFF
 
       - name: Build tests
         if: matrix.build_type == 'Release'
@@ -231,10 +223,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -o pipefail
-          # Fewer jobs than cores on purpose: LibTorch-including test units are
-          # memory hungry and the runner has far less RAM than a dev machine.
           set +e
-          cmake --build build --target lichtfeld_tests -j 2 2>&1 | tee /tmp/build-tests.log
+          # Fewer jobs than cores: LibTorch-including units are memory hungry.
+          cmake --build build/tests --target lichtfeld_tests -j 2 2>&1 | tee /tmp/build-tests.log
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -ne 0 ]; then
@@ -247,7 +238,7 @@ jobs:
       # labelled "gpu"; every other suite needs a CUDA device.
       - name: Run CPU tests
         if: matrix.build_type == 'Release'
-        run: ctest --test-dir build -L cpu --output-on-failure
+        run: ctest --test-dir build/tests -L cpu --output-on-failure
 
   # .clang-tidy is for local/IDE use only here; CI needs compile_commands.json in a later phase.
   error-debt-gate:
