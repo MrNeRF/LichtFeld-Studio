@@ -1395,6 +1395,7 @@
     "action.node_rect_select": "Knoten mit Rechteck auswählen",
     "action.toggle_ui": "UI umschalten",
     "action.toggle_fullscreen": "Vollbild umschalten",
+    "action.open_preferences": "Einstellungen öffnen",
     "action.histogram_zoom_marked": "Histogramm am Cursor zoomen",
     "action.sequencer_add_keyframe": "Keyframe hinzufügen",
     "action.sequencer_update_keyframe": "Keyframe aktualisieren",

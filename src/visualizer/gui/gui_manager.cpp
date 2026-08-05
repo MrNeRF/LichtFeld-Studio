@@ -6893,6 +6893,10 @@ namespace lfs::vis::gui {
         lfs::core::events::cmd::RequestExit{}.emit();
     }
 
+    void GuiManager::openPreferences() {
+        PanelRegistry::instance().set_panel_enabled("lfs.preferences", true);
+    }
+
     bool GuiManager::isExitConfirmationPending() const {
         return lfs::python::is_exit_popup_open();
     }

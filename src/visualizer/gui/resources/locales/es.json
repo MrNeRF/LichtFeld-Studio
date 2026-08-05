@@ -524,6 +524,7 @@
     "action.node_rect_select": "Selección rectangular de nodos",
     "action.toggle_ui": "Alternar UI",
     "action.toggle_fullscreen": "Alternar pantalla completa",
+    "action.open_preferences": "Abrir preferencias",
     "action.histogram_zoom_marked": "Zoom del Histograma en el Cursor",
     "action.sequencer_add_keyframe": "Añadir fotograma clave",
     "action.sequencer_update_keyframe": "Actualizar fotograma clave",

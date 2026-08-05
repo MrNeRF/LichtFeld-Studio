@@ -23,8 +23,8 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 20; // Version 20 adds the performance HUD toggle.
-        constexpr Action LAST_ACTION = Action::TOGGLE_PERFORMANCE_HUD;
+        constexpr int PROFILE_VERSION = 21; // Version 21 adds the Preferences shortcut.
+        constexpr Action LAST_ACTION = Action::OPEN_PREFERENCES;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -506,7 +506,8 @@ namespace lfs::vis::input {
                 (version < 17 && def.action == Action::SELECTION_INTERSECT) ||
                 (version < 18 && selection_volume_shortcut) ||
                 (version < 19 && def.action == Action::CUT_SELECTION) ||
-                (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD);
+                (version < 20 && def.action == Action::TOGGLE_PERFORMANCE_HUD) ||
+                (version < 21 && def.action == Action::OPEN_PREFERENCES);
             if (!should_add) {
                 continue;
             }
@@ -1013,6 +1014,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_F12, MODIFIER_NONE}, Action::TOGGLE_UI, "Hide UI"},
             {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             {KeyTrigger{KEY_F10, MODIFIER_NONE}, Action::TOGGLE_PERFORMANCE_HUD, "Performance HUD"},
+            {KeyTrigger{KEY_COMMA, MODIFIER_CTRL}, Action::OPEN_PREFERENCES, "Preferences"},
             {MouseScrollTrigger{MODIFIER_CTRL}, Action::HISTOGRAM_ZOOM_MARKED, "Zoom histogram at cursor"},
             // Sequencer
             {KeyTrigger{KEY_K, MODIFIER_NONE}, Action::SEQUENCER_ADD_KEYFRAME, "Add keyframe"},
@@ -1174,6 +1176,7 @@ namespace lfs::vis::input {
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
+        case Action::OPEN_PREFERENCES: return "Open Preferences";
         default: return "Unknown";
         }
     }
@@ -1256,6 +1259,7 @@ namespace lfs::vis::input {
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
         case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
+        case Action::OPEN_PREFERENCES: return "open_preferences";
         default: return {};
         }
     }
@@ -1936,6 +1940,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
         case Action::TOGGLE_PERFORMANCE_HUD:
+        case Action::OPEN_PREFERENCES:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;
@@ -1970,6 +1975,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
         case Action::TOGGLE_PERFORMANCE_HUD:
+        case Action::OPEN_PREFERENCES:
         case Action::SELECT_MODE_CENTERS:
         case Action::SELECT_MODE_RECTANGLE:
         case Action::SELECT_MODE_POLYGON:

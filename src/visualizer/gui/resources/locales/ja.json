@@ -1395,6 +1395,7 @@
     "action.node_rect_select": "ノードを矩形選択",
     "action.toggle_ui": "UI切替",
     "action.toggle_fullscreen": "全画面切替",
+    "action.open_preferences": "設定を開く",
     "action.histogram_zoom_marked": "カーソル位置でヒストグラムをズーム",
     "action.sequencer_add_keyframe": "キーフレーム追加",
     "action.sequencer_update_keyframe": "キーフレーム更新",

@@ -135,6 +135,7 @@ namespace lfs::vis {
             [[nodiscard]] std::unordered_map<std::string, bool>* getWindowStates() { return &window_states_; }
 
             void requestExitConfirmation();
+            void openPreferences();
             bool isExitConfirmationPending() const;
 
             bool isCapturingInput() const;

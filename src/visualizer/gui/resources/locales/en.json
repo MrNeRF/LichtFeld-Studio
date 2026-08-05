@@ -1407,6 +1407,7 @@
     "action.node_rect_select": "Rectangle Select Nodes",
     "action.toggle_ui": "Toggle UI",
     "action.toggle_fullscreen": "Toggle Fullscreen",
+    "action.open_preferences": "Open Preferences",
     "action.histogram_zoom_marked": "Zoom Histogram at Cursor",
     "action.sequencer_add_keyframe": "Add Keyframe",
     "action.sequencer_update_keyframe": "Update Keyframe",

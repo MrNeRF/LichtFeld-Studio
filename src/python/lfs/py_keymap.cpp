@@ -178,7 +178,8 @@ namespace lfs::python {
             .value("PIE_MENU", Action::PIE_MENU)
             .value("DEPTH_ADJUST_NEAR", Action::DEPTH_ADJUST_NEAR)
             .value("HISTOGRAM_ZOOM_MARKED", Action::HISTOGRAM_ZOOM_MARKED)
-            .value("TOGGLE_CAMERA_FRUSTUMS", Action::TOGGLE_CAMERA_FRUSTUMS);
+            .value("TOGGLE_CAMERA_FRUSTUMS", Action::TOGGLE_CAMERA_FRUSTUMS)
+            .value("OPEN_PREFERENCES", Action::OPEN_PREFERENCES);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")

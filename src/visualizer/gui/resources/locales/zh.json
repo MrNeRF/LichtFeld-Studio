@@ -1414,6 +1414,7 @@
     "action.node_rect_select": "矩形选择节点",
     "action.toggle_ui": "切换 UI",
     "action.toggle_fullscreen": "切换全屏",
+    "action.open_preferences": "打开偏好设置",
     "action.histogram_zoom_marked": "在光标处缩放直方图",
     "action.sequencer_add_keyframe": "添加关键帧",
     "action.sequencer_update_keyframe": "更新关键帧",

@@ -1395,6 +1395,7 @@
     "action.node_rect_select": "Sélection rectangulaire de nœuds",
     "action.toggle_ui": "Basculer l'interface",
     "action.toggle_fullscreen": "Basculer le plein écran",
+    "action.open_preferences": "Ouvrir les préférences",
     "action.histogram_zoom_marked": "Zoomer l'histogramme au curseur",
     "action.sequencer_add_keyframe": "Ajouter une image clé",
     "action.sequencer_update_keyframe": "Mettre à jour l'image clé",

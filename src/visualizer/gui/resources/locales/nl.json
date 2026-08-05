@@ -1395,6 +1395,7 @@
     "action.node_rect_select": "Knopen rechthoekig selecteren",
     "action.toggle_ui": "UI omschakelen",
     "action.toggle_fullscreen": "Volledig scherm omschakelen",
+    "action.open_preferences": "Voorkeuren openen",
     "action.histogram_zoom_marked": "Histogram bij cursor zoomen",
     "action.sequencer_add_keyframe": "Keyframe toevoegen",
     "action.sequencer_update_keyframe": "Keyframe bijwerken",

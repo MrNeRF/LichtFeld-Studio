@@ -1395,6 +1395,7 @@
     "action.node_rect_select": "Selezione rettangolare di nodi",
     "action.toggle_ui": "Attiva UI",
     "action.toggle_fullscreen": "Attiva schermo intero",
+    "action.open_preferences": "Apri preferenze",
     "action.histogram_zoom_marked": "Zoom istogramma al cursore",
     "action.sequencer_add_keyframe": "Aggiungi keyframe",
     "action.sequencer_update_keyframe": "Aggiorna keyframe",

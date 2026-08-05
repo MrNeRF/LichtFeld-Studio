@@ -1395,6 +1395,7 @@
     "action.node_rect_select": "Prostokątne zaznaczenie węzłów",
     "action.toggle_ui": "Przełącz interfejs",
     "action.toggle_fullscreen": "Przełącz pełny ekran",
+    "action.open_preferences": "Otwórz preferencje",
     "action.histogram_zoom_marked": "Powiększ histogram przy kursorze",
     "action.sequencer_add_keyframe": "Dodaj klatkę kluczową",
     "action.sequencer_update_keyframe": "Aktualizuj klatkę kluczową",

@@ -1395,6 +1395,7 @@
     "action.node_rect_select": "노드 사각형 선택",
     "action.toggle_ui": "UI 전환",
     "action.toggle_fullscreen": "전체 화면 전환",
+    "action.open_preferences": "환경설정 열기",
     "action.histogram_zoom_marked": "커서 위치에서 히스토그램 확대/축소",
     "action.sequencer_add_keyframe": "키프레임 추가",
     "action.sequencer_update_keyframe": "키프레임 업데이트",
