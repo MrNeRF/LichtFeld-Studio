@@ -53,7 +53,6 @@ namespace lfs::python {
         [[nodiscard]] bool can_edit() const;
     };
 
-    void register_optimization_properties();
     void register_dataset_properties();
     void register_params(nb::module_& m);
 

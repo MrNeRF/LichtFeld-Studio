@@ -39,10 +39,6 @@ namespace lfs::python {
         return meta.getter(ref);
     }
 
-    void register_optimization_properties() {
-        core::param::register_optimization_properties();
-    }
-
     void register_dataset_properties() {
         PropertyGroup group;
         group.id = "dataset";
