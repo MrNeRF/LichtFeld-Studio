@@ -4,6 +4,8 @@
 
 #include "core/system_info.hpp"
 
+#include "core/logger.hpp"
+
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -140,7 +142,7 @@ namespace lfs::core::system_info {
         }
 
         std::uint64_t collect_ram_mb() {
-            struct sysinfo state {};
+            struct sysinfo state{};
             if (::sysinfo(&state) != 0)
                 return 0;
             const auto bytes = static_cast<std::uint64_t>(state.totalram) *
@@ -153,21 +155,36 @@ namespace lfs::core::system_info {
 
     SystemInfo collect() noexcept {
         SystemInfo info;
+        // Each probe is independent and best-effort: one unavailable source
+        // must not cost us the rest of the report. Failures are logged rather
+        // than swallowed so a permanently blank field is diagnosable.
         try {
             collect_os(info);
+        } catch (const std::exception& e) {
+            LOG_DEBUG("system_info: OS probe failed: {}", e.what());
         } catch (...) {
+            LOG_DEBUG("system_info: OS probe failed with a non-standard exception");
         }
         try {
             info.cpu = collect_cpu();
+        } catch (const std::exception& e) {
+            LOG_DEBUG("system_info: CPU probe failed: {}", e.what());
         } catch (...) {
+            LOG_DEBUG("system_info: CPU probe failed with a non-standard exception");
         }
         try {
             info.ram_mb = collect_ram_mb();
+        } catch (const std::exception& e) {
+            LOG_DEBUG("system_info: RAM probe failed: {}", e.what());
         } catch (...) {
+            LOG_DEBUG("system_info: RAM probe failed with a non-standard exception");
         }
         try {
             info.cuda_runtime = cuda_runtime_version();
+        } catch (const std::exception& e) {
+            LOG_DEBUG("system_info: CUDA runtime probe failed: {}", e.what());
         } catch (...) {
+            LOG_DEBUG("system_info: CUDA runtime probe failed with a non-standard exception");
         }
         return info;
     }

@@ -82,7 +82,11 @@ namespace lfs::core {
                 record.log_path = value.at("log_path").get<std::string>();
                 record.clean_exit = value.at("clean_exit").get<bool>();
                 return record;
+            } catch (const std::exception& e) {
+                LOG_DEBUG("session breadcrumb: discarding unreadable record: {}", e.what());
+                return std::nullopt;
             } catch (...) {
+                LOG_DEBUG("session breadcrumb: discarding unreadable record");
                 return std::nullopt;
             }
         }
@@ -175,7 +179,8 @@ namespace lfs::core {
                         previous_record->log_path = snapshot_path().string();
                     else
                         previous_record->log_path.clear();
-                } catch (...) {
+                } catch (const std::exception& e) {
+                    LOG_DEBUG("session breadcrumb: could not snapshot previous log: {}", e.what());
                     previous_record->log_path.clear();
                 }
             } else if (previous_record) {
@@ -189,7 +194,10 @@ namespace lfs::core {
                 .clean_exit = false,
             };
             static_cast<void>(write_record(breadcrumb_path(), *current_record));
+        } catch (const std::exception& e) {
+            LOG_DEBUG("session breadcrumb: could not record session start: {}", e.what());
         } catch (...) {
+            LOG_DEBUG("session breadcrumb: could not record session start");
         }
     }
 
@@ -200,7 +208,10 @@ namespace lfs::core {
                 return;
             current_record->clean_exit = true;
             static_cast<void>(write_record(breadcrumb_path(), *current_record));
+        } catch (const std::exception& e) {
+            LOG_DEBUG("session breadcrumb: could not mark clean exit: {}", e.what());
         } catch (...) {
+            LOG_DEBUG("session breadcrumb: could not mark clean exit");
         }
     }
 
@@ -208,7 +219,11 @@ namespace lfs::core {
         try {
             std::lock_guard lock(breadcrumb_mutex);
             return previous_record;
+        } catch (const std::exception& e) {
+            LOG_DEBUG("session breadcrumb: previous session unavailable: {}", e.what());
+            return std::nullopt;
         } catch (...) {
+            LOG_DEBUG("session breadcrumb: previous session unavailable");
             return std::nullopt;
         }
     }
