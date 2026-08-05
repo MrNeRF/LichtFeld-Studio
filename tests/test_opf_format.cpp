@@ -199,3 +199,21 @@ TEST_F(OpfFormatTest, DetectsOpfProjectAsDataset) {
     EXPECT_TRUE(lfs::io::Loader::isDatasetPath(root / "project.opf"));
     EXPECT_EQ(lfs::io::Loader::getDatasetType(root / "project.opf"), lfs::io::DatasetType::OPF);
 }
+
+TEST_F(OpfFormatTest, ParsesPointCloudGltfBuffers) {
+    write(root / "positions.bin", "data");
+    write(root / "cloud.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"positions.bin"}]})");
+    lfs::io::opf::Resource resource{"cloud.gltf", "model/gltf+json", root / "cloud.gltf"};
+    auto result = lfs::io::opf::read_point_cloud_manifest(resource, root);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(result->buffer_paths.size(), 1u);
+    EXPECT_EQ(result->buffer_paths.front(), root / "positions.bin");
+}
+
+TEST_F(OpfFormatTest, RejectsPointCloudBufferEscape) {
+    write(root / "cloud.gltf", R"({"asset":{"version":"2.0"},"buffers":[{"uri":"../positions.bin"}]})");
+    lfs::io::opf::Resource resource{"cloud.gltf", "model/gltf+json", root / "cloud.gltf"};
+    auto result = lfs::io::opf::read_point_cloud_manifest(resource, root);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+}

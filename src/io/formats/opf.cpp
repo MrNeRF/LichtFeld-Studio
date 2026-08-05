@@ -466,4 +466,38 @@ namespace lfs::io::opf {
         }
         return captures;
     }
+
+    Result<PointCloudManifest> read_point_cloud_manifest(const Resource& gltf_resource,
+                                                         const std::filesystem::path& project_root) {
+        if (gltf_resource.format != "model/gltf+json")
+            return invalid(gltf_resource.resolved_path, "OPF point cloud requires a glTF JSON resource.");
+        std::ifstream input(gltf_resource.resolved_path, std::ios::binary);
+        if (!input)
+            return make_error(ErrorCode::READ_FAILURE, "Cannot open OPF point cloud glTF.", gltf_resource.resolved_path);
+        json root;
+        try {
+            root = json::parse(input);
+        } catch (const json::parse_error& error) {
+            return make_error(ErrorCode::MALFORMED_JSON,
+                              std::format("Malformed OPF point cloud glTF: {}", error.what()),
+                              gltf_resource.resolved_path);
+        }
+        if (!root.is_object() || !root.contains("asset") || !root["asset"].is_object() ||
+            root["asset"].value("version", std::string{}) != "2.0")
+            return invalid(gltf_resource.resolved_path, "OPF point cloud requires glTF asset version 2.0.");
+        if (!root.contains("buffers") || !root["buffers"].is_array())
+            return invalid(gltf_resource.resolved_path, "OPF point cloud glTF requires a buffers array.");
+
+        PointCloudManifest manifest{gltf_resource.resolved_path, {}};
+        const auto base = project_root.lexically_normal();
+        for (const auto& buffer : root["buffers"]) {
+            if (!buffer.is_object() || !buffer.contains("uri") || !buffer["uri"].is_string())
+                return invalid(gltf_resource.resolved_path, "OPF point cloud buffers require relative URI strings.");
+            auto resolved = resolve_resource(base, buffer["uri"].get<std::string>(), gltf_resource.resolved_path);
+            if (!resolved)
+                return std::unexpected(resolved.error());
+            manifest.buffer_paths.push_back(*resolved);
+        }
+        return manifest;
+    }
 } // namespace lfs::io::opf
