@@ -116,15 +116,6 @@ namespace lfs::core::prop {
         std::function<std::any(const PropertyObjectRef&)> getter;
         std::function<void(PropertyObjectRef&, const std::any&)> setter;
 
-        // AnimatableProperty bridge for Python descriptor support
-        std::function<void*(const PropertyObjectRef&)> get_animatable_ptr;
-        bool supports_descriptor = false;
-
-        bool is_collection = false;
-        std::string collection_item_type;
-        std::function<size_t(const PropertyObjectRef&)> collection_size;
-        std::function<PropertyObjectRef(const PropertyObjectRef&, size_t)> collection_get;
-
         std::function<void(const PropertyObjectRef&, const std::any&, const std::any&)> on_update;
 
         [[nodiscard]] bool has_flag(PropFlags f) const { return (flags & f) != PROP_NONE; }

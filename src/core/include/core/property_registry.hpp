@@ -11,7 +11,6 @@
 
 #include <cassert>
 #include <glm/glm.hpp>
-#include <glm/gtc/quaternion.hpp>
 #include <mutex>
 #include <tuple>
 #include <unordered_map>
@@ -237,7 +236,6 @@ namespace lfs::core::prop {
             meta.description = desc;
             meta.type = PropertyTraits<T>::type;
             meta.flags = PROP_ANIMATABLE;
-            meta.supports_descriptor = true;
 
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
                 assert(ref.is_cpp() && "Cannot call C++ property getter with Python object");
@@ -246,10 +244,6 @@ namespace lfs::core::prop {
             meta.setter = [member](PropertyObjectRef& ref, const std::any& val) {
                 assert(ref.is_cpp() && "Cannot call C++ property setter with Python object");
                 (static_cast<StructT*>(ref.ptr)->*member) = std::any_cast<T>(val);
-            };
-            meta.get_animatable_ptr = [member](const PropertyObjectRef& ref) -> void* {
-                assert(ref.is_cpp() && "Cannot call C++ animatable_ptr with Python object");
-                return &(static_cast<StructT*>(const_cast<void*>(ref.ptr))->*member);
             };
 
             group_.properties.push_back(std::move(meta));
@@ -270,47 +264,6 @@ namespace lfs::core::prop {
                 });
             group_.properties.back().default_value =
                 std::array<double, 3>{default_val.x, default_val.y, default_val.z};
-            return *this;
-        }
-
-        PropertyGroupBuilder& quat_prop(glm::quat StructT::*member,
-                                        const std::string& id,
-                                        const std::string& name,
-                                        const glm::quat& default_val,
-                                        const std::string& desc = "") {
-            add_prop(
-                member, id, name, PropType::Quat, desc, PropUIHint::Default,
-                [](const glm::quat& q) { return std::array<float, 4>{q.w, q.x, q.y, q.z}; },
-                [](const std::any& v) {
-                    auto arr = std::any_cast<std::array<float, 4>>(v);
-                    return glm::quat{arr[0], arr[1], arr[2], arr[3]};
-                });
-            group_.properties.back().default_value =
-                std::array<double, 4>{default_val.w, default_val.x, default_val.y, default_val.z};
-            return *this;
-        }
-
-        PropertyGroupBuilder& mat4_prop(glm::mat4 StructT::*member,
-                                        const std::string& id,
-                                        const std::string& name,
-                                        const std::string& desc = "") {
-            add_prop(
-                member, id, name, PropType::Mat4, desc, PropUIHint::Default,
-                [](const glm::mat4& m) {
-                    std::array<float, 16> arr;
-                    for (int i = 0; i < 4; ++i)
-                        for (int j = 0; j < 4; ++j)
-                            arr[i * 4 + j] = m[i][j];
-                    return arr;
-                },
-                [](const std::any& v) {
-                    auto arr = std::any_cast<std::array<float, 16>>(v);
-                    glm::mat4 m;
-                    for (int i = 0; i < 4; ++i)
-                        for (int j = 0; j < 4; ++j)
-                            m[i][j] = arr[i * 4 + j];
-                    return m;
-                });
             return *this;
         }
 
@@ -342,32 +295,6 @@ namespace lfs::core::prop {
                 [](const std::any& v) { return std::any_cast<std::array<float, 3>>(v); });
             group_.properties.back().default_value =
                 std::array<double, 3>{default_val[0], default_val[1], default_val[2]};
-            return *this;
-        }
-
-        template <typename CollT>
-        PropertyGroupBuilder& collection_prop(CollT StructT::*member,
-                                              const std::string& id,
-                                              const std::string& item_type) {
-            PropertyMeta meta;
-            meta.id = id;
-            meta.is_collection = true;
-            meta.collection_item_type = item_type;
-
-            meta.collection_size = [member](const PropertyObjectRef& ref) -> size_t {
-                assert(ref.is_cpp() && "Cannot call C++ collection_size with Python object");
-                return (static_cast<const StructT*>(ref.ptr)->*member).size();
-            };
-            meta.collection_get = [member](const PropertyObjectRef& ref, size_t i) -> PropertyObjectRef {
-                assert(ref.is_cpp() && "Cannot call C++ collection_get with Python object");
-                auto& coll = static_cast<StructT*>(const_cast<void*>(ref.ptr))->*member;
-                if (i < coll.size()) {
-                    return PropertyObjectRef::cpp(&coll[i]);
-                }
-                return PropertyObjectRef{};
-            };
-
-            group_.properties.push_back(std::move(meta));
             return *this;
         }
 

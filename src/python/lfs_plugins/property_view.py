@@ -4,7 +4,7 @@
 
 import re
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional
 
 import lichtfeld as lf
 
@@ -569,9 +569,6 @@ class SectionBinding:
         self._edit_snapshots = {}
         self.sync_text_bufs(publish=False)
 
-    def contains(self, prop_id):
-        return str(prop_id) in self._rows_by_id
-
     def input_key(self, prop_id):
         return f"pv_{self.section_id}_{prop_id}_str"
 
@@ -935,25 +932,3 @@ def bind_sections(
     return bindings
 
 
-def bind_section(
-    model,
-    section_id,
-    prop_ids: Sequence[str],
-    params_accessor,
-    text_bufs,
-    publisher,
-    value_setter=None,
-    search_accessor=None,
-    visibility_predicate=None,
-):
-    """Compatibility seam for focused property-view tests and plugins."""
-    return bind_run(
-        model,
-        SectionRunSpec(str(section_id), tuple(prop_ids)),
-        params_accessor,
-        text_bufs,
-        publisher,
-        value_setter,
-        search_accessor=search_accessor,
-        visibility_predicate=visibility_predicate,
-    )

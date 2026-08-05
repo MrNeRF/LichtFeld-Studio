@@ -211,11 +211,6 @@ namespace lfs::python {
             return core::param::OptimizationParameters::defaults_for_strategy(get_default_params().strategy);
         }
 
-        void mark_params_dirty() {
-            if (auto* pm = get_parameter_manager())
-                pm->markDirty();
-        }
-
         template <typename F>
         void modify_params(F&& fn) {
             auto* pm = get_parameter_manager();
