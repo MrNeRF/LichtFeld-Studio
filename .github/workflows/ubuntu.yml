@@ -207,10 +207,23 @@ jobs:
       # configure and changes how the application itself is built; the source
       # build guide keeps them separate for that reason. VCPKG_INSTALLED_DIR is
       # reused so this does not restore the whole dependency set a second time.
+      # The application is linked by now, so its object files are dead weight.
+      # A second build tree plus LibTorch does not fit beside them on a runner
+      # with ~14GB free.
+      - name: Reclaim disk before test build
+        if: matrix.build_type == 'Release'
+        shell: bash
+        run: |
+          df -h /
+          find build -name '*.o' -delete 2>/dev/null || true
+          rm -rf "$VCPKG_ROOT"/buildtrees "$VCPKG_ROOT"/downloads "$VCPKG_ROOT"/packages 2>/dev/null || true
+          echo "after reclaim:"
+          df -h /
+
       - name: Configure tests
         if: matrix.build_type == 'Release'
         run: |
-          cmake -S . -B build/tests -G Ninja \
+          cmake -S . -B build-tests -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTS=ON \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
@@ -230,7 +243,7 @@ jobs:
           set -o pipefail
           set +e
           # Fewer jobs than cores: LibTorch-including units are memory hungry.
-          cmake --build build/tests --target lichtfeld_tests -j 2 2>&1 | tee /tmp/build-tests.log
+          cmake --build build-tests --target lichtfeld_tests -j 2 2>&1 | tee /tmp/build-tests.log
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -ne 0 ]; then
@@ -246,8 +259,12 @@ jobs:
         if: matrix.build_type == 'Release'
         shell: bash
         run: |
-          PY=$(find "${GITHUB_WORKSPACE}/build/vcpkg_installed" -maxdepth 4 -type f -name 'python3.*' -perm -u+x 2>/dev/null | head -1)
-          [ -n "$PY" ] || PY=$(command -v python3)
+          # Match the interpreter only. python3.12-config lives in the same
+          # directory and satisfies a naive python3.* glob.
+          PY="${GITHUB_WORKSPACE}/build/vcpkg_installed/x64-linux/tools/python3/python3"
+          [ -x "$PY" ] || PY=$(find "${GITHUB_WORKSPACE}/build/vcpkg_installed" -maxdepth 4 -type f \
+              -regex '.*/python3\.[0-9]+' -perm -u+x 2>/dev/null | sort | head -1)
+          [ -n "$PY" ] && [ -x "$PY" ] || PY=$(command -v python3)
           echo "using interpreter: $PY"
           "$PY" -m ensurepip --upgrade >/dev/null 2>&1 || true
           "$PY" -m pip install -q -r tests/python/requirements-test.txt
@@ -275,4 +292,8 @@ jobs:
           else
             echo "::warning::no CUDA driver stubs found; the test binary may fail to load"
           fi
-          ctest --test-dir build/tests -L cpu --output-on-failure
+          if ldd build-tests/tests/lichtfeld_tests 2>/dev/null | grep 'not found'; then
+            echo "::error::test binary has unresolved shared libraries (see above)"
+            exit 1
+          fi
+          ctest --test-dir build-tests -L cpu --output-on-failure
