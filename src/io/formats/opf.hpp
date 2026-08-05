@@ -4,6 +4,7 @@
 #pragma once
 
 #include "io/error.hpp"
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -45,6 +46,18 @@ namespace lfs::io::opf {
         std::filesystem::path resolved_path;
     };
 
+    struct InputSensor {
+        std::uint64_t id;
+        std::string name;
+        std::uint32_t width;
+        std::uint32_t height;
+        std::string model;
+        std::vector<double> principal_point;
+        double focal_length = 0.0;
+        std::vector<double> radial_distortion;
+        std::vector<double> tangential_distortion;
+    };
+
     // Parses and validates the OPF project graph. Resource files are resolved
     // relative to the directory containing the project file and must remain
     // inside that directory. Unknown extension items/resources are retained
@@ -52,5 +65,6 @@ namespace lfs::io::opf {
     [[nodiscard]] Result<Project> read_project(const std::filesystem::path& path);
     [[nodiscard]] Result<std::vector<CameraImage>> read_camera_list(const Resource& resource,
                                                                     const std::filesystem::path& project_root);
+    [[nodiscard]] Result<std::vector<InputSensor>> read_input_cameras(const Resource& resource);
 
 } // namespace lfs::io::opf

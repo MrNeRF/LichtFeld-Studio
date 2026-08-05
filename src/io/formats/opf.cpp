@@ -318,4 +318,79 @@ namespace lfs::io::opf {
         }
         return cameras;
     }
+
+    Result<std::vector<InputSensor>> read_input_cameras(const Resource& resource) {
+        if (resource.format != "application/opf-input-cameras+json")
+            return invalid(resource.resolved_path, "OPF input cameras resource has an unexpected format.");
+        std::ifstream input(resource.resolved_path, std::ios::binary);
+        if (!input)
+            return make_error(ErrorCode::READ_FAILURE, "Cannot open OPF input cameras.", resource.resolved_path);
+        json root;
+        try {
+            root = json::parse(input);
+        } catch (const json::parse_error& error) {
+            return make_error(ErrorCode::MALFORMED_JSON,
+                              std::format("Malformed OPF input cameras JSON: {}", error.what()),
+                              resource.resolved_path);
+        }
+        if (!root.is_object())
+            return invalid(resource.resolved_path, "OPF input cameras root must be an object.");
+        auto format = required_string(root, "format", resource.resolved_path, "input cameras");
+        auto version = required_string(root, "version", resource.resolved_path, "input cameras");
+        if (!format)
+            return std::unexpected(format.error());
+        if (!version)
+            return std::unexpected(version.error());
+        if (*format != "application/opf-input-cameras+json")
+            return make_error(ErrorCode::UNSUPPORTED_FORMAT, "Unsupported OPF input cameras format.", resource.resolved_path);
+        if (!root.contains("sensors") || !root["sensors"].is_array())
+            return invalid(resource.resolved_path, "OPF input cameras requires a 'sensors' array.");
+
+        std::vector<InputSensor> sensors;
+        std::unordered_set<std::uint64_t> ids;
+        for (const auto& sensor : root["sensors"]) {
+            if (!sensor.is_object() || !sensor.contains("id") || !sensor["id"].is_number_unsigned())
+                return invalid(resource.resolved_path, "OPF sensors require unsigned integer ids.");
+            if (!ids.insert(sensor["id"].get<std::uint64_t>()).second)
+                return invalid(resource.resolved_path, "OPF input sensor ids must be unique.");
+            if (!sensor.contains("image_size_px") || !sensor["image_size_px"].is_array() ||
+                sensor["image_size_px"].size() != 2)
+                return invalid(resource.resolved_path, "OPF sensors require image_size_px [width,height].");
+            if (!sensor["image_size_px"][0].is_number_unsigned() ||
+                !sensor["image_size_px"][1].is_number_unsigned())
+                return invalid(resource.resolved_path, "OPF sensor image dimensions must be unsigned integers.");
+            const auto internals = sensor.find("internals");
+            if (internals == sensor.end() || !internals->is_object())
+                return invalid(resource.resolved_path, "OPF sensors require camera internals.");
+            auto model = required_string(*internals, "type", resource.resolved_path, "sensor internals");
+            if (!model)
+                return std::unexpected(model.error());
+            if (*model != "perspective" && *model != "fisheye" && *model != "spherical")
+                return make_error(ErrorCode::UNSUPPORTED_FORMAT,
+                                  std::format("Unsupported OPF camera distortion model '{}'.", *model),
+                                  resource.resolved_path);
+            const auto principal = internals->find("principal_point_px");
+            if (principal == internals->end() || !principal->is_array() || principal->size() != 2)
+                return invalid(resource.resolved_path, "OPF camera internals require principal_point_px [x,y].");
+
+            InputSensor parsed{sensor["id"].get<std::uint64_t>(),
+                               sensor.value("name", std::string{}),
+                               sensor["image_size_px"][0].get<std::uint32_t>(),
+                               sensor["image_size_px"][1].get<std::uint32_t>(),
+                               *model,
+                               {principal->at(0).get<double>(), principal->at(1).get<double>()}};
+            if (*model == "perspective") {
+                if (!internals->contains("focal_length_px") || !internals->contains("radial_distortion") ||
+                    !internals->contains("tangential_distortion"))
+                    return invalid(resource.resolved_path, "OPF perspective internals are incomplete.");
+                parsed.focal_length = (*internals)["focal_length_px"].get<double>();
+                parsed.radial_distortion = (*internals)["radial_distortion"].get<std::vector<double>>();
+                parsed.tangential_distortion = (*internals)["tangential_distortion"].get<std::vector<double>>();
+                if (parsed.radial_distortion.size() != 3 || parsed.tangential_distortion.size() != 2)
+                    return invalid(resource.resolved_path, "OPF perspective distortion coefficients have invalid sizes.");
+            }
+            sensors.push_back(std::move(parsed));
+        }
+        return sensors;
+    }
 } // namespace lfs::io::opf

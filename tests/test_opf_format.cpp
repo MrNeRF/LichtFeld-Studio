@@ -134,3 +134,34 @@ TEST_F(OpfFormatTest, RejectsDuplicateCameraIds) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
 }
+
+TEST_F(OpfFormatTest, ParsesPerspectiveInputSensor) {
+    write(root / "input-cameras.json", R"({
+        "format":"application/opf-input-cameras+json", "version":"1.0",
+        "sensors":[{"id":7, "name":"test", "image_size_px":[1920,1080],
+        "internals":{"type":"perspective", "principal_point_px":[960,540],
+        "focal_length_px":1200, "radial_distortion":[0,0,0], "tangential_distortion":[0,0]}}],
+        "captures":[]
+    })");
+    lfs::io::opf::Resource resource{"input-cameras.json", "application/opf-input-cameras+json",
+                                    root / "input-cameras.json"};
+    auto result = lfs::io::opf::read_input_cameras(resource);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ(result->front().model, "perspective");
+    EXPECT_EQ(result->front().width, 1920u);
+    EXPECT_DOUBLE_EQ(result->front().focal_length, 1200.0);
+}
+
+TEST_F(OpfFormatTest, RejectsUnsupportedInputCameraModel) {
+    write(root / "input-cameras.json", R"({
+        "format":"application/opf-input-cameras+json", "version":"1.0",
+        "sensors":[{"id":7, "image_size_px":[10,10],
+        "internals":{"type":"custom_distortion", "principal_point_px":[5,5]}}], "captures":[]
+    })");
+    lfs::io::opf::Resource resource{"input-cameras.json", "application/opf-input-cameras+json",
+                                    root / "input-cameras.json"};
+    auto result = lfs::io::opf::read_input_cameras(resource);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::UNSUPPORTED_FORMAT);
+}
