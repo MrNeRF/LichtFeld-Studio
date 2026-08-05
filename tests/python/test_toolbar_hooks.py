@@ -57,7 +57,10 @@ def _install_stub_modules(monkeypatch):
 
     ui_pkg = ModuleType("lfs_plugins.ui")
     ui_pkg.__path__ = []
-    ui_pkg.RuntimeState = SimpleNamespace(trainer_state=SimpleNamespace(value="idle"))
+    ui_pkg.RuntimeState = SimpleNamespace(
+        trainer_state=SimpleNamespace(value="idle"),
+        language_generation=SimpleNamespace(value=0),
+    )
     ui_pkg.native_value = lambda _field, fallback: fallback
     monkeypatch.setitem(sys.modules, "lfs_plugins.ui", ui_pkg)
 

@@ -123,6 +123,13 @@ def isolate_lichtfeld_module_overrides():
     modules holding the stub, making otherwise independent files fail according
     to collection order. Preserve the module graph seen at test entry and put it
     back after the test.
+
+    Also rebind parent-package attributes for nested modules. A test that does
+    ``del sys.modules['lfs_plugins.types']; importlib.import_module(...)`` leaves
+    ``lfs_plugins.types`` pointing at the *new* module object even after
+    ``sys.modules`` is restored. ``from lfs_plugins import types`` then yields a
+    different ``Operator`` identity than ``importlib.import_module('lfs_plugins.types')``
+    (used by native ``register_class``), so issubclass checks fail.
     """
     prefixes = ("lichtfeld", "lfs_plugins")
 
@@ -130,11 +137,30 @@ def isolate_lichtfeld_module_overrides():
         return any(name == prefix or name.startswith(f"{prefix}.") for prefix in prefixes)
 
     before = {name: module for name, module in sys.modules.items() if is_managed(name)}
+
+    # Snapshot parent-package attributes that currently alias managed submodules.
+    parent_attrs = {}
+    for name, module in before.items():
+        if "." not in name:
+            continue
+        parent_name, attr = name.rsplit(".", 1)
+        parent = sys.modules.get(parent_name)
+        if parent is None:
+            continue
+        current = getattr(parent, attr, None)
+        if current is module:
+            parent_attrs[(parent_name, attr)] = module
+
     yield
 
     for name in [name for name in sys.modules if is_managed(name) and name not in before]:
         del sys.modules[name]
     sys.modules.update(before)
+
+    for (parent_name, attr), module in parent_attrs.items():
+        parent = sys.modules.get(parent_name)
+        if parent is not None:
+            setattr(parent, attr, module)
 
 
 @pytest.fixture

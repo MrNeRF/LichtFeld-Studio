@@ -218,8 +218,15 @@ class TestIndexingErrors:
             _ = t[-100]  # Too negative
 
 
+@pytest.mark.gpu
 class TestCreationFactories:
-    """Tests for tensor creation factory functions."""
+    """Tests for tensor creation factory functions.
+
+    Tensor.zeros/ones allocate on the default device, which is CUDA, so these
+    raise ResourceError("Out of memory") on a machine without a GPU. They were
+    unmarked and therefore selected by "not gpu" runs, failing wherever no
+    device is present.
+    """
 
     def test_zeros_creation(self, lf, numpy):
         """Test zeros factory creates zero-filled tensor."""
