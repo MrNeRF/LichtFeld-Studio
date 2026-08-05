@@ -162,36 +162,34 @@ protected:
 // ============================================================================
 
 TEST_F(UnicodePathTest, PathToUtf8Conversion) {
+    // Asserting only that the result is non-empty would pass for any garbage
+    // the conversion happened to return, so every case below checks the exact
+    // bytes and that the path survives a round trip.
+
     // Test ASCII path
     {
         fs::path ascii_path = "C:/test/file.txt";
         std::string utf8 = path_to_utf8(ascii_path);
-        EXPECT_FALSE(utf8.empty());
+        EXPECT_EQ(utf8, ascii_path.generic_string());
+        EXPECT_EQ(fs::path(utf8), ascii_path);
     }
 
     // Test all Unicode character sets
-    {
-        auto japanese_path = test_root_ / UnicodeStrings::japanese;
-        std::string utf8 = path_to_utf8(japanese_path);
-        EXPECT_FALSE(utf8.empty());
-    }
+    for (const char* component : {UnicodeStrings::japanese,
+                                  UnicodeStrings::chinese,
+                                  UnicodeStrings::korean,
+                                  UnicodeStrings::mixed,
+                                  UnicodeStrings::emoji}) {
+        SCOPED_TRACE(component);
+        const auto path = test_root_ / component;
+        const std::string utf8 = path_to_utf8(path);
 
-    {
-        auto chinese_path = test_root_ / UnicodeStrings::chinese;
-        std::string utf8 = path_to_utf8(chinese_path);
-        EXPECT_FALSE(utf8.empty());
-    }
-
-    {
-        auto korean_path = test_root_ / UnicodeStrings::korean;
-        std::string utf8 = path_to_utf8(korean_path);
-        EXPECT_FALSE(utf8.empty());
-    }
-
-    {
-        auto mixed_path = test_root_ / UnicodeStrings::mixed;
-        std::string utf8 = path_to_utf8(mixed_path);
-        EXPECT_FALSE(utf8.empty());
+        // The converted text must carry the original component verbatim,
+        // not a replacement-character or truncated rendering of it.
+        EXPECT_NE(utf8.find(component), std::string::npos)
+            << "component lost in conversion: " << utf8;
+        EXPECT_EQ(utf8, path.generic_string());
+        EXPECT_EQ(fs::path(utf8), path) << "round trip changed the path";
     }
 
     // Test empty path
@@ -209,7 +207,10 @@ TEST_F(UnicodePathTest, PathToUtf8Conversion) {
         }
         auto long_path = test_root_ / long_component;
         std::string utf8 = path_to_utf8(long_path);
-        EXPECT_FALSE(utf8.empty());
+        // 3 characters x 3 UTF-8 bytes x 50 repetitions must survive intact;
+        // a truncating conversion would still produce a non-empty string.
+        EXPECT_NE(utf8.find(long_component), std::string::npos);
+        EXPECT_EQ(fs::path(utf8), long_path);
     }
 }
 
@@ -246,9 +247,11 @@ TEST_F(UnicodePathTest, BasicFileIO) {
         std::string read_content = read_file(file_path);
         EXPECT_EQ(read_content, tc.content) << "Content mismatch for: " << tc.name;
 
-        // Verify path_to_utf8 works
+        // Verify path_to_utf8 round-trips rather than merely returning something
         std::string utf8_path = path_to_utf8(file_path);
-        EXPECT_FALSE(utf8_path.empty()) << "path_to_utf8 failed for: " << tc.name;
+        EXPECT_EQ(fs::path(utf8_path), file_path) << "round trip failed for: " << tc.name;
+        EXPECT_TRUE(fs::exists(fs::path(utf8_path)))
+            << "converted path no longer resolves for: " << tc.name;
     }
 }
 
@@ -464,9 +467,11 @@ TEST_F(UnicodePathTest, SpecialCharacters) {
         create_file(path, "special content");
         verify_file(path);
 
-        // Test path_to_utf8 conversion
+        // Test path_to_utf8 conversion round-trips and still resolves on disk
         std::string utf8 = path_to_utf8(path);
-        EXPECT_FALSE(utf8.empty()) << "path_to_utf8 failed for: " << name;
+        EXPECT_EQ(fs::path(utf8), path) << "round trip failed for: " << name;
+        EXPECT_TRUE(fs::exists(fs::path(utf8)))
+            << "converted path no longer resolves for: " << name;
 
         // Verify we can read back
         std::string content = read_file(path);
@@ -650,9 +655,10 @@ TEST_F(UnicodePathTest, LongPathNames) {
     create_file(long_file, "content in long path");
     verify_file(long_file);
 
-    // Verify path_to_utf8 works with long paths
+    // Verify path_to_utf8 preserves long paths instead of truncating them
     std::string utf8_path = path_to_utf8(long_file);
-    EXPECT_FALSE(utf8_path.empty()) << "path_to_utf8 failed for long path";
+    EXPECT_EQ(fs::path(utf8_path), long_file) << "long path did not round trip";
+    EXPECT_TRUE(fs::exists(fs::path(utf8_path))) << "converted long path no longer resolves";
 }
 
 // ============================================================================

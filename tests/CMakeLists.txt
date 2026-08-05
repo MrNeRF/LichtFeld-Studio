@@ -532,59 +532,122 @@ set(LFS_NON_FAST_TEST_FILTER
 # Verify a candidate before adding it:
 #   CUDA_VISIBLE_DEVICES="" ./build/tests/tests/lichtfeld_tests --gtest_filter='Suite.*'
 set(LFS_CPU_TEST_SUITES
-    # argument and parameter parsing
-    ArgumentParserTest
     ArgumentParserMetadataTest
-    TrainingParametersTest
-    ParameterValidationTest
-    ParameterManagerTest
-    DiagnosticModeParsing
-    # error handling and reporting
-    ErrorCore
-    ErrorCoreAbi
-    ErrorCoreOom
-    ErrorCoreConcurrency
-    ErrorCoreLegacyBridge
-    ErrorReporterTest
-    ErrorBusTest
-    ErrorEnvelopeTest
-    ErrorEventBridgeTest
-    ErrorDedupTest
-    ErrorLatchTest
-    ErrorFingerprintTest
-    ExceptionCore
-    ResultCore
-    StatusCore
-    CudaLaunchCheckTest
-    # assertion and guard hardening
+    ArgumentParserTest
     AssertHardeningExpectedFailTest
     AssertHardeningRegression
-    RunGuardedTest
-    ValidatedIndexToken
-    # paths, logging, serialization
-    UnicodePathTest
-    LoggerTest
-    PlyErrorTaxonomyTest
-    ViewInfoJson
-    HdrFormatClassification
-    CheckpointLoaderProbeTest
     CheckpointAtomicReplaceFaultTest
-    # tensor logic that does not touch the device
-    TensorLazyIrTest
-    TensorMemoryPlannerTest
-    TensorStorageVersionCPUTest
-    # camera undistortion maths
-    UndistortColmapParity
-    UndistortPacking
-    UndistortBlankPixels
-    ScaleUndistortParams
-    # MCP protocol contracts
+    CheckpointLoaderProbeTest
+    CrashHandlerTest
+    CudaErrorTypedDeathTest
+    CudaLaunchCheckTest
+    DeferredD1CopyRegistryTest
+    DeviceFaultAbi
+    DeviceFaultDeathTest
+    DeviceFaultNvccFixtures
+    DiagnosticModeParsing
+    ErrorBusTest
+    ErrorCore
+    ErrorCoreAbi
+    ErrorCoreConcurrency
+    ErrorCoreLegacyBridge
+    ErrorCoreOom
+    ErrorCorePerf
+    ErrorDedupTest
+    ErrorEnvelopeTest
+    ErrorEventBridgeTest
+    ErrorFingerprintTest
+    ErrorLatchTest
+    ErrorReporterTest
+    ExceptionCore
+    FastGSOverflowGuards
+    FrameInputBufferTest
+    FrameStateMachineTest
+    GuiErrorConsumerTest
+    HdrFormatClassification
+    HeadlessRunCoordinatorTest
+    InputControllerDatasetLoadTest
+    InputControllerFocusTest
+    LegacyInterop
+    LodPageCache
+    LoggerTest
+    McpAppUtilsTest
+    McpHttpServerTest
+    McpOperatorSchemaTest
     McpProtocolTest
     McpSequencerToolsTest
-    McpAppUtilsTest
-    McpOperatorSchemaTest
     McpSharedSceneToolsTest
     McpTrainingStateTest
+    MeshLoaderTest
+    MeshOffscreenDepthTest
+    NormalPriorDecodeTest
+    OpenMeshBridgeTest
+    OperatorReturnValueTest
+    PanelLayoutRenderDemandTest
+    PanelRegistryAnimationDemandTest
+    ParameterManagerTest
+    ParameterValidationTest
+    PlyErrorTaxonomyTest
+    PropertyRegistryTest
+    PyModalRegistryRegression
+    PythonLspClientTest
+    ReactiveStoreTest
+    RenderSettingsBackendNormalization
+    RenderSettingsDefaults
+    RenderSettingsProxy
+    RendererTerminalStateTest
+    RenderingManagerEventsTest
+    ResultCore
+    RmlDocumentUtilsTest
+    RmlPathUtilsTest
+    RmlStaticStyleBoundaries
+    RmlTextInputHandlerTest
+    RunGuardedDeathTest
+    RunGuardedTest
+    ScaleUndistortParams
+    SdlKeyMappingTest
+    SdlRmlKeyMappingTest
+    SequencerControllerRegressionTest
+    SequencerMappingRegressionTest
+    SequencerTimelineRegressionTest
+    SparseExtractionContract
+    StatusBarFitTest
+    StatusCore
+    StatusMessageStateTest
+    SubmissionStateTransitions
+    TcpPublisherTest
+    TcpReceiveStatusTest
+    TcpResponderRoundtripTest
+    TcpResponderTest
+    TensorD4FromBlobHomeStreamTest
+    TensorLazyIrTest
+    TensorLazyRuntimeTest
+    TensorMemoryPlannerTest
+    TensorStorageVersionCPUTest
+    ThemeRegistry
+    ToastStackTest
+    TrainingParametersTest
+    TrainingStateMachineTest
+    TrainingTerminalStateTest
+    UndistortBlankPixels
+    UndistortColmapParity
+    UndistortPacking
+    UnicodePathTest
+    ValidatedIndexToken
+    VideoEncoderValidationTest
+    VideoFrameExtractorParams
+    ViewInfoJson
+    ViewportFrameLifecycleServiceTest
+    ViewportInteropDecision
+    ViewportRegionUtilsTest
+    ViewportRequestBuilderTest
+    ViewportTest
+    VisualizerPostWorkTest
+    VisualizerPostedWorkTest
+    VkSplatFailedSubmitNoPublish
+    VkSplatIndirectLayoutTest
+    VulkanBufferViewTest
+    VulkanWaitBounded
 )
 
 # Join explicitly: a bare CMake list expands with ";" separators, which gtest
@@ -597,6 +660,21 @@ add_test(NAME lichtfeld.cpu
     COMMAND $<TARGET_FILE:lichtfeld_tests>
         "--gtest_filter=${LFS_CPU_TEST_FILTER}"
         --gtest_color=no
+)
+
+# An allowlist filter fails open: GoogleTest warns but still exits 0 when a
+# pattern matches nothing, so a renamed suite would quietly shrink this gate
+# while CI stayed green. This entry fails if any listed suite has disappeared.
+add_test(NAME lichtfeld.cpu.manifest
+    COMMAND ${CMAKE_COMMAND}
+        "-DTEST_BINARY=$<TARGET_FILE:lichtfeld_tests>"
+        "-DEXPECTED_SUITES=${LFS_CPU_TEST_SUITES}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/check_cpu_suites.cmake"
+)
+set_tests_properties(lichtfeld.cpu.manifest PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "cpu"
+    TIMEOUT 180
 )
 # No "gpu" label: this is the one entry that is expected to pass on a runner
 # with no CUDA device.
@@ -744,10 +822,15 @@ add_test(NAME lichtfeld.python.fast
         -m "not gpu and not slow and not integration"
         ${LFS_PYTHON_FAST_TESTS}
 )
+# "cpu" as well as "fast": these are already restricted to
+# "not gpu and not slow and not integration", so they are the Python half of the
+# GPU-less gate. LFS_PYTHON_MODULE_DIR tells conftest where the compiled
+# extension actually landed, which is not <root>/build for every build layout.
 set_tests_properties(lichtfeld.python.fast PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    LABELS "fast"
-    TIMEOUT 60
+    LABELS "fast;cpu"
+    ENVIRONMENT "LFS_PYTHON_MODULE_DIR=${CMAKE_BINARY_DIR}/src/python"
+    TIMEOUT 300
 )
 
 add_test(NAME lichtfeld.python.slow

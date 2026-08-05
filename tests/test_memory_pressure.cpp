@@ -33,6 +33,13 @@ namespace {
 class MemoryPressureTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // These exercise device-memory reclaim paths, so they need a real
+        // device. Without this they fail rather than skip on a GPU-less
+        // machine, which is how they behaved on CI runners.
+        int device_count = 0;
+        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+            GTEST_SKIP() << "no CUDA device";
+        }
         MemoryPressureCoordinator::instance().reset_for_testing();
     }
     void TearDown() override {

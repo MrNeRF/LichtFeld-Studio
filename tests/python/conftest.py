@@ -20,9 +20,21 @@ if SOURCE_MODULE_PATH.exists():
     sys.path.insert(0, str(SOURCE_MODULE_PATH))
 
 # Keep built modules available for compiled extensions like `lichtfeld`.
-MODULE_PATH = BUILD_DIR / "src" / "python"
+#
+# The build tree is not always literally <root>/build: the test target is often
+# configured into build/tests, and CI uses its own layout. CTest exports
+# LFS_PYTHON_MODULE_DIR so the compiled extension is found wherever it was
+# built; the hardcoded default only serves direct `pytest` invocations.
+_module_dir_env = os.environ.get("LFS_PYTHON_MODULE_DIR")
+MODULE_PATH = Path(_module_dir_env) if _module_dir_env else BUILD_DIR / "src" / "python"
 if MODULE_PATH.exists():
     sys.path.insert(1 if SOURCE_MODULE_PATH.exists() else 0, str(MODULE_PATH))
+elif _module_dir_env:
+    # Fail loudly rather than letting every test error with ModuleNotFoundError.
+    raise RuntimeError(
+        f"LFS_PYTHON_MODULE_DIR={_module_dir_env} does not exist; "
+        "the lichtfeld extension has not been built there"
+    )
 
 
 # The real, user-facing Asset Manager catalog. No test may ever write here.
