@@ -13,9 +13,13 @@
    encounter: fix it immediately if <30 min, otherwise append a full entry (file:line,
    repro, severity) to perf_campaign/ISSUES.md. Never silently skip.
 5. **Commit discipline.** One task = one or more focused commits on this branch
-   (perf/spirulae-parity). Message: what changed + the before/after numbers.
+   (lfs-elite). Message: what changed + the before/after numbers.
 6. **Progress log.** Append to perf_campaign/PROGRESS.md per task: task id, failing test
    output (trimmed), passing output, baseline number, after number, commit hash.
 7. Build with the existing cmake preset ("build"); test with ctest (fast tier for quick
    loops, full gpu tier before declaring a task done). Do not reconfigure the build system.
 8. Scope: exactly your work order. Improvements you notice outside scope go to ISSUES.md.
+
+NOTE: the campaign branch was renamed from perf/spirulae-parity to **lfs-elite**. If any
+work order references the old name, it means this branch — you are already on it. Never
+run `git checkout`; just verify with `git branch --show-current` (expect: lfs-elite).
