@@ -834,4 +834,4 @@ Gate: no regression vs Wave 2; bicycle quality canary healthy (densify to 500k, 
 - ISS-010 Float16 host gates (reduce/unary/fill/clamp/broadcast_to) outside declared file set
 - ISS-011 half functor ambiguity mitigated via half_unary_via_float
 
-- **Commit:** `85aacdf9`
+- **Commit:** `2645e679`
