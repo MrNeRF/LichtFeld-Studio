@@ -35,3 +35,13 @@
 - **Severity:** info
 - **Cause:** live run includes soft-delete / extra densify aux beyond pure
   `densification_info [2,N]`. Unit test with only densification_info matches 428.
+
+## ISS-006 — `reserve()` on prior `cuda.direct` cannot grow deleted/free masks
+- **Severity:** medium (correctness on max_cap=0 densify grow)
+- **File:** `src/training/strategies/mrnf.cpp` `append_live_deleted_rows` /
+  `ensure_deleted_mask_size`; `tensor.cpp:3325` rejects re-reserve of
+  `external_kind=cuda.direct` (set by both `zeros_direct` and successful `reserve`).
+- **Symptom:** `MRNFStrategyTest.GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks`
+  threw `reserve(11) would reallocate externally-owned tensor storage 'cuda.direct'`.
+- **Status:** fixed in Task 4.1 — rebuild bool masks via `zeros_direct` with
+  growth headroom instead of second `reserve` on direct storage.

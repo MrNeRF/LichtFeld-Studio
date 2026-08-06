@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mrnf.hpp"
+#include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "edge_rasterizer.hpp"
@@ -176,9 +178,35 @@ namespace lfs::training {
             const size_t desired_capacity = deleted_mask_capacity(splat_data, free_mask);
             auto& deleted = splat_data.deleted();
             if (!deleted.is_valid() || deleted.ndim() != 1 || deleted.numel() != current_size) {
-                deleted = lfs::core::Tensor::zeros_bool({current_size}, splat_data.means().device());
+                if (desired_capacity > current_size) {
+                    deleted = lfs::core::Tensor::zeros_direct(
+                        lfs::core::TensorShape({current_size}),
+                        desired_capacity,
+                        splat_data.means().device(),
+                        lfs::core::DataType::Bool);
+                } else {
+                    deleted = lfs::core::Tensor::zeros_bool({current_size}, splat_data.means().device());
+                }
+                return;
             }
-            deleted.reserve(desired_capacity);
+            if (deleted.capacity() >= desired_capacity) {
+                return;
+            }
+            // Growing cuda.direct (from prior zeros_direct/reserve) cannot use reserve().
+            auto fresh = lfs::core::Tensor::zeros_direct(
+                lfs::core::TensorShape({current_size}),
+                desired_capacity,
+                deleted.device(),
+                lfs::core::DataType::Bool);
+            if (current_size > 0) {
+                LFS_CUDA_CHECK(cudaMemcpyAsync(
+                    fresh.ptr<uint8_t>(),
+                    deleted.ptr<uint8_t>(),
+                    current_size * sizeof(uint8_t),
+                    cudaMemcpyDeviceToDevice,
+                    fresh.stream()));
+            }
+            deleted = std::move(fresh);
         }
 
         void sync_deleted_mask_from_free_mask(
@@ -223,12 +251,37 @@ namespace lfs::training {
 
             ensure_deleted_mask_size(splat_data, free_mask);
             auto& deleted = splat_data.deleted();
+            const size_t new_logical = static_cast<size_t>(deleted.numel()) + n_rows;
             const size_t desired_capacity = std::max(
                 deleted_mask_capacity(splat_data, free_mask),
-                static_cast<size_t>(deleted.numel()) + n_rows);
-            deleted.reserve(desired_capacity);
-            deleted.append_zeros(n_rows);
-            deleted.reserve(deleted_mask_capacity(splat_data, free_mask));
+                new_logical);
+
+            // zeros_direct / prior reserve() marks storage as cuda.direct, which cannot
+            // grow via reserve(). Rebuild with headroom when capacity is insufficient.
+            if (deleted.capacity() >= new_logical) {
+                deleted.append_zeros(n_rows);
+            } else {
+                const size_t grow_cap = std::max(
+                    desired_capacity,
+                    deleted.capacity() > 0
+                        ? static_cast<size_t>(deleted.capacity() * 3 / 2)
+                        : new_logical);
+                auto fresh = lfs::core::Tensor::zeros_direct(
+                    lfs::core::TensorShape({static_cast<size_t>(deleted.numel())}),
+                    grow_cap,
+                    deleted.device(),
+                    lfs::core::DataType::Bool);
+                if (deleted.numel() > 0) {
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(
+                        fresh.ptr<uint8_t>(),
+                        deleted.ptr<uint8_t>(),
+                        deleted.numel() * sizeof(uint8_t),
+                        cudaMemcpyDeviceToDevice,
+                        fresh.stream()));
+                }
+                fresh.append_zeros(n_rows);
+                deleted = std::move(fresh);
+            }
         }
 
         struct CannyWorkspace {
@@ -929,13 +982,20 @@ namespace lfs::training {
         const size_t new_size = valid_indices.numel();
         const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
 
+        // Gather kept rows directly into a single pre-reserved destination (Task 4.1).
+        // Old path was index_select(exact) → reserve(max_cap) while the source still
+        // lived → peak ≈ source@cap + exact + dest@cap ≈ 3×. New path allocates once
+        // at max_cap, index_select_into it, then swap → peak ≤ source + dest@cap (2×).
         auto compact = [&](Tensor& t) {
             if (!t.is_valid() || t.numel() == 0)
                 return;
-            auto compacted = t.index_select(0, valid_indices).contiguous();
-            if (cap > 0)
-                compacted.reserve(cap);
-            t = std::move(compacted);
+            auto dims = t.shape().dims();
+            dims[0] = new_size;
+            const size_t dest_cap = cap > 0 ? cap : new_size;
+            Tensor dest = Tensor::zeros_direct(
+                TensorShape(dims), dest_cap, t.device(), t.dtype());
+            t.index_select_into(dest, 0, valid_indices, BoundaryMode::Assert);
+            t = std::move(dest);
         };
 
         // shN is swizzled — compact via block-aware gather.
@@ -1016,39 +1076,53 @@ namespace lfs::training {
                         state->exp_avg.shape(),
                         state->capacity,
                         state->exp_avg.device());
+                } else if (cap > 0 && pt != ParamType::ShN) {
+                    state->grad = Tensor::zeros_direct(
+                        state->exp_avg.shape(), cap, state->exp_avg.device());
                 } else {
                     state->grad = Tensor::zeros(state->exp_avg.shape(), state->exp_avg.device());
                 }
-                if (cap > 0 && pt != ParamType::ShN)
-                    state->grad.reserve(cap);
             }
+            // Capacity invariant after compact: capacity >= size.
+            LFS_DEBUG_ASSERT_MSG(state->capacity >= state->size,
+                                 "MRNF::compact_splats: state.capacity < state.size");
         }
 
         const auto& info = _splat_data->_densification_info;
         if (info.is_valid() && info.ndim() == 2 && info.shape()[1] == old_size) {
-            _splat_data->_densification_info = info.index_select(1, valid_indices).contiguous();
+            // densification_info is [2, N] — capacity is along dim 0, so allocate exact
+            // gather into a fresh [2, new_size] (no max_cap reserve on this aux).
+            auto dims = info.shape().dims();
+            dims[1] = new_size;
+            Tensor dest = Tensor::zeros(TensorShape(dims), info.device(), info.dtype());
+            info.index_select_into(dest, 1, valid_indices, BoundaryMode::Assert);
+            _splat_data->_densification_info = std::move(dest);
         }
         if (_splat_data->has_deleted_mask() && _splat_data->deleted().numel() == old_size) {
-            auto compacted_deleted = _splat_data->deleted().index_select(0, valid_indices).contiguous();
-            if (cap > 0)
-                compacted_deleted.reserve(cap);
-            _splat_data->deleted() = std::move(compacted_deleted);
+            compact(_splat_data->deleted());
         }
         if (_free_mask.is_valid() && old_size > 0) {
-            auto compacted_free = _free_mask.slice(0, 0, old_size).index_select(0, valid_indices).contiguous();
+            // Compact the live prefix of free_mask, then extend to max_cap with free=false tail.
+            auto live = _free_mask.slice(0, 0, old_size);
+            auto dims = live.shape().dims();
+            dims[0] = new_size;
+            const size_t dest_cap = cap > 0 ? cap : new_size;
+            Tensor dest = Tensor::zeros_direct(
+                TensorShape(dims), dest_cap, live.device(), live.dtype());
+            live.index_select_into(dest, 0, valid_indices, BoundaryMode::Assert);
             if (cap > new_size) {
-                auto tail = Tensor::zeros_bool({cap - new_size}, compacted_free.device());
-                _free_mask = Tensor::cat({compacted_free, tail}, 0);
-            } else {
-                _free_mask = std::move(compacted_free);
+                // Tail beyond new_size is already zeroed by zeros_direct → free=false.
+                // Grow logical size to cap so free_mask covers the reserved range.
+                dest.append_zeros(cap - new_size);
             }
+            _free_mask = std::move(dest);
         }
         if (_refine_weight_max.is_valid() && _refine_weight_max.numel() > new_size)
-            _refine_weight_max = _refine_weight_max.index_select(0, valid_indices).contiguous();
+            compact(_refine_weight_max);
         if (_vis_count.is_valid() && _vis_count.numel() > new_size)
-            _vis_count = _vis_count.index_select(0, valid_indices).contiguous();
+            compact(_vis_count);
         if (_precomputed_edge_scores.is_valid() && _precomputed_edge_scores.numel() > new_size)
-            _precomputed_edge_scores = _precomputed_edge_scores.index_select(0, valid_indices).contiguous();
+            compact(_precomputed_edge_scores);
 
         remap_frozen_ranges_after_compaction(*_splat_data, valid_indices, old_size);
         apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
