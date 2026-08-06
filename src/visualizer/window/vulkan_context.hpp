@@ -269,6 +269,14 @@ namespace lfs::vis {
         // retired. Non-blocking (vkGetFenceStatus); serial-0 slots ignored.
         // device_ null returns frame_submit_serial_ (everything retired).
         [[nodiscard]] std::uint64_t retiredFrameSubmitSerial() const;
+        // Host-wait until every graphics submit with serial <= |serial| has
+        // retired. Returns immediately if serial == 0, no device, or already
+        // retired. Waits only the in_flight_ fences whose frame_submit_serials_
+        // are non-zero and <= serial (2s timeout, waitAll). Swapchain image
+        // aliases are the same fence objects as in_flight_ (endFrame), so they
+        // are not listed separately. Same threading assumptions as
+        // waitForSubmittedFrames (no extra locking).
+        [[nodiscard]] bool waitForRetiredFrameSubmitSerial(std::uint64_t serial);
         [[nodiscard]] bool waitForImmediateSubmits();
         [[nodiscard]] bool deviceWaitIdle();
         void addFrameTimelineWait(VkSemaphore semaphore,

@@ -1827,6 +1827,51 @@ namespace lfs::vis {
         return retired;
     }
 
+    bool VulkanContext::waitForRetiredFrameSubmitSerial(const std::uint64_t serial) {
+        if (serial == 0 || device_ == VK_NULL_HANDLE) {
+            return true;
+        }
+        if (retiredFrameSubmitSerial() >= serial) {
+            return true;
+        }
+
+        // Bound the wait so a wedged GPU surfaces as an error rather than a hang.
+        // Matches waitForFrameFences (2 s); healthy frames complete in <16 ms.
+        constexpr std::uint64_t kRetiredSerialWaitTimeoutNs = 2'000'000'000ull;
+        std::vector<VkFence> fences;
+        fences.reserve(kFramesInFlight);
+        // Only in_flight_ slots whose submit serial is still relevant. Swapchain
+        // image aliases (swapchain_images_in_flight_) hold the same fence objects
+        // assigned in endFrame, so listing them separately would only duplicate.
+        for (std::size_t i = 0; i < kFramesInFlight; ++i) {
+            const std::uint64_t slot_serial = frame_submit_serials_[i];
+            if (slot_serial == 0 || slot_serial > serial) {
+                continue;
+            }
+            const VkFence fence = in_flight_[i];
+            if (fence != VK_NULL_HANDLE) {
+                fences.push_back(fence);
+            }
+        }
+        if (fences.empty()) {
+            return true;
+        }
+
+        const VkResult result = vkWaitForFences(device_,
+                                                static_cast<std::uint32_t>(fences.size()),
+                                                fences.data(),
+                                                VK_TRUE,
+                                                kRetiredSerialWaitTimeoutNs);
+        if (result != VK_SUCCESS) {
+            return fail(std::format(
+                "vkWaitForFences(retired frame serial {}) failed: {} (fences={})",
+                serial,
+                vkResultToString(result),
+                fences.size()));
+        }
+        return true;
+    }
+
     bool VulkanContext::waitForImmediateSubmits() {
         if (device_ == VK_NULL_HANDLE || pending_immediate_submits_.empty()) {
             return true;

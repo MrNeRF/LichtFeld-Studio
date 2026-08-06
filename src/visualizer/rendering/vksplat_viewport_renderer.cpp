@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -401,6 +402,18 @@ namespace lfs::vis {
                                                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                                     external_producer,
                                                     transfer_read);
+        }
+
+        // Retire GUI frames that may still fragment-sample a published Main/split
+        // output image before a readback layout transition. Preview images are
+        // never bound by the viewport pass, so they skip the consumer wait.
+        [[nodiscard]] bool waitForOutputImageConsumers(VulkanContext& context,
+                                                       const VksplatViewportRenderer::OutputSlot slot) {
+            if (slot == VksplatViewportRenderer::OutputSlot::Preview) {
+                return true;
+            }
+            const std::uint64_t serial = context.lastFrameSubmitSerial();
+            return context.waitForRetiredFrameSubmitSerial(serial);
         }
 
         void recordUpdateBufferChunks(
@@ -5812,6 +5825,7 @@ namespace lfs::vis {
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     VksplatViewportRenderer::readPreviewDepth(VulkanContext& context, const OutputSlot output_slot) const {
+        const auto readback_t0 = std::chrono::steady_clock::now();
         const auto size = latestOutputImageSize(output_slot);
         if (!size) {
             return std::unexpected(size.error());
@@ -5824,16 +5838,13 @@ namespace lfs::vis {
         if (&context != context_) {
             return std::unexpected("VkSplat depth readback received a different Vulkan context");
         }
-        // The render batch signals completion through a timeline semaphore, not a
-        // blocking fence; wait for it (and any in-flight frames) so the copy reads
-        // the depth this render wrote rather than a previous frame's residue.
+        // Producer ordering is the timeline wait below (max of slot completion and
+        // last_submitted_render_value_). Source is the pixel_depth scratch buffer,
+        // which GUI frames never fragment-sample, so no graphics-queue consumer wait.
         try {
             const_cast<VulkanGSRenderer&>(renderer_).waitForPendingBatch();
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat depth readback pending-batch wait failed: {}", e.what()));
-        }
-        if (!context.waitForSubmittedFrames()) {
-            return std::unexpected(context.lastError());
         }
 
         const auto& output = output_slots_[outputSlotIndex(output_slot)][latestOutputRingSlot(output_slot)];
@@ -5941,11 +5952,16 @@ namespace lfs::vis {
             return std::unexpected("VkSplat depth readback has null mapped data");
         }
         std::memcpy(dst, src, static_cast<std::size_t>(byte_count));
+        LOG_PERF("vksplat.readback.readPreviewDepth took_us={}",
+                 std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - readback_t0)
+                     .count());
         return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     VksplatViewportRenderer::readOutputDepthImage(VulkanContext& context, const OutputSlot output_slot) const {
+        const auto readback_t0 = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
             return std::unexpected("VkSplat output depth readback requested before renderer initialization");
@@ -5957,9 +5973,6 @@ namespace lfs::vis {
             const_cast<VulkanGSRenderer&>(renderer_).waitForPendingBatch();
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat output depth readback pending-batch wait failed: {}", e.what()));
-        }
-        if (!context.waitForSubmittedFrames()) {
-            return std::unexpected(context.lastError());
         }
 
         const auto& output = output_slots_[outputSlotIndex(output_slot)][latestOutputRingSlot(output_slot)];
@@ -5974,6 +5987,9 @@ namespace lfs::vis {
         if (vulkan_render_complete_timeline_ == VK_NULL_HANDLE || output.completion_value == 0) {
             return std::unexpected(
                 "VkSplat output depth readback has no submitted image producer to wait on");
+        }
+        if (!waitForOutputImageConsumers(context, output_slot)) {
+            return std::unexpected(context.lastError());
         }
 
         const VkDevice device = context.device();
@@ -6073,6 +6089,10 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output depth readback has null mapped data");
         }
         std::memcpy(dst, src, static_cast<std::size_t>(byte_count));
+        LOG_PERF("vksplat.readback.readOutputDepthImage took_us={}",
+                 std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - readback_t0)
+                     .count());
         return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
 
@@ -6082,6 +6102,7 @@ namespace lfs::vis {
         lfs::core::Tensor& destination,
         const int destination_x,
         const int destination_y) const {
+        const auto readback_t0 = std::chrono::steady_clock::now();
         if (!destination.is_valid() ||
             destination.device() != lfs::core::Device::CPU ||
             destination.ndim() != 3 ||
@@ -6132,7 +6153,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output readback destination region is too small");
         }
 
-        if (!context.waitForSubmittedFrames()) {
+        if (!waitForOutputImageConsumers(context, output_slot)) {
             return std::unexpected(context.lastError());
         }
 
@@ -6263,12 +6284,17 @@ namespace lfs::vis {
                 }
             }
         }
+        LOG_PERF("vksplat.readback.readOutputImageIntoCpuHwc took_us={}",
+                 std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - readback_t0)
+                     .count());
         return {};
     }
 
     std::expected<float, std::string> VksplatViewportRenderer::sampleDepthAtPixel(
         VulkanContext& context,
         const DepthSampleRequest& request) const {
+        const auto readback_t0 = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
             return std::unexpected("VkSplat depth sample requested before renderer initialization");
@@ -6311,9 +6337,10 @@ namespace lfs::vis {
         if (x < 0 || y < 0 || x >= output.size.x || y >= output.size.y) {
             return -1.0f;
         }
-        // Retire any earlier fragment sampling before the readback submission;
-        // the producer timeline below handles the independent compute queue.
-        if (!context.waitForSubmittedFrames()) {
+        // Wait until graphics submits that may still fragment-sample this depth
+        // image have retired (serial watermark). Producer timeline below covers
+        // the independent compute queue.
+        if (!waitForOutputImageConsumers(context, request.output_slot)) {
             return std::unexpected(context.lastError());
         }
 
@@ -6389,8 +6416,12 @@ namespace lfs::vis {
         float depth = -1.0f;
         std::memcpy(&depth, readback_staging_info_.pMappedData, sizeof(depth));
         if (!std::isfinite(depth) || depth <= 0.0f || depth >= 1.0e9f) {
-            return -1.0f;
+            depth = -1.0f;
         }
+        LOG_PERF("vksplat.readback.sampleDepthAtPixel took_us={}",
+                 std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - readback_t0)
+                     .count());
         return depth;
     }
 
