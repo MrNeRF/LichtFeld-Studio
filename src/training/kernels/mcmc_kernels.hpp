@@ -72,6 +72,24 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
+     * Phase 1.8: fused RNG + covariance transform + means update.
+     * Replaces normal_() full-buffer pass + separate add_noise kernel.
+     * Honors frozen_mask. Seed controls curand sequence (not bit-identical
+     * to the old two-pass path).
+     */
+    void launch_inject_noise_kernel(
+        const float* raw_opacities,
+        const float* raw_scales,
+        const float* raw_quats,
+        float* means,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
+        float current_lr,
+        size_t N,
+        uint64_t seed,
+        void* stream = nullptr);
+
+    /**
      * Fused gather kernel - Collect multiple parameters at specified indices
      *
      * Gathers parameters for multiple Gaussians in a single kernel launch.

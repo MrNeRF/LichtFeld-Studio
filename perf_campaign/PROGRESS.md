@@ -425,5 +425,26 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   (frozen: 1 rebuild across 10 hits; +1 on N change; +1 on range change)
   (cropbox: 1 rebuild across 8 installs; +1 on scale; +1 on transform)
   ```
-- **Commit:** (this commit)
+- **Commit:** `35759f68`
 
+
+## Task 1.8 — Fuse noise injection
+
+- **Branch:** `lfs-elite`
+- **Change:** MCMC `inject_noise` uses one `inject_noise_kernel` (curand +
+  covariance transform + means add, honors frozen mask). Removed
+  `normal_()` pass and the `[max_cap,3]` noise buffer. MRNF path was already
+  fused (`launch_mrnf_noise_injection`). Legacy `launch_add_noise_kernel`
+  kept for the pre-supplied-noise path.
+- **Fail evidence (TDD):** without fused launch, test fails to link/compile
+  on missing `launch_inject_noise_kernel`. Conceptual pre-change: two full-N
+  passes per step (`normal_` + add_noise).
+- **Pass evidence:**
+  ```
+  [  PASSED  ] FusedNoiseInjectionTest.MeanAndVarMatchIdentityCovariance
+  # mean≈0, var≈(lr*0.622)^2 within 8% on N=50k identity cov
+  [  PASSED  ] FusedNoiseInjectionTest.FrozenMaskBlocksNoise
+  ```
+- **Note:** Bit-identical trajectories not required (new RNG stream). Quality
+  check via dual-workload bench after 1.9.
+- **Commit:** (this commit)

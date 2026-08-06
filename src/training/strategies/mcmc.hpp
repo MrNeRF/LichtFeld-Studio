@@ -88,9 +88,8 @@ namespace lfs::training {
         static constexpr float NOISE_LR = 5e5f;
 
         // State variables
-        int _n_max = 0;                  // max relocation ratio
-        lfs::core::Tensor _noise_buffer; // Reusable buffer for noise injection
-        lfs::core::Tensor _ones_int32;   // Cached ones for ratio counting; grows with the live model.
+        int _n_max = 0;                // max relocation ratio
+        lfs::core::Tensor _ones_int32; // Cached ones for ratio counting; grows with the live model.
         lfs::core::Tensor _error_score_max;
         int _error_score_windows = 0;
     };

@@ -645,37 +645,25 @@ namespace lfs::training {
 
         // Get current learning rate from optimizer (after scheduler has updated it)
         const float current_lr = _optimizer->get_lr() * NOISE_LR;
-
-        // Generate noise in pre-allocated buffer
-        {
-            LOG_TIMER("inject_noise_generate");
-            if (_noise_buffer.is_valid() && _noise_buffer.capacity() > 0) {
-                // Fill pre-allocated buffer with random values (kernel will use first size() elements)
-                _noise_buffer.normal_(0.0f, 1.0f);
-            } else {
-                // Fallback for non-capacity mode
-                _noise_buffer = Tensor::randn(_splat_data->means().shape(), Device::CUDA, DataType::Float32);
-            }
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (n == 0) {
+            return;
         }
 
-        // Call CUDA add_noise kernel (uses first size() elements of buffer)
-        {
-            LOG_TIMER("inject_noise_cuda_kernel");
-            const auto frozen_mask = make_frozen_mask(
-                *_splat_data,
-                static_cast<size_t>(_splat_data->size()),
-                Device::CUDA);
-            mcmc::launch_add_noise_kernel(
-                _splat_data->opacity_raw().ptr<float>(),
-                _splat_data->scaling_raw().ptr<float>(),
-                _splat_data->rotation_raw().ptr<float>(),
-                _noise_buffer.ptr<float>(),
-                _splat_data->means().ptr<float>(),
-                frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
-                frozen_mask.is_valid() ? frozen_mask.numel() : 0,
-                current_lr,
-                _splat_data->size());
-        }
+        // Phase 1.8: one fused kernel (curand + cov transform + add); no noise buffer.
+        const auto frozen_mask = make_frozen_mask(*_splat_data, n, Device::CUDA);
+        const auto seed = static_cast<uint64_t>(
+            std::chrono::high_resolution_clock::now().time_since_epoch().count());
+        mcmc::launch_inject_noise_kernel(
+            _splat_data->opacity_raw().ptr<float>(),
+            _splat_data->scaling_raw().ptr<float>(),
+            _splat_data->rotation_raw().ptr<float>(),
+            _splat_data->means().ptr<float>(),
+            frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
+            frozen_mask.is_valid() ? frozen_mask.numel() : 0,
+            current_lr,
+            n,
+            seed);
     }
 
     void MCMC::post_backward(int iter, RenderOutput& render_output) {
@@ -878,8 +866,7 @@ namespace lfs::training {
                 ensure_capacity_direct(_splat_data->rotation_raw());
                 ensure_capacity_direct(_splat_data->opacity_raw());
 
-                // Pre-allocate noise buffer [max_cap, 3]
-                _noise_buffer = Tensor::zeros_direct(TensorShape({capacity, 3}), capacity);
+                // Phase 1.8: noise is generated inside inject_noise_kernel (no buffer).
 
                 LOG_INFO("Pre-allocated capacity: {}/{} Gaussians ({:.1f}%)",
                          current_size, capacity, 100.0f * current_size / capacity);
@@ -997,7 +984,7 @@ namespace lfs::training {
             _scheduler->adopt_checkpoint_state(*source._scheduler);
         _params.swap(source._params);
         std::swap(_n_max, source._n_max);
-        std::swap(_noise_buffer, source._noise_buffer);
+
         std::swap(_ones_int32, source._ones_int32);
         std::swap(_error_score_max, source._error_score_max);
         std::swap(_error_score_windows, source._error_score_windows);
