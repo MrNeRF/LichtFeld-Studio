@@ -208,6 +208,9 @@ namespace lfs::vis {
             const lfs::core::param::TrainingParameters& params,
             std::size_t min_capacity = 0);
 
+        // Install densify-time grow/rebind hook on the training model (Phase 5.1).
+        void installExportableCapacityEnsure(lfs::core::SplatData& model);
+
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
         std::unique_ptr<std::jthread> training_thread_;

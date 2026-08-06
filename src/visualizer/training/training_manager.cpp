@@ -109,8 +109,37 @@ namespace lfs::vis {
             params.optimization.max_cap > 0
                 ? static_cast<std::size_t>(params.optimization.max_cap)
                 : 0;
-        const std::size_t exportable_capacity = std::max(configured_capacity, min_capacity);
         const int sh_degree = params.optimization.sh_degree;
+
+        // Phase 5.1: size the exportable block to live N (+ 1.5× headroom), not
+        // max_cap. Virtual-reserve max_cap so densify can grow in place.
+        std::size_t live_estimate = min_capacity;
+        if (live_estimate == 0 && scene_) {
+            if (const auto* model = scene_->getTrainingModel()) {
+                live_estimate = static_cast<std::size_t>(model->size());
+            } else if (const auto pc = scene_->getInitialPointCloud()) {
+                live_estimate = static_cast<std::size_t>(pc->size());
+            } else {
+                for (const auto* node : scene_->getNodes()) {
+                    if (node && node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
+                        live_estimate = static_cast<std::size_t>(node->point_cloud->size());
+                        break;
+                    }
+                }
+            }
+        }
+        if (live_estimate == 0 && params.optimization.random) {
+            live_estimate = static_cast<std::size_t>(
+                std::max(params.optimization.init_num_pts, 1));
+        }
+        if (live_estimate == 0) {
+            live_estimate = 1;
+        }
+
+        const std::size_t exportable_capacity =
+            lfs::core::SplatExportableStorage::growthCapacity(live_estimate, configured_capacity);
+        const std::size_t reserve_capacity =
+            configured_capacity > 0 ? configured_capacity : exportable_capacity;
 
         VulkanContext* vk_ctx = nullptr;
         if (viewer_ && viewer_->getWindowManager()) {
@@ -120,8 +149,8 @@ namespace lfs::vis {
             vk_ctx && vk_ctx->externalMemoryInteropEnabled();
 
         if (vulkan_interop_available && exportable_capacity > 0) {
-            auto storage_result =
-                lfs::core::SplatExportableStorage::create(exportable_capacity, sh_degree);
+            auto storage_result = lfs::core::SplatExportableStorage::create(
+                exportable_capacity, sh_degree, /*device=*/0, reserve_capacity);
             if (storage_result) {
                 splat_storage_ = std::move(*storage_result);
                 auto interop_alloc_result =
@@ -129,9 +158,12 @@ namespace lfs::vis {
                 if (interop_alloc_result) {
                     tensor_allocator = std::move(*interop_alloc_result);
                     LOG_INFO("Training tensors share one CUDA-exportable VMM block "
-                             "imported into Vulkan (capacity={}, sh_degree={}, "
-                             "block={} MiB) — zero-copy viewer interop",
+                             "imported into Vulkan (live≈{}, capacity={}, reserve={}, "
+                             "sh_degree={}, block={} MiB) — zero-copy viewer interop "
+                             "(Phase 5.1 live-N growth)",
+                             live_estimate,
                              exportable_capacity,
+                             reserve_capacity,
                              sh_degree,
                              splat_storage_->block->size >> 20);
                 } else {
@@ -155,6 +187,75 @@ namespace lfs::vis {
         }
 
         return tensor_allocator;
+    }
+
+    void TrainerManager::installExportableCapacityEnsure(lfs::core::SplatData& model) {
+        if (!splat_storage_ || !splat_storage_->valid()) {
+            return;
+        }
+        // Capture raw pointers that outlive densify callbacks for this run.
+        // Grow must run when the GPU is not reading the block (densify is on the
+        // training thread between steps; Vulkan re-import replaces the import so
+        // the next viewer frame binds the new handle — same invariant as shared-
+        // scratch reimport after VMM growth).
+        model.set_capacity_ensure([this](std::size_t needed_rows) -> bool {
+            if (!splat_storage_ || !splat_storage_->valid()) {
+                return false;
+            }
+            if (splat_storage_->capacity() >= needed_rows) {
+                return true;
+            }
+            const std::size_t want = lfs::core::SplatExportableStorage::growthCapacity(
+                needed_rows, splat_storage_->reservedCapacity());
+            auto grew = splat_storage_->grow(want);
+            if (!grew) {
+                LOG_ERROR("Exportable splat grow failed (need={}): {}", needed_rows, grew.error());
+                return false;
+            }
+            if (splat_storage_->capacity() < needed_rows) {
+                LOG_ERROR("Exportable splat grow left capacity {} < needed {}",
+                          splat_storage_->capacity(),
+                          needed_rows);
+                return false;
+            }
+
+            auto* model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
+            if (!model_ptr) {
+                return false;
+            }
+
+            lfs::core::SplatTensorAllocator alloc;
+            VulkanContext* vk_ctx = nullptr;
+            if (viewer_ && viewer_->getWindowManager()) {
+                vk_ctx = viewer_->getWindowManager()->getVulkanContext();
+            }
+            if (vk_ctx && vk_ctx->externalMemoryInteropEnabled()) {
+                // Re-import the new export handle into Vulkan (handle changes on grow).
+                auto interop = makeSplatExportableInteropAllocator(*vk_ctx, *splat_storage_);
+                if (!interop) {
+                    LOG_ERROR("Exportable re-import after grow failed: {}", interop.error());
+                    return false;
+                }
+                alloc = std::move(*interop);
+            } else {
+                alloc = splat_storage_->make_allocator();
+            }
+
+            if (auto ok = splat_storage_->rebindSplatData(*model_ptr, alloc); !ok) {
+                LOG_ERROR("Exportable rebind after grow failed: {}", ok.error());
+                return false;
+            }
+            // rebind replaces SplatData; re-install this callback on the new model.
+            installExportableCapacityEnsure(*model_ptr);
+            if (trainer_) {
+                trainer_->setSplatTensorAllocator(alloc);
+            }
+            LOG_INFO("Exportable splat storage grew for densify: capacity={} block={} MiB gen={}",
+                     splat_storage_->capacity(),
+                     splat_storage_->block->size >> 20,
+                     splat_storage_->generation());
+            return model_ptr->means_raw().capacity() >= needed_rows;
+        });
     }
 
     void TrainerManager::setupStateMachineCallbacks() {
@@ -369,6 +470,7 @@ namespace lfs::vis {
                         }
                         return false;
                     }
+                    installExportableCapacityEnsure(*model);
                 }
             }
             LOG_DEBUG("Resuming from iteration {}", trainer_->get_current_iteration());
@@ -413,6 +515,9 @@ namespace lfs::vis {
                     return false;
                 }
                 lfs::core::Tensor::log_storage_memory("After training model initialization");
+                if (auto* model = scene_->getTrainingModel()) {
+                    installExportableCapacityEnsure(*model);
+                }
             }
 
             if (auto result = trainer_->initialize(params); !result) {

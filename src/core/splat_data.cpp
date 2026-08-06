@@ -554,6 +554,7 @@ namespace lfs::core {
           _deleted_count(other._deleted_count.load(std::memory_order_relaxed)),
           _deleted_mask_version(other._deleted_mask_version.load(std::memory_order_relaxed)),
           _tensor_allocator(std::move(other._tensor_allocator)),
+          _capacity_ensure(std::move(other._capacity_ensure)),
           lod_tree(std::move(other.lod_tree)),
           _frozen_ranges(std::move(other._frozen_ranges)) {
         // Reset the moved-from object
@@ -589,6 +590,7 @@ namespace lfs::core {
             _deleted_mask_version.store(other._deleted_mask_version.load(std::memory_order_relaxed),
                                         std::memory_order_relaxed);
             _tensor_allocator = std::move(other._tensor_allocator);
+            _capacity_ensure = std::move(other._capacity_ensure);
             _frozen_ranges = std::move(other._frozen_ranges);
             other._deleted_count.store(0, std::memory_order_relaxed);
             other._deleted_mask_version.store(0, std::memory_order_relaxed);
