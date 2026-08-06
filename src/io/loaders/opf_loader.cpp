@@ -38,6 +38,12 @@ namespace lfs::io {
     Result<LoadResult> OpfLoader::load(const std::filesystem::path& path,
                                        const LoadOptions& options) {
         const auto started = std::chrono::steady_clock::now();
+        const auto report = [&options](const float progress, const char* message) {
+            if (options.progress)
+                options.progress(progress, message);
+            throw_if_load_cancel_requested(options, message);
+        };
+        report(0.0f, "Reading OPF project");
         std::filesystem::path project_path = path;
         if (std::filesystem::is_directory(path)) {
             std::error_code ec;
@@ -54,6 +60,7 @@ namespace lfs::io {
         auto project = opf::read_project(project_path);
         if (!project)
             return std::unexpected(project.error());
+        report(0.15f, "Resolving OPF resources");
 
         const auto* camera_list_resource = find_resource(
             *project, [](const auto& item, const auto& resource) {
@@ -100,6 +107,7 @@ namespace lfs::io {
         auto images = opf::read_camera_list(*camera_list_resource, project_path.parent_path());
         if (!images)
             return std::unexpected(images.error());
+        report(0.35f, "Loading OPF cameras");
         auto sensors = opf::read_input_cameras(*input_resource);
         if (!sensors)
             return std::unexpected(sensors.error());
@@ -109,6 +117,7 @@ namespace lfs::io {
         auto imported = opf::assemble_cameras(*images, *sensors, *calibrated);
         if (!imported)
             return std::unexpected(imported.error());
+        report(0.55f, "Loading OPF georeference");
         std::optional<GeoreferenceMetadata> georeference;
         if (reference_frame_resource) {
             auto parsed_reference_frame = opf::read_scene_reference_frame(*reference_frame_resource);
@@ -124,6 +133,7 @@ namespace lfs::io {
 
         std::shared_ptr<PointCloud> point_cloud;
         if (point_cloud_resource) {
+            report(0.65f, "Loading OPF point cloud");
             auto manifest = opf::read_point_cloud_manifest(*point_cloud_resource, project_path.parent_path());
             if (!manifest)
                 return std::unexpected(manifest.error());
@@ -143,6 +153,7 @@ namespace lfs::io {
         LoadedScene scene;
         scene.point_cloud = std::move(point_cloud);
         if (!options.validate_only) {
+            report(0.85f, "Creating LichtFeld cameras");
             for (const auto& camera : *imported) {
                 auto loaded_camera = opf::make_camera(camera);
                 if (!loaded_camera)
@@ -156,6 +167,7 @@ namespace lfs::io {
         result.loader_used = "OPF";
         result.warnings = project->warnings;
         result.georeference = std::move(georeference);
+        report(1.0f, "OPF load complete");
         result.load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started);
         return result;
