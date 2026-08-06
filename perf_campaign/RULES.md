@@ -63,3 +63,19 @@ Therefore EVERY full build by ANY worker MUST go through the concurrency-aware w
 It counts active builders machine-wide and caps parallelism per the maintainer's rule:
   3+ concurrent builds -> -j4 each; 2 builds -> -j8 each; alone -> -j12.
 Never invoke `cmake --build -j<big>` directly.
+
+## Process hardening (2026-08-06, after fleet crash + stall lessons)
+
+Structural guarantees now in place (do not remove):
+1. All fleet work runs inside `lfs.slice`: MemoryHigh=14G / MemoryMax=18G / CPUWeight=75 —
+   the kernel throttles/kills WORKERS before the desktop feels pressure. oomd can no
+   longer take down gnome-shell because of us.
+2. Queue runner: max 3 concurrent workers, each its own systemd unit with
+   MemoryMax=10G and RuntimeMaxSec=4h (hung workers die and the queue proceeds).
+3. Stall watchdog (`lfs-watchdog.timer`, every 5 min): any worker whose output hasn't
+   grown for 30 min is killed and marked `.stalled`; queue continues. Log:
+   ~/lfs-campaign-out/watchdog.log.
+4. Build slots (3) + bench lock use flock on files — auto-released on process death,
+   so a killed worker can never wedge builds or benches.
+5. Fleet size policy: max 3 concurrent implementation workers, ever. Read-only analysts
+   may burst higher but only WITHOUT builds and in bounded batches (<=8), inside lfs.slice.
