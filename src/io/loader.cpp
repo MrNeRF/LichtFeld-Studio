@@ -111,6 +111,15 @@ namespace lfs::io {
                         LOG_TRACE("Blender/NeRF dataset detected: {}", lfs::core::path_to_utf8(path));
                         return true;
                     }
+
+                    std::error_code opf_ec;
+                    for (std::filesystem::directory_iterator it(path, opf_ec), end;
+                         !opf_ec && it != end; it.increment(opf_ec)) {
+                        if (it->is_regular_file(opf_ec) && it->path().extension() == ".opf") {
+                            LOG_TRACE("OPF dataset detected in folder: {}", lfs::core::path_to_utf8(path));
+                            return true;
+                        }
+                    }
                 }
 
                 LOG_TRACE("No compatible loader found for: {}", lfs::core::path_to_utf8(path));
@@ -149,6 +158,11 @@ namespace lfs::io {
             // JSON files might be datasets (transforms.json)
             if (ext == ".json") {
                 LOG_TRACE("JSON file detected, treating as potential dataset: {}", lfs::core::path_to_utf8(path));
+                return true;
+            }
+
+            if (ext == ".opf") {
+                LOG_TRACE("OPF project detected as dataset: {}", lfs::core::path_to_utf8(path));
                 return true;
             }
 
@@ -210,6 +224,15 @@ namespace lfs::io {
             return true;
         }
 
+        std::error_code opf_ec;
+        for (std::filesystem::directory_iterator it(path, opf_ec), end; !opf_ec && it != end;
+             it.increment(opf_ec)) {
+            if (it->is_regular_file(opf_ec) && it->path().extension() == ".opf") {
+                LOG_TRACE("OPF dataset detected in directory: {}", lfs::core::path_to_utf8(path));
+                return true;
+            }
+        }
+
         LOG_TRACE("No dataset markers found in directory: {}", lfs::core::path_to_utf8(path));
         return false;
     }
@@ -237,6 +260,9 @@ namespace lfs::io {
             if (ext == ".json") {
                 return DatasetType::Transforms;
             }
+            if (ext == ".opf") {
+                return DatasetType::OPF;
+            }
             // SOG files are not datasets
             if (ext == ".sog") {
                 return DatasetType::Unknown;
@@ -255,6 +281,13 @@ namespace lfs::io {
             if (has_sog_files) {
                 return DatasetType::Unknown; // SOG is not a dataset type
             }
+        }
+
+        std::error_code opf_ec;
+        for (std::filesystem::directory_iterator it(path, opf_ec), end; !opf_ec && it != end;
+             it.increment(opf_ec)) {
+            if (it->is_regular_file(opf_ec) && it->path().extension() == ".opf")
+                return DatasetType::OPF;
         }
 
         // Check for COLMAP markers

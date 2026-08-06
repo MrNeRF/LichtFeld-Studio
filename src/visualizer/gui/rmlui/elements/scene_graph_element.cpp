@@ -651,6 +651,11 @@ namespace lfs::vis::gui {
             vis_icon->SetAttribute("data-action", "toggle-vis");
             slot.vis_icon = slot.content->AppendChild(std::move(vis_icon));
 
+            auto training_pc_selector = doc->CreateElement("span");
+            training_pc_selector->SetClass("pointcloud-init-selector", true);
+            training_pc_selector->SetAttribute("data-action", "select-init-pc");
+            slot.training_pc_selector = slot.content->AppendChild(std::move(training_pc_selector));
+
             auto trash_icon = doc->CreateElement("img");
             trash_icon->SetClass("row-icon", true);
             trash_icon->SetClass("trash-icon", true);
@@ -806,6 +811,8 @@ namespace lfs::vis::gui {
             snapshot.type = node->type;
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
+            snapshot.training_initialization_selected =
+                node->type == core::NodeType::POINTCLOUD && node->id == scene.getInitialPointCloudNodeId();
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
             snapshot.has_mask = node->type == core::NodeType::CAMERA &&
@@ -922,6 +929,7 @@ namespace lfs::vis::gui {
             .type = snapshot.type,
             .depth = depth,
             .visible = snapshot.visible,
+            .training_initialization_selected = snapshot.training_initialization_selected,
             .has_children = snapshot.has_children,
             .collapsed = collapsed_ids_.contains(snapshot.id),
             .draggable = snapshot.draggable,
@@ -1303,6 +1311,12 @@ namespace lfs::vis::gui {
         setCachedClass(slot.vis_icon, "icon-vis-on", row.visible);
         setCachedClass(slot.vis_icon, "icon-vis-off", !row.visible);
 
+        const bool is_point_cloud = row.type == core::NodeType::POINTCLOUD;
+        setCachedAttribute(slot.training_pc_selector, "data-node-id", row.node_id_text);
+        setCachedProperty(slot.training_pc_selector, "display", is_point_cloud ? "inline-block" : "none");
+        setCachedClass(slot.training_pc_selector, "selected", row.training_initialization_selected);
+        setCachedInnerRml(slot.training_pc_selector, row.training_initialization_selected ? "&#10003;" : "&#160;");
+
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
         setCachedProperty(slot.delete_icon, "display", row.can_delete ? "inline" : "none");
         setCachedClass(slot.delete_icon, "trash-disabled", row.can_delete && !row.delete_enabled);
@@ -1592,6 +1606,11 @@ namespace lfs::vis::gui {
                 .node_id = static_cast<int32_t>(node_id),
                 .visible = !static_cast<bool>(node->visible)}
                 .emit();
+        } else if (action == "select-init-pc") {
+            if (node->type == core::NodeType::POINTCLOUD && scene->setInitialPointCloudFromNode(node_id)) {
+                tree_rebuild_needed_ = true;
+                markStateDirty();
+            }
         } else if (action == "delete") {
             const auto snapshot_it = node_snapshots_.find(node_id);
             if (snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled)

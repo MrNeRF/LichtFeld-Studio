@@ -671,6 +671,13 @@ class Scene:
     def has_training_data(self) -> bool:
         """Check if training dataset is loaded"""
 
+    def set_initial_point_cloud_node(self, node_id: int) -> bool:
+        """Use a point-cloud scene node to initialize training"""
+
+    @property
+    def initial_point_cloud_node_id(self) -> int:
+        """Scene node used to initialize training"""
+
     @property
     def is_point_cloud_modified(self) -> bool:
         """Whether the point cloud has been modified since loading"""

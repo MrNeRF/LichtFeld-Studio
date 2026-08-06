@@ -718,6 +718,40 @@ namespace lfs::python {
                   core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
     }
 
+    TEST_F(SceneValidityTest, InitializeTrainingModelUsesSelectedPointCloudAndRetainsSceneNodes) {
+        constexpr size_t sparse_count = 3;
+        constexpr size_t dense_count = 7;
+        const auto sparse_id = dummy_scene_.addPointCloud("sparse", make_test_point_cloud(sparse_count));
+        const auto dense_id = dummy_scene_.addPointCloud("dense", make_test_point_cloud(dense_count));
+        ASSERT_TRUE(dummy_scene_.setInitialPointCloudFromNode(dense_id));
+        EXPECT_EQ(dummy_scene_.getInitialPointCloudNodeId(), dense_id);
+
+        core::param::TrainingParameters params;
+        params.optimization.random = false;
+        params.optimization.sh_degree = 1;
+
+        const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_);
+
+        ASSERT_TRUE(result.has_value()) << result.error();
+        const auto* model = dummy_scene_.getTrainingModel();
+        ASSERT_NE(model, nullptr);
+        EXPECT_EQ(model->size(), dense_count);
+        ASSERT_NE(dummy_scene_.getNodeById(sparse_id), nullptr);
+        ASSERT_NE(dummy_scene_.getNodeById(dense_id), nullptr);
+        EXPECT_TRUE(dummy_scene_.getNodeById(sparse_id)->visible.get());
+        EXPECT_FALSE(dummy_scene_.getNodeById(dense_id)->visible.get());
+    }
+
+    TEST_F(SceneValidityTest, RemovingSelectedInitializationPointCloudClearsItsNodeId) {
+        const auto point_cloud_id = dummy_scene_.addPointCloud("initial", make_test_point_cloud(3));
+        ASSERT_TRUE(dummy_scene_.setInitialPointCloudFromNode(point_cloud_id));
+
+        dummy_scene_.removeNode("initial");
+
+        EXPECT_EQ(dummy_scene_.getInitialPointCloudNodeId(), core::NULL_NODE);
+        EXPECT_EQ(dummy_scene_.getInitialPointCloud(), nullptr);
+    }
+
     TEST_F(SceneValidityTest, MigrateTrainingModelAcceptsCudaOnlyExportableStorage) {
         constexpr size_t count = 4;
         constexpr size_t capacity = 16;

@@ -1956,6 +1956,11 @@ def open_ply_file_dialog(start_dir: str = '') -> str:
     Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
     """
 
+def open_ply_point_cloud_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a PLY point cloud. Returns empty string if cancelled.
+    """
+
 def open_mesh_file_dialog(start_dir: str = '') -> str:
     """
     Open a file dialog to select a mesh file. Returns empty string if cancelled.

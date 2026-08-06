@@ -518,6 +518,10 @@ namespace lfs::python {
 
         // Training data
         bool has_training_data() const { return scene_->hasTrainingData(); }
+        bool set_initial_point_cloud_node(int32_t node_id) {
+            return scene_->setInitialPointCloudFromNode(node_id);
+        }
+        int32_t initial_point_cloud_node_id() const { return scene_->getInitialPointCloudNodeId(); }
         bool is_point_cloud_modified() const { return scene_->isPointCloudModified(); }
         void set_point_cloud_modified(bool modified) { scene_->setPointCloudModified(modified); }
         PyTensor scene_center() const;

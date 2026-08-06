@@ -1372,6 +1372,8 @@ Returns:
             .def("get_active_cameras", &PyScene::get_active_cameras, "Get camera nodes enabled for training")
             // Training data
             .def("has_training_data", &PyScene::has_training_data, "Check if training dataset is loaded")
+            .def("set_initial_point_cloud_node", &PyScene::set_initial_point_cloud_node, nb::arg("node_id"), "Use a point-cloud scene node to initialize training")
+            .def_prop_ro("initial_point_cloud_node_id", &PyScene::initial_point_cloud_node_id, "Scene node used to initialize training")
             .def_prop_rw("is_point_cloud_modified", &PyScene::is_point_cloud_modified, &PyScene::set_point_cloud_modified, "Whether the point cloud has been modified since loading")
             .def_prop_ro("scene_center", &PyScene::scene_center, "Scene center position as a [3] tensor")
             // Counts

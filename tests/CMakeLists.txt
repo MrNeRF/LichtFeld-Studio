@@ -156,6 +156,7 @@ set(TEST_FILES
     test_tensor_cat_reduction_bug.cpp
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
+    test_opf_format.cpp
     test_ply_error_taxonomy.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp

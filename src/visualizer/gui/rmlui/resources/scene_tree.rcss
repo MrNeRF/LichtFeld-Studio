@@ -568,6 +568,24 @@ scene-graph,
     image-color: rgba(180, 120, 120, 220);
 }
 
+.pointcloud-init-selector {
+    display: none;
+    width: 14dp;
+    height: 14dp;
+    margin-right: 2dp;
+    color: rgba(120, 130, 145, 150);
+    text-align: center;
+    cursor: pointer;
+}
+
+.pointcloud-init-selector:hover {
+    background-color: rgba(120, 200, 120, 35);
+}
+
+.pointcloud-init-selector.selected {
+    color: rgba(102, 230, 102, 255);
+}
+
 
 /* Colored dot — replaces type icons for a cleaner row */
 .row-icon.type-icon.splat        { image-color: rgba(153, 204, 255, 230); }

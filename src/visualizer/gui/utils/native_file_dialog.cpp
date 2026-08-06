@@ -610,6 +610,12 @@ namespace lfs::vis::gui {
         return result;
     }
 
+    std::filesystem::path OpenPlyPointCloudFileDialog(const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest(singleExtensionFilter("PLY Files", ".ply"), defaultPath), result);
+        return result;
+    }
+
     std::filesystem::path OpenMeshFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(meshFilters(), defaultPath), result);

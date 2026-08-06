@@ -67,13 +67,33 @@ namespace lfs::vis::gui {
             Fn fn_;
         };
 
+        [[nodiscard]] std::string localizeOpfProgress(const std::string_view message) {
+            using namespace lichtfeld::Strings;
+            if (message == "Reading OPF project")
+                return LOC(Runtime::OPF_READING_PROJECT);
+            if (message == "Resolving OPF resources")
+                return LOC(Runtime::OPF_RESOLVING_RESOURCES);
+            if (message == "Loading OPF cameras")
+                return LOC(Runtime::OPF_LOADING_CAMERAS);
+            if (message == "Loading OPF georeference")
+                return LOC(Runtime::OPF_LOADING_GEOREFERENCE);
+            if (message == "Loading OPF point clouds" || message == "Loading OPF point cloud")
+                return LOC(Runtime::OPF_LOADING_POINT_CLOUDS);
+            if (message == "Creating LichtFeld cameras")
+                return LOC(Runtime::OPF_CREATING_CAMERAS);
+            if (message == "OPF load complete")
+                return LOC(Runtime::OPF_LOAD_COMPLETE);
+            return std::string(message);
+        }
+
     } // namespace
 
-    [[nodiscard]] const char* getDatasetTypeName(const std::filesystem::path& path) {
+    [[nodiscard]] std::string getDatasetTypeName(const std::filesystem::path& path) {
         switch (lfs::io::Loader::getDatasetType(path)) {
         case lfs::io::DatasetType::COLMAP: return "COLMAP";
         case lfs::io::DatasetType::Transforms: return "NeRF/Blender";
-        default: return "Dataset";
+        case lfs::io::DatasetType::OPF: return "OPF";
+        default: return LOC(lichtfeld::Strings::Training::Section::DATASET);
         }
     }
 
@@ -1611,7 +1631,8 @@ namespace lfs::vis::gui {
 
         import_state_.thread.emplace(
             [this, path](const std::stop_token stop_token) noexcept {
-                const auto record_failure = [this](const char* detail) noexcept {
+                const bool is_opf = lfs::io::Loader::getDatasetType(path) == lfs::io::DatasetType::OPF;
+                const auto record_failure = [this, is_opf](const char* detail) noexcept {
                     try {
                         const std::lock_guard lock(import_state_.mutex);
                         import_state_.success = false;
@@ -1623,14 +1644,17 @@ namespace lfs::vis::gui {
                     }
 
                     try {
-                        const std::string message = detail && *detail
-                                                        ? LOCF(lichtfeld::Strings::Runtime::IMPORT_FAILED_DETAIL, detail)
-                                                        : LOC(lichtfeld::Strings::Runtime::IMPORT_UNKNOWN_EXCEPTION);
+                        const std::string technical_message = detail && *detail
+                                                                  ? LOCF(lichtfeld::Strings::Runtime::IMPORT_FAILED_DETAIL, detail)
+                                                                  : LOC(lichtfeld::Strings::Runtime::IMPORT_UNKNOWN_EXCEPTION);
+                        const std::string gui_message = is_opf
+                                                            ? LOC(lichtfeld::Strings::Runtime::OPF_IMPORT_ERROR)
+                                                            : technical_message;
                         {
                             const std::lock_guard lock(import_state_.mutex);
-                            import_state_.error = message;
+                            import_state_.error = gui_message;
                         }
-                        LOG_ERROR("{}", message);
+                        LOG_ERROR("{}", technical_message);
                     } catch (...) {
                         // The worker boundary must remain no-throw even when
                         // reporting an allocation failure. success was reset
@@ -1690,13 +1714,13 @@ namespace lfs::vis::gui {
                         .min_track_length = effective_min_track_length,
                         .validate_only = false,
                         .centralize = parse_centralize(local_params.dataset.centralize_dataset),
-                        .progress = [this, &stop_token](const float pct, const std::string& msg) {
+                        .progress = [this, &stop_token, is_opf](const float pct, const std::string& msg) {
                         if (stop_token.stop_requested())
                             return;
                         import_state_.progress.store(pct / 100.0f);
                         {
                             const std::lock_guard lock(import_state_.mutex);
-                            import_state_.stage = msg;
+                            import_state_.stage = is_opf ? localizeOpfProgress(msg) : msg;
                         }
                         publishImportOverlayState(); },
                         .cancel_requested = [&stop_token]() { return stop_token.stop_requested(); }};
@@ -1711,6 +1735,8 @@ namespace lfs::vis::gui {
                     {
                         const std::lock_guard lock(import_state_.mutex);
                         if (result) {
+                            for (const auto& warning : result->warnings)
+                                LOG_WARN("Dataset import warning: {}", warning);
                             import_state_.load_result = std::move(*result);
                             import_state_.success = true;
                             import_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_APPLYING);
@@ -1731,10 +1757,13 @@ namespace lfs::vis::gui {
                                        import_state_.load_result->data);
                         } else {
                             import_state_.success = false;
-                            import_state_.error = result.error().format();
+                            const auto technical_error = result.error().format();
+                            import_state_.error = is_opf
+                                                      ? LOC(lichtfeld::Strings::Runtime::OPF_IMPORT_ERROR)
+                                                      : technical_error;
                             import_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_FAILED);
                             import_state_.outcome = "failed";
-                            LOG_ERROR("Import failed: {}", import_state_.error);
+                            LOG_ERROR("Import failed: {}", technical_error);
                         }
                     }
                 } catch (const std::exception& e) {

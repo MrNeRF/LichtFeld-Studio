@@ -7,11 +7,13 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "io/error.hpp"
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -46,7 +48,8 @@ namespace lfs::io {
     enum class DatasetType {
         Unknown,
         COLMAP,
-        Transforms
+        Transforms,
+        OPF
     };
 
     // Centralize dataset enum
@@ -91,9 +94,27 @@ namespace lfs::io {
         }
     }
 
+    struct LoadedPointCloud {
+        std::string name;
+        std::shared_ptr<PointCloud> point_cloud;
+        bool visible = false;
+    };
+
     struct LoadedScene {
         std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
+        // Preferred initialization cloud, retained for loader compatibility.
         std::shared_ptr<PointCloud> point_cloud;
+        // All point-cloud products exposed by formats that support them.
+        std::vector<LoadedPointCloud> point_clouds;
+    };
+
+    // Dataset georeference metadata preserved at the loader boundary. Loaders
+    // must not silently apply this information to the local scene coordinates.
+    struct GeoreferenceMetadata {
+        std::array<double, 3> scale{1.0, 1.0, 1.0};
+        std::array<double, 3> shift{0.0, 0.0, 0.0};
+        bool swap_xy = false;
+        std::string crs_definition;
     };
 
     struct LoadResult {
@@ -103,6 +124,7 @@ namespace lfs::io {
         std::string loader_used;
         std::chrono::milliseconds load_time{0};
         std::vector<std::string> warnings;
+        std::optional<GeoreferenceMetadata> georeference;
     };
 
     /**

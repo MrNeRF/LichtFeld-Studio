@@ -195,6 +195,8 @@ add_library(lfs_io STATIC
         formats/colmap.cpp
         formats/transforms.hpp
         formats/transforms.cpp
+        formats/opf.hpp
+        formats/opf.cpp
         formats/sogs.hpp
         formats/sogs.cpp
         formats/html.hpp
@@ -229,7 +231,9 @@ add_library(lfs_io STATIC
         loaders/checkpoint_loader.hpp
         loaders/checkpoint_loader.cpp
         loaders/mesh_loader.hpp
+        loaders/opf_loader.hpp
         loaders/mesh_loader.cpp
+        loaders/opf_loader.cpp
         mesh/openmesh_bridge.hpp
         mesh/openmesh_bridge.cpp
         mesh/texture_loader.hpp

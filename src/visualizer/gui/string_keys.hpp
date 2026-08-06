@@ -1077,6 +1077,14 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SCENE_MANAGER_NOT_INITIALIZED = "runtime.scene_manager_not_initialized";
         inline constexpr const char* IMPORT_FAILED_DETAIL = "runtime.import_failed_detail";
         inline constexpr const char* IMPORT_UNKNOWN_EXCEPTION = "runtime.import_unknown_exception";
+        inline constexpr const char* OPF_READING_PROJECT = "runtime.opf_reading_project";
+        inline constexpr const char* OPF_RESOLVING_RESOURCES = "runtime.opf_resolving_resources";
+        inline constexpr const char* OPF_LOADING_CAMERAS = "runtime.opf_loading_cameras";
+        inline constexpr const char* OPF_LOADING_GEOREFERENCE = "runtime.opf_loading_georeference";
+        inline constexpr const char* OPF_LOADING_POINT_CLOUDS = "runtime.opf_loading_point_clouds";
+        inline constexpr const char* OPF_CREATING_CAMERAS = "runtime.opf_creating_cameras";
+        inline constexpr const char* OPF_LOAD_COMPLETE = "runtime.opf_load_complete";
+        inline constexpr const char* OPF_IMPORT_ERROR = "runtime.opf_import_error";
         inline constexpr const char* TRAINING_UNKNOWN_ERROR = "runtime.training_unknown_error";
         inline constexpr const char* COLMAP_OVERWRITE_MESSAGE = "runtime.colmap_overwrite_message";
         inline constexpr const char* FOLDER_LABEL = "runtime.folder_label";

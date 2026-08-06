@@ -490,14 +490,27 @@ namespace lfs::training {
                         }
                     }
                 } else {
-                    if (data.point_cloud && data.point_cloud->size() > 0) {
+                    if (!data.point_clouds.empty()) {
+                        for (const auto& loaded : data.point_clouds) {
+                            if (!loaded.point_cloud || loaded.point_cloud->size() == 0)
+                                continue;
+                            const auto node_id = scene.addPointCloud(loaded.name, loaded.point_cloud, dataset_id);
+                            if (node_id != lfs::core::NULL_NODE) {
+                                scene.setNodeVisibility(node_id, loaded.visible);
+                                if (loaded.point_cloud == data.point_cloud)
+                                    (void)scene.setInitialPointCloudFromNode(node_id);
+                            }
+                        }
+                    } else if (data.point_cloud && data.point_cloud->size() > 0) {
                         LOG_INFO("Adding {} points to scene", data.point_cloud->size());
-                        scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
+                        const auto node_id = scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
+                        (void)scene.setInitialPointCloudFromNode(node_id);
                     } else {
                         LOG_INFO("No point cloud, using random initialization");
                         auto pc = createRandomPointCloud();
                         LOG_INFO("Adding {} random points to scene", pc->size());
-                        scene.addPointCloud("PointCloud", pc, dataset_id);
+                        const auto node_id = scene.addPointCloud("PointCloud", pc, dataset_id);
+                        (void)scene.setInitialPointCloudFromNode(node_id);
                     }
                 }
 
@@ -603,7 +616,22 @@ namespace lfs::training {
         glm::mat4 preserved_cropbox_transform{1.0f};
         bool has_preserved_cropbox = false;
 
+        const auto selected_point_cloud = scene.getInitialPointCloud();
         for (const auto* node : scene.getNodes()) {
+            if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud &&
+                node->point_cloud == selected_point_cloud) {
+                point_cloud_node_id = node->id;
+                parent_id = node->parent_id;
+                node_transform = node->transform();
+                point_cloud = node->point_cloud.get();
+                break;
+            }
+        }
+        // Preserve legacy callers that only populate a point-cloud node and do
+        // not explicitly select an initialization cloud.
+        for (const auto* node : scene.getNodes()) {
+            if (point_cloud_node_id != lfs::core::NULL_NODE)
+                break;
             if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
                 point_cloud_node_id = node->id;
                 parent_id = node->parent_id;
@@ -739,11 +767,8 @@ namespace lfs::training {
             lfs::core::random_choose(*splat_result, max_cap);
         }
 
-        if (point_cloud_node_id != lfs::core::NULL_NODE) {
-            if (const auto* pc_node = scene.getNodeById(point_cloud_node_id)) {
-                scene.removeNode(pc_node->name, false);
-            }
-        }
+        if (point_cloud_node_id != lfs::core::NULL_NODE)
+            scene.setNodeVisibility(point_cloud_node_id, false);
 
         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
         applyTrainingSHDegree(*model, params.optimization.sh_degree);
@@ -864,10 +889,23 @@ namespace lfs::training {
                             return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }
                     }
+                } else if (!data.point_clouds.empty()) {
+                    for (const auto& loaded : data.point_clouds) {
+                        if (!loaded.point_cloud || loaded.point_cloud->size() == 0)
+                            continue;
+                        const auto node_id = scene.addPointCloud(loaded.name, loaded.point_cloud, dataset_id);
+                        if (node_id != lfs::core::NULL_NODE) {
+                            scene.setNodeVisibility(node_id, loaded.visible);
+                            if (loaded.point_cloud == data.point_cloud)
+                                (void)scene.setInitialPointCloudFromNode(node_id);
+                        }
+                    }
                 } else if (data.point_cloud && data.point_cloud->size() > 0) {
-                    scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
+                    const auto node_id = scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
+                    (void)scene.setInitialPointCloudFromNode(node_id);
                 } else {
-                    scene.addPointCloud("PointCloud", createRandomPointCloud(), dataset_id);
+                    const auto node_id = scene.addPointCloud("PointCloud", createRandomPointCloud(), dataset_id);
+                    (void)scene.setInitialPointCloudFromNode(node_id);
                 }
 
                 const auto& cameras = data.cameras;
