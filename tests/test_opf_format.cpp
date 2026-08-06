@@ -254,3 +254,17 @@ TEST_F(OpfFormatTest, ConvertsCalibratedOmegaPhiKappaPose) {
     EXPECT_NEAR(pose.rotation[4], 0.0f, 1e-6f);
     EXPECT_EQ(pose.position, (std::array<float, 3>{1.0f, 2.0f, 3.0f}));
 }
+
+TEST_F(OpfFormatTest, AssemblesCameraCatalogsForImport) {
+    const std::vector<lfs::io::opf::CameraImage> images = {{42, "image.jpg", root / "image.jpg"}};
+    const std::vector<lfs::io::opf::InputSensor> sensors = {
+        {7, "sensor", 1920, 1080, "perspective", {960.0, 540.0}, 1200.0, {0, 0, 0}, {0, 0}}};
+    const std::vector<lfs::io::opf::CalibratedCamera> calibrated = {
+        {42, 7, {1.0, 2.0, 3.0}, {0.0, 0.0, 0.0}}};
+    auto result = lfs::io::opf::assemble_cameras(images, sensors, calibrated);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ(result->front().uri, "image.jpg");
+    EXPECT_EQ(result->front().width, 1920u);
+    EXPECT_EQ(result->front().pose.position[1], 2.0f);
+}

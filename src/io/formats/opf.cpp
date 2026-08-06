@@ -577,4 +577,43 @@ namespace lfs::io::opf {
                 {static_cast<float>(camera.position[0]), static_cast<float>(camera.position[1]),
                  static_cast<float>(camera.position[2])}};
     }
+
+    Result<std::vector<ImportedCamera>> assemble_cameras(
+        const std::vector<CameraImage>& camera_list,
+        const std::vector<InputSensor>& sensors,
+        const std::vector<CalibratedCamera>& calibrated_cameras) {
+        std::unordered_map<std::uint64_t, const CameraImage*> images;
+        for (const auto& image : camera_list)
+            images.emplace(image.id, &image);
+        std::unordered_map<std::uint64_t, const InputSensor*> sensor_map;
+        for (const auto& sensor : sensors)
+            sensor_map.emplace(sensor.id, &sensor);
+
+        std::vector<ImportedCamera> result;
+        result.reserve(calibrated_cameras.size());
+        for (const auto& calibrated : calibrated_cameras) {
+            const auto image_it = images.find(calibrated.id);
+            if (image_it == images.end())
+                return make_error(ErrorCode::INVALID_DATASET,
+                                  std::format("OPF calibrated camera '{}' is missing from camera_list.", calibrated.id));
+            const auto sensor_it = sensor_map.find(calibrated.sensor_id);
+            if (sensor_it == sensor_map.end())
+                return make_error(ErrorCode::INVALID_DATASET,
+                                  std::format("OPF calibrated camera '{}' references missing sensor '{}'.",
+                                              calibrated.id, calibrated.sensor_id));
+            const auto& sensor = *sensor_it->second;
+            ImportedCamera imported{calibrated.id,
+                                    image_it->second->uri,
+                                    sensor.width,
+                                    sensor.height,
+                                    sensor.model,
+                                    sensor.principal_point,
+                                    sensor.focal_length,
+                                    sensor.radial_distortion,
+                                    sensor.tangential_distortion,
+                                    to_calibrated_pose(calibrated)};
+            result.push_back(std::move(imported));
+        }
+        return result;
+    }
 } // namespace lfs::io::opf
