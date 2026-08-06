@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -945,6 +946,27 @@ namespace {
             forge_pipeline(pipeline_cull_prepare, 0x5402);
             forge_pipeline(pipeline_projection_forward_survivors, 0x5403);
             forge_pipeline(pipeline_projection_forward_quant_survivors, 0x5404);
+            forge_pipeline(pipeline_cumsum.single_pass, 0x5501);
+            forge_pipeline(pipeline_cumsum.block_scan, 0x5502);
+            forge_pipeline(pipeline_cumsum.scan_block_sums, 0x5503);
+            forge_pipeline(pipeline_cumsum.add_block_offsets, 0x5504);
+            forge_pipeline(pipeline_cumsum_indirect.block_scan, 0x5511);
+            forge_pipeline(pipeline_cumsum_indirect.scan_block_sums, 0x5512);
+            forge_pipeline(pipeline_cumsum_indirect.add_block_offsets, 0x5513);
+            forge_pipeline(pipeline_prepare_tile_sort, 0x5521);
+            forge_pipeline(pipeline_prepare_tile_sort_visible, 0x5522);
+            forge_pipeline(pipeline_visible_flags, 0x5531);
+            forge_pipeline(pipeline_prepare_visible_sort, 0x5532);
+            forge_pipeline(pipeline_compact_visible_primitives, 0x5533);
+            forge_pipeline(pipeline_prepare_visible_chain, 0x5534);
+            forge_pipeline(pipeline_copy_visible_indices, 0x5535);
+            forge_pipeline(pipeline_radix_histogram_clear, 0x5541);
+            forge_pipeline(pipeline_sorting_indirect_1.upsweep, 0x5542);
+            forge_pipeline(pipeline_sorting_indirect_1.spine, 0x5543);
+            forge_pipeline(pipeline_sorting_indirect_1.downsweep, 0x5544);
+            forge_pipeline(pipeline_sorting_indirect_2.upsweep, 0x5552);
+            forge_pipeline(pipeline_sorting_indirect_2.spine, 0x5553);
+            forge_pipeline(pipeline_sorting_indirect_2.downsweep, 0x5554);
 
             // Pre-sized host-visible readback so ensureLodSelectionReadback is a no-op.
             // ensureLodSelectionReadback(chunk_capacity) allocates (2+chunk_capacity) words;
@@ -960,6 +982,13 @@ namespace {
             lod_selection_readback_pending_ = false;
             lod_selection_readback_chunk_capacity_ = kPayloadWords;
             lod_selection_readback_capacity_ = 0;
+
+            // Visible-count readback (two words) for sort-chain audits.
+            visible_count_readback_buffer_ = makeBuffer(0xF002, 2 * sizeof(std::uint32_t));
+            visible_count_readback_mapped_ = reinterpret_cast<std::uint32_t*>(
+                static_cast<std::uintptr_t>(0xBEEF1000));
+            visible_count_readback_initialized_ = true;
+            visible_count_readback_pending_ = false;
         }
 
         void disarm_for_destruction() {
@@ -1074,6 +1103,14 @@ namespace {
     constexpr std::size_t kAuditCullSplatsWithLod = 12;
     constexpr std::size_t kAuditProjectionSurvivorsNoLod = 5;
     constexpr std::size_t kAuditProjectionSurvivorsWithLod = 7;
+    // P4 r3: cumsum single-pass begin=3 structs (input+output; no blockSums) + phases 0;
+    // prepare tile sort 2; generous caps for multi-phase + sort chain under freeze N=64.
+    constexpr std::size_t kAuditCumsumSinglePass = 8;
+    constexpr std::size_t kAuditPrepareTileSort = 4;
+    // Radix multi-pass (32 bits → 4 passes) + cumsum + compact + copy expands
+    // well past the catalog's local-site count (nested chains).
+    constexpr std::size_t kAuditSortPrimitivesByDepth = 64;
+    constexpr std::size_t kAuditIndexBufferOffsetVisible = 24;
 
     constexpr std::uint32_t kAuditSplatCount = 64;
     constexpr std::uint32_t kAuditAabbW = 16;
@@ -1705,6 +1742,198 @@ TEST(VkSplatTaggedDispatch, CullAndSurvivorsProjectionAuditWithinBaseline) {
         surv_with_lod, kAuditProjectionSurvivorsWithLod + 6, surv_no_lod,
         kAuditSurvivorsAfterCullNoLod, derived.size(),
         static_cast<unsigned long long>(planned_activity));
+
+    renderer.discard_timestamps();
+    renderer.endCommandBatch(/*use_fence=*/false);
+}
+
+// =============================================================================
+// P4 r3: cumsum / offset / tile sort / radix sort / visible-count readback
+// =============================================================================
+
+// Catches: classic cumsum + prepare_tile_sort still hand-writing barriers.
+TEST(VkSplatTaggedDispatch, CumsumAndPrepareTileSortAuditWithinBaseline) {
+    DispatchScript script;
+    BindScript bind(script);
+
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+
+    VulkanGSPipelineBuffers buffers;
+    // N=64 → single-pass cumsum (≤1024).
+    forge_owned_i32(buffers.tiles_touched_depth_ordered, 0xF101, kAuditSplatCount);
+    forge_owned_i32(buffers.index_buffer_offset, 0xF102, kAuditSplatCount);
+    forge_owned(buffers.tile_sort_count, 0xF103, 4);
+    forge_owned_i32(buffers._cumsum_blockSums, 0xF104, 64);
+    forge_owned_i32(buffers._cumsum_blockSums2, 0xF105, 64);
+
+    renderer.beginCommandBatch();
+    track_buf(renderer, buffers.tiles_touched_depth_ordered.deviceBuffer);
+    track_buf(renderer, buffers.index_buffer_offset.deviceBuffer);
+    track_buf(renderer, buffers.tile_sort_count.deviceBuffer);
+    track_buf(renderer, buffers._cumsum_blockSums.deviceBuffer);
+    track_buf(renderer, buffers._cumsum_blockSums2.deviceBuffer);
+
+    // Seed a writer on tiles so cumsum input Read emits a real barrier.
+    (void)renderer.barrierPlanner().plan(std::array{
+        lfs::rendering::vulkan::DeclaredAccess{
+            &buffers.tiles_touched_depth_ordered.deviceBuffer,
+            lfs::rendering::vulkan::BufferUse::ComputeWrite},
+    });
+
+    const auto stats_before = renderer.barrierPlanner().stats();
+    script.clear_recording();
+
+    VulkanGSRendererUniforms u{};
+    u.num_splats = kAuditSplatCount;
+    u.grid_width = 4;
+    u.grid_height = 4;
+
+    renderer.executeCalculateIndexBufferOffset(u, buffers);
+    const std::size_t n = total_buffer_barrier_structs(script);
+    EXPECT_LE(n, kAuditCumsumSinglePass + kAuditPrepareTileSort);
+
+    const auto stats_after = renderer.barrierPlanner().stats();
+    EXPECT_GT((stats_after.barriers_emitted + stats_after.accesses_elided) -
+                  (stats_before.barriers_emitted + stats_before.accesses_elided),
+              0u);
+
+    std::printf("CumsumPrepareAudit structs=%zu (≤%zu) planned_activity=%llu\n",
+                n,
+                kAuditCumsumSinglePass + kAuditPrepareTileSort,
+                static_cast<unsigned long long>(
+                    (stats_after.barriers_emitted + stats_after.accesses_elided) -
+                    (stats_before.barriers_emitted + stats_before.accesses_elided)));
+
+    renderer.discard_timestamps();
+    renderer.endCommandBatch(/*use_fence=*/false);
+}
+
+// Catches: sort-by-depth + radix + visible-count readback still legacy.
+TEST(VkSplatTaggedDispatch, SortPrimitivesByDepthAuditWithinBaseline) {
+    DispatchScript script;
+    BindScript bind(script);
+
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+
+    VulkanGSPipelineBuffers buffers;
+    forge_owned_i32(buffers.tiles_touched, 0xF201, kAuditSplatCount);
+    forge_owned_i32(buffers.visible_flags, 0xF202, kAuditSplatCount);
+    forge_owned_i32(buffers.visible_prefix, 0xF203, kAuditSplatCount);
+    forge_owned(buffers.visible_count, 0xF204, 2);
+    forge_owned(buffers.visible_sort_dispatch_args, 0xF205, 16);
+    forge_owned(buffers.primitive_depth_keys, 0xF206, kAuditSplatCount);
+    forge_owned_i32(buffers.sorting_keys_1, 0xF207, kAuditSplatCount);
+    forge_owned_i32(buffers.sorting_keys_2, 0xF208, kAuditSplatCount);
+    forge_owned_i32(buffers.sorting_gauss_idx_1, 0xF209, kAuditSplatCount);
+    forge_owned_i32(buffers.sorting_gauss_idx_2, 0xF20A, kAuditSplatCount);
+    forge_owned_i32(buffers.primitive_sort_indices, 0xF20B, kAuditSplatCount);
+    forge_owned_i32(buffers._sorting_histogram, 0xF20C, 8 * 256);
+    forge_owned_i32(buffers._sorting_histogram_cumsum, 0xF20D, 64 * 256);
+    forge_owned_i32(buffers._cumsum_blockSums, 0xF20E, 64);
+    forge_owned_i32(buffers._cumsum_blockSums2, 0xF20F, 64);
+
+    renderer.beginCommandBatch();
+    for (auto* b : {&buffers.tiles_touched.deviceBuffer, &buffers.visible_flags.deviceBuffer,
+                    &buffers.visible_prefix.deviceBuffer, &buffers.visible_count.deviceBuffer,
+                    &buffers.visible_sort_dispatch_args.deviceBuffer,
+                    &buffers.primitive_depth_keys.deviceBuffer,
+                    &buffers.sorting_keys_1.deviceBuffer, &buffers.sorting_keys_2.deviceBuffer,
+                    &buffers.sorting_gauss_idx_1.deviceBuffer,
+                    &buffers.sorting_gauss_idx_2.deviceBuffer,
+                    &buffers.primitive_sort_indices.deviceBuffer,
+                    &buffers._sorting_histogram.deviceBuffer,
+                    &buffers._sorting_histogram_cumsum.deviceBuffer,
+                    &buffers._cumsum_blockSums.deviceBuffer,
+                    &buffers._cumsum_blockSums2.deviceBuffer}) {
+        track_buf(renderer, *b);
+    }
+
+    const auto stats_before = renderer.barrierPlanner().stats();
+    script.clear_recording();
+
+    VulkanGSRendererUniforms u{};
+    u.num_splats = kAuditSplatCount;
+    u.grid_width = 4;
+    u.grid_height = 4;
+
+    renderer.executeSortPrimitivesByDepth(u, buffers);
+    const std::size_t n = total_buffer_barrier_structs(script);
+    EXPECT_LE(n, kAuditSortPrimitivesByDepth);
+
+    const auto stats_after = renderer.barrierPlanner().stats();
+    EXPECT_GT((stats_after.barriers_emitted + stats_after.accesses_elided) -
+                  (stats_before.barriers_emitted + stats_before.accesses_elided),
+              0u);
+
+    std::printf("SortByDepthAudit structs=%zu (≤%zu) planned_activity=%llu\n",
+                n,
+                kAuditSortPrimitivesByDepth,
+                static_cast<unsigned long long>(
+                    (stats_after.barriers_emitted + stats_after.accesses_elided) -
+                    (stats_before.barriers_emitted + stats_before.accesses_elided)));
+
+    renderer.discard_timestamps();
+    renderer.endCommandBatch(/*use_fence=*/false);
+}
+
+// Catches: indirect visible cumsum + prepare_tile_sort_visible still legacy.
+TEST(VkSplatTaggedDispatch, IndexBufferOffsetVisibleAuditWithinBaseline) {
+    DispatchScript script;
+    BindScript bind(script);
+
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+
+    VulkanGSPipelineBuffers buffers;
+    forge_owned_i32(buffers.tiles_touched_depth_ordered, 0xF301, kAuditSplatCount);
+    forge_owned_i32(buffers.index_buffer_offset, 0xF302, kAuditSplatCount);
+    forge_owned_i32(buffers._cumsum_blockSums, 0xF303, 64);
+    forge_owned_i32(buffers._cumsum_blockSums2, 0xF304, 64);
+    forge_owned_i32(buffers.cumsum_counts, 0xF305, 4);
+    forge_owned(buffers.visible_dispatch, 0xF306, 16); // 4*3 words
+    forge_owned(buffers.tile_sort_count, 0xF307, 4);
+    forge_owned(buffers.visible_count, 0xF308, 2);
+
+    renderer.beginCommandBatch();
+    for (auto* b : {&buffers.tiles_touched_depth_ordered.deviceBuffer,
+                    &buffers.index_buffer_offset.deviceBuffer,
+                    &buffers._cumsum_blockSums.deviceBuffer,
+                    &buffers._cumsum_blockSums2.deviceBuffer,
+                    &buffers.cumsum_counts.deviceBuffer,
+                    &buffers.visible_dispatch.deviceBuffer,
+                    &buffers.tile_sort_count.deviceBuffer,
+                    &buffers.visible_count.deviceBuffer}) {
+        track_buf(renderer, *b);
+    }
+
+    const auto stats_before = renderer.barrierPlanner().stats();
+    script.clear_recording();
+
+    VulkanGSRendererUniforms u{};
+    u.num_splats = kAuditSplatCount;
+    u.grid_width = 4;
+    u.grid_height = 4;
+
+    renderer.executeCalculateIndexBufferOffsetVisible(u, buffers, kAuditSplatCount);
+    const std::size_t n = total_buffer_barrier_structs(script);
+    EXPECT_LE(n, kAuditIndexBufferOffsetVisible);
+
+    const auto stats_after = renderer.barrierPlanner().stats();
+    EXPECT_GT((stats_after.barriers_emitted + stats_after.accesses_elided) -
+                  (stats_before.barriers_emitted + stats_before.accesses_elided),
+              0u);
+
+    std::printf("IndexOffsetVisibleAudit structs=%zu (≤%zu) planned_activity=%llu\n",
+                n,
+                kAuditIndexBufferOffsetVisible,
+                static_cast<unsigned long long>(
+                    (stats_after.barriers_emitted + stats_after.accesses_elided) -
+                    (stats_before.barriers_emitted + stats_before.accesses_elided)));
 
     renderer.discard_timestamps();
     renderer.endCommandBatch(/*use_fence=*/false);
