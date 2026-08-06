@@ -312,3 +312,33 @@
 | B/splat | 429.0 | 429.0 | Phase 2 pending |
 | GUI start exportable (5M cap) | 1182.6 MiB | 141.9 MiB | **−1040.6 MiB** (G7) |
 All 20 campaign tests green. ISS-007 open (manual GUI validation).
+
+## Task 1.3 — Fold regularizer loss scalars into fused backward
+
+- **Branch:** `lfs-elite`
+- **Change:** scale/opacity reg *loss scalars* accumulated in
+  `preprocess_backward_cu` (block reduce + atomicAdd into persistent device
+  scalars). Trainer zeros `fused_scale_reg_loss_` /
+  `fused_opacity_reg_loss_` each FastGS backward step and skips
+  `forward_loss_only` (which did `empty({num_blocks})+empty({1})` per call).
+  Legacy loss-only path kept for freeze / non-backward FastGS iters and for
+  the gsplat path (`compute_*_reg_loss`).
+- **Fail evidence (TDD):** without kernel accumulation, fused scalars stay 0
+  after bwd → `relative_delta(old, 0) == 1` fails `|delta| < 1e-5`. Pre-change
+  trainer always launched loss-only kernels on the FastGS path.
+  ```
+  # conceptual pre-fix (loss_out never written):
+  Expected: relative_delta(scale_old, scale_new) < 1e-5
+  scale reg: old=0.00… fused=0  (delta=1)
+  ```
+- **Pass evidence:**
+  ```
+  [==========] Running 2 tests from 1 test suite.
+  [  PASSED  ] 2 tests.  (FusedRegLossTest.*)
+  FusedBackwardLossMatchesLossOnly  (rel Δ < 1e-5)
+  FusedPathHasNoPerCallRegLossAllocs (fused_delta=0 driver allocs)
+  ```
+- **Note:** Bench gate deferred to after 1.4 (per work order). Wave 1 before:
+  4.085 ms/iter, 0.05 allocs/iter.
+- **Commit:** (this commit)
+

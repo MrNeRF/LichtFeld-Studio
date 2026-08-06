@@ -691,6 +691,8 @@ namespace lfs::training {
         fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
         fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
         fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
+        fused_adam.scale_reg_loss_out = fused_extra_gradients.scale_reg_loss_out;
+        fused_adam.opacity_reg_loss_out = fused_extra_gradients.opacity_reg_loss_out;
         fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
         fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
         fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;

@@ -511,6 +511,9 @@ namespace lfs::training {
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;
+        // Phase 1.3: persistent FastGS scale/opacity reg loss scalars (filled in fused bwd)
+        core::Tensor fused_scale_reg_loss_;
+        core::Tensor fused_opacity_reg_loss_;
         core::Tensor depth_loss_scalar_;
         core::Tensor depth_loss_grad_;
         core::Tensor depth_loss_grad_alpha_;

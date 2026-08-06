@@ -7,6 +7,7 @@
 #include "buffer_utils.h"
 #include "helper_math.h"
 #include "kernel_utils.cuh"
+#include "lfs/core/warp_reduce.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 #include <cooperative_groups.h>
@@ -58,7 +59,50 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint sh_layout_slots,
         FusedAdamSettings fused_adam) {
         auto primitive_idx = cg::this_grid().thread_rank();
-        if (primitive_idx >= n_primitives)
+        const bool in_range = primitive_idx < n_primitives;
+
+        // Fold scale/opacity regularizer *loss scalars* into this kernel (grads were
+        // already fused). Each thread contributes its primitive's share of
+        // weight * mean(·); block-reduce + atomicAdd into caller-owned device scalars
+        // so the trainer can drop the loss-only full-N reduction kernels + their
+        // per-call empty({num_blocks})/empty({1}) allocs.
+        float scale_loss_local = 0.0f;
+        float opacity_loss_local = 0.0f;
+        if (in_range) {
+            if (fused_adam.scale_reg_loss_out != nullptr &&
+                fused_adam.scale_reg_weight > 0.0f &&
+                fused_adam.scaling.param != nullptr &&
+                fused_adam.scaling.n_elements > 0) {
+                const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
+                const float inv_n = 1.0f / static_cast<float>(fused_adam.scaling.n_elements);
+                scale_loss_local = fused_adam.scale_reg_weight * inv_n *
+                                   (expf(fused_adam.scaling.param[scale_base]) +
+                                    expf(fused_adam.scaling.param[scale_base + 1]) +
+                                    expf(fused_adam.scaling.param[scale_base + 2]));
+            }
+            if (fused_adam.opacity_reg_loss_out != nullptr &&
+                fused_adam.opacity_reg_weight > 0.0f &&
+                fused_adam.opacity.param != nullptr &&
+                fused_adam.opacity.n_elements > 0) {
+                const float opa = sigmoid(fused_adam.opacity.param[primitive_idx]);
+                opacity_loss_local = fused_adam.opacity_reg_weight * opa /
+                                     static_cast<float>(fused_adam.opacity.n_elements);
+            }
+        }
+        if (fused_adam.scale_reg_loss_out != nullptr) {
+            const float block_sum = lfs::core::warp_ops::block_reduce_sum(scale_loss_local);
+            if (threadIdx.x == 0 && block_sum != 0.0f) {
+                atomicAdd(fused_adam.scale_reg_loss_out, block_sum);
+            }
+        }
+        if (fused_adam.opacity_reg_loss_out != nullptr) {
+            const float block_sum = lfs::core::warp_ops::block_reduce_sum(opacity_loss_local);
+            if (threadIdx.x == 0 && block_sum != 0.0f) {
+                atomicAdd(fused_adam.opacity_reg_loss_out, block_sum);
+            }
+        }
+
+        if (!in_range)
             return;
 
         // vksplat-style invisible fold: when n_touched_tiles == 0, skip the projection /

@@ -3997,41 +3997,68 @@ namespace lfs::training {
                         if (normal_supervision_started) {
                             fused_extra_gradients.flatten_reg_weight = params_.optimization.normal_flatten_weight;
                         }
-                    }
-
-                    if (params_.optimization.scale_reg > 0.0f) {
-                        auto scale_loss_result = lfs::training::losses::ScaleRegularization::forward_loss_only(
-                            model.scaling_raw(),
-                            {.weight = params_.optimization.scale_reg});
-                        if (!scale_loss_result) {
-                            return lfs::from_legacy_expected<StepDisposition>(
-                                       std::unexpected(scale_loss_result.error()),
-                                       lfs::LegacyErrorContext{
-                                           .code = lfs::ErrorCode::Internal,
-                                           .domain = lfs::ErrorDomain::Training,
-                                           .operation = "scale regularization forward (fastgs)",
-                                           .source = LFS_SOURCE_SITE_CURRENT(),
-                                       })
-                                .error();
+                        // Phase 1.3: accumulate reg loss scalars inside preprocess_backward
+                        // (block reduce + atomicAdd) — kill loss-only full-N kernels +
+                        // their per-call empty({num_blocks})+empty({1}) allocs.
+                        if (params_.optimization.scale_reg > 0.0f) {
+                            if (!fused_scale_reg_loss_.is_valid()) {
+                                fused_scale_reg_loss_ = lfs::core::Tensor::zeros(
+                                    {1}, lfs::core::Device::CUDA);
+                            }
+                            fused_scale_reg_loss_.zero_();
+                            fused_extra_gradients.scale_reg_loss_out =
+                                fused_scale_reg_loss_.ptr<float>();
+                            fused_scale_reg_loss_gpu = fused_scale_reg_loss_;
                         }
-                        fused_scale_reg_loss_gpu = *scale_loss_result;
-                    }
-                    if (params_.optimization.opacity_reg > 0.0f) {
-                        auto opacity_loss_result = lfs::training::losses::OpacityRegularization::forward_loss_only(
-                            model.opacity_raw(),
-                            {.weight = params_.optimization.opacity_reg});
-                        if (!opacity_loss_result) {
-                            return lfs::from_legacy_expected<StepDisposition>(
-                                       std::unexpected(opacity_loss_result.error()),
-                                       lfs::LegacyErrorContext{
-                                           .code = lfs::ErrorCode::Internal,
-                                           .domain = lfs::ErrorDomain::Training,
-                                           .operation = "opacity regularization forward (fastgs)",
-                                           .source = LFS_SOURCE_SITE_CURRENT(),
-                                       })
-                                .error();
+                        if (params_.optimization.opacity_reg > 0.0f) {
+                            if (!fused_opacity_reg_loss_.is_valid()) {
+                                fused_opacity_reg_loss_ = lfs::core::Tensor::zeros(
+                                    {1}, lfs::core::Device::CUDA);
+                            }
+                            fused_opacity_reg_loss_.zero_();
+                            fused_extra_gradients.opacity_reg_loss_out =
+                                fused_opacity_reg_loss_.ptr<float>();
+                            fused_opacity_reg_loss_gpu = fused_opacity_reg_loss_;
                         }
-                        fused_opacity_reg_loss_gpu = *opacity_loss_result;
+                    } else {
+                        // Freeze / non-backward FastGS iterations: keep legacy loss-only
+                        // path so reported loss stays valid without a fused backward.
+                        if (params_.optimization.scale_reg > 0.0f) {
+                            auto scale_loss_result =
+                                lfs::training::losses::ScaleRegularization::forward_loss_only(
+                                    model.scaling_raw(),
+                                    {.weight = params_.optimization.scale_reg});
+                            if (!scale_loss_result) {
+                                return lfs::from_legacy_expected<StepDisposition>(
+                                           std::unexpected(scale_loss_result.error()),
+                                           lfs::LegacyErrorContext{
+                                               .code = lfs::ErrorCode::Internal,
+                                               .domain = lfs::ErrorDomain::Training,
+                                               .operation = "scale regularization forward (fastgs)",
+                                               .source = LFS_SOURCE_SITE_CURRENT(),
+                                           })
+                                    .error();
+                            }
+                            fused_scale_reg_loss_gpu = *scale_loss_result;
+                        }
+                        if (params_.optimization.opacity_reg > 0.0f) {
+                            auto opacity_loss_result =
+                                lfs::training::losses::OpacityRegularization::forward_loss_only(
+                                    model.opacity_raw(),
+                                    {.weight = params_.optimization.opacity_reg});
+                            if (!opacity_loss_result) {
+                                return lfs::from_legacy_expected<StepDisposition>(
+                                           std::unexpected(opacity_loss_result.error()),
+                                           lfs::LegacyErrorContext{
+                                               .code = lfs::ErrorCode::Internal,
+                                               .domain = lfs::ErrorDomain::Training,
+                                               .operation = "opacity regularization forward (fastgs)",
+                                               .source = LFS_SOURCE_SITE_CURRENT(),
+                                           })
+                                    .error();
+                            }
+                            fused_opacity_reg_loss_gpu = *opacity_loss_result;
+                        }
                     }
                     if (run_fastgs_gaussian_backward &&
                         sparsity_optimizer_ && sparsity_optimizer_->should_apply_loss(iter)) {
