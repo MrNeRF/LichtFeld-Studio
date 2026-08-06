@@ -22,14 +22,35 @@ namespace lfs::io {
     } // namespace
 
     bool OpfLoader::canLoad(const std::filesystem::path& path) const {
-        return std::filesystem::is_regular_file(path) &&
-               path.extension().string() == ".opf";
+        if (std::filesystem::is_regular_file(path))
+            return path.extension().string() == ".opf";
+        if (!std::filesystem::is_directory(path))
+            return false;
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(path, ec), end; !ec && it != end; it.increment(ec)) {
+            if (it->is_regular_file(ec) && it->path().extension() == ".opf")
+                return true;
+        }
+        return false;
     }
 
     Result<LoadResult> OpfLoader::load(const std::filesystem::path& path,
                                        const LoadOptions& options) {
         const auto started = std::chrono::steady_clock::now();
-        auto project = opf::read_project(path);
+        std::filesystem::path project_path = path;
+        if (std::filesystem::is_directory(path)) {
+            std::error_code ec;
+            std::vector<std::filesystem::path> projects;
+            for (std::filesystem::directory_iterator it(path, ec), end; !ec && it != end; it.increment(ec)) {
+                if (it->is_regular_file(ec) && it->path().extension() == ".opf")
+                    projects.push_back(it->path());
+            }
+            if (projects.size() != 1)
+                return make_error(ErrorCode::INVALID_DATASET,
+                                  "OPF dataset folder must contain exactly one .opf project file.", path);
+            project_path = projects.front();
+        }
+        auto project = opf::read_project(project_path);
         if (!project)
             return std::unexpected(project.error());
 
@@ -51,9 +72,9 @@ namespace lfs::io {
         if (!camera_list_resource || !input_resource || !calibrated_resource)
             return make_error(ErrorCode::MISSING_REQUIRED_FILES,
                               "OPF project requires camera_list, input_cameras, and calibrated cameras resources.",
-                              path);
+                              project_path);
 
-        auto images = opf::read_camera_list(*camera_list_resource, path.parent_path());
+        auto images = opf::read_camera_list(*camera_list_resource, project_path.parent_path());
         if (!images)
             return std::unexpected(images.error());
         auto sensors = opf::read_input_cameras(*input_resource);

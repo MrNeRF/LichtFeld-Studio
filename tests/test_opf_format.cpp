@@ -334,3 +334,14 @@ TEST_F(OpfFormatTest, LoadsCompleteOpfProjectThroughLoader) {
     ASSERT_TRUE(std::holds_alternative<lfs::io::LoadedScene>(result->data));
     EXPECT_EQ(std::get<lfs::io::LoadedScene>(result->data).cameras.size(), 1u);
 }
+
+TEST_F(OpfFormatTest, LoadsOpfProjectWhenDatasetFolderIsSelected) {
+    write(root / "project.opf", R"({
+        "format":"application/opf-project+json", "version":"1.0", "id":"project",
+        "name":"fixture", "description":"folder detection", "items":[]
+    })");
+    EXPECT_TRUE(lfs::io::Loader::isDatasetPath(root));
+    EXPECT_EQ(lfs::io::Loader::getDatasetType(root), lfs::io::DatasetType::OPF);
+    auto loader = lfs::io::Loader::create();
+    EXPECT_TRUE(loader->canLoad(root));
+}
