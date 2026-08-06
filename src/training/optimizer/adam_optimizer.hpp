@@ -6,6 +6,7 @@
 
 #include "core/splat_data.hpp"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cuda_runtime_api.h>
 #include <string>
@@ -170,7 +171,13 @@ namespace lfs::training {
         void reset_state(ParamType type);
         void invalidate_state(ParamType type);
 
+        /// Telemetry: times the capacity=0 / no-headroom slow grow path has fired
+        /// (process-wide). Loud LOG_WARN is emitted at each site; tests assert this counter.
+        [[nodiscard]] static uint64_t slow_path_grow_count() noexcept;
+        static void reset_slow_path_grow_count() noexcept;
+
     private:
+        static void note_slow_path_grow(const char* site, const std::string& name);
         AdamConfig config_;
         lfs::core::SplatData& splat_data_;
         std::unordered_map<std::string, AdamParamState> states_;

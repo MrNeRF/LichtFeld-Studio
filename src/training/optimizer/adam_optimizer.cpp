@@ -13,6 +13,7 @@
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <optional>
@@ -26,6 +27,7 @@ namespace lfs::training {
         constexpr int SH_WARMUP_ITERATIONS = 1000;
         constexpr float DEFAULT_GROWTH_MULTIPLIER = 1.5f;
         constexpr uint8_t QUANTIZED_MOMENT_ZERO_POINT = 128;
+        std::atomic<uint64_t> g_adam_slow_path_grow_count{0};
 
         [[nodiscard]] size_t tensor_row_size(const lfs::core::Tensor& tensor) {
             if (!tensor.is_valid() || tensor.ndim() == 0) {
@@ -78,6 +80,21 @@ namespace lfs::training {
                 tensor.stream()));
         }
     } // namespace
+
+    uint64_t AdamOptimizer::slow_path_grow_count() noexcept {
+        return g_adam_slow_path_grow_count.load(std::memory_order_relaxed);
+    }
+
+    void AdamOptimizer::reset_slow_path_grow_count() noexcept {
+        g_adam_slow_path_grow_count.store(0, std::memory_order_relaxed);
+    }
+
+    void AdamOptimizer::note_slow_path_grow(const char* site, const std::string& name) {
+        const uint64_t n = g_adam_slow_path_grow_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        LOG_WARN("AdamOptimizer slow-path grow #{} at {} for '{}' — capacity was insufficient; "
+                 "will re-reserve after this grow to restore the capacity invariant",
+                 n, site, name);
+    }
 
     AdamOptimizer::AdamOptimizer(lfs::core::SplatData& splat_data, const AdamConfig& config)
         : config_(config),
@@ -794,10 +811,12 @@ namespace lfs::training {
                 state.grad.append_zeros(n_new);
             state.size = new_size;
             state.capacity = state.exp_avg.capacity();
+            LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
+                                 "extend_state_by_gather fast path: capacity < size");
             LOG_DEBUG("extend_state_by_gather({}): fast path done", name);
             return;
         }
-        LOG_WARN("extend_state_by_gather({}): SLOW PATH triggered (all_have_cap={}, fits={})", name, all_have_capacity, fits_in_capacity);
+        note_slow_path_grow("extend_state_by_gather", name);
 
         // Slow path: reallocate via cat (dtype-agnostic; handles uint8 moments + fp32 scales).
         if (state.grad.is_valid()) {
@@ -811,8 +830,23 @@ namespace lfs::training {
         state.exp_avg_scale = lfs::core::Tensor::cat({state.exp_avg_scale, state.exp_avg_scale.index_select(0, indices)}, 0);
         state.exp_avg_sq_scale = lfs::core::Tensor::cat({state.exp_avg_sq_scale, state.exp_avg_sq_scale.index_select(0, indices)}, 0);
         state.size = new_size;
-        state.capacity = 0;
-        LOG_DEBUG("extend_state_by_gather: {} slow path, new size = {}", name, new_size);
+
+        // Task 4.2: re-reserve with growth_factor so subsequent grows take the fast path.
+        const size_t target_cap = compute_new_capacity(new_size, new_size);
+        if (state.exp_avg.is_valid())
+            state.exp_avg.reserve(target_cap);
+        if (state.exp_avg_sq.is_valid())
+            state.exp_avg_sq.reserve(target_cap);
+        if (state.exp_avg_scale.is_valid())
+            state.exp_avg_scale.reserve(target_cap);
+        if (state.exp_avg_sq_scale.is_valid())
+            state.exp_avg_sq_scale.reserve(target_cap);
+        if (state.grad.is_valid())
+            state.grad.reserve(target_cap);
+        state.capacity = state.exp_avg.is_valid() ? state.exp_avg.capacity() : target_cap;
+        LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
+                             "extend_state_by_gather slow path: capacity < size after re-reserve");
+        LOG_DEBUG("extend_state_by_gather: {} slow path done, size={}, capacity={}", name, state.size, state.capacity);
     }
 
     void AdamOptimizer::extend_state_for_new_params(ParamType type, const size_t n_new) {
@@ -885,12 +919,14 @@ namespace lfs::training {
             state.exp_avg_sq_scale.append_zeros(n_new);
             state.size = new_size;
             state.capacity = state.exp_avg.capacity();
+            LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
+                                 "extend_state_for_new_params fast path: capacity < size");
             LOG_DEBUG("extend_state_for_new_params({}): fast path done, new size = {}", name, new_size);
             return;
         }
-        LOG_WARN("extend_state_for_new_params({}): SLOW PATH triggered (all_have_cap={}, fits={})", name, all_have_capacity, fits_in_capacity);
+        note_slow_path_grow("extend_state_for_new_params", name);
 
-        // Slow path: reallocate without extra capacity.
+        // Slow path: reallocate, then re-reserve (Task 4.2) so capacity does not stay 0.
         const auto& shape = param.shape();
         std::vector<size_t> new_dims(shape.dims());
         new_dims[0] = new_size;
@@ -931,7 +967,25 @@ namespace lfs::training {
         state.exp_avg_sq_scale = std::move(new_v_scale);
 
         state.size = new_size;
-        state.capacity = 0;
+
+        // Re-reserve with growth_factor so the next grow uses the fast path.
+        const size_t moment_cap = compute_new_capacity(new_size, new_size);
+        const size_t scale_cap = compute_new_capacity(scale_new, scale_new);
+        if (state.exp_avg.is_valid())
+            state.exp_avg.reserve(moment_cap);
+        if (state.exp_avg_sq.is_valid())
+            state.exp_avg_sq.reserve(moment_cap);
+        if (state.exp_avg_scale.is_valid())
+            state.exp_avg_scale.reserve(scale_cap);
+        if (state.exp_avg_sq_scale.is_valid())
+            state.exp_avg_sq_scale.reserve(scale_cap);
+        if (state.grad.is_valid())
+            state.grad.reserve(moment_cap);
+        state.capacity = state.exp_avg.is_valid() ? state.exp_avg.capacity() : moment_cap;
+        LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
+                             "extend_state_for_new_params slow path: capacity < size after re-reserve");
+        LOG_DEBUG("extend_state_for_new_params({}): slow path done, size={}, capacity={}",
+                  name, state.size, state.capacity);
     }
 
     size_t AdamOptimizer::compute_new_capacity(const size_t current_capacity, const size_t required_size) const {
@@ -1090,8 +1144,11 @@ namespace lfs::training {
                         state.exp_avg_sq_scale.append_gather(indices);
                         state.size = new_floats;
                         state.capacity = state.exp_avg.capacity();
+                        LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
+                                             "add_new_params_gather(shN) fast path: capacity < size");
                     } else {
-                        // Fallback: no reserved capacity. Reallocate at exact size.
+                        // Fallback: no reserved capacity. Reallocate, then re-reserve (Task 4.2).
+                        note_slow_path_grow("add_new_params_gather(shN)", name);
                         auto realloc_u8 = [&](lfs::core::Tensor& t) {
                             auto fresh = lfs::core::Tensor::zeros({new_floats}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
                             LFS_CUDA_CHECK(cudaMemcpyAsync(
@@ -1119,7 +1176,20 @@ namespace lfs::training {
                         state.exp_avg_sq_scale = lfs::core::Tensor::cat(
                             {state.exp_avg_sq_scale, state.exp_avg_sq_scale.index_select(0, indices)}, 0);
                         state.size = new_floats;
-                        state.capacity = 0;
+
+                        const size_t moment_cap = compute_new_capacity(new_floats, new_floats);
+                        const size_t scale_cap = compute_new_capacity(new_N, new_N);
+                        if (state.exp_avg.is_valid())
+                            state.exp_avg.reserve(moment_cap);
+                        if (state.exp_avg_sq.is_valid())
+                            state.exp_avg_sq.reserve(moment_cap);
+                        if (state.exp_avg_scale.is_valid())
+                            state.exp_avg_scale.reserve(scale_cap);
+                        if (state.exp_avg_sq_scale.is_valid())
+                            state.exp_avg_sq_scale.reserve(scale_cap);
+                        state.capacity = state.exp_avg.is_valid() ? state.exp_avg.capacity() : moment_cap;
+                        LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,
+                                             "add_new_params_gather(shN) slow path: capacity < size");
                     }
                 }
             }
