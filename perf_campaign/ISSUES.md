@@ -45,3 +45,11 @@
   threw `reserve(11) would reallocate externally-owned tensor storage 'cuda.direct'`.
 - **Status:** fixed in Task 4.1 — rebuild bool masks via `zeros_direct` with
   growth headroom instead of second `reserve` on direct storage.
+
+## ISS-007 — Manual GUI validation of exportable-storage growth pending
+- **Severity:** medium (5.1 grow + Vulkan re-import path is storage-layer-tested only)
+- **What to check:** start GUI training with max_cap=5M — initial exportable block must be
+  ~live×1.5 (tens–hundreds MiB, not ~1.2 GB); after densify growth, log shows
+  "Exportable splat storage grew for densify" and the viewport stays zero-copy (no black
+  frames / no full input-copy refusal errors).
+- **Status:** open — needs a human GUI session or a windowed CI harness.
