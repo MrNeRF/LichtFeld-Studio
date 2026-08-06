@@ -494,6 +494,8 @@ namespace lfs::vis::gui {
         int hovered_label = -1;
         for (int i = 0; i < count; ++i) {
             auto* child = menu_items_->GetChild(i);
+            if (!child)
+                continue;
             const auto box = child->GetAbsoluteOffset(Rml::BoxArea::Border);
             const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
             if (mx >= box.x && mx < box.x + size.x && my >= box.y && my < box.y + size.y) {
@@ -890,7 +892,7 @@ namespace lfs::vis::gui {
                 return nullptr;
             for (int i = 0; i < root->GetNumChildren(); ++i) {
                 auto* child = root->GetChild(i);
-                if (!child->HasAttribute("data-action"))
+                if (!child || !child->HasAttribute("data-action"))
                     continue;
                 const auto box = child->GetAbsoluteOffset(Rml::BoxArea::Border);
                 const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
@@ -958,6 +960,8 @@ namespace lfs::vis::gui {
             return;
 
         auto* label_el = menu_items_->GetChild(open_menu_index_);
+        if (!label_el)
+            return;
         const auto label_offset = label_el->GetAbsoluteOffset(Rml::BoxArea::Border);
         const auto label_size = label_el->GetBox().GetSize(Rml::BoxArea::Border);
 

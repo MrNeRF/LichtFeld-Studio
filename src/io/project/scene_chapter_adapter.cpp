@@ -457,7 +457,9 @@ namespace lfs::io::project {
             std::uint32_t saved_order = 0;
             for (const lfs::core::NodeId child_id : node.children) {
                 const lfs::core::SceneNode* child = scene.getNodeById(child_id);
-                if (!persisted(child)) {
+                // Explicit null first so static analysis sees getNodeById checked
+                // (persisted() also rejects null).
+                if (!child || !persisted(child)) {
                     continue;
                 }
                 if (auto status = visit(*child, node.uuid, saved_order++); !status) {

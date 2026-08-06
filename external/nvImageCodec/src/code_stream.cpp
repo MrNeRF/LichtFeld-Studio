@@ -60,7 +60,10 @@ namespace nvimgcodec {
           tile_geometry_info_{NVIMGCODEC_STRUCTURE_TYPE_TILE_GEOMETRY_INFO, sizeof(nvimgcodecTileGeometryInfo_t), nullptr},
           jpeg_info_{NVIMGCODEC_STRUCTURE_TYPE_JPEG_IMAGE_INFO, sizeof(nvimgcodecJpegImageInfo_t), &tile_geometry_info_},
           image_info_{NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO, sizeof(nvimgcodecImageInfo_t), &jpeg_info_} {
-        if (other.codestream_info_.code_stream_view && other.codestream_info_.code_stream_view->region.ndim > 0 && code_stream_view && code_stream_view->region.ndim > 0) {
+        // code_stream_view was already dereferenced to initialize code_stream_view_;
+        // only re-check the other stream's nested-region view.
+        if (other.codestream_info_.code_stream_view && other.codestream_info_.code_stream_view->region.ndim > 0 &&
+            code_stream_view->region.ndim > 0) {
             throw Exception(INVALID_PARAMETER, "Cannot create a sub code stream with nested regions. This is not supported.", "CodeStream::CodeStream");
         }
     }

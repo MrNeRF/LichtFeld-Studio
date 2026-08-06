@@ -1034,6 +1034,9 @@ namespace Zep {
                 std::string strNum;
 
                 auto mode = m_pBuffer->GetMode();
+                if (!mode) {
+                    return;
+                }
 
                 // In Vim mode show relative lines, unless in Ex mode (with hidden cursor)
                 if (mode->UsesRelativeLines() && mode->GetCursorType() != CursorType::None) {
@@ -1737,6 +1740,9 @@ namespace Zep {
         TIME_SCOPE(Display);
 
         auto pMode = GetBuffer().GetMode();
+        if (!pMode) {
+            return;
+        }
         pMode->PreDisplay(*this);
 
         // Ensure line spans are valid; updated if the text is changed or the window dimensions change

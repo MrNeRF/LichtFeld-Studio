@@ -150,6 +150,8 @@ namespace lfs::vis {
 
         if (timeline_.realKeyframeCount() == 0 && hasPlySequence()) {
             const auto* const sequence = plySequence();
+            if (!sequence)
+                return;
             const auto current_frame = plySequenceFrameIndex(playhead_).value_or(0);
             const size_t target_frame = std::min(current_frame + 1, sequence->frames.size() - 1);
             playhead_ = static_cast<float>(target_frame) / plySequenceFps();
@@ -185,6 +187,8 @@ namespace lfs::vis {
         if (hasPlayableContent()) {
             if (timeline_.realKeyframeCount() == 0 && hasPlySequence()) {
                 const auto* const sequence = plySequence();
+                if (!sequence)
+                    return;
                 playhead_ = static_cast<float>(sequence->frames.size() - 1) / plySequenceFps();
             } else {
                 playhead_ = timeline_.realKeyframeCount() > 0 ? timeline_.realEndTime() : timeline_.endTime();

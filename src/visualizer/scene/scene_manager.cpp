@@ -5088,6 +5088,9 @@ namespace lfs::vis {
 
         if (plan.consolidated) {
             auto* combined = const_cast<core::SplatData*>(scene_.getCombinedModel());
+            if (!combined) {
+                return std::unexpected("Consolidated soft-delete requires a combined model");
+            }
             combined->soft_delete(plan.selection_mask);
             for (const auto* node : scene_.getNodes()) {
                 if (node && node->type == core::NodeType::SPLAT && node->model &&

@@ -602,12 +602,16 @@ namespace lfs::vis::gui {
         auto content = doc->CreateElement("div");
         content->SetClass("scene-graph-content", true);
         content_el_ = AppendChild(std::move(content));
+        if (!content_el_)
+            return;
 
         auto header = doc->CreateElement("div");
         header->SetClass("section-header", true);
         header->SetClass("scene-graph-models-header", true);
         header->SetAttribute("data-role", "models-header");
         header_el_ = content_el_->AppendChild(std::move(header));
+        if (!header_el_)
+            return;
 
         auto arrow = doc->CreateElement("span");
         arrow->SetClass("section-arrow", true);
@@ -641,10 +645,14 @@ namespace lfs::vis::gui {
             row->SetClass("tree-row", true);
             row->SetProperty("display", "none");
             slot.root = content_el_->AppendChild(std::move(row));
+            if (!slot.root)
+                return;
 
             auto content = doc->CreateElement("span");
             content->SetClass("row-content", true);
             slot.content = slot.root->AppendChild(std::move(content));
+            if (!slot.content)
+                return;
 
             auto vis_icon = doc->CreateElement("img");
             vis_icon->SetClass("row-icon", true);
