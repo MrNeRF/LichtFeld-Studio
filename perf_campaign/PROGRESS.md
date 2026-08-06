@@ -63,4 +63,4 @@
   | B/splat | **429.0** |
   | last_loss | ~0.039 |
 
-- **Commit:** (see git log)
+- **Commit:** `e5506f39`

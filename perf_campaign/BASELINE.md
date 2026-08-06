@@ -20,7 +20,7 @@ steady-state allocs/iter, peak VRAM, or quality (loss/PSNR).
 | Field | Value |
 |---|---|
 | Branch | `perf/spirulae-parity` |
-| Commit (at baseline) | see `git log -1` after Phase 0.3 commit (runs tag `f6b0d5b6` dirty pre-commit) |
+| Commit (at baseline) | `e5506f39` (Phase 0.3; numbers collected just before this commit on dirty tree `f6b0d5b6`) |
 | Binary | `build/tests/LichtFeld-Studio` |
 | Bench script | `perf_campaign/bench.sh` |
 
