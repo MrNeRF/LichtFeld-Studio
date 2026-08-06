@@ -373,6 +373,12 @@ namespace lfs::training {
         // Use adjusted cx/cy for tile rendering
         fast_lfs::rasterization::ForwardContext forward_ctx;
         try {
+            const float* bg_image_ptr =
+                has_background_image(bg_image) ? bg_image.ptr<float>() : nullptr;
+            const float* bg_color_ptr =
+                bg_image_ptr != nullptr
+                    ? nullptr
+                    : (bg_color.is_valid() && bg_color.numel() >= 3 ? bg_color.ptr<float>() : nullptr);
             forward_ctx = fast_lfs::rasterization::forward_raw(
                 means.ptr<float>(),
                 raw_scales.ptr<float>(),
@@ -386,6 +392,8 @@ namespace lfs::training {
                 alpha.ptr<float>(),
                 depth.ptr<float>(),
                 render_normal ? normal.ptr<float>() : nullptr,
+                bg_color_ptr,
+                bg_image_ptr,
                 n_primitives,
                 active_sh_bases,
                 sh_layout_bases,
@@ -473,7 +481,8 @@ namespace lfs::training {
         RenderOutput render_output;
         const cudaStream_t stream = image.stream();
 
-        compose_background_in_place(image, alpha, bg_color, bg_image, height, width, stream, false);
+        // Phase 1.4: background is composed inside blend_cu (single write).
+        // No separate full-image compose pass.
 
         render_output.image = image;
         render_output.alpha = alpha;
@@ -659,8 +668,12 @@ namespace lfs::training {
             }
         }
 
+        // Phase 1.4: blend_backward_cu does not read the image buffer
+        // ((void)image in the kernel) — it reconstructs transmittance from
+        // tile_final_transmittance. Unblend was pure dead work. Keep the
+        // blended image in ctx (one-image VRAM already resident for the
+        // loss path); do not allocate a separate pre-blend cache.
         auto raw_image = ctx.image;
-        compose_background_in_place(raw_image, ctx.alpha, ctx.bg_color, ctx.bg_image, H, W, stream, true);
 
         fast_lfs::rasterization::FusedAdamSettings fused_adam;
         const auto optimizer_fused = optimizer.prepare_fastgs_fused_adam(iteration, stream);

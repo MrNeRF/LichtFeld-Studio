@@ -84,6 +84,7 @@ namespace {
         const auto context = fast_lfs::rasterization::forward_raw(
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
             nullptr, nullptr, nullptr, nullptr,
+            /*bg_color_ptr=*/nullptr, /*bg_image_ptr=*/nullptr,
             0, 1, 1, 1, 1,
             1.0f, 1.0f, 0.5f, 0.5f, 0.01f, 100.0f, false, nullptr);
         EXPECT_FALSE(context.success);
@@ -154,6 +155,7 @@ namespace {
             return fast_lfs::rasterization::forward_raw(
                 ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr,
                 ptr, ptr, ptr, nullptr,
+                /*bg_color_ptr=*/nullptr, /*bg_image_ptr=*/nullptr,
                 10'000'000, 1, 1, 1, 1,
                 1.0f, 1.0f, 0.5f, 0.5f, 0.01f, 100.0f, false, nullptr);
         };

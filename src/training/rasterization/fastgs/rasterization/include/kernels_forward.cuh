@@ -445,6 +445,11 @@ namespace fast_lfs::rasterization::kernels::forward {
         float* __restrict__ normal_map,
         uint* __restrict__ tile_n_contributions,
         float* __restrict__ tile_final_transmittance,
+        // Phase 1.4: fuse background compose into the final write.
+        // out = fg + T * bg  (equivalent to fg + (1-alpha)*bg).
+        // bg_image (CHW [3,H,W]) wins over solid bg_color [3]; either may be null → black.
+        const float* __restrict__ bg_color,
+        const float* __restrict__ bg_image,
         const uint width,
         const uint height,
         const uint grid_width) {
@@ -521,10 +526,18 @@ namespace fast_lfs::rasterization::kernels::forward {
         if (inside) {
             const int pixel_idx = width * pixel_coords.y + pixel_coords.x;
             const int n_pixels = width * height;
-            // store results
-            image[pixel_idx] = color_pixel.x;
-            image[pixel_idx + n_pixels] = color_pixel.y;
-            image[pixel_idx + n_pixels * 2] = color_pixel.z;
+            // Background composite: out = fg + T * bg  (= fg + (1-α)*bg).
+            float3 bg = make_float3(0.0f, 0.0f, 0.0f);
+            if (bg_image != nullptr) {
+                bg = make_float3(bg_image[pixel_idx],
+                                 bg_image[pixel_idx + n_pixels],
+                                 bg_image[pixel_idx + 2 * n_pixels]);
+            } else if (bg_color != nullptr) {
+                bg = make_float3(bg_color[0], bg_color[1], bg_color[2]);
+            }
+            image[pixel_idx] = color_pixel.x + transmittance * bg.x;
+            image[pixel_idx + n_pixels] = color_pixel.y + transmittance * bg.y;
+            image[pixel_idx + n_pixels * 2] = color_pixel.z + transmittance * bg.z;
             alpha_map[pixel_idx] = 1.0f - transmittance;
             depth_map[pixel_idx] = depth_pixel;
             if constexpr (kRenderNormal) {

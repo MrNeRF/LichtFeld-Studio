@@ -342,3 +342,35 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   4.085 ms/iter, 0.05 allocs/iter.
 - **Commit:** (this commit)
 
+
+## Task 1.4 — Fuse background blend; drop backward unblend
+
+- **Branch:** `lfs-elite`
+- **Change:** `blend_cu` writes `fg + T*bg` in one pass (solid `bg_color` or
+  per-pixel `bg_image` CHW). Removed forward `compose_background_in_place` and
+  backward unblend. `blend_backward_cu` already ignores `image`/`alpha_map`
+  (uses `tile_final_transmittance`); unblend was dead. Keep blended image in
+  ctx (already resident for the loss path) — no extra pre-blend cache.
+  `grad_alpha` kernels unchanged (still `dL/dα = -dot(grad_image, bg)`).
+- **Fail evidence (TDD):** without fuse, dropping compose leaves raw fg →
+  `max_abs_diff` vs external compose ≈ bg magnitude. Pre-change: separate
+  full-image compose + unblend every step.
+- **Pass evidence:**
+  ```
+  [  PASSED  ] FusedBgBlendTest.ForwardBlendedMatchesExternalCompose  (diff < 1e-6)
+  [  PASSED  ] FusedBgBlendTest.BackwardGradsMatchWithBlendedImage  (repro < 1e-6; bg affects grads)
+  [  PASSED  ] FusedRegLossTest.* (no regression)
+  ```
+- **Gate bench (flock, 3 runs) vs Wave 1 (4.085 ms, 0.05 allocs):**
+
+  | metric | Wave 1 | after 1.4 | Δ |
+  |---|---:|---:|---|
+  | wall_s | 8.94 | 9.00 | +0.7% noise |
+  | steady_ms/iter | 4.085 | **4.104** | +0.5% flat (run1=4.084) |
+  | steady_allocs/iter | 0.05 | **0.05** | 0 |
+  | peak VRAM MiB | 1152.6 | **1135.4** | −17.2 |
+  | last_loss | ~0.03–0.04 | 0.029–0.040 | ok |
+
+  Runs: `perf_campaign/runs/20260806T183749Z_run{1,2,3}/`
+- **Commit:** (this commit)
+

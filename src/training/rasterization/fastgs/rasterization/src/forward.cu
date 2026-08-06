@@ -296,6 +296,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     float* depth,
     float* normal,
     float3* primitive_normals,
+    const float* bg_color,
+    const float* bg_image,
     const int n_primitives,
     const int active_sh_bases,
     const int sh_layout_bases,
@@ -699,6 +701,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             normal,
             per_tile_buffers.n_contributions,
             per_tile_buffers.final_transmittance,
+            bg_color,
+            bg_image,
             width,
             height,
             grid.x);

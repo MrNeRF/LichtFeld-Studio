@@ -69,6 +69,8 @@ namespace fast_lfs::rasterization {
         float* alpha_ptr,                      // Device pointer [H*W]
         float* depth_ptr,                      // Device pointer [H*W]
         float* normal_ptr,                     // Device pointer [3*H*W] or nullptr — enables the normal render channel
+        const float* bg_color_ptr,             // Device pointer [3] solid bg, or nullptr
+        const float* bg_image_ptr,             // Device pointer [3*H*W] CHW, or nullptr
         int n_primitives,
         int active_sh_bases,
         int sh_layout_bases,

@@ -47,6 +47,8 @@ namespace fast_lfs::rasterization {
         float* depth,
         float* normal,             // [3*H*W] or nullptr
         float3* primitive_normals, // [N] scratch, required when normal != nullptr
+        const float* bg_color,     // [3] device solid bg, or nullptr
+        const float* bg_image,     // [3*H*W] CHW per-pixel bg, or nullptr (wins over bg_color)
         const int n_primitives,
         const int active_sh_bases,
         const int sh_layout_bases,
