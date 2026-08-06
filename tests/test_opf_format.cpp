@@ -345,3 +345,15 @@ TEST_F(OpfFormatTest, LoadsOpfProjectWhenDatasetFolderIsSelected) {
     auto loader = lfs::io::Loader::create();
     EXPECT_TRUE(loader->canLoad(root));
 }
+
+TEST_F(OpfFormatTest, AcceptsPix4dProjectWithoutDescription) {
+    write(root / "camera-list.json", R"({"format":"application/opf-camera-list+json","version":"1.0","cameras":[]})");
+    write(root / "project.opf", R"({
+        "format":"application/opf-project+json", "version":"1.0", "id":"project",
+        "name":"fixture", "items":[{"id":"camera", "type":"camera_list",
+        "sources":[], "resources":[{"uri":"camera-list.json","format":"application/opf-camera-list+json"}]}]
+    })");
+    auto result = lfs::io::opf::read_project(root / "project.opf");
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_FALSE(result->warnings.empty());
+}

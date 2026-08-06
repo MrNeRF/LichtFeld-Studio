@@ -111,6 +111,15 @@ namespace lfs::io {
                         LOG_TRACE("Blender/NeRF dataset detected: {}", lfs::core::path_to_utf8(path));
                         return true;
                     }
+
+                    std::error_code opf_ec;
+                    for (std::filesystem::directory_iterator it(path, opf_ec), end;
+                         !opf_ec && it != end; it.increment(opf_ec)) {
+                        if (it->is_regular_file(opf_ec) && it->path().extension() == ".opf") {
+                            LOG_TRACE("OPF dataset detected in folder: {}", lfs::core::path_to_utf8(path));
+                            return true;
+                        }
+                    }
                 }
 
                 LOG_TRACE("No compatible loader found for: {}", lfs::core::path_to_utf8(path));

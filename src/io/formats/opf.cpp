@@ -159,7 +159,7 @@ namespace lfs::io::opf {
             return make_error(ErrorCode::UNSUPPORTED_FORMAT,
                               std::format("Unsupported OPF project format '{}'.", project.format), path);
 
-        for (const char* key : {"version", "id", "name", "description"}) {
+        for (const char* key : {"version", "id", "name"}) {
             auto value = required_string(root, key, path, "project");
             if (!value)
                 return std::unexpected(value.error());
@@ -169,8 +169,13 @@ namespace lfs::io::opf {
                 project.id = *value;
             if (std::string_view(key) == "name")
                 project.name = *value;
-            if (std::string_view(key) == "description")
-                project.description = *value;
+        }
+        if (const auto description = root.find("description"); description != root.end()) {
+            if (!description->is_string())
+                return invalid(path, "OPF project description must be a string when present.");
+            project.description = description->get<std::string>();
+        } else {
+            project.warnings.push_back("OPF project omits optional-in-practice 'description'.");
         }
         if (!root.contains("items") || !root["items"].is_array() || root["items"].empty())
             return invalid(path, "OPF project requires a non-empty 'items' array.");
