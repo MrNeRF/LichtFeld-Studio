@@ -1,0 +1,10 @@
+Implementation engineer, LichtFeld-Studio. Dir: /home/gauss/projects/lfs-wt-gui (worktree), branch lfs-elite-vramfix (verify; NEVER checkout). If cmake complains about libvterm run `git submodule update --init --recursive`; configure with -DLFS_CUDA_COMPILER_CACHE=ccache (sccache races nvcc fatbinary).
+MANDATORY reads first: perf_campaign/RULES.md (esp. "Build discipline": full builds ONLY via `flock /tmp/lfs-build.lock cmake --build <dir> -j 8`), perf_campaign/BASELINE.md, perf_campaign/ISSUES.md (ISS-007), perf_campaign/PROGRESS.md.
+
+CONTEXT UPDATE: the user-visible "memory is full" warnings were traced to SYSTEM RAM pressure (systemd-oomd killed gnome-shell at 95.56% user-slice pressure on 2026-08-06 20:48 — caused by parallel unbounded builds, now fixed by the build-discipline rule). Additionally the kernel logged repeated `NVRM: VM: invalid mmap context` at 20:48:16 while CUDA apps were being killed. Your order is now:
+
+1. **GPU-side audit stays** (was ISS-007): stress-test Phase 5.1 exportable-storage growth (commit 013f6e04): many grow cycles → cudaMemGetInfo must plateau; verify the Vulkan re-import path releases/reuses old imports; verify no VMM physical chunk leak. TDD fail-first if a leak exists; fix; pass.
+2. **Thread-local high-water buffers audit** (Phase 1.1 sort workspaces + thread-local raster outputs): enumerate rasterizing threads; verify buffers release at thread exit (spawn-render-join test with VRAM before/after); fix if multiplied/leaked.
+3. **NVRM 'invalid mmap context' investigation**: reproduce if possible (CUDA-VMM export + Vulkan import teardown ordering is the suspect — e.g., freeing exported VMM memory while imports live, or teardown order on trainer shutdown in GUI). Read splat_exportable_storage.cpp + vulkan_external_tensor.cpp teardown paths; fix ordering bugs found; document in ISSUES.md either way.
+4. **RAM-side regression guard**: add a leak-regression test running N fixed-size training-like cycles asserting host RSS and VRAM deltas ~0 between cycle 10 and N.
+5. Gate: dual-workload bench per RULES.md; all new tests green; PROGRESS.md + ISSUES.md updated; commit per fix with numbers.
