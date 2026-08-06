@@ -4861,6 +4861,7 @@ namespace lfs::vis {
                 output_image_bytes += static_cast<std::size_t>(slot.depth_image.allocation_size);
             }
         }
+        const std::size_t output_pool_idle_bytes = output_pool_.idleBytes();
         const std::size_t shared_scratch_bytes = shared_scratch_.bytes;
 
         const auto mix = [](const std::size_t seed, const std::size_t value) {
@@ -4874,6 +4875,7 @@ namespace lfs::vis {
         signature = mix(signature, opacity_copy_bytes);
         signature = mix(signature, overlay_bytes);
         signature = mix(signature, output_image_bytes);
+        signature = mix(signature, output_pool_idle_bytes);
         signature = mix(signature, sort_buffer_bytes);
         signature = mix(signature, shared_scratch_bytes);
         if (signature == last_vram_report_signature_) {
@@ -4900,7 +4902,7 @@ namespace lfs::vis {
             top += std::format("{}={:.2f}GiB", entries[i].first, gib(entries[i].second));
         }
 
-        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB opacity_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
+        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB opacity_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB output_pool_idle={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
                  reason,
                  gib(owned_total),
                  gib(pipeline_current),
@@ -4909,6 +4911,7 @@ namespace lfs::vis {
                  gib(opacity_copy_bytes),
                  gib(overlay_bytes),
                  gib(output_image_bytes),
+                 gib(output_pool_idle_bytes),
                  gib(sort_buffer_bytes),
                  gib(shared_scratch_bytes),
                  buffers_.num_indices,

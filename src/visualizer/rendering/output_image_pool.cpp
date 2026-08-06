@@ -164,6 +164,16 @@ namespace lfs::vis {
         free_serials_ = std::move(keep);
     }
 
+    std::size_t OutputImagePool::idleBytes() const {
+        std::size_t bytes = 0;
+        for (const auto& [serial, entry] : entries_) {
+            if (entry.state != State::Live) {
+                bytes += static_cast<std::size_t>(entry.image.allocation_size);
+            }
+        }
+        return bytes;
+    }
+
     std::size_t OutputImagePool::liveCount() const {
         return live_count_;
     }

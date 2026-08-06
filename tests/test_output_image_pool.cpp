@@ -391,6 +391,36 @@ TEST(OutputImagePool, CountersConsistent) {
     EXPECT_EQ(cap.destroyed.size(), 2u);
 }
 
+TEST(OutputImagePool, IdleBytesTracksRetiredAndFreeEntries) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+
+    auto first = pool.registerCreated(key, makeImage(0xF040, VK_FORMAT_R8G8B8A8_UNORM, 128, 64));
+    auto second = pool.registerCreated(key, makeImage(0xF041, VK_FORMAT_R8G8B8A8_UNORM, 128, 64));
+    const std::size_t bytes_each = 128u * 64u * 4u;
+    EXPECT_EQ(pool.idleBytes(), 0u);
+
+    pool.release(first.acquisition_serial, 1, 1);
+    EXPECT_EQ(pool.idleBytes(), bytes_each);
+
+    pool.drain(false, always_done, always_done, cap.fn());
+    EXPECT_EQ(pool.idleBytes(), bytes_each);
+
+    pool.release(second.acquisition_serial, 1, 1);
+    pool.drain(false, never_done, never_done, cap.fn());
+    EXPECT_EQ(pool.idleBytes(), 2u * bytes_each);
+
+    auto reused = pool.acquire(key);
+    ASSERT_TRUE(reused.has_value());
+    EXPECT_EQ(pool.idleBytes(), bytes_each);
+
+    pool.trimIdle(cap.fn());
+    EXPECT_EQ(pool.idleBytes(), bytes_each);
+    pool.drain(true, always_done, always_done, cap.fn());
+    EXPECT_EQ(pool.idleBytes(), 0u);
+}
+
 TEST(OutputImagePool, Ceil64Bucketing) {
     EXPECT_EQ(ceil64(0), 0u);
     EXPECT_EQ(ceil64(1), 64u);

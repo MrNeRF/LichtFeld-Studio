@@ -100,6 +100,8 @@ namespace lfs::vis {
         // Destroy free entries idle for more than kIdleTrimTicks drain ticks.
         void trimAged(const DestroyFn& destroy);
 
+        // Bytes held by entries not bound to any slot (retired + free).
+        [[nodiscard]] std::size_t idleBytes() const;
         [[nodiscard]] std::size_t liveCount() const;
         [[nodiscard]] std::size_t retiredCount() const;
         [[nodiscard]] std::size_t freeCount() const;
