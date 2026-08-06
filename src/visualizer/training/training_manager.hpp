@@ -210,6 +210,9 @@ namespace lfs::vis {
 
         // Install densify-time grow/rebind hook on the training model (Phase 5.1).
         void installExportableCapacityEnsure(lfs::core::SplatData& model);
+        // Body of the capacity-ensure hook (member so rebind cannot destroy the
+        // running std::function target mid-call).
+        [[nodiscard]] bool growExportableForDensify(std::size_t needed_rows);
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
