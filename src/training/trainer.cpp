@@ -54,6 +54,9 @@
 #include "training/training_setup.hpp"
 #include "training_cropbox_mask.hpp"
 
+#include <bit>
+#include <cstdint>
+
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -1962,16 +1965,59 @@ namespace lfs::training {
 
         if (scale == 1.0f || !scene_) {
             optimizer.set_crop_damping_mask({});
+            cropbox_damping_cache_valid_ = false;
+            return;
+        }
+
+        // Phase 1.7: rebuild only on cropbox geometry / topology (N) / scale change.
+        // Means drift between densify events is intentionally not a rebuild trigger
+        // (damping is a soft LR scale, not a hard cull).
+        const size_t n = static_cast<size_t>(model.size());
+        size_t geom_fp = 0;
+        if (const auto geometry = resolve_training_cropbox_geom(*scene_)) {
+            // FNV-ish fingerprint of crop bounds + inverse flag + a few matrix entries.
+            auto mix = [&](size_t v) {
+                geom_fp ^= v + 0x9e3779b97f4a7c15ull + (geom_fp << 6) + (geom_fp >> 2);
+            };
+            mix(static_cast<size_t>(geometry->inverse));
+            const float* floats = &geometry->min.x;
+            for (int i = 0; i < 6; ++i) {
+                mix(static_cast<size_t>(std::bit_cast<uint32_t>(floats[i])));
+            }
+            const float* m = &geometry->model_to_cropbox[0][0];
+            for (int i = 0; i < 16; ++i) {
+                mix(static_cast<size_t>(std::bit_cast<uint32_t>(m[i])));
+            }
+        } else {
+            optimizer.set_crop_damping_mask({});
+            cropbox_damping_cache_valid_ = false;
+            return;
+        }
+
+        if (cropbox_damping_cache_valid_ &&
+            cropbox_damping_cached_n_ == n &&
+            cropbox_damping_geom_fp_ == geom_fp &&
+            cropbox_damping_cached_scale_ == scale &&
+            cropbox_damping_cached_mask_.is_valid() &&
+            cropbox_damping_cached_mask_.numel() == n) {
+            optimizer.set_crop_damping_mask(cropbox_damping_cached_mask_);
             return;
         }
 
         auto crop_mask = compute_training_cropbox_remove_mask(*scene_, model);
         if (!crop_mask || !crop_mask->is_valid() || crop_mask->numel() == 0) {
             optimizer.set_crop_damping_mask({});
+            cropbox_damping_cache_valid_ = false;
             return;
         }
 
-        optimizer.set_crop_damping_mask(std::move(*crop_mask));
+        cropbox_damping_cached_mask_ = *crop_mask;
+        cropbox_damping_cached_n_ = n;
+        cropbox_damping_geom_fp_ = geom_fp;
+        cropbox_damping_cached_scale_ = scale;
+        cropbox_damping_cache_valid_ = true;
+        ++cropbox_damping_rebuild_count_;
+        optimizer.set_crop_damping_mask(cropbox_damping_cached_mask_);
     }
 
     Trainer::Trainer(std::shared_ptr<CameraDataset> dataset,

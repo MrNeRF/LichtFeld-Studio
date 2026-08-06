@@ -7,11 +7,15 @@
 #include "core/logger.hpp"
 #include "kernels/pruning_kernels.hpp"
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <vector>
 
 namespace lfs::training {
 
     namespace {
+        std::atomic<std::uint64_t> g_frozen_mask_rebuilds{0};
+
         [[nodiscard]] std::vector<bool> build_frozen_vector(
             const lfs::core::SplatData& splat_data,
             const size_t n,
@@ -38,7 +42,36 @@ namespace lfs::training {
             return mask;
         }
 
+        [[nodiscard]] size_t frozen_ranges_fingerprint(const lfs::core::SplatData& splat_data) {
+            size_t h = 1469598103934665603ull; // FNV-1a offset
+            for (const auto& range : splat_data.frozen_ranges()) {
+                h ^= range.start + 0x9e3779b97f4a7c15ull;
+                h *= 1099511628211ull;
+                h ^= range.count + 0x9e3779b97f4a7c15ull;
+                h *= 1099511628211ull;
+            }
+            return h;
+        }
+
+        // Phase 1.7: process-wide GPU frozen mask cache (steady inject_noise path).
+        struct FrozenMaskCache {
+            const void* key = nullptr;
+            size_t n = 0;
+            size_t ranges_fp = 0;
+            lfs::core::Device device = lfs::core::Device::CUDA;
+            lfs::core::Tensor mask;
+        };
+        FrozenMaskCache g_frozen_mask_cache;
+
     } // namespace
+
+    std::uint64_t frozen_mask_rebuild_count() noexcept {
+        return g_frozen_mask_rebuilds.load(std::memory_order_relaxed);
+    }
+
+    void reset_frozen_mask_rebuild_count() noexcept {
+        g_frozen_mask_rebuilds.store(0, std::memory_order_relaxed);
+    }
 
     void initialize_gaussians(lfs::core::SplatData& splat_data, int max_cap) {
         // Tensors are already on GPU in the new framework (created with Device::CUDA by default)
@@ -114,9 +147,21 @@ namespace lfs::training {
             return {};
         }
 
+        const size_t ranges_fp = frozen_ranges_fingerprint(splat_data);
+        const void* key = static_cast<const void*>(&splat_data);
+        if (g_frozen_mask_cache.key == key &&
+            g_frozen_mask_cache.n == n &&
+            g_frozen_mask_cache.ranges_fp == ranges_fp &&
+            g_frozen_mask_cache.device == device &&
+            g_frozen_mask_cache.mask.is_valid() &&
+            g_frozen_mask_cache.mask.numel() == n) {
+            return g_frozen_mask_cache.mask; // share persistent GPU tensor
+        }
+
         size_t frozen_count = 0;
         auto mask = build_frozen_vector(splat_data, n, &frozen_count);
         if (frozen_count == 0) {
+            g_frozen_mask_cache = {};
             return {};
         }
 
@@ -125,6 +170,12 @@ namespace lfs::training {
             lfs::core::TensorShape({n}),
             device);
         tensor.set_name("splat.frozen_mask");
+        g_frozen_mask_cache.key = key;
+        g_frozen_mask_cache.n = n;
+        g_frozen_mask_cache.ranges_fp = ranges_fp;
+        g_frozen_mask_cache.device = device;
+        g_frozen_mask_cache.mask = tensor;
+        g_frozen_mask_rebuilds.fetch_add(1, std::memory_order_relaxed);
         return tensor;
     }
 

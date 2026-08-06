@@ -41,6 +41,7 @@ namespace lfs::core {
 namespace lfs::training {
     class AdamOptimizer;
     struct TrainerRetryTestAccess;
+    struct TrainerCropboxMaskTestAccess;
     struct PPISPFileMetadata;
 
     struct PPISPViewportOverrides {
@@ -249,6 +250,7 @@ namespace lfs::training {
 
     private:
         friend struct TrainerRetryTestAccess;
+        friend struct TrainerCropboxMaskTestAccess;
 
         // Helper for deferred event emission to prevent deadlocks
         struct DeferredEvents {
@@ -514,6 +516,13 @@ namespace lfs::training {
         // Phase 1.3: persistent FastGS scale/opacity reg loss scalars (filled in fused bwd)
         core::Tensor fused_scale_reg_loss_;
         core::Tensor fused_opacity_reg_loss_;
+        // Phase 1.7: cropbox damping mask cache (rebuild on cropbox/topology change only)
+        core::Tensor cropbox_damping_cached_mask_;
+        size_t cropbox_damping_cached_n_ = 0;
+        size_t cropbox_damping_geom_fp_ = 0;
+        float cropbox_damping_cached_scale_ = 1.0f;
+        bool cropbox_damping_cache_valid_ = false;
+        std::uint64_t cropbox_damping_rebuild_count_ = 0;
         core::Tensor depth_loss_scalar_;
         core::Tensor depth_loss_grad_;
         core::Tensor depth_loss_grad_alpha_;
@@ -657,5 +666,21 @@ namespace lfs::training {
 
         std::function<void()> on_iteration_start_;
         GTLoadConfigSnapshot gt_load_config_snapshot_;
+    };
+
+    /// Phase 1.7 test hook for cropbox damping mask cache.
+    struct TrainerCropboxMaskTestAccess {
+        static void install(Trainer& t, core::SplatData& model, AdamOptimizer& optimizer) {
+            t.install_cropbox_step_damping(model, optimizer);
+        }
+        static void set_cropbox_lr_scale(Trainer& t, float scale) {
+            t.params_.optimization.cropbox_lr_scale = scale;
+        }
+        [[nodiscard]] static std::uint64_t rebuild_count(const Trainer& t) noexcept {
+            return t.cropbox_damping_rebuild_count_;
+        }
+        static void reset_rebuild_count(Trainer& t) noexcept {
+            t.cropbox_damping_rebuild_count_ = 0;
+        }
     };
 } // namespace lfs::training

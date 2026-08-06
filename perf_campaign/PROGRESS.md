@@ -340,7 +340,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   ```
 - **Note:** Bench gate deferred to after 1.4 (per work order). Wave 1 before:
   4.085 ms/iter, 0.05 allocs/iter.
-- **Commit:** (this commit)
+- **Commit:** `167300ff`
 
 
 ## Task 1.4 — Fuse background blend; drop backward unblend
@@ -361,7 +361,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   [  PASSED  ] FusedBgBlendTest.BackwardGradsMatchWithBlendedImage  (repro < 1e-6; bg affects grads)
   [  PASSED  ] FusedRegLossTest.* (no regression)
   ```
-- **Gate bench (flock, 3 runs) vs Wave 1 (4.085 ms, 0.05 allocs):**
+- **Gate bench (flock, 3 runs bonsai) vs Wave 1 (4.085 ms, 0.05 allocs):**
 
   | metric | Wave 1 | after 1.4 | Δ |
   |---|---:|---:|---|
@@ -372,7 +372,8 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   | last_loss | ~0.03–0.04 | 0.029–0.040 | ok |
 
   Runs: `perf_campaign/runs/20260806T183749Z_run{1,2,3}/`
-- **Commit:** (this commit)
+  Dual-workload bicycle gate deferred to post-1.9 (RULES dual-gate added mid-campaign).
+- **Commit:** `ff517550`
 
 
 ## Task 1.6 — Photometric hygiene
@@ -396,6 +397,33 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   [  PASSED  ] PhotometricHygieneTest.FusedLossValueStableAndNoCloneAlloc
   # steady fused_l1_ssim_forward alloc delta=0; loss equal across steps;
   # bwd grads finite without prior zero_
+  ```
+- **Commit:** `654a92ee`
+
+
+## Task 1.7 — Persistent masks
+
+- **Branch:** `lfs-elite`
+- **Change:**
+  1. Cropbox damping mask cached on Trainer; rebuild only when N / crop
+     geometry fingerprint / scale changes (`install_cropbox_step_damping`).
+  2. Frozen GPU mask process-wide cache in `make_frozen_mask` — rebuild only
+     when SplatData identity / N / frozen-ranges fingerprint / device change.
+     Steady `inject_noise` no longer host-vector + H2D every step.
+- **Fail evidence (TDD):** without cache, 10 unchanged `make_frozen_mask` calls
+  would increment rebuild counter 10×; cropbox path rebuilt every install.
+  ```
+  # conceptual pre-cache:
+  Expected: frozen_mask_rebuild_count() == 1 after 10 hits  (got 10)
+  Expected: cropbox rebuild_count == 1 after 8 installs    (got 8)
+  ```
+- **Pass evidence:**
+  ```
+  [==========] Running 2 tests from 1 test suite.
+  [  PASSED  ] PersistentMasksTest.FrozenMaskRebuiltOnceAcrossUnchangedCalls
+  [  PASSED  ] PersistentMasksTest.CropboxDampingRebuiltOnceAcrossUnchangedSteps
+  (frozen: 1 rebuild across 10 hits; +1 on N change; +1 on range change)
+  (cropbox: 1 rebuild across 8 installs; +1 on scale; +1 on transform)
   ```
 - **Commit:** (this commit)
 

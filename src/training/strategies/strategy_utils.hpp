@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -29,10 +30,16 @@ namespace lfs::training {
 
     // Build the row mask for splats loaded via --add-splat ... --freeze.
     // Invalid/empty means no frozen rows for the requested size.
+    // Phase 1.7: GPU mask is cached and rebuilt only when frozen ranges or N change
+    // (no host vector + H2D on the steady inject_noise path).
     lfs::core::Tensor make_frozen_mask(
         const lfs::core::SplatData& splat_data,
         size_t n,
         lfs::core::Device device);
+
+    /// Test/telemetry: times make_frozen_mask rebuilt the GPU cache.
+    [[nodiscard]] std::uint64_t frozen_mask_rebuild_count() noexcept;
+    void reset_frozen_mask_rebuild_count() noexcept;
 
     lfs::core::Tensor make_trainable_mask(
         const lfs::core::SplatData& splat_data,
