@@ -7,7 +7,6 @@
 #include "io/formats/opf.hpp"
 
 #include <algorithm>
-#include <array>
 #include <chrono>
 
 namespace lfs::io {
@@ -82,23 +81,17 @@ namespace lfs::io {
                 return item.type == "scene_reference_frame" &&
                        resource.format == "application/opf-scene-reference-frame+json";
             });
-        // Prefer the canonical sparse reconstruction, then use another OPF
-        // point-cloud product only when sparse is absent. This keeps the
-        // current import semantics deterministic while allowing datasets such
-        // as PIX4Dcatch to expose dense/depth/fused products through the same
-        // validated glTF path.
-        const opf::Resource* point_cloud_resource = nullptr;
-        for (const auto kind : std::array<std::string_view, 4>{"sparse", "dense", "fused", "depth"}) {
-            point_cloud_resource = find_resource(
-                *project, [kind](const auto& item, const auto& resource) {
-                    return (item.type == "calibration" || item.type == "point_cloud") &&
-                           resource.format == "model/gltf+json" &&
-                           (resource.uri.find(std::string(kind) + "/") != std::string::npos ||
-                            resource.uri == std::string(kind) + "/pcl.gltf");
-                });
-            if (point_cloud_resource)
-                break;
-        }
+        // OPF identifies the sparse reconstruction by its owning calibration
+        // item, not by a prescribed filename. Prefer that semantic resource;
+        // only fall back to a point_cloud product when calibration has no glTF.
+        const auto gltf_resource_for_item_type = [&project](const std::string_view item_type) {
+            return find_resource(*project, [item_type](const auto& item, const auto& resource) {
+                return item.type == item_type && resource.format == "model/gltf+json";
+            });
+        };
+        const opf::Resource* point_cloud_resource = gltf_resource_for_item_type("calibration");
+        if (!point_cloud_resource)
+            point_cloud_resource = gltf_resource_for_item_type("point_cloud");
         if (!camera_list_resource || !input_resource || !calibrated_resource)
             return make_error(ErrorCode::MISSING_REQUIRED_FILES,
                               "OPF project requires camera_list, input_cameras, and calibrated cameras resources.",

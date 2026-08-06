@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
 #include <unordered_set>
@@ -510,32 +511,43 @@ namespace lfs::io::opf {
             !root["meshes"][0].contains("primitives") || root["meshes"][0]["primitives"].empty())
             return manifest;
         const auto& attributes = root["meshes"][0]["primitives"][0]["attributes"];
-        if (!attributes.contains("POSITION") || !attributes.contains("COLOR_0"))
-            return invalid(gltf_resource.resolved_path, "OPF sparse point cloud requires POSITION and COLOR_0.");
+        if (!attributes.contains("POSITION"))
+            return invalid(gltf_resource.resolved_path, "OPF point cloud requires POSITION.");
         const auto read_accessor = [&](const json& index) -> Result<void> {
             if (!index.is_number_unsigned() || index.get<size_t>() >= root["accessors"].size())
-                return invalid(gltf_resource.resolved_path, "OPF sparse point cloud has an invalid accessor.");
+                return invalid(gltf_resource.resolved_path, "OPF point cloud has an invalid accessor.");
             return {};
         };
         if (auto valid = read_accessor(attributes["POSITION"]); !valid)
             return std::unexpected(valid.error());
-        if (auto valid = read_accessor(attributes["COLOR_0"]); !valid)
-            return std::unexpected(valid.error());
         const auto& position_accessor = root["accessors"][attributes["POSITION"].get<size_t>()];
-        const auto& color_accessor = root["accessors"][attributes["COLOR_0"].get<size_t>()];
         if (position_accessor.value("componentType", 0) != 5126 ||
-            position_accessor.value("type", std::string{}) != "VEC3" ||
-            color_accessor.value("componentType", 0) != 5121 ||
-            color_accessor.value("type", std::string{}) != "VEC4" ||
-            position_accessor.value("count", 0u) != color_accessor.value("count", 0u))
-            return invalid(gltf_resource.resolved_path, "OPF sparse point cloud uses unsupported accessor types.");
+            position_accessor.value("type", std::string{}) != "VEC3")
+            return invalid(gltf_resource.resolved_path, "OPF point cloud uses an unsupported POSITION accessor.");
         manifest.point_count = position_accessor.value("count", 0u);
+        const auto position_view = position_accessor.value("bufferView", std::numeric_limits<size_t>::max());
+        if (position_view >= root["bufferViews"].size())
+            return invalid(gltf_resource.resolved_path, "OPF point cloud POSITION references an invalid buffer view.");
         const auto position_buffer = root["bufferViews"][position_accessor.value("bufferView", 0u)].value("buffer", 0u);
-        const auto color_buffer = root["bufferViews"][color_accessor.value("bufferView", 0u)].value("buffer", 0u);
-        if (position_buffer >= manifest.buffer_paths.size() || color_buffer >= manifest.buffer_paths.size())
-            return invalid(gltf_resource.resolved_path, "OPF sparse point cloud accessor references an invalid buffer.");
+        if (position_buffer >= manifest.buffer_paths.size())
+            return invalid(gltf_resource.resolved_path, "OPF point cloud POSITION references an invalid buffer.");
         manifest.positions_path = manifest.buffer_paths[position_buffer];
-        manifest.colors_path = manifest.buffer_paths[color_buffer];
+        if (attributes.contains("COLOR_0")) {
+            if (auto valid = read_accessor(attributes["COLOR_0"]); !valid)
+                return std::unexpected(valid.error());
+            const auto& color_accessor = root["accessors"][attributes["COLOR_0"].get<size_t>()];
+            if (color_accessor.value("componentType", 0) != 5121 ||
+                color_accessor.value("type", std::string{}) != "VEC4" ||
+                position_accessor.value("count", 0u) != color_accessor.value("count", 0u))
+                return invalid(gltf_resource.resolved_path, "OPF point cloud uses an unsupported COLOR_0 accessor.");
+            const auto color_view = color_accessor.value("bufferView", std::numeric_limits<size_t>::max());
+            if (color_view >= root["bufferViews"].size())
+                return invalid(gltf_resource.resolved_path, "OPF point cloud COLOR_0 references an invalid buffer view.");
+            const auto color_buffer = root["bufferViews"][color_view].value("buffer", 0u);
+            if (color_buffer >= manifest.buffer_paths.size())
+                return invalid(gltf_resource.resolved_path, "OPF point cloud COLOR_0 references an invalid buffer.");
+            manifest.colors_path = manifest.buffer_paths[color_buffer];
+        }
         if (root.contains("nodes") && root["nodes"].is_array() && !root["nodes"].empty() &&
             root["nodes"][0].contains("matrix") && root["nodes"][0]["matrix"].is_array() &&
             root["nodes"][0]["matrix"].size() == 16) {
@@ -548,16 +560,22 @@ namespace lfs::io::opf {
     Result<lfs::core::PointCloud> read_sparse_point_cloud(const PointCloudManifest& manifest,
                                                           const SceneReferenceFrame* frame) {
         std::ifstream positions(manifest.positions_path, std::ios::binary);
-        std::ifstream colors(manifest.colors_path, std::ios::binary);
-        if (!positions || !colors)
-            return make_error(ErrorCode::READ_FAILURE, "Cannot open OPF sparse point cloud buffers.", manifest.gltf_path);
+        std::ifstream colors;
+        const bool has_colors = !manifest.colors_path.empty();
+        if (has_colors)
+            colors.open(manifest.colors_path, std::ios::binary);
+        if (!positions || (has_colors && !colors))
+            return make_error(ErrorCode::READ_FAILURE, "Cannot open OPF point cloud buffers.", manifest.gltf_path);
         std::vector<float> xyz(static_cast<size_t>(manifest.point_count) * 3);
-        std::vector<std::uint8_t> rgba(static_cast<size_t>(manifest.point_count) * 4);
+        std::vector<std::uint8_t> rgba;
+        if (has_colors)
+            rgba.resize(static_cast<size_t>(manifest.point_count) * 4);
         positions.read(reinterpret_cast<char*>(xyz.data()), static_cast<std::streamsize>(xyz.size() * sizeof(float)));
-        colors.read(reinterpret_cast<char*>(rgba.data()), static_cast<std::streamsize>(rgba.size()));
-        if (!positions || !colors)
-            return make_error(ErrorCode::READ_FAILURE, "OPF sparse point cloud buffers are truncated.", manifest.gltf_path);
-        std::vector<float> rgb(static_cast<size_t>(manifest.point_count) * 3);
+        if (has_colors)
+            colors.read(reinterpret_cast<char*>(rgba.data()), static_cast<std::streamsize>(rgba.size()));
+        if (!positions || (has_colors && !colors))
+            return make_error(ErrorCode::READ_FAILURE, "OPF point cloud buffers are truncated.", manifest.gltf_path);
+        std::vector<float> rgb(static_cast<size_t>(manifest.point_count) * 3, 1.0f);
         for (size_t i = 0; i < manifest.point_count; ++i) {
             const float x = xyz[i * 3], y = xyz[i * 3 + 1], z = xyz[i * 3 + 2];
             float p[3] = {manifest.node_matrix[0] * x + manifest.node_matrix[4] * y + manifest.node_matrix[8] * z + manifest.node_matrix[12],
@@ -577,9 +595,11 @@ namespace lfs::io::opf {
             xyz[i * 3] = p[0];
             xyz[i * 3 + 1] = p[1];
             xyz[i * 3 + 2] = p[2];
-            rgb[i * 3] = static_cast<float>(rgba[i * 4]) / 255.0f;
-            rgb[i * 3 + 1] = static_cast<float>(rgba[i * 4 + 1]) / 255.0f;
-            rgb[i * 3 + 2] = static_cast<float>(rgba[i * 4 + 2]) / 255.0f;
+            if (!rgba.empty()) {
+                rgb[i * 3] = static_cast<float>(rgba[i * 4]) / 255.0f;
+                rgb[i * 3 + 1] = static_cast<float>(rgba[i * 4 + 1]) / 255.0f;
+                rgb[i * 3 + 2] = static_cast<float>(rgba[i * 4 + 2]) / 255.0f;
+            }
         }
         return lfs::core::PointCloud(
             lfs::core::Tensor::from_vector(std::move(xyz), {static_cast<size_t>(manifest.point_count), size_t{3}}, lfs::core::Device::CPU),
