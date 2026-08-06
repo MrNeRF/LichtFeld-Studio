@@ -429,5 +429,5 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
 
   Gate: no regression vs Wave-1 bonsai or bicycle steady_ms; G2 allocs held.
 
-- **Commit:** `31dfbad8`
+- **Commit:** `786fefb6`
 
