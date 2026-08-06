@@ -32,6 +32,8 @@ namespace {
             internal::lazy_executor_set_size_heuristic_override_for_testing(false);
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             internal::lazy_ir_set_node_limit_override_for_testing(std::nullopt);
+            // IR introspection tests opt into eager IR recording (default OFF in production).
+            internal::lazy_ir_set_active_for_testing(true);
             Tensor::reset_lazy_telemetry();
         }
 
@@ -44,6 +46,7 @@ namespace {
             internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             internal::lazy_ir_set_node_limit_override_for_testing(std::nullopt);
+            internal::lazy_ir_set_active_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
     };
@@ -106,7 +109,11 @@ TEST(TensorLazyIrTest, OnModeDefersUntilBoundaryAndMaterializes) {
     auto b = Tensor::ones({16}, Device::CPU, DataType::Float32);
     auto c = a.add(b);
 
-    EXPECT_TRUE(c.has_lazy_expr());
+    // Eager binaries are not deferred; has_lazy_expr() is local-deferred-only (6A.5a).
+    // With IR recording enabled (this suite), the debug map still tracks the node.
+    EXPECT_FALSE(c.is_deferred());
+    EXPECT_FALSE(c.has_lazy_expr());
+    EXPECT_TRUE(internal::tensor_has_lazy_expr(c));
     EXPECT_GT(c.lazy_expr_id(), 0u);
 
     const auto info = c.lazy_expr_info();
@@ -285,7 +292,9 @@ TEST(TensorLazyIrTest, OnModePlannerExecutorCachesSharedSubgraphWithinMaterializ
     auto branch_a = base.slice(0, 0, 2);
     auto branch_b = base.slice(0, 0, 2);
     const auto shared = branch_a.add(branch_b);
-    ASSERT_TRUE(shared.has_lazy_expr());
+    // Binary results are eager; IR map still tracks the node when recording is on.
+    ASSERT_FALSE(shared.is_deferred());
+    ASSERT_TRUE(internal::tensor_has_lazy_expr(shared));
     auto [shared_values, shared_mat_delta] = measure_materialization_delta(shared);
     ASSERT_EQ(shared_values.size(), 6u);
     for (float value : shared_values) {
@@ -313,7 +322,9 @@ TEST(TensorLazyIrTest, OnModePlannerDiagnosticsCaptureFanOutExecution) {
     auto left = base.mul(2.0f).add(3.0f);
     auto right = base.sub(4.0f).abs();
     auto fanout = left.add(right);
-    ASSERT_TRUE(fanout.has_lazy_expr());
+    // Binary result is eager; deferred inputs still materialize via the planner.
+    ASSERT_FALSE(fanout.is_deferred());
+    ASSERT_TRUE(internal::tensor_has_lazy_expr(fanout));
 
     const auto values = fanout.to_vector();
     ASSERT_EQ(values.size(), 8u);
@@ -1887,7 +1898,9 @@ TEST(TensorLazyRuntimeTest, DeferredHintedChainWaitsForProducerWhenConsumedWitho
         CUDAStreamGuard hint_guard(hinted_consumer);
         deferred = base.add(bias);
     }
-    ASSERT_TRUE(deferred.has_lazy_expr());
+    // Binary add is always eager (not deferred); stream hint still propagates.
+    ASSERT_TRUE(deferred.is_valid());
+    ASSERT_FALSE(deferred.is_deferred());
     ASSERT_EQ(deferred.stream(), hinted_consumer);
 
     Tensor result = deferred.mul(3.0f);
@@ -2097,7 +2110,10 @@ TEST(TensorLazyIrTest, LazyReduceIRNodeRecorded) {
     auto x = Tensor::full({4096}, 2.0f, Device::CUDA, DataType::Float32);
     auto result = x.add(1.0f).sum();
 
-    ASSERT_TRUE(result.has_lazy_expr());
+    // Reduce result is eager; IR still records the reduce node when enabled.
+    ASSERT_FALSE(result.is_deferred());
+    ASSERT_FALSE(result.has_lazy_expr());
+    ASSERT_GT(result.lazy_expr_id(), 0u);
     const auto info = result.lazy_expr_info();
     ASSERT_TRUE(info.has_value());
     EXPECT_EQ(info->op_kind, internal::LazyOpKind::Reduce);

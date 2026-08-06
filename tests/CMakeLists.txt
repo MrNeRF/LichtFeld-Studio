@@ -218,6 +218,7 @@ set(TEST_FILES
     test_tensor_deferred_d1_copy_registry.cpp
     test_tensor_deferred_d3_pin_operands.cpp
     test_tensor_lazy_ir.cpp
+    test_tensor_dispatch_6a.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp

@@ -312,3 +312,56 @@
 | B/splat | 429.0 | 429.0 | Phase 2 pending |
 | GUI start exportable (5M cap) | 1182.6 MiB | 141.9 MiB | **−1040.6 MiB** (G7) |
 All 20 campaign tests green. ISS-007 open (manual GUI validation).
+
+---
+
+## Task 6A.5a — has_lazy_expr() from local deferred state
+
+- **Branch:** `lfs-elite-tensor`
+- **Change:** `Tensor::has_lazy_expr()` reads only `state_->lazy` (no global IR mutex /
+  `tensor_has_lazy_expr` map lookup). Eager IR debug nodes are inspected via
+  `lazy_expr_id()` / `internal::tensor_has_lazy_expr`.
+- **Fail evidence (TDD):**
+  ```
+  TensorDispatch6A.HasLazyExprReadsLocalDeferredStateOnly
+  Value of: eager.has_lazy_expr()
+    Actual: true
+  Expected: false
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] TensorDispatch6A.HasLazyExprReadsLocalDeferredStateOnly
+  [  PASSED  ] TensorDispatch6A.HasLazyExprMatchesIsDeferredWhenIrOff
+  Tensor* suite: 998 PASSED; tensor_hardening_tests: 89 PASSED
+  ```
+
+## Task 6A.2 — Gate lazy-IR recording off in production
+
+- **Branch:** `lfs-elite-tensor`
+- **Change:**
+  - `lazy_ir_active()` default OFF (`LFS_LAZY_IR=1` or
+    `lazy_ir_set_active_for_testing(true)` to enable).
+  - Eager `lazy_ir_record_*` remain gated; deferred always recorded via
+    `lazy_ir_record_deferred` (fusion/materializer registries key by node_id).
+  - `lazy_ir_set_node_inputs` not gated by eager flag.
+- **Fail evidence (TDD, hard-true `lazy_ir_active`):**
+  ```
+  TensorDispatch6A.LazyIrDefaultOffAndOptIn
+    Expected: false  Actual: true  (lazy_ir_active)
+  TensorDispatch6A.EagerBinaryDoesNotRecordWhenIrOff
+    tensor_has_lazy_expr(c)=true, lazy_expr_id=6, expr_nodes_created increased
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] UnaryReduceFusesWithIrOff  (fused_launches > 0 with IR off)
+  [  PASSED  ] EagerBinaryDoesNotRecordWhenIrOff
+  TensorLazy* + TensorDispatch*: 111 PASSED
+  Tensor* suite: 998 PASSED; hardening: 89 PASSED
+  ```
+- **Microbench (eager add loop, CUDA, 20k iters, ops/s IR_on → IR_off):**
+
+  | shape | IR on | IR off | Δ |
+  |---|---:|---:|---:|
+  | [1] | 122234 | 145647 | **+19.2%** |
+  | [4096] | 135932 | 321081 | **+136%** |
+

@@ -441,10 +441,10 @@ namespace lfs::core {
         deferred.id_ = next_id_++;
         deferred.compute_alignment();
 
-        if (internal::lazy_ir_active()) {
-            deferred.state_->lazy->node_id =
-                internal::lazy_ir_record_deferred(deferred, "deferred_expr", lazy_input_ids);
-        }
+        // Always allocate a fusion/materializer node id for deferred tensors.
+        // Eager IR recording remains gated by lazy_ir_active() elsewhere.
+        deferred.state_->lazy->node_id =
+            internal::lazy_ir_record_deferred(deferred, "deferred_expr", lazy_input_ids);
         if (deferred.state_->lazy->node_id != 0) {
             internal::lazy_executor_register_deferred_materializer(
                 deferred.state_->lazy->node_id,

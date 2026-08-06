@@ -1379,8 +1379,10 @@ namespace lfs::core {
         bool is_view() const { return is_view_; }
         bool is_external_storage() const { return has_external_storage(); }
         bool is_empty() const { return !is_valid() || numel() == 0; }
+        // Local deferred flag only — never takes the global IR mutex. Eager IR
+        // nodes (debug map) are NOT reported here; use lazy_expr_id() / IR APIs.
         bool has_lazy_expr() const {
-            return (state_ && state_->lazy) || internal::tensor_has_lazy_expr(*this);
+            return state_ && static_cast<bool>(state_->lazy);
         }
         bool is_deferred() const { return state_ && state_->lazy; }
         uint64_t lazy_expr_id() const;
