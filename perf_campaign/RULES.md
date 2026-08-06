@@ -20,6 +20,19 @@
    loops, full gpu tier before declaring a task done). Do not reconfigure the build system.
 8. Scope: exactly your work order. Improvements you notice outside scope go to ISSUES.md.
 
+## Build discipline (added 2026-08-06 — system-RAM OOM)
+
+Full builds MUST be serialized via flock so parallel workers cannot thrash host RAM
+(systemd-oomd killed gnome-shell at 95.56% user-slice pressure on 2026-08-06 20:48 when
+unbounded parallel builds raced):
+
+```bash
+flock /tmp/lfs-build.lock cmake --build <dir> -j 8
+```
+
+Configure with `-DLFS_CUDA_COMPILER_CACHE=ccache` (sccache races nvcc fatbinary).
+Bench GPU timing stays on `flock /tmp/lfs-bench.lock` (see dual-workload gate below).
+
 NOTE: the campaign branch was renamed from perf/spirulae-parity to **lfs-elite**. If any
 work order references the old name, it means this branch — you are already on it. Never
 run `git checkout`; just verify with `git branch --show-current` (expect: lfs-elite).

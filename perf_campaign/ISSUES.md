@@ -52,7 +52,34 @@
   ~live×1.5 (tens–hundreds MiB, not ~1.2 GB); after densify growth, log shows
   "Exportable splat storage grew for densify" and the viewport stays zero-copy (no black
   frames / no full input-copy refusal errors).
-- **Status:** open — needs a human GUI session or a windowed CI harness.
+- **Status:** partially addressed 2026-08-06 (lfs-elite-vramfix):
+  - Automated storage-layer audit: many grow cycles → `cudaMemGetInfo` plateaus;
+    24× create/grow/destroy returns VRAM (no VMM physical chunk leak).
+  - **Ordering fix:** `TrainerManager::growExportableForDensify` now drops Vulkan
+    imports (CUDA-only rebind + clear trainer allocator + `cudaDeviceSynchronize`)
+    *before* `grow()` / `release_physical`. Previous order grew first while
+    `VulkanExternalTensorStorage` still held the old import → primary suspect for
+    `NVRM: VM: invalid mmap context` (kernel 2026-08-06 20:48:16).
+  - Thread-local FastGS sort workspaces now released on training-thread shutdown;
+    spawn-render-join VRAM test green.
+  - Host RSS + VRAM cycle regression guard (`VramLeakRegressionTest`) green.
+  - Still open: human GUI session / windowed CI for zero-copy viewport after densify grow.
+
+## ISS-009 — NVRM "VM: invalid mmap context" under CUDA-VMM export + Vulkan import
+- **Severity:** high (driver/kernel log; coincides with CUDA process kills under pressure)
+- **Symptom:** kernel logged repeated `NVRM: VM: invalid mmap context` at 2026-08-06
+  20:48:16 while CUDA apps were killed (same window as systemd-oomd / host RAM pressure).
+- **Root cause (code audit):** `growExportableDeviceBlock` → `release_physical` unmaps
+  + `cuMemRelease` + closes the export fd while live `VkDeviceMemory` may still import
+  that allocation (old path: grow first, then re-import). Pure CUDA multi-grow has **no**
+  VMM physical leak (plateau tests pass). Destructor path
+  `VulkanExternalTensorStorage` already tears down interop → `destroyExternalBuffer`
+  before `extra_owner_` (ExportableBlock) — correct for full teardown.
+- **Fix:** drop Vulkan import owners before grow (see ISS-007). Documented on
+  `release_physical` / `growExportableDeviceBlock`. Full in-process NVRM repro needs
+  GUI/Vulkan; not reproduced in headless unit tests.
+- **Status:** fixed for densify grow path; residual risk if any other call site grows
+  exportable storage under a live Vulkan import.
 
 ## ISS-008 — Reviewer bench raced a worker build (ABI mismatch)
 - **Severity:** high (invalidates measurements, crashes runs)
