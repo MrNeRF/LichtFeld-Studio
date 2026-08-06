@@ -1044,7 +1044,17 @@ namespace lfs::core {
                        "multinomial sample count must be positive");
         LFS_ASSERT_MSG(replacement || static_cast<size_t>(num_samples) <= weights.numel(),
                        "multinomial cannot sample more entries than weights without replacement");
-        const auto host_weights = weights.to_vector();
+
+        // Theme A (TENSOR_LIB_FINDINGS): kernels scan weights densely. Force a
+        // contiguous logical copy at the API boundary so host validation and
+        // device sampling always see the same probability mass (strided column
+        // views from densify LAS paths are training-reachable).
+        Tensor weights_materialized;
+        const Tensor& dense_weights = weights.contiguous_read(weights_materialized);
+        LFS_ASSERT_MSG(dense_weights.is_contiguous(),
+                       "multinomial requires contiguous weights after materialize firewall");
+
+        const auto host_weights = dense_weights.to_vector();
         double weight_sum = 0.0;
         for (size_t index = 0; index < host_weights.size(); ++index) {
             const float weight = host_weights[index];
@@ -1057,9 +1067,12 @@ namespace lfs::core {
 
         LoadArgs args;
         args.shape = TensorShape({static_cast<size_t>(num_samples)});
-        args.device = weights.device();
+        args.device = dense_weights.device();
         args.dtype = DataType::Int64; // Must be Int64 for MCMC compatibility (nonzero() returns Int64)
-        args.args = std::pair<void*, bool>{const_cast<void*>(static_cast<const void*>(&weights)), replacement};
+        // Pass dense_weights (not the possibly-strided original) so LoadOp and
+        // launch_multinomial never observe non-contiguous storage.
+        args.args = std::pair<void*, bool>{
+            const_cast<void*>(static_cast<const void*>(&dense_weights)), replacement};
         return load(LoadOp::Multinomial, args);
     }
 

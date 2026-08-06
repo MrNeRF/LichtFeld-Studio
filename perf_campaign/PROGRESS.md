@@ -754,3 +754,75 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+## Task WO-Q — Theme A strided-op correctness hardening (worker Q)
+
+- **Branch:** `lfs-elite-fQ`
+- **Scope:** training-reachable Theme A set from `TENSOR_LIB_FINDINGS` /
+  `docs/analysis/spirulae-comparison/lfs-densify.md`:
+  1. `masked_select` / `masked_fill_` on strided views (materialize firewall)
+  2. `index_put_` on view destinations (offset + non-contiguous)
+  3. `densification_info.index_select(dim=1)` / `index_select_into` (`[2,N]`)
+  4. `Tensor::multinomial` force-contiguous weights (API + LoadOp)
+- **Files:**
+  - `src/core/tensor/tensor_masking_ops.cpp` — Theme A firewall docs + fail-evidence comment
+  - `src/core/tensor/tensor_unified_ops.cpp` — explicit contiguous weights at multinomial entry
+    (outside `tensor_masking_ops.*` but required by WO; LoadOp already densified)
+  - `tests/test_theme_a_strided_ops.cpp` — 13 CPU-reference regression tests
+  - `tests/CMakeLists.txt` — register suite
+- **Prior state:** materialize firewalls (`contiguous_read` / `mutate_logical_view`) already
+  present from #1415 for masking/`index_put_`; multinomial LoadOp densified but API
+  validated and passed possibly-strided `weights` pointer. Hardened API to force dense
+  weights for validation + sampling; locked Theme A with explicit CPU-loop oracles.
+
+### Fail evidence (TDD)
+
+Temporarily disabled `masked_select` materialize firewall → physical-order scan:
+
+```
+ThemeAStridedOpsTest.MaskedSelect_TransposedView_CPU
+Expected equality of these values:
+  got[i]  Which is: 3
+  ref[i]  Which is: 2
+MaskedSelect_TransposedView_CPU mismatch at 1 got=3 ref=2
+[  FAILED  ] ThemeAStridedOpsTest.MaskedSelect_TransposedView_CPU
+[  FAILED  ] ThemeAStridedOpsTest.MaskedSelect_TransposedView_CUDA
+```
+
+(Logical select on transposed `[[1,2,3],[4,5,6]]` with mask `T F T F F T` must yield
+`[1,2,6]`; linear physical scan yields `[1,3,6]` — classic Theme A.)
+
+### Pass evidence
+
+```
+[==========] Running 13 tests from 1 test suite.
+[  PASSED  ] 13 tests.  (ThemeAStridedOpsTest.*)
+  MaskedSelect_TransposedView_{CPU,CUDA}
+  MaskedFill_TransposedView_{CPU,CUDA} (no sibling corruption)
+  IndexPut_OffsetContiguousView_{CPU,CUDA}  (slice(0,2,5).index_put_([1],[9]) → base[3]=9)
+  IndexPut_NonContiguousSlice_RowAssign_CUDA
+  DensificationInfo_IndexSelectDim1_{CPU,CUDA,StridedSource}
+  Multinomial_StridedColumnWeights_{CPU,CUDA}  (non-contig column [0,100,0] → 200× mode=1)
+  DensificationInfo_RowExtractDim0_Control
+```
+
+### Dual-workload gate (flock, 3-run medians)
+
+| Metric | Wave 2 ref | WO-Q after | Δ |
+|---|---:|---:|---|
+| Bonsai wall_s | 9.00 (orig) / W2 ~8.9 | **8.854** | ok |
+| Bonsai steady_ms/iter | **4.065** | **4.048** | −0.4% |
+| Bonsai peak MiB | **938.3** | **938.1** | flat |
+| Bonsai allocs/iter | 0.05 | **0.052** | flat |
+| Bonsai last_loss | ~0.03–0.04 | **0.025–0.038** | quality ok |
+| Bicycle 7k steady_ms/iter | **3.208** (base 3.290) | **3.291** | noise (3.19–3.40) |
+| Bicycle 7k peak MiB | **1026.3** | **1026.1** | flat |
+| Bicycle loss range | 0.079–0.107 | **0.082–0.106** | quality ok |
+| B/splat | 429 | **429** | flat |
+
+Bonsai runs: `perf_campaign/runs/20260806T231332Z_run{1,2,3}/`  
+Bicycle runs: `perf_campaign/runs/20260806T231424Z_run{1,2,3}/`  
+Gate: no quality regression; speed within dual-workload noise (bicycle wall varies under
+fleet contention — compare steady_ms/iter).
+
+- **Commit:** `9594581a`
