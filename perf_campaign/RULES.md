@@ -23,3 +23,15 @@
 NOTE: the campaign branch was renamed from perf/spirulae-parity to **lfs-elite**. If any
 work order references the old name, it means this branch — you are already on it. Never
 run `git checkout`; just verify with `git branch --show-current` (expect: lfs-elite).
+
+## Dual-workload gate (added 2026-08-06)
+
+Every task's final bench gate runs BOTH workloads, each via flock:
+  1. `flock /tmp/lfs-bench.lock ./perf_campaign/bench.sh --runs 3`                     (bonsai — light, exposes host/dispatch regressions)
+  2. `LFS_BENCH_DATASET=/home/gauss/data/360_v2/bicycle flock /tmp/lfs-bench.lock ./perf_campaign/bench.sh --runs 3`   (bicycle — heavy, GPU-saturated, and VERY sensitive to correctness/quality issues)
+
+Bicycle is the canary: it surfaces subtle bugs (floaters, densify misbehavior, quality
+drift) that bonsai hides. Any bicycle loss/quality anomaly = stop and investigate before
+committing, even if bonsai looks clean. Quality-sensitive changes (quantization, RNG,
+kernel-math changes) must additionally compare bicycle loss curves, not just final loss.
+Both baselines live in perf_campaign/BASELINE.md.
