@@ -33,6 +33,7 @@
 #include <variant>
 #include <vector>
 
+#include "cuda_stream_context.hpp"
 #include "lazy_config.hpp"
 #include "lazy_executor.hpp"
 #include "lazy_ir.hpp"
@@ -42,6 +43,7 @@
 #include "tensor_ops.hpp"
 
 #include "core/export.hpp"
+#include <cuda_fp16.h>
 
 namespace lfs::core {
 
@@ -870,7 +872,96 @@ namespace lfs::core {
             LFS_ASSERT_MSG(result_dtype != DataType::Bool,
                            "arithmetic on two Bool tensors is unsupported; use a logical operation");
 
-            // Convert operands to result dtype if needed
+            // 6A.3 fast path: same shape/device/dtype, contiguous, non-deferred —
+            // skip BinaryExpr + TensorLeaf heap cells and launch directly.
+            // Match BinaryExpr evaluator: prepare stream first, then empty, so the
+            // result tensor inherits the prepared execution stream.
+            const bool can_fast_path =
+                dtype_ == result_dtype && other.dtype() == result_dtype &&
+                shape_ == other.shape() &&
+                is_contiguous() && other.is_contiguous() &&
+                !is_deferred() && !other.is_deferred() &&
+                (result_dtype == DataType::Float32 || result_dtype == DataType::Float16 ||
+                 result_dtype == DataType::Int32 || result_dtype == DataType::Int64 ||
+                 result_dtype == DataType::UInt8);
+
+            if (can_fast_path) {
+                std::optional<CUDAStreamGuard> execution_guard;
+                if (device_ == Device::CUDA && numel() > 0) {
+                    execution_guard.emplace(prepare_inputs_for_stream({this, &other}));
+                }
+                Tensor result = Tensor::empty(shape_, device_, result_dtype);
+                if (numel() > 0) {
+                    pin_operands({this, &other});
+                    if (device_ == Device::CUDA) {
+                        switch (result_dtype) {
+                        case DataType::Float32:
+                            tensor_ops::launch_float_binary_with_numeric_policy(
+                                ptr<float>(), other.ptr<float>(), result.ptr<float>(),
+                                result.numel(), op, result.stream());
+                            break;
+                        case DataType::Float16:
+                            tensor_ops::launch_binary_op_generic(
+                                ptr<__half>(), other.ptr<__half>(), result.ptr<__half>(),
+                                result.numel(), op, result.stream());
+                            break;
+                        case DataType::Int32:
+                            tensor_ops::launch_binary_op_generic(
+                                ptr<int>(), other.ptr<int>(), result.ptr<int>(),
+                                result.numel(), op, result.stream());
+                            break;
+                        case DataType::Int64:
+                            tensor_ops::launch_binary_op_generic(
+                                ptr<int64_t>(), other.ptr<int64_t>(), result.ptr<int64_t>(),
+                                result.numel(), op, result.stream());
+                            break;
+                        case DataType::UInt8:
+                            tensor_ops::launch_binary_op_generic(
+                                ptr<uint8_t>(), other.ptr<uint8_t>(), result.ptr<uint8_t>(),
+                                result.numel(), op, result.stream());
+                            break;
+                        default:
+                            break; // unreachable given can_fast_path dtype filter
+                        }
+                    } else {
+                        switch (result_dtype) {
+                        case DataType::Float32:
+                            apply_binary_cpu(ptr<float>(), other.ptr<float>(), result.ptr<float>(),
+                                             result.numel(), op);
+                            break;
+                        case DataType::Float16: {
+                            const __half* left_ptr = ptr<__half>();
+                            const __half* right_ptr = other.ptr<__half>();
+                            __half* out_ptr = result.ptr<__half>();
+                            const size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = __float2half(
+                                    op(__half2float(left_ptr[i]), __half2float(right_ptr[i])));
+                            }
+                            break;
+                        }
+                        case DataType::Int32:
+                            apply_binary_cpu(ptr<int>(), other.ptr<int>(), result.ptr<int>(),
+                                             result.numel(), op);
+                            break;
+                        case DataType::Int64:
+                            apply_binary_cpu(ptr<int64_t>(), other.ptr<int64_t>(),
+                                             result.ptr<int64_t>(), result.numel(), op);
+                            break;
+                        case DataType::UInt8:
+                            apply_binary_cpu(ptr<uint8_t>(), other.ptr<uint8_t>(),
+                                             result.ptr<uint8_t>(), result.numel(), op);
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                }
+                internal::lazy_ir_record_binary(*this, other, result, "binary");
+                return result;
+            }
+
+            // Convert operands to result dtype if needed (promotion / broadcast path)
             const Tensor& lhs = (dtype_ == result_dtype) ? *this : this->to(result_dtype);
             const Tensor& rhs = (other.dtype() == result_dtype) ? other : other.to(result_dtype);
 
@@ -1379,8 +1470,10 @@ namespace lfs::core {
         bool is_view() const { return is_view_; }
         bool is_external_storage() const { return has_external_storage(); }
         bool is_empty() const { return !is_valid() || numel() == 0; }
+        // Local deferred flag only — never takes the global IR mutex. Eager IR
+        // nodes (debug map) are NOT reported here; use lazy_expr_id() / IR APIs.
         bool has_lazy_expr() const {
-            return (state_ && state_->lazy) || internal::tensor_has_lazy_expr(*this);
+            return state_ && static_cast<bool>(state_->lazy);
         }
         bool is_deferred() const { return state_ && state_->lazy; }
         uint64_t lazy_expr_id() const;

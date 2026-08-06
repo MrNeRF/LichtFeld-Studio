@@ -532,3 +532,123 @@ cap (54k→500k), no collapse/NaN, no floater runaway.
 workloads; bicycle quality canary clean (loss curve + final range OK).
 Phase 1 series **DONE**.
 
+||||||| f06a8885
+
+---
+
+## Task 6A.5a — has_lazy_expr() from local deferred state
+
+- **Branch:** `lfs-elite-tensor`
+- **Change:** `Tensor::has_lazy_expr()` reads only `state_->lazy` (no global IR mutex /
+  `tensor_has_lazy_expr` map lookup). Eager IR debug nodes are inspected via
+  `lazy_expr_id()` / `internal::tensor_has_lazy_expr`.
+- **Fail evidence (TDD):**
+  ```
+  TensorDispatch6A.HasLazyExprReadsLocalDeferredStateOnly
+  Value of: eager.has_lazy_expr()
+    Actual: true
+  Expected: false
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] TensorDispatch6A.HasLazyExprReadsLocalDeferredStateOnly
+  [  PASSED  ] TensorDispatch6A.HasLazyExprMatchesIsDeferredWhenIrOff
+  Tensor* suite: 998 PASSED; tensor_hardening_tests: 89 PASSED
+  ```
+
+## Task 6A.2 — Gate lazy-IR recording off in production
+
+- **Branch:** `lfs-elite-tensor`
+- **Change:**
+  - `lazy_ir_active()` default OFF (`LFS_LAZY_IR=1` or
+    `lazy_ir_set_active_for_testing(true)` to enable).
+  - Eager `lazy_ir_record_*` remain gated; deferred always recorded via
+    `lazy_ir_record_deferred` (fusion/materializer registries key by node_id).
+  - `lazy_ir_set_node_inputs` not gated by eager flag.
+- **Fail evidence (TDD, hard-true `lazy_ir_active`):**
+  ```
+  TensorDispatch6A.LazyIrDefaultOffAndOptIn
+    Expected: false  Actual: true  (lazy_ir_active)
+  TensorDispatch6A.EagerBinaryDoesNotRecordWhenIrOff
+    tensor_has_lazy_expr(c)=true, lazy_expr_id=6, expr_nodes_created increased
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] UnaryReduceFusesWithIrOff  (fused_launches > 0 with IR off)
+  [  PASSED  ] EagerBinaryDoesNotRecordWhenIrOff
+  TensorLazy* + TensorDispatch*: 111 PASSED
+  Tensor* suite: 998 PASSED; hardening: 89 PASSED
+  ```
+- **Microbench (eager add loop, CUDA, 20k iters, ops/s IR_on → IR_off):**
+
+  | shape | IR on | IR off | Δ |
+  |---|---:|---:|---:|
+  | [1] | 122234 | 145647 | **+19.2%** |
+  | [4096] | 135932 | 321081 | **+136%** |
+
+- **Commit:** `2aeded6f`
+
+## Task 6A.3 — Contiguous same-shape same-dtype binary fast path
+
+- **Branch:** `lfs-elite-tensor`
+- **Change:** In `binary_op_with_promotion`, when operands are same shape, same
+  dtype as the promoted result, contiguous, non-deferred, and dtype is
+  F32/F16/I32/I64/U8: skip `BinaryExpr` + `TensorLeaf` heap cells. Path is
+  `validate → prepare stream → empty → pin → launch_binary → optional IR → return`.
+  Promotion/broadcast/deferred still use the expr path unchanged.
+- **Fail evidence (TDD / microbench BEFORE, fast path gated `false &&`):**
+  ```
+  MICROBENCH 6A.3 shape=[1] add=6700.31 ns/op mul=6697.32 ns/op
+  MICROBENCH 6A.3 shape=[4096] add=3121.35 ns/op mul=3117.15 ns/op
+  # Correctness tests already green on BinaryExpr path (empty, [1], fp16, int32/64)
+  ```
+- **Pass evidence (fast path enabled):**
+  ```
+  [  PASSED  ] TensorDispatch6A.BinaryFastPathFloat32Cpu
+  [  PASSED  ] TensorDispatch6A.BinaryFastPathEmptyAndScalarShapes
+  [  PASSED  ] TensorDispatch6A.BinaryFastPathInt32 / Int64
+  [  PASSED  ] TensorDispatch6A.BinaryFastPathFloat32Cuda / Float16Cuda
+  [  PASSED  ] TensorDispatch6A.BinaryPromotionAndBroadcastStillWork
+  Tensor* suite: 1005 PASSED; tensor_hardening_tests: 89 PASSED
+  MICROBENCH 6A.3 shape=[1] add=6315.52 ns/op mul=6289.56 ns/op
+  MICROBENCH 6A.3 shape=[4096] add=2682.71 ns/op mul=2701.11 ns/op
+  ```
+- **Microbench (CUDA F32 add/mul, 50k iters, ns/op before → after):**
+
+  | shape | add before | add after | Δ | mul before | mul after | Δ |
+  |---|---:|---:|---:|---:|---:|---:|
+  | [1] | 6700 | 6316 | **−5.7%** | 6697 | 6290 | **−6.1%** |
+  | [4096] | 3121 | 2683 | **−14.0%** | 3117 | 2701 | **−13.3%** |
+
+- **Dual gate (exclusive GPU + `flock /tmp/lfs-build.lock`, dirty tree post-6A.3):**
+
+  **Bonsai** (3×2000, images_4, max_cap=500k) vs Wave-1:
+
+  | metric | Wave-1 | after 6A.3 | Δ |
+  |---|---:|---:|---|
+  | wall_s (med) | 8.94 | **8.87** | −0.8% |
+  | steady_ms/iter | 4.085 | **4.068** | −0.4% |
+  | steady_allocs/iter | 0.05 | **0.05** | 0 |
+  | peak VRAM MiB | 1152.6 | **938.3** | −214 (quiet GPU; see ISS-008) |
+  | B/splat | 429.0 | 429.0 | 0 |
+  | last_loss | ~0.03–0.04 | 0.029–0.045 | ok |
+
+  Runs: `perf_campaign/runs/6a3_bonsai/20260806T200024Z_run{1,2,3}/`
+
+  **Bicycle** (3×7000, images_4, max_cap=500k) vs bicycle baseline (3.290 ms, 1038.5 MiB):
+
+  | metric | bicycle baseline | after 6A.3 | Δ |
+  |---|---:|---:|---|
+  | wall_s (med) | — | **30.48** | — |
+  | steady_ms/iter | 3.290 | **3.237** | −1.6% |
+  | steady_allocs/iter | — | **0.04** | ok |
+  | peak VRAM MiB | 1038.5 | **994.3** | −44 |
+  | B/splat | 429.0 | 429.0 | 0 |
+  | last_loss | 0.098–0.121 | 0.096–0.142 | high-variance OK |
+
+  Runs: `perf_campaign/runs/6a3_bicycle/20260806T200053Z_run{1,2,3}/`
+
+  Gate: no regression vs Wave-1 bonsai or bicycle steady_ms; G2 allocs held.
+
+- **Commit:** `786fefb6`
+

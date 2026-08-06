@@ -62,3 +62,27 @@
   the commit under test (own build dir). Worker gates bench only their own checkout and
   never bench while another process builds it. flock still serializes GPU timing.
 - **Status:** policy adopted; bench worktree created.
+||||||| f06a8885
+
+## ISS-008 — Concurrent GPU workers contaminate dual-gate medians
+- **Severity:** medium (measurement validity; can fake regressions)
+- **Symptom:** First 6A.3 bonsai trio (shared `perf_campaign/runs/20260806T195827Z_*`)
+  reported steady_ms ≈ **7.7** and peak VRAM ≈ **1699 MiB** vs Wave-1 4.085 / 1152.
+  Re-run under exclusive GPU + `flock` recovered **4.068 ms / 938 MiB**. Worker D
+  on `lfs-elite` saw the same contaminated pattern (~7.5 ms / 1699 MiB).
+- **Cause:** `perf_bench` peak uses device-wide `cudaMemGetInfo` (total−free), not
+  process-local; concurrent training/builds also double steady_ms.
+- **Action:** Always dual-gate under `flock /tmp/lfs-build.lock` (and ideally
+  `/tmp/lfs-bench.lock`) with no other `LichtFeld-Studio` compute apps. Prefer
+  process-scoped VRAM peak later if multi-worker benches become common.
+- **Status:** open (measurement hygiene); 6A.3 exclusive re-run is authoritative.
+
+## ISS-009 — Worktree `perf_campaign/RULES.md` missing dual-gate / flock build rule
+- **Severity:** low (docs drift vs main studio RULES)
+- **Symptom:** This worktree's RULES still describe only bonsai single-gate and
+  lack "Build discipline: full builds ONLY via `flock /tmp/lfs-build.lock … -j 8`"
+  and the bonsai+bicycle dual gate. Main `LichtFeld-Studio/perf_campaign/RULES.md`
+  already has dual-gate wording.
+- **Action:** Sync RULES from main when merging tensor work; until then follow
+  work-order dual-gate + flock discipline.
+- **Status:** open (docs).
