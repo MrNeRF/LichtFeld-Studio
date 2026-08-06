@@ -3,3 +3,5 @@ PRECONDITION: the previous quantization worker must be finished — verify /home
 MANDATORY reads: perf_campaign/RULES.md (build via ./perf_campaign/build.sh; flock'd benches), perf_campaign/work_orders/FIX-2.2-directive.md (your exact marching orders — a senior analyst already root-caused everything; do NOT re-derive, IMPLEMENT F1->F2->F3 in order with the given measurement protocol, F4 only if ncu says so), BASELINE.md, PROGRESS.md.
 Commit per F-step with before/after kernel timing + the gate table. If after F1-F3 the gate (bonsai steady_ms <= 4.065 at B/splat 409.4) still fails, set the joint codec default OFF, document precisely in ISSUES.md, and leave the infrastructure.
 Also verify whatever state worker G left for task 2.1 (SH quant infra, default OFF): ensure it builds green and its tests pass; do not extend it.
+
+PRECONDITION addition: also acquire flock /home/gauss/lfs-campaign-out/main-checkout.lock for your whole session (one worker in main checkout at a time).
