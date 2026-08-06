@@ -438,6 +438,9 @@ namespace lfs::vis {
         // reached. force=true destroys all of them unconditionally and is only
         // safe after vkDeviceWaitIdle (reset/teardown).
         void drainRetiredScratchBuffers(bool force);
+        // True when the render timeline has passed `value` (0 / no timeline =
+        // trivially retired; a failed query holds the resource for retry).
+        [[nodiscard]] bool renderTimelineValueRetired(std::uint64_t value);
         // Drain/trim the viewport output-image pool. Predicates mirror scratch
         // retirement (producer timeline) plus graphics-frame submit serials.
         // force=true only after device idle; never destroys live acquisitions.

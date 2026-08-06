@@ -3736,20 +3736,24 @@ namespace lfs::vis {
         old = {};
     }
 
+    bool VksplatViewportRenderer::renderTimelineValueRetired(const std::uint64_t value) {
+        if (value == 0 || render_complete_timeline_ == VK_NULL_HANDLE) {
+            return true;
+        }
+        try {
+            return renderer_.timelineValueComplete(render_complete_timeline_, value);
+        } catch (const std::exception&) {
+            return false;
+        }
+    }
+
     void VksplatViewportRenderer::drainRetiredScratchBuffers(bool force) {
         if (context_ == nullptr ||
             (retired_scratch_buffers_.empty() && retired_input_storages_.empty())) {
             return;
         }
         auto retired = [&](std::uint64_t value) {
-            if (force || value == 0 || render_complete_timeline_ == VK_NULL_HANDLE) {
-                return true;
-            }
-            try {
-                return renderer_.timelineValueComplete(render_complete_timeline_, value);
-            } catch (const std::exception&) {
-                return false;
-            }
+            return force || renderTimelineValueRetired(value);
         };
         auto it = retired_scratch_buffers_.begin();
         while (it != retired_scratch_buffers_.end()) {
@@ -3778,14 +3782,7 @@ namespace lfs::vis {
             context_->destroyExternalImage(image);
         };
         auto producer_pred = [this](const std::uint64_t value) {
-            if (value == 0 || render_complete_timeline_ == VK_NULL_HANDLE) {
-                return true;
-            }
-            try {
-                return renderer_.timelineValueComplete(render_complete_timeline_, value);
-            } catch (const std::exception&) {
-                return false;
-            }
+            return renderTimelineValueRetired(value);
         };
         const std::uint64_t retired_serial = context_->retiredFrameSubmitSerial();
         auto consumer_pred = [retired_serial](const std::uint64_t serial) {
@@ -4997,11 +4994,12 @@ namespace lfs::vis {
             .external = true,
         };
 
+        // Optional return: on nullopt the create error is in context.lastError().
         auto acquire_or_create = [&](const OutputImagePool::Key& key,
                                      const std::string_view label)
-            -> std::expected<OutputImagePool::Acquired, std::string> {
+            -> std::optional<OutputImagePool::Acquired> {
             if (auto hit = output_pool_.acquire(key)) {
-                return *hit;
+                return hit;
             }
             VulkanContext::ExternalImage created{};
             if (!context.createExternalImage(extent,
@@ -5009,7 +5007,7 @@ namespace lfs::vis {
                                              created,
                                              "vulkan.vksplat.output_pool",
                                              label)) {
-                return std::unexpected(context.lastError());
+                return std::nullopt;
             }
             return output_pool_.registerCreated(key, std::move(created));
         };
@@ -5018,16 +5016,17 @@ namespace lfs::vis {
             color_key,
             std::format("{}.color.ring{}", outputSlotDiagnosticName(output_slot), ring_slot));
         if (!color) {
-            return std::unexpected(color.error());
+            return std::unexpected(context.lastError());
         }
         auto depth = acquire_or_create(
             depth_key,
             std::format("{}.depth.ring{}", outputSlotDiagnosticName(output_slot), ring_slot));
         if (!depth) {
+            const std::string error = context.lastError();
             // Color is live in the pool; release with trivial predicates so the
             // next drain free-lists it. Do not destroy from the slot.
             output_pool_.release(color->acquisition_serial, /*producer_value=*/0, /*consumer_serial=*/0);
-            return std::unexpected(depth.error());
+            return std::unexpected(error);
         }
 
         slot.image = color->image;
