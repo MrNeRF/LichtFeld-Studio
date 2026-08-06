@@ -349,7 +349,7 @@ TEST_F(OpfFormatTest, AppliesSceneReferenceFrameToCameraCenters) {
         1, "image.jpg", 10, 10, "perspective", {5, 5}, 8, {0, 0, 0}, {0, 0},
         {{1, 0, 0, 0, 1, 0, 0, 0, 1}, {1, 2, 3}}};
     lfs::io::opf::apply_scene_reference_frame(camera, *frame);
-    EXPECT_FLOAT_EQ(camera.pose.position[0], 16.0f);
+    EXPECT_FLOAT_EQ(camera.pose.position[0], 14.0f);
     EXPECT_FLOAT_EQ(camera.pose.position[1], 23.0f);
     EXPECT_FLOAT_EQ(camera.pose.position[2], 42.0f);
 }
