@@ -1113,5 +1113,4 @@ Loader shutdown (bicycle run3): `device=194 entries/564.4 MiB hits=6809 inserts=
 - `tests/test_gt_device_cache.cpp`, `tests/CMakeLists.txt`
 - `perf_campaign/bench.sh`
 
-
-**Commit:** `5d7ea93e`
+**Commit:** `353cdfb0`
