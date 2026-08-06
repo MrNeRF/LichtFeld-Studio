@@ -96,3 +96,41 @@
   Residual ~0.06 allocs/iter are non-sort (densify growth / rare paths).
   Peak VRAM +31 MiB is expected high-water residency of sort buffers.
 
+- **Commit:** `b6c020aa`
+  Runs: `perf_campaign/runs/20260806T173156Z_run{1,2,3}/`
+
+## Task 1.2 — Remove the n_instances hard sync
+
+- **Change:** Async D2H of scan total + `cudaEventSynchronize` only on the D2H
+  event (create launched first so it overlaps). Exact-size CUB sort after the
+  event. Mid-pipeline `cudaStreamSynchronize` only on first step / capacity
+  overflow (fallback counter). Kernels accept capacity clamp + device count.
+- **Fail evidence (TDD):** Pre-change, `forward.cu` always
+  `cudaMemcpyAsync`+`cudaStreamSynchronize` after the scan (host pipeline stall).
+  New APIs (`n_instances_fallback_sync_count`, etc.) did not exist.
+  ```
+  # before: unconditional mid-pipeline sync every step
+  return cudaStreamSynchronize(stream);  // after n_instances D2H
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] FastGSSortBufferTest.AsyncPathMatchesSyncPathPixels
+  [  PASSED  ] FastGSSortBufferTest.CapacityGrowthTakesFallbackSync
+  # steady same-size forward: fallback count unchanged
+  # capacity reset: fallback count increments
+  # pixel-identical sync vs async path
+  ```
+- **Bench (flock, 3 runs, medians vs 1.1 / BASELINE):**
+
+  | metric | baseline | after 1.1 | after 1.2 |
+  |---|---:|---:|---:|
+  | wall_s | 9.00 | 9.02 | **9.03** |
+  | steady_ms/iter | 4.129 | 4.101 | **4.094** |
+  | steady_allocs/iter | 5.05 | 0.06 | **0.05** |
+  | peak VRAM MiB | 1156.3 | 1187.4 | 1176.6 |
+  | last_loss | ~0.039 | ~0.03–0.04 | ~0.03–0.04 |
+
+  G3: zero mid-pipeline StreamSynchronize in steady state (fallback only at
+  warmup/growth). G4: steady_ms improved vs 1.1 and baseline.
+
+

@@ -11,6 +11,7 @@
 #include "rasterization_config.h"
 #include "utils.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
@@ -24,7 +25,8 @@ namespace {
 
     // Grow-only high-water sort scratch (Phase 1.1). Never shrinks; frees only
     // on destruction / explicit reset. Matches spirulae slot-style semantics.
-    constexpr double kSortBufferGrowthFactor = 1.2;
+    // 1.5× headroom absorbs typical densify/view jumps without overflow re-runs.
+    constexpr double kSortBufferGrowthFactor = 1.5;
 
     class StreamOrderedDeviceBuffer {
     public:
@@ -151,7 +153,49 @@ namespace {
         StreamOrderedDeviceBuffer primitive_indices_alternate{"rasterizer.fastgs.sort_indices_alt"};
         StreamOrderedDeviceBuffer cub_workspace{"rasterizer.fastgs.cub_workspace"};
         size_t cub_workspace_query_size = 0; // last successful CUB temp-bytes query
-        int max_n_instances = 0;
+        int capacity_n_instances = 0;        // host-side element capacity of sort buffers
+        int last_n_instances = 0;            // most recent completed D2H count
+        std::uint64_t* h_n_instances_pinned = nullptr;
+        bool h_n_instances_is_pinned = false;
+        bool force_sync_next = false; // testing: force mid-pipeline sync fallback
+        cudaEvent_t n_instances_ready_event = nullptr;
+
+        FastGSSortBufferCache() {
+#if CUDART_VERSION >= 11020
+            // Pinned host slot for async n_instances D2H (Phase 1.2).
+            void* ptr = nullptr;
+            if (cudaMallocHost(&ptr, sizeof(std::uint64_t)) == cudaSuccess) {
+                h_n_instances_pinned = static_cast<std::uint64_t*>(ptr);
+                h_n_instances_is_pinned = true;
+                *h_n_instances_pinned = 0;
+            }
+#endif
+            if (!h_n_instances_pinned) {
+                // Fallback: pageable host memory (async D2H still works, may be slower).
+                h_n_instances_pinned = new std::uint64_t(0);
+                h_n_instances_is_pinned = false;
+            }
+            if (cudaEventCreateWithFlags(&n_instances_ready_event, cudaEventDisableTiming) !=
+                cudaSuccess) {
+                n_instances_ready_event = nullptr;
+            }
+        }
+
+        ~FastGSSortBufferCache() {
+            if (n_instances_ready_event) {
+                (void)cudaEventDestroy(n_instances_ready_event);
+                n_instances_ready_event = nullptr;
+            }
+            if (!h_n_instances_pinned) {
+                return;
+            }
+            if (h_n_instances_is_pinned) {
+                (void)cudaFreeHost(h_n_instances_pinned);
+            } else {
+                delete h_n_instances_pinned;
+            }
+            h_n_instances_pinned = nullptr;
+        }
 
         void bind_stream(cudaStream_t stream) {
             keys_current.set_stream(stream);
@@ -166,12 +210,38 @@ namespace {
                    (ptr == primitive_indices_current.raw() ||
                     ptr == primitive_indices_alternate.raw());
         }
+
+        /// Grow sort buffers to hold at least n_instances elements (×1.2 headroom).
+        void ensure_instance_capacity(int n_instances) {
+            if (n_instances <= 0) {
+                return;
+            }
+            if (n_instances <= capacity_n_instances) {
+                return;
+            }
+            const size_t n = static_cast<size_t>(n_instances);
+            using Key = fast_lfs::rasterization::InstanceKey;
+            keys_current.ensure(n * sizeof(Key));
+            keys_alternate.ensure(n * sizeof(Key));
+            primitive_indices_current.ensure(n * sizeof(uint));
+            primitive_indices_alternate.ensure(n * sizeof(uint));
+            // Capacity in elements is the smallest of the four (they grow together).
+            const size_t cap_keys = keys_current.size() / sizeof(Key);
+            capacity_n_instances = static_cast<int>(cap_keys);
+            if (capacity_n_instances < n_instances) {
+                capacity_n_instances = n_instances;
+            }
+        }
     };
 
     FastGSSortBufferCache& sort_buffer_cache() {
         thread_local FastGSSortBufferCache cache;
         return cache;
     }
+
+    // Phase 1.2: count mid-pipeline n_instances hard-sync fallbacks (warmup/growth only).
+    std::atomic<std::uint64_t> g_n_instances_fallback_syncs{0};
+    std::atomic<bool> g_force_n_instances_sync{false};
 
 } // namespace
 
@@ -183,6 +253,31 @@ void fast_lfs::rasterization::release_sorted_primitive_indices(
     // Stream ordering with subsequent forwards on the same stream keeps the
     // buffer valid through backward without an explicit free.
     (void)ptr;
+}
+
+std::uint64_t fast_lfs::rasterization::n_instances_fallback_sync_count() noexcept {
+    return g_n_instances_fallback_syncs.load(std::memory_order_relaxed);
+}
+
+void fast_lfs::rasterization::reset_n_instances_fallback_sync_count() noexcept {
+    g_n_instances_fallback_syncs.store(0, std::memory_order_relaxed);
+}
+
+void fast_lfs::rasterization::set_force_n_instances_sync_for_testing(bool force) noexcept {
+    g_force_n_instances_sync.store(force, std::memory_order_relaxed);
+}
+
+void fast_lfs::rasterization::reset_sort_capacity_for_testing() noexcept {
+    auto& cache = sort_buffer_cache();
+    cache.keys_current.reset();
+    cache.keys_alternate.reset();
+    cache.primitive_indices_current.reset();
+    cache.primitive_indices_alternate.reset();
+    cache.cub_workspace.reset();
+    cache.cub_workspace_query_size = 0;
+    cache.capacity_n_instances = 0;
+    cache.last_n_instances = 0;
+    cache.force_sync_next = true;
 }
 
 fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
@@ -301,65 +396,56 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         static_cast<uint64_t>(n_primitives),
         n_tiles_u64);
 
-    // Sizing readback: host-blocking by necessity (buffer sizes depend on it),
-    // but scoped to this stream instead of relying on legacy-stream ordering.
-    std::uint64_t n_instances_u64 = 0;
+    // Phase 1.1/1.2: grow-only sort buffers + async n_instances (no mid-pipeline
+    // hard sync in steady state). Device count always at offset[n_primitives-1].
+    auto& sort_cache = sort_buffer_cache();
+    sort_cache.bind_stream(stream);
+    LFS_ASSERT_MSG(sort_cache.h_n_instances_pinned != nullptr,
+                   "FastGS sort cache missing pinned n_instances slot");
+
+    const std::uint64_t* d_n_instances = per_primitive_buffers.offset + n_primitives - 1;
+
+    // Always kick async D2H (consumed after GPU work or on fallback sync).
     check_cuda_with_fastgs_status(
-        [&] {
-            const cudaError_t copy_err = cudaMemcpyAsync(
-                &n_instances_u64, per_primitive_buffers.offset + n_primitives - 1,
-                sizeof(n_instances_u64), cudaMemcpyDeviceToHost, stream);
-            if (copy_err != cudaSuccess) {
-                return copy_err;
-            }
-            return cudaStreamSynchronize(stream);
-        }(),
-        "cudaMemcpy(n_instances)",
+        cudaMemcpyAsync(
+            sort_cache.h_n_instances_pinned, d_n_instances,
+            sizeof(std::uint64_t), cudaMemcpyDeviceToHost, stream),
+        "cudaMemcpyAsync(n_instances)",
         forward_status,
         "primitive offset scan",
         static_cast<uint64_t>(n_primitives),
         n_tiles_u64);
-    LFS_FASTGS_PHASE_CHECK("cudaMemcpy(n_instances)");
-    const int n_instances = checked_fastgs_instance_count(n_instances_u64, static_cast<uint64_t>(n_primitives), n_tiles_u64);
 
-    // Phase 1.1: grow-only thread-local sort buffers (keys×2, indices×2, CUB WS).
-    // Sorted indices stay in-cache through backward; release_sorted is a no-op free.
-    auto& sort_cache = sort_buffer_cache();
-    sort_cache.bind_stream(stream);
+    // Event marks D2H completion only — host can resolve n_instances without
+    // waiting for create/sort/blend (keeps forward return overlapping blend).
+    LFS_ASSERT_MSG(sort_cache.n_instances_ready_event != nullptr,
+                   "FastGS sort cache missing n_instances ready event");
+    check_cuda_with_fastgs_status(
+        cudaEventRecord(sort_cache.n_instances_ready_event, stream),
+        "cudaEventRecord(n_instances_ready)",
+        forward_status,
+        "primitive offset scan",
+        static_cast<uint64_t>(n_primitives),
+        n_tiles_u64);
 
-    cub::DoubleBuffer<InstanceKey> keys;
-    cub::DoubleBuffer<uint> primitive_indices;
-    size_t cub_workspace_size = 0;
-    size_t per_instance_sort_total_size = 0;
-    uint* sorted_primitive_indices = nullptr;
+    const bool force_sync =
+        g_force_n_instances_sync.load(std::memory_order_relaxed) ||
+        sort_cache.force_sync_next ||
+        sort_cache.capacity_n_instances == 0;
 
-    if (n_instances > 0) {
-        const size_t n_instances_size = static_cast<size_t>(n_instances);
-        sort_cache.keys_current.ensure(n_instances_size * sizeof(InstanceKey));
-        sort_cache.keys_alternate.ensure(n_instances_size * sizeof(InstanceKey));
-        sort_cache.primitive_indices_current.ensure(n_instances_size * sizeof(uint));
-        sort_cache.primitive_indices_alternate.ensure(n_instances_size * sizeof(uint));
-        sort_cache.max_n_instances = std::max(sort_cache.max_n_instances, n_instances);
-
-        keys = cub::DoubleBuffer<InstanceKey>(
-            sort_cache.keys_current.as<InstanceKey>(),
-            sort_cache.keys_alternate.as<InstanceKey>());
-        primitive_indices = cub::DoubleBuffer<uint>(
-            sort_cache.primitive_indices_current.as<uint>(),
-            sort_cache.primitive_indices_alternate.as<uint>());
-
-        // Re-query CUB workspace only when the high-water instance count grows
-        // past the size last queried (workspace needs scale with n_items).
-        if (static_cast<size_t>(n_instances) > sort_cache.cub_workspace_query_size ||
+    auto ensure_cub_workspace = [&](int sort_n, cub::DoubleBuffer<InstanceKey>& keys_db,
+                                    cub::DoubleBuffer<uint>& idx_db) -> size_t {
+        size_t cub_workspace_size = 0;
+        if (static_cast<size_t>(sort_n) > sort_cache.cub_workspace_query_size ||
             sort_cache.cub_workspace.size() == 0) {
             size_t query_bytes = 0;
             check_cuda_with_fastgs_status(
                 cub::DeviceRadixSort::SortPairs(
                     nullptr,
                     query_bytes,
-                    keys,
-                    primitive_indices,
-                    n_instances,
+                    keys_db,
+                    idx_db,
+                    sort_n,
                     0,
                     key_end_bit),
                 "cub::DeviceRadixSort::SortPairs workspace query",
@@ -371,20 +457,27 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 query_bytes > 0,
                 "FastGS CUB radix sort returned an empty workspace for nonempty instance input");
             sort_cache.cub_workspace.ensure(query_bytes);
-            sort_cache.cub_workspace_query_size = static_cast<size_t>(n_instances);
+            sort_cache.cub_workspace_query_size = static_cast<size_t>(sort_n);
             cub_workspace_size = query_bytes;
         } else {
             cub_workspace_size = sort_cache.cub_workspace.size();
         }
         LFS_ASSERT_MSG(sort_cache.cub_workspace.as<char>() != nullptr,
                        "FastGS CUB radix sort cannot execute with null workspace");
+        return cub_workspace_size;
+    };
 
-        per_instance_sort_total_size =
-            sort_cache.keys_current.size() +
-            sort_cache.keys_alternate.size() +
-            sort_cache.primitive_indices_current.size() +
-            sort_cache.primitive_indices_alternate.size() +
-            sort_cache.cub_workspace.size();
+    // Run create → sort → extract for a known host sort count (exact or capacity).
+    auto run_sort_path = [&](int sort_n, bool use_device_count_for_extract,
+                             uint max_write_instances) {
+        cub::DoubleBuffer<InstanceKey> keys(
+            sort_cache.keys_current.as<InstanceKey>(),
+            sort_cache.keys_alternate.as<InstanceKey>());
+        cub::DoubleBuffer<uint> primitive_indices(
+            sort_cache.primitive_indices_current.as<uint>(),
+            sort_cache.primitive_indices_alternate.as<uint>());
+
+        size_t cub_workspace_size = ensure_cub_workspace(sort_n, keys, primitive_indices);
 
         kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
             per_primitive_buffers.n_touched_tiles,
@@ -398,7 +491,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             forward_status,
             grid.x,
             depth_bits,
-            n_primitives);
+            static_cast<uint>(n_primitives),
+            max_write_instances);
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");
         check_cuda_with_fastgs_status(cudaGetLastError(), "create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
         sync_fastgs_phase_if_requested("create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
@@ -409,7 +503,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 cub_workspace_size,
                 keys,
                 primitive_indices,
-                n_instances, 0, key_end_bit,
+                sort_n, 0, key_end_bit,
                 stream),
             "cub::DeviceRadixSort::SortPairs (Tile/Depth)",
             forward_status,
@@ -424,28 +518,172 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             static_cast<uint64_t>(n_primitives),
             n_tiles_u64);
 
-        sorted_primitive_indices = primitive_indices.Current();
-        // Pointer must be one of the two persistent index buffers.
-        if (!sort_cache.owns_sorted_indices(sorted_primitive_indices)) {
+        const uint* sorted_idx = primitive_indices.Current();
+        if (!sort_cache.owns_sorted_indices(sorted_idx)) {
             throw std::runtime_error("FastGS radix sort returned an unexpected sorted index buffer");
         }
-    }
 
-    // Extract instance ranges
-    if (n_instances > 0) {
-        kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges, 0, stream>>>(
+        kernels::forward::extract_instance_ranges_cu<<<div_round_up(sort_n, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges, 0, stream>>>(
             keys.Current(),
             per_tile_buffers.instance_ranges,
             forward_status,
             depth_bits,
             n_tiles_u32,
-            n_instances);
+            static_cast<uint>(sort_n),
+            use_device_count_for_extract ? d_n_instances : nullptr);
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.extract_instance_ranges");
         check_cuda_with_fastgs_status(cudaGetLastError(), "extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
         sync_fastgs_phase_if_requested("extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+
+        return const_cast<uint*>(sorted_idx);
+    };
+
+    int n_instances = 0;
+    uint* sorted_primitive_indices = nullptr;
+    size_t per_instance_sort_total_size = 0;
+
+    if (force_sync) {
+        // First step / forced / empty capacity: mid-pipeline sync + exact sizes.
+        g_n_instances_fallback_syncs.fetch_add(1, std::memory_order_relaxed);
+        sort_cache.force_sync_next = false;
+        check_cuda_with_fastgs_status(
+            cudaStreamSynchronize(stream),
+            "cudaStreamSynchronize(n_instances fallback)",
+            forward_status,
+            "primitive offset scan",
+            static_cast<uint64_t>(n_primitives),
+            n_tiles_u64);
+        LFS_FASTGS_PHASE_CHECK("cudaMemcpy(n_instances fallback)");
+        n_instances = checked_fastgs_instance_count(
+            *sort_cache.h_n_instances_pinned,
+            static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        sort_cache.last_n_instances = n_instances;
+        if (n_instances > 0) {
+            sort_cache.ensure_instance_capacity(n_instances);
+            sorted_primitive_indices = run_sort_path(
+                n_instances, /*use_device_count_for_extract=*/false,
+                static_cast<uint>(n_instances));
+        }
+    } else {
+        // Steady state: no mid-pipeline StreamSynchronize.
+        // 1) Proactively grow capacity from last_n headroom (no sync).
+        // 2) Launch create_instances clamped to capacity (overlaps D2H).
+        // 3) Event-wait ONLY for the D2H (not create/sort/blend).
+        // 4) Sort/extract/blend with the exact host count.
+        // Overflow (n > capacity) is the rare growth fallback.
+        if (sort_cache.last_n_instances > 0) {
+            const int predicted = static_cast<int>(
+                static_cast<double>(sort_cache.last_n_instances) * kSortBufferGrowthFactor + 0.5);
+            sort_cache.ensure_instance_capacity(std::max(predicted, sort_cache.last_n_instances));
+        }
+        const int capacity = sort_cache.capacity_n_instances;
+        cub::DoubleBuffer<InstanceKey> keys(
+            sort_cache.keys_current.as<InstanceKey>(),
+            sort_cache.keys_alternate.as<InstanceKey>());
+        cub::DoubleBuffer<uint> primitive_indices(
+            sort_cache.primitive_indices_current.as<uint>(),
+            sort_cache.primitive_indices_alternate.as<uint>());
+
+        // Optimistic create into capacity-sized buffers (no host count yet).
+        kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
+            per_primitive_buffers.n_touched_tiles,
+            per_primitive_buffers.offset,
+            per_primitive_buffers.depth_keys,
+            per_primitive_buffers.screen_bounds,
+            per_primitive_buffers.mean2d,
+            per_primitive_buffers.conic_opacity,
+            keys.Current(),
+            primitive_indices.Current(),
+            forward_status,
+            grid.x,
+            depth_bits,
+            static_cast<uint>(n_primitives),
+            static_cast<uint>(capacity));
+        LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.create_instances");
+        check_cuda_with_fastgs_status(cudaGetLastError(), "create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        sync_fastgs_phase_if_requested("create_instances", forward_status, "create_instances", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+
+        // Resolve n_instances: wait only for D2H event (create still in flight).
+        check_cuda_with_fastgs_status(
+            cudaEventSynchronize(sort_cache.n_instances_ready_event),
+            "cudaEventSynchronize(n_instances)",
+            forward_status,
+            "primitive offset scan",
+            static_cast<uint64_t>(n_primitives),
+            n_tiles_u64);
+        n_instances = checked_fastgs_instance_count(
+            *sort_cache.h_n_instances_pinned,
+            static_cast<uint64_t>(n_primitives), n_tiles_u64);
+
+        if (n_instances > capacity) {
+            // Growth fallback: drain, grow, re-run exact path.
+            g_n_instances_fallback_syncs.fetch_add(1, std::memory_order_relaxed);
+            check_cuda_with_fastgs_status(
+                cudaStreamSynchronize(stream),
+                "cudaStreamSynchronize(overflow re-run)",
+                forward_status,
+                "sort capacity overflow",
+                static_cast<uint64_t>(n_primitives),
+                n_tiles_u64);
+            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, stream),
+                                 "cudaMemsetAsync(tile instance ranges re-run)");
+            LFS_FASTGS_CUDA_CALL(cudaMemsetAsync(forward_status, 0, sizeof(raster::FastGSForwardStatus), stream),
+                                 "cudaMemsetAsync(FastGS forward status re-run)");
+            sort_cache.ensure_instance_capacity(n_instances);
+            sorted_primitive_indices = run_sort_path(
+                n_instances, /*use_device_count_for_extract=*/false,
+                static_cast<uint>(n_instances));
+        } else if (n_instances > 0) {
+            // Exact-size sort/extract — create already wrote [0, n_instances).
+            size_t cub_workspace_size = ensure_cub_workspace(n_instances, keys, primitive_indices);
+            check_cuda_with_fastgs_status(
+                cub::DeviceRadixSort::SortPairs(
+                    sort_cache.cub_workspace.as<char>(),
+                    cub_workspace_size,
+                    keys,
+                    primitive_indices,
+                    n_instances, 0, key_end_bit,
+                    stream),
+                "cub::DeviceRadixSort::SortPairs (Tile/Depth)",
+                forward_status,
+                "radix sort",
+                static_cast<uint64_t>(n_primitives),
+                n_tiles_u64);
+            LFS_FASTGS_PHASE_CHECK("cub::DeviceRadixSort::SortPairs (Tile/Depth)");
+            sync_fastgs_phase_if_requested(
+                "cub::DeviceRadixSort::SortPairs (Tile/Depth)",
+                forward_status,
+                "radix sort",
+                static_cast<uint64_t>(n_primitives),
+                n_tiles_u64);
+
+            sorted_primitive_indices = primitive_indices.Current();
+            if (!sort_cache.owns_sorted_indices(sorted_primitive_indices)) {
+                throw std::runtime_error("FastGS radix sort returned an unexpected sorted index buffer");
+            }
+
+            kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges, 0, stream>>>(
+                keys.Current(),
+                per_tile_buffers.instance_ranges,
+                forward_status,
+                depth_bits,
+                n_tiles_u32,
+                static_cast<uint>(n_instances),
+                /*d_n_instances=*/nullptr);
+            LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.extract_instance_ranges");
+            check_cuda_with_fastgs_status(cudaGetLastError(), "extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+            sync_fastgs_phase_if_requested("extract_instance_ranges", forward_status, "extract_instance_ranges", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        }
+
+        sort_cache.last_n_instances = n_instances;
+        if (n_instances > 0) {
+            sort_cache.ensure_instance_capacity(n_instances);
+        }
+
+        // Fall through to shared blend path below.
     }
 
-    // Perform blending
+    // Fallback path still needs blend.
     auto launch_blend = [&]<bool RENDER_NORMAL>() {
         kernels::forward::blend_cu<RENDER_NORMAL><<<grid, block, 0, stream>>>(
             per_tile_buffers.instance_ranges,
@@ -474,7 +712,12 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     check_cuda_with_fastgs_status(cudaGetLastError(), "blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     sync_fastgs_phase_if_requested("blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);
 
-    // Sorted indices remain owned by the thread-local cache (not released/freed).
+    per_instance_sort_total_size =
+        sort_cache.keys_current.size() +
+        sort_cache.keys_alternate.size() +
+        sort_cache.primitive_indices_current.size() +
+        sort_cache.primitive_indices_alternate.size() +
+        sort_cache.cub_workspace.size();
 
     ForwardResult result;
     result.n_instances = n_instances;

@@ -24,6 +24,8 @@ namespace fast_lfs::rasterization {
         kFastGSForwardStatusInstanceWriteMismatch = 1u << 1,
         kFastGSForwardStatusPrimitiveIndexOutOfRange = 1u << 2,
         kFastGSForwardStatusTileInstanceRangeOutOfRange = 1u << 3,
+        /// Phase 1.2: instance count exceeded sort-buffer capacity (async path).
+        kFastGSForwardStatusSortCapacityOverflow = 1u << 4,
     };
 
     struct FastGSForwardStatus {
@@ -85,6 +87,9 @@ namespace fast_lfs::rasterization {
         }
         if ((flags & kFastGSForwardStatusTileInstanceRangeOutOfRange) != 0) {
             append("tile instance range out of range");
+        }
+        if ((flags & kFastGSForwardStatusSortCapacityOverflow) != 0) {
+            append("sort capacity overflow");
         }
         if (result.empty()) {
             result = "unknown status flag " + std::to_string(flags);

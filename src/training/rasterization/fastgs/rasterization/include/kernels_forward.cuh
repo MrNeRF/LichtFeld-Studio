@@ -279,7 +279,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         FastGSForwardStatus* __restrict__ status,
         const uint grid_width,
         const uint depth_bits,
-        const uint n_primitives) {
+        const uint n_primitives,
+        const uint max_instances) {
         uint idx = cg::this_grid().thread_rank();
 
         bool active = true;
@@ -298,7 +299,21 @@ namespace fast_lfs::rasterization::kernels::forward {
         const ushort4 screen_bounds = active ? primitive_screen_bounds[primitive_idx] : make_ushort4(0, 0, 0, 0);
         const uint4 diagnostic_bounds = make_uint4(screen_bounds.x, screen_bounds.y, screen_bounds.z, screen_bounds.w);
         const uint depth_key = active ? primitive_depth_keys[primitive_idx] : 0;
-        const uint write_offset_end = active ? static_cast<uint>(primitive_offsets[idx]) : 0;
+        const uint write_offset_end_raw = active ? static_cast<uint>(primitive_offsets[idx]) : 0;
+        // Phase 1.2: clamp to sort-buffer capacity; flag overflow for host re-run.
+        if (active && write_offset_end_raw > max_instances) {
+            report_forward_status(
+                status,
+                kFastGSForwardStatusSortCapacityOverflow,
+                primitive_idx,
+                0,
+                write_offset_end_raw,
+                diagnostic_bounds,
+                max_instances,
+                write_offset_end_raw);
+        }
+        const uint write_offset_end =
+            write_offset_end_raw > max_instances ? max_instances : write_offset_end_raw;
 
         const float2 mean2d_shifted = active ? primitive_mean2d[primitive_idx] - 0.5f : make_float2(0.0f, 0.0f);
         const float4 conic_opacity_loaded = active ? primitive_conic_opacity[primitive_idx] : make_float4(0.0f, 0.0f, 0.0f, config::min_alpha_threshold);
@@ -307,6 +322,9 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float radius_sq = 2.0f * power_threshold_precomputed;
 
         uint current_write_offset = idx == 0 ? 0 : static_cast<uint>(primitive_offsets[idx - 1]);
+        if (current_write_offset > max_instances) {
+            current_write_offset = max_instances;
+        }
         if (active) {
             const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
             const uint screen_bounds_height = static_cast<uint>(screen_bounds.w - screen_bounds.z);
@@ -356,14 +374,22 @@ namespace fast_lfs::rasterization::kernels::forward {
         }
     }
 
+    // n_instances_upper sizes the grid; real count is read from d_n_instances
+    // (Phase 1.2 async path — host may only know an upper bound).
     __global__ void extract_instance_ranges_cu(
         const InstanceKey* instance_keys,
         uint2* tile_instance_ranges,
         FastGSForwardStatus* __restrict__ status,
         const uint depth_bits,
         const uint n_tiles,
-        const uint n_instances) {
+        const uint n_instances_upper,
+        const std::uint64_t* __restrict__ d_n_instances) {
         auto instance_idx = cg::this_grid().thread_rank();
+        if (instance_idx >= n_instances_upper)
+            return;
+        const uint n_instances = d_n_instances != nullptr
+                                     ? static_cast<uint>(*d_n_instances)
+                                     : n_instances_upper;
         if (instance_idx >= n_instances)
             return;
         const uint instance_tile_idx = static_cast<uint>(instance_keys[instance_idx] >> depth_bits);

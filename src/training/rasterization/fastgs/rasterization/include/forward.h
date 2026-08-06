@@ -6,6 +6,7 @@
 
 #include "helper_math.h"
 #include <cstddef>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <functional>
 
@@ -21,6 +22,14 @@ namespace fast_lfs::rasterization {
 
     /// Phase 1.1: sorted indices live in grow-only thread-local cache — no free.
     void release_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept;
+
+    /// Phase 1.2: mid-pipeline n_instances hard-sync fallback count (warmup/growth).
+    [[nodiscard]] std::uint64_t n_instances_fallback_sync_count() noexcept;
+    void reset_n_instances_fallback_sync_count() noexcept;
+    /// Testing: force the next forward(s) onto the mid-pipeline sync path.
+    void set_force_n_instances_sync_for_testing(bool force) noexcept;
+    /// Testing: drop high-water capacity so the next forward must grow+sync.
+    void reset_sort_capacity_for_testing() noexcept;
 
     ForwardResult forward(
         std::function<char*(size_t)> per_primitive_buffers_func,

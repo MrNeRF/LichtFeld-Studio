@@ -2,8 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
  * Phase 1.1 — Persistent high-water sort buffers in FastGS forward.
- * Asserts steady-state sort-path driver allocs drop to 0 across two consecutive
- * same-size forwards (alloc_counter::delta on the second must be 0).
+ * Phase 1.2 — Remove n_instances hard sync (async + capacity path).
  */
 
 #include "core/alloc_counter.hpp"
@@ -12,7 +11,9 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
+#include "training/rasterization/fastgs/rasterization/include/forward.h"
 
+#include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <vector>
@@ -124,4 +125,97 @@ TEST_F(FastGSSortBufferTest, SteadyStateSecondForwardHasZeroSortAllocs) {
            "allocs (sort keys×2, indices×2, CUB workspace should be grow-only "
            "persistent). Observed delta="
         << delta2;
+}
+
+// ---------------------------------------------------------------------------
+// Task 1.2 — async n_instances path matches sync path (pixel golden).
+// First forward forces mid-pipeline sync (empty capacity); second uses steady
+// async/capacity path. Images must be bit-identical.
+// ---------------------------------------------------------------------------
+TEST_F(FastGSSortBufferTest, AsyncPathMatchesSyncPathPixels) {
+    using fast_lfs::rasterization::n_instances_fallback_sync_count;
+    using fast_lfs::rasterization::reset_n_instances_fallback_sync_count;
+    using fast_lfs::rasterization::reset_sort_capacity_for_testing;
+    using fast_lfs::rasterization::set_force_n_instances_sync_for_testing;
+
+    reset_sort_capacity_for_testing();
+    reset_n_instances_fallback_sync_count();
+    set_force_n_instances_sync_for_testing(false);
+
+    // Sync-path render (capacity empty → fallback sync).
+    Tensor image_sync;
+    {
+        const auto before = n_instances_fallback_sync_count();
+        auto r = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
+        ASSERT_GT(n_instances_fallback_sync_count(), before)
+            << "first forward after capacity reset must take the sync fallback";
+        image_sync = r->first.image.to(Device::CPU).contiguous();
+        r->second.release_forward_context();
+    }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    // Steady async path (capacity warm).
+    Tensor image_async;
+    {
+        const auto before = n_instances_fallback_sync_count();
+        auto r = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
+        EXPECT_EQ(n_instances_fallback_sync_count(), before)
+            << "steady same-size forward must not mid-pipeline-sync for n_instances";
+        image_async = r->first.image.to(Device::CPU).contiguous();
+        r->second.release_forward_context();
+    }
+
+    ASSERT_EQ(image_sync.numel(), image_async.numel());
+    const float* a = image_sync.ptr<float>();
+    const float* b = image_async.ptr<float>();
+    for (size_t i = 0; i < image_sync.numel(); ++i) {
+        ASSERT_EQ(a[i], b[i]) << "pixel mismatch at i=" << i
+                              << " sync=" << a[i] << " async=" << b[i];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task 1.2 — capacity growth / fallback path fires when high-water is reset.
+// ---------------------------------------------------------------------------
+TEST_F(FastGSSortBufferTest, CapacityGrowthTakesFallbackSync) {
+    using fast_lfs::rasterization::n_instances_fallback_sync_count;
+    using fast_lfs::rasterization::reset_n_instances_fallback_sync_count;
+    using fast_lfs::rasterization::reset_sort_capacity_for_testing;
+    using fast_lfs::rasterization::set_force_n_instances_sync_for_testing;
+
+    set_force_n_instances_sync_for_testing(false);
+    reset_sort_capacity_for_testing();
+    reset_n_instances_fallback_sync_count();
+
+    // Warm capacity with the default 32-gaussian scene.
+    {
+        auto r = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value());
+        r->second.release_forward_context();
+    }
+    const auto after_warm = n_instances_fallback_sync_count();
+    ASSERT_GE(after_warm, 1u);
+
+    // Steady re-render: no additional fallback.
+    {
+        auto r = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value());
+        r->second.release_forward_context();
+    }
+    EXPECT_EQ(n_instances_fallback_sync_count(), after_warm);
+
+    // Force capacity drop → next forward must fall back and grow.
+    reset_sort_capacity_for_testing();
+    {
+        const auto before = n_instances_fallback_sync_count();
+        auto r = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value());
+        EXPECT_GT(n_instances_fallback_sync_count(), before)
+            << "capacity reset must force a mid-pipeline sync fallback to grow";
+        r->second.release_forward_context();
+    }
+
+    set_force_n_instances_sync_for_testing(false);
 }
