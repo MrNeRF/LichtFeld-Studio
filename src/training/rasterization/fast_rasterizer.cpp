@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "training/kernels/grad_alpha.hpp"
+#include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -778,5 +779,9 @@ namespace lfs::training {
                !fast_rasterizer_thread_caches.depth.is_valid() &&
                !fast_rasterizer_thread_caches.normal.is_valid() &&
                !fast_rasterizer_thread_caches.grad_alpha.is_valid();
+    }
+
+    void release_fastgs_sort_workspace_buffers() noexcept {
+        fast_lfs::rasterization::release_sort_workspace_buffers();
     }
 } // namespace lfs::training

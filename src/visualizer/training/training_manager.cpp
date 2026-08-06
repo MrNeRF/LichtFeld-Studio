@@ -56,6 +56,9 @@ namespace lfs::vis {
             (void)lfs::training::release_gsplat_rasterizer_thread_local_caches();
             (void)gsplat_lfs::release_intersect_thread_local_cache();
             (void)lfs::core::tensor_ops::release_nan_check_thread_buffers();
+            // Phase 1.1 sort workspaces — explicit release before thread join so
+            // high-water VRAM is not held until TLS dtor races CUDA teardown.
+            lfs::training::release_fastgs_sort_workspace_buffers();
         }
 
         [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl* viewer) {
@@ -193,69 +196,105 @@ namespace lfs::vis {
         if (!splat_storage_ || !splat_storage_->valid()) {
             return;
         }
-        // Capture raw pointers that outlive densify callbacks for this run.
-        // Grow must run when the GPU is not reading the block (densify is on the
-        // training thread between steps; Vulkan re-import replaces the import so
-        // the next viewer frame binds the new handle — same invariant as shared-
-        // scratch reimport after VMM growth).
+        // Thin trampoline only: rebindSplatData assigns into the live SplatData and
+        // would destroy a capturing std::function mid-call. The real work lives in
+        // growExportableForDensify (member function, immune to that).
         model.set_capacity_ensure([this](std::size_t needed_rows) -> bool {
-            if (!splat_storage_ || !splat_storage_->valid()) {
-                return false;
-            }
-            if (splat_storage_->capacity() >= needed_rows) {
-                return true;
-            }
-            const std::size_t want = lfs::core::SplatExportableStorage::growthCapacity(
-                needed_rows, splat_storage_->reservedCapacity());
-            auto grew = splat_storage_->grow(want);
-            if (!grew) {
-                LOG_ERROR("Exportable splat grow failed (need={}): {}", needed_rows, grew.error());
-                return false;
-            }
-            if (splat_storage_->capacity() < needed_rows) {
-                LOG_ERROR("Exportable splat grow left capacity {} < needed {}",
-                          splat_storage_->capacity(),
-                          needed_rows);
-                return false;
-            }
+            return growExportableForDensify(needed_rows);
+        });
+    }
 
-            auto* model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
-            if (!model_ptr) {
+    bool TrainerManager::growExportableForDensify(std::size_t needed_rows) {
+        if (!splat_storage_ || !splat_storage_->valid()) {
+            return false;
+        }
+        if (splat_storage_->capacity() >= needed_rows) {
+            return true;
+        }
+        const std::size_t want = lfs::core::SplatExportableStorage::growthCapacity(
+            needed_rows, splat_storage_->reservedCapacity());
+
+        auto* model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
+        if (!model_ptr) {
+            return false;
+        }
+
+        // CRITICAL teardown order (NVRM "VM: invalid mmap context"):
+        // growExportableDeviceBlock() unmaps + cuMemRelease + closes the old
+        // export fd. Vulkan's imported VkDeviceMemory must be destroyed BEFORE
+        // that happens. Drop all VulkanExternalTensorStorage owners by rebinding
+        // to CUDA-only views that keep only ExportableBlock. Trainer may also
+        // hold the old interop allocator (shared parent) — clear it too.
+        //
+        // Grow must run when the GPU is not reading the block (densify is on the
+        // training thread between steps; the next viewer frame re-imports).
+        {
+            auto cuda_only = splat_storage_->make_allocator();
+            if (auto ok = splat_storage_->rebindSplatData(*model_ptr, cuda_only); !ok) {
+                LOG_ERROR("Exportable pre-grow rebind (drop Vulkan import) failed: {}",
+                          ok.error());
                 return false;
             }
-
-            lfs::core::SplatTensorAllocator alloc;
-            VulkanContext* vk_ctx = nullptr;
-            if (viewer_ && viewer_->getWindowManager()) {
-                vk_ctx = viewer_->getWindowManager()->getVulkanContext();
-            }
-            if (vk_ctx && vk_ctx->externalMemoryInteropEnabled()) {
-                // Re-import the new export handle into Vulkan (handle changes on grow).
-                auto interop = makeSplatExportableInteropAllocator(*vk_ctx, *splat_storage_);
-                if (!interop) {
-                    LOG_ERROR("Exportable re-import after grow failed: {}", interop.error());
-                    return false;
-                }
-                alloc = std::move(*interop);
-            } else {
-                alloc = splat_storage_->make_allocator();
-            }
-
-            if (auto ok = splat_storage_->rebindSplatData(*model_ptr, alloc); !ok) {
-                LOG_ERROR("Exportable rebind after grow failed: {}", ok.error());
-                return false;
-            }
-            // rebind replaces SplatData; re-install this callback on the new model.
+            // rebind replaces SplatData fields; re-install the trampoline.
             installExportableCapacityEnsure(*model_ptr);
             if (trainer_) {
-                trainer_->setSplatTensorAllocator(alloc);
+                trainer_->setSplatTensorAllocator(cuda_only);
             }
-            LOG_INFO("Exportable splat storage grew for densify: capacity={} block={} MiB gen={}",
-                     splat_storage_->capacity(),
-                     splat_storage_->block->size >> 20,
-                     splat_storage_->generation());
-            return model_ptr->means_raw().capacity() >= needed_rows;
-        });
+            if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                LOG_ERROR("cudaDeviceSynchronize before exportable grow failed: {} ({})",
+                          cudaGetErrorName(err),
+                          cudaGetErrorString(err));
+                return false;
+            }
+        }
+
+        auto grew = splat_storage_->grow(want);
+        if (!grew) {
+            LOG_ERROR("Exportable splat grow failed (need={}): {}", needed_rows, grew.error());
+            return false;
+        }
+        if (splat_storage_->capacity() < needed_rows) {
+            LOG_ERROR("Exportable splat grow left capacity {} < needed {}",
+                      splat_storage_->capacity(),
+                      needed_rows);
+            return false;
+        }
+
+        model_ptr = scene_ ? scene_->getTrainingModel() : nullptr;
+        if (!model_ptr) {
+            return false;
+        }
+
+        lfs::core::SplatTensorAllocator alloc;
+        VulkanContext* vk_ctx = nullptr;
+        if (viewer_ && viewer_->getWindowManager()) {
+            vk_ctx = viewer_->getWindowManager()->getVulkanContext();
+        }
+        if (vk_ctx && vk_ctx->externalMemoryInteropEnabled()) {
+            // Re-import the new export handle into Vulkan (handle changes on grow).
+            auto interop = makeSplatExportableInteropAllocator(*vk_ctx, *splat_storage_);
+            if (!interop) {
+                LOG_ERROR("Exportable re-import after grow failed: {}", interop.error());
+                return false;
+            }
+            alloc = std::move(*interop);
+        } else {
+            alloc = splat_storage_->make_allocator();
+        }
+
+        if (auto ok = splat_storage_->rebindSplatData(*model_ptr, alloc); !ok) {
+            LOG_ERROR("Exportable rebind after grow failed: {}", ok.error());
+            return false;
+        }
+        installExportableCapacityEnsure(*model_ptr);
+        if (trainer_) {
+            trainer_->setSplatTensorAllocator(alloc);
+        }
+        LOG_INFO("Exportable splat storage grew for densify: capacity={} block={} MiB gen={}",
+                 splat_storage_->capacity(),
+                 splat_storage_->block->size >> 20,
+                 splat_storage_->generation());
+        return model_ptr->means_raw().capacity() >= needed_rows;
     }
 
     void TrainerManager::setupStateMachineCallbacks() {

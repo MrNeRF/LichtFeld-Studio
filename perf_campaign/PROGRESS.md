@@ -175,8 +175,6 @@
   Final trio runs: `perf_campaign/runs/20260806T174846Z_run{1,2,3}/`
 
 
-||||||| f570d3b8
-
 ## Task 4.1 — Kill the ~3× compact peak
 
 - **Branch:** `lfs-elite-densify`
@@ -235,9 +233,6 @@
   ```
 - **Bench:** same gate table as 4.1 (measured together after both landed).
 - **Commit:** `a3bebc21`
-||||||| f570d3b8
-- **Commit:** `e5506f39`
-- **Commit:** `013f6e04`
 
 ## Task 5.1 — Grow exportable splat block with live N
 
@@ -652,3 +647,97 @@ Phase 1 series **DONE**.
 
 - **Commit:** `786fefb6`
 
+||||||| 42184eea
+- **Commit:** (this commit)
+- **Commit:** `42184eea`
+
+## Task VRAM-audit (lfs-elite-vramfix) — ISS-007 + NVRM + TLS + RAM guard
+
+- **Branch:** `lfs-elite-vramfix`
+- **Context:** User-visible "memory is full" traced to **system RAM** pressure
+  (systemd-oomd killed gnome-shell at 95.56% user-slice, 2026-08-06 20:48) from
+  parallel unbounded builds — fixed by build-discipline flock rule. Kernel also
+  logged `NVRM: VM: invalid mmap context` while CUDA apps were killed.
+
+### 1) Exportable-storage multi-grow (Phase 5.1 / ISS-007 GPU audit)
+- **Finding:** pure CUDA VMM grow path has **no physical chunk leak**.
+  `cudaMemGetInfo` plateaus after capacity max; 24× create/grow/destroy returns free.
+- **Fail evidence (TDD):** tests did not exist; added first.
+- **Pass evidence:**
+  ```
+  [  PASSED  ] SplatExportableStorageTest.ManyGrowCyclesCudaMemGetInfoPlateaus
+  [  PASSED  ] SplatExportableStorageTest.RepeatedCreateGrowDestroyDoesNotLeakVmm
+  [  PASSED  ] SplatExportableStorageTest.GrowKeepsStableVaWhileImportersHoldBlock
+  # plateau free stable across 12 idempotent grows; 24 cycles free ≥ baseline (−0 MiB)
+  ```
+
+### 2) NVRM invalid mmap — teardown ordering fix
+- **Bug:** densify grow called `grow()` (→ `release_physical`: unmap + cuMemRelease
+  + close fd) **while** Vulkan still held `VkDeviceMemory` imported from the old
+  handle. Re-import happened only after grow.
+- **Fix:** `TrainerManager::growExportableForDensify`:
+  1. rebind CUDA-only (drop all `VulkanExternalTensorStorage` owners)
+  2. clear trainer interop allocator
+  3. `cudaDeviceSynchronize`
+  4. `grow()`
+  5. re-import + rebind interop
+  - Thin `std::function` trampoline → member method (avoids self-destroy on rebind).
+  - Documented on `release_physical` / `growExportableDeviceBlock`.
+- **VulkanExternalTensorStorage dtor** already correct: interop reset →
+  `destroyExternalBuffer` → then `extra_owner_` (ExportableBlock).
+- **Fail evidence:** code-order audit (grow before drop import). Headless cannot
+  fully repro NVRM without GUI Vulkan.
+- **Pass evidence:** ordering inverted in code; unit tests green; ISS-009 filed.
+
+### 3) Thread-local high-water buffers (Phase 1.1 sort + raster outputs)
+- **Change:** `release_sort_workspace_buffers` / `release_fastgs_sort_workspace_buffers`;
+  training-thread shutdown (TrainerManager + MCP) now releases FastGS sort TLS
+  alongside raster/gsplat/intersect caches.
+- **Pass evidence:**
+  ```
+  [  PASSED  ] FastGSThreadLocalCacheTest.SpawnRenderJoinReturnsVram
+  # 4 threads × 3 forwards; free_after ≥ free_before (−0 MiB within 32 MiB slack)
+  [  PASSED  ] FastGSSortBufferTest.* (4 tests, no regression)
+  ```
+
+### 4) RAM-side regression guard
+- **Test:** `VramLeakRegressionTest.FixedSizeCyclesHostRssAndVramStable` —
+  40 fixed-size training-like cycles; assert host RSS and CUDA free ~flat from
+  cycle 10 → 40 (RSS slack 64 MiB, VRAM slack 32 MiB).
+- **Pass evidence:**
+  ```
+  [  PASSED  ] VramLeakRegressionTest.FixedSizeCyclesHostRssAndVramStable (56 ms)
+  [==========] 14 tests (exportable + FastGS + leak)  [  PASSED  ] 14 tests.
+  ```
+
+### Dual-workload gate (flock, 3 runs each)
+
+**Bonsai** (2000 iters) — runs `20260806T195041Z_run{1,2,3}`:
+
+| metric | baseline | after VRAM audit | Δ |
+|---|---:|---:|---|
+| wall_s (med) | 9.00 | **8.94** | −0.7% |
+| steady_ms/iter | 4.129 | **4.063** | −1.6% |
+| steady_allocs/iter | 5.05 | **0.05** | (Wave 1 already) |
+| peak_VRAM_MiB | 1156.3 | **938.3** | −218 |
+| B/splat | 429.0 | 429.0 | 0 |
+| last_loss | ~0.039 | 0.027–0.043 | ok |
+
+**Bicycle canary** (7000 iters) — runs `20260806T195115Z_run{1,2,3}`:
+
+| metric | bicycle baseline | after VRAM audit | Δ |
+|---|---:|---:|---|
+| wall_s (med) | 31.15 | **30.41** | −2.4% |
+| steady_ms/iter | 3.290 | **3.235** | −1.7% |
+| steady_allocs/iter | 0.04 | **0.04** | 0 |
+| peak_VRAM_MiB | 1038.5 | **1026.3** | −12 |
+| last_loss range | 0.098–0.121 | 0.088–0.117 | ok |
+
+No quality or speed regression. Headless path does not exercise Vulkan
+re-import; NVRM fix is densify/grow ordering for GUI.
+
+- **Commits:**
+  - `1e454987` fix(vram): drop Vulkan import before exportable grow (NVRM)
+  - `0a0db4f4` fix(vram): release FastGS sort TLS on training-thread shutdown
+  - `41aec0ae` test(vram): multi-grow plateau, TLS spawn-join, RSS/VRAM cycle guard
+  - (docs commit)

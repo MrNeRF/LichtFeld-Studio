@@ -23,6 +23,12 @@ namespace fast_lfs::rasterization {
     /// Phase 1.1: sorted indices live in grow-only thread-local cache — no free.
     void release_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept;
 
+    /// Release grow-only FastGS sort workspaces on the calling thread (keys×2,
+    /// indices×2, CUB WS, pinned n_instances slot kept). Call from training-
+    /// thread shutdown so VRAM is returned before the worker joins, not only
+    /// when the TLS destructor runs.
+    void release_sort_workspace_buffers() noexcept;
+
     /// Phase 1.2: mid-pipeline n_instances hard-sync fallback count (warmup/growth).
     [[nodiscard]] std::uint64_t n_instances_fallback_sync_count() noexcept;
     void reset_n_instances_fallback_sync_count() noexcept;

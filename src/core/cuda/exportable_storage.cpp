@@ -118,6 +118,13 @@ namespace lfs::core {
 
         // Releases the committed physical memory (unmap + release handle + close
         // exported handle) while keeping the virtual reservation intact.
+        //
+        // IMPORT LIFETIME (NVRM "VM: invalid mmap context"): any Vulkan
+        // VkDeviceMemory imported from a.native MUST be destroyed (vkFreeMemory)
+        // BEFORE this runs. Closing/unmapping while a live import exists is the
+        // primary suspect for driver "invalid mmap context" under CUDA-VMM
+        // export + Vulkan import. TrainerManager::growExportableForDensify drops
+        // interop tensors before grow → release_physical.
         void release_physical(OwnedAllocation& a) {
             close_native(a);
             if (a.mapped) {

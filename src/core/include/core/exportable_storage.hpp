@@ -59,6 +59,11 @@ namespace lfs::core {
     // address. Returns true if the block grew (handle/size changed, callers must
     // re-import into Vulkan), false if it already satisfied new_size. device_ptr
     // is unchanged on success. Must not run while the GPU is using the block.
+    //
+    // Ordering: any Vulkan import of the current export handle must be destroyed
+    // before this call (release_physical unmaps + cuMemRelease + closes the old
+    // fd). Holding a live VkDeviceMemory over that teardown can trigger
+    // "NVRM: VM: invalid mmap context".
     [[nodiscard]] std::expected<bool, std::string>
     growExportableDeviceBlock(const std::shared_ptr<ExportableBlock>& block, std::size_t new_size);
 

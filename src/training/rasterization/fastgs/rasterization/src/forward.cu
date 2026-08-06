@@ -255,6 +255,18 @@ void fast_lfs::rasterization::release_sorted_primitive_indices(
     (void)ptr;
 }
 
+void fast_lfs::rasterization::release_sort_workspace_buffers() noexcept {
+    auto& cache = sort_buffer_cache();
+    cache.keys_current.reset();
+    cache.keys_alternate.reset();
+    cache.primitive_indices_current.reset();
+    cache.primitive_indices_alternate.reset();
+    cache.cub_workspace.reset();
+    cache.cub_workspace_query_size = 0;
+    cache.capacity_n_instances = 0;
+    cache.last_n_instances = 0;
+}
+
 std::uint64_t fast_lfs::rasterization::n_instances_fallback_sync_count() noexcept {
     return g_n_instances_fallback_syncs.load(std::memory_order_relaxed);
 }
@@ -268,15 +280,8 @@ void fast_lfs::rasterization::set_force_n_instances_sync_for_testing(bool force)
 }
 
 void fast_lfs::rasterization::reset_sort_capacity_for_testing() noexcept {
+    release_sort_workspace_buffers();
     auto& cache = sort_buffer_cache();
-    cache.keys_current.reset();
-    cache.keys_alternate.reset();
-    cache.primitive_indices_current.reset();
-    cache.primitive_indices_alternate.reset();
-    cache.cub_workspace.reset();
-    cache.cub_workspace_query_size = 0;
-    cache.capacity_n_instances = 0;
-    cache.last_n_instances = 0;
     cache.force_sync_next = true;
 }
 

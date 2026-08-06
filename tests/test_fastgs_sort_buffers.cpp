@@ -14,9 +14,11 @@
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 
+#include <atomic>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <thread>
 #include <vector>
 
 using namespace lfs::training;
@@ -250,4 +252,93 @@ TEST_F(FastGSSortBufferTest, ReleasePreflightPointerAttrsAreSkipped) {
     EXPECT_GE(calls, static_cast<std::uint64_t>(kFrames) * 8u)
         << "Debug builds should still run pointer attribute preflight";
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// VRAM audit — thread-local sort + raster output buffers release on join.
+// Spawn N worker threads that each run a few FastGS forwards (building
+// high-water sort + image TLS caches), explicitly release, then join.
+// cudaMemGetInfo free must return near the pre-spawn baseline.
+// ---------------------------------------------------------------------------
+TEST(FastGSThreadLocalCacheTest, SpawnRenderJoinReturnsVram) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+
+    // Warm primary thread caches so first-touch noise is outside the measurement.
+    {
+        auto cam = make_camera(64, 64);
+        auto splat = make_splat(64);
+        auto bg = Tensor::zeros({3}, Device::CUDA);
+        auto r = fast_rasterize_forward(cam, *splat, bg, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
+        r->second.release_forward_context();
+        release_fast_rasterizer_thread_local_caches();
+        release_fastgs_sort_workspace_buffers();
+        cleanup_arena();
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    }
+
+    std::size_t free_before = 0, total = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
+
+    constexpr int kThreads = 4;
+    constexpr int kForwardsPerThread = 3;
+    std::atomic<int> failures{0};
+
+    auto worker = [&]() {
+        if (cudaSetDevice(0) != cudaSuccess) {
+            failures.fetch_add(1);
+            return;
+        }
+        try {
+            auto cam = make_camera(96, 96);
+            auto splat = make_splat(128);
+            auto bg = Tensor::zeros({3}, Device::CUDA);
+            for (int i = 0; i < kForwardsPerThread; ++i) {
+                auto r = fast_rasterize_forward(cam, *splat, bg, 0, 0, 0, 0, false);
+                if (!r.has_value()) {
+                    failures.fetch_add(1);
+                    return;
+                }
+                r->second.release_forward_context();
+            }
+            // Explicit TLS release (mirrors training-thread shutdown). Without
+            // this, join relies solely on TLS destructors — which must also free.
+            release_fast_rasterizer_thread_local_caches();
+            release_fastgs_sort_workspace_buffers();
+            if (cudaDeviceSynchronize() != cudaSuccess) {
+                failures.fetch_add(1);
+            }
+        } catch (...) {
+            failures.fetch_add(1);
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back(worker);
+    }
+    for (auto& th : threads) {
+        th.join();
+    }
+    ASSERT_EQ(failures.load(), 0) << "one or more worker threads failed";
+
+    cleanup_arena();
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::size_t free_after = 0;
+    ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+
+    // Each worker builds sort keys/indices (~hundreds of KB–few MB) plus image
+    // TLS. If buffers leak per thread, free drops by multiple MiB * kThreads.
+    constexpr std::size_t kSlack = 32ull << 20; // 32 MiB driver/fragmentation slack
+    EXPECT_GE(free_after + kSlack, free_before)
+        << "thread-local FastGS sort/raster caches leaked across spawn-render-join "
+        << "free_before=" << free_before << " free_after=" << free_after
+        << " delta_MiB="
+        << (static_cast<long long>(free_before) - static_cast<long long>(free_after)) /
+               (1024 * 1024);
 }

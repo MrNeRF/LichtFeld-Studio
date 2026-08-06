@@ -9,6 +9,7 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -270,4 +271,179 @@ TEST(SplatExportableStorageTest, GrowthCapacityHelper) {
     EXPECT_EQ(SplatExportableStorage::growthCapacity(100, 120), 120u);
     EXPECT_EQ(SplatExportableStorage::growthCapacity(100, 50), 50u);
     EXPECT_EQ(SplatExportableStorage::growthCapacity(0, 5'000'000), 1u);
+}
+
+// ---------------------------------------------------------------------------
+// ISS-007 / VRAM audit — multi-grow must plateau (no VMM physical chunk leak)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+    struct CudaMemSnapshot {
+        std::size_t free_bytes = 0;
+        std::size_t total_bytes = 0;
+    };
+
+    CudaMemSnapshot cuda_mem_snapshot() {
+        CudaMemSnapshot s;
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        EXPECT_EQ(cudaMemGetInfo(&s.free_bytes, &s.total_bytes), cudaSuccess);
+        return s;
+    }
+
+    // Allow a small absolute slack for driver fragmentation / other threads.
+    constexpr std::size_t kVramSlackBytes = 16ull << 20; // 16 MiB
+
+} // namespace
+
+TEST(SplatExportableStorageTest, ManyGrowCyclesCudaMemGetInfoPlateaus) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 256;
+    constexpr std::size_t kReserve = 200'000; // enough virtual headroom for steps
+    constexpr int kShDegree = 3;
+    // Capacities that force physical growth at several granularities.
+    const std::vector<std::size_t> steps = {512, 1024, 2048, 4096, 8192, 16384, 32768};
+
+    auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+    ASSERT_TRUE(storage.valid());
+    const void* const stable_ptr = storage.block->device_ptr;
+
+    std::size_t free_at_plateau = 0;
+    std::size_t block_at_plateau = 0;
+    for (std::size_t cap : steps) {
+        auto grew = storage.grow(cap);
+        if (!grew) {
+            FAIL() << grew.error();
+        }
+        EXPECT_EQ(storage.block->device_ptr, stable_ptr);
+        EXPECT_EQ(storage.capacity(), cap);
+        const auto snap = cuda_mem_snapshot();
+        free_at_plateau = snap.free_bytes;
+        block_at_plateau = storage.block->size;
+    }
+
+    // Further grows to the same capacity are no-ops; free VRAM must not keep dropping.
+    for (int i = 0; i < 12; ++i) {
+        auto grew = storage.grow(steps.back());
+        ASSERT_TRUE(grew.has_value()) << grew.error();
+        EXPECT_FALSE(*grew) << "idempotent grow must not re-commit physical";
+        EXPECT_EQ(storage.block->size, block_at_plateau);
+        const auto snap = cuda_mem_snapshot();
+        // free may jitter slightly; it must not systematically fall.
+        EXPECT_GE(snap.free_bytes + kVramSlackBytes, free_at_plateau)
+            << "cudaMemGetInfo free dropped after plateau grow #" << i
+            << " free_plateau=" << free_at_plateau << " free_now=" << snap.free_bytes
+            << " (possible VMM physical chunk leak)";
+        free_at_plateau = std::max(free_at_plateau, snap.free_bytes);
+    }
+
+    // Destroy storage: free VRAM must return near pre-allocation baseline of a probe.
+    // Measure residual after destroy vs a fresh identical allocation's delta.
+    const auto before_destroy = cuda_mem_snapshot();
+    const std::size_t committed = storage.block->size;
+    storage = SplatExportableStorage{}; // dtor teardown
+    const auto after_destroy = cuda_mem_snapshot();
+    EXPECT_GE(after_destroy.free_bytes + kVramSlackBytes, before_destroy.free_bytes + committed)
+        << "destroy did not return committed exportable bytes (before_free="
+        << before_destroy.free_bytes << " after_free=" << after_destroy.free_bytes
+        << " committed=" << committed << ")";
+}
+
+TEST(SplatExportableStorageTest, RepeatedCreateGrowDestroyDoesNotLeakVmm) {
+    require_cuda();
+
+    constexpr std::size_t kInitial = 512;
+    constexpr std::size_t kGrown = 8192;
+    constexpr std::size_t kReserve = 100'000;
+    constexpr int kShDegree = 3;
+    constexpr int kCycles = 24;
+
+    // Warm CUDA allocator / context so first-touch noise is out of the way.
+    {
+        auto warm = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+        ASSERT_TRUE(warm.has_value()) << warm.error();
+        ASSERT_TRUE(warm->grow(kGrown).has_value());
+    }
+    const auto baseline = cuda_mem_snapshot();
+
+    for (int cycle = 0; cycle < kCycles; ++cycle) {
+        auto storage_result = SplatExportableStorage::create(kInitial, kShDegree, 0, kReserve);
+        if (!storage_result) {
+            FAIL() << "cycle " << cycle << ": " << storage_result.error();
+        }
+        auto storage = std::move(*storage_result);
+        for (std::size_t cap : {std::size_t{1024}, std::size_t{2048}, std::size_t{4096}, kGrown}) {
+            auto grew = storage.grow(cap);
+            if (!grew) {
+                FAIL() << "cycle " << cycle << " grow " << cap << ": " << grew.error();
+            }
+        }
+        // Explicit destroy each cycle.
+        storage = SplatExportableStorage{};
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    }
+
+    const auto after = cuda_mem_snapshot();
+    // Across many create/grow/destroy cycles free VRAM must return to baseline.
+    EXPECT_GE(after.free_bytes + kVramSlackBytes, baseline.free_bytes)
+        << "VMM physical leaked across " << kCycles << " create/grow/destroy cycles"
+        << " baseline_free=" << baseline.free_bytes << " after_free=" << after.free_bytes
+        << " delta_MiB="
+        << (static_cast<long long>(baseline.free_bytes) - static_cast<long long>(after.free_bytes)) /
+               (1024 * 1024);
+
+    const auto snap = lfs::diagnostics::VramProfiler::instance().snapshot();
+    EXPECT_EQ(snap.process.exportable_splat_bytes, 0u);
+}
+
+// Simulates the importer-lifetime protocol without a full Vulkan context:
+// an "importer" holds a shared_ptr to the ExportableBlock (like
+// VulkanExternalTensorStorage::extra_owner_). grow() must leave the block
+// object + stable VA intact; consumers that still hold the block after grow
+// see the new size/handle. The real Vulkan fix is to drop VkDeviceMemory
+// BEFORE grow (see TrainerManager::installExportableCapacityEnsure).
+TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
+    require_cuda();
+
+    auto storage_result = SplatExportableStorage::create(256, /*sh=*/0, 0, 4096);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::move(*storage_result);
+
+    // Simulated Vulkan import lifetime anchor (same type as extra_owner_).
+    std::shared_ptr<void> importer_hold = storage.block;
+    const void* const va = storage.block->device_ptr;
+    const auto old_handle = storage.block->handle.native;
+    const std::size_t old_size = storage.block->size;
+
+    auto grew = storage.grow(1024);
+    if (!grew) {
+        FAIL() << grew.error();
+    }
+    ASSERT_TRUE(*grew);
+    EXPECT_EQ(storage.block->device_ptr, va);
+    EXPECT_GE(storage.block->size, old_size);
+    // Export handle is re-exported on physical growth (Vulkan must re-import).
+#ifdef _WIN32
+    EXPECT_NE(storage.block->handle.native, old_handle);
+#else
+    // POSIX fd may be recycled to the same integer after close+export; size
+    // and generation are the reliable signals.
+    EXPECT_GT(storage.generation(), 1u);
+#endif
+    EXPECT_EQ(importer_hold.get(), storage.block.get());
+    EXPECT_EQ(static_cast<ExportableBlock*>(importer_hold.get())->device_ptr, va);
+
+    // Drop importer, then storage — no crash / CUDA death.
+    importer_hold.reset();
+    storage = SplatExportableStorage{};
+    void* probe = nullptr;
+    ASSERT_EQ(cudaMalloc(&probe, 4096), cudaSuccess);
+    ASSERT_EQ(cudaFree(probe), cudaSuccess);
 }
