@@ -45,8 +45,8 @@ This machine has 30 GB RAM and systemd-oomd kills the desktop when the user slic
 50% memory pressure for 20 s. Three parallel -j24 nvcc builds caused exactly that
 (gnome-shell killed at 20:48, repeated session deaths, "memory full" warnings).
 
-Therefore EVERY build command by ANY worker MUST be:
-    flock /tmp/lfs-build.lock cmake --build <dir> -j 8
-- The flock serializes heavy builds machine-wide (one build at a time, like the bench lock).
-- -j 8 caps compile memory (~8 nvcc × ~2-3 GB stays well under budget).
-- Unit-test runs and short compiles of 1-2 TUs may skip the lock; full builds may not.
+Therefore EVERY full build by ANY worker MUST go through the concurrency-aware wrapper:
+    ./perf_campaign/build.sh <build-dir>
+It counts active builders machine-wide and caps parallelism per the maintainer's rule:
+  3+ concurrent builds -> -j4 each; 2 builds -> -j8 each; alone -> -j12.
+Never invoke `cmake --build -j<big>` directly.
