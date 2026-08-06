@@ -32,8 +32,10 @@ namespace lfs::vis {
 
         struct DepthBlitPush {
             float params[4]; // near, far, is_view_depth, flip_y
+            float uv_scale[2];
+            float uv_clamp_max[2];
         };
-        static_assert(sizeof(DepthBlitPush) == 16);
+        static_assert(sizeof(DepthBlitPush) == 32);
 
         [[nodiscard]] const char* waitOutcomeLabel(const lfs::rendering::WaitOutcome outcome) noexcept {
             using lfs::rendering::WaitOutcome;
@@ -988,6 +990,10 @@ namespace lfs::vis {
             push.params[1] = params.far_plane;
             push.params[2] = params.depth_is_ndc ? 0.0f : 1.0f;
             push.params[3] = params.flip_y ? 1.0f : 0.0f;
+            push.uv_scale[0] = params.uv_scale.x;
+            push.uv_scale[1] = params.uv_scale.y;
+            push.uv_clamp_max[0] = params.uv_clamp_max.x;
+            push.uv_clamp_max[1] = params.uv_clamp_max.y;
             vkCmdPushConstants(cb, pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(push), &push);
             vkCmdDraw(cb, 6, 1, 0, 0);

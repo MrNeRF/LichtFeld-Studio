@@ -52,15 +52,20 @@ namespace lfs::vis {
         }
 
         struct SplitPush {
-            float split[4];       // x = position, y = left_flip_y, z = right_flip_y, w = pad
-            float rect[4];        // x, y, w, h
-            float panel_norm[4];  // left_start, left_end, right_start, right_end
-            float panel_flags[4]; // left_normalize, right_normalize, pad, pad
-            float background[4];  // rgb + pad
-            float divider[4];     // bar_half_w, handle_half_w, handle_half_h, corner_radius
-            float grip[4];        // spacing, half_w, half_l, line_count
+            float split[4];               // x = position, y = left_flip_y, z = right_flip_y, w = pad
+            float rect[4];                // x, y, w, h
+            float panel_norm[4];          // left_start, left_end, right_start, right_end
+            float panel_flags[4];         // left_normalize, right_normalize, pad, pad
+            float background[4];          // rgb + pad
+            float divider[4];             // bar_half_w, handle_half_w, handle_half_h, corner_radius
+            float grip[4];                // spacing, half_w, half_l, line_count
+            float left_uv_scale_clamp[4]; // xy scale, zw clamp
+            float right_uv_scale_clamp[4];
         };
-        static_assert(sizeof(SplitPush) == 7 * 16);
+        // 144 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
+        // Acceptable only because CUDA requires NVIDIA hardware (reports 256).
+        static_assert(sizeof(SplitPush) == 9 * 16);
+        static_assert(sizeof(SplitPush) <= 256);
 
         // Convert a CHW float [0,1] tensor (CUDA or CPU) into a tightly packed RGBA8
         // buffer at `dst`. TBB-parallel over rows. Caller owns the destination memory
@@ -1192,6 +1197,15 @@ namespace lfs::vis {
             push.grip[1] = 2.0f;         // grip half-width
             push.grip[2] = 12.0f * 0.5f; // grip half-length
             push.grip[3] = 2.0f;         // line count (kGripLineCount)
+
+            push.left_uv_scale_clamp[0] = params.left.uv_scale.x;
+            push.left_uv_scale_clamp[1] = params.left.uv_scale.y;
+            push.left_uv_scale_clamp[2] = params.left.uv_clamp_max.x;
+            push.left_uv_scale_clamp[3] = params.left.uv_clamp_max.y;
+            push.right_uv_scale_clamp[0] = params.right.uv_scale.x;
+            push.right_uv_scale_clamp[1] = params.right.uv_scale.y;
+            push.right_uv_scale_clamp[2] = params.right.uv_clamp_max.x;
+            push.right_uv_scale_clamp[3] = params.right.uv_clamp_max.y;
 
             vkCmdPushConstants(cb, pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(push), &push);

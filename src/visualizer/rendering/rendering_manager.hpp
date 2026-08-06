@@ -101,7 +101,8 @@ namespace lfs::vis {
             // (e.g. CUDA→Vulkan interop upload) can skip work by generation.
             std::uint64_t image_generation = 0;
             std::uint64_t split_left_image_generation = 0;
-            glm::ivec2 size{0, 0};
+            glm::ivec2 size{0, 0};       // valid/logical viewport extent
+            glm::ivec2 alloc_size{0, 0}; // bucketed image extent (0 = treat as size)
             bool flip_y = false;
 
             // Split-view right panel. The left panel reuses the `image` slot above
@@ -605,7 +606,9 @@ namespace lfs::vis {
         [[nodiscard]] static PreviewImageReadbackConfig previewImageReadbackConfig(
             PreviewImageReadback readback,
             bool has_background_color_override);
-        void clearVulkanViewportImageState(glm::ivec2 size = {0, 0}, bool flip_y = false);
+        void clearVulkanViewportImageState(glm::ivec2 size = {0, 0},
+                                           bool flip_y = false,
+                                           glm::ivec2 alloc_size = {0, 0});
 
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
             SceneManager* scene_manager,
@@ -797,6 +800,7 @@ namespace lfs::vis {
         std::mutex wake_callback_mutex_;
         std::function<void()> wake_callback_;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
+        glm::ivec2 vulkan_viewport_image_alloc_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
         struct GTComparisonImageCacheEntry {

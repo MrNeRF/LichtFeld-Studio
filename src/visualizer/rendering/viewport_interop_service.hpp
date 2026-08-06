@@ -119,7 +119,8 @@ namespace lfs::vis {
                                    bool flip_y,
                                    std::uint64_t generation,
                                    VkSemaphore completion_semaphore = VK_NULL_HANDLE,
-                                   std::uint64_t completion_value = 0);
+                                   std::uint64_t completion_value = 0,
+                                   glm::ivec2 alloc_size = {0, 0});
         void setSplitRightImage(std::shared_ptr<const lfs::core::Tensor> image,
                                 glm::ivec2 size,
                                 bool flip_y,
@@ -187,6 +188,7 @@ namespace lfs::vis {
         VkImageView external_scene_image_view_ = VK_NULL_HANDLE;
         VkImageLayout external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         glm::ivec2 external_scene_image_size_{0, 0};
+        glm::ivec2 external_scene_image_alloc_size_{0, 0};
         bool external_scene_image_flip_y_ = false;
         std::uint64_t external_scene_image_generation_ = 0;
 

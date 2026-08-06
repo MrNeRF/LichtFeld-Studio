@@ -263,6 +263,12 @@ namespace lfs::vis {
         [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
         [[nodiscard]] bool waitForCurrentFrameSlot();
         [[nodiscard]] bool waitForSubmittedFrames();
+        // Serial of the most recent graphics frame submission.
+        [[nodiscard]] std::uint64_t lastFrameSubmitSerial() const;
+        // Highest serial S such that every graphics submit with serial <= S has
+        // retired. Non-blocking (vkGetFenceStatus); serial-0 slots ignored.
+        // device_ null returns frame_submit_serial_ (everything retired).
+        [[nodiscard]] std::uint64_t retiredFrameSubmitSerial() const;
         [[nodiscard]] bool waitForImmediateSubmits();
         [[nodiscard]] bool deviceWaitIdle();
         void addFrameTimelineWait(VkSemaphore semaphore,

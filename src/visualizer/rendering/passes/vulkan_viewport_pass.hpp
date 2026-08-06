@@ -106,6 +106,8 @@ namespace lfs::vis {
 
         std::shared_ptr<const lfs::core::Tensor> scene_image;
         glm::ivec2 scene_image_size{0, 0};
+        // Bucketed VkImage extent for padded output slots (defaults to size).
+        glm::ivec2 scene_image_alloc_size{0, 0};
         bool scene_image_flip_y = false;
         VkImage external_scene_image = VK_NULL_HANDLE;
         VkImageView external_scene_image_view = VK_NULL_HANDLE;

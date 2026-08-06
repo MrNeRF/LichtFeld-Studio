@@ -1770,7 +1770,8 @@ namespace lfs::vis {
                                                   vulkan_frame.flip_y,
                                                   vulkan_frame.external_image_generation,
                                                   vulkan_frame.completion_semaphore,
-                                                  vulkan_frame.completion_value);
+                                                  vulkan_frame.completion_value,
+                                                  vulkan_frame.alloc_size);
                 } else {
                     interop.setSceneImage(
                         vulkan_frame.image,

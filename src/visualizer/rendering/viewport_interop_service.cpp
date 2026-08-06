@@ -167,6 +167,7 @@ namespace lfs::vis {
         external_scene_image_view_ = VK_NULL_HANDLE;
         external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         external_scene_image_size_ = {0, 0};
+        external_scene_image_alloc_size_ = {0, 0};
         frame_completion_semaphore_ = completion_semaphore;
         frame_completion_value_ = completion_value;
         channel.source_image = std::move(image);
@@ -182,7 +183,8 @@ namespace lfs::vis {
                                                        const bool flip_y,
                                                        const std::uint64_t generation,
                                                        const VkSemaphore completion_semaphore,
-                                                       const std::uint64_t completion_value) {
+                                                       const std::uint64_t completion_value,
+                                                       const glm::ivec2 alloc_size) {
         auto& channel = channels_->scene;
         channel.source_image.reset();
         channel.source_size = size;
@@ -191,6 +193,8 @@ namespace lfs::vis {
         external_scene_image_view_ = image_view;
         external_scene_image_layout_ = layout;
         external_scene_image_size_ = size;
+        external_scene_image_alloc_size_ =
+            alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
         external_scene_image_flip_y_ = flip_y;
         external_scene_image_generation_ = generation;
         frame_completion_semaphore_ = completion_semaphore;
@@ -586,11 +590,20 @@ namespace lfs::vis {
             external_scene_image_size_.x > 0 &&
             external_scene_image_size_.y > 0) {
             params.scene_image_size = external_scene_image_size_;
+            params.scene_image_alloc_size =
+                external_scene_image_alloc_size_.x > 0 && external_scene_image_alloc_size_.y > 0
+                    ? external_scene_image_alloc_size_
+                    : external_scene_image_size_;
             params.scene_image_flip_y = external_scene_image_flip_y_;
             params.external_scene_image = external_scene_image_;
             params.external_scene_image_view = external_scene_image_view_;
             params.external_scene_image_layout = external_scene_image_layout_;
             params.external_scene_image_generation = external_scene_image_generation_;
+        } else {
+            params.scene_image_alloc_size =
+                params.scene_image_alloc_size.x > 0 && params.scene_image_alloc_size.y > 0
+                    ? params.scene_image_alloc_size
+                    : params.scene_image_size;
         }
         const auto bind_cached_interop_slot = [&](const std::size_t slot) -> bool {
             if (slot >= scene.targets.size()) {
@@ -677,6 +690,7 @@ namespace lfs::vis {
         external_scene_image_view_ = VK_NULL_HANDLE;
         external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         external_scene_image_size_ = {0, 0};
+        external_scene_image_alloc_size_ = {0, 0};
         frame_completion_semaphore_ = VK_NULL_HANDLE;
         frame_completion_value_ = 0;
         shut_down_ = true;

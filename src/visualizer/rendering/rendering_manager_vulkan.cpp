@@ -1448,17 +1448,20 @@ namespace lfs::vis {
                         .external_image_generation = vulkan_external_viewport_image_generation_,
                         .image_generation = vulkan_viewport_image_generation_,
                         .size = vulkan_viewport_image_size_,
+                        .alloc_size = vulkan_viewport_image_alloc_size_,
                         .flip_y = vulkan_viewport_image_flip_y_};
             }
             if (!vulkan_viewport_image_) {
                 return {.image = {},
                         .image_generation = split_view_image_generation_,
                         .size = vulkan_viewport_image_size_,
+                        .alloc_size = vulkan_viewport_image_alloc_size_,
                         .flip_y = vulkan_viewport_image_flip_y_};
             }
             return {.image = vulkan_viewport_image_,
                     .image_generation = vulkan_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
+                    .alloc_size = vulkan_viewport_image_alloc_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
         };
         const auto update_cached_split_position = [this, &frame_settings](const bool require_position_change) -> bool {
@@ -1899,6 +1902,8 @@ namespace lfs::vis {
             VkImageView external_image_view = VK_NULL_HANDLE;
             std::uint64_t external_image_generation = 0;
             bool flip_y = false;
+            glm::ivec2 size{0, 0};
+            glm::ivec2 alloc_size{0, 0};
         };
 
         const auto ensure_cuda_viewport_image =
@@ -2162,7 +2167,9 @@ namespace lfs::vis {
                                          .metadata = std::move(metadata),
                                          .external_image_view = result->image_view,
                                          .external_image_generation = result->generation,
-                                         .flip_y = result->flip_y};
+                                         .flip_y = result->flip_y,
+                                         .size = result->size,
+                                         .alloc_size = result->alloc_size};
                 }
                 return std::unexpected(result.error());
             }
@@ -2178,6 +2185,9 @@ namespace lfs::vis {
                const float start,
                const float end,
                const bool normalize_x_to_panel) {
+                const glm::ivec2 valid = panel.size;
+                const glm::ivec2 alloc =
+                    panel.alloc_size.x > 0 && panel.alloc_size.y > 0 ? panel.alloc_size : valid;
                 return VulkanSplitViewPanel{
                     .image = panel.image,
                     .start_position = start,
@@ -2186,6 +2196,8 @@ namespace lfs::vis {
                     .flip_y = panel.flip_y,
                     .external_image_view = panel.external_image_view,
                     .external_image_generation = panel.external_image_generation,
+                    .uv_scale = outputUvScale(valid, alloc),
+                    .uv_clamp_max = outputUvClampMax(valid, alloc),
                 };
             };
         const auto make_placeholder_panel =
@@ -3242,6 +3254,14 @@ namespace lfs::vis {
                                     mesh_frame.depth_blit.far_plane = request.frame_view.far_plane > 0.0f
                                                                           ? request.frame_view.far_plane
                                                                           : 1000.0f;
+                                    const glm::ivec2 depth_valid = render_result.size;
+                                    const glm::ivec2 depth_alloc =
+                                        render_result.alloc_size.x > 0 && render_result.alloc_size.y > 0
+                                            ? render_result.alloc_size
+                                            : depth_valid;
+                                    mesh_frame.depth_blit.uv_scale = outputUvScale(depth_valid, depth_alloc);
+                                    mesh_frame.depth_blit.uv_clamp_max =
+                                        outputUvClampMax(depth_valid, depth_alloc);
                                 }
                                 setVulkanMeshFrame(std::move(mesh_frame));
                             } else {
@@ -3301,6 +3321,7 @@ namespace lfs::vis {
                                     vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
                                     vulkan_external_viewport_image_generation_ = 0;
                                     vulkan_viewport_image_size_ = render_result.size;
+                                    vulkan_viewport_image_alloc_size_ = render_result.size;
                                     vulkan_viewport_image_flip_y_ = render_result.flip_y;
                                     vulkan_gt_comparison_content_size_ = {0, 0};
                                     viewport_artifact_service_.updateFromImageOutput(
@@ -3364,7 +3385,9 @@ namespace lfs::vis {
                             }
                         }
 
-                        clearVulkanViewportImageState(render_result.size, render_result.flip_y);
+                        clearVulkanViewportImageState(render_result.size,
+                                                      render_result.flip_y,
+                                                      render_result.alloc_size);
                         vulkan_external_viewport_image_ = render_result.image;
                         vulkan_external_viewport_image_view_ = render_result.image_view;
                         vulkan_external_viewport_image_layout_ = render_result.image_layout;
@@ -3437,6 +3460,7 @@ namespace lfs::vis {
                                 .completion_semaphore = render_result.completion_semaphore,
                                 .completion_value = render_result.completion_value,
                                 .size = vulkan_viewport_image_size_,
+                                .alloc_size = vulkan_viewport_image_alloc_size_,
                                 .flip_y = vulkan_viewport_image_flip_y_};
                     };
 
@@ -3773,6 +3797,7 @@ namespace lfs::vis {
         vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         vulkan_external_viewport_image_generation_ = 0;
         vulkan_viewport_image_size_ = render_size;
+        vulkan_viewport_image_alloc_size_ = render_size;
         vulkan_viewport_image_flip_y_ = !rendered_metadata.flip_y;
         vulkan_gt_comparison_content_size_ =
             rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};

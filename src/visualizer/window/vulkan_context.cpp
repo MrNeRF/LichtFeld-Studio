@@ -1799,6 +1799,34 @@ namespace lfs::vis {
         return waitForFrameFences();
     }
 
+    std::uint64_t VulkanContext::lastFrameSubmitSerial() const {
+        return frame_submit_serial_;
+    }
+
+    std::uint64_t VulkanContext::retiredFrameSubmitSerial() const {
+        if (device_ == VK_NULL_HANDLE) {
+            return frame_submit_serial_;
+        }
+        // Start at last submit: nothing past that serial has been submitted.
+        std::uint64_t retired = frame_submit_serial_;
+        for (std::size_t i = 0; i < kFramesInFlight; ++i) {
+            const std::uint64_t serial = frame_submit_serials_[i];
+            if (serial == 0) {
+                continue; // never submitted
+            }
+            const VkFence fence = in_flight_[i];
+            if (fence == VK_NULL_HANDLE) {
+                continue;
+            }
+            const VkResult status = vkGetFenceStatus(device_, fence);
+            if (status != VK_SUCCESS) {
+                // Unsignaled (or error): still in flight — watermark is serial-1.
+                retired = std::min(retired, serial - 1);
+            }
+        }
+        return retired;
+    }
+
     bool VulkanContext::waitForImmediateSubmits() {
         if (device_ == VK_NULL_HANDLE || pending_immediate_submits_.empty()) {
             return true;

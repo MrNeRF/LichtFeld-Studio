@@ -379,13 +379,15 @@ namespace lfs::vis {
     }
 
     void RenderingManager::clearVulkanViewportImageState(const glm::ivec2 size,
-                                                         const bool flip_y) {
+                                                         const bool flip_y,
+                                                         const glm::ivec2 alloc_size) {
         vulkan_viewport_image_.reset();
         vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         vulkan_external_viewport_image_generation_ = 0;
         vulkan_viewport_image_size_ = size;
+        vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
         vulkan_viewport_image_flip_y_ = flip_y;
         vulkan_gt_comparison_content_size_ = {0, 0};
     }
