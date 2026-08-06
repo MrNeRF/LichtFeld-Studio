@@ -1827,6 +1827,16 @@ namespace lfs::vis {
         return retired;
     }
 
+    bool VulkanContext::getTimelineSemaphoreCounterValue(const VkSemaphore semaphore,
+                                                         std::uint64_t& out_value) const {
+        out_value = 0;
+        if (device_ == VK_NULL_HANDLE || semaphore == VK_NULL_HANDLE) {
+            return false;
+        }
+        const VkResult result = vkGetSemaphoreCounterValue(device_, semaphore, &out_value);
+        return result == VK_SUCCESS;
+    }
+
     bool VulkanContext::waitForRetiredFrameSubmitSerial(const std::uint64_t serial) {
         if (serial == 0 || device_ == VK_NULL_HANDLE) {
             return true;

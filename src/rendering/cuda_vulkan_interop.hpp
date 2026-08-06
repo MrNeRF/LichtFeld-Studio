@@ -33,6 +33,17 @@ namespace lfs::rendering {
         R32Sfloat,
     };
 
+    // GPU-free size check: tensor may be a top-left subrect of a padded import surface.
+    // Returns true when tensor extents are positive and fit within the imported surface.
+    [[nodiscard]] inline bool cudaVulkanTensorFitsImport(
+        const std::uint32_t tensor_width,
+        const std::uint32_t tensor_height,
+        const std::uint32_t import_width,
+        const std::uint32_t import_height) noexcept {
+        return tensor_width > 0 && tensor_height > 0 && tensor_width <= import_width &&
+               tensor_height <= import_height;
+    }
+
     struct CudaVulkanExternalImageImport {
         CudaVulkanExternalHandle memory_handle = kInvalidCudaVulkanExternalHandle;
         std::size_t allocation_size = 0;

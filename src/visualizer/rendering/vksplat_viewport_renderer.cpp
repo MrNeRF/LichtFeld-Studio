@@ -3816,7 +3816,7 @@ namespace lfs::vis {
         const auto destroy_fn = [this](VulkanContext::ExternalImage& image) {
             context_->destroyExternalImage(image);
         };
-        auto producer_pred = [this](const std::uint64_t value) {
+        auto producer_pred = [this](const VulkanContext::ExternalImage&, const std::uint64_t value) {
             return renderTimelineValueRetired(value);
         };
         const std::uint64_t retired_serial = context_->retiredFrameSubmitSerial();

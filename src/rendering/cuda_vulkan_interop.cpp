@@ -318,12 +318,18 @@ namespace lfs::rendering {
             const int width = imageWidth(tensor, layout);
             const int height = imageHeight(tensor, layout);
             const int channels = imageChannels(tensor, layout);
-            if (width != static_cast<int>(extent.width) || height != static_cast<int>(extent.height)) {
-                error = std::format("CUDA/Vulkan image copy size mismatch: tensor {}x{}, target {}x{}",
-                                    width,
-                                    height,
-                                    extent.width,
-                                    extent.height);
+            // Bucketed interop surfaces may be larger than the tensor (top-left valid region).
+            if (width <= 0 || height <= 0 ||
+                !cudaVulkanTensorFitsImport(static_cast<std::uint32_t>(width),
+                                            static_cast<std::uint32_t>(height),
+                                            extent.width,
+                                            extent.height)) {
+                error = std::format(
+                    "CUDA/Vulkan image copy size mismatch: tensor {}x{} must fit in target {}x{}",
+                    width,
+                    height,
+                    extent.width,
+                    extent.height);
                 return false;
             }
             if (channels != 1 && channels != 3 && channels != 4) {
@@ -670,6 +676,10 @@ namespace lfs::rendering {
         }
 
         upload_source_.sync_to_stream(stream);
+        // Kernels iterate the TENSOR extent and write the top-left subrect of the surface.
+        // Padding pixels are never written (display UV clamp excludes them).
+        const std::uint32_t copy_width = static_cast<std::uint32_t>(prepared.width);
+        const std::uint32_t copy_height = static_cast<std::uint32_t>(prepared.height);
         cudaError_t status = cudaSuccess;
         if (format_ == CudaVulkanImageFormat::R32Sfloat) {
             if (prepared.element_type != detail::CudaVulkanTensorElementType::Float32) {
@@ -684,8 +694,8 @@ namespace lfs::rendering {
             status = detail::launchCudaVulkanCopyTensorToSurfaceR32f(
                 surface_,
                 static_cast<const float*>(data),
-                extent_.width,
-                extent_.height,
+                copy_width,
+                copy_height,
                 prepared.channels,
                 prepared.layout,
                 flip_y,
@@ -694,8 +704,8 @@ namespace lfs::rendering {
             status = detail::launchCudaVulkanCopyTensorToSurface(
                 surface_,
                 data,
-                extent_.width,
-                extent_.height,
+                copy_width,
+                copy_height,
                 prepared.channels,
                 prepared.layout,
                 prepared.element_type,
