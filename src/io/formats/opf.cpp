@@ -474,7 +474,7 @@ namespace lfs::io::opf {
     }
 
     Result<PointCloudManifest> read_point_cloud_manifest(const Resource& gltf_resource,
-                                                         const std::filesystem::path& project_root) {
+                                                         const std::filesystem::path& /*project_root*/) {
         if (gltf_resource.format != "model/gltf+json")
             return invalid(gltf_resource.resolved_path, "OPF point cloud requires a glTF JSON resource.");
         std::ifstream input(gltf_resource.resolved_path, std::ios::binary);
@@ -557,7 +557,7 @@ namespace lfs::io::opf {
         colors.read(reinterpret_cast<char*>(rgba.data()), static_cast<std::streamsize>(rgba.size()));
         if (!positions || !colors)
             return make_error(ErrorCode::READ_FAILURE, "OPF sparse point cloud buffers are truncated.", manifest.gltf_path);
-        std::vector<std::uint8_t> rgb(static_cast<size_t>(manifest.point_count) * 3);
+        std::vector<float> rgb(static_cast<size_t>(manifest.point_count) * 3);
         for (size_t i = 0; i < manifest.point_count; ++i) {
             const float x = xyz[i * 3], y = xyz[i * 3 + 1], z = xyz[i * 3 + 2];
             float p[3] = {manifest.node_matrix[0] * x + manifest.node_matrix[4] * y + manifest.node_matrix[8] * z + manifest.node_matrix[12],
@@ -570,11 +570,13 @@ namespace lfs::io::opf {
                     p[axis] = static_cast<float>(p[axis] * frame->scale[axis] + frame->shift[axis]);
             }
             xyz[i * 3] = p[0]; xyz[i * 3 + 1] = p[1]; xyz[i * 3 + 2] = p[2];
-            rgb[i * 3] = rgba[i * 4]; rgb[i * 3 + 1] = rgba[i * 4 + 1]; rgb[i * 3 + 2] = rgba[i * 4 + 2];
+            rgb[i * 3] = static_cast<float>(rgba[i * 4]) / 255.0f;
+            rgb[i * 3 + 1] = static_cast<float>(rgba[i * 4 + 1]) / 255.0f;
+            rgb[i * 3 + 2] = static_cast<float>(rgba[i * 4 + 2]) / 255.0f;
         }
         return lfs::core::PointCloud(
-            lfs::core::Tensor::from_vector(std::move(xyz), {static_cast<int64_t>(manifest.point_count), 3}, lfs::core::Device::CPU),
-            lfs::core::Tensor::from_vector(std::move(rgb), {static_cast<int64_t>(manifest.point_count), 3}, lfs::core::Device::CPU));
+            lfs::core::Tensor::from_vector(std::move(xyz), {static_cast<size_t>(manifest.point_count), size_t{3}}, lfs::core::Device::CPU),
+            lfs::core::Tensor::from_vector(std::move(rgb), {static_cast<size_t>(manifest.point_count), size_t{3}}, lfs::core::Device::CPU));
     }
 
     Result<SceneReferenceFrame> read_scene_reference_frame(const Resource& resource) {
