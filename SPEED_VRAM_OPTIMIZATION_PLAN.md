@@ -269,24 +269,22 @@ Recommended first wave (max win / effort, all quality-neutral): **1.1, 1.2, 1.3,
 
 ---
 
-## Phase 8 — On-disk formats: SPZ v4 + checkpoint container (bonus, 2026-08-06)
+## Phase 8 — SPZ takeaway: per-band SH bit budgets (bonus, 2026-08-06)
 
 Source: `docs/analysis/spirulae-comparison/spz-v4-analysis.md` (deep-dive of
-github.com/nianticlabs/spz, verified against our `src/io/` + vendored `external/spz`).
+github.com/nianticlabs/spz). Decision: SPZ's disk-format ideas (v4 library upgrade,
+checkpoint container, export presets) are explicitly OUT of scope — only the VRAM-relevant
+insight is kept.
 
-Verdict: SPZ's lossy attribute codecs are **viewer/export-safe, training-unsafe** — they do
-NOT replace Phase 2's VRAM quantization (their SH is 4–5 effective bits with error ~0.03–0.07;
-u8 log-scales quantize at 0.0625 log-steps that would staircase Adam updates). What we
-leverage is the **container engineering** and an overdue **library upgrade**:
+**8.1 — Per-band SH bit budgets inside Phase-2 block quantization [vram].**
+SPZ allocates more bits to SH band 1 than bands 2+ (5 vs 4 in their disk codec — matching
+SH energy decay: higher bands carry less energy, so they tolerate fewer bits). Apply the
+*insight*, not their bit depths: after Phase 2.1 lands with uniform 16-bit SH blocks, run a
+gated A/B giving degree-1 coefficients 16 bits and degrees 2+ e.g. 12 bits (packed), saving
+a further ~20 B/splat at SH3 on top of the 90 B quantized budget. Strictly behind gate G6
+(no PSNR/SSIM regression on the eval suite) and gate G4 (decode cost must not slow the
+SH evaluation). Evidence for the band split in SPZ: `spz load-spz.cc:412-417`.
 
-| # | Task | Tag | Evidence | Effort / risk |
-|---|---|---|---|---|
-| 8.1 | **Upgrade vendored `external/spz` v3(gzip) → upstream v4** (NGSP magic, 32-B header + TOC, per-attribute ZSTD-12 streams, `std::async` parallel codec). Today we can't write or fully read modern .spz files; upstream also allows SH degree 4 (we cap at 3) and configurable `sh1Bits`/`shRestBits` (ours are hardcoded 5/4) | [disk] | `external/spz/load-spz.cc:156-157, 374-375` vs `/home/gauss/projects/spz/src/cc/load-spz.h:64-77`; zstd already in vcpkg.json | Low-med / none (train path still decodes to fp32) |
-| 8.2 | **Checkpoint v2 container**: adopt SPZ's *packaging* (plaintext header + TOC + per-tensor independent ZSTD streams, parallel compress, decompress-into-destination) for .lfkp — today checkpoints are raw uncompressed tensor bytes (~416 MB at 1M splats SH3 incl. Adam). Keep payloads lossless (fp32 or Phase-2-native packed) — no SPZ param codecs | [disk] | `checkpoint_format.hpp:16-47`, `tensor_serialization.cpp:50-71` | Med / none (bit-exact payloads) |
-| 8.3 | Export UX: .spz as the share/view format (expose sh1Bits/shRestBits, add an 8/8 high-fidelity preset), .ply stays the lossless interchange; propagate the antialiased header flag when mip-trained | [disk] | `src/io/formats/spz.cpp:230-260` | Low |
-| 8.4 | (Experiment, later) **Per-band SH bit budgets** inside Phase-2 block quant (more bits for degree 1, fewer for 2+ — SPZ's insight, NOT its bit depths, e.g. 16/12 rather than 5/4). Only after Phase 2 lands, behind gate G6 A/B | [vram] | spz `load-spz.cc:412-417` band split | Med / medium |
-| 8.5 | Snapshot preview: optionally write a .spz beside each checkpoint for instant sharing/preview (loss acceptable there) | [disk] | — | Low |
-
-Non-goals: SPZ as checkpoint format (drops Adam state, over-quantizes params); training on
-straight-through 8-bit SPZ params; replacing RAD (our streaming/LOD stack is stronger for
-huge scenes — SPZ is single-cloud interchange).
+Non-goals (explicit): upgrading `external/spz`, SPZ-style checkpoint container, .spz export
+changes, SPZ codecs for any training state (their 4-5-bit SH / u8 log-scales / u8 opacity
+are training-unsafe — see the report's quality-risk table).
