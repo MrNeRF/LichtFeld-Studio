@@ -46,7 +46,7 @@ namespace {
     size_t decoupled_bytes(const DecoupledFusedL1SSIMWorkspace& w) {
         return tensor_bytes(w.ssim_map) + tensor_bytes(w.app_dm_dmu1) + tensor_bytes(w.raw_dm_dmu1) +
                tensor_bytes(w.raw_dm_dsigma1_sq) + tensor_bytes(w.raw_dm_dsigma12) +
-               tensor_bytes(w.zero_terms) + tensor_bytes(w.grad_corrected) + tensor_bytes(w.grad_raw) +
+               tensor_bytes(w.grad_corrected) + tensor_bytes(w.grad_raw) +
                tensor_bytes(w.reduction_temp) + tensor_bytes(w.reduction_result);
     }
 
@@ -59,7 +59,7 @@ namespace {
     size_t masked_decoupled_bytes(const MaskedDecoupledFusedL1SSIMWorkspace& w) {
         return tensor_bytes(w.ssim_map) + tensor_bytes(w.app_dm_dmu1) + tensor_bytes(w.raw_dm_dmu1) +
                tensor_bytes(w.raw_dm_dsigma1_sq) + tensor_bytes(w.raw_dm_dsigma12) +
-               tensor_bytes(w.zero_terms) + tensor_bytes(w.grad_corrected) + tensor_bytes(w.grad_raw) +
+               tensor_bytes(w.grad_corrected) + tensor_bytes(w.grad_raw) +
                tensor_bytes(w.reduction_temp) + tensor_bytes(w.masked_loss) + tensor_bytes(w.mask_sum);
     }
 
@@ -208,4 +208,78 @@ TEST_F(LossWorkspaceUnionTest, PhotometricLossExposesSharedArena) {
         << "arena grew too much after mode switches: fused=" << after_fused
         << " after_many=" << after_many;
     EXPECT_LE(after_many, 16ull * 1024 * 1024);
+}
+
+// Phase 6D.2 — zero_terms deleted; decoupled layout drops one full image buffer,
+// and app-branch grads match the (now removed) zeros-buffer path.
+TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
+    const int N = 1, C = 3, H = 48, W = 48;
+    const std::vector<size_t> shape = {1, 3, 48, 48};
+    const float ssim_weight = 0.2f;
+
+    // Alloc drop: decoupled independent workspace must be smaller than the
+    // pre-6D.2 layout that included a full-image zero_terms buffer.
+    DecoupledFusedL1SSIMWorkspace ws;
+    ws.ensure_size(shape);
+    const size_t live = decoupled_bytes(ws);
+    const size_t image_f32 = static_cast<size_t>(N * C * H * W) * sizeof(float);
+    // Pre-6D.2 fields: ssim_map(C1) + 4 dm + zero_terms + 2 grad + reduce
+    // ≈ map + 7*image + reduce. Post: map + 6*image + reduce.
+    const size_t map_bytes = static_cast<size_t>(N * 1 * H * W) * sizeof(float);
+    const size_t reduce = 1024 * sizeof(float) + sizeof(float);
+    const size_t pre_6d2 = map_bytes + 7 * image_f32 + reduce;
+    const size_t post_6d2 = map_bytes + 6 * image_f32 + reduce;
+    EXPECT_LE(live, post_6d2 + 4096);
+    EXPECT_LT(live, pre_6d2);
+    EXPECT_GE(pre_6d2 - live, image_f32 - 4096)
+        << "expected ~1 full image (~" << image_f32 << " B) drop from zero_terms";
+
+    // Grad equivalence: two independent runs with different workspaces must match
+    // (HasSigmaPartials=false is deterministic and replaces zeros).
+    auto corrected = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto raw = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto gt = Tensor::randn({N, C, H, W}, Device::CUDA);
+
+    DecoupledFusedL1SSIMWorkspace a, b;
+    auto [loss_a, ctx_a] = decoupled_fused_l1_ssim_forward(corrected, raw, gt, ssim_weight, a, true);
+    auto grads_a = decoupled_fused_l1_ssim_backward(ctx_a, a);
+    const float la = loss_a.item<float>();
+
+    auto [loss_b, ctx_b] = decoupled_fused_l1_ssim_forward(corrected, raw, gt, ssim_weight, b, true);
+    auto grads_b = decoupled_fused_l1_ssim_backward(ctx_b, b);
+    const float lb = loss_b.item<float>();
+
+    EXPECT_NEAR(la, lb, 1e-6f);
+
+    auto ga = grads_a.grad_corrected.cpu().contiguous();
+    auto gb = grads_b.grad_corrected.cpu().contiguous();
+    auto ra = grads_a.grad_raw.cpu().contiguous();
+    auto rb = grads_b.grad_raw.cpu().contiguous();
+    double max_c = 0, max_r = 0;
+    for (size_t i = 0; i < ga.numel(); ++i) {
+        max_c = std::max(max_c, static_cast<double>(std::abs(ga.ptr<float>()[i] - gb.ptr<float>()[i])));
+        max_r = std::max(max_r, static_cast<double>(std::abs(ra.ptr<float>()[i] - rb.ptr<float>()[i])));
+    }
+    EXPECT_LT(max_c, 1e-6);
+    EXPECT_LT(max_r, 1e-6);
+
+    // When corrected == raw, decoupled corrected+raw grads should match standard fused.
+    FusedL1SSIMWorkspace fused;
+    auto [floss, fctx] = fused_l1_ssim_forward(corrected, gt, ssim_weight, fused, true);
+    auto fgrad = fused_l1_ssim_backward(fctx, fused);
+
+    DecoupledFusedL1SSIMWorkspace dec;
+    auto [dloss, dctx] = decoupled_fused_l1_ssim_forward(corrected, corrected, gt, ssim_weight, dec, true);
+    auto dgrads = decoupled_fused_l1_ssim_backward(dctx, dec);
+
+    EXPECT_NEAR(floss.item<float>(), dloss.item<float>(), 1e-4f);
+    // Combined appearance path: grad_corrected + grad_raw ≈ fused grad when raw==corrected.
+    auto combined = (dgrads.grad_corrected + dgrads.grad_raw).cpu().contiguous();
+    auto fcpu = fgrad.cpu().contiguous();
+    double max_combo = 0;
+    for (size_t i = 0; i < fcpu.numel(); ++i) {
+        max_combo = std::max(max_combo,
+                             static_cast<double>(std::abs(combined.ptr<float>()[i] - fcpu.ptr<float>()[i])));
+    }
+    EXPECT_LT(max_combo, 5e-4) << "decoupled(corrected==raw) vs fused max abs " << max_combo;
 }

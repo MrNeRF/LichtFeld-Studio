@@ -784,5 +784,28 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 - **Numbers (unit, 64×96):** arena capacity ≤ max(variant)+256KiB slack after touching
   all 5 modes; independent path retains sum (documents pre-6D.1 peak risk up to ~650 MiB
   @1080p).
+- **Commit:** `9fc40b0b`
+
+## Task 6D.2 — Delete zero_terms (HasSigmaPartials flag)
+
+- **Branch:** `lfs-elite-mem`
+- **Change:** Decoupled / masked-decoupled app-branch backward no longer allocates or
+  reads a full-image `zero_terms` buffer. `fusedL1SSIMBackwardCUDA` and
+  `maskedFusedL1SSIMBackwardCUDA` gain `HasSigmaPartials` template flag; app path
+  instantiates `false` and passes null sigma partials (compile-time zeros). Arena
+  layout and independent `ensure_size` drop one image-sized f32 buffer each.
+- **Fail evidence (TDD):** Pre-6D.2 layout retained `zero_terms` (full image f32). Unit
+  oracle: live decoupled bytes would be `map + 7*image + reduce` and fail
+  `EXPECT_LT(live, pre_6d2)` / `EXPECT_GE(pre_6d2 - live, image_f32 - 4096)` once
+  the field is gone. Kernel previously passed `workspace.zero_terms.ptr<float>()`
+  twice into app backward (`ssim.cu` decoupled + masked-decoupled).
+- **Pass evidence:**
+  ```
+  [  PASSED  ] LossWorkspaceUnionTest.ZeroTermsDeletedAndDecoupledGradsStable
+  [  PASSED  ] FusedL1SSIMTest.* (15) + MaskedFusedL1SSIMTest.* (13)
+               + LossWorkspaceUnionTest.* (5) = 33/33
+  ```
+  Alloc drop @48×48 NCHW: ≥1 full image (~27.6 KiB) vs pre-6D.2. Decoupled
+  corrected==raw combined grads match fused within 5e-4 abs.
 - **Commit:** (recorded after commit)
 

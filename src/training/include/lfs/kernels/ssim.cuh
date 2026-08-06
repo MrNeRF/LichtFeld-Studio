@@ -189,11 +189,11 @@ namespace lfs::training::kernels {
         lfs::core::Tensor raw_dm_dmu1;       // [N, C, H, W] indirect mu(raw) contribution via sigma terms
         lfs::core::Tensor raw_dm_dsigma1_sq; // [N, C, H, W] lambda-scaled d(ssim_map)/d sigma^2(raw)
         lfs::core::Tensor raw_dm_dsigma12;   // [N, C, H, W] lambda-scaled d(ssim_map)/d sigma12(raw)
-        lfs::core::Tensor zero_terms;        // [N, C, H, W] reusable zeros for unused backward terms
-        lfs::core::Tensor grad_corrected;    // [N, C, H, W]
-        lfs::core::Tensor grad_raw;          // [N, C, H, W]
-        lfs::core::Tensor reduction_temp;    // [<=1024]
-        lfs::core::Tensor reduction_result;  // [1]
+        // Phase 6D.2: zero_terms removed — app backward uses HasSigmaPartials=false.
+        lfs::core::Tensor grad_corrected;   // [N, C, H, W]
+        lfs::core::Tensor grad_raw;         // [N, C, H, W]
+        lfs::core::Tensor reduction_temp;   // [<=1024]
+        lfs::core::Tensor reduction_result; // [1]
 
         std::vector<size_t> allocated_shape;
         LossWorkspaceArena* arena = nullptr;
@@ -277,7 +277,7 @@ namespace lfs::training::kernels {
         lfs::core::Tensor raw_dm_dmu1;
         lfs::core::Tensor raw_dm_dsigma1_sq;
         lfs::core::Tensor raw_dm_dsigma12;
-        lfs::core::Tensor zero_terms;
+        // Phase 6D.2: zero_terms removed — app backward uses HasSigmaPartials=false.
         lfs::core::Tensor grad_corrected; // [N, C, H, W]
         lfs::core::Tensor grad_raw;       // [N, C, H, W]
         lfs::core::Tensor reduction_temp; // [<=2048]
