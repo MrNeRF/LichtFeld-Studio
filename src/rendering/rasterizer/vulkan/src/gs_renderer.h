@@ -336,7 +336,6 @@ protected:
         VulkanGSPipelineBuffers& buffers,
         Buffer<int32_t>& input_buffer,
         Buffer<int32_t>& output_buffer,
-        const std::vector<BufferBarrier>& additional_begin_barriers = {},
         bool record_timestamps = true);
 
     void executeSortIndirectCount(const VulkanGSRendererUniforms& uniforms,
