@@ -634,4 +634,42 @@ namespace lfs::io::opf {
                                      transpose[7] * pose.position[1] +
                                      transpose[8] * pose.position[2])}};
     }
+
+    Result<lfs::io::CameraData> to_camera_data(const ImportedCamera& camera) {
+        if (camera.model != "perspective")
+            return make_error(ErrorCode::UNSUPPORTED_FORMAT,
+                              std::format("OPF camera model '{}' has no safe LichtFeld mapping yet.", camera.model));
+        if (camera.principal_point.size() != 2 || camera.radial_distortion.size() != 3 ||
+            camera.tangential_distortion.size() != 2 || camera.focal_length <= 0.0)
+            return make_error(ErrorCode::INVALID_DATASET,
+                              "OPF perspective camera has incomplete calibrated intrinsics.");
+
+        const auto transform = to_camera_transform(camera.pose);
+        lfs::io::CameraData data;
+        data._camera_ID = static_cast<std::uint32_t>(camera.id);
+        data._R = lfs::core::Tensor::from_vector(
+            std::vector<float>(transform.rotation_world_to_camera.begin(),
+                               transform.rotation_world_to_camera.end()),
+            {3, 3}, lfs::core::Device::CPU);
+        data._T = lfs::core::Tensor::from_vector(
+            std::vector<float>(transform.translation_world_to_camera.begin(),
+                               transform.translation_world_to_camera.end()),
+            {3}, lfs::core::Device::CPU);
+        data._focal_x = static_cast<float>(camera.focal_length);
+        data._focal_y = static_cast<float>(camera.focal_length);
+        data._center_x = static_cast<float>(camera.principal_point[0]);
+        data._center_y = static_cast<float>(camera.principal_point[1]);
+        data._image_name = camera.uri;
+        data._image_path = camera.uri;
+        data._camera_model_type = lfs::core::CameraModelType::PINHOLE;
+        data._width = static_cast<int>(camera.width);
+        data._height = static_cast<int>(camera.height);
+        data._radial_distortion = lfs::core::Tensor::from_vector(
+            std::vector<float>(camera.radial_distortion.begin(), camera.radial_distortion.end()),
+            {3}, lfs::core::Device::CPU);
+        data._tangential_distortion = lfs::core::Tensor::from_vector(
+            std::vector<float>(camera.tangential_distortion.begin(), camera.tangential_distortion.end()),
+            {2}, lfs::core::Device::CPU);
+        return data;
+    }
 } // namespace lfs::io::opf

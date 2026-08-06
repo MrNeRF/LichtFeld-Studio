@@ -5,6 +5,7 @@
 
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/formats/colmap.hpp"
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -123,5 +124,6 @@ namespace lfs::io::opf {
         const std::vector<InputSensor>& sensors,
         const std::vector<CalibratedCamera>& calibrated_cameras);
     [[nodiscard]] CameraTransform to_camera_transform(const CalibratedPose& pose);
+    [[nodiscard]] Result<lfs::io::CameraData> to_camera_data(const ImportedCamera& camera);
 
 } // namespace lfs::io::opf

@@ -278,3 +278,22 @@ TEST_F(OpfFormatTest, ConvertsCameraCenterToWorldToCameraTransform) {
     EXPECT_EQ(transform.translation_world_to_camera,
               (std::array<float, 3>{-1, -2, -3}));
 }
+
+TEST_F(OpfFormatTest, ConvertsPerspectiveCameraToInternalCameraData) {
+    const lfs::io::opf::ImportedCamera camera{
+        42,
+        "image.jpg",
+        1920,
+        1080,
+        "perspective",
+        {960.0, 540.0},
+        1200.0,
+        {0, 0, 0},
+        {0, 0},
+        {{1, 0, 0, 0, 1, 0, 0, 0, 1}, {1, 2, 3}}};
+    auto result = lfs::io::opf::to_camera_data(camera);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    EXPECT_EQ(result->_width, 1920);
+    EXPECT_FLOAT_EQ(result->_focal_x, 1200.0f);
+    EXPECT_EQ(result->_image_name, "image.jpg");
+}
