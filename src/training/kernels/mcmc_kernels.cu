@@ -1227,4 +1227,38 @@ namespace lfs::training::mcmc {
         LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.elementwise_max");
     }
 
+    // Phase 1.9: fold densification_info[1,:] into error_max and zero both rows.
+    __global__ void max_error_and_zero_densification_kernel(
+        float* __restrict__ error_max,
+        float* __restrict__ densification_info,
+        size_t N) {
+
+        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx >= N)
+            return;
+
+        const float err = densification_info[N + idx];
+        error_max[idx] = fmaxf(error_max[idx], err);
+        densification_info[idx] = 0.f;
+        densification_info[N + idx] = 0.f;
+    }
+
+    void launch_max_error_and_zero_densification(
+        float* error_max,
+        float* densification_info,
+        size_t N,
+        void* stream) {
+
+        if (N == 0)
+            return;
+
+        dim3 threads(256);
+        dim3 grid((N + threads.x - 1) / threads.x);
+        cudaStream_t cuda_stream = resolve_stream(stream);
+
+        max_error_and_zero_densification_kernel<<<grid, threads, 0, cuda_stream>>>(
+            error_max, densification_info, N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.max_error_and_zero_densif");
+    }
+
 } // namespace lfs::training::mcmc

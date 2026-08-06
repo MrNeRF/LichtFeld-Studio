@@ -647,20 +647,20 @@ namespace lfs::training {
             }
             ensure_error_score_shape();
 
+            // Phase 1.9: fold error row into max and zero densification_info in one kernel.
             const auto& accum = _splat_data->_densification_info;
             if (accum.is_valid() &&
                 accum.ndim() == 2 &&
                 accum.shape()[0] >= 2 &&
                 accum.shape()[1] == _error_score_max.numel()) {
-                const float* error_row = accum.ptr<float>() + accum.shape()[1];
-                lfs::training::mcmc::launch_elementwise_max_inplace(
+                lfs::training::mcmc::launch_max_error_and_zero_densification(
                     _error_score_max.ptr<float>(),
-                    error_row,
+                    _splat_data->_densification_info.ptr<float>(),
                     _error_score_max.numel());
                 zero_frozen_scores_inplace(*_splat_data, _error_score_max);
+            } else if (accum.is_valid() && accum.numel() > 0) {
+                _splat_data->_densification_info.zero_();
             }
-
-            _splat_data->_densification_info.zero_();
         }
 
         if (is_refining(iter)) {

@@ -615,22 +615,17 @@ namespace lfs::training {
         assert(info.shape()[1] == n);
 
         if (_refine_weight_max.numel() == n) {
-            const float* refine_row = info.ptr<float>() + n;
-            mcmc::launch_elementwise_max_inplace(
-                _refine_weight_max.ptr<float>(),
-                refine_row,
-                n);
-
-            const float* vis_row = info.ptr<float>();
-            mrnf_strategy::launch_elementwise_add_inplace(
+            // Phase 1.9: fold densification into vis/refine and zero [2,N] in one kernel.
+            mrnf_strategy::launch_fold_densification_and_zero(
                 _vis_count.ptr<float>(),
-                vis_row,
+                _refine_weight_max.ptr<float>(),
+                _splat_data->_densification_info.ptr<float>(),
                 n);
             zero_frozen_scores_inplace(*_splat_data, _refine_weight_max);
             zero_frozen_scores_inplace(*_splat_data, _vis_count);
+        } else if (info.is_valid() && info.numel() > 0) {
+            _splat_data->_densification_info.zero_();
         }
-
-        _splat_data->_densification_info.zero_();
 
         if (_bounds_valid) {
             inject_noise(iter);

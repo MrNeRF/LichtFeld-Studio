@@ -395,4 +395,16 @@ namespace lfs::training::mcmc {
         size_t N,
         void* stream = nullptr);
 
+    /**
+     * Phase 1.9: fold densification error row into running max and zero the
+     * full [2,N] densification buffer in one pass (replaces max + zero_).
+     *
+     * densification_info layout: row0 [0..N), row1 [N..2N) — only row1 is maxed.
+     */
+    void launch_max_error_and_zero_densification(
+        float* error_max,
+        float* densification_info,
+        size_t N,
+        void* stream = nullptr);
+
 } // namespace lfs::training::mcmc

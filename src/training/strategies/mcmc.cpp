@@ -685,20 +685,19 @@ namespace lfs::training {
 
             // One training iteration corresponds to one camera view, so info[1] is E_k^pi.
             // Keep the max over views as the densification priority.
+            // Phase 1.9: fold + zero densification_info in one kernel (no separate [2,N] memset).
             const auto& info = _splat_data->_densification_info;
             if (info.is_valid() &&
                 info.ndim() == 2 &&
                 info.shape()[0] >= 2 &&
                 info.shape()[1] == _error_score_max.numel()) {
-                const float* error_row = info.ptr<float>() + info.shape()[1];
-                lfs::training::mcmc::launch_elementwise_max_inplace(
+                lfs::training::mcmc::launch_max_error_and_zero_densification(
                     _error_score_max.ptr<float>(),
-                    error_row,
+                    _splat_data->_densification_info.ptr<float>(),
                     _error_score_max.numel());
+            } else if (info.is_valid() && info.numel() > 0) {
+                _splat_data->_densification_info.zero_();
             }
-
-            // Clear per-view accumulators; they are rebuilt by the next backward pass.
-            _splat_data->_densification_info.zero_();
         }
 
         // Refine Gaussians
