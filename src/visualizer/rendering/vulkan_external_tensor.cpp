@@ -336,7 +336,17 @@ namespace lfs::vis {
 
         // Capture sub_views + offsets by value. cuda_base + region_offsets[r] gives the
         // CUDA write pointer; the sub-view at index r becomes the tensor's owner.
-        return [sub_views, region_offsets = storage.region_offsets, cuda_base, region_from_name](
+        // Phase 5.1: clamp requested capacity to the committed exportable layout so
+        // callers that still pass max_cap cannot claim more rows than the block holds.
+        const std::size_t committed_capacity = storage.capacity();
+        const std::size_t shN_float_capacity =
+            storage.region_bytes[lfs::core::SplatExportableStorage::ShN] / sizeof(float);
+        return [sub_views,
+                region_offsets = storage.region_offsets,
+                cuda_base,
+                region_from_name,
+                committed_capacity,
+                shN_float_capacity](
                    lfs::core::TensorShape shape,
                    std::size_t capacity,
                    lfs::core::DataType dtype,
@@ -345,13 +355,21 @@ namespace lfs::vis {
             void* const data =
                 static_cast<char*>(cuda_base) + region_offsets[region];
             std::shared_ptr<void> owner = sub_views[region];
+            std::size_t clamped = capacity;
+            if (region == lfs::core::SplatExportableStorage::ShN) {
+                if (shN_float_capacity > 0) {
+                    clamped = std::min(capacity, shN_float_capacity);
+                }
+            } else if (committed_capacity > 0) {
+                clamped = std::min(capacity, committed_capacity);
+            }
             return lfs::core::Tensor::from_external_owner(
                 data,
                 std::move(shape),
                 lfs::core::Device::CUDA,
                 dtype,
                 std::move(owner),
-                capacity,
+                clamped,
                 /*stream=*/nullptr,
                 "vulkan_external_buffer");
         };

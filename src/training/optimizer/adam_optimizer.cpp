@@ -1054,12 +1054,25 @@ namespace lfs::training {
 
         const size_t old_size = param.shape()[0];
         const size_t new_size = old_size + n_new;
-        if (param.capacity() >= new_size) {
-            param.append_zeros(n_new);
-            auto appended = param.slice(0, old_size, new_size);
+        if (param.capacity() < new_size && param.is_external_storage()) {
+            // Phase 5.1: grow exportable block (and rebind) instead of cat, which
+            // would orphan the Vulkan zero-copy mapping.
+            if (!splat_data_.ensure_param_capacity(new_size)) {
+                throw std::runtime_error(std::format(
+                    "add_new_params: external storage capacity {} < needed {} and "
+                    "capacity-ensure failed (exportable grow/rebind)",
+                    param.capacity(),
+                    new_size));
+            }
+        }
+        // Re-fetch after possible rebind.
+        auto& param_ref = get_param(type);
+        if (param_ref.capacity() >= new_size) {
+            param_ref.append_zeros(n_new);
+            auto appended = param_ref.slice(0, old_size, new_size);
             appended.copy_from(new_values);
         } else {
-            param = lfs::core::Tensor::cat({param, new_values}, 0);
+            param_ref = lfs::core::Tensor::cat({param_ref, new_values}, 0);
         }
         extend_state_for_new_params(type, n_new);
     }

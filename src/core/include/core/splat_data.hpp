@@ -345,6 +345,24 @@ namespace lfs::core {
             _tensor_allocator = std::move(allocator);
         }
 
+        // Optional hook for exportable / external storage growth (Phase 5.1).
+        // When densification needs more rows than the committed exportable block,
+        // AdamOptimizer calls this before falling back to Tensor::cat (which would
+        // leave the Vulkan zero-copy path). Returns true if capacity >= needed.
+        using CapacityEnsureFn = std::function<bool(std::size_t needed_rows)>;
+        void set_capacity_ensure(CapacityEnsureFn fn) {
+            _capacity_ensure = std::move(fn);
+        }
+        [[nodiscard]] bool ensure_param_capacity(std::size_t needed_rows) {
+            if (means_raw().is_valid() && means_raw().capacity() >= needed_rows) {
+                return true;
+            }
+            if (!_capacity_ensure) {
+                return false;
+            }
+            return _capacity_ensure(needed_rows);
+        }
+
     public:
         // Holds the magnitude of the screen space gradient (used for densification)
         Tensor _densification_info;
@@ -376,6 +394,7 @@ namespace lfs::core {
 
         // Backing allocator for parameter tensors (see set_tensor_allocator).
         SplatTensorAllocator _tensor_allocator;
+        CapacityEnsureFn _capacity_ensure;
         std::vector<FrozenRange> _frozen_ranges;
 
         // Allow free functions in splat_data_transform.cpp to access private members

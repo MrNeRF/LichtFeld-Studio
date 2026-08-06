@@ -846,6 +846,9 @@ namespace lfs::training {
                 auto ensure_capacity_direct = [capacity](Tensor& param) {
                     if (param.capacity() >= capacity)
                         return;
+                    // GUI exportable tensors grow with live N (Phase 5.1).
+                    if (param.is_external_storage())
+                        return;
                     auto new_param = Tensor::zeros_direct(param.shape(), capacity);
                     cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                                param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
@@ -857,6 +860,8 @@ namespace lfs::training {
                 auto ensure_shN_capacity_direct = [capacity, layout_rest](Tensor& param) {
                     const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, layout_rest);
                     if (param.capacity() >= cap_floats)
+                        return;
+                    if (param.is_external_storage())
                         return;
                     auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
                     cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
