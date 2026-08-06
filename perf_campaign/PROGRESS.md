@@ -20,7 +20,7 @@
   [==========] Running 4 tests from 1 test suite.
   [  PASSED  ] 4 tests.  (AllocCounterTest.*)
   ```
-- **Commit:** `45feeff5`
+- **Commit:** `013f6e04`
 
 ## Task 0.2 — Bytes-per-splat training-state ledger
 
@@ -38,7 +38,7 @@
   [  PASSED  ] 2 tests.  (TrainingStateLedgerTest.*)
   Synthetic SH3 N=32: params=248*N, optim=172*N, densify=8*N, grads=0 → 428 B/splat
   ```
-- **Commit:** `c9b2a5e4`
+- **Commit:** `013f6e04`
 
 ## Task 0.3 — Bench gate script + BASELINE
 
@@ -63,7 +63,7 @@
   | B/splat | **429.0** |
   | last_loss | ~0.039 |
 
-- **Commit:** `e5506f39`
+- **Commit:** `013f6e04`
 
 ## Task 5.1 — Grow exportable splat block with live N
 
@@ -125,4 +125,4 @@
      (no fallback copy warning). Generation bumps; Vulkan re-imports new handle.
   4. Confirm viewport still renders live training splats without a full model copy.
 
-- **Commit:** `9a242719`
+- **Commit:** `013f6e04`
