@@ -113,3 +113,26 @@ LFS_BENCH_ITERS=2000 LFS_PERF_BENCH_WARMUP=200 LFS_BENCH_MAX_CAP=500000 \
 | G5 peak refine VRAM | not isolated yet (peak 1156 MiB overall) | ≤ 1.1× steady |
 | G6 quality | last_loss ≈ 0.04 (no PSNR yet) | no regression |
 | G7 GUI additive VRAM | N/A (headless) | later |
+
+---
+
+## Bicycle canary baseline (added 2026-08-06, dual-workload gate)
+
+| Field | Value |
+|---|---|
+| Dataset | `/home/gauss/data/360_v2/bicycle` (`images_4`), strategy mrnf, max_cap 500k |
+| Iterations | **7000** (warmup 200) — short runs are NOT heavy; densification growth is the point |
+| Recorded at commit | `ba7c4497` in the isolated bench worktree — **includes task 1.3** (Wave 1 + 1.3 state) |
+| Runs | 3 (medians below); run 2 wall-clock was a +42% outlier — two workers were compiling CUDA concurrently (CPU contention; flock only guards GPU timing). Peak-VRAM spread 1037–1221 MiB across runs (densify/eval timing variance). |
+
+| Metric | Median |
+|---|---:|
+| wall_s | **31.15** |
+| steady_ms/iter | **3.290** |
+| steady_allocs/iter | 0.04 |
+| peak VRAM MiB | **1038.5** |
+| B/splat | 429.0 |
+| final loss (range) | 0.098–0.121 (bicycle loss is high-variance; compare CURVES for quality-sensitive changes) |
+
+Gate note: for tight wall-clock comparisons on bicycle, re-run in quiet conditions (no
+concurrent builds) or compare steady_ms/iter medians, which were stable (3.25–3.48).
