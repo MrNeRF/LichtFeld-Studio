@@ -754,3 +754,35 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+## Task 6D.1 — Loss-workspace union (shared arena)
+
+- **Branch:** `lfs-elite-mem`
+- **Change:** `LossWorkspaceArena` in `ssim.cuh` / `ssim.cu` owns one grow-only UInt8
+  blob sized to `max(variant layout)` at the active resolution. Fused / pure-SSIM /
+  decoupled / masked-fused / masked-decoupled are mutually exclusive views rebuilt on
+  mode switch. `PhotometricLoss` owns the arena; Trainer masked/decoupled paths use
+  `photometric_loss_.arena()`. VRAM accounting reports arena capacity once (not the sum).
+  Independent stack workspaces still allocate separately for unit tests.
+- **Fail evidence (TDD):** pre-union, five independent `ensure_size` calls retain the sum:
+  ```
+  IndependentWorkspacesRetainSum: total >> max_variant  (EXPECTED_GT documents bug)
+  # example 64x96 NCHW: sum ≈ 5× single-variant; arena gate would fail under sum retention
+  ```
+  Before arena API, `LossWorkspaceArena` / `allocated_bytes()` did not exist
+  (compile fail for SequentialModesThroughArenaStayWithinMax).
+- **Pass evidence:**
+  ```
+  [  PASSED  ] LossWorkspaceUnionTest.IndependentWorkspacesRetainSum
+  [  PASSED  ] LossWorkspaceUnionTest.SequentialModesThroughArenaStayWithinMax
+  [  PASSED  ] LossWorkspaceUnionTest.ArenaFusedLossMatchesIndependent
+  [  PASSED  ] LossWorkspaceUnionTest.PhotometricLossExposesSharedArena
+  [  PASSED  ] FusedL1SSIMTest.* (15) + LossWorkspaceUnionTest.* (4) = 19/19
+  ```
+- **Also:** fixed `FusedL1SSIMTest.WorkspaceReuse` to snapshot loss/grad before workspace
+  scalar reuse (Phase 1.6 alias).
+- **Numbers (unit, 64×96):** arena capacity ≤ max(variant)+256KiB slack after touching
+  all 5 modes; independent path retains sum (documents pre-6D.1 peak risk up to ~650 MiB
+  @1080p).
+- **Commit:** (recorded after commit)
+
