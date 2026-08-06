@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "io/cache_image_loader.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -67,6 +68,71 @@ namespace lfs::io {
         SidecarCount normal;
     };
 
+    /// Default free-VRAM headroom reserved above the GT-cache footprint so
+    /// training peak still has room (Directive-3 / WO-HP1).
+    constexpr size_t GT_CACHE_DEFAULT_HEADROOM_BYTES = 2ULL * 1024 * 1024 * 1024;
+
+    /**
+     * @brief Pure budget gate for the decoded-GT device cache.
+     *
+     * Enable device tier only when n_images * bytes_per_image fits under
+     * min(free_vram - headroom, optional LFS_GT_CACHE_CAP). Pinned-host is the
+     * middle tier when device is denied; both off falls back to today's decode.
+     */
+    struct GtCacheBudgetDecision {
+        bool enable_device = false;
+        bool enable_pinned_host = false;
+        size_t estimated_bytes = 0;
+        size_t free_vram_bytes = 0;
+        size_t headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES;
+        size_t cap_bytes = 0; // 0 = no explicit cap
+        size_t device_budget_bytes = 0;
+        const char* reason = "uninitialized";
+    };
+
+    [[nodiscard]] inline GtCacheBudgetDecision evaluate_gt_cache_budget(
+        const size_t n_images,
+        const size_t bytes_per_image,
+        const size_t free_vram_bytes,
+        const size_t headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES,
+        const size_t cap_bytes = 0,
+        const bool force_disable = false,
+        const bool allow_pinned_fallback = true) {
+        GtCacheBudgetDecision d;
+        d.estimated_bytes = n_images * bytes_per_image;
+        d.free_vram_bytes = free_vram_bytes;
+        d.headroom_bytes = headroom_bytes;
+        d.cap_bytes = cap_bytes;
+        if (force_disable) {
+            d.reason = "disabled_by_env_or_config";
+            return d;
+        }
+        if (n_images == 0 || bytes_per_image == 0) {
+            d.reason = "unknown_footprint";
+            return d;
+        }
+        if (free_vram_bytes <= headroom_bytes) {
+            d.enable_pinned_host = allow_pinned_fallback;
+            d.reason = d.enable_pinned_host ? "vram_below_headroom_use_pinned"
+                                            : "vram_below_headroom_no_cache";
+            return d;
+        }
+        size_t budget = free_vram_bytes - headroom_bytes;
+        if (cap_bytes > 0) {
+            budget = std::min(budget, cap_bytes);
+        }
+        d.device_budget_bytes = budget;
+        if (d.estimated_bytes <= budget) {
+            d.enable_device = true;
+            d.reason = "device_within_budget";
+            return d;
+        }
+        d.enable_pinned_host = allow_pinned_fallback;
+        d.reason = d.enable_pinned_host ? "device_over_budget_use_pinned"
+                                        : "device_over_budget_no_cache";
+        return d;
+    }
+
     struct PipelinedLoaderConfig {
         size_t jpeg_batch_size = config::DEFAULT_BATCH_SIZE;
         size_t prefetch_count = config::DEFAULT_PREFETCH_COUNT;
@@ -81,6 +147,15 @@ namespace lfs::io {
         std::chrono::milliseconds batch_collect_timeout{config::DEFAULT_BATCH_TIMEOUT_MS};
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
         bool use_16bit_color = false;
+
+        // Decoded-GT device / pinned cache (Directive-3). Disabled when false;
+        // when true the budget gate still decides device vs pinned vs off.
+        bool enable_gt_cache = true;
+        bool enable_gt_pinned_fallback = true;
+        size_t gt_cache_headroom_bytes = GT_CACHE_DEFAULT_HEADROOM_BYTES;
+        size_t gt_cache_cap_bytes = 0; // 0 = no override; env LFS_GT_CACHE_CAP wins when set
+        size_t gt_cache_expected_images = 0;
+        size_t gt_cache_bytes_per_image = 0;
 
         // Default preserves today's unconditional "skip and continue" behavior
         // for every optional sidecar. Required fails the whole camera
@@ -202,8 +277,20 @@ namespace lfs::io {
             SidecarTally aggregate_sidecar_tally;
             std::uint64_t accepted_sequences = 0;
             std::uint64_t succeeded_sequences = 0;
-            std::uint64_t failed_sequences = 0;
             std::uint64_t cancelled_sequences = 0;
+            std::uint64_t failed_sequences = 0;
+            // Decoded-GT device / pinned cache (WO-HP1)
+            bool gt_device_cache_enabled = false;
+            bool gt_pinned_cache_enabled = false;
+            size_t gt_device_cache_entries = 0;
+            size_t gt_device_cache_bytes = 0;
+            size_t gt_pinned_cache_entries = 0;
+            size_t gt_pinned_cache_bytes = 0;
+            size_t gt_device_cache_hits = 0;
+            size_t gt_device_cache_misses = 0;
+            size_t gt_pinned_cache_hits = 0;
+            size_t gt_cache_inserts = 0;
+            size_t gt_cache_evictions = 0;
         };
 
         explicit PipelinedImageLoader(PipelinedLoaderConfig config = {});
@@ -226,6 +313,17 @@ namespace lfs::io {
 
         lfs::core::Tensor load_image_immediate(
             const std::filesystem::path& path, const LoadParams& params);
+
+        /// Evaluate VRAM budget and enable device / pinned GT tiers.
+        /// Call once the dataset size and (optionally) per-image decoded size
+        /// are known. Safe to call multiple times; later calls re-evaluate.
+        void configure_gt_cache(size_t expected_images, size_t bytes_per_image = 0);
+
+        /// Drop all decoded-GT device / pinned entries (VRAM reclaim).
+        void clear_gt_cache();
+
+        [[nodiscard]] GtCacheBudgetDecision gt_cache_budget() const { return gt_budget_; }
+        [[nodiscard]] size_t gt_device_cache_bytes() const;
 
         size_t ready_count() const;
         size_t in_flight_count() const;
@@ -478,6 +576,15 @@ namespace lfs::io {
         void destroy_sidecar_ready_event(CUevent_st*& event);
         void reset_pipeline_gpu_bytes();
 
+        // Decoded-GT device / pinned cache helpers (primary RGB only).
+        void maybe_init_gt_cache_from_env();
+        void evaluate_and_apply_gt_budget();
+        [[nodiscard]] std::optional<lfs::core::Tensor> try_gt_device_hit(const std::string& key);
+        [[nodiscard]] std::optional<lfs::core::Tensor> try_gt_pinned_hit(const std::string& key,
+                                                                         cudaStream_t stream);
+        void maybe_store_gt_tensor(const std::string& key, const lfs::core::Tensor& tensor);
+        void evict_gt_device_if_needed(size_t required_bytes);
+
         PipelinedLoaderConfig config_;
         std::atomic<bool> running_{false};
         std::vector<std::thread> io_threads_;
@@ -503,6 +610,27 @@ namespace lfs::io {
         std::unordered_map<std::string, JpegCacheEntry> jpeg_cache_;
         mutable std::mutex jpeg_cache_mutex_;
         std::atomic<size_t> jpeg_cache_bytes_{0};
+
+        // Decoded-GT caches: device-resident (primary) and pinned-host (middle).
+        struct GtDeviceEntry {
+            lfs::core::Tensor tensor; // CUDA, typically u8 CHW
+            size_t size_bytes = 0;
+            std::chrono::steady_clock::time_point last_access;
+        };
+        struct GtPinnedEntry {
+            lfs::core::Tensor tensor; // pinned CPU, same dtype/shape as device
+            size_t size_bytes = 0;
+            std::chrono::steady_clock::time_point last_access;
+        };
+        std::unordered_map<std::string, GtDeviceEntry> gt_device_cache_;
+        std::unordered_map<std::string, GtPinnedEntry> gt_pinned_cache_;
+        mutable std::mutex gt_cache_mutex_;
+        std::atomic<size_t> gt_device_cache_bytes_{0};
+        std::atomic<size_t> gt_pinned_cache_bytes_{0};
+        std::atomic<bool> gt_device_enabled_{false};
+        std::atomic<bool> gt_pinned_enabled_{false};
+        GtCacheBudgetDecision gt_budget_{};
+        bool gt_budget_evaluated_ = false;
 
         std::filesystem::path fs_cache_folder_;
         std::mutex fs_cache_mutex_;

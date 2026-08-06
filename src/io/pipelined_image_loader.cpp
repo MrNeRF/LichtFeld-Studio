@@ -4,6 +4,7 @@
 #include "io/pipelined_image_loader.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/environment.hpp"
 #include "core/error_reporter.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -18,10 +19,12 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <semaphore>
 #include <sstream>
 
@@ -361,6 +364,11 @@ namespace lfs::io {
             retain_nvcodec_loader_cache(config_.decoder_pool_size);
         }
 
+        maybe_init_gt_cache_from_env();
+        if (config_.gt_cache_expected_images > 0 && config_.gt_cache_bytes_per_image > 0) {
+            evaluate_and_apply_gt_budget();
+        }
+
         LOG_INFO("[PipelinedImageLoader] Started {} I/O, 1 GPU, {} cold threads",
                  config_.io_threads, config_.cold_process_threads);
     }
@@ -422,6 +430,20 @@ namespace lfs::io {
                      jpeg_cache_bytes_.load() / (1024.0 * 1024.0),
                      fs_cache_folder_.empty() ? std::string("(disabled)") : lfs::core::path_to_utf8(fs_cache_folder_));
         }
+        {
+            std::lock_guard<std::mutex> gt_lock(gt_cache_mutex_);
+            LOG_INFO("[PipelinedImageLoader] GT cache: device={} entries/{:.1f} MiB hits={}  "
+                     "pinned={} entries/{:.1f} MiB hits={}  inserts={} evictions={}",
+                     gt_device_cache_.size(),
+                     gt_device_cache_bytes_.load() / (1024.0 * 1024.0),
+                     stats_.gt_device_cache_hits,
+                     gt_pinned_cache_.size(),
+                     gt_pinned_cache_bytes_.load() / (1024.0 * 1024.0),
+                     stats_.gt_pinned_cache_hits,
+                     stats_.gt_cache_inserts,
+                     stats_.gt_cache_evictions);
+        }
+        clear_gt_cache();
     }
 
     void PipelinedImageLoader::prefetch(const std::vector<ImageRequest>& requests) {
@@ -585,6 +607,274 @@ namespace lfs::io {
         reconcile_ledger_on_shutdown();
         reset_pipeline_gpu_bytes();
         in_flight_ = 0;
+        // Keep GT cache across clear() — it is keyed by path+params, not sequence.
+    }
+
+    void PipelinedImageLoader::maybe_init_gt_cache_from_env() {
+        // LFS_GT_CACHE=0/false/off disables both tiers.
+        if (const char* v = std::getenv("LFS_GT_CACHE");
+            v != nullptr && v[0] != '\0') {
+            if (v[0] == '0' || v[0] == 'f' || v[0] == 'F' || v[0] == 'n' || v[0] == 'N' ||
+                (v[0] == 'o' && (v[1] == 'f' || v[1] == 'F'))) {
+                config_.enable_gt_cache = false;
+            }
+        }
+        if (const char* v = std::getenv("LFS_GT_PINNED_CACHE");
+            v != nullptr && v[0] != '\0') {
+            if (v[0] == '0' || v[0] == 'f' || v[0] == 'F' || v[0] == 'n' || v[0] == 'N' ||
+                (v[0] == 'o' && (v[1] == 'f' || v[1] == 'F'))) {
+                config_.enable_gt_pinned_fallback = false;
+            }
+        }
+        if (const auto cap = lfs::core::environment::unsigned_integer<unsigned long long>(
+                "LFS_GT_CACHE_CAP");
+            cap && *cap > 0) {
+            config_.gt_cache_cap_bytes = static_cast<size_t>(*cap);
+        }
+    }
+
+    void PipelinedImageLoader::evaluate_and_apply_gt_budget() {
+        size_t free_b = 0;
+        size_t total_b = 0;
+        if (cudaMemGetInfo(&free_b, &total_b) != cudaSuccess) {
+            free_b = 0;
+            total_b = 0;
+        }
+        const bool force_off = !config_.enable_gt_cache;
+        gt_budget_ = evaluate_gt_cache_budget(
+            config_.gt_cache_expected_images,
+            config_.gt_cache_bytes_per_image,
+            free_b,
+            config_.gt_cache_headroom_bytes,
+            config_.gt_cache_cap_bytes,
+            force_off,
+            config_.enable_gt_pinned_fallback && config_.enable_gt_cache);
+        gt_device_enabled_.store(gt_budget_.enable_device, std::memory_order_release);
+        gt_pinned_enabled_.store(gt_budget_.enable_pinned_host, std::memory_order_release);
+        gt_budget_evaluated_ = true;
+        LOG_INFO("[PipelinedImageLoader] GT cache budget: device={} pinned={} "
+                 "est={:.1f} MiB free_vram={:.1f} MiB headroom={:.1f} MiB cap={:.1f} MiB reason={}",
+                 gt_budget_.enable_device,
+                 gt_budget_.enable_pinned_host,
+                 gt_budget_.estimated_bytes / (1024.0 * 1024.0),
+                 free_b / (1024.0 * 1024.0),
+                 config_.gt_cache_headroom_bytes / (1024.0 * 1024.0),
+                 config_.gt_cache_cap_bytes > 0
+                     ? config_.gt_cache_cap_bytes / (1024.0 * 1024.0)
+                     : 0.0,
+                 gt_budget_.reason);
+        if (!gt_budget_.enable_device) {
+            // Drop any partial device entries if we re-evaluate and lose device tier.
+            std::lock_guard<std::mutex> lock(gt_cache_mutex_);
+            if (!gt_device_cache_.empty()) {
+                gt_device_cache_.clear();
+                gt_device_cache_bytes_.store(0, std::memory_order_release);
+            }
+        }
+    }
+
+    void PipelinedImageLoader::configure_gt_cache(const size_t expected_images,
+                                                  const size_t bytes_per_image) {
+        config_.gt_cache_expected_images = expected_images;
+        if (bytes_per_image > 0) {
+            config_.gt_cache_bytes_per_image = bytes_per_image;
+        }
+        maybe_init_gt_cache_from_env();
+        if (config_.gt_cache_expected_images > 0 && config_.gt_cache_bytes_per_image > 0) {
+            evaluate_and_apply_gt_budget();
+        }
+    }
+
+    void PipelinedImageLoader::clear_gt_cache() {
+        size_t n_dev = 0;
+        size_t n_pin = 0;
+        {
+            std::lock_guard<std::mutex> lock(gt_cache_mutex_);
+            n_dev = gt_device_cache_.size();
+            n_pin = gt_pinned_cache_.size();
+            gt_device_cache_.clear();
+            gt_pinned_cache_.clear();
+            gt_device_cache_bytes_.store(0, std::memory_order_release);
+            gt_pinned_cache_bytes_.store(0, std::memory_order_release);
+        }
+        if (n_dev + n_pin > 0) {
+            std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+            stats_.gt_cache_evictions += n_dev + n_pin;
+        }
+    }
+
+    size_t PipelinedImageLoader::gt_device_cache_bytes() const {
+        return gt_device_cache_bytes_.load(std::memory_order_acquire);
+    }
+
+    std::optional<lfs::core::Tensor> PipelinedImageLoader::try_gt_device_hit(
+        const std::string& key) {
+        if (!gt_device_enabled_.load(std::memory_order_acquire)) {
+            return std::nullopt;
+        }
+        std::optional<lfs::core::Tensor> hit;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock(gt_cache_mutex_);
+            const auto it = gt_device_cache_.find(key);
+            if (it != gt_device_cache_.end()) {
+                it->second.last_access = std::chrono::steady_clock::now();
+                // Shallow copy (refcounted) — zero decode, zero H2D.
+                hit = it->second.tensor;
+                found = true;
+            }
+        }
+        // Stats lock never nested under gt_cache_mutex_ (get_stats takes stats then gt).
+        {
+            std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+            if (found) {
+                ++stats_.gt_device_cache_hits;
+            } else {
+                ++stats_.gt_device_cache_misses;
+            }
+        }
+        return hit;
+    }
+
+    std::optional<lfs::core::Tensor> PipelinedImageLoader::try_gt_pinned_hit(
+        const std::string& key,
+        cudaStream_t stream) {
+        if (!gt_pinned_enabled_.load(std::memory_order_acquire)) {
+            return std::nullopt;
+        }
+        lfs::core::Tensor host;
+        bool found = false;
+        {
+            std::lock_guard<std::mutex> lock(gt_cache_mutex_);
+            const auto it = gt_pinned_cache_.find(key);
+            if (it == gt_pinned_cache_.end()) {
+                return std::nullopt;
+            }
+            it->second.last_access = std::chrono::steady_clock::now();
+            host = it->second.tensor;
+            found = true;
+        }
+        if (found) {
+            std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+            ++stats_.gt_pinned_cache_hits;
+        }
+        // Async H2D on the decode stream (materialize for consumer).
+        if (stream) {
+            const lfs::core::CUDAStreamGuard guard(stream);
+            auto device = host.to(lfs::core::Device::CUDA);
+            cudaStreamSynchronize(stream);
+            return device;
+        }
+        return host.to(lfs::core::Device::CUDA);
+    }
+
+    void PipelinedImageLoader::evict_gt_device_if_needed(const size_t required_bytes) {
+        // Caller holds gt_cache_mutex_. Do not take stats_mutex_ here.
+        const size_t budget = gt_budget_.device_budget_bytes > 0
+                                  ? gt_budget_.device_budget_bytes
+                                  : std::numeric_limits<size_t>::max();
+        size_t evicted = 0;
+        while (gt_device_cache_bytes_.load(std::memory_order_relaxed) + required_bytes > budget &&
+               !gt_device_cache_.empty()) {
+            auto oldest = gt_device_cache_.begin();
+            for (auto it = gt_device_cache_.begin(); it != gt_device_cache_.end(); ++it) {
+                if (it->second.last_access < oldest->second.last_access) {
+                    oldest = it;
+                }
+            }
+            gt_device_cache_bytes_ -= oldest->second.size_bytes;
+            gt_device_cache_.erase(oldest);
+            ++evicted;
+        }
+        if (evicted > 0) {
+            // Deferred: caller must bump stats after releasing gt lock, or we
+            // use a side counter. Store pending in required_bytes high bit is
+            // ugly — return via reference would be cleaner; for now atomic-ish
+            // bump after unlock is done by maybe_store.
+            (void)evicted;
+        }
+    }
+
+    void PipelinedImageLoader::maybe_store_gt_tensor(const std::string& key,
+                                                     const lfs::core::Tensor& tensor) {
+        if (!tensor.is_valid() || tensor.numel() == 0 || key.empty()) {
+            return;
+        }
+        if (tensor.device() != lfs::core::Device::CUDA) {
+            return;
+        }
+        // Lazy budget: first decoded image teaches us bytes_per_image if unset.
+        if (!gt_budget_evaluated_ && config_.enable_gt_cache) {
+            if (config_.gt_cache_bytes_per_image == 0) {
+                config_.gt_cache_bytes_per_image = tensor.bytes();
+            }
+            if (config_.gt_cache_expected_images == 0) {
+                // Opportunistic single-image fill until configure_gt_cache arrives.
+                config_.gt_cache_expected_images = 1;
+            }
+            evaluate_and_apply_gt_budget();
+        }
+
+        const size_t nbytes = tensor.bytes();
+        bool inserted = false;
+        size_t evicted = 0;
+        if (gt_device_enabled_.load(std::memory_order_acquire)) {
+            {
+                std::lock_guard<std::mutex> lock(gt_cache_mutex_);
+                if (gt_device_cache_.contains(key)) {
+                    return;
+                }
+                const size_t before = gt_device_cache_.size();
+                evict_gt_device_if_needed(nbytes);
+                evicted = before > gt_device_cache_.size() ? before - gt_device_cache_.size() : 0;
+                if (gt_budget_.device_budget_bytes > 0 &&
+                    gt_device_cache_bytes_.load(std::memory_order_relaxed) + nbytes >
+                        gt_budget_.device_budget_bytes) {
+                    // fall through to stats update only
+                } else {
+                    GtDeviceEntry entry;
+                    entry.tensor = tensor; // retain ref
+                    entry.size_bytes = nbytes;
+                    entry.last_access = std::chrono::steady_clock::now();
+                    gt_device_cache_.emplace(key, std::move(entry));
+                    gt_device_cache_bytes_ += nbytes;
+                    inserted = true;
+                }
+            }
+            if (inserted || evicted > 0) {
+                std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+                if (inserted) {
+                    ++stats_.gt_cache_inserts;
+                }
+                stats_.gt_cache_evictions += evicted;
+            }
+            return;
+        }
+
+        if (gt_pinned_enabled_.load(std::memory_order_acquire)) {
+            try {
+                auto host = tensor.cpu();
+                {
+                    std::lock_guard<std::mutex> lock(gt_cache_mutex_);
+                    if (gt_pinned_cache_.contains(key)) {
+                        return;
+                    }
+                    GtPinnedEntry entry;
+                    entry.tensor = std::move(host);
+                    entry.size_bytes = nbytes;
+                    entry.last_access = std::chrono::steady_clock::now();
+                    gt_pinned_cache_.emplace(key, std::move(entry));
+                    gt_pinned_cache_bytes_ += nbytes;
+                    inserted = true;
+                }
+                if (inserted) {
+                    std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+                    ++stats_.gt_cache_inserts;
+                }
+            } catch (const std::exception& e) {
+                LOG_WARN("[PipelinedImageLoader] GT pinned store failed for {}: {}", key, e.what());
+            }
+        }
     }
 
     PipelinedImageLoader::CacheStats PipelinedImageLoader::get_stats() const {
@@ -598,6 +888,15 @@ namespace lfs::io {
             std::lock_guard<std::mutex> cache_lock(jpeg_cache_mutex_);
             s.jpeg_cache_entries = jpeg_cache_.size();
             s.jpeg_cache_bytes = jpeg_cache_bytes_.load();
+        }
+        {
+            std::lock_guard<std::mutex> gt_lock(gt_cache_mutex_);
+            s.gt_device_cache_enabled = gt_device_enabled_.load(std::memory_order_relaxed);
+            s.gt_pinned_cache_enabled = gt_pinned_enabled_.load(std::memory_order_relaxed);
+            s.gt_device_cache_entries = gt_device_cache_.size();
+            s.gt_device_cache_bytes = gt_device_cache_bytes_.load(std::memory_order_relaxed);
+            s.gt_pinned_cache_entries = gt_pinned_cache_.size();
+            s.gt_pinned_cache_bytes = gt_pinned_cache_bytes_.load(std::memory_order_relaxed);
         }
         {
             std::lock_guard<std::mutex> pairs_lock(pending_pairs_mutex_);
@@ -1795,6 +2094,21 @@ namespace lfs::io {
             result.undistort = request.undistort;
 
             try {
+                // Decoded-GT device/pinned hit: skip file I/O, Huffman decode, and
+                // (for device) H2D. Key includes resize/undistort params so a hit
+                // is always the fully-processed tensor for this request.
+                if (auto device_hit = try_gt_device_hit(result.cache_key)) {
+                    try_complete_pair(request.sequence_id, request.loader_generation,
+                                      std::move(*device_hit), std::nullopt, decode_stream_);
+                    // Still enqueue optional mask/depth/normal below.
+                    goto after_primary_image_enqueued;
+                }
+                if (auto pinned_hit = try_gt_pinned_hit(result.cache_key, decode_stream_)) {
+                    try_complete_pair(request.sequence_id, request.loader_generation,
+                                      std::move(*pinned_hit), std::nullopt, decode_stream_);
+                    goto after_primary_image_enqueued;
+                }
+
                 const bool needs_requested_processing = load_params_need_processing(request.params);
                 const auto base_key = make_base_cache_key(request.path);
 
@@ -1836,6 +2150,7 @@ namespace lfs::io {
                 continue; // Skip auxiliary image processing if image failed
             }
 
+after_primary_image_enqueued:
             if (request.mask_path) {
                 if (!is_regular_file_no_throw(*request.mask_path)) {
                     LOG_DEBUG("[PipelinedImageLoader] Skipping missing mask {}", lfs::core::path_to_utf8(*request.mask_path));
@@ -2090,6 +2405,11 @@ namespace lfs::io {
                                                     batch[i].params.cuda_stream);
                             }
 
+                            // Populate decoded-GT cache on first decode (epoch 1).
+                            if (!batch[i].cache_key.empty()) {
+                                maybe_store_gt_tensor(batch[i].cache_key, tensor);
+                            }
+
                             try_complete_pair(batch[i].sequence_id, batch[i].loader_generation,
                                               std::move(tensor), std::nullopt, nullptr);
                         }
@@ -2286,6 +2606,9 @@ namespace lfs::io {
                         throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                     }
 
+                    if (!item.cache_key.empty()) {
+                        maybe_store_gt_tensor(item.cache_key, rgb);
+                    }
                     try_complete_pair(item.sequence_id, item.loader_generation,
                                       std::move(rgb), std::move(alpha), nullptr);
 
@@ -2594,6 +2917,9 @@ namespace lfs::io {
                         write_derived_cache(*nvcodec, decoded, item.cache_key, nullptr);
                     }
 
+                    if (!item.cache_key.empty()) {
+                        maybe_store_gt_tensor(item.cache_key, decoded);
+                    }
                     try_complete_pair(item.sequence_id, item.loader_generation,
                                       std::move(decoded), std::nullopt, nullptr);
                 }
@@ -2643,6 +2969,9 @@ namespace lfs::io {
                                 it->second.mask_failed = true;
                                 it->second.mask_expected = false;
                             }
+                        }
+                        if (!item.cache_key.empty()) {
+                            maybe_store_gt_tensor(item.cache_key, decoded);
                         }
                         try_complete_pair(item.sequence_id, item.loader_generation,
                                           std::move(decoded), std::nullopt, nullptr);

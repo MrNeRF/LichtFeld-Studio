@@ -1034,4 +1034,84 @@ explains why). Ship as exact-math enabler for BWD-B/C.
 
 ### Commit
 
-- **Commit:** (this commit)
+- **Commit:** `a3f25c4f`
+
+---
+
+## WO-HP1 — decoded-GT device cache + `dataloader_wait_ms` (Wave 5 rank-3)
+
+**Date:** 2026-08-07  
+**Branch:** lfs-elite  
+**Directive:** DIRECTIVES-round2 §Directive-3 / WO-HP1-gt-cache
+
+### Part 1 — metric first
+
+Added `dataloader_wait_ms` (total), `dataloader_wait_ms_per_iter`,
+`steady_dataloader_wait_ms_per_iter` to `perf_bench.json`, and `dl_wait` /
+`gt_cache` columns to `bench.sh`. Instrumented `train_dataloader->next()` in
+`trainer.cpp` (outside `train_step` / `steady_ms`).
+
+### TDD
+
+| suite | result |
+|---|---|
+| `GtCacheBudgetGate.*` (5 pure budget tests) | PASS |
+| `GtDeviceCacheTest.CacheHitReturnsBitIdenticalTensor` | PASS (FNV hash equal) |
+| `GtDeviceCacheTest.BudgetGateDisablesDeviceFallsBackToDecode` | PASS |
+| `GtDeviceCacheTest.ClearGtCacheEvictsAndFallsBack` | PASS |
+| `GtDeviceCacheTest.CapOverrideForcesPinnedOrOff` | PASS (pinned middle tier) |
+
+### Baseline (metric present, `LFS_GT_CACHE=0`)
+
+| | wall_s | steady_ms | dl_wait | gt_cache MiB | peak MiB | B/splat |
+|---|---:|---:|---:|---:|---:|---:|
+| Bonsai 2k med×3 | 7.95 | 3.373 | 0.013 | 0.0 | 930.1 | 409.4 |
+| Bicycle 7k med×3 | **30.39** | 1.764 | **2.283** | 0.0 | 986.1 | 409.4 |
+
+Bicycle residual: ~2.28 ms/iter blocked in `next()` after compressed-JPEG
+warmup (Directive-3 measured 4.8 ms Huffman; warm jpeg cache already cuts
+some of that).
+
+### After — decoded-GT device cache ON (default, budget-gated)
+
+VRAM budget: enable device iff `n_images * u8_CHW < min(free_vram − 2 GiB, LFS_GT_CACHE_CAP)`.
+Pinned-host middle tier when device denied; legacy decode as fallback.
+Env: `LFS_GT_CACHE=0` disables; `LFS_GT_CACHE_CAP=<bytes>` caps device budget.
+
+| | wall_s | steady_ms | dl_wait | gt_cache MiB | peak MiB | B/splat |
+|---|---:|---:|---:|---:|---:|---:|
+| Bonsai 2k med×3 | 7.86 (−1.2%) | 3.336 | 0.010 | **338.8** | 1506.1 | 409.4 |
+| Bicycle 7k med×3 | **22.49 (−26.0%)** | 2.956 | **0.007 (−99.7%)** | **564.4** | 1562.1 | 409.4 |
+
+Loader shutdown (bicycle run3): `device=194 entries/564.4 MiB hits=6809 inserts=194`.
+
+### VRAM ledger (cache on vs off)
+
+| bucket | bonsai off | bonsai on | bicycle off | bicycle on |
+|---|---:|---:|---:|---:|
+| **gt_cache_MiB** | 0.0 | **338.8** | 0.0 | **564.4** |
+| peak_cuda_used_MiB | 930.1 | 1506.1 | 986.1 | 1562.1 |
+| headroom left (16 GB − peak) | ~15.0 GB | ~14.5 GB | ~15.0 GB | ~14.5 GB |
+| budget gate (≥2 GB free above peak) | n/a | **pass** | n/a | **pass** |
+
+### Notes
+
+- Wall is the ground-truth gate for this WO (Directive-3: `steady_ms` is blind
+  to `next()`). Bicycle wall −26% (target −30–45%); short of the low end
+  because warm compressed-JPEG cache already reduced residual wait to 2.28 ms
+  (not the raw 4.8 ms Huffman). `dl_wait` → ~0 as required.
+- `steady_ms` rose on bicycle because host-side step timing no longer drains
+  prior async GPU work during a multi-ms `next()` wait; combined
+  `steady+dl_wait` dropped 4.05 → 2.96 ms/iter (−27%), matching wall.
+- Quality: B/splat flat 409.4; bicycle final loss still in historical noise band.
+
+### Files
+
+- `src/training/{perf_bench.cpp,include/lfs/training/perf_bench.hpp}`
+- `src/training/trainer.cpp` — dl_wait + `configure_gt_cache` + stats capture
+- `src/io/{pipelined_image_loader.cpp,include/io/pipelined_image_loader.hpp}`
+- `tests/test_gt_device_cache.cpp`, `tests/CMakeLists.txt`
+- `perf_campaign/bench.sh`
+
+
+**Commit:** `5d7ea93e`

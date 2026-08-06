@@ -6033,6 +6033,31 @@ namespace lfs::training {
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
 
+            // WO-HP1: configure decoded-GT device cache budget from dataset size
+            // and first-camera dimensions (u8 CHW RGB ≈ 3*W*H).
+            if (train_dataset_ && train_dataloader->get_loader()) {
+                const size_t n_images = train_dataset_->size();
+                size_t bytes_per = 0;
+                if (n_images > 0) {
+                    auto& cams = train_dataset_->get_cameras();
+                    if (!cams.empty() && cams[0]) {
+                        auto& cam = cams[0];
+                        if (!cam->image_size_loaded()) {
+                            cam->load_image_size(train_dataset_->get_resize_factor(),
+                                                 train_dataset_->get_max_width());
+                        }
+                        const int w = cam->image_width();
+                        const int h = cam->image_height();
+                        if (w > 0 && h > 0) {
+                            // Training default is u8 CHW RGB when not 16-bit.
+                            bytes_per = static_cast<size_t>(3) * static_cast<size_t>(w) *
+                                        static_cast<size_t>(h);
+                        }
+                    }
+                }
+                train_dataloader->get_loader()->configure_gt_cache(n_images, bytes_per);
+            }
+
             LOG_DEBUG("Starting training iterations");
             bool logged_epoch2_loader_cache = false;
             const size_t epoch2_loader_sample_count =
@@ -6055,7 +6080,16 @@ namespace lfs::training {
                 lfs::core::Camera* cam = nullptr;
                 lfs::core::Tensor gt_image;
                 train_phase = StepPhase::AcquireData;
+                // Dataloader wait is outside train_step / steady_ms (Directive-3).
+                const auto dl_wait_t0 = std::chrono::steady_clock::now();
                 auto example_opt = train_dataloader->next();
+                const auto dl_wait_t1 = std::chrono::steady_clock::now();
+                if (PerfBenchCollector::enabled()) {
+                    const double wait_ms =
+                        std::chrono::duration<double, std::milli>(dl_wait_t1 - dl_wait_t0)
+                            .count();
+                    PerfBenchCollector::instance().record_dataloader_wait(iter, wait_ms);
+                }
                 if (!example_opt) {
                     const std::string detail = std::format(
                         "DataLoader ended unexpectedly at iteration {}",
@@ -6160,6 +6194,13 @@ namespace lfs::training {
                 }
 
                 ++iter;
+            }
+
+            // Capture GT-cache footprint before the loader is torn down so
+            // perf_bench.json can report the explicit gt_cache_MiB ledger line.
+            if (PerfBenchCollector::enabled()) {
+                const auto stats = train_dataloader->get_stats();
+                PerfBenchCollector::instance().set_gt_cache_bytes(stats.gt_device_cache_bytes);
             }
 
             clearActiveImageLoader();

@@ -81,6 +81,11 @@ namespace lfs::training {
         steady_ms_sum_ = 0.0;
         peak_cuda_used_ = 0;
         peak_cuda_total_ = 0;
+        gt_cache_bytes_ = 0;
+        dataloader_wait_ms_sum_ = 0.0;
+        steady_dataloader_wait_ms_sum_ = 0.0;
+        dataloader_wait_count_ = 0;
+        steady_dataloader_wait_count_ = 0;
         last_loss_ = 0.0f;
         last_live_splats_ = 0;
         last_psnr_ = -1.0;
@@ -150,6 +155,33 @@ namespace lfs::training {
         last_psnr_ = psnr;
     }
 
+    void PerfBenchCollector::record_dataloader_wait(const int iter, const double wait_ms) {
+        if (!started_) {
+            return;
+        }
+        dataloader_wait_ms_sum_ += wait_ms;
+        ++dataloader_wait_count_;
+        // iter is 1-based in the trainer; mirror on_step_end warmup split.
+        if (iter > warmup_) {
+            steady_dataloader_wait_ms_sum_ += wait_ms;
+            ++steady_dataloader_wait_count_;
+        }
+    }
+
+    void PerfBenchCollector::set_gt_cache_bytes(const std::size_t bytes) {
+        if (!started_) {
+            return;
+        }
+        gt_cache_bytes_ = bytes;
+        // Include cache in the reported peak when it is the dominant resident
+        // consumer (cudaMemGetInfo peak already covers live use; this is the
+        // explicit ledger line for the GT cache bucket).
+        if (bytes > peak_cuda_used_) {
+            // Do not inflate peak beyond measured CUDA used; peak is measured.
+        }
+        (void)bytes;
+    }
+
     void PerfBenchCollector::finalize(const std::filesystem::path& path) {
         if (!started_) {
             return;
@@ -175,6 +207,19 @@ namespace lfs::training {
             steady_steps_ > 0
                 ? static_cast<double>(steady_allocs_) / static_cast<double>(steady_steps_)
                 : 0.0;
+        const double dataloader_wait_ms =
+            dataloader_wait_ms_sum_;
+        const double dataloader_wait_ms_per_iter =
+            dataloader_wait_count_ > 0
+                ? dataloader_wait_ms_sum_ / static_cast<double>(dataloader_wait_count_)
+                : 0.0;
+        const double steady_dataloader_wait_ms_per_iter =
+            steady_dataloader_wait_count_ > 0
+                ? steady_dataloader_wait_ms_sum_ /
+                      static_cast<double>(steady_dataloader_wait_count_)
+                : 0.0;
+        const double gt_cache_mib =
+            static_cast<double>(gt_cache_bytes_) / (1024.0 * 1024.0);
 
         std::error_code ec;
         std::filesystem::create_directories(path.parent_path(), ec);
@@ -194,12 +239,17 @@ namespace lfs::training {
         out << "  \"wall_seconds\": " << wall_s << ",\n";
         out << "  \"warmup_ms_per_iter\": " << warmup_ms_iter << ",\n";
         out << "  \"steady_ms_per_iter\": " << steady_ms_iter << ",\n";
+        out << "  \"dataloader_wait_ms\": " << dataloader_wait_ms << ",\n";
+        out << "  \"dataloader_wait_ms_per_iter\": " << dataloader_wait_ms_per_iter << ",\n";
+        out << "  \"steady_dataloader_wait_ms_per_iter\": " << steady_dataloader_wait_ms_per_iter << ",\n";
         out << "  \"warmup_allocs_total\": " << warmup_allocs_ << ",\n";
         out << "  \"steady_allocs_total\": " << steady_allocs_ << ",\n";
         out << "  \"warmup_allocs_per_iter\": " << warmup_allocs_iter << ",\n";
         out << "  \"steady_allocs_per_iter\": " << steady_allocs_iter << ",\n";
         out << "  \"peak_cuda_used_bytes\": " << peak_cuda_used_ << ",\n";
         out << "  \"peak_cuda_total_bytes\": " << peak_cuda_total_ << ",\n";
+        out << "  \"gt_cache_bytes\": " << gt_cache_bytes_ << ",\n";
+        out << "  \"gt_cache_mib\": " << gt_cache_mib << ",\n";
         out << "  \"last_loss\": " << last_loss_ << ",\n";
         out << "  \"last_psnr\": " << last_psnr_ << ",\n";
         out << "  \"last_live_splats\": " << last_live_splats_ << ",\n";
@@ -209,6 +259,7 @@ namespace lfs::training {
         out << "    \"optimizer_bytes\": " << ledger_.optimizer_bytes << ",\n";
         out << "    \"gradients_or_helpers_bytes\": " << ledger_.gradients_or_helpers_bytes << ",\n";
         out << "    \"densify_aux_bytes\": " << ledger_.densify_aux_bytes << ",\n";
+        out << "    \"gt_cache_bytes\": " << gt_cache_bytes_ << ",\n";
         out << "    \"total_bytes\": " << ledger_.total_bytes << ",\n";
         out << "    \"live_splats\": " << ledger_.live_splats << ",\n";
         out << "    \"bytes_per_splat\": " << ledger_.bytes_per_splat << "\n";
@@ -216,11 +267,14 @@ namespace lfs::training {
         out << "}\n";
         out.close();
 
-        LOG_INFO("PerfBench: wrote {} (steady {:.2f} ms/iter, {:.1f} allocs/iter, peak VRAM {:.1f} MiB, {:.1f} B/splat)",
+        LOG_INFO("PerfBench: wrote {} (steady {:.2f} ms/iter, dl_wait {:.2f} ms/iter steady, "
+                 "{:.1f} allocs/iter, peak VRAM {:.1f} MiB, gt_cache {:.1f} MiB, {:.1f} B/splat)",
                  path.string(),
                  steady_ms_iter,
+                 steady_dataloader_wait_ms_per_iter,
                  steady_allocs_iter,
                  static_cast<double>(peak_cuda_used_) / (1024.0 * 1024.0),
+                 gt_cache_mib,
                  ledger_.bytes_per_splat);
     }
 

@@ -169,22 +169,30 @@ def get(m, *keys, default=0):
         cur = cur[k]
     return cur
 
-print(f"{'run':>4} {'wall_s':>10} {'steady_ms':>10} {'alloc/s':>10} {'peak_MiB':>10} {'B/splat':>10} {'loss':>10}")
-walls, steadies, allocs, peaks, bps = [], [], [], [], []
+print(f"{'run':>4} {'wall_s':>10} {'steady_ms':>10} {'dl_wait':>10} {'gt_cache':>10} {'alloc/s':>10} {'peak_MiB':>10} {'B/splat':>10} {'loss':>10}")
+walls, steadies, dl_waits, gt_caches, allocs, peaks, bps = [], [], [], [], [], [], []
 for r in rows:
     m = r["metrics"]
     wall = get(m, "wall_seconds")
     steady = get(m, "steady_ms_per_iter")
+    # Prefer steady-state per-iter wait; fall back to overall per-iter.
+    dl_wait = get(m, "steady_dataloader_wait_ms_per_iter")
+    if not dl_wait:
+        dl_wait = get(m, "dataloader_wait_ms_per_iter")
+    gt_cache = get(m, "gt_cache_mib")
+    if not gt_cache:
+        gt_cache = get(m, "gt_cache_bytes") / (1024*1024)
     a = get(m, "steady_allocs_per_iter")
     peak = get(m, "peak_cuda_used_bytes") / (1024*1024)
     b = get(m, "ledger", "bytes_per_splat")
     loss = get(m, "last_loss")
-    walls.append(wall); steadies.append(steady); allocs.append(a); peaks.append(peak); bps.append(b)
-    print(f"{r['run']:4d} {wall:10.2f} {steady:10.3f} {a:10.2f} {peak:10.1f} {b:10.1f} {loss:10.5f}")
+    walls.append(wall); steadies.append(steady); dl_waits.append(dl_wait)
+    gt_caches.append(gt_cache); allocs.append(a); peaks.append(peak); bps.append(b)
+    print(f"{r['run']:4d} {wall:10.2f} {steady:10.3f} {dl_wait:10.3f} {gt_cache:10.1f} {a:10.2f} {peak:10.1f} {b:10.1f} {loss:10.5f}")
 
 if len(rows) > 1:
-    print("-" * 70)
-    print(f"{'med':>4} {med(walls):10.2f} {med(steadies):10.3f} {med(allocs):10.2f} {med(peaks):10.1f} {med(bps):10.1f}")
+    print("-" * 100)
+    print(f"{'med':>4} {med(walls):10.2f} {med(steadies):10.3f} {med(dl_waits):10.3f} {med(gt_caches):10.1f} {med(allocs):10.2f} {med(peaks):10.1f} {med(bps):10.1f}")
 
 # Always write a machine-readable aggregate next to the runs.
 agg = {
@@ -197,6 +205,8 @@ agg = {
     "median": {
         "wall_seconds": med(walls),
         "steady_ms_per_iter": med(steadies),
+        "steady_dataloader_wait_ms_per_iter": med(dl_waits),
+        "gt_cache_mib": med(gt_caches),
         "steady_allocs_per_iter": med(allocs),
         "peak_cuda_used_mib": med(peaks),
         "bytes_per_splat": med(bps),

@@ -38,6 +38,13 @@ namespace lfs::training {
         void set_ledger(const diagnostics::TrainingStateLedger& ledger);
         void set_psnr(double psnr);
 
+        /// Accumulate wall time spent blocked in dataloader->next() (outside
+        /// the train_step span that feeds steady_ms). @p iter is 1-based.
+        void record_dataloader_wait(int iter, double wait_ms);
+
+        /// Decoded-GT device cache footprint (bytes) for VRAM ledger line.
+        void set_gt_cache_bytes(std::size_t bytes);
+
         /// Write JSON report to @p path (parent dirs created as needed).
         void finalize(const std::filesystem::path& path);
 
@@ -61,8 +68,14 @@ namespace lfs::training {
         std::uint64_t steady_steps_ = 0;
         double warmup_ms_sum_ = 0.0;
         double steady_ms_sum_ = 0.0;
+        // Dataloader wait is outside train_step timing (steady_ms is blind to it).
+        double dataloader_wait_ms_sum_ = 0.0;
+        double steady_dataloader_wait_ms_sum_ = 0.0;
+        std::uint64_t dataloader_wait_count_ = 0;
+        std::uint64_t steady_dataloader_wait_count_ = 0;
         std::size_t peak_cuda_used_ = 0;
         std::size_t peak_cuda_total_ = 0;
+        std::size_t gt_cache_bytes_ = 0;
         float last_loss_ = 0.0f;
         std::size_t last_live_splats_ = 0;
         double last_psnr_ = -1.0;
