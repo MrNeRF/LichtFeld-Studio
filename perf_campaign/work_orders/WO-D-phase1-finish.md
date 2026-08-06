@@ -7,3 +7,8 @@ REMAINING WORK:
 1. Finish task 1.9 (plan §Phase 1): stop memsetting the full [2,N] densification_info every iteration (mcmc.cpp:700-714, mrnf.cpp:573) — zero in the writing kernel or only touched rows. TDD: equivalence test for accumulated densification stats across several simulated steps (fail-first evidence, then pass). Commit with numbers.
 2. FINAL DUAL GATE for the whole Phase-1 series: bonsai `flock /tmp/lfs-bench.lock ./perf_campaign/bench.sh --runs 3` AND bicycle `LFS_BENCH_DATASET=/home/gauss/data/360_v2/bicycle flock /tmp/lfs-bench.lock ./perf_campaign/bench.sh --runs 3 --iters 7000`. Compare vs Wave-1 numbers (bonsai 4.085 ms/iter, 0.05 allocs/iter) and the bicycle baseline in BASELINE.md (3.290 ms/iter, 1038.5 MiB, loss curves not just final). Any bicycle anomaly = stop and investigate per rules.
 3. Update PROGRESS.md with the full Phase-1 table (all six tasks, fail/pass evidence, both-workload numbers); log any bug to ISSUES.md.
+
+NOTE — RESUME SEMANTICS: if your branch already contains commits for this order or the
+working tree has uncommitted edits, that is a PREVIOUS INTERRUPTED ATTEMPT of this same
+order. git log + git diff first; keep what is sound, finish or revert per-file; never
+blindly restart from scratch and never discard committed work.

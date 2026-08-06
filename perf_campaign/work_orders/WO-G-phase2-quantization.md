@@ -12,3 +12,8 @@ Store shN packed 2 B/cell (uint16) + float2 bounds per 256-splat block (per-spla
 TDD: codec tests; render-equivalence test (PSNR of quantized-SH render vs fp32 render on synthetic scene > 55dB); densify-path roundtrip tests; ledger (fail-first). GATE: dual-workload with bicycle loss curves + a FULL bicycle 7k A/B (flag on vs off): final loss delta < noise band, curve overlap; B/splat ~403->~301. If quality regresses: investigate bounds granularity (128 vs 256) before conceding.
 
 Commit per task with numbers. If any gate fails and cannot be fixed: leave the flag OFF by default, document in ISSUES.md, still land the infrastructure. Summary table at end.
+
+NOTE — RESUME SEMANTICS: if your branch already contains commits for this order or the
+working tree has uncommitted edits, that is a PREVIOUS INTERRUPTED ATTEMPT of this same
+order. git log + git diff first; keep what is sound, finish or revert per-file; never
+blindly restart from scratch and never discard committed work.

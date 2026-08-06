@@ -8,3 +8,8 @@ CONTEXT UPDATE: the user-visible "memory is full" warnings were traced to SYSTEM
 3. **NVRM 'invalid mmap context' investigation**: reproduce if possible (CUDA-VMM export + Vulkan import teardown ordering is the suspect — e.g., freeing exported VMM memory while imports live, or teardown order on trainer shutdown in GUI). Read splat_exportable_storage.cpp + vulkan_external_tensor.cpp teardown paths; fix ordering bugs found; document in ISSUES.md either way.
 4. **RAM-side regression guard**: add a leak-regression test running N fixed-size training-like cycles asserting host RSS and VRAM deltas ~0 between cycle 10 and N.
 5. Gate: dual-workload bench per RULES.md; all new tests green; PROGRESS.md + ISSUES.md updated; commit per fix with numbers.
+
+NOTE — RESUME SEMANTICS: if your branch already contains commits for this order or the
+working tree has uncommitted edits, that is a PREVIOUS INTERRUPTED ATTEMPT of this same
+order. git log + git diff first; keep what is sound, finish or revert per-file; never
+blindly restart from scratch and never discard committed work.

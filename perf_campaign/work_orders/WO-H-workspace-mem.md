@@ -10,3 +10,8 @@ ssim.cuh:206-224 / ssim.cu:2087-2088: 23.7 MiB of literal zeros passed as unused
 ## 6D.3 fp16 dm_* partials for decoupled/masked/pure-SSIM
 Fused path already ships fp16 partials (ssim.cuh:135-158) — port the same to the other variants (ssim.cuh:220-223, 281-283, 339-342 + kernels). TDD: grad-equivalence within fp16 tolerance vs fp32 partials on synthetic images; workspace-bytes assertions (fail first); bench must not regress (expect slight win).
 GATE: dual-workload per rules (bicycle loss curves for 6D.3). PROGRESS/ISSUES. Commit per task with numbers.
+
+NOTE — RESUME SEMANTICS: if your branch already contains commits for this order or the
+working tree has uncommitted edits, that is a PREVIOUS INTERRUPTED ATTEMPT of this same
+order. git log + git diff first; keep what is sound, finish or revert per-file; never
+blindly restart from scratch and never discard committed work.

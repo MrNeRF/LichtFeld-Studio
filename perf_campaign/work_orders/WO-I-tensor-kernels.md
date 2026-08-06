@@ -10,3 +10,8 @@ tensor_unified_ops.cpp:1866-1881: stop cloning matched-shape operands (kernel is
 ## 6C.2 Wire dead Channel3D kernels
 tensor_broadcast_ops.cuh:439-669 implemented coalesced/smem variants; launcher only uses the slow one (:999-1001). Add selection heuristic by C and measure — keep whichever wins per size class, delete truly-dead code. TDD: equivalence across C in {1,3,4,16,64}; microbench table in commit.
 GATE: full tensor suites (lichtfeld_tests + tensor_hardening_tests) + dual-workload bench. PROGRESS/ISSUES. Commit per task.
+
+NOTE — RESUME SEMANTICS: if your branch already contains commits for this order or the
+working tree has uncommitted edits, that is a PREVIOUS INTERRUPTED ATTEMPT of this same
+order. git log + git diff first; keep what is sound, finish or revert per-file; never
+blindly restart from scratch and never discard committed work.
