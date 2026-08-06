@@ -16,6 +16,7 @@ for candidate in \
     fi
 done
 fatal=0
+gpu_av=0
 
 usage() {
     cat <<'EOF'
@@ -25,6 +26,12 @@ Options:
   --binary PATH      LichtFeld Studio executable
   --layer-path PATH  Vulkan validation layer manifest directory
   --fatal            Abort on the first validation error
+  --gpu-av           Also enable GPU-assisted validation. Off by default: the
+                     pinned layer (1.4.341.0) reports false-positive
+                     VUID-vkCmdDispatch-storageBuffers-06936 against stale
+                     push-descriptor snapshots (Vulkan-ValidationLayers issue
+                     #11433, analysis in debug/epic1496/). Cross-check any
+                     GPU-AV OOB hit against a core+sync run before trusting it.
   -h, --help         Show this help
 EOF
 }
@@ -41,6 +48,10 @@ while (($#)); do
         ;;
     --fatal)
         fatal=1
+        shift
+        ;;
+    --gpu-av)
+        gpu_av=1
         shift
         ;;
     -h | --help)
@@ -68,10 +79,14 @@ if [[ -z "$layer_path" || ! -f "$layer_path/VkLayer_khronos_validation.json" ]];
     exit 1
 fi
 
+layer_enables="VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT"
+if ((gpu_av)); then
+    layer_enables="VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,$layer_enables"
+fi
 validation_environment=(
     "VK_LAYER_PATH=$layer_path"
     "VK_LOADER_LAYERS_ENABLE=VK_LAYER_KHRONOS_validation"
-    "VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT"
+    "VK_LAYER_ENABLES=$layer_enables"
     "LFS_VK_VALIDATION=1"
 )
 if ((fatal)); then

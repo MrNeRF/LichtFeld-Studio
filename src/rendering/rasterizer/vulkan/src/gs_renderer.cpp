@@ -1832,6 +1832,30 @@ void VulkanGSRenderer::executeCumsum(
 
     resizeDeviceBuffer(output_buffer, num_elements);
 
+    // A scan phase writes gid < active_elements into its bound storage. A backing
+    // smaller than that is silent out-of-bounds GPU writes with robustness off
+    // (caught live by GPU-AV as VUID 06936), so pin the contract host-side.
+    const auto require_backing = [](const _VulkanBuffer& b, const size_t needed_elements,
+                                    const char* role) {
+        const size_t needed_bytes = needed_elements * sizeof(int32_t);
+        if (b.buffer == VK_NULL_HANDLE || b.allocSize < needed_bytes || b.size < needed_bytes) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "VkSplat cumsum {} backing is smaller than the scan (label='{}', buffer={:#x}, alloc_bytes={}, capacity_bytes={}, active_bytes={}, needed_bytes={}, elements={})",
+                    role,
+                    b.label ? b.label : "?",
+                    lfs::rendering::vkHandleValue(b.buffer),
+                    b.allocSize,
+                    b.capacity,
+                    b.size,
+                    needed_bytes,
+                    needed_elements),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    };
+    require_backing(input_buffer.deviceBuffer, num_elements, "input");
+    require_backing(output_buffer.deviceBuffer, num_elements, "output");
+
     const auto begin_cumsum = [&](const bool uses_level_1, const bool uses_level_2) {
         std::vector<BufferBarrier> barriers = additional_begin_barriers;
         barriers.insert(barriers.end(),
@@ -1868,6 +1892,7 @@ void VulkanGSRenderer::executeCumsum(
     else if (num_elements <= block * block) {
         const size_t num_blocks = _CEIL_DIV(num_elements, block);
         resizeDeviceBuffer(buffers._cumsum_blockSums, num_blocks, true);
+        require_backing(buffers._cumsum_blockSums.deviceBuffer, num_blocks, "block_sums");
         begin_cumsum(true, false);
 
         execute_cumsum_phase(
@@ -1912,6 +1937,8 @@ void VulkanGSRenderer::executeCumsum(
         const size_t num_elements_2 = _CEIL_DIV(num_elements_1, block);
         resizeDeviceBuffer(buffers._cumsum_blockSums, num_elements_1, true);
         resizeDeviceBuffer(buffers._cumsum_blockSums2, num_elements_2, true);
+        require_backing(buffers._cumsum_blockSums.deviceBuffer, num_elements_1, "block_sums");
+        require_backing(buffers._cumsum_blockSums2.deviceBuffer, num_elements_2, "block_sums2");
         begin_cumsum(true, true);
 
         execute_cumsum_phase(
