@@ -335,6 +335,25 @@ TEST_F(OpfFormatTest, LoadsCompleteOpfProjectThroughLoader) {
     EXPECT_EQ(std::get<lfs::io::LoadedScene>(result->data).cameras.size(), 1u);
 }
 
+TEST_F(OpfFormatTest, AppliesSceneReferenceFrameToCameraCenters) {
+    write(root / "reference-frame.json", R"({
+        "format":"application/opf-scene-reference-frame+json", "version":"1.0",
+        "base_to_canonical":{"scale":[2,3,4],"shift":[10,20,30],"swap_xy":true}
+    })");
+    lfs::io::opf::Resource resource{"reference-frame.json",
+                                    "application/opf-scene-reference-frame+json",
+                                    root / "reference-frame.json"};
+    auto frame = lfs::io::opf::read_scene_reference_frame(resource);
+    ASSERT_TRUE(frame.has_value()) << frame.error().format();
+    lfs::io::opf::ImportedCamera camera{
+        1, "image.jpg", 10, 10, "perspective", {5, 5}, 8, {0, 0, 0}, {0, 0},
+        {{1, 0, 0, 0, 1, 0, 0, 0, 1}, {1, 2, 3}}};
+    lfs::io::opf::apply_scene_reference_frame(camera, *frame);
+    EXPECT_FLOAT_EQ(camera.pose.position[0], 16.0f);
+    EXPECT_FLOAT_EQ(camera.pose.position[1], 23.0f);
+    EXPECT_FLOAT_EQ(camera.pose.position[2], 42.0f);
+}
+
 TEST_F(OpfFormatTest, LoadsOpfProjectWhenDatasetFolderIsSelected) {
     write(root / "project.opf", R"({
         "format":"application/opf-project+json", "version":"1.0", "id":"project",

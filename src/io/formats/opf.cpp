@@ -507,6 +507,58 @@ namespace lfs::io::opf {
         return manifest;
     }
 
+    Result<SceneReferenceFrame> read_scene_reference_frame(const Resource& resource) {
+        if (resource.format != "application/opf-scene-reference-frame+json")
+            return invalid(resource.resolved_path, "OPF scene reference frame has an unexpected format.");
+        std::ifstream input(resource.resolved_path, std::ios::binary);
+        if (!input)
+            return make_error(ErrorCode::READ_FAILURE, "Cannot open OPF scene reference frame.", resource.resolved_path);
+        json root;
+        try {
+            root = json::parse(input);
+        } catch (const json::parse_error& error) {
+            return make_error(ErrorCode::MALFORMED_JSON,
+                              std::format("Malformed OPF scene reference frame JSON: {}", error.what()),
+                              resource.resolved_path);
+        }
+        if (!root.is_object() || root.value("format", std::string{}) !=
+                                      "application/opf-scene-reference-frame+json")
+            return invalid(resource.resolved_path, "Unsupported OPF scene reference frame format.");
+        const auto it = root.find("base_to_canonical");
+        if (it == root.end() || !it->is_object())
+            return invalid(resource.resolved_path, "OPF scene reference frame requires base_to_canonical.");
+        SceneReferenceFrame frame;
+        for (const char* key : {"scale", "shift"}) {
+            const auto value = it->find(key);
+            if (value == it->end() || !value->is_array() || value->size() != 3)
+                return invalid(resource.resolved_path, std::format("OPF scene reference frame requires {}[3].", key));
+            for (size_t i = 0; i < 3; ++i) {
+                if (!(*value)[i].is_number())
+                    return invalid(resource.resolved_path, std::format("OPF scene reference frame {} must be numeric.", key));
+                if (std::string_view(key) == "scale")
+                    frame.scale[i] = (*value)[i].get<double>();
+                else
+                    frame.shift[i] = (*value)[i].get<double>();
+            }
+        }
+        if (const auto swap = it->find("swap_xy"); swap != it->end()) {
+            if (!swap->is_boolean())
+                return invalid(resource.resolved_path, "OPF scene reference frame swap_xy must be boolean.");
+            frame.swap_xy = swap->get<bool>();
+        }
+        if (const auto crs = root.find("crs"); crs != root.end() && crs->is_object())
+            frame.crs_definition = crs->value("definition", std::string{});
+        return frame;
+    }
+
+    void apply_scene_reference_frame(ImportedCamera& camera, const SceneReferenceFrame& frame) {
+        auto position = camera.pose.position;
+        if (frame.swap_xy)
+            std::swap(position[0], position[1]);
+        for (size_t i = 0; i < 3; ++i)
+            camera.pose.position[i] = static_cast<float>(position[i] * frame.scale[i] + frame.shift[i]);
+    }
+
     Result<std::vector<CalibratedCamera>> read_calibrated_cameras(const Resource& resource) {
         if (resource.format != "application/opf-calibrated-cameras+json")
             return invalid(resource.resolved_path, "OPF calibrated cameras resource has an unexpected format.");

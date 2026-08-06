@@ -75,6 +75,13 @@ namespace lfs::io::opf {
         std::vector<std::filesystem::path> buffer_paths;
     };
 
+    struct SceneReferenceFrame {
+        std::array<double, 3> scale{1.0, 1.0, 1.0};
+        std::array<double, 3> shift{0.0, 0.0, 0.0};
+        bool swap_xy = false;
+        std::string crs_definition;
+    };
+
     struct CalibratedCamera {
         std::uint64_t id;
         std::uint64_t sensor_id;
@@ -129,5 +136,7 @@ namespace lfs::io::opf {
     [[nodiscard]] Result<lfs::io::CameraData> to_camera_data(const ImportedCamera& camera);
     [[nodiscard]] Result<std::shared_ptr<lfs::core::Camera>> make_camera(
         const ImportedCamera& camera);
+    [[nodiscard]] Result<SceneReferenceFrame> read_scene_reference_frame(const Resource& resource);
+    void apply_scene_reference_frame(ImportedCamera& camera, const SceneReferenceFrame& frame);
 
 } // namespace lfs::io::opf

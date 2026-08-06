@@ -69,6 +69,11 @@ namespace lfs::io {
                 return item.type == "calibration" &&
                        resource.format == "application/opf-calibrated-cameras+json";
             });
+        const auto* reference_frame_resource = find_resource(
+            *project, [](const auto& item, const auto& resource) {
+                return item.type == "scene_reference_frame" &&
+                       resource.format == "application/opf-scene-reference-frame+json";
+            });
         if (!camera_list_resource || !input_resource || !calibrated_resource)
             return make_error(ErrorCode::MISSING_REQUIRED_FILES,
                               "OPF project requires camera_list, input_cameras, and calibrated cameras resources.",
@@ -86,6 +91,13 @@ namespace lfs::io {
         auto imported = opf::assemble_cameras(*images, *sensors, *calibrated);
         if (!imported)
             return std::unexpected(imported.error());
+        if (reference_frame_resource) {
+            auto reference_frame = opf::read_scene_reference_frame(*reference_frame_resource);
+            if (!reference_frame)
+                return std::unexpected(reference_frame.error());
+            for (auto& camera : *imported)
+                opf::apply_scene_reference_frame(camera, *reference_frame);
+        }
 
         LoadedScene scene;
         if (!options.validate_only) {
