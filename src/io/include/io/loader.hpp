@@ -7,11 +7,13 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "io/error.hpp"
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -97,6 +99,15 @@ namespace lfs::io {
         std::shared_ptr<PointCloud> point_cloud;
     };
 
+    // Dataset georeference metadata preserved at the loader boundary. Loaders
+    // must not silently apply this information to the local scene coordinates.
+    struct GeoreferenceMetadata {
+        std::array<double, 3> scale{1.0, 1.0, 1.0};
+        std::array<double, 3> shift{0.0, 0.0, 0.0};
+        bool swap_xy = false;
+        std::string crs_definition;
+    };
+
     struct LoadResult {
         std::variant<std::shared_ptr<SplatData>, LoadedScene, std::shared_ptr<MeshData>> data;
         Tensor scene_center;
@@ -104,6 +115,7 @@ namespace lfs::io {
         std::string loader_used;
         std::chrono::milliseconds load_time{0};
         std::vector<std::string> warnings;
+        std::optional<GeoreferenceMetadata> georeference;
     };
 
     /**

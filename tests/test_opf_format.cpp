@@ -320,12 +320,14 @@ TEST_F(OpfFormatTest, LoadsCompleteOpfProjectThroughLoader) {
     write(root / "camera-list.json", R"({"format":"application/opf-camera-list+json","version":"1.0","cameras":[{"id":42,"uri":"image.jpg"}]})");
     write(root / "input-cameras.json", R"({"format":"application/opf-input-cameras+json","version":"1.0","sensors":[{"id":7,"image_size_px":[10,10],"internals":{"type":"perspective","principal_point_px":[5,5],"focal_length_px":8,"radial_distortion":[0,0,0],"tangential_distortion":[0,0]}}],"captures":[]})");
     write(root / "calibrated.json", R"({"format":"application/opf-calibrated-cameras+json","version":"1.0","sensors":[{"id":7,"internals":{"type":"perspective"}}],"cameras":[{"id":42,"sensor_id":7,"position":[0,0,0],"orientation_deg":[0,0,0]}]})");
+    write(root / "scene-reference.json", R"({"format":"application/opf-scene-reference-frame+json","version":"1.0","base_to_canonical":{"scale":[2,3,4],"shift":[10,20,30],"swap_xy":true},"crs":{"definition":"EPSG:25832"}})");
     write(root / "project.opf", R"({
         "format":"application/opf-project+json", "version":"1.0", "id":"project",
         "name":"fixture", "description":"loader test", "items":[
           {"id":"list", "type":"camera_list", "sources":[], "resources":[{"uri":"camera-list.json", "format":"application/opf-camera-list+json"}]},
           {"id":"input", "type":"input_cameras", "sources":[{"id":"list", "type":"camera_list"}], "resources":[{"uri":"input-cameras.json", "format":"application/opf-input-cameras+json"}]},
-          {"id":"calibration", "type":"calibration", "sources":[{"id":"input", "type":"input_cameras"}], "resources":[{"uri":"calibrated.json", "format":"application/opf-calibrated-cameras+json"}]}
+          {"id":"calibration", "type":"calibration", "sources":[{"id":"input", "type":"input_cameras"}], "resources":[{"uri":"calibrated.json", "format":"application/opf-calibrated-cameras+json"}]},
+          {"id":"reference", "type":"scene_reference_frame", "sources":[], "resources":[{"uri":"scene-reference.json", "format":"application/opf-scene-reference-frame+json"}]}
         ]
     })");
     auto loader = lfs::io::Loader::create();
@@ -333,6 +335,10 @@ TEST_F(OpfFormatTest, LoadsCompleteOpfProjectThroughLoader) {
     ASSERT_TRUE(result.has_value()) << result.error().format();
     ASSERT_TRUE(std::holds_alternative<lfs::io::LoadedScene>(result->data));
     EXPECT_EQ(std::get<lfs::io::LoadedScene>(result->data).cameras.size(), 1u);
+    ASSERT_TRUE(result->georeference.has_value());
+    EXPECT_EQ(result->georeference->crs_definition, "EPSG:25832");
+    EXPECT_TRUE(result->georeference->swap_xy);
+    EXPECT_DOUBLE_EQ(result->georeference->shift[2], 30.0);
 }
 
 TEST_F(OpfFormatTest, AppliesSceneReferenceFrameToCameraCenters) {

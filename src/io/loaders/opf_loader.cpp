@@ -97,10 +97,17 @@ namespace lfs::io {
         auto imported = opf::assemble_cameras(*images, *sensors, *calibrated);
         if (!imported)
             return std::unexpected(imported.error());
+        std::optional<GeoreferenceMetadata> georeference;
         if (reference_frame_resource) {
             auto parsed_reference_frame = opf::read_scene_reference_frame(*reference_frame_resource);
             if (!parsed_reference_frame)
                 return std::unexpected(parsed_reference_frame.error());
+            georeference = GeoreferenceMetadata{
+                .scale = parsed_reference_frame->scale,
+                .shift = parsed_reference_frame->shift,
+                .swap_xy = parsed_reference_frame->swap_xy,
+                .crs_definition = parsed_reference_frame->crs_definition,
+            };
         }
 
         std::shared_ptr<PointCloud> point_cloud;
@@ -136,6 +143,7 @@ namespace lfs::io {
         result.data = std::move(scene);
         result.loader_used = "OPF";
         result.warnings = project->warnings;
+        result.georeference = std::move(georeference);
         result.load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started);
         return result;
