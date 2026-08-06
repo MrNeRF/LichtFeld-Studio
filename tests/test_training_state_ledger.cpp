@@ -2,21 +2,28 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 /**
- * Phase 0.2 — bytes-per-splat training-state ledger.
+ * Phase 0.2 / 2.2 — bytes-per-splat training-state ledger.
  *
  * Hand-computed sizes from docs/analysis/spirulae-comparison/footprint-compare.md §7
  * and SPEED_VRAM_OPTIMIZATION_PLAN §0b (SH degree 3, capacity = live N):
  *
  *   params:   means 12 + rot 16 + scale 12 + opac 4 + sh0 12 + shN 192 = 248 B/splat
- *   optimizer: means 14 + sh0 14 + shN 104 + scale 14 + rot 16 + opac 10 = 172 B/splat
  *   densify:   densification_info [2,N] fp32 = 8 B/splat
  *   grads:     0 (fused FastGS path; allocate_gradients leaves grad empty)
- *   total:     428 B/splat
+ *
+ * Optimizer (Phase 2.2 joint codec, default ON):
+ *   non-SH: 14 cells × 4 B = 56 + 5 × ceil(N/256) × 16 bounds
+ *   SH:     48 cells × 2 B = 96 + 1 × ceil(N/256) × 16 bounds
+ *   At N=32: bounds = 6 × 16 = 96 total → optim = (56+96)*32 + 96 = 4960 (155 B/splat)
+ *   Large-N limit ≈ 152 B/splat (swizzled SH pad); spirulae quotes 146 with 45 cells.
+ *
+ * Legacy (LFS_ADAM_LEGACY_CODEC=1): 172 B/splat → total 428.
  */
 
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 
@@ -35,10 +42,26 @@ namespace {
 
     // Hand-computed B/splat (footprint-compare §7 / plan §0b).
     constexpr size_t kParamsBps = 248;
-    constexpr size_t kOptimBps = 172;
     constexpr size_t kDensifyBps = 8;
     constexpr size_t kGradsBps = 0;
-    constexpr size_t kTotalBps = 428;
+
+    // Exact joint optim bytes at N=32 (includes bounds tables).
+    [[nodiscard]] size_t joint_optim_bytes(const size_t n) {
+        using namespace joint_adam;
+        const size_t nb = n_bounds_for_prims(n);
+        // non-SH groups: means3, sh0 3, scaling3, rotation4, opacity1
+        const size_t non_sh_cells = n * (3 + 3 + 3 + 4 + 1);
+        const size_t non_sh_packed = packed_bytes(non_sh_cells, 16);
+        const size_t non_sh_bounds = nb * 5 * sizeof(float) * 4; // 5 attrs × float4
+        // SH: 48 swizzled float cells × 2 B, 1 bounds table
+        const size_t sh_cells = n * 48;
+        const size_t sh_packed = packed_bytes(sh_cells, 8);
+        const size_t sh_bounds = nb * sizeof(float) * 4;
+        return non_sh_packed + non_sh_bounds + sh_packed + sh_bounds;
+    }
+
+    constexpr size_t kOptimBpsLegacy = 172;
+    constexpr size_t kTotalBpsLegacy = 428;
 
     SplatData make_sh3_splat(const size_t n) {
         auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
@@ -72,6 +95,9 @@ namespace {
 // ---------------------------------------------------------------------------
 
 TEST(TrainingStateLedgerTest, SyntheticSh3MatchesFootprintTable) {
+    // Force joint codec path (Phase 2.2 default).
+    joint_adam::set_joint_codec_enabled_for_testing(true);
+
     auto splat = make_sh3_splat(kN);
     ASSERT_EQ(splat.size(), kN);
     ASSERT_EQ(splat.get_max_sh_degree(), kShDegree);
@@ -92,21 +118,40 @@ TEST(TrainingStateLedgerTest, SyntheticSh3MatchesFootprintTable) {
     optimizer.allocate_gradients(); // moments only; grads stay empty (fused path)
 
     const TrainingStateLedger ledger = compute_training_state_ledger(splat, &optimizer);
+    const size_t expected_optim = joint_optim_bytes(kN);
+    const size_t expected_total = kParamsBps * kN + expected_optim + kDensifyBps * kN;
 
     EXPECT_EQ(ledger.live_splats, kN);
     EXPECT_EQ(ledger.params_bytes, kParamsBps * kN)
         << "means 12 + rot 16 + scale 12 + opac 4 + sh0 12 + shN 192 = 248";
-    EXPECT_EQ(ledger.optimizer_bytes, kOptimBps * kN)
-        << "uint8 m+v + per-primitive fp32 scales (footprint-compare §3)";
+    EXPECT_EQ(ledger.optimizer_bytes, expected_optim)
+        << "joint (u,log_s) 16-bit non-SH + 8-bit SH + float4 bounds/256";
     EXPECT_EQ(ledger.gradients_or_helpers_bytes, kGradsBps * kN)
         << "fused FastGS path keeps no persistent world grads";
     EXPECT_EQ(ledger.densify_aux_bytes, kDensifyBps * kN)
         << "densification_info [2,N] fp32";
-    EXPECT_EQ(ledger.total_bytes, kTotalBps * kN);
-    EXPECT_DOUBLE_EQ(ledger.bytes_per_splat, static_cast<double>(kTotalBps));
+    EXPECT_EQ(ledger.total_bytes, expected_total);
+    EXPECT_DOUBLE_EQ(ledger.bytes_per_splat,
+                     static_cast<double>(expected_total) / static_cast<double>(kN));
+
+    // Must be strictly leaner than legacy 172 B/splat optimizer.
+    EXPECT_LT(ledger.optimizer_bytes, kOptimBpsLegacy * kN);
+    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
+}
+
+TEST(TrainingStateLedgerTest, LegacyCodecStillReports172) {
+    joint_adam::set_joint_codec_enabled_for_testing(false);
+    auto splat = make_sh3_splat(kN);
+    AdamOptimizer optimizer(splat, AdamConfig{});
+    optimizer.allocate_gradients();
+    const auto ledger = compute_training_state_ledger(splat, &optimizer);
+    EXPECT_EQ(ledger.optimizer_bytes, kOptimBpsLegacy * kN);
+    EXPECT_EQ(ledger.total_bytes, kTotalBpsLegacy * kN);
+    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
 }
 
 TEST(TrainingStateLedgerTest, PublishesIntoVramProfiler) {
+    joint_adam::set_joint_codec_enabled_for_testing(true);
     auto& profiler = VramProfiler::instance();
     profiler.setEnabled(true);
 
@@ -116,13 +161,16 @@ TEST(TrainingStateLedgerTest, PublishesIntoVramProfiler) {
 
     publish_training_state_ledger(splat, &optimizer);
 
+    const size_t expected_total = kParamsBps * kN + joint_optim_bytes(kN) + kDensifyBps * kN;
     const auto stored = profiler.trainingStateLedger();
     EXPECT_EQ(stored.live_splats, kN);
-    EXPECT_EQ(stored.total_bytes, kTotalBps * kN);
-    EXPECT_DOUBLE_EQ(stored.bytes_per_splat, static_cast<double>(kTotalBps));
+    EXPECT_EQ(stored.total_bytes, expected_total);
+    EXPECT_DOUBLE_EQ(stored.bytes_per_splat,
+                     static_cast<double>(expected_total) / static_cast<double>(kN));
 
     const auto snap = profiler.snapshot();
-    EXPECT_EQ(snap.training_state.total_bytes, kTotalBps * kN);
+    EXPECT_EQ(snap.training_state.total_bytes, expected_total);
 
     profiler.setEnabled(false);
+    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
 }

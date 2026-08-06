@@ -114,4 +114,26 @@ namespace fast_lfs::optimizer {
         const std::uint8_t zero_point,
         cudaStream_t stream = nullptr);
 
+    // Joint (u,log_s) densify reset: encode true (m,v)=(0,0) under each prim's
+    // current block bounds (codes for u=0,log_s=0 — not raw zero bytes).
+    // Contiguous params: n_attr cells/row, bits 8 or 16.
+    void joint_encode_zero_rows_at_indices(
+        std::uint8_t* packed,
+        const float* bounds, // float4 per 256-splat block
+        const int64_t* indices_device,
+        const int n_indices,
+        const int n_attr,
+        const int bits,
+        cudaStream_t stream = nullptr);
+
+    // Same for swizzled shN: walks float4 slots via shAt layout.
+    void joint_encode_zero_shN_at_indices(
+        std::uint8_t* packed,
+        const float* bounds,
+        const int64_t* indices_device,
+        const int n_indices,
+        const int slots_per_primitive,
+        const int bits,
+        cudaStream_t stream = nullptr);
+
 } // namespace fast_lfs::optimizer

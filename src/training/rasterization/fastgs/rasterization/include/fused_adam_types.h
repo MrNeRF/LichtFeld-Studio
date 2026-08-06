@@ -8,14 +8,21 @@
 
 namespace fast_lfs::rasterization {
 
-    // Optimizer moments are quantised: m (first) as signed int8 around zero-point 128,
-    // v (second) as quantised sqrt(v); both with per-primitive fp32 scales. param stays fp32.
+    // Optimizer moments: either legacy uint8 m/v + per-primitive scales, or joint
+    // (u, log_s) packed + float4 bounds per 256-splat block (Phase 2.2).
+    // joint_bits == 0 → legacy; 8 or 16 → joint codec.
     struct FusedAdamParam {
         float* param = nullptr;
+        // Legacy codec
         std::uint8_t* exp_avg_q = nullptr;
         std::uint8_t* exp_avg_sq_q = nullptr;
         float* exp_avg_scale = nullptr;
         float* exp_avg_sq_scale = nullptr;
+        // Joint codec: packed (u,log_s) bytes + float4 bounds[n_bounds]
+        std::uint8_t* joint_packed = nullptr;
+        float* joint_bounds = nullptr; // float4 as 4 floats per bound
+        int joint_bits = 0;            // 0=legacy, 8=SH, 16=non-SH
+        int n_primitives = 0;          // live splat count (bounds index = prim/256)
         const bool* frozen_mask = nullptr;
         int frozen_mask_size = 0;
         float frozen_lr_scale = 0.0f;

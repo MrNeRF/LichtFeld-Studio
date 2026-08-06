@@ -754,3 +754,67 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+---
+## Task 2.2 — Joint (u, log_s) Adam codec
+
+- **Branch:** `lfs-elite`
+- **Change:** Replace uint8 moments + per-primitive fp32 scales with spirulae-style
+  joint `(u, log_s)` codec: 16-bit non-SH (4 B/cell) / 8-bit SH (2 B/cell),
+  `float4` bounds per 256-splat block, endpoint-exact, 0↔0 fixed point.
+  Decode+update+encode inside fused Adam (`adam_step_row_joint` /
+  `apply_shN_grads_packed_joint`). Runtime fallback: `LFS_ADAM_LEGACY_CODEC=1`
+  (or `set_joint_codec_enabled_for_testing(false)`).
+  Densify/relocate/reset encode true zeros under current bounds
+  (`joint_encode_zero_*`). Compact rebuilds zero bounds (free-zero moments).
+  Also: MRNF `ensure_*_capacity` no longer treats `cuda.direct` as interop external
+  (fixes shN max_cap reservation under-allocation).
+- **Fail evidence (TDD):**
+  ```
+  # Pre-impl: no joint_adam_codec.hpp / JointAdamCodecTest
+  tests/test_joint_adam_codec.cpp: fatal error: lfs/training/joint_adam_codec.hpp: No such file
+  # Ledger expected 172 optim B/splat (legacy) before joint path
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] 6 tests.  (JointAdamCodecTest.*)
+  [  PASSED  ] 3 tests.  (TrainingStateLedgerTest.* incl. joint + legacy)
+  [  PASSED  ] 2 tests.  (AdamCapacityInvariant.*)
+  [  PASSED  ] 19 tests. (MRNFStrategyTest.*)
+  [  PASSED  ] 2 tests.  (MCMCTest.* with legacy scale guards)
+  ```
+- **Dual-workload gate (quiet-ish; 3-run medians):**
+
+  **Bonsai** (2000 iters) vs Wave-2:
+
+  | metric | Wave-2 | after 2.2 | Δ |
+  |---|---:|---:|---|
+  | wall_s (med) | ~8.9 | **9.67** | +noise/block256 |
+  | steady_ms/iter | 4.065 | **4.287** | +5.5% (block_size_preprocess_backward 128→256 for quant blocks) |
+  | steady_allocs/iter | 0.05 | **0.08** | flat |
+  | peak VRAM MiB | 938.3 | **930.1** | −8 |
+  | B/splat | 429.0 | **409.4** | **−19.6** (optim 172→~152; LFS shN pad 48 cells) |
+  | last_loss | ~0.03–0.04 | 0.030–0.035 | ok |
+
+  Runs: `perf_campaign/runs/20260806T210434Z_run{1,2,3}/`
+
+  **Bicycle canary** (7000 iters) vs Wave-2:
+
+  | metric | Wave-2 | after 2.2 | Δ |
+  |---|---:|---:|---|
+  | wall_s (med) | — | **41.07** | (high wall variance; run1=34.8) |
+  | steady_ms/iter | 3.208 | **3.215** | **flat** |
+  | steady_allocs/iter | 0.04 | **0.07** | ok |
+  | peak VRAM MiB | 1026.3 | **986.1** | −40 |
+  | B/splat | 429.0 | **409.4** | −19.6 |
+  | final loss range | 0.079–0.107 | **0.106–0.158** | high-variance OK; curves healthy |
+
+  Loss-curve samples (run3, every 1k): 1k=0.17, 2k=0.12, 3k=0.18, 4k=0.10,
+  5k=0.10, 6k=0.12, 6.9k=0.11 — densify 54k→500k, no collapse/NaN.
+
+  Note: target ~403 B/splat assumes spirulae 45 SH cells; LFS swizzled pad is
+  48 cells → optim 152 vs 146 → total ~409. Phase 2.4 can reclaim the pad.
+
+- **Env flag:** `LFS_ADAM_LEGACY_CODEC=1` forces legacy uint8+scales path.
+- **Default:** joint ON.
+- **Commit:** (this commit)

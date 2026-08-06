@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "lfs/training/joint_adam_codec.cuh"
+
 #include <cooperative_groups.h>
 #include <cstdint>
 namespace cg = cooperative_groups;
@@ -444,6 +446,7 @@ namespace fast_lfs::optimizer::kernels::adam {
 
     // Reset quantised rows to the "zero moment" state: bytes -> zero_point, scale -> 0.
     // (m uses zero_point 128, v uses 0; both dequantise to 0 with scale 0.)
+    // scales may be null (joint codec: only packed bytes need zeroing).
     __global__ void zero_quantized_rows_cu(
         uint8_t* tensor_q,
         float* scales,
@@ -460,7 +463,58 @@ namespace fast_lfs::optimizer::kernels::adam {
         for (int i = 0; i < row_size; ++i) {
             tensor_q[row_start + i] = zero_point;
         }
-        scales[row_idx] = 0.0f;
+        if (scales != nullptr) {
+            scales[row_idx] = 0.0f;
+        }
+    }
+
+    // Encode (u,log_s)=(0,0) under current block bounds → true (m,v)=(0,0).
+    // Contiguous [N, n_attr] cells; packed is [N, n_attr * bpc] uint8.
+    template <int BITS>
+    __global__ void joint_encode_zero_rows_cu(
+        uint8_t* packed,
+        const float* bounds,
+        const int64_t* indices,
+        const int n_indices,
+        const int n_attr) {
+        using C = lfs::training::joint_adam::DeviceCodec<BITS>;
+        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= n_indices)
+            return;
+        const int64_t prim = indices[idx];
+        const int bidx = static_cast<int>(prim / 256);
+        const float4 mm = *reinterpret_cast<const float4*>(bounds + 4 * bidx);
+        for (int a = 0; a < n_attr; ++a) {
+            const int64_t cell = prim * static_cast<int64_t>(n_attr) + a;
+            C::encode_us(packed, cell, 0.0f, 0.0f, mm);
+        }
+    }
+
+    // Swizzled shN: one thread per primitive; zero all float cells in layout slots.
+    template <int BITS>
+    __global__ void joint_encode_zero_shN_cu(
+        uint8_t* packed,
+        const float* bounds,
+        const int64_t* indices,
+        const int n_indices,
+        const int slots_per_primitive) {
+        using C = lfs::training::joint_adam::DeviceCodec<BITS>;
+        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= n_indices)
+            return;
+        const int64_t prim = indices[idx];
+        const int bidx = static_cast<int>(prim / 256);
+        const float4 mm = *reinterpret_cast<const float4*>(bounds + 4 * bidx);
+        const uint slots = static_cast<uint>(slots_per_primitive);
+        for (uint k = 0; k < slots; ++k) {
+            // shAt(p, k, slots) = (p/R)*(slots*R) + k*R + (p%R)
+            constexpr uint R = 32u;
+            const uint p = static_cast<uint>(prim);
+            const uint slot = (p / R) * (slots * R) + k * R + (p % R);
+            for (int c = 0; c < 4; ++c) {
+                C::encode_us(packed, static_cast<int64_t>(slot) * 4 + c, 0.0f, 0.0f, mm);
+            }
+        }
     }
 
 } // namespace fast_lfs::optimizer::kernels::adam

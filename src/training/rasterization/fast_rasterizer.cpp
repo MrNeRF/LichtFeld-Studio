@@ -685,6 +685,10 @@ namespace lfs::training {
             dst.exp_avg_sq_q = src.exp_avg_sq_q;
             dst.exp_avg_scale = src.exp_avg_scale;
             dst.exp_avg_sq_scale = src.exp_avg_sq_scale;
+            dst.joint_packed = src.joint_packed;
+            dst.joint_bounds = src.joint_bounds;
+            dst.joint_bits = src.joint_bits;
+            dst.n_primitives = src.n_primitives;
             dst.frozen_mask = src.frozen_mask;
             dst.frozen_mask_size = src.frozen_mask_size;
             dst.frozen_lr_scale = src.frozen_lr_scale;

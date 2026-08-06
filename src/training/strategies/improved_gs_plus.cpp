@@ -478,24 +478,49 @@ namespace lfs::training {
             if (!state)
                 return;
 
-            // Quantised moments: reset a primitive by zeroing its per-primitive scales (a zero
-            // scale dequantises every moment to zero), for both contiguous and swizzled layouts.
-            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
-                return;
-            auto scale_zeros = lfs::core::Tensor::zeros(
-                lfs::core::TensorShape({sampled_idxs.numel()}), state->exp_avg_scale.device());
-            state->exp_avg_scale.index_put_(sampled_idxs, scale_zeros);
-            state->exp_avg_sq_scale.index_put_(sampled_idxs, scale_zeros);
-
-            if (param_type == ParamType::ShN) {
-                if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                    auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
-                                       ? sampled_idxs
-                                       : sampled_idxs.to(lfs::core::DataType::Int32);
-                    lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
+            if (state->is_joint()) {
+                auto idx_cpu = sampled_idxs.cpu();
+                std::vector<int64_t> host_idx;
+                host_idx.reserve(sampled_idxs.numel());
+                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
+                    const auto* p = idx_cpu.ptr<int64_t>();
+                    host_idx.assign(p, p + sampled_idxs.numel());
+                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
+                    const auto* p = idx_cpu.ptr<int32_t>();
+                    for (size_t i = 0; i < sampled_idxs.numel(); ++i)
+                        host_idx.push_back(static_cast<int64_t>(p[i]));
                 }
-                return;
+                if (!host_idx.empty())
+                    _optimizer->reset_state_at_indices(param_type, host_idx);
+                if (param_type == ParamType::ShN) {
+                    if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
+                                           ? sampled_idxs
+                                           : sampled_idxs.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
+                    }
+                    return;
+                }
+            } else {
+                // Legacy: zero scales → moments dequantise to zero.
+                if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
+                    return;
+                auto scale_zeros = lfs::core::Tensor::zeros(
+                    lfs::core::TensorShape({sampled_idxs.numel()}), state->exp_avg_scale.device());
+                state->exp_avg_scale.index_put_(sampled_idxs, scale_zeros);
+                state->exp_avg_sq_scale.index_put_(sampled_idxs, scale_zeros);
+
+                if (param_type == ParamType::ShN) {
+                    if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
+                                           ? sampled_idxs
+                                           : sampled_idxs.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
+                    }
+                    return;
+                }
             }
 
             if (state->grad.is_valid() && state->grad.numel() > 0) {
@@ -1019,23 +1044,49 @@ namespace lfs::training {
             if (!state)
                 return;
 
-            // Quantised moments: zero per-primitive scales to reset moments (contiguous + shN).
-            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
-                return;
-            auto scale_zeros = lfs::core::Tensor::zeros(
-                lfs::core::TensorShape({target_indices.numel()}), state->exp_avg_scale.device());
-            state->exp_avg_scale.index_put_(target_indices, scale_zeros);
-            state->exp_avg_sq_scale.index_put_(target_indices, scale_zeros);
-
-            if (param_type == ParamType::ShN) {
-                if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                    auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
-                                       ? target_indices
-                                       : target_indices.to(lfs::core::DataType::Int32);
-                    lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+            if (state->is_joint()) {
+                auto idx_cpu = target_indices.cpu();
+                std::vector<int64_t> host_idx;
+                host_idx.reserve(target_indices.numel());
+                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
+                    const auto* p = idx_cpu.ptr<int64_t>();
+                    host_idx.assign(p, p + target_indices.numel());
+                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
+                    const auto* p = idx_cpu.ptr<int32_t>();
+                    for (size_t i = 0; i < target_indices.numel(); ++i)
+                        host_idx.push_back(static_cast<int64_t>(p[i]));
                 }
-                return;
+                if (!host_idx.empty())
+                    _optimizer->reset_state_at_indices(param_type, host_idx);
+                if (param_type == ParamType::ShN) {
+                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
+                                           ? target_indices
+                                           : target_indices.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+                    }
+                    return;
+                }
+            } else {
+                // Legacy: zero scales → moments dequantise to zero.
+                if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
+                    return;
+                auto scale_zeros = lfs::core::Tensor::zeros(
+                    lfs::core::TensorShape({target_indices.numel()}), state->exp_avg_scale.device());
+                state->exp_avg_scale.index_put_(target_indices, scale_zeros);
+                state->exp_avg_sq_scale.index_put_(target_indices, scale_zeros);
+
+                if (param_type == ParamType::ShN) {
+                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
+                                           ? target_indices
+                                           : target_indices.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+                    }
+                    return;
+                }
             }
 
             if (state->grad.is_valid() && state->grad.numel() > 0) {

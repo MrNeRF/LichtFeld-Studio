@@ -9,6 +9,7 @@
 #include "core/alloc_counter.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "lfs/training/joint_adam_codec.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
 #include <cuda_runtime.h>
@@ -17,6 +18,15 @@
 
 using namespace lfs::core;
 using namespace lfs::training;
+
+namespace {
+    // Capacity tests exercise both codecs; force joint (default) explicitly and
+    // also cover legacy via env in a separate assertion path when needed.
+    struct JointOnGuard {
+        JointOnGuard() { joint_adam::set_joint_codec_enabled_for_testing(true); }
+        ~JointOnGuard() { joint_adam::set_joint_codec_enabled_for_testing(std::nullopt); }
+    };
+} // namespace
 
 namespace {
 
@@ -46,6 +56,7 @@ namespace {
         strip(state.exp_avg_sq);
         strip(state.exp_avg_scale);
         strip(state.exp_avg_sq_scale);
+        strip(state.joint_bounds);
         if (state.grad.is_valid()) {
             strip(state.grad);
         }
@@ -55,6 +66,7 @@ namespace {
 } // namespace
 
 TEST(AdamCapacityInvariant, SlowPathReReservesSoSecondGrowIsFast) {
+    JointOnGuard joint_guard;
     constexpr size_t n0 = 16;
     constexpr size_t n_grow = 4;
 

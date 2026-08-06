@@ -127,28 +127,59 @@ namespace lfs::training {
                 return;
             }
 
-            // Quantised moments: zeroing a primitive's per-primitive scales dequantises its
-            // moments to zero, so we reset the scales (works for both contiguous and swizzled
-            // shN layouts). The fp32 grad buffer is still zeroed in its native layout.
-            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
-                return;
-            }
-            auto scale_zeros = lfs::core::Tensor::zeros(
-                lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
-            state->exp_avg_scale.index_put_(indices, scale_zeros);
-            state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
-
-            if (param_type == ParamType::ShN) {
-                const auto layout_rest = shN_layout_rest;
-                if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
-                    auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
-                                       ? indices
-                                       : indices.to(lfs::core::DataType::Int32);
-                    lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+            // Joint codec: zero packed moment rows via optimizer GPU path (uint8
+            // index_put_ is not supported). Grad zero still runs below for non-SH.
+            if (state->is_joint()) {
+                // Host vector of indices for AdamOptimizer::reset_state_at_indices
+                auto idx_cpu = indices.cpu();
+                std::vector<int64_t> host_idx;
+                host_idx.reserve(indices.numel());
+                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
+                    const auto* p = idx_cpu.ptr<int64_t>();
+                    host_idx.assign(p, p + indices.numel());
+                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
+                    const auto* p = idx_cpu.ptr<int32_t>();
+                    for (size_t i = 0; i < indices.numel(); ++i)
+                        host_idx.push_back(static_cast<int64_t>(p[i]));
                 }
-                return;
-            }
+                if (!host_idx.empty()) {
+                    optimizer.reset_state_at_indices(param_type, host_idx);
+                }
+                if (param_type == ParamType::ShN) {
+                    const auto layout_rest = shN_layout_rest;
+                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
+                                           ? indices
+                                           : indices.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+                    }
+                    return;
+                }
+                // continue to grad zero for non-SH
+            } else {
+                // Legacy quantised moments: zeroing a primitive's per-primitive scales
+                // dequantises its moments to zero.
+                if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
+                    return;
+                }
+                auto scale_zeros = lfs::core::Tensor::zeros(
+                    lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
+                state->exp_avg_scale.index_put_(indices, scale_zeros);
+                state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
+
+                if (param_type == ParamType::ShN) {
+                    const auto layout_rest = shN_layout_rest;
+                    if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                        auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
+                                           ? indices
+                                           : indices.to(lfs::core::DataType::Int32);
+                        lfs::core::shN_swizzled_zero_at_indices(
+                            state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
+                    }
+                    return;
+                }
+            } // !joint
 
             if (state->grad.is_valid() && state->grad.numel() > 0) {
                 const auto& shape = state->grad.shape();
@@ -403,13 +434,21 @@ namespace lfs::training {
             // is already direct-allocated at that capacity. Re-allocating would briefly hold
             // both old and new buffers (≈2× peak) before the cuda caching allocator releases the
             // freed chunk — so only replace if the param's capacity is actually below the target.
-            auto ensure_capacity_direct = [capacity](Tensor& param) {
+            // Only skip Vulkan/exportable interop storage. zeros_direct marks
+            // external_kind="cuda.direct", which is_external_storage() also reports
+            // true for — those must still grow to max_cap here.
+            auto is_interop_external = [](const Tensor& t) {
+                return t.is_external_storage() &&
+                       t.external_storage_kind() == "vulkan_external_buffer";
+            };
+
+            auto ensure_capacity_direct = [capacity, &is_interop_external](Tensor& param) {
                 if (param.capacity() >= capacity)
                     return;
                 // GUI exportable / Vulkan-external tensors grow with live N via
                 // SplatExportableStorage (Phase 5.1); do not steal them onto a
                 // private zeros_direct max_cap buffer.
-                if (param.is_external_storage())
+                if (is_interop_external(param))
                     return;
                 auto new_param = Tensor::zeros_direct(param.shape(), capacity);
                 cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
@@ -419,11 +458,11 @@ namespace lfs::training {
 
             // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
             const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-            auto ensure_shN_capacity_direct = [capacity, layout_rest](Tensor& param) {
+            auto ensure_shN_capacity_direct = [capacity, layout_rest, &is_interop_external](Tensor& param) {
                 const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, layout_rest);
                 if (param.capacity() >= cap_floats)
                     return;
-                if (param.is_external_storage())
+                if (is_interop_external(param))
                     return;
                 auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
                 cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
@@ -1056,7 +1095,38 @@ namespace lfs::training {
             auto* state = _optimizer->get_state_mutable(pt);
             if (!state)
                 continue;
-            if (pt == ParamType::ShN) {
+            if (state->is_joint()) {
+                // Compact packed rows + rebuild zero bounds → free-zero moments
+                // (decode under zero bounds is (m,v)=(0,0) regardless of codes).
+                if (pt == ParamType::ShN) {
+                    // 1D packed [n_floats * bpc]: allocate correct size (zero free-init).
+                    // Swizzled gather of multi-byte cells is not needed when bounds are
+                    // zeroed — moments restart clean after compact.
+                    const int bpc = state->joint_bits == 16 ? 4 : 2;
+                    const size_t logical_floats =
+                        lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
+                    const size_t cap_floats = cap > 0
+                                                  ? lfs::core::sh_swizzled_float_count(cap, layout_rest_u32)
+                                                  : logical_floats;
+                    const size_t logical_bytes = logical_floats * static_cast<size_t>(bpc);
+                    const size_t cap_bytes = cap_floats * static_cast<size_t>(bpc);
+                    state->exp_avg = Tensor::zeros_direct(
+                        TensorShape({logical_bytes}), cap_bytes, Device::CUDA, DataType::UInt8);
+                    state->size = logical_floats;
+                    state->capacity = cap_floats;
+                } else {
+                    compact(state->exp_avg);
+                    state->size = new_size;
+                    state->capacity = cap;
+                }
+                const size_t nb = (new_size + 255) / 256;
+                if (nb > 0) {
+                    state->joint_bounds = Tensor::zeros(
+                        TensorShape({nb, size_t{4}}), Device::CUDA);
+                } else {
+                    state->joint_bounds = {};
+                }
+            } else if (pt == ParamType::ShN) {
                 compact_shN_swizzled(state->exp_avg, cap, 128);
                 compact_shN_swizzled(state->exp_avg_sq, cap);
                 compact(state->exp_avg_scale);
@@ -1072,17 +1142,53 @@ namespace lfs::training {
                 state->size = new_size;
                 state->capacity = cap;
             }
-            if (state->exp_avg.is_valid()) {
-                if (pt == ParamType::ShN && state->capacity > state->size) {
+            // Grad buffers match param dtype/shape (fp32), not joint packed bytes.
+            if (pt == ParamType::ShN) {
+                if (layout_rest_u32 > 0 && state->capacity > 0) {
+                    const size_t logical_floats =
+                        lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
                     state->grad = Tensor::zeros_direct(
-                        state->exp_avg.shape(),
-                        state->capacity,
-                        state->exp_avg.device());
-                } else if (cap > 0 && pt != ParamType::ShN) {
-                    state->grad = Tensor::zeros_direct(
-                        state->exp_avg.shape(), cap, state->exp_avg.device());
+                        TensorShape({logical_floats}), state->capacity, Device::CUDA);
                 } else {
-                    state->grad = Tensor::zeros(state->exp_avg.shape(), state->exp_avg.device());
+                    state->grad = {};
+                }
+            } else if (state->exp_avg.is_valid()) {
+                // Param shape for this type (means/sh0/etc.)
+                Tensor* param_t = nullptr;
+                switch (pt) {
+                case ParamType::Means:
+                    param_t = &_splat_data->means();
+                    break;
+                case ParamType::Sh0:
+                    param_t = &_splat_data->sh0();
+                    break;
+                case ParamType::Scaling:
+                    param_t = &_splat_data->scaling_raw();
+                    break;
+                case ParamType::Rotation:
+                    param_t = &_splat_data->rotation_raw();
+                    break;
+                case ParamType::Opacity:
+                    param_t = &_splat_data->opacity_raw();
+                    break;
+                default:
+                    break;
+                }
+                if (param_t && param_t->is_valid()) {
+                    if (cap > 0) {
+                        state->grad = Tensor::zeros_direct(
+                            param_t->shape(), cap, param_t->device());
+                    } else {
+                        state->grad = Tensor::zeros(param_t->shape(), param_t->device());
+                    }
+                } else if (!state->is_joint()) {
+                    // Legacy fallback: moments share param shape
+                    if (cap > 0) {
+                        state->grad = Tensor::zeros_direct(
+                            state->exp_avg.shape(), cap, state->exp_avg.device());
+                    } else {
+                        state->grad = Tensor::zeros(state->exp_avg.shape(), state->exp_avg.device());
+                    }
                 }
             }
             // Capacity invariant after compact: capacity >= size.

@@ -44,14 +44,20 @@ namespace lfs::training {
     };
 
     struct AdamParamState {
-        lfs::core::Tensor grad;             // Gradient (transient, fp32)
-        lfs::core::Tensor exp_avg;          // Quantised first moment (m), uint8
-        lfs::core::Tensor exp_avg_sq;       // Quantised second moment (sqrt(v)), uint8
-        lfs::core::Tensor exp_avg_scale;    // Per-primitive m scale, fp32
-        lfs::core::Tensor exp_avg_sq_scale; // Per-primitive sqrt(v) scale, fp32
+        lfs::core::Tensor grad; // Gradient (transient, fp32)
+        // Legacy codec: separate uint8 m / sqrt(v) + per-primitive fp32 scales.
+        // Joint codec (Phase 2.2): exp_avg holds packed (u,log_s) bytes;
+        //   joint_bounds holds float4 per 256-splat block; exp_avg_sq/scales empty.
+        lfs::core::Tensor exp_avg;
+        lfs::core::Tensor exp_avg_sq;
+        lfs::core::Tensor exp_avg_scale;
+        lfs::core::Tensor exp_avg_sq_scale;
+        lfs::core::Tensor joint_bounds; // [n_bounds, 4] fp32; joint codec only
+        int joint_bits = 0;             // 0=legacy, 8=SH, 16=non-SH
         int64_t step_count = 0;
-        size_t capacity = 0; // Allocated capacity
+        size_t capacity = 0; // Allocated capacity (moment rows / float cells)
         size_t size = 0;     // Used size
+        [[nodiscard]] bool is_joint() const noexcept { return joint_bits != 0; }
     };
 
     enum class ParamType {
@@ -69,6 +75,10 @@ namespace lfs::training {
         uint8_t* exp_avg_sq_q = nullptr;
         float* exp_avg_scale = nullptr;
         float* exp_avg_sq_scale = nullptr;
+        uint8_t* joint_packed = nullptr;
+        float* joint_bounds = nullptr;
+        int joint_bits = 0;
+        int n_primitives = 0;
         const bool* frozen_mask = nullptr;
         int frozen_mask_size = 0;
         float frozen_lr_scale = 0.0f;

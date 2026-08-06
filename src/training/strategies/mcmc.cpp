@@ -85,15 +85,31 @@ namespace lfs::training {
                 return;
             }
 
-            // Quantised moments: zero the per-primitive scales (a zero scale dequantises every
-            // moment of that primitive to zero) — correct for both contiguous and swizzled shN.
-            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
-                return;
+            if (state->is_joint()) {
+                // Joint codec: encode true zeros under current bounds via optimizer API.
+                auto idx_cpu = indices.cpu();
+                std::vector<int64_t> host_idx;
+                host_idx.reserve(indices.numel());
+                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
+                    const auto* p = idx_cpu.ptr<int64_t>();
+                    host_idx.assign(p, p + indices.numel());
+                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
+                    const auto* p = idx_cpu.ptr<int32_t>();
+                    for (size_t i = 0; i < indices.numel(); ++i)
+                        host_idx.push_back(static_cast<int64_t>(p[i]));
+                }
+                if (!host_idx.empty())
+                    optimizer.reset_state_at_indices(param_type, host_idx);
+            } else {
+                // Legacy: zero scales → moments dequantise to zero.
+                if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
+                    return;
+                }
+                auto scale_zeros = lfs::core::Tensor::zeros(
+                    lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
+                state->exp_avg_scale.index_put_(indices, scale_zeros);
+                state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
             }
-            auto scale_zeros = lfs::core::Tensor::zeros(
-                lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
-            state->exp_avg_scale.index_put_(indices, scale_zeros);
-            state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
 
             // grad is transient (re-zeroed each step); only the contiguous case is handled here.
             if (param_type != ParamType::ShN && state->grad.is_valid() && state->grad.numel() > 0) {

@@ -102,319 +102,311 @@ namespace fast_lfs::rasterization::kernels::backward {
             }
         }
 
-        if (!in_range)
-            return;
-
-        // vksplat-style invisible fold: when n_touched_tiles == 0, skip the projection /
-        // SH-backward work and only apply Adam momentum decay (with regulariser grads for
-        // scaling / opacity). Eliminates the separate adam_step_invisible kernel launches.
-        if (primitive_n_touched_tiles[primitive_idx] == 0) {
-            // means / rotation / sh0: grad = 0 (pure momentum decay)
-            const float zero3[3] = {0.0f, 0.0f, 0.0f};
-            const float zero4[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            adam_step_row(zero3, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            adam_step_row(zero4, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            adam_step_row(zero3, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-
-            // scaling: grad = scale_regularization_grad per channel
-            const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
-            float scaling_grads[3] = {
-                scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base),
-                scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1),
-                scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2)};
-            add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scaling_grads);
-            adam_step_row(scaling_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-
-            // opacity: grad = opacity_extra_grad
-            const float opacity_grads[1] = {opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx))};
-            adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-
-            // shN: grad = 0, swizzle-aware momentum decay over the active slots.
-            if constexpr (ACTIVE_SH_BASES > 1) {
-                float3 zero_g[15];
+        // Grad buffers for unified Adam (joint block-bounds needs all threads to
+        // hit the same adam_step_row sequence — no early returns before Adam).
+        float mean_grads[3] = {0.0f, 0.0f, 0.0f};
+        float rotation_grads[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        float sh0_grads[3] = {0.0f, 0.0f, 0.0f};
+        float scale_grads[3] = {0.0f, 0.0f, 0.0f};
+        float opacity_grads[1] = {0.0f};
+        float3 shN_grads[15];
 #pragma unroll
-                for (int i = 0; i < 15; ++i)
-                    zero_g[i] = make_float3(0.0f, 0.0f, 0.0f);
-                constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
-                                                                                             : 3u;
-                apply_shN_grads_packed(fused_adam, primitive_idx, zero_g, N_SLOTS, sh_layout_slots);
+        for (int i = 0; i < 15; ++i)
+            shN_grads[i] = make_float3(0.0f, 0.0f, 0.0f);
+
+        const bool invisible = in_range && primitive_n_touched_tiles[primitive_idx] == 0;
+        const bool visible = in_range && !invisible;
+
+        if (invisible) {
+            // Reg-only grads; geometry/SH get pure momentum decay (zero grads).
+            const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
+            scale_grads[0] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base);
+            scale_grads[1] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1);
+            scale_grads[2] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2);
+            add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
+            opacity_grads[0] = opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx));
+        } else if (visible) {
+            // load 3d mean
+            const float3 mean3d = means[primitive_idx];
+
+            // sh evaluation backward (grads only — Adam applied in unified section)
+            const float3 dL_dmean3d_from_color = convert_sh_to_color_backward_grads<ACTIVE_SH_BASES>(
+                sh_coefficients_rest, grad_color_helper,
+                mean3d, cam_position[0],
+                primitive_idx,
+                sh_layout_slots,
+                sh0_grads,
+                shN_grads);
+
+            const float4 w2c_r3 = w2c[2];
+            const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
+            const float depth_safe = fmaxf(depth, 1e-4f);
+            const float4 w2c_r1 = w2c[0];
+            const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) / depth_safe;
+            const float4 w2c_r2 = w2c[1];
+            const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) / depth_safe;
+
+            // compute 3d covariance from raw scale and rotation
+            const float3 raw_scale = raw_scales[primitive_idx];
+            const float3 clamped_scale = make_float3(
+                fminf(raw_scale.x, config::max_raw_scale),
+                fminf(raw_scale.y, config::max_raw_scale),
+                fminf(raw_scale.z, config::max_raw_scale));
+            const float3 variance = make_float3(expf(2.0f * clamped_scale.x), expf(2.0f * clamped_scale.y), expf(2.0f * clamped_scale.z));
+            const float4 raw_rotation = raw_rotations[primitive_idx];
+            const float qr = raw_rotation.x;
+            const float qx = raw_rotation.y;
+            const float qy = raw_rotation.z;
+            const float qz = raw_rotation.w;
+            const float qrr_raw = qr * qr, qxx_raw = qx * qx, qyy_raw = qy * qy, qzz_raw = qz * qz;
+            const float q_norm_sq = qrr_raw + qxx_raw + qyy_raw + qzz_raw;
+            const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-7f);
+            const float qxx = 2.0f * qxx_raw / q_norm_sq_safe, qyy = 2.0f * qyy_raw / q_norm_sq_safe, qzz = 2.0f * qzz_raw / q_norm_sq_safe;
+            const float qxy = 2.0f * qx * qy / q_norm_sq_safe, qxz = 2.0f * qx * qz / q_norm_sq_safe, qyz = 2.0f * qy * qz / q_norm_sq_safe;
+            const float qrx = 2.0f * qr * qx / q_norm_sq_safe, qry = 2.0f * qr * qy / q_norm_sq_safe, qrz = 2.0f * qr * qz / q_norm_sq_safe;
+            const mat3x3 rotation = {
+                1.0f - (qyy + qzz), qxy - qrz, qry + qxz,
+                qrz + qxy, 1.0f - (qxx + qzz), qyz - qrx,
+                qxz - qry, qrx + qyz, 1.0f - (qxx + qyy)};
+            const mat3x3 rotation_scaled = {
+                rotation.m11 * variance.x, rotation.m12 * variance.y, rotation.m13 * variance.z,
+                rotation.m21 * variance.x, rotation.m22 * variance.y, rotation.m23 * variance.z,
+                rotation.m31 * variance.x, rotation.m32 * variance.y, rotation.m33 * variance.z};
+            const mat3x3_triu cov3d{
+                rotation_scaled.m11 * rotation.m11 + rotation_scaled.m12 * rotation.m12 + rotation_scaled.m13 * rotation.m13,
+                rotation_scaled.m11 * rotation.m21 + rotation_scaled.m12 * rotation.m22 + rotation_scaled.m13 * rotation.m23,
+                rotation_scaled.m11 * rotation.m31 + rotation_scaled.m12 * rotation.m32 + rotation_scaled.m13 * rotation.m33,
+                rotation_scaled.m21 * rotation.m21 + rotation_scaled.m22 * rotation.m22 + rotation_scaled.m23 * rotation.m23,
+                rotation_scaled.m21 * rotation.m31 + rotation_scaled.m22 * rotation.m32 + rotation_scaled.m23 * rotation.m33,
+                rotation_scaled.m31 * rotation.m31 + rotation_scaled.m32 * rotation.m32 + rotation_scaled.m33 * rotation.m33,
+            };
+
+            // ewa splatting gradient helpers
+            const float clip_left = (-0.15f * w - cx) / fx;
+            const float clip_right = (1.15f * w - cx) / fx;
+            const float clip_top = (-0.15f * h - cy) / fy;
+            const float clip_bottom = (1.15f * h - cy) / fy;
+            const float tx = clamp(x, clip_left, clip_right);
+            const float ty = clamp(y, clip_top, clip_bottom);
+            const float j11 = fx / depth_safe;
+            const float j13 = -j11 * tx;
+            const float j22 = fy / depth_safe;
+            const float j23 = -j22 * ty;
+            const float3 jw_r1 = make_float3(
+                j11 * w2c_r1.x + j13 * w2c_r3.x,
+                j11 * w2c_r1.y + j13 * w2c_r3.y,
+                j11 * w2c_r1.z + j13 * w2c_r3.z);
+            const float3 jw_r2 = make_float3(
+                j22 * w2c_r2.x + j23 * w2c_r3.x,
+                j22 * w2c_r2.y + j23 * w2c_r3.y,
+                j22 * w2c_r2.z + j23 * w2c_r3.z);
+            const float3 jwc_r1 = make_float3(
+                jw_r1.x * cov3d.m11 + jw_r1.y * cov3d.m12 + jw_r1.z * cov3d.m13,
+                jw_r1.x * cov3d.m12 + jw_r1.y * cov3d.m22 + jw_r1.z * cov3d.m23,
+                jw_r1.x * cov3d.m13 + jw_r1.y * cov3d.m23 + jw_r1.z * cov3d.m33);
+            const float3 jwc_r2 = make_float3(
+                jw_r2.x * cov3d.m11 + jw_r2.y * cov3d.m12 + jw_r2.z * cov3d.m13,
+                jw_r2.x * cov3d.m12 + jw_r2.y * cov3d.m22 + jw_r2.z * cov3d.m23,
+                jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
+
+            // 2d covariance gradient (use same dilation as forward pass)
+            constexpr float kernel_size = MIP_FILTER ? config::dilation_mip_filter : config::dilation;
+            const float raw_a = dot(jwc_r1, jw_r1);
+            const float raw_b = dot(jwc_r1, jw_r2);
+            const float raw_c = dot(jwc_r2, jw_r2);
+            const float a = raw_a + kernel_size, b = raw_b, c = raw_c + kernel_size;
+            const float aa = a * a, bb = b * b, cc = c * c;
+            const float ac = a * c, ab = a * b, bc = b * c;
+            const float determinant = ac - bb;
+            const float determinant_safe = fmaxf(determinant, config::min_cov2d_determinant);
+            const float determinant_rcp = 1.0f / determinant_safe;
+            const float determinant_rcp_sq = determinant_rcp * determinant_rcp;
+            const float3 dL_dconic = make_float3(
+                grad_conic[primitive_idx],
+                grad_conic[n_primitives + primitive_idx],
+                grad_conic[2 * n_primitives + primitive_idx]);
+            float3 dL_dcov2d = determinant_rcp_sq * make_float3(
+                                                        2.0f * bc * dL_dconic.y - cc * dL_dconic.x - bb * dL_dconic.z,
+                                                        bc * dL_dconic.x - (ac + bb) * dL_dconic.y + ab * dL_dconic.z,
+                                                        2.0f * ab * dL_dconic.y - bb * dL_dconic.x - aa * dL_dconic.z);
+
+            const float original_opacity = __frcp_rn(1.0f + __expf(-raw_opacities[primitive_idx]));
+            const float grad_compensated_opacity = grad_opacity_helper[primitive_idx];
+            float opacity_compensation = 1.0f;
+            if constexpr (MIP_FILTER) {
+                const float det_raw = raw_a * raw_c - raw_b * raw_b;
+                if (det_raw > config::min_cov2d_determinant && determinant > config::min_cov2d_determinant) {
+                    opacity_compensation = sqrtf(det_raw * determinant_rcp);
+                } else {
+                    opacity_compensation = 0.0f;
+                }
             }
-            return;
-        }
 
-        // load 3d mean
-        const float3 mean3d = means[primitive_idx];
+            const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
+            opacity_grads[0] = grad_compensated_opacity * opacity_compensation * sigmoid_derivative +
+                               opacity_extra_grad(fused_adam, fused_adam.opacity, primitive_idx);
 
-        // sh evaluation backward
-        const float3 dL_dmean3d_from_color = convert_sh_to_color_backward<ACTIVE_SH_BASES>(
-            sh_coefficients_rest, grad_color_helper,
-            fused_adam,
-            mean3d, cam_position[0],
-            primitive_idx,
-            sh_layout_slots);
+            // 3d covariance gradient
+            const mat3x3_triu dL_dcov3d = {
+                (jw_r1.x * jw_r1.x) * dL_dcov2d.x + 2.0f * (jw_r1.x * jw_r2.x) * dL_dcov2d.y + (jw_r2.x * jw_r2.x) * dL_dcov2d.z,
+                (jw_r1.x * jw_r1.y) * dL_dcov2d.x + (jw_r1.x * jw_r2.y + jw_r1.y * jw_r2.x) * dL_dcov2d.y + (jw_r2.x * jw_r2.y) * dL_dcov2d.z,
+                (jw_r1.x * jw_r1.z) * dL_dcov2d.x + (jw_r1.x * jw_r2.z + jw_r1.z * jw_r2.x) * dL_dcov2d.y + (jw_r2.x * jw_r2.z) * dL_dcov2d.z,
+                (jw_r1.y * jw_r1.y) * dL_dcov2d.x + 2.0f * (jw_r1.y * jw_r2.y) * dL_dcov2d.y + (jw_r2.y * jw_r2.y) * dL_dcov2d.z,
+                (jw_r1.y * jw_r1.z) * dL_dcov2d.x + (jw_r1.y * jw_r2.z + jw_r1.z * jw_r2.y) * dL_dcov2d.y + (jw_r2.y * jw_r2.z) * dL_dcov2d.z,
+                (jw_r1.z * jw_r1.z) * dL_dcov2d.x + 2.0f * (jw_r1.z * jw_r2.z) * dL_dcov2d.y + (jw_r2.z * jw_r2.z) * dL_dcov2d.z,
+            };
 
-        const float4 w2c_r3 = w2c[2];
-        const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
-        const float depth_safe = fmaxf(depth, 1e-4f);
-        const float4 w2c_r1 = w2c[0];
-        const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) / depth_safe;
-        const float4 w2c_r2 = w2c[1];
-        const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) / depth_safe;
+            // gradient of J * W
+            const float3 dL_djw_r1 = 2.0f * make_float3(
+                                                jwc_r1.x * dL_dcov2d.x + jwc_r2.x * dL_dcov2d.y,
+                                                jwc_r1.y * dL_dcov2d.x + jwc_r2.y * dL_dcov2d.y,
+                                                jwc_r1.z * dL_dcov2d.x + jwc_r2.z * dL_dcov2d.y);
+            const float3 dL_djw_r2 = 2.0f * make_float3(
+                                                jwc_r1.x * dL_dcov2d.y + jwc_r2.x * dL_dcov2d.z,
+                                                jwc_r1.y * dL_dcov2d.y + jwc_r2.y * dL_dcov2d.z,
+                                                jwc_r1.z * dL_dcov2d.y + jwc_r2.z * dL_dcov2d.z);
 
-        // compute 3d covariance from raw scale and rotation
-        const float3 raw_scale = raw_scales[primitive_idx];
-        const float3 clamped_scale = make_float3(
-            fminf(raw_scale.x, config::max_raw_scale),
-            fminf(raw_scale.y, config::max_raw_scale),
-            fminf(raw_scale.z, config::max_raw_scale));
-        const float3 variance = make_float3(expf(2.0f * clamped_scale.x), expf(2.0f * clamped_scale.y), expf(2.0f * clamped_scale.z));
-        const float4 raw_rotation = raw_rotations[primitive_idx];
-        const float qr = raw_rotation.x;
-        const float qx = raw_rotation.y;
-        const float qy = raw_rotation.z;
-        const float qz = raw_rotation.w;
-        const float qrr_raw = qr * qr, qxx_raw = qx * qx, qyy_raw = qy * qy, qzz_raw = qz * qz;
-        const float q_norm_sq = qrr_raw + qxx_raw + qyy_raw + qzz_raw;
-        const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-7f);
-        const float qxx = 2.0f * qxx_raw / q_norm_sq_safe, qyy = 2.0f * qyy_raw / q_norm_sq_safe, qzz = 2.0f * qzz_raw / q_norm_sq_safe;
-        const float qxy = 2.0f * qx * qy / q_norm_sq_safe, qxz = 2.0f * qx * qz / q_norm_sq_safe, qyz = 2.0f * qy * qz / q_norm_sq_safe;
-        const float qrx = 2.0f * qr * qx / q_norm_sq_safe, qry = 2.0f * qr * qy / q_norm_sq_safe, qrz = 2.0f * qr * qz / q_norm_sq_safe;
-        const mat3x3 rotation = {
-            1.0f - (qyy + qzz), qxy - qrz, qry + qxz,
-            qrz + qxy, 1.0f - (qxx + qzz), qyz - qrx,
-            qxz - qry, qrx + qyz, 1.0f - (qxx + qyy)};
-        const mat3x3 rotation_scaled = {
-            rotation.m11 * variance.x, rotation.m12 * variance.y, rotation.m13 * variance.z,
-            rotation.m21 * variance.x, rotation.m22 * variance.y, rotation.m23 * variance.z,
-            rotation.m31 * variance.x, rotation.m32 * variance.y, rotation.m33 * variance.z};
-        const mat3x3_triu cov3d{
-            rotation_scaled.m11 * rotation.m11 + rotation_scaled.m12 * rotation.m12 + rotation_scaled.m13 * rotation.m13,
-            rotation_scaled.m11 * rotation.m21 + rotation_scaled.m12 * rotation.m22 + rotation_scaled.m13 * rotation.m23,
-            rotation_scaled.m11 * rotation.m31 + rotation_scaled.m12 * rotation.m32 + rotation_scaled.m13 * rotation.m33,
-            rotation_scaled.m21 * rotation.m21 + rotation_scaled.m22 * rotation.m22 + rotation_scaled.m23 * rotation.m23,
-            rotation_scaled.m21 * rotation.m31 + rotation_scaled.m22 * rotation.m32 + rotation_scaled.m23 * rotation.m33,
-            rotation_scaled.m31 * rotation.m31 + rotation_scaled.m32 * rotation.m32 + rotation_scaled.m33 * rotation.m33,
-        };
+            // gradient of non-zero entries in J
+            const float dL_dj11 = w2c_r1.x * dL_djw_r1.x + w2c_r1.y * dL_djw_r1.y + w2c_r1.z * dL_djw_r1.z;
+            const float dL_dj22 = w2c_r2.x * dL_djw_r2.x + w2c_r2.y * dL_djw_r2.y + w2c_r2.z * dL_djw_r2.z;
+            const float dL_dj13 = w2c_r3.x * dL_djw_r1.x + w2c_r3.y * dL_djw_r1.y + w2c_r3.z * dL_djw_r1.z;
+            const float dL_dj23 = w2c_r3.x * dL_djw_r2.x + w2c_r3.y * dL_djw_r2.y + w2c_r3.z * dL_djw_r2.z;
 
-        // ewa splatting gradient helpers
-        const float clip_left = (-0.15f * w - cx) / fx;
-        const float clip_right = (1.15f * w - cx) / fx;
-        const float clip_top = (-0.15f * h - cy) / fy;
-        const float clip_bottom = (1.15f * h - cy) / fy;
-        const float tx = clamp(x, clip_left, clip_right);
-        const float ty = clamp(y, clip_top, clip_bottom);
-        const float j11 = fx / depth_safe;
-        const float j13 = -j11 * tx;
-        const float j22 = fy / depth_safe;
-        const float j23 = -j22 * ty;
-        const float3 jw_r1 = make_float3(
-            j11 * w2c_r1.x + j13 * w2c_r3.x,
-            j11 * w2c_r1.y + j13 * w2c_r3.y,
-            j11 * w2c_r1.z + j13 * w2c_r3.z);
-        const float3 jw_r2 = make_float3(
-            j22 * w2c_r2.x + j23 * w2c_r3.x,
-            j22 * w2c_r2.y + j23 * w2c_r3.y,
-            j22 * w2c_r2.z + j23 * w2c_r3.z);
-        const float3 jwc_r1 = make_float3(
-            jw_r1.x * cov3d.m11 + jw_r1.y * cov3d.m12 + jw_r1.z * cov3d.m13,
-            jw_r1.x * cov3d.m12 + jw_r1.y * cov3d.m22 + jw_r1.z * cov3d.m23,
-            jw_r1.x * cov3d.m13 + jw_r1.y * cov3d.m23 + jw_r1.z * cov3d.m33);
-        const float3 jwc_r2 = make_float3(
-            jw_r2.x * cov3d.m11 + jw_r2.y * cov3d.m12 + jw_r2.z * cov3d.m13,
-            jw_r2.x * cov3d.m12 + jw_r2.y * cov3d.m22 + jw_r2.z * cov3d.m23,
-            jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
+            // mean3d camera space gradient from J and mean2d (accounts for tx/ty clipping)
+            const float2 dL_dmean2d = grad_mean2d[primitive_idx];
+            const float dL_ddepth = grad_depth ? grad_depth[primitive_idx] : 0.0f;
+            float3 dL_dmean3d_cam = make_float3(
+                j11 * dL_dmean2d.x,
+                j22 * dL_dmean2d.y,
+                -j11 * x * dL_dmean2d.x - j22 * y * dL_dmean2d.y + dL_ddepth);
+            const bool valid_x = x >= clip_left && x <= clip_right;
+            const bool valid_y = y >= clip_top && y <= clip_bottom;
+            if (valid_x)
+                dL_dmean3d_cam.x -= j11 * dL_dj13 / depth_safe;
+            if (valid_y)
+                dL_dmean3d_cam.y -= j22 * dL_dj23 / depth_safe;
+            const float factor_x = 1.0f + static_cast<float>(valid_x);
+            const float factor_y = 1.0f + static_cast<float>(valid_y);
+            dL_dmean3d_cam.z += (j11 * (factor_x * tx * dL_dj13 - dL_dj11) + j22 * (factor_y * ty * dL_dj23 - dL_dj22)) / depth_safe;
 
-        // 2d covariance gradient (use same dilation as forward pass)
-        constexpr float kernel_size = MIP_FILTER ? config::dilation_mip_filter : config::dilation;
-        const float raw_a = dot(jwc_r1, jw_r1);
-        const float raw_b = dot(jwc_r1, jw_r2);
-        const float raw_c = dot(jwc_r2, jw_r2);
-        const float a = raw_a + kernel_size, b = raw_b, c = raw_c + kernel_size;
-        const float aa = a * a, bb = b * b, cc = c * c;
-        const float ac = a * c, ab = a * b, bc = b * c;
-        const float determinant = ac - bb;
-        const float determinant_safe = fmaxf(determinant, config::min_cov2d_determinant);
-        const float determinant_rcp = 1.0f / determinant_safe;
-        const float determinant_rcp_sq = determinant_rcp * determinant_rcp;
-        const float3 dL_dconic = make_float3(
-            grad_conic[primitive_idx],
-            grad_conic[n_primitives + primitive_idx],
-            grad_conic[2 * n_primitives + primitive_idx]);
-        float3 dL_dcov2d = determinant_rcp_sq * make_float3(
-                                                    2.0f * bc * dL_dconic.y - cc * dL_dconic.x - bb * dL_dconic.z,
-                                                    bc * dL_dconic.x - (ac + bb) * dL_dconic.y + ab * dL_dconic.z,
-                                                    2.0f * ab * dL_dconic.y - bb * dL_dconic.x - aa * dL_dconic.z);
-
-        const float original_opacity = __frcp_rn(1.0f + __expf(-raw_opacities[primitive_idx]));
-        const float grad_compensated_opacity = grad_opacity_helper[primitive_idx];
-        float opacity_compensation = 1.0f;
-        if constexpr (MIP_FILTER) {
-            // Keep mip opacity compensation detached from covariance; feeding this
-            // determinant ratio into scale/rotation gradients creates long splats.
-            const float det_raw = raw_a * raw_c - raw_b * raw_b;
-            if (det_raw > config::min_cov2d_determinant && determinant > config::min_cov2d_determinant) {
-                opacity_compensation = sqrtf(det_raw * determinant_rcp);
-            } else {
-                opacity_compensation = 0.0f;
+            if (grad_w2c != nullptr) {
+                atomicAdd(&grad_w2c[0].w, dL_dmean3d_cam.x);
+                atomicAdd(&grad_w2c[1].w, dL_dmean3d_cam.y);
+                atomicAdd(&grad_w2c[2].w, dL_dmean3d_cam.z);
+                atomicAdd(&grad_w2c[0].x, dL_dmean3d_cam.x * mean3d.x);
+                atomicAdd(&grad_w2c[0].y, dL_dmean3d_cam.x * mean3d.y);
+                atomicAdd(&grad_w2c[0].z, dL_dmean3d_cam.x * mean3d.z);
+                atomicAdd(&grad_w2c[1].x, dL_dmean3d_cam.y * mean3d.x);
+                atomicAdd(&grad_w2c[1].y, dL_dmean3d_cam.y * mean3d.y);
+                atomicAdd(&grad_w2c[1].z, dL_dmean3d_cam.y * mean3d.z);
+                atomicAdd(&grad_w2c[2].x, dL_dmean3d_cam.z * mean3d.x);
+                atomicAdd(&grad_w2c[2].y, dL_dmean3d_cam.z * mean3d.y);
+                atomicAdd(&grad_w2c[2].z, dL_dmean3d_cam.z * mean3d.z);
             }
-        }
 
-        const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
-        const float opacity_grad = grad_compensated_opacity * opacity_compensation * sigmoid_derivative +
-                                   opacity_extra_grad(fused_adam, fused_adam.opacity, primitive_idx);
-        const float opacity_grads[1] = {opacity_grad};
-        adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            // 3d mean gradient from splatting
+            const float3 dL_dmean3d_from_splatting = make_float3(
+                w2c_r1.x * dL_dmean3d_cam.x + w2c_r2.x * dL_dmean3d_cam.y + w2c_r3.x * dL_dmean3d_cam.z,
+                w2c_r1.y * dL_dmean3d_cam.x + w2c_r2.y * dL_dmean3d_cam.y + w2c_r3.y * dL_dmean3d_cam.z,
+                w2c_r1.z * dL_dmean3d_cam.x + w2c_r2.z * dL_dmean3d_cam.y + w2c_r3.z * dL_dmean3d_cam.z);
 
-        // 3d covariance gradient
-        const mat3x3_triu dL_dcov3d = {
-            (jw_r1.x * jw_r1.x) * dL_dcov2d.x + 2.0f * (jw_r1.x * jw_r2.x) * dL_dcov2d.y + (jw_r2.x * jw_r2.x) * dL_dcov2d.z,
-            (jw_r1.x * jw_r1.y) * dL_dcov2d.x + (jw_r1.x * jw_r2.y + jw_r1.y * jw_r2.x) * dL_dcov2d.y + (jw_r2.x * jw_r2.y) * dL_dcov2d.z,
-            (jw_r1.x * jw_r1.z) * dL_dcov2d.x + (jw_r1.x * jw_r2.z + jw_r1.z * jw_r2.x) * dL_dcov2d.y + (jw_r2.x * jw_r2.z) * dL_dcov2d.z,
-            (jw_r1.y * jw_r1.y) * dL_dcov2d.x + 2.0f * (jw_r1.y * jw_r2.y) * dL_dcov2d.y + (jw_r2.y * jw_r2.y) * dL_dcov2d.z,
-            (jw_r1.y * jw_r1.z) * dL_dcov2d.x + (jw_r1.y * jw_r2.z + jw_r1.z * jw_r2.y) * dL_dcov2d.y + (jw_r2.y * jw_r2.z) * dL_dcov2d.z,
-            (jw_r1.z * jw_r1.z) * dL_dcov2d.x + 2.0f * (jw_r1.z * jw_r2.z) * dL_dcov2d.y + (jw_r2.z * jw_r2.z) * dL_dcov2d.z,
-        };
+            const float3 dL_dmean3d = dL_dmean3d_from_splatting + dL_dmean3d_from_color;
+            const float3 clamped_mean = clamp_grad3(dL_dmean3d);
+            mean_grads[0] = clamped_mean.x;
+            mean_grads[1] = clamped_mean.y;
+            mean_grads[2] = clamped_mean.z;
 
-        // gradient of J * W
-        const float3 dL_djw_r1 = 2.0f * make_float3(
-                                            jwc_r1.x * dL_dcov2d.x + jwc_r2.x * dL_dcov2d.y,
-                                            jwc_r1.y * dL_dcov2d.x + jwc_r2.y * dL_dcov2d.y,
-                                            jwc_r1.z * dL_dcov2d.x + jwc_r2.z * dL_dcov2d.y);
-        const float3 dL_djw_r2 = 2.0f * make_float3(
-                                            jwc_r1.x * dL_dcov2d.y + jwc_r2.x * dL_dcov2d.z,
-                                            jwc_r1.y * dL_dcov2d.y + jwc_r2.y * dL_dcov2d.z,
-                                            jwc_r1.z * dL_dcov2d.y + jwc_r2.z * dL_dcov2d.z);
+            // raw scale gradient (zero gradient for clamped scales)
+            const float dL_dvariance_x = rotation.m11 * rotation.m11 * dL_dcov3d.m11 + rotation.m21 * rotation.m21 * dL_dcov3d.m22 + rotation.m31 * rotation.m31 * dL_dcov3d.m33 +
+                                         2.0f * (rotation.m11 * rotation.m21 * dL_dcov3d.m12 + rotation.m11 * rotation.m31 * dL_dcov3d.m13 + rotation.m21 * rotation.m31 * dL_dcov3d.m23);
+            const float dL_dvariance_y = rotation.m12 * rotation.m12 * dL_dcov3d.m11 + rotation.m22 * rotation.m22 * dL_dcov3d.m22 + rotation.m32 * rotation.m32 * dL_dcov3d.m33 +
+                                         2.0f * (rotation.m12 * rotation.m22 * dL_dcov3d.m12 + rotation.m12 * rotation.m32 * dL_dcov3d.m13 + rotation.m22 * rotation.m32 * dL_dcov3d.m23);
+            const float dL_dvariance_z = rotation.m13 * rotation.m13 * dL_dcov3d.m11 + rotation.m23 * rotation.m23 * dL_dcov3d.m22 + rotation.m33 * rotation.m33 * dL_dcov3d.m33 +
+                                         2.0f * (rotation.m13 * rotation.m23 * dL_dcov3d.m12 + rotation.m13 * rotation.m33 * dL_dcov3d.m13 + rotation.m23 * rotation.m33 * dL_dcov3d.m23);
+            const float3 dL_draw_scale = make_float3(
+                (raw_scale.x < config::max_raw_scale) ? 2.0f * variance.x * dL_dvariance_x : 0.0f,
+                (raw_scale.y < config::max_raw_scale) ? 2.0f * variance.y * dL_dvariance_y : 0.0f,
+                (raw_scale.z < config::max_raw_scale) ? 2.0f * variance.z * dL_dvariance_z : 0.0f);
+            const float3 clamped_scale_grad = clamp_grad3(dL_draw_scale);
+            const uint scale_base = primitive_idx * 3;
+            scale_grads[0] = clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base);
+            scale_grads[1] = clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1);
+            scale_grads[2] = clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2);
+            add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
 
-        // gradient of non-zero entries in J
-        const float dL_dj11 = w2c_r1.x * dL_djw_r1.x + w2c_r1.y * dL_djw_r1.y + w2c_r1.z * dL_djw_r1.z;
-        const float dL_dj22 = w2c_r2.x * dL_djw_r2.x + w2c_r2.y * dL_djw_r2.y + w2c_r2.z * dL_djw_r2.z;
-        const float dL_dj13 = w2c_r3.x * dL_djw_r1.x + w2c_r3.y * dL_djw_r1.y + w2c_r3.z * dL_djw_r1.z;
-        const float dL_dj23 = w2c_r3.x * dL_djw_r2.x + w2c_r3.y * dL_djw_r2.y + w2c_r3.z * dL_djw_r2.z;
+            // raw rotation gradient
+            mat3x3 dL_drotation = {
+                2.0f * (rotation_scaled.m11 * dL_dcov3d.m11 + rotation_scaled.m21 * dL_dcov3d.m12 + rotation_scaled.m31 * dL_dcov3d.m13),
+                2.0f * (rotation_scaled.m12 * dL_dcov3d.m11 + rotation_scaled.m22 * dL_dcov3d.m12 + rotation_scaled.m32 * dL_dcov3d.m13),
+                2.0f * (rotation_scaled.m13 * dL_dcov3d.m11 + rotation_scaled.m23 * dL_dcov3d.m12 + rotation_scaled.m33 * dL_dcov3d.m13),
+                2.0f * (rotation_scaled.m11 * dL_dcov3d.m12 + rotation_scaled.m21 * dL_dcov3d.m22 + rotation_scaled.m31 * dL_dcov3d.m23),
+                2.0f * (rotation_scaled.m12 * dL_dcov3d.m12 + rotation_scaled.m22 * dL_dcov3d.m22 + rotation_scaled.m32 * dL_dcov3d.m23),
+                2.0f * (rotation_scaled.m13 * dL_dcov3d.m12 + rotation_scaled.m23 * dL_dcov3d.m22 + rotation_scaled.m33 * dL_dcov3d.m23),
+                2.0f * (rotation_scaled.m11 * dL_dcov3d.m13 + rotation_scaled.m21 * dL_dcov3d.m23 + rotation_scaled.m31 * dL_dcov3d.m33),
+                2.0f * (rotation_scaled.m12 * dL_dcov3d.m13 + rotation_scaled.m22 * dL_dcov3d.m23 + rotation_scaled.m32 * dL_dcov3d.m33),
+                2.0f * (rotation_scaled.m13 * dL_dcov3d.m13 + rotation_scaled.m23 * dL_dcov3d.m23 + rotation_scaled.m33 * dL_dcov3d.m33)};
 
-        // mean3d camera space gradient from J and mean2d (accounts for tx/ty clipping)
-        const float2 dL_dmean2d = grad_mean2d[primitive_idx];
-        const float dL_ddepth = grad_depth ? grad_depth[primitive_idx] : 0.0f;
-        float3 dL_dmean3d_cam = make_float3(
-            j11 * dL_dmean2d.x,
-            j22 * dL_dmean2d.y,
-            -j11 * x * dL_dmean2d.x - j22 * y * dL_dmean2d.y + dL_ddepth);
-        const bool valid_x = x >= clip_left && x <= clip_right;
-        const bool valid_y = y >= clip_top && y <= clip_bottom;
-        if (valid_x)
-            dL_dmean3d_cam.x -= j11 * dL_dj13 / depth_safe;
-        if (valid_y)
-            dL_dmean3d_cam.y -= j22 * dL_dj23 / depth_safe;
-        const float factor_x = 1.0f + static_cast<float>(valid_x);
-        const float factor_y = 1.0f + static_cast<float>(valid_y);
-        dL_dmean3d_cam.z += (j11 * (factor_x * tx * dL_dj13 - dL_dj11) + j22 * (factor_y * ty * dL_dj23 - dL_dj22)) / depth_safe;
+            if (grad_normal != nullptr) {
+                const float3 g_cam = grad_normal[primitive_idx];
+                const float3 g_world = make_float3(
+                    w2c_r1.x * g_cam.x + w2c_r2.x * g_cam.y + w2c_r3.x * g_cam.z,
+                    w2c_r1.y * g_cam.x + w2c_r2.y * g_cam.y + w2c_r3.y * g_cam.z,
+                    w2c_r1.z * g_cam.x + w2c_r2.z * g_cam.y + w2c_r3.z * g_cam.z);
+                const float3 view_dir = mean3d - cam_position[0];
+                if (variance.x <= variance.y && variance.x <= variance.z) {
+                    const float axis_dot = rotation.m11 * view_dir.x + rotation.m21 * view_dir.y + rotation.m31 * view_dir.z;
+                    const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
+                    dL_drotation.m11 += sign * g_world.x;
+                    dL_drotation.m21 += sign * g_world.y;
+                    dL_drotation.m31 += sign * g_world.z;
+                } else if (variance.y <= variance.z) {
+                    const float axis_dot = rotation.m12 * view_dir.x + rotation.m22 * view_dir.y + rotation.m32 * view_dir.z;
+                    const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
+                    dL_drotation.m12 += sign * g_world.x;
+                    dL_drotation.m22 += sign * g_world.y;
+                    dL_drotation.m32 += sign * g_world.z;
+                } else {
+                    const float axis_dot = rotation.m13 * view_dir.x + rotation.m23 * view_dir.y + rotation.m33 * view_dir.z;
+                    const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
+                    dL_drotation.m13 += sign * g_world.x;
+                    dL_drotation.m23 += sign * g_world.y;
+                    dL_drotation.m33 += sign * g_world.z;
+                }
+            }
 
-        if (grad_w2c != nullptr) {
-            atomicAdd(&grad_w2c[0].w, dL_dmean3d_cam.x);
-            atomicAdd(&grad_w2c[1].w, dL_dmean3d_cam.y);
-            atomicAdd(&grad_w2c[2].w, dL_dmean3d_cam.z);
-            atomicAdd(&grad_w2c[0].x, dL_dmean3d_cam.x * mean3d.x);
-            atomicAdd(&grad_w2c[0].y, dL_dmean3d_cam.x * mean3d.y);
-            atomicAdd(&grad_w2c[0].z, dL_dmean3d_cam.x * mean3d.z);
-            atomicAdd(&grad_w2c[1].x, dL_dmean3d_cam.y * mean3d.x);
-            atomicAdd(&grad_w2c[1].y, dL_dmean3d_cam.y * mean3d.y);
-            atomicAdd(&grad_w2c[1].z, dL_dmean3d_cam.y * mean3d.z);
-            atomicAdd(&grad_w2c[2].x, dL_dmean3d_cam.z * mean3d.x);
-            atomicAdd(&grad_w2c[2].y, dL_dmean3d_cam.z * mean3d.y);
-            atomicAdd(&grad_w2c[2].z, dL_dmean3d_cam.z * mean3d.z);
-        }
+            const float dL_dqxx = -dL_drotation.m22 - dL_drotation.m33;
+            const float dL_dqyy = -dL_drotation.m11 - dL_drotation.m33;
+            const float dL_dqzz = -dL_drotation.m11 - dL_drotation.m22;
+            const float dL_dqxy = dL_drotation.m12 + dL_drotation.m21;
+            const float dL_dqxz = dL_drotation.m13 + dL_drotation.m31;
+            const float dL_dqyz = dL_drotation.m23 + dL_drotation.m32;
+            const float dL_dqrx = dL_drotation.m32 - dL_drotation.m23;
+            const float dL_dqry = dL_drotation.m13 - dL_drotation.m31;
+            const float dL_dqrz = dL_drotation.m21 - dL_drotation.m12;
+            const float dL_dq_norm_helper = qxx * dL_dqxx + qyy * dL_dqyy + qzz * dL_dqzz + qxy * dL_dqxy + qxz * dL_dqxz + qyz * dL_dqyz + qrx * dL_dqrx + qry * dL_dqry + qrz * dL_dqrz;
+            const float4 dL_draw_rotation = 2.0f * make_float4(qx * dL_dqrx + qy * dL_dqry + qz * dL_dqrz - qr * dL_dq_norm_helper, 2.0f * qx * dL_dqxx + qy * dL_dqxy + qz * dL_dqxz + qr * dL_dqrx - qx * dL_dq_norm_helper, 2.0f * qy * dL_dqyy + qx * dL_dqxy + qz * dL_dqyz + qr * dL_dqry - qy * dL_dq_norm_helper, 2.0f * qz * dL_dqzz + qx * dL_dqxz + qy * dL_dqyz + qr * dL_dqrz - qz * dL_dq_norm_helper) / q_norm_sq_safe;
+            const float4 clamped_rotation = clamp_grad4(dL_draw_rotation);
+            rotation_grads[0] = clamped_rotation.x;
+            rotation_grads[1] = clamped_rotation.y;
+            rotation_grads[2] = clamped_rotation.z;
+            rotation_grads[3] = clamped_rotation.w;
 
-        // 3d mean gradient from splatting
-        const float3 dL_dmean3d_from_splatting = make_float3(
-            w2c_r1.x * dL_dmean3d_cam.x + w2c_r2.x * dL_dmean3d_cam.y + w2c_r3.x * dL_dmean3d_cam.z,
-            w2c_r1.y * dL_dmean3d_cam.x + w2c_r2.y * dL_dmean3d_cam.y + w2c_r3.y * dL_dmean3d_cam.z,
-            w2c_r1.z * dL_dmean3d_cam.x + w2c_r2.z * dL_dmean3d_cam.y + w2c_r3.z * dL_dmean3d_cam.z);
+            if (densification_info != nullptr) {
+                densification_info[primitive_idx] += 1.0f;
+                densification_info[n_primitives + primitive_idx] += length(dL_dmean2d * make_float2(0.5f * w, 0.5f * h));
+            }
+        } // visible
 
-        const float3 dL_dmean3d = dL_dmean3d_from_splatting + dL_dmean3d_from_color;
-        const float3 clamped_mean = clamp_grad3(dL_dmean3d);
-        const float mean_grads[3] = {clamped_mean.x, clamped_mean.y, clamped_mean.z};
+        // Unified Adam — all threads participate (joint block-bounds reduction).
         adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-
-        // raw scale gradient (zero gradient for clamped scales)
-        const float dL_dvariance_x = rotation.m11 * rotation.m11 * dL_dcov3d.m11 + rotation.m21 * rotation.m21 * dL_dcov3d.m22 + rotation.m31 * rotation.m31 * dL_dcov3d.m33 +
-                                     2.0f * (rotation.m11 * rotation.m21 * dL_dcov3d.m12 + rotation.m11 * rotation.m31 * dL_dcov3d.m13 + rotation.m21 * rotation.m31 * dL_dcov3d.m23);
-        const float dL_dvariance_y = rotation.m12 * rotation.m12 * dL_dcov3d.m11 + rotation.m22 * rotation.m22 * dL_dcov3d.m22 + rotation.m32 * rotation.m32 * dL_dcov3d.m33 +
-                                     2.0f * (rotation.m12 * rotation.m22 * dL_dcov3d.m12 + rotation.m12 * rotation.m32 * dL_dcov3d.m13 + rotation.m22 * rotation.m32 * dL_dcov3d.m23);
-        const float dL_dvariance_z = rotation.m13 * rotation.m13 * dL_dcov3d.m11 + rotation.m23 * rotation.m23 * dL_dcov3d.m22 + rotation.m33 * rotation.m33 * dL_dcov3d.m33 +
-                                     2.0f * (rotation.m13 * rotation.m23 * dL_dcov3d.m12 + rotation.m13 * rotation.m33 * dL_dcov3d.m13 + rotation.m23 * rotation.m33 * dL_dcov3d.m23);
-        const float3 dL_draw_scale = make_float3(
-            (raw_scale.x < config::max_raw_scale) ? 2.0f * variance.x * dL_dvariance_x : 0.0f,
-            (raw_scale.y < config::max_raw_scale) ? 2.0f * variance.y * dL_dvariance_y : 0.0f,
-            (raw_scale.z < config::max_raw_scale) ? 2.0f * variance.z * dL_dvariance_z : 0.0f);
-        const float3 clamped_scale_grad = clamp_grad3(dL_draw_scale);
-        const uint scale_base = primitive_idx * 3;
-        float scale_grads[3] = {
-            clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base),
-            clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1),
-            clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2)};
-        add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
-        adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-
-        // raw rotation gradient
-        mat3x3 dL_drotation = {
-            2.0f * (rotation_scaled.m11 * dL_dcov3d.m11 + rotation_scaled.m21 * dL_dcov3d.m12 + rotation_scaled.m31 * dL_dcov3d.m13),
-            2.0f * (rotation_scaled.m12 * dL_dcov3d.m11 + rotation_scaled.m22 * dL_dcov3d.m12 + rotation_scaled.m32 * dL_dcov3d.m13),
-            2.0f * (rotation_scaled.m13 * dL_dcov3d.m11 + rotation_scaled.m23 * dL_dcov3d.m12 + rotation_scaled.m33 * dL_dcov3d.m13),
-            2.0f * (rotation_scaled.m11 * dL_dcov3d.m12 + rotation_scaled.m21 * dL_dcov3d.m22 + rotation_scaled.m31 * dL_dcov3d.m23),
-            2.0f * (rotation_scaled.m12 * dL_dcov3d.m12 + rotation_scaled.m22 * dL_dcov3d.m22 + rotation_scaled.m32 * dL_dcov3d.m23),
-            2.0f * (rotation_scaled.m13 * dL_dcov3d.m12 + rotation_scaled.m23 * dL_dcov3d.m22 + rotation_scaled.m33 * dL_dcov3d.m23),
-            2.0f * (rotation_scaled.m11 * dL_dcov3d.m13 + rotation_scaled.m21 * dL_dcov3d.m23 + rotation_scaled.m31 * dL_dcov3d.m33),
-            2.0f * (rotation_scaled.m12 * dL_dcov3d.m13 + rotation_scaled.m22 * dL_dcov3d.m23 + rotation_scaled.m32 * dL_dcov3d.m33),
-            2.0f * (rotation_scaled.m13 * dL_dcov3d.m13 + rotation_scaled.m23 * dL_dcov3d.m23 + rotation_scaled.m33 * dL_dcov3d.m33)};
-
-        // Rendered-normal channel: n_cam = W2C · sign · R[:, argmin(variance)], so the
-        // world-space gradient lands on that rotation column (argmin/sign are constants).
-        if (grad_normal != nullptr) {
-            const float3 g_cam = grad_normal[primitive_idx];
-            const float3 g_world = make_float3(
-                w2c_r1.x * g_cam.x + w2c_r2.x * g_cam.y + w2c_r3.x * g_cam.z,
-                w2c_r1.y * g_cam.x + w2c_r2.y * g_cam.y + w2c_r3.y * g_cam.z,
-                w2c_r1.z * g_cam.x + w2c_r2.z * g_cam.y + w2c_r3.z * g_cam.z);
-            const float3 view_dir = mean3d - cam_position[0];
-            if (variance.x <= variance.y && variance.x <= variance.z) {
-                const float axis_dot = rotation.m11 * view_dir.x + rotation.m21 * view_dir.y + rotation.m31 * view_dir.z;
-                const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
-                dL_drotation.m11 += sign * g_world.x;
-                dL_drotation.m21 += sign * g_world.y;
-                dL_drotation.m31 += sign * g_world.z;
-            } else if (variance.y <= variance.z) {
-                const float axis_dot = rotation.m12 * view_dir.x + rotation.m22 * view_dir.y + rotation.m32 * view_dir.z;
-                const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
-                dL_drotation.m12 += sign * g_world.x;
-                dL_drotation.m22 += sign * g_world.y;
-                dL_drotation.m32 += sign * g_world.z;
-            } else {
-                const float axis_dot = rotation.m13 * view_dir.x + rotation.m23 * view_dir.y + rotation.m33 * view_dir.z;
-                const float sign = axis_dot > 0.0f ? -1.0f : 1.0f;
-                dL_drotation.m13 += sign * g_world.x;
-                dL_drotation.m23 += sign * g_world.y;
-                dL_drotation.m33 += sign * g_world.z;
-            }
-        }
-
-        const float dL_dqxx = -dL_drotation.m22 - dL_drotation.m33;
-        const float dL_dqyy = -dL_drotation.m11 - dL_drotation.m33;
-        const float dL_dqzz = -dL_drotation.m11 - dL_drotation.m22;
-        const float dL_dqxy = dL_drotation.m12 + dL_drotation.m21;
-        const float dL_dqxz = dL_drotation.m13 + dL_drotation.m31;
-        const float dL_dqyz = dL_drotation.m23 + dL_drotation.m32;
-        const float dL_dqrx = dL_drotation.m32 - dL_drotation.m23;
-        const float dL_dqry = dL_drotation.m13 - dL_drotation.m31;
-        const float dL_dqrz = dL_drotation.m21 - dL_drotation.m12;
-        const float dL_dq_norm_helper = qxx * dL_dqxx + qyy * dL_dqyy + qzz * dL_dqzz + qxy * dL_dqxy + qxz * dL_dqxz + qyz * dL_dqyz + qrx * dL_dqrx + qry * dL_dqry + qrz * dL_dqrz;
-        const float4 dL_draw_rotation = 2.0f * make_float4(qx * dL_dqrx + qy * dL_dqry + qz * dL_dqrz - qr * dL_dq_norm_helper, 2.0f * qx * dL_dqxx + qy * dL_dqxy + qz * dL_dqxz + qr * dL_dqrx - qx * dL_dq_norm_helper, 2.0f * qy * dL_dqyy + qx * dL_dqxy + qz * dL_dqyz + qr * dL_dqry - qy * dL_dq_norm_helper, 2.0f * qz * dL_dqzz + qx * dL_dqxz + qy * dL_dqyz + qr * dL_dqrz - qz * dL_dq_norm_helper) / q_norm_sq_safe;
-        const float4 clamped_rotation = clamp_grad4(dL_draw_rotation);
-        const float rotation_grads[4] = {clamped_rotation.x, clamped_rotation.y, clamped_rotation.z, clamped_rotation.w};
         adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-
-        // TODO: only needed for adaptive density control from the original 3dgs
-        if (densification_info != nullptr) {
-            densification_info[primitive_idx] += 1.0f;
-            densification_info[n_primitives + primitive_idx] += length(dL_dmean2d * make_float2(0.5f * w, 0.5f * h));
+        adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        if constexpr (ACTIVE_SH_BASES > 1) {
+            constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
+                                                                                         : 3u;
+            apply_shN_grads_packed(fused_adam, primitive_idx, shN_grads, N_SLOTS, sh_layout_slots);
         }
     }
 

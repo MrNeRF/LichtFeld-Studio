@@ -19,6 +19,7 @@ class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_
 #include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "lfs/training/joint_adam_codec.hpp"
 #include "training/strategies/mrnf.hpp"
 
 #include <cmath>
@@ -29,6 +30,20 @@ class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_
 
 using namespace lfs::core;
 using namespace lfs::training;
+
+namespace {
+    // Phase 2.2: densify/serialize tests below still assert legacy uint8+scale
+    // layout. Force legacy for those cases; joint is covered by TrainingStateLedger
+    // + JointAdamCodec unit tests and the fused training path.
+    struct LegacyAdamCodecGuard {
+        LegacyAdamCodecGuard() {
+            joint_adam::set_joint_codec_enabled_for_testing(false);
+        }
+        ~LegacyAdamCodecGuard() {
+            joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
+        }
+    };
+} // namespace
 
 namespace {
 
@@ -188,6 +203,7 @@ TEST(MRNFStrategyTest, RemoveGaussiansKeepsOptimizerStateUsable) {
 }
 
 TEST(MRNFStrategyTest, QuantizedShNFirstMomentStartsAtSignedZeroPoint) {
+    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -218,6 +234,7 @@ TEST(MRNFStrategyTest, QuantizedShNFirstMomentStartsAtSignedZeroPoint) {
 }
 
 TEST(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShNDtype) {
+    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -298,6 +315,7 @@ TEST(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShN
 }
 
 TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
+    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -415,6 +433,7 @@ TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
 }
 
 TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
+    LegacyAdamCodecGuard legacy_guard;
     constexpr int n_gaussians = 10;
     constexpr size_t max_cap = 70;
 
@@ -642,6 +661,7 @@ TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
 }
 
 TEST(MRNFStrategyTest, SerializeRoundTripPreservesFreeMask) {
+    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -674,6 +694,7 @@ TEST(MRNFStrategyTest, SerializeRoundTripPreservesFreeMask) {
 }
 
 TEST(MRNFStrategyTest, SerializeRoundTripPreservesLrScheduleState) {
+    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
 
@@ -704,6 +725,7 @@ TEST(MRNFStrategyTest, SerializeRoundTripPreservesLrScheduleState) {
 }
 
 TEST(MRNFStrategyTest, DeserializeResizesTransientBuffersToLoadedModel) {
+    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_mrnf_test_splat_data(12);
     MRNF strategy(splat_data);
 

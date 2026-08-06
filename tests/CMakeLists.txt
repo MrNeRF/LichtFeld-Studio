@@ -128,6 +128,7 @@ set(TEST_FILES
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp
     test_training_state_ledger.cpp
+    test_joint_adam_codec.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
     test_tensor_views.cpp

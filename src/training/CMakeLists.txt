@@ -81,6 +81,7 @@ add_subdirectory(depth_anchor)
 # Optimizer sources
 set(TRAINING_NEW_SOURCES
     optimizer/adam_optimizer.cpp
+    joint_adam_codec.cpp
     optimizer/scheduler.cpp
     losses/regularization.cpp
     losses/photometric_loss.cpp

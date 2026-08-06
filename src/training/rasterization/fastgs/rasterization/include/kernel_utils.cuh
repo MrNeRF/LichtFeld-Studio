@@ -6,6 +6,8 @@
 
 #include "fused_adam_types.h"
 #include "helper_math.h"
+#include "lfs/core/warp_reduce.cuh"
+#include "lfs/training/joint_adam_codec.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
 
@@ -165,10 +167,123 @@ namespace fast_lfs::rasterization::kernels {
         return static_cast<std::uint8_t>(min(255, max(0, q)));
     }
 
+    // Joint (u, log_s) Adam step for a contiguous param row. ALL threads in the CUDA
+    // block must call this together (block_reduce + __syncthreads). Disabled params
+    // early-out uniformly (same `enabled` for every thread).
+    //
+    // Frozen / crop-damped rows with zero lr skip the moment+param update but still
+    // re-encode their current (u,log_s) under the new block bounds so codes stay valid.
+    template <int BITS>
+    __device__ inline void adam_step_row_joint(
+        const float* grads,
+        const FusedAdamParam& param,
+        const uint primitive_idx,
+        const uint row_elements,
+        const float beta1,
+        const float beta2,
+        const float eps) {
+        using C = lfs::training::joint_adam::DeviceCodec<BITS>;
+        constexpr float kInf = 1e30f;
+
+        float row_step_size = param.step_size;
+        bool apply_step = true;
+        bool touch = param.enabled && param.n_attributes > 0 &&
+                     param.joint_packed != nullptr && param.joint_bounds != nullptr;
+        if (touch && param.frozen_mask != nullptr &&
+            primitive_idx < static_cast<uint>(param.frozen_mask_size) &&
+            param.frozen_mask[primitive_idx]) {
+            if (param.frozen_lr_scale == 0.0f)
+                apply_step = false;
+            else
+                row_step_size *= param.frozen_lr_scale;
+        }
+        if (touch && param.crop_damping_mask != nullptr &&
+            primitive_idx < static_cast<uint>(param.crop_damping_mask_size) &&
+            param.crop_damping_mask[primitive_idx]) {
+            if (param.cropbox_lr_scale == 0.0f)
+                apply_step = false;
+            else
+                row_step_size *= param.cropbox_lr_scale;
+        }
+
+        const uint n_attr = param.n_attributes > 0 ? static_cast<uint>(param.n_attributes) : 1u;
+        const uint base = primitive_idx * n_attr;
+        if (touch && base >= static_cast<uint>(param.n_elements))
+            touch = false;
+        const uint row = touch ? min(n_attr, static_cast<uint>(param.n_elements) - base) : 0u;
+        const uint active = min(row_elements, row);
+
+        const int bidx = static_cast<int>(blockIdx.x);
+        const float4 old_mm = touch
+                                  ? *reinterpret_cast<const float4*>(param.joint_bounds + 4 * bidx)
+                                  : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+        float local_u_min = kInf, local_u_max = -kInf;
+        float local_s_min = kInf, local_s_max = -kInf;
+        float us_u[MAX_FUSED_ADAM_ATTRIBUTES];
+        float us_s[MAX_FUSED_ADAM_ATTRIBUTES];
+
+        if (touch) {
+            for (uint i = 0; i < row; ++i) {
+                // Packed layout: [N, n_attr * bytes_per_cell] — cell = base+i
+                const int64_t cell = static_cast<int64_t>(base + i);
+                const float2 mv = C::decode_g1g2(param.joint_packed, cell, old_mm);
+                float m = mv.x;
+                float v = mv.y;
+                if (apply_step) {
+                    const float grad = (i < active) ? grads[i] : 0.0f;
+                    m = beta1 * mv.x + (1.0f - beta1) * grad;
+                    v = beta2 * mv.y + (1.0f - beta2) * grad * grad;
+                    if (i < active) {
+                        const float denom = sqrtf(v) * param.bias_correction2_sqrt_rcp + eps;
+                        param.param[base + i] -= row_step_size * m / denom;
+                    }
+                }
+                const float2 prim = C::g1g2_to_us(m, v);
+                us_u[i] = prim.x;
+                us_s[i] = prim.y;
+                local_u_min = fminf(local_u_min, prim.x);
+                local_u_max = fmaxf(local_u_max, prim.x);
+                local_s_min = fminf(local_s_min, prim.y);
+                local_s_max = fmaxf(local_s_max, prim.y);
+            }
+        }
+
+        // Block-wide bounds for this 256-splat quant block (blockDim must be 256).
+        const float u_min = lfs::core::warp_ops::block_reduce_min(local_u_min);
+        const float u_max = lfs::core::warp_ops::block_reduce_max(local_u_max);
+        const float s_min = lfs::core::warp_ops::block_reduce_min(local_s_min);
+        const float s_max = lfs::core::warp_ops::block_reduce_max(local_s_max);
+
+        __shared__ float4 sm_bounds;
+        if (threadIdx.x == 0) {
+            float4 nb;
+            if (u_min > u_max) {
+                nb = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            } else {
+                nb = make_float4(u_min, u_max, s_min, s_max);
+            }
+            sm_bounds = nb;
+            if (param.enabled && param.joint_bounds != nullptr) {
+                *reinterpret_cast<float4*>(param.joint_bounds + 4 * bidx) = nb;
+            }
+        }
+        __syncthreads();
+        const float4 new_mm = sm_bounds;
+
+        if (touch) {
+            for (uint i = 0; i < row; ++i) {
+                C::encode_us(param.joint_packed, static_cast<int64_t>(base + i),
+                             us_u[i], us_s[i], new_mm);
+            }
+        }
+    }
+
     // Two-pass quantised Adam step over a contiguous [n_attributes] row of one primitive
     // (means / sh0 / scaling / rotation / opacity). Pass 1 derives the per-primitive scales
     // from max|m| / max(v); pass 2 writes the param update and requantises. `grads` holds
     // `row_elements` values; any resident attributes beyond that get pure momentum decay.
+    // Joint codec path uses block bounds (all threads must call when joint_bits != 0).
     __device__ inline void adam_step_row(
         const float* grads,
         const FusedAdamParam& param,
@@ -177,6 +292,14 @@ namespace fast_lfs::rasterization::kernels {
         const float beta1,
         const float beta2,
         const float eps) {
+        if (param.joint_bits == 16) {
+            adam_step_row_joint<16>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
+            return;
+        }
+        if (param.joint_bits == 8) {
+            adam_step_row_joint<8>(grads, param, primitive_idx, row_elements, beta1, beta2, eps);
+            return;
+        }
         if (!param.enabled || param.n_attributes <= 0)
             return;
         float row_step_size = param.step_size;
@@ -317,12 +440,135 @@ namespace fast_lfs::rasterization::kernels {
         }
     }
 
+    // Joint 8-bit shN Adam (swizzled float cells × 2 B). ALL threads must call when joint.
+    // Walks ALL layout slots (not only active SH) so inactive bands re-encode under new
+    // bounds and stay true-zero when their codes represent (u,log_s)=(0,0).
+    __device__ inline void apply_shN_grads_packed_joint(
+        const FusedAdamSettings& fused_adam,
+        const uint primitive_idx,
+        const float3 (&g)[15],
+        const uint n_slots_to_update,
+        const uint sh_layout_slots) {
+        using C = lfs::training::joint_adam::DeviceCodec<8>;
+        constexpr float kInf = 1e30f;
+        const FusedAdamParam& p = fused_adam.shN;
+
+        float row_step_size = p.step_size;
+        bool apply_step = true;
+        bool touch = p.enabled && sh_layout_slots > 0u &&
+                     p.joint_packed != nullptr && p.joint_bounds != nullptr;
+        if (touch && p.frozen_mask != nullptr &&
+            primitive_idx < static_cast<uint>(p.frozen_mask_size) &&
+            p.frozen_mask[primitive_idx]) {
+            if (p.frozen_lr_scale == 0.0f)
+                apply_step = false;
+            else
+                row_step_size *= p.frozen_lr_scale;
+        }
+        if (touch && p.crop_damping_mask != nullptr &&
+            primitive_idx < static_cast<uint>(p.crop_damping_mask_size) &&
+            p.crop_damping_mask[primitive_idx]) {
+            if (p.cropbox_lr_scale == 0.0f)
+                apply_step = false;
+            else
+                row_step_size *= p.cropbox_lr_scale;
+        }
+
+        const int bidx = static_cast<int>(blockIdx.x);
+        const float4 old_mm = touch
+                                  ? *reinterpret_cast<const float4*>(p.joint_bounds + 4 * bidx)
+                                  : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        const float beta1 = fused_adam.beta1, beta2 = fused_adam.beta2, eps = fused_adam.eps;
+        float4* param4 = touch ? reinterpret_cast<float4*>(p.param) : nullptr;
+
+        float local_u_min = kInf, local_u_max = -kInf;
+        float local_s_min = kInf, local_s_max = -kInf;
+        // Up to 12 slots × 4 cells; store (u,log_s) for encode after bounds reduce.
+        float us_u[48], us_s[48];
+
+        if (touch) {
+            int n_cells_local = 0;
+#pragma unroll
+            for (uint k = 0; k < 12u; ++k) {
+                if (k >= sh_layout_slots)
+                    break;
+                const uint slot = shAt(primitive_idx, k, sh_layout_slots);
+                const bool active_slot = k < n_slots_to_update;
+                const float4 gk = active_slot ? shN_grad_for_slot(g, k)
+                                              : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                const float gc[4] = {gk.x, gk.y, gk.z, gk.w};
+                float4 pv = param4[slot];
+                float pc[4] = {pv.x, pv.y, pv.z, pv.w};
+#pragma unroll
+                for (int c = 0; c < 4; ++c) {
+                    const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
+                    const float2 mv = C::decode_g1g2(p.joint_packed, cell, old_mm);
+                    float m = mv.x;
+                    float v = mv.y;
+                    if (apply_step) {
+                        m = beta1 * mv.x + (1.0f - beta1) * gc[c];
+                        v = beta2 * mv.y + (1.0f - beta2) * gc[c] * gc[c];
+                        if (active_slot) {
+                            const float denom = sqrtf(v) * p.bias_correction2_sqrt_rcp + eps;
+                            pc[c] -= row_step_size * m / denom;
+                        }
+                    }
+                    const float2 prim = C::g1g2_to_us(m, v);
+                    us_u[n_cells_local] = prim.x;
+                    us_s[n_cells_local] = prim.y;
+                    ++n_cells_local;
+                    local_u_min = fminf(local_u_min, prim.x);
+                    local_u_max = fmaxf(local_u_max, prim.x);
+                    local_s_min = fminf(local_s_min, prim.y);
+                    local_s_max = fmaxf(local_s_max, prim.y);
+                }
+                if (apply_step && active_slot)
+                    param4[slot] = make_float4(pc[0], pc[1], pc[2], pc[3]);
+            }
+            (void)n_cells_local;
+        }
+
+        const float u_min = lfs::core::warp_ops::block_reduce_min(local_u_min);
+        const float u_max = lfs::core::warp_ops::block_reduce_max(local_u_max);
+        const float s_min = lfs::core::warp_ops::block_reduce_min(local_s_min);
+        const float s_max = lfs::core::warp_ops::block_reduce_max(local_s_max);
+
+        __shared__ float4 sm_bounds;
+        if (threadIdx.x == 0) {
+            float4 nb = (u_min > u_max) ? make_float4(0.0f, 0.0f, 0.0f, 0.0f)
+                                        : make_float4(u_min, u_max, s_min, s_max);
+            sm_bounds = nb;
+            if (p.enabled && p.joint_bounds != nullptr) {
+                *reinterpret_cast<float4*>(p.joint_bounds + 4 * bidx) = nb;
+            }
+        }
+        __syncthreads();
+        const float4 new_mm = sm_bounds;
+
+        if (touch) {
+            int ci = 0;
+#pragma unroll
+            for (uint k = 0; k < 12u; ++k) {
+                if (k >= sh_layout_slots)
+                    break;
+                const uint slot = shAt(primitive_idx, k, sh_layout_slots);
+#pragma unroll
+                for (int c = 0; c < 4; ++c) {
+                    const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
+                    C::encode_us(p.joint_packed, cell, us_u[ci], us_s[ci], new_mm);
+                    ++ci;
+                }
+            }
+        }
+    }
+
     // Quantised two-pass Adam step over the swizzled shN moments of one primitive. moments are
     // uchar4 at the same swizzled float4 slots as the fp32 param (32 warp lanes -> 32 consecutive
     // uchar4 = coalesced 128B loads). Pass 1 derives the per-primitive scales over the active
     // slots; pass 2 updates param and requantises. n_slots_to_update is derived from active SH:
     //     active_sh_bases <= 1 : 0 slots (caller skips)   <= 4 : 3 slots
     //     active_sh_bases <= 9 : 6 slots                   > 9 : 12 slots
+    // Joint path (joint_bits==8): block-bounded (u,log_s); all threads must call.
     __device__ inline void apply_shN_grads_packed(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
@@ -330,6 +576,10 @@ namespace fast_lfs::rasterization::kernels {
         const uint n_slots_to_update,
         const uint sh_layout_slots) {
         const FusedAdamParam& p = fused_adam.shN;
+        if (p.joint_bits == 8) {
+            apply_shN_grads_packed_joint(fused_adam, primitive_idx, g, n_slots_to_update, sh_layout_slots);
+            return;
+        }
         if (!p.enabled || n_slots_to_update == 0u || sh_layout_slots == 0u)
             return;
         float row_step_size = p.step_size;
@@ -417,20 +667,27 @@ namespace fast_lfs::rasterization::kernels {
         p.exp_avg_sq_scale[primitive_idx] = new_v_scale;
     }
 
+    // SH backward: fills sh0_grads[3] and shN_grads[15]; does NOT apply Adam
+    // (caller runs a unified adam section so joint block-bounds can sync).
     template <int ACTIVE_SH_BASES>
-    __device__ inline float3 convert_sh_to_color_backward(
+    __device__ inline float3 convert_sh_to_color_backward_grads(
         const float4* sh_coefficients_rest,
         float3* grad_color_helper,
-        const FusedAdamSettings& fused_adam,
         const float3& position,
         const float3& cam_position,
         const uint primitive_idx,
-        const uint sh_layout_slots) {
-        // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
+        const uint sh_layout_slots,
+        float* __restrict__ sh0_grads_out,
+        float3* __restrict__ shN_grads_out) {
         const float3 grad_color = grad_color_helper[primitive_idx];
         const float3 dL_dsh0 = 0.28209479177387814f * grad_color;
-        const float sh0_grads[3] = {dL_dsh0.x, dL_dsh0.y, dL_dsh0.z};
-        adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        sh0_grads_out[0] = dL_dsh0.x;
+        sh0_grads_out[1] = dL_dsh0.y;
+        sh0_grads_out[2] = dL_dsh0.z;
+#pragma unroll
+        for (int i = 0; i < 15; ++i)
+            shN_grads_out[i] = make_float3(0.0f, 0.0f, 0.0f);
+
         float3 dcolor_dposition = make_float3(0.0f);
         if constexpr (ACTIVE_SH_BASES > 1) {
             const float3 raw_direction = position - cam_position;
@@ -442,16 +699,10 @@ namespace fast_lfs::rasterization::kernels {
             const float y = direction.y;
             const float z = direction.z;
 
-            // Load all coeffs we need via the float4-packed shuffle.
             float3 c[15];
             load_shN_coeffs(sh_coefficients_rest, primitive_idx, ACTIVE_SH_BASES, sh_layout_slots, c);
 
-            // Compute grad-of-coeff (15 float3 grads); inactive lanes left at 0.
-            float3 g[15];
-#pragma unroll
-            for (int i = 0; i < 15; ++i)
-                g[i] = make_float3(0.0f, 0.0f, 0.0f);
-
+            float3* g = shN_grads_out;
             g[0] = (-0.48860251190291987f * y) * grad_color;
             g[1] = (0.48860251190291987f * z) * grad_color;
             g[2] = (-0.48860251190291987f * x) * grad_color;
@@ -483,14 +734,6 @@ namespace fast_lfs::rasterization::kernels {
                 }
             }
 
-            // How many float4 slots cover the active coeffs:
-            //   bases > 9 : 12 slots cover c0..c14
-            //   bases > 4 : 6 slots cover c0..c7
-            //   bases > 1 : 3 slots cover c0..c2 (slot 2's c3 lane has 0 grad -> harmless decay)
-            constexpr uint n_slots = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
-                                                                                         : 3u;
-            apply_shN_grads_packed(fused_adam, primitive_idx, g, n_slots, sh_layout_slots);
-
             const float3 grad_direction = make_float3(
                 dot(grad_direction_x, grad_color),
                 dot(grad_direction_y, grad_color),
@@ -507,6 +750,33 @@ namespace fast_lfs::rasterization::kernels {
                                    -xy_raw * grad_direction.x + (xx_raw + zz_raw) * grad_direction.y - yz_raw * grad_direction.z,
                                    -xz_raw * grad_direction.x - yz_raw * grad_direction.y + (xx_raw + yy_raw) * grad_direction.z) *
                                inv_norm_cubed;
+        }
+        return dcolor_dposition;
+    }
+
+    // Legacy wrapper: compute SH grads then apply Adam immediately (legacy codec path).
+    template <int ACTIVE_SH_BASES>
+    __device__ inline float3 convert_sh_to_color_backward(
+        const float4* sh_coefficients_rest,
+        float3* grad_color_helper,
+        const FusedAdamSettings& fused_adam,
+        const float3& position,
+        const float3& cam_position,
+        const uint primitive_idx,
+        const uint sh_layout_slots) {
+        float sh0_grads[3] = {0.0f, 0.0f, 0.0f};
+        float3 g[15];
+#pragma unroll
+        for (int i = 0; i < 15; ++i)
+            g[i] = make_float3(0.0f, 0.0f, 0.0f);
+        const float3 dcolor_dposition = convert_sh_to_color_backward_grads<ACTIVE_SH_BASES>(
+            sh_coefficients_rest, grad_color_helper, position, cam_position,
+            primitive_idx, sh_layout_slots, sh0_grads, g);
+        adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        if constexpr (ACTIVE_SH_BASES > 1) {
+            constexpr uint n_slots = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
+                                                                                         : 3u;
+            apply_shN_grads_packed(fused_adam, primitive_idx, g, n_slots, sh_layout_slots);
         }
         return dcolor_dposition;
     }

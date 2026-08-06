@@ -48,6 +48,7 @@ namespace lfs::training {
                 ledger.optimizer_bytes += tensor_logical_bytes(state->exp_avg_sq);
                 ledger.optimizer_bytes += tensor_logical_bytes(state->exp_avg_scale);
                 ledger.optimizer_bytes += tensor_logical_bytes(state->exp_avg_sq_scale);
+                ledger.optimizer_bytes += tensor_logical_bytes(state->joint_bounds);
                 // Transient world grads (non-fused paths only). Fused FastGS keeps
                 // these empty — matches the "0 persistent world grads" claim.
                 ledger.gradients_or_helpers_bytes += tensor_logical_bytes(state->grad);

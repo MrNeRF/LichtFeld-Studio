@@ -25,7 +25,8 @@ namespace fast_lfs::rasterization::config {
     DEF float max_blend_color = 4.0f; // SH output is typically < 2.0
     // block size constants
     DEF int block_size_preprocess = 128;
-    DEF int block_size_preprocess_backward = 128;
+    // 256 matches joint-Adam quant block size so blockIdx.x == splat_block for bounds.
+    DEF int block_size_preprocess_backward = 256;
     DEF int block_size_create_instances = 256;
     DEF int block_size_extract_instance_ranges = 256;
     DEF int block_size_adam_step_invisible = 256;

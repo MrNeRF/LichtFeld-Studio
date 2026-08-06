@@ -3,6 +3,7 @@
 
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "lfs/training/joint_adam_codec.hpp"
 #include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mcmc.hpp"
 #include <algorithm>
@@ -13,6 +14,11 @@ using namespace lfs::core;
 using namespace lfs::training;
 
 namespace {
+    // These tests assert legacy per-primitive scale reset semantics.
+    struct LegacyAdamCodecGuard {
+        LegacyAdamCodecGuard() { joint_adam::set_joint_codec_enabled_for_testing(false); }
+        ~LegacyAdamCodecGuard() { joint_adam::set_joint_codec_enabled_for_testing(std::nullopt); }
+    };
 
     SplatData create_test_splat_data(const int n_gaussians = 100) {
         std::vector<float> means_data(n_gaussians * 3, 0.0f);
@@ -48,6 +54,7 @@ namespace {
 } // namespace
 
 TEST(MCMCTest, RemoveGaussiansSoftDeletesRows) {
+    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_test_splat_data(50);
     MCMC strategy(splat_data);
 
@@ -172,6 +179,7 @@ TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
 }
 
 TEST(MCMCTest, RelocateClearsDeletedMaskOnReusedRows) {
+    LegacyAdamCodecGuard legacy_guard;
     auto splat_data = create_test_splat_data(12);
     MCMC strategy(splat_data);
 
