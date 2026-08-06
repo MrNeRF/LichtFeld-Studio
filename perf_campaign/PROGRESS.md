@@ -835,4 +835,4 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 - **Gate:** dual-workload **not run with quant ON** (storage not wired).
   Task 2.2 gate remains the live B/splat number (409.4). Enabling 2.1 is expected
   to drop ~409→~313 once wired.
-- **Commit:** `23f90234`
+- **Commit:** `514b2a49`
