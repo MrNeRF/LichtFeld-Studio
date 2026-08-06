@@ -314,3 +314,23 @@ TEST_F(OpfFormatTest, ConstructsCoreCameraFromImportedCamera) {
     ASSERT_TRUE(result.has_value()) << result.error().format();
     ASSERT_NE(*result, nullptr);
 }
+
+TEST_F(OpfFormatTest, LoadsCompleteOpfProjectThroughLoader) {
+    write(root / "image.jpg", "test");
+    write(root / "camera-list.json", R"({"format":"application/opf-camera-list+json","version":"1.0","cameras":[{"id":42,"uri":"image.jpg"}]})");
+    write(root / "input-cameras.json", R"({"format":"application/opf-input-cameras+json","version":"1.0","sensors":[{"id":7,"image_size_px":[10,10],"internals":{"type":"perspective","principal_point_px":[5,5],"focal_length_px":8,"radial_distortion":[0,0,0],"tangential_distortion":[0,0]}}],"captures":[]})");
+    write(root / "calibrated.json", R"({"format":"application/opf-calibrated-cameras+json","version":"1.0","sensors":[{"id":7,"internals":{"type":"perspective"}}],"cameras":[{"id":42,"sensor_id":7,"position":[0,0,0],"orientation_deg":[0,0,0]}]})");
+    write(root / "project.opf", R"({
+        "format":"application/opf-project+json", "version":"1.0", "id":"project",
+        "name":"fixture", "description":"loader test", "items":[
+          {"id":"list", "type":"camera_list", "sources":[], "resources":[{"uri":"camera-list.json", "format":"application/opf-camera-list+json"}]},
+          {"id":"input", "type":"input_cameras", "sources":[{"id":"list", "type":"camera_list"}], "resources":[{"uri":"input-cameras.json", "format":"application/opf-input-cameras+json"}]},
+          {"id":"calibration", "type":"calibration", "sources":[{"id":"input", "type":"input_cameras"}], "resources":[{"uri":"calibrated.json", "format":"application/opf-calibrated-cameras+json"}]}
+        ]
+    })");
+    auto loader = lfs::io::Loader::create();
+    auto result = loader->load(root / "project.opf");
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_TRUE(std::holds_alternative<lfs::io::LoadedScene>(result->data));
+    EXPECT_EQ(std::get<lfs::io::LoadedScene>(result->data).cameras.size(), 1u);
+}
