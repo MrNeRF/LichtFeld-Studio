@@ -5,6 +5,8 @@
 #include "vulkan_image_barrier_tracker.hpp"
 #include "vulkan_result.hpp"
 
+#include <stdexcept>
+
 namespace lfs::vis {
     namespace {
 

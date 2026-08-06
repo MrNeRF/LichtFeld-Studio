@@ -1269,9 +1269,11 @@ namespace lfs::vis {
             } catch (const std::exception& e) {
                 image.reset();
                 error = std::format("RGB GT comparison image load failed: {}", e.what());
+                LOG_WARN("{}", error);
             } catch (...) {
                 image.reset();
                 error = "RGB GT comparison image load failed with an unknown error";
+                LOG_WARN("{}", error);
             }
 
             bool applied = false;
@@ -2648,6 +2650,7 @@ namespace lfs::vis {
                     }
                 } catch (const std::exception& e) {
                     render_error = std::format("GT comparison failed: {}", e.what());
+                    LOG_WARN("{}", render_error);
                 }
             }
         } else if (splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
