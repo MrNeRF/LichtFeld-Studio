@@ -127,6 +127,7 @@ set(TEST_FILES
     test_persistent_masks.cpp
     test_fused_noise_injection.cpp
     test_densification_info_zero.cpp
+    test_densify_events_4x.cpp
     test_training_state_ledger.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp

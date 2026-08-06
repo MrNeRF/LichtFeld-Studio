@@ -137,20 +137,16 @@ namespace lfs::training {
 
     void MCMC::ensure_densification_info_shape() {
         const size_t n = static_cast<size_t>(_splat_data->size());
-        const auto& info = _splat_data->_densification_info;
-        if (!info.is_valid() ||
-            info.ndim() != 2 ||
-            info.shape()[0] < 2 ||
-            info.shape()[1] != n) {
-            _splat_data->_densification_info =
-                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
-            _splat_data->_densification_info.set_name("splat.densification_info");
-        }
+        // Phase 4.3: reuse densification_info / score buffers in place when possible.
+        const size_t reserve =
+            (_params && _params->max_cap > 0) ? static_cast<size_t>(_params->max_cap) : 0;
+        ensure_densification_info_shape_inplace(
+            _splat_data->_densification_info, n, _splat_data->means().device(), reserve);
 
-        if (!_error_score_max.is_valid() ||
-            _error_score_max.ndim() != 1 ||
-            _error_score_max.numel() != n) {
-            _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+        const size_t prev_n = _error_score_max.is_valid() ? _error_score_max.numel() : 0;
+        ensure_score_buffer_inplace(
+            _error_score_max, n, _splat_data->means().device(), reserve);
+        if (prev_n != n) {
             _error_score_max.set_name("mcmc.error_score_max");
             _error_score_windows = 0;
         }
@@ -720,23 +716,25 @@ namespace lfs::training {
             LFS_GAUGE("model.gaussians.live", n);
             LFS_GAUGE("model.gaussians.capacity", deleted_mask_capacity(*_splat_data));
 
-            if (_error_score_max.numel() < n) {
-                const size_t n_new = n - _error_score_max.numel();
-                _error_score_max = _error_score_max.cat(
-                    lfs::core::Tensor::zeros({n_new}, _splat_data->means().device()),
-                    0);
-            }
+            // Phase 4.3: append_zeros growth instead of cat realloc.
+            ensure_score_buffer_inplace(
+                _error_score_max, n, _splat_data->means().device(),
+                _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
 
             ++_error_score_windows;
             if (_error_score_windows >= 2) {
-                _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+                ensure_score_buffer_inplace(
+                    _error_score_max, n, _splat_data->means().device(),
+                    _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
+                _error_score_max.zero_();
                 _error_score_max.set_name("mcmc.error_score_max");
                 _error_score_windows = 0;
             }
 
-            _splat_data->_densification_info =
-                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
-            _splat_data->_densification_info.set_name("splat.densification_info");
+            ensure_densification_info_shape_inplace(
+                _splat_data->_densification_info, n, _splat_data->means().device(),
+                _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
+            _splat_data->_densification_info.zero_();
         }
 
         // Inject noise to positions every iteration

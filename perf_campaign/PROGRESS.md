@@ -754,3 +754,74 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+---
+
+## Tasks 4.3–4.8 — Densify events (worker J, branch `lfs-elite-fJ`)
+
+- **Branch:** `lfs-elite-fJ`
+- **Scope:** `src/training/strategies/*`, `src/training/kernels/*` (+ densify unit test)
+- **Changes:**
+  1. **4.3** Reusable `DensifyChildWorkspace` (grow-only ×1.2) for LAS child buffers
+     (MRNF + IGS+). Score buffers grow via `append_zeros` when capacity allows
+     (`ensure_score_buffer_inplace`). densification_info reuses matching `[2,N]`
+     (`ensure_densification_info_shape_inplace`; N growth still reallocs — row1
+     offset depends on N).
+  2. **4.4** Fused free-slot write kernel: attrs + Adam scales + free_mask=false in
+     one launch (`launch_fill_free_slots_fused`). Parent split uses
+     `launch_zero_adam_scales_at_indices` + `zero_adam_grads_at_indices` (grads
+     required: `strategy::step` runs Adam after densify).
+  3. **4.5** Packed refine counts (`launch_packed_refine_counts`) batch prune nnz /
+     candidate sum / replace-weight nnz into one D2H (growth nnz remains a second
+     packed readout after replace_mask is applied).
+  4. **4.6** MRNF calls `Tensor::trim_memory_pool()` after refine (parity MCMC/IGS+).
+  5. **4.7** IGS+ `Tensor::multinomial` → `launch_gumbel_topk` (Theme A bypass).
+  6. **4.8** Positive-median normalize: compact positives + CUB radix-sort of P≪N
+     (`launch_normalize_by_positive_median`) — MRNF + IGS+ edge/error paths.
+
+- **Fail evidence (TDD, pre-API / interrupted resume):**
+  ```
+  # test_densify_events_4x.cpp required kernels/helpers that did not exist:
+  'launch_fill_free_slots_fused' is not a member of 'lfs::training::kernels'
+  'launch_packed_refine_counts' is not a member of 'lfs::training::kernels'
+  'launch_normalize_by_positive_median' is not a member of 'lfs::training::kernels'
+  'DensifyChildWorkspace' was not declared
+  ```
+- **Pass evidence:**
+  ```
+  [==========] Running 6 tests from 1 test suite.
+  [  PASSED  ] 6 tests.  (DensifyEvents4x.*)
+  MRNF densify path tests (GrowAndSplit*, FreeSlots*, Compact*): PASS
+  (ShNReservationTracksMaxDegreeAndMaxCap pre-existing fail — see ISS-010)
+  ```
+
+### Dual-workload FINAL GATE (quiet GPU, flock)
+
+**Bonsai** (2000 iters, images_4, max_cap 500k, mrnf) — runs `20260806T223728Z_run{1,2,3}`:
+
+| metric | Wave 2 | after 4.3–4.8 | Δ |
+|---|---:|---:|---|
+| wall_s (med) | — | **8.77** | — |
+| steady_ms/iter | **4.065** | **3.988** | **−1.9%** |
+| steady_allocs/iter | 0.05 | **0.07** | +0.02 (noise) |
+| peak VRAM MiB | 938.3 | **930.1** | −8.2 |
+| B/splat | 429.0 | 429.0 | 0 |
+| last_loss | ~0.03–0.04 | 0.030–0.051 | ok |
+
+**Bicycle canary** (7000 iters) — runs `20260806T223917Z_run{1,2,3}`:
+
+| metric | Wave 2 | after 4.3–4.8 | Δ |
+|---|---:|---:|---|
+| wall_s (med) | — | **30.27** | — |
+| steady_ms/iter | **3.208** | **3.110** | **−3.1%** |
+| steady_allocs/iter | — | **0.06** | ok |
+| peak VRAM MiB | 1026.3 | **994.1** | −32.2 |
+| B/splat | 429.0 | 429.0 | 0 |
+| final loss range | 0.079–0.107 | **0.074–0.086** | healthy (no worse) |
+
+Bicycle densify growth: 54k → 500k (cap) clean; no NaN/floater runaway.
+
+**Gate status:** G4 ms/iter improved vs Wave 2 on both workloads; quality canary clean;
+alloc residual ~0.07 (refine workspace HWM / rare growth). Tasks 4.3–4.8 **DONE**.
+
+- **Commit:** `9a0606dc`

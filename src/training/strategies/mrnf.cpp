@@ -22,6 +22,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cuda_runtime.h>
 #include <limits>
 #include <numeric>
 #include <random>
@@ -361,6 +362,15 @@ namespace lfs::training {
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
+            // Phase 4.8: compact positives + radix-sort (not full-tensor sort).
+            if (tensor.device() == lfs::core::Device::CUDA &&
+                tensor.dtype() == lfs::core::DataType::Float32 &&
+                tensor.is_valid() && tensor.numel() > 0) {
+                kernels::launch_normalize_by_positive_median(
+                    tensor.ptr<float>(), tensor.numel());
+                return;
+            }
+            // CPU fallback (tests / rare).
             tensor.masked_fill_(tensor.isnan(), 0.0f);
             auto valid = tensor.masked_select(tensor > 0.0f);
             if (valid.numel() == 0) {
@@ -368,15 +378,8 @@ namespace lfs::training {
                 return;
             }
             auto [sorted, _] = valid.sort();
-            if (tensor.device() == lfs::core::Device::CUDA) {
-                kernels::launch_normalize_by_device_scalar(
-                    tensor.ptr<float>(),
-                    tensor.numel(),
-                    sorted.ptr<float>() + valid.numel() / 2);
-            } else {
-                const float median = sorted[valid.numel() / 2].item_as<float>();
-                tensor.div_(std::max(median, 1e-9f));
-            }
+            const float median = sorted[valid.numel() / 2].item_as<float>();
+            tensor.div_(std::max(median, 1e-9f));
         }
 
         [[nodiscard]] lfs::core::Tensor normalized_by_positive_median(const lfs::core::Tensor& tensor) {
@@ -500,13 +503,12 @@ namespace lfs::training {
 
     void MRNF::ensure_densification_info_shape() {
         const size_t n = static_cast<size_t>(_splat_data->size());
-        const auto& info = _splat_data->_densification_info;
-        if (!info.is_valid() ||
-            info.ndim() != 2 ||
-            info.shape()[0] < 2 ||
-            info.shape()[1] != n) {
-            _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
-        }
+        // Phase 4.3: reuse buffer when shape already matches (no realloc-zeros).
+        ensure_densification_info_shape_inplace(
+            _splat_data->_densification_info,
+            n,
+            _splat_data->means().device(),
+            _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
     }
 
     int MRNF::edge_target_samples_per_refine_window() const {
@@ -695,7 +697,22 @@ namespace lfs::training {
         }
         prune_mask = exclude_frozen_from_mask(*_splat_data, prune_mask);
 
-        const int pruned_count = static_cast<int>(prune_mask.sum().item());
+        // Phase 4.5: prune count via packed refine readout (slot 0).
+        if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
+            _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
+        }
+        kernels::launch_packed_refine_counts(
+            prune_mask.ptr<bool>(), n,
+            nullptr, 0,
+            nullptr, 0,
+            nullptr, 0,
+            _refine_counts_dev.ptr<int64_t>());
+        int64_t host_counts[4] = {0, 0, 0, 0};
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
+                       4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
+            "MRNF refine prune-count D2H");
+        const int pruned_count = static_cast<int>(host_counts[0]);
 
         if (pruned_count > 0) {
             auto prune_indices = prune_mask.nonzero().squeeze(-1);
@@ -730,6 +747,9 @@ namespace lfs::training {
         reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
+
+        // Phase 4.6: MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
+        lfs::core::Tensor::trim_memory_pool();
     }
 
     void MRNF::grow_and_split(int iter, int pruned_count) {
@@ -750,9 +770,7 @@ namespace lfs::training {
         if (trainable_mask.is_valid()) {
             refine_candidates = refine_candidates.logical_and(trainable_mask);
         }
-        const int desired_total = static_cast<int>(
-            std::round(static_cast<float>(refine_candidates.sum().item()) *
-                       _params->grow_fraction));
+
         const int budget = (_params->max_cap > 0)
                                ? std::max(0, _params->max_cap - static_cast<int>(current_active))
                                : INT_MAX;
@@ -771,11 +789,14 @@ namespace lfs::training {
         Tensor replace_mask;
         int actual_replace = 0;
 
+        // Build replace weights first (if needed) so we can pack cand_sum + replace_nnz
+        // into one D2H (Phase 4.5).
+        Tensor replace_weights;
         if (requested_replace > 0) {
             auto opacities = _splat_data->get_opacity();
             if (opacities.ndim() == 2 && opacities.shape()[1] == 1)
                 opacities = opacities.squeeze(-1);
-            auto replace_weights = opacities * (_vis_count > 0.0f);
+            replace_weights = opacities * (_vis_count > 0.0f);
             if (active_mask.is_valid()) {
                 replace_weights = replace_weights * active_mask;
             }
@@ -785,7 +806,28 @@ namespace lfs::training {
             if (edge_guidance.is_valid()) {
                 replace_weights = replace_weights * edge_guidance;
             }
-            const int selectable_replace = static_cast<int>(replace_weights.count_nonzero());
+        }
+
+        if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
+            _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
+        }
+        kernels::launch_packed_refine_counts(
+            refine_candidates.ptr<bool>(), n,
+            nullptr, 0,
+            (replace_weights.is_valid() ? replace_weights.ptr<float>() : nullptr),
+            (replace_weights.is_valid() ? n : 0),
+            nullptr, 0,
+            _refine_counts_dev.ptr<int64_t>());
+        int64_t host_counts[4] = {0, 0, 0, 0};
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
+                       4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
+            "MRNF grow packed counts D2H");
+        const int desired_total = static_cast<int>(
+            std::round(static_cast<float>(host_counts[0]) * _params->grow_fraction));
+        const int selectable_replace = static_cast<int>(host_counts[2]);
+
+        if (requested_replace > 0) {
             actual_replace = std::min(requested_replace, selectable_replace);
             if (actual_replace > 0) {
                 replace_inds = Tensor::empty({static_cast<size_t>(actual_replace)}, Device::CUDA, DataType::Int64);
@@ -817,7 +859,17 @@ namespace lfs::training {
                 growth_weights = growth_weights.masked_fill(replace_mask, 0.0f);
             }
 
-            const int selectable_growth = static_cast<int>(growth_weights.count_nonzero());
+            // Growth nnz is data-dependent on replace_mask — second packed slot.
+            kernels::launch_packed_refine_counts(
+                nullptr, 0, nullptr, 0,
+                growth_weights.ptr<float>(), n,
+                nullptr, 0,
+                _refine_counts_dev.ptr<int64_t>());
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
+                           4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
+                "MRNF growth nnz D2H");
+            const int selectable_growth = static_cast<int>(host_counts[2]);
             if (selectable_growth > 0) {
                 const int growth_budget = std::min(n_grow, selectable_growth);
                 growth_inds = Tensor::empty({static_cast<size_t>(growth_budget)}, Device::CUDA, DataType::Int64);
@@ -849,15 +901,14 @@ namespace lfs::training {
                              _splat_data->shN().is_valid() &&
                              _splat_data->shN().numel() > 0;
 
-        auto child_means = Tensor::empty({K, 3}, Device::CUDA);
-        auto child_log_scales = Tensor::empty({K, 3}, Device::CUDA);
-        auto child_raw_opacities = Tensor::empty({K}, Device::CUDA);
-        auto child_rotations = Tensor::empty({K, 4}, Device::CUDA);
-        auto child_sh0 = Tensor::empty({K, 1, 3}, Device::CUDA);
-        Tensor child_shN;
-        if (use_shN) {
-            child_shN = Tensor::empty({K, sh_rest, 3}, Device::CUDA);
-        }
+        // Phase 4.3: reusable densify child workspace (grow-only).
+        _densify_ws.ensure(K, sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
+        auto child_means = _densify_ws.means_view(K);
+        auto child_log_scales = _densify_ws.scales_view(K);
+        auto child_raw_opacities = _densify_ws.opacities_view(K);
+        auto child_rotations = _densify_ws.rotations_view(K);
+        auto child_sh0 = _densify_ws.sh0_view(K);
+        Tensor child_shN = use_shN ? _densify_ws.shN_view(K) : Tensor();
 
         // The LAS kernel only needs linear shN to copy child rows. shN itself is unchanged
         // for the parent rows, so keep the resident swizzled buffer in place and gather the
@@ -889,12 +940,16 @@ namespace lfs::training {
                 layout_rest);
         }
 
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, split_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, split_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, split_indices, layout_rest);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, split_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, split_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, split_indices);
+        // Phase 4.4: fused Adam-scale zero for split parents + grad zero (step runs next).
+        {
+            float* adam_ptrs[12] = {};
+            const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
+            if (n_adam > 0) {
+                kernels::launch_zero_adam_scales_at_indices(
+                    split_indices.ptr<int64_t>(), K, adam_ptrs, n_adam, n);
+            }
+            zero_adam_grads_at_indices(*_optimizer, split_indices, layout_rest);
+        }
 
         size_t append_start = 0;
         if (free_count() > 0) {
@@ -1315,16 +1370,34 @@ namespace lfs::training {
         const int64_t slots_to_fill = std::min(count, num_free);
         auto target_indices = free_indices.slice(0, 0, slots_to_fill);
 
-        _splat_data->means().index_put_(target_indices, positions.slice(0, 0, slots_to_fill));
-        _splat_data->rotation_raw().index_put_(target_indices, rotations.slice(0, 0, slots_to_fill));
-        _splat_data->scaling_raw().index_put_(target_indices, scales.slice(0, 0, slots_to_fill));
-        _splat_data->sh0().index_put_(target_indices, sh0.slice(0, 0, slots_to_fill));
+        // Phase 4.4: one fused kernel writes all attrs + zeros Adam scales + clears free mask.
+        float* adam_ptrs[12] = {};
+        const int n_adam = collect_adam_scale_ptrs(*_optimizer, adam_ptrs);
+        const int opacity_dim = (_splat_data->opacity_raw().ndim() == 2) ? 1 : 0;
+        auto pos_slice = positions.slice(0, 0, slots_to_fill);
+        auto rot_slice = rotations.slice(0, 0, slots_to_fill);
+        auto scale_slice = scales.slice(0, 0, slots_to_fill);
+        auto sh0_slice = sh0.slice(0, 0, slots_to_fill);
+        auto opac_slice = opacities.slice(0, 0, slots_to_fill);
 
-        auto opacity_slice = opacities.slice(0, 0, slots_to_fill);
-        if (_splat_data->opacity_raw().ndim() == 2) {
-            opacity_slice = opacity_slice.unsqueeze(-1);
-        }
-        _splat_data->opacity_raw().index_put_(target_indices, opacity_slice);
+        kernels::launch_fill_free_slots_fused(
+            target_indices.ptr<int64_t>(),
+            static_cast<size_t>(slots_to_fill),
+            pos_slice.ptr<float>(),
+            rot_slice.ptr<float>(),
+            scale_slice.ptr<float>(),
+            sh0_slice.ptr<float>(),
+            opac_slice.ptr<float>(),
+            _splat_data->means().ptr<float>(),
+            _splat_data->rotation_raw().ptr<float>(),
+            _splat_data->scaling_raw().ptr<float>(),
+            _splat_data->sh0().ptr<float>(),
+            _splat_data->opacity_raw().ptr<float>(),
+            opacity_dim,
+            adam_ptrs,
+            n_adam,
+            _free_mask.ptr<bool>(),
+            current_size);
 
         const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
         if (layout_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
@@ -1342,15 +1415,10 @@ namespace lfs::training {
                 layout_rest);
         }
 
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, target_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, target_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, target_indices, layout_rest);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, target_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, target_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, target_indices);
+        // Zero residual grads so the post-densify Adam step does not use
+        // previous-occupant / pre-split gradients on rewritten rows.
+        zero_adam_grads_at_indices(*_optimizer, target_indices, layout_rest);
 
-        auto false_vals = Tensor::zeros_bool({static_cast<size_t>(slots_to_fill)}, target_indices.device());
-        _free_mask.index_put_(target_indices, false_vals);
         set_deleted_mask_rows(*_splat_data, _free_mask, target_indices, false);
 
         return {target_indices, count - slots_to_fill};
