@@ -28,10 +28,13 @@ run `git checkout`; just verify with `git branch --show-current` (expect: lfs-el
 
 Every task's final bench gate runs BOTH workloads, each via flock:
   1. `flock /tmp/lfs-bench.lock ./perf_campaign/bench.sh --runs 3`                     (bonsai — light, exposes host/dispatch regressions)
-  2. `LFS_BENCH_DATASET=/home/gauss/data/360_v2/bicycle flock /tmp/lfs-bench.lock ./perf_campaign/bench.sh --runs 3`   (bicycle — heavy, GPU-saturated, and VERY sensitive to correctness/quality issues)
+  2. `LFS_BENCH_DATASET=/home/gauss/data/360_v2/bicycle flock /tmp/lfs-bench.lock ./perf_campaign/bench.sh --runs 3 --iters 7000`   (bicycle — heavy, GPU-saturated, and VERY sensitive to correctness/quality issues)
 
 Bicycle is the canary: it surfaces subtle bugs (floaters, densify misbehavior, quality
 drift) that bonsai hides. Any bicycle loss/quality anomaly = stop and investigate before
 committing, even if bonsai looks clean. Quality-sensitive changes (quantization, RNG,
 kernel-math changes) must additionally compare bicycle loss curves, not just final loss.
 Both baselines live in perf_campaign/BASELINE.md.
+
+Bicycle gate runs 7000 iters (short runs stay light — bicycle only becomes the heavy,
+issue-sensitive canary after densification has grown the scene).
