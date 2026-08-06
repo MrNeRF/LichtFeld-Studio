@@ -741,3 +741,16 @@ re-import; NVRM fix is densify/grow ordering for GUI.
   - `0a0db4f4` fix(vram): release FastGS sort TLS on training-thread shutdown
   - `41aec0ae` test(vram): multi-grow plateau, TLS spawn-join, RSS/VRAM cycle guard
   - (docs commit)
+
+---
+## WAVE 2 COMBINED (merged: Phase 1 complete + 6A.5a/6A.2/6A.3 + VRAM/NVRM fixes; commit 77467aab; quiet GPU, 3-run medians)
+| Metric | Original baseline | Wave 1 | **Wave 2** |
+|---|---:|---:|---:|
+| Bonsai steady_ms/iter | 4.129 | 4.085 | **4.065** (−1.5% vs base) |
+| Bonsai peak MiB | 1156.3 | 1152.6 | **938.3** (−18.9%) |
+| Bonsai allocs/iter | 5.05 | 0.05 | **0.05** |
+| Bicycle 7k steady_ms/iter | 3.290 | — | **3.208** (−2.5%) |
+| Bicycle 7k peak MiB | 1038.5 | — | **1026.3** |
+| Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
+| B/splat | 429 | 429 | 429 (Phase 2 next) |
+36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
