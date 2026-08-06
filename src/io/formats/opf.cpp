@@ -4,6 +4,7 @@
 #include "opf.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <format>
 #include <fstream>
@@ -552,5 +553,28 @@ namespace lfs::io::opf {
             cameras.push_back(parsed);
         }
         return cameras;
+    }
+
+    CalibratedPose to_calibrated_pose(const CalibratedCamera& camera) {
+        constexpr double pi = 3.14159265358979323846;
+        const double omega = camera.orientation_deg[0] * pi / 180.0;
+        const double phi = camera.orientation_deg[1] * pi / 180.0;
+        const double kappa = camera.orientation_deg[2] * pi / 180.0;
+        const double co = std::cos(omega), so = std::sin(omega);
+        const double cp = std::cos(phi), sp = std::sin(phi);
+        const double ck = std::cos(kappa), sk = std::sin(kappa);
+
+        // OPF defines the image-to-processing rotation as Rx(omega)Ry(phi)Rz(kappa).
+        const std::array<double, 9> rotation = {
+            cp * ck, -cp * sk, sp,
+            co * sk + so * sp * ck, co * ck - so * sp * sk, -so * cp,
+            so * sk - co * sp * ck, so * ck + co * sp * sk, co * cp};
+        return {{static_cast<float>(rotation[0]), static_cast<float>(rotation[1]),
+                 static_cast<float>(rotation[2]), static_cast<float>(rotation[3]),
+                 static_cast<float>(rotation[4]), static_cast<float>(rotation[5]),
+                 static_cast<float>(rotation[6]), static_cast<float>(rotation[7]),
+                 static_cast<float>(rotation[8])},
+                {static_cast<float>(camera.position[0]), static_cast<float>(camera.position[1]),
+                 static_cast<float>(camera.position[2])}};
     }
 } // namespace lfs::io::opf

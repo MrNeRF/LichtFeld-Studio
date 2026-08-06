@@ -79,6 +79,11 @@ namespace lfs::io::opf {
         std::array<double, 3> orientation_deg;
     };
 
+    struct CalibratedPose {
+        std::array<float, 9> rotation;
+        std::array<float, 3> position;
+    };
+
     // Parses and validates the OPF project graph. Resource files are resolved
     // relative to the directory containing the project file and must remain
     // inside that directory. Unknown extension items/resources are retained
@@ -94,5 +99,6 @@ namespace lfs::io::opf {
         const Resource& gltf_resource, const std::filesystem::path& project_root);
     [[nodiscard]] Result<std::vector<CalibratedCamera>> read_calibrated_cameras(
         const Resource& resource);
+    [[nodiscard]] CalibratedPose to_calibrated_pose(const CalibratedCamera& camera);
 
 } // namespace lfs::io::opf

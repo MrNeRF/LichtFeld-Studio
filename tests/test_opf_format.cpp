@@ -244,3 +244,13 @@ TEST_F(OpfFormatTest, RejectsCalibratedCameraMissingSensor) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
 }
+
+TEST_F(OpfFormatTest, ConvertsCalibratedOmegaPhiKappaPose) {
+    const lfs::io::opf::CalibratedCamera camera{42, 7, {1.0, 2.0, 3.0}, {0.0, 0.0, 90.0}};
+    const auto pose = lfs::io::opf::to_calibrated_pose(camera);
+    EXPECT_NEAR(pose.rotation[0], 0.0f, 1e-6f);
+    EXPECT_NEAR(pose.rotation[1], -1.0f, 1e-6f);
+    EXPECT_NEAR(pose.rotation[3], 1.0f, 1e-6f);
+    EXPECT_NEAR(pose.rotation[4], 0.0f, 1e-6f);
+    EXPECT_EQ(pose.position, (std::array<float, 3>{1.0f, 2.0f, 3.0f}));
+}
