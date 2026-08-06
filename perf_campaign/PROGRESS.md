@@ -825,4 +825,4 @@ Bicycle runs: `perf_campaign/runs/20260806T231424Z_run{1,2,3}/`
 Gate: no quality regression; speed within dual-workload noise (bicycle wall varies under
 fleet contention — compare steady_ms/iter).
 
-- **Commit:** `9594581a`
+- **Commit:** `e43c49b7`
