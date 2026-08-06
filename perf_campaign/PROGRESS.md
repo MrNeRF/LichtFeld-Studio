@@ -815,4 +815,4 @@ re-import; NVRM fix is densify/grow ordering for GUI.
   500k, no NaN/collapse). Default bonsai/bicycle paths do not enable mask_mode;
   correctness is covered by unit equivalence tests.
 
-- **Commit:** `a7d194f3`
+- **Commit:** `cd33fe58`
