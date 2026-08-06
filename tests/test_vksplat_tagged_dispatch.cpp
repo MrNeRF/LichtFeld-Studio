@@ -941,6 +941,10 @@ namespace {
             forge_pipeline(pipeline_projection_forward_3dgut, 0x5302);
             forge_pipeline(pipeline_projection_forward_quant, 0x5303);
             forge_pipeline(pipeline_projection_forward_quant_3dgut, 0x5304);
+            forge_pipeline(pipeline_cull_splats, 0x5401);
+            forge_pipeline(pipeline_cull_prepare, 0x5402);
+            forge_pipeline(pipeline_projection_forward_survivors, 0x5403);
+            forge_pipeline(pipeline_projection_forward_quant_survivors, 0x5404);
 
             // Pre-sized host-visible readback so ensureLodSelectionReadback is a no-op.
             // ensureLodSelectionReadback(chunk_capacity) allocates (2+chunk_capacity) words;
@@ -1002,6 +1006,10 @@ namespace {
             zero_pipeline(pipeline_projection_forward_3dgut);
             zero_pipeline(pipeline_projection_forward_quant);
             zero_pipeline(pipeline_projection_forward_quant_3dgut);
+            zero_pipeline(pipeline_cull_splats);
+            zero_pipeline(pipeline_cull_prepare);
+            zero_pipeline(pipeline_projection_forward_survivors);
+            zero_pipeline(pipeline_projection_forward_quant_survivors);
             all_compute_pipelines.clear();
         }
 
@@ -1061,6 +1069,11 @@ namespace {
     constexpr std::size_t kAuditSelectionPolygonRasterize = 3; // 2 pre + 1 post
     constexpr std::size_t kAuditProjectionForwardNoLod = 12;   // 10 + 1 + 1 (no L1218)
     constexpr std::size_t kAuditProjectionForwardWithLod = 16; // +4 LOD
+    // P4 r2: cull 5+1+(0..2)+1+1+2; survivors 5+(0..2).
+    constexpr std::size_t kAuditCullSplatsNoLod = 10;
+    constexpr std::size_t kAuditCullSplatsWithLod = 12;
+    constexpr std::size_t kAuditProjectionSurvivorsNoLod = 5;
+    constexpr std::size_t kAuditProjectionSurvivorsWithLod = 7;
 
     constexpr std::uint32_t kAuditSplatCount = 64;
     constexpr std::uint32_t kAuditAabbW = 16;
@@ -1498,6 +1511,200 @@ TEST(VkSplatTaggedDispatch, ProjectionForwardAuditWithinBaseline) {
                 no_lod_structs, kAuditProjectionForwardNoLod,
                 derived.size(),
                 static_cast<unsigned long long>(planned_activity));
+
+    renderer.discard_timestamps();
+    renderer.endCommandBatch(/*use_fence=*/false);
+}
+
+// =============================================================================
+// P4 r2: executeCullSplats + executeProjectionForwardSurvivors
+// =============================================================================
+
+// Catches: cull/survivors still hand-writing barriers (planner idle) or struct
+// count / edge coverage past catalog baselines; emit_count / IndirectRead missed.
+TEST(VkSplatTaggedDispatch, CullAndSurvivorsProjectionAuditWithinBaseline) {
+    DispatchScript script;
+    BindScript bind(script);
+
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+
+    VulkanGSPipelineBuffers buffers;
+    buffers.quant_pool = false;
+    forge_owned_f(buffers.xyz_ws, 0xE001, kAuditSplatCount * 3);
+    forge_owned_f(buffers.sh0, 0xE002, kAuditSplatCount * 3);
+    forge_owned_f(buffers.shN, 0xE003, kAuditSplatCount * 16);
+    forge_owned_f(buffers.rotations, 0xE004, kAuditSplatCount * 4);
+    forge_owned_f(buffers.scaling_raw, 0xE005, kAuditSplatCount * 3);
+    forge_owned_f(buffers.opacity_raw, 0xE006, kAuditSplatCount);
+    forge_owned_i32(buffers.survivors, 0xE007, kAuditSplatCount);
+    forge_owned(buffers.survivor_state, 0xE008, 16); // ≥ SurvivorState::kLayout.word_count
+    forge_owned(buffers.visible_emit_count, 0xE009, 4);
+    forge_owned_i32(buffers.sorting_keys_1, 0xE00A, kAuditSplatCount);
+    forge_owned_i32(buffers.sorting_keys_2, 0xE00B, kAuditSplatCount);
+    forge_owned_i32(buffers.sorting_gauss_idx_1, 0xE00C, kAuditSplatCount);
+    forge_owned_i32(buffers.sorting_gauss_idx_2, 0xE00D, kAuditSplatCount);
+    forge_owned_i64(buffers.rect_tile_space, 0xE00E, kAuditSplatCount);
+    forge_owned_f(buffers.xy_vs, 0xE00F, kAuditSplatCount * 2);
+    forge_owned_f(buffers.depths, 0xE010, kAuditSplatCount);
+    forge_owned_f(buffers.inv_cov_vs_opacity, 0xE011, kAuditSplatCount * 4);
+    forge_owned_f(buffers.rgb, 0xE012, kAuditSplatCount * 3);
+    forge_owned_i32(buffers.overlay_flags, 0xE013, kAuditSplatCount);
+    forge_owned_i32(buffers.orig_ids, 0xE014, kAuditSplatCount);
+
+    auto transform_indices = makeBuffer(0xE020, kAuditSplatCount * 4);
+    auto node_mask = makeBuffer(0xE021, 4096);
+    auto overlay_params = makeBuffer(0xE022, 4096);
+    auto model_transforms = makeBuffer(0xE023, 4096);
+    auto lod_indices = makeBuffer(0xE024, kAuditSplatCount * 4);
+    auto lod_logical = makeBuffer(0xE025, kAuditSplatCount * 4);
+    auto lod_levels = makeBuffer(0xE026, kAuditSplatCount * 4);
+    auto lod_weights = makeBuffer(0xE027, kAuditSplatCount * 4);
+    auto lod_counts = makeBuffer(0xE028, 16);
+
+    renderer.beginCommandBatch();
+    for (auto* b : {&buffers.xyz_ws.deviceBuffer, &buffers.sh0.deviceBuffer,
+                    &buffers.shN.deviceBuffer, &buffers.rotations.deviceBuffer,
+                    &buffers.scaling_raw.deviceBuffer, &buffers.opacity_raw.deviceBuffer,
+                    &buffers.survivors.deviceBuffer, &buffers.survivor_state.deviceBuffer,
+                    &buffers.visible_emit_count.deviceBuffer,
+                    &buffers.sorting_keys_1.deviceBuffer, &buffers.sorting_keys_2.deviceBuffer,
+                    &buffers.sorting_gauss_idx_1.deviceBuffer,
+                    &buffers.sorting_gauss_idx_2.deviceBuffer,
+                    &buffers.rect_tile_space.deviceBuffer, &buffers.xy_vs.deviceBuffer,
+                    &buffers.depths.deviceBuffer, &buffers.inv_cov_vs_opacity.deviceBuffer,
+                    &buffers.rgb.deviceBuffer, &buffers.overlay_flags.deviceBuffer,
+                    &buffers.orig_ids.deviceBuffer,
+                    &transform_indices, &node_mask, &overlay_params, &model_transforms,
+                    &lod_indices, &lod_logical, &lod_levels, &lod_weights, &lod_counts}) {
+        track_buf(renderer, *b);
+    }
+
+    const auto stats_before = renderer.barrierPlanner().stats();
+    script.clear_recording();
+
+    VulkanGSRendererUniforms u{};
+    u.num_splats = kAuditSplatCount;
+    u.image_width = 64;
+    u.image_height = 64;
+    u.grid_width = 4;
+    u.grid_height = 4;
+    u.lod_enabled = 1;
+    u.lod_count = kAuditSplatCount;
+    u.model_num_splats = kAuditSplatCount;
+
+    // --- cull alone (no-LOD first so state is clean for with-LOD) ---
+    renderer.executeCullSplats(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms);
+    const std::size_t cull_no_lod = total_buffer_barrier_structs(script);
+    EXPECT_LE(cull_no_lod, kAuditCullSplatsNoLod);
+
+    script.clear_recording();
+    renderer.executeCullSplats(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+        lod_indices, lod_logical, lod_counts);
+    const std::size_t cull_with_lod = total_buffer_barrier_structs(script);
+    EXPECT_LE(cull_with_lod, kAuditCullSplatsWithLod);
+
+    // --- survivors after a single fresh cull (no-LOD), then with-LOD ---
+    // End/begin resets planner via onBatchBegin so counts are not polluted by
+    // WAW stacks from earlier isolated measurements.
+    renderer.discard_timestamps();
+    renderer.endCommandBatch(/*use_fence=*/false);
+    renderer.beginCommandBatch();
+    for (auto* b : {&buffers.xyz_ws.deviceBuffer, &buffers.sh0.deviceBuffer,
+                    &buffers.shN.deviceBuffer, &buffers.rotations.deviceBuffer,
+                    &buffers.scaling_raw.deviceBuffer, &buffers.opacity_raw.deviceBuffer,
+                    &buffers.survivors.deviceBuffer, &buffers.survivor_state.deviceBuffer,
+                    &buffers.visible_emit_count.deviceBuffer,
+                    &buffers.sorting_keys_1.deviceBuffer, &buffers.sorting_keys_2.deviceBuffer,
+                    &buffers.sorting_gauss_idx_1.deviceBuffer,
+                    &buffers.sorting_gauss_idx_2.deviceBuffer,
+                    &buffers.rect_tile_space.deviceBuffer, &buffers.xy_vs.deviceBuffer,
+                    &buffers.depths.deviceBuffer, &buffers.inv_cov_vs_opacity.deviceBuffer,
+                    &buffers.rgb.deviceBuffer, &buffers.overlay_flags.deviceBuffer,
+                    &buffers.orig_ids.deviceBuffer,
+                    &transform_indices, &node_mask, &overlay_params, &model_transforms,
+                    &lod_indices, &lod_logical, &lod_levels, &lod_weights, &lod_counts}) {
+        track_buf(renderer, *b);
+    }
+
+    script.clear_recording();
+    renderer.executeCullSplats(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms);
+    renderer.executeProjectionForwardSurvivors(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+        kAuditSplatCount);
+    // Structs for the survivors step only: re-run survivors after clear once cull state exists.
+    // Catalog hand-written survivors only barriered 5 attrs; co-migration also plans
+    // cull→survivors hazards (state/survivors/emit_count/IndirectRead) that legacy under-synced.
+    // Bound by (catalog survivors max) + (cross-chain true hazards from cull outputs).
+    const std::size_t kAuditSurvivorsAfterCullNoLod =
+        kAuditProjectionSurvivorsNoLod + 6; // +state/survivors/emit/indirect/cross
+    script.clear_recording();
+    renderer.executeProjectionForwardSurvivors(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+        kAuditSplatCount);
+    const std::size_t surv_no_lod = total_buffer_barrier_structs(script);
+    EXPECT_LE(surv_no_lod, kAuditSurvivorsAfterCullNoLod);
+
+    script.clear_recording();
+    renderer.executeProjectionForwardSurvivors(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+        kAuditSplatCount, lod_indices, lod_logical, lod_levels, lod_weights, lod_counts);
+    const std::size_t surv_with_lod = total_buffer_barrier_structs(script);
+    EXPECT_LE(surv_with_lod, kAuditProjectionSurvivorsWithLod + 6);
+
+    // Combined edge coverage.
+    script.clear_recording();
+    renderer.executeCullSplats(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+        lod_indices, lod_logical, lod_counts);
+    renderer.executeProjectionForwardSurvivors(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+        kAuditSplatCount, lod_indices, lod_logical, lod_levels, lod_weights, lod_counts);
+
+    std::vector<VkBufferMemoryBarrier2> derived;
+    for (const auto& cap : script.barriers) {
+        derived.insert(derived.end(), cap.buffer_barriers.begin(), cap.buffer_barriers.end());
+    }
+    using BM = VulkanGSPipeline::BarrierMask;
+    const HazardEdge edges[] = {
+        // clear → cull: survivor_state TransferWrite → ComputeWrite (cull) / R/W (prepare)
+        {buffers.survivor_state.deviceBuffer.buffer, BM::TRANSFER_WRITE, BM::COMPUTE_SHADER_WRITE,
+         "survivor_state fill→cull write"},
+        // cull write → prepare R/W
+        {buffers.survivor_state.deviceBuffer.buffer, BM::COMPUTE_SHADER_WRITE,
+         BM::COMPUTE_SHADER_READ_WRITE, "survivor_state cull→prepare"},
+        // prepare write → indirect read for survivors projection
+        {buffers.survivor_state.deviceBuffer.buffer, BM::COMPUTE_SHADER_WRITE,
+         BM::INDIRECT_DISPATCH_READ, "survivor_state prepare→indirect"},
+        // survivors list → projection read
+        {buffers.survivors.deviceBuffer.buffer, BM::COMPUTE_SHADER_WRITE, BM::COMPUTE_SHADER_READ,
+         "survivors cull→projection"},
+        // emit_count prepare write → projection R/W
+        {buffers.visible_emit_count.deviceBuffer.buffer, BM::COMPUTE_SHADER_WRITE,
+         BM::COMPUTE_SHADER_READ_WRITE, "emit_count prepare→projection"},
+    };
+    for (const auto& edge : edges) {
+        EXPECT_TRUE(edge_covered(derived, edge)) << "missing edge: " << edge.name;
+    }
+
+    const auto stats_after = renderer.barrierPlanner().stats();
+    const std::uint64_t planned_activity =
+        (stats_after.barriers_emitted + stats_after.accesses_elided) -
+        (stats_before.barriers_emitted + stats_before.accesses_elided);
+    EXPECT_GT(planned_activity, 0u)
+        << "cull/survivors must exercise planner (tagged + clear planTransfer)";
+
+    std::printf(
+        "CullSurvivorsAudit cull_with_lod=%zu (≤%zu) cull_no_lod=%zu (≤%zu) "
+        "surv_with_lod=%zu (≤%zu) surv_no_lod=%zu (≤%zu) derived=%zu planned_activity=%llu\n",
+        cull_with_lod, kAuditCullSplatsWithLod, cull_no_lod, kAuditCullSplatsNoLod,
+        surv_with_lod, kAuditProjectionSurvivorsWithLod + 6, surv_no_lod,
+        kAuditSurvivorsAfterCullNoLod, derived.size(),
+        static_cast<unsigned long long>(planned_activity));
 
     renderer.discard_timestamps();
     renderer.endCommandBatch(/*use_fence=*/false);

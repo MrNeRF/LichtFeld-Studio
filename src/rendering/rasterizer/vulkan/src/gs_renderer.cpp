@@ -2524,20 +2524,14 @@ void VulkanGSRenderer::executeCullSplats(
     PerfTimer::Timer<PerfTimer::CullSplats> timer(this);
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+
     const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
     if (num_splats == 0)
         return;
 
-    bufferMemoryBarrier({
-                            {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ);
-
     auto& survivors = resizeDeviceBuffer(buffers.survivors, num_splats);
+    // clearDeviceBuffer records TransferWrite via planTransfer (§3.2).
     auto& survivor_state = clearDeviceBuffer(
         buffers.survivor_state,
         indirect::SurvivorState::kLayout.word_count);
@@ -2545,20 +2539,9 @@ void VulkanGSRenderer::executeCullSplats(
                                  indirect::SurvivorState::kLayout,
                                  "cull_prepare survivor-state producer");
     auto& emit_count = resizeDeviceBuffer(buffers.visible_emit_count, 1);
-    bufferMemoryBarrier({{survivor_state, TRANSFER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
 
-    if (lod_indices.buffer != VK_NULL_HANDLE ||
-        lod_logical_indices.buffer != VK_NULL_HANDLE) {
-        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
-        if (lod_indices.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_indices, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        if (lod_logical_indices.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_logical_indices, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
-    }
-
+    // Optional LOD inputs: null → dummy bind to survivor_state (legacy parity).
+    // plan() on tagged path covers valid LOD reads (replaces L2592 conditional).
     const _VulkanBuffer lod_indices_binding =
         (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : survivor_state;
     const _VulkanBuffer lod_logical_indices_binding =
@@ -2566,39 +2549,37 @@ void VulkanGSRenderer::executeCullSplats(
     const _VulkanBuffer lod_counts_binding =
         (lod_counts.buffer != VK_NULL_HANDLE) ? lod_counts : survivor_state;
 
+    // Tags from cull_splats.slang CULL_ENTRY_CULL bindings 0–9.
     executeCompute(
         {{num_splats, 256}},
         &uniforms, sizeof(uniforms),
         pipeline_cull_splats,
-        {
-            buffers.xyz_ws.deviceBuffer,
-            transform_indices,
-            node_mask,
-            overlay_params,
-            model_transforms,
-            lod_indices_binding,
-            lod_logical_indices_binding,
-            lod_counts_binding,
-            survivors,
-            survivor_state,
+        std::vector<TaggedBinding>{
+            {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
+            {transform_indices, BufferUse::ComputeRead},
+            {node_mask, BufferUse::ComputeRead},
+            {overlay_params, BufferUse::ComputeRead},
+            {model_transforms, BufferUse::ComputeRead},
+            {lod_indices_binding, BufferUse::ComputeRead},
+            {lod_logical_indices_binding, BufferUse::ComputeRead},
+            {lod_counts_binding, BufferUse::ComputeRead},
+            {survivors, BufferUse::ComputeWrite},
+            {survivor_state, BufferUse::ComputeWrite},
         });
 
-    bufferMemoryBarrier({{survivor_state, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
+    // Tags from cull_splats.slang CULL_ENTRY_PREPARE: state R/W, emit_count write.
+    // L2619 catalog only barriered survivor_state (emit_count mismatch — first write).
     executeCompute(
         {{1, 1}},
         nullptr, 0,
         pipeline_cull_prepare,
-        {
-            survivor_state,
-            emit_count,
+        std::vector<TaggedBinding>{
+            {survivor_state, BufferUse::ComputeReadWrite},
+            {emit_count, BufferUse::ComputeWrite},
         });
 
-    bufferMemoryBarrier({{survivor_state, COMPUTE_SHADER_WRITE}}, INDIRECT_DISPATCH_READ);
-    bufferMemoryBarrier({
-                            {survivors, COMPUTE_SHADER_WRITE},
-                            {emit_count, COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
+    // Post L2629/L2630 deleted: executeProjectionForwardSurvivors (co-migrated)
+    // plans survivors/emit_count reads + implicit IndirectRead on survivor_state (§3.4.5).
 }
 
 void VulkanGSRenderer::executeProjectionForwardSurvivors(
@@ -2617,28 +2598,10 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     PerfTimer::Timer<PerfTimer::ProjectionSurvivors> timer(this);
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+
     if (visible_capacity == 0)
         return;
-
-    bufferMemoryBarrier({
-                            {buffers.sh0.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.shN.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ);
-
-    if (lod_levels.buffer != VK_NULL_HANDLE || lod_weights.buffer != VK_NULL_HANDLE) {
-        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
-        if (lod_levels.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_levels, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        if (lod_weights.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_weights, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
-    }
 
     VulkanGSRendererUniforms survivor_uniforms = uniforms;
     survivor_uniforms.sort_capacity = static_cast<uint32_t>(
@@ -2650,6 +2613,13 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
 
     auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), visible_capacity);
     auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), visible_capacity);
+    auto& rect_tile_space = resizeDeviceBuffer(buffers.rect_tile_space, visible_capacity);
+    auto& xy_vs = resizeDeviceBuffer(buffers.xy_vs, 2 * visible_capacity);
+    auto& depths = resizeDeviceBuffer(buffers.depths, visible_capacity);
+    auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * visible_capacity);
+    auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * visible_capacity);
+    auto& overlay_flags = resizeDeviceBuffer(buffers.overlay_flags, visible_capacity);
+    auto& orig_ids = resizeDeviceBuffer(buffers.orig_ids, visible_capacity);
 
     const _VulkanBuffer lod_indices_binding =
         (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : unsorted_keys;
@@ -2662,50 +2632,52 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     const _VulkanBuffer lod_counts_binding =
         (lod_counts.buffer != VK_NULL_HANDLE) ? lod_counts : unsorted_keys;
 
-    std::vector<_VulkanBuffer> projection_buffers = {
-        // inputs
-        buffers.xyz_ws.deviceBuffer,
-        buffers.sh0.deviceBuffer,
-        buffers.shN.deviceBuffer,
-        buffers.rotations.deviceBuffer,
-        buffers.scaling_raw.deviceBuffer,
-        buffers.opacity_raw.deviceBuffer,
-        // compact-slot outputs (slots 6 and 8 are absent from the
-        // pipeline layout; the entries are placeholders)
-        unsorted_keys,
-        resizeDeviceBuffer(buffers.rect_tile_space, visible_capacity),
-        unsorted_keys,
-        resizeDeviceBuffer(buffers.xy_vs, 2 * visible_capacity),
-        resizeDeviceBuffer(buffers.depths, visible_capacity),
-        resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * visible_capacity),
-        resizeDeviceBuffer(buffers.rgb, 3 * visible_capacity),
-        resizeDeviceBuffer(buffers.overlay_flags, visible_capacity),
-        transform_indices,
-        node_mask,
-        overlay_params,
-        model_transforms,
-        unsorted_keys,
-        lod_indices_binding,
-        lod_logical_indices_binding,
-        lod_levels_binding,
-        lod_weights_binding,
-        lod_counts_binding,
-        buffers.survivors.deviceBuffer,
-        buffers.survivor_state.deviceBuffer,
-        unsorted_idx,
-        buffers.visible_emit_count.deviceBuffer,
-        resizeDeviceBuffer(buffers.orig_ids, visible_capacity),
+    // Dense buffer array indexed by binding number (catalog appendix L2735).
+    // Pipeline layouts skip bindings 6 and 8 (placeholders still occupy slots).
+    // Tags: attr/LOD/survivors/state reads; compact outputs write; emit_count R/W atomic.
+    std::vector<TaggedBinding> tagged = {
+        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},                  // 0
+        {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},                     // 1
+        {buffers.shN.deviceBuffer, BufferUse::ComputeRead},                     // 2
+        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},               // 3
+        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},             // 4
+        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},             // 5
+        {unsorted_keys, BufferUse::ComputeWrite},                               // 6 placeholder
+        {rect_tile_space, BufferUse::ComputeWrite},                             // 7
+        {unsorted_keys, BufferUse::ComputeWrite},                               // 8 placeholder
+        {xy_vs, BufferUse::ComputeWrite},                                       // 9
+        {depths, BufferUse::ComputeWrite},                                      // 10
+        {inv_cov, BufferUse::ComputeWrite},                                     // 11
+        {rgb, BufferUse::ComputeWrite},                                         // 12
+        {overlay_flags, BufferUse::ComputeWrite},                               // 13
+        {transform_indices, BufferUse::ComputeRead},                            // 14
+        {node_mask, BufferUse::ComputeRead},                                    // 15
+        {overlay_params, BufferUse::ComputeRead},                               // 16
+        {model_transforms, BufferUse::ComputeRead},                             // 17
+        {unsorted_keys, BufferUse::ComputeWrite},                               // 18 placeholder
+        {lod_indices_binding, BufferUse::ComputeRead},                          // 19
+        {lod_logical_indices_binding, BufferUse::ComputeRead},                  // 20
+        {lod_levels_binding, BufferUse::ComputeRead},                           // 21
+        {lod_weights_binding, BufferUse::ComputeRead},                          // 22
+        {lod_counts_binding, BufferUse::ComputeRead},                           // 23
+        {buffers.survivors.deviceBuffer, BufferUse::ComputeRead},               // 24
+        {buffers.survivor_state.deviceBuffer, BufferUse::ComputeRead},          // 25
+        {unsorted_idx, BufferUse::ComputeWrite},                                // 26
+        {buffers.visible_emit_count.deviceBuffer, BufferUse::ComputeReadWrite}, // 27
+        {orig_ids, BufferUse::ComputeWrite},                                    // 28
     };
     if (buffers.quant_pool) {
-        projection_buffers.push_back(buffers.page_frames.deviceBuffer);
+        tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead}); // 29
     }
+
+    // Indirect: plan() adds implicit IndirectRead on survivor_state (replaces L2629 handoff).
     executeComputeIndirect(
         buffers.survivor_state.deviceBuffer,
         indirect::byteOffset(indirect::SurvivorState::kProjectionWordOffset),
         &survivor_uniforms, sizeof(survivor_uniforms),
         buffers.quant_pool ? pipeline_projection_forward_quant_survivors
                            : pipeline_projection_forward_survivors,
-        projection_buffers);
+        tagged);
 }
 
 void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
