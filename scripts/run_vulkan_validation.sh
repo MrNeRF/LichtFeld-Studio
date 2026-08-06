@@ -30,7 +30,7 @@ Options:
                      pinned layer (1.4.341.0) reports false-positive
                      VUID-vkCmdDispatch-storageBuffers-06936 against stale
                      push-descriptor snapshots (Vulkan-ValidationLayers issue
-                     #11433, analysis in debug/epic1496/). Cross-check any
+                     #11433). Cross-check any
                      GPU-AV OOB hit against a core+sync run before trusting it.
   -h, --help         Show this help
 EOF
