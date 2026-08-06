@@ -265,6 +265,111 @@ TEST(OutputImagePool, ReleaseUnknownSerialFlagged) {
 #endif
 }
 
+TEST(OutputImagePool, EvictReleaseDestroysOnDrainWhenBothPredsPass) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+    const VkImage handle = fakeImage(0xE100);
+
+    auto acquired = pool.registerCreated(key, makeImage(0xE100));
+    pool.release(acquired.acquisition_serial, /*producer_value=*/10, /*consumer_serial=*/20,
+                 /*evict=*/true);
+    EXPECT_EQ(pool.liveCount(), 0u);
+    EXPECT_EQ(pool.retiredCount(), 1u);
+    EXPECT_EQ(pool.idleBytes(), 128u * 64u * 4u);
+
+    pool.drain(/*force=*/false, always_done, always_done, cap.fn());
+    ASSERT_EQ(cap.destroyed.size(), 1u);
+    EXPECT_EQ(cap.destroyed[0], handle);
+    EXPECT_EQ(pool.retiredCount(), 0u);
+    EXPECT_EQ(pool.freeCount(), 0u);
+    EXPECT_EQ(pool.idleBytes(), 0u);
+    EXPECT_FALSE(pool.acquire(key).has_value());
+}
+
+TEST(OutputImagePool, EvictReleaseHoldsWhileEitherPredFails) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+
+    auto acquired = pool.registerCreated(key, makeImage(0xE101));
+    pool.release(acquired.acquisition_serial, 5, 6, /*evict=*/true);
+
+    pool.drain(false, never_done, always_done, cap.fn());
+    EXPECT_EQ(pool.retiredCount(), 1u);
+    EXPECT_TRUE(cap.destroyed.empty());
+    EXPECT_FALSE(pool.acquire(key).has_value());
+
+    pool.drain(false, always_done, never_done, cap.fn());
+    EXPECT_EQ(pool.retiredCount(), 1u);
+    EXPECT_TRUE(cap.destroyed.empty());
+    EXPECT_FALSE(pool.acquire(key).has_value());
+    EXPECT_EQ(pool.idleBytes(), 128u * 64u * 4u);
+}
+
+TEST(OutputImagePool, EvictEntriesNeverReappearViaAcquire) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+
+    auto acquired = pool.registerCreated(key, makeImage(0xE102));
+    pool.release(acquired.acquisition_serial, 1, 1, /*evict=*/true);
+    pool.drain(false, always_done, always_done, cap.fn());
+
+    EXPECT_EQ(cap.destroyed.size(), 1u);
+    EXPECT_FALSE(pool.acquire(key).has_value());
+    EXPECT_EQ(pool.freeCount(), 0u);
+    EXPECT_EQ(pool.liveCount(), 0u);
+}
+
+TEST(OutputImagePool, NonEvictReleaseStillFreeLists) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+    const VkImage handle = fakeImage(0xE103);
+
+    auto acquired = pool.registerCreated(key, makeImage(0xE103));
+    pool.release(acquired.acquisition_serial, 1, 1, /*evict=*/false);
+    pool.drain(false, always_done, always_done, cap.fn());
+    EXPECT_TRUE(cap.destroyed.empty());
+    EXPECT_EQ(pool.freeCount(), 1u);
+
+    auto reused = pool.acquire(key);
+    ASSERT_TRUE(reused.has_value());
+    EXPECT_EQ(reused->image.image, handle);
+}
+
+TEST(OutputImagePool, ForceDrainDestroysEvictedRetiredEntries) {
+    OutputImagePool pool;
+    DestroyCapture cap;
+    const auto key = makeKey();
+
+    auto live = pool.registerCreated(key, makeImage(0xE104));
+    auto free_src = pool.registerCreated(key, makeImage(0xE105));
+    pool.release(free_src.acquisition_serial, 1, 1, /*evict=*/false);
+    pool.drain(false, always_done, always_done, cap.fn());
+
+    auto retired_evict = pool.registerCreated(key, makeImage(0xE106));
+    pool.release(retired_evict.acquisition_serial, 1, 1, /*evict=*/true);
+    pool.drain(false, never_done, never_done, cap.fn());
+
+    auto retired_keep = pool.registerCreated(key, makeImage(0xE107));
+    pool.release(retired_keep.acquisition_serial, 1, 1, /*evict=*/false);
+    pool.drain(false, never_done, never_done, cap.fn());
+
+    EXPECT_EQ(pool.freeCount(), 1u);
+    EXPECT_EQ(pool.retiredCount(), 2u);
+    EXPECT_EQ(pool.liveCount(), 1u);
+    cap.destroyed.clear();
+
+    pool.drain(/*force=*/true, always_done, always_done, cap.fn());
+    EXPECT_EQ(cap.destroyed.size(), 3u);
+    EXPECT_EQ(pool.liveCount(), 1u);
+    EXPECT_EQ(pool.retiredCount(), 0u);
+    EXPECT_EQ(pool.freeCount(), 0u);
+    EXPECT_EQ(live.image.image, fakeImage(0xE104));
+}
+
 TEST(OutputImagePool, ForceDrainDestroysRetiredAndFreeNotLive) {
     OutputImagePool pool;
     DestroyCapture cap;

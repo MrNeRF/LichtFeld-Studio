@@ -70,6 +70,8 @@ public:
 
     void createBuffer(size_t size, _VulkanBuffer& buffer);
     void destroyBuffer(_VulkanBuffer& buffer);
+    // Caller must prove via timeline wait that no submitted batch still references the buffer.
+    void destroyBufferRetired(_VulkanBuffer& buffer);
     void resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink = true);
     template <typename T>
     _VulkanBuffer& resizeDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool no_shrink = true);
@@ -328,6 +330,8 @@ protected:
 
 private:
     void destroyComputePipeline(_ComputePipeline& pipeline);
+    // Shared destroy path for destroyBuffer (wait) / destroyBufferRetired (no wait).
+    void destroyBufferImpl(_VulkanBuffer& buffer, bool wait_for_pending_batch, const char* caller_name);
 
     // Shared bind / push-descriptor / push-constants / dispatch recording (batch must be active).
     void recordComputeDispatch(

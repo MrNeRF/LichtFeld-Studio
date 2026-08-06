@@ -84,9 +84,11 @@ namespace lfs::vis {
         [[nodiscard]] Acquired registerCreated(const Key& key, VulkanContext::ExternalImage&& image);
 
         // Double/unknown release: debug assert + misuseFlagged() + ignore.
+        // evict=true: on successful non-force drain, destroy instead of free-listing.
         void release(std::uint64_t acquisition_serial,
                      std::uint64_t producer_value,
-                     std::uint64_t consumer_serial);
+                     std::uint64_t consumer_serial,
+                     bool evict = false);
 
         // force=true destroys retired+free (never live). Otherwise both predicates must pass
         // to move retired → free.
@@ -122,6 +124,7 @@ namespace lfs::vis {
             std::uint64_t consumer_serial = 0;
             std::uint64_t free_since_tick = 0;
             State state = State::Live;
+            bool evict = false;
         };
 
         [[nodiscard]] std::uint64_t nextSerial();

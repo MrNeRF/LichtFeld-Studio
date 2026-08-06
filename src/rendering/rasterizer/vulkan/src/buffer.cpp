@@ -242,11 +242,14 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     }
 }
 
-void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
+void VulkanGSPipeline::destroyBufferImpl(_VulkanBuffer& buffer,
+                                         bool wait_for_pending_batch,
+                                         const char* caller_name) {
     if (commandBatchInProgress) {
         lfs::rendering::throw_renderer_contract(
             std::format(
-                "destroyBuffer cannot destroy an allocation referenced by an active command batch (batch_active={}, buffer={:#x}, allocation={:#x}, bytes={}, label='{}')",
+                "{} cannot destroy an allocation referenced by an active command batch (batch_active={}, buffer={:#x}, allocation={:#x}, bytes={}, label='{}')",
+                caller_name,
                 commandBatchInProgress,
                 lfs::rendering::vkHandleValue(buffer.buffer),
                 lfs::rendering::vkHandleValue(buffer.allocation),
@@ -257,7 +260,9 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
         // Epic #1496: drop planner state before handle reuse can reappear.
         barrier_planner_.forget(buffer.buffer);
-        waitForPendingBatch();
+        if (wait_for_pending_batch) {
+            waitForPendingBatch();
+        }
         vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
         if (current_vram < buffer.allocSize) {
             lfs::rendering::throw_renderer_contract(
@@ -283,6 +288,15 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     buffer.offset = 0;
     buffer.created_with_extra_usage = 0;
     // Keep buffer.label intact so a subsequent resize re-establishes the recording.
+}
+
+void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
+    destroyBufferImpl(buffer, /*wait_for_pending_batch=*/true, "destroyBuffer");
+}
+
+void VulkanGSPipeline::destroyBufferRetired(_VulkanBuffer& buffer) {
+    // Caller must prove via timeline wait that no submitted batch still references the buffer.
+    destroyBufferImpl(buffer, /*wait_for_pending_batch=*/false, "destroyBufferRetired");
 }
 
 void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink) {

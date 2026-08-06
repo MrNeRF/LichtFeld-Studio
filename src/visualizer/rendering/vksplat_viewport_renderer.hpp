@@ -426,7 +426,8 @@ namespace lfs::vis {
         void detachSharedScratchBuffers();
         void releaseSharedScratchImportOnly();
         void releaseSharedScratchArena();
-        void releaseOutputSlot(OutputSlot output_slot);
+        // evict=true: pool entries destroy on drain instead of free-list reuse.
+        void releaseOutputSlot(OutputSlot output_slot, bool evict = false);
         // Queues a no-longer-current shared-scratch import for destruction once
         // the GPU submission that last referenced it has retired. The old VkBuffer
         // may still be read by in-flight graphics/compute submissions (the resize
@@ -653,6 +654,8 @@ namespace lfs::vis {
         // render-complete timeline value at which they become safe to free.
         std::vector<std::pair<std::uint64_t, VulkanContext::ExternalBuffer>>
             retired_scratch_buffers_;
+        // Private VMA scratch buffers awaiting the same timeline retirement.
+        std::vector<std::pair<std::uint64_t, _VulkanBuffer>> retired_private_scratch_buffers_;
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
         // CUDA upload completing; eliminates the per-frame

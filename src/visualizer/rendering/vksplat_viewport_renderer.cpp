@@ -1759,7 +1759,7 @@ namespace lfs::vis {
         reset();
     }
 
-    void VksplatViewportRenderer::releaseOutputSlot(const OutputSlot output_slot) {
+    void VksplatViewportRenderer::releaseOutputSlot(const OutputSlot output_slot, const bool evict) {
         if (!context_) {
             return;
         }
@@ -1777,10 +1777,10 @@ namespace lfs::vis {
             // Slot holds non-owning copies; pool owns the images. Serial 0 = never
             // acquired — must not call release.
             if (slot.color_pool_serial != 0) {
-                output_pool_.release(slot.color_pool_serial, producer, consumer);
+                output_pool_.release(slot.color_pool_serial, producer, consumer, evict);
             }
             if (slot.depth_pool_serial != 0) {
-                output_pool_.release(slot.depth_pool_serial, producer, consumer);
+                output_pool_.release(slot.depth_pool_serial, producer, consumer, evict);
             }
             slot = {};
         }
@@ -1794,30 +1794,12 @@ namespace lfs::vis {
             return;
         }
 
-        try {
-            renderer_.waitForPendingBatch();
-        } catch (const std::exception& e) {
-            LOG_WARN("VkSplat preview resource release skipped while render batch is pending: {}", e.what());
-            return;
-        }
-        if (!context_->waitForSubmittedFrames()) {
-            LOG_WARN("VkSplat preview resource release skipped while submitted frames are pending: {}",
-                     context_->lastError());
-            return;
-        }
-        for (std::size_t ring_slot = 0; ring_slot < ring_completion_values_.size(); ++ring_slot) {
-            if (auto ok = waitForRingSlot(ring_slot, "preview resource release"); !ok) {
-                LOG_WARN("VkSplat preview resource release skipped: {}", ok.error());
-                return;
-            }
-        }
-
-        releaseOutputSlot(OutputSlot::Preview);
+        releaseOutputSlot(OutputSlot::Preview, /*evict=*/true);
         releasePrivateScratchBuffers();
         releaseSharedScratchArena();
         drainRetiredScratchBuffers(false);
         drainOutputImagePool(false);
-        trimOutputImagePoolIdle();
+        trimOutputImagePoolAged();
         logVramBreakdownIfChanged("preview_release");
     }
 
@@ -1839,28 +1821,10 @@ namespace lfs::vis {
             return;
         }
 
-        try {
-            renderer_.waitForPendingBatch();
-        } catch (const std::exception& e) {
-            LOG_WARN("VkSplat split output release skipped while render batch is pending: {}", e.what());
-            return;
-        }
-        if (!context_->waitForSubmittedFrames()) {
-            LOG_WARN("VkSplat split output release skipped while submitted frames are pending: {}",
-                     context_->lastError());
-            return;
-        }
-        for (std::size_t ring_slot = 0; ring_slot < ring_completion_values_.size(); ++ring_slot) {
-            if (auto ok = waitForRingSlot(ring_slot, "split output release"); !ok) {
-                LOG_WARN("VkSplat split output release skipped: {}", ok.error());
-                return;
-            }
-        }
-
-        releaseOutputSlot(OutputSlot::SplitLeft);
-        releaseOutputSlot(OutputSlot::SplitRight);
+        releaseOutputSlot(OutputSlot::SplitLeft, /*evict=*/true);
+        releaseOutputSlot(OutputSlot::SplitRight, /*evict=*/true);
         drainOutputImagePool(false);
-        trimOutputImagePoolIdle();
+        trimOutputImagePoolAged();
         logVramBreakdownIfChanged("split_output_release");
     }
 
@@ -3545,15 +3509,25 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::releasePrivateScratchBuffers() {
         std::size_t released_bytes = 0;
+        const bool destroy_now =
+            render_complete_timeline_ == VK_NULL_HANDLE || last_submitted_render_value_ == 0;
         const auto release = [&](auto& typed_buffer) {
             auto& dev = typed_buffer.deviceBuffer;
             if (dev.buffer == VK_NULL_HANDLE || dev.allocation == VK_NULL_HANDLE) {
                 return;
             }
             released_bytes += dev.allocSize;
-            renderer_.destroyBuffer(dev);
+            const char* const label = dev.label;
+            _VulkanBuffer owned = dev;
+            dev = {};
+            dev.label = label;
             typed_buffer.clear();
             typed_buffer.shrink_to_fit();
+            if (destroy_now) {
+                renderer_.destroyBuffer(owned);
+            } else {
+                retired_private_scratch_buffers_.emplace_back(last_submitted_render_value_, owned);
+            }
         };
 
 #define RELEASE_PRIVATE_SCRATCH(name) release(buffers_.name)
@@ -3697,8 +3671,8 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::releaseSharedScratchImportOnly() {
         detachSharedScratchBuffers();
-        if (context_ != nullptr && shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
-            context_->destroyExternalBuffer(shared_scratch_.imported_buffer);
+        if (shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
+            retireSharedScratchBuffer(std::move(shared_scratch_.imported_buffer));
         }
         if (shared_scratch_.bytes != 0) {
             lfs::diagnostics::VramProfiler::instance().clearScope("shared.scratch");
@@ -3748,20 +3722,32 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::drainRetiredScratchBuffers(bool force) {
-        if (context_ == nullptr ||
-            (retired_scratch_buffers_.empty() && retired_input_storages_.empty())) {
+        if (retired_scratch_buffers_.empty() && retired_input_storages_.empty() &&
+            retired_private_scratch_buffers_.empty()) {
             return;
         }
         auto retired = [&](std::uint64_t value) {
             return force || renderTimelineValueRetired(value);
         };
-        auto it = retired_scratch_buffers_.begin();
-        while (it != retired_scratch_buffers_.end()) {
-            if (retired(it->first)) {
-                context_->destroyExternalBuffer(it->second);
-                it = retired_scratch_buffers_.erase(it);
+        if (context_ != nullptr) {
+            auto it = retired_scratch_buffers_.begin();
+            while (it != retired_scratch_buffers_.end()) {
+                if (retired(it->first)) {
+                    context_->destroyExternalBuffer(it->second);
+                    it = retired_scratch_buffers_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        auto private_it = retired_private_scratch_buffers_.begin();
+        while (private_it != retired_private_scratch_buffers_.end()) {
+            if (retired(private_it->first)) {
+                // Timeline-retired (or force post-idle): skip destroyBuffer's waitForPendingBatch.
+                renderer_.destroyBufferRetired(private_it->second);
+                private_it = retired_private_scratch_buffers_.erase(private_it);
             } else {
-                ++it;
+                ++private_it;
             }
         }
         auto storage_it = retired_input_storages_.begin();

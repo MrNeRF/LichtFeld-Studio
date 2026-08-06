@@ -38,6 +38,7 @@ namespace lfs::vis {
             entry.producer_value = 0;
             entry.consumer_serial = 0;
             entry.free_since_tick = 0;
+            entry.evict = false;
             ++live_count_;
 
             // Re-key map under the fresh serial (serial is never reused).
@@ -73,7 +74,8 @@ namespace lfs::vis {
 
     void OutputImagePool::release(const std::uint64_t acquisition_serial,
                                   const std::uint64_t producer_value,
-                                  const std::uint64_t consumer_serial) {
+                                  const std::uint64_t consumer_serial,
+                                  const bool evict) {
         const auto it = entries_.find(acquisition_serial);
         if (it == entries_.end() || it->second.state != State::Live) {
             misuse_flagged_ = true;
@@ -84,6 +86,7 @@ namespace lfs::vis {
         Entry& entry = it->second;
         entry.producer_value = producer_value;
         entry.consumer_serial = consumer_serial;
+        entry.evict = evict;
         entry.state = State::Retired;
         --live_count_;
         ++retired_count_;
@@ -116,6 +119,7 @@ namespace lfs::vis {
         }
 
         std::vector<std::uint64_t> freed;
+        std::vector<std::uint64_t> evicted;
         for (auto& [serial, entry] : entries_) {
             if (entry.state != State::Retired) {
                 continue;
@@ -125,12 +129,20 @@ namespace lfs::vis {
             if (!prod_ok || !cons_ok) {
                 continue;
             }
-            entry.state = State::Free;
-            entry.free_since_tick = drain_tick_;
             --retired_count_;
-            freed.push_back(serial);
+            if (entry.evict) {
+                destroyEntry(entry, destroy);
+                evicted.push_back(serial);
+            } else {
+                entry.state = State::Free;
+                entry.free_since_tick = drain_tick_;
+                freed.push_back(serial);
+            }
         }
         free_serials_.insert(free_serials_.end(), freed.begin(), freed.end());
+        for (const std::uint64_t serial : evicted) {
+            entries_.erase(serial);
+        }
     }
 
     void OutputImagePool::trimIdle(const DestroyFn& destroy) {
