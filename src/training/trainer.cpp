@@ -34,6 +34,7 @@
 #include "io/filesystem_utils.hpp"
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "lfs/training/perf_bench.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "losses/losses.hpp"
 #include "optimizer/adam_optimizer.hpp"
@@ -3738,6 +3739,9 @@ namespace lfs::training {
             try {
                 LFS_VRAM_SCOPE("train.step");
                 LOG_VRAM_DIFF("train.step");
+                if (PerfBenchCollector::enabled()) {
+                    PerfBenchCollector::instance().on_step_begin(iter);
+                }
                 if (live_vram_profiler_enabled()) {
                     auto& profiler = lfs::diagnostics::VramProfiler::instance();
                     profiler.beginIteration(iter);
@@ -5537,6 +5541,15 @@ namespace lfs::training {
                                                   &strategy_->get_optimizer());
                     lfs::diagnostics::VramProfiler::instance().sampleCudaMemory();
                 }
+                if (PerfBenchCollector::enabled() && strategy_) {
+                    auto& bench = PerfBenchCollector::instance();
+                    const auto ledger = compute_training_state_ledger(
+                        strategy_->get_model(), &strategy_->get_optimizer());
+                    bench.set_ledger(ledger);
+                    bench.on_step_end(iter,
+                                      current_loss_.load(),
+                                      strategy_->get_model().size());
+                }
 
                 // Return Continue if we should continue training
                 if (iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()) {
@@ -5631,6 +5644,9 @@ namespace lfs::training {
         }
         apply_pending_params_at_safe_point();
         LOG_INFO("Starting training loop");
+        if (PerfBenchCollector::enabled()) {
+            PerfBenchCollector::instance().on_training_start(get_total_iterations());
+        }
         auto& cache_loader = lfs::io::CacheLoader::getInstance();
         std::optional<lfs::Error> terminal_error;
         const auto append_terminal_error = [&terminal_error](lfs::Error error) {
@@ -6096,6 +6112,11 @@ namespace lfs::training {
             }
             if (progress_ && strategy_) {
                 progress_->print_final_summary(static_cast<int>(strategy_->get_model().size()));
+            }
+            if (PerfBenchCollector::enabled()) {
+                const auto report_path =
+                    params_.dataset.output_path / "perf_bench.json";
+                PerfBenchCollector::instance().finalize(report_path);
             }
         } catch (const std::exception& e) {
             append_terminal_error(lfs::make_error(lfs::ErrorInit{

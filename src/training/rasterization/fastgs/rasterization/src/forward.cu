@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "buffer_utils.h"
+#include "core/alloc_counter.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
 #include "helper_math.h"
@@ -63,6 +64,8 @@ namespace {
                         "requested_bytes={}, label={}", size,
                         label_ ? label_ : "rasterizer.fastgs.scratch"));
             }
+            // Phase 0.1: count real driver allocs for gate G2 (sort-buffer churn).
+            lfs::core::alloc_counter::record();
             ptr_ = ptr;
             size_ = size;
             lfs::diagnostics::VramProfiler::instance().recordAllocation(

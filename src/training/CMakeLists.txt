@@ -106,6 +106,7 @@ set(TRAINING_NEW_SOURCES
         training_cropbox_mask.cpp
         trainer.cpp
         vram_ledger.cpp
+        perf_bench.cpp
     training_setup.cpp
 )
 
