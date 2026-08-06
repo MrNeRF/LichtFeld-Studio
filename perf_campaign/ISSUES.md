@@ -53,3 +53,12 @@
   "Exportable splat storage grew for densify" and the viewport stays zero-copy (no black
   frames / no full input-copy refusal errors).
 - **Status:** open — needs a human GUI session or a windowed CI harness.
+
+## ISS-008 — Reviewer bench raced a worker build (ABI mismatch)
+- **Severity:** high (invalidates measurements, crashes runs)
+- **Symptom:** bicycle baseline run 3 died: "lfs_core ABI mismatch ... remove stale binaries" —
+  Worker D rebuilt build/ in the main checkout between bench runs.
+- **Fix (policy):** reviewer/merge-gate benches run in a dedicated bench worktree pinned to
+  the commit under test (own build dir). Worker gates bench only their own checkout and
+  never bench while another process builds it. flock still serializes GPU timing.
+- **Status:** policy adopted; bench worktree created.
