@@ -171,7 +171,7 @@
 | 1.2 n_instances sync | mid-pipeline StreamSync every step | fallback only warm/grow; pixel golden | 9.03 | 4.094 | 0.05 | 1176.6 | ~0.036 |
 | 1.5 preflight NDEBUG | ~10 attrs/forward | attrs calls=0 after N frames | 9.06 | 4.101 | 0.05 | 1178.2 | ~0.037 |
 
-- **Commit (1.5):** `a7f6dc94`
+- **Commit (1.5):** `7214e8bf` (tip of trio stack; hash recorded post-commit)
   Final trio runs: `perf_campaign/runs/20260806T174846Z_run{1,2,3}/`
 
 
