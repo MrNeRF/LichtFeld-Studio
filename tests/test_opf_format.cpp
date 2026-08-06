@@ -368,6 +368,15 @@ TEST_F(OpfFormatTest, AppliesGltfNodeBasisToCameraPose) {
     EXPECT_EQ(camera.pose.rotation, (std::array<float, 9>{1, 0, 0, 0, 0, 1, 0, -1, 0}));
 }
 
+TEST_F(OpfFormatTest, ConvertsOpfCameraAndWorldAxesToLichtfeldDataConvention) {
+    lfs::io::opf::ImportedCamera camera{
+        1, "image.jpg", 10, 10, "perspective", {5, 5}, 8, {0, 0, 0}, {0, 0},
+        {{0, -1, 0, 1, 0, 0, 0, 0, 1}, {1, 2, 3}}};
+    lfs::io::opf::apply_lichtfeld_coordinate_convention(camera);
+    EXPECT_EQ(camera.pose.position, (std::array<float, 3>{1, -2, -3}));
+    EXPECT_EQ(camera.pose.rotation, (std::array<float, 9>{0, 1, 0, -1, 0, 0, 0, 0, 1}));
+}
+
 TEST_F(OpfFormatTest, LoadsOpfProjectWhenDatasetFolderIsSelected) {
     write(root / "project.opf", R"({
         "format":"application/opf-project+json", "version":"1.0", "id":"project",

@@ -118,6 +118,8 @@ namespace lfs::io {
                 opf::apply_gltf_node_transform(camera, manifest->node_matrix);
             point_cloud = std::make_shared<PointCloud>(std::move(*sparse));
         }
+        for (auto& camera : *imported)
+            opf::apply_lichtfeld_coordinate_convention(camera);
 
         LoadedScene scene;
         scene.point_cloud = std::move(point_cloud);

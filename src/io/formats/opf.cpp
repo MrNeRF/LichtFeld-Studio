@@ -563,6 +563,11 @@ namespace lfs::io::opf {
             float p[3] = {manifest.node_matrix[0] * x + manifest.node_matrix[4] * y + manifest.node_matrix[8] * z + manifest.node_matrix[12],
                           manifest.node_matrix[1] * x + manifest.node_matrix[5] * y + manifest.node_matrix[9] * z + manifest.node_matrix[13],
                           manifest.node_matrix[2] * x + manifest.node_matrix[6] * y + manifest.node_matrix[10] * z + manifest.node_matrix[14]};
+            // OPF/glTF scene coordinates are visualizer-style (+Y up, +Z back).
+            // LichtFeld stores imported datasets in its COLMAP/data world basis;
+            // the visualizer boundary flips these axes back exactly once.
+            p[1] = -p[1];
+            p[2] = -p[2];
             if (frame) {
                 if (frame->swap_xy)
                     std::swap(p[0], p[1]);
@@ -649,6 +654,21 @@ namespace lfs::io::opf {
             }
         }
         camera.pose.rotation = transformed;
+    }
+
+    void apply_lichtfeld_coordinate_convention(ImportedCamera& camera) {
+        // OPF image axes: +X right, +Y up, +Z from scene to camera.
+        // LichtFeld dataset axes: +X right, +Y down, +Z camera forward.
+        // The same Y/Z flip is also the OPF/glTF world -> LichtFeld data-world
+        // basis conversion. For camera-to-world R this is F * R * F.
+        camera.pose.position[1] = -camera.pose.position[1];
+        camera.pose.position[2] = -camera.pose.position[2];
+
+        auto& rotation = camera.pose.rotation;
+        constexpr std::array<float, 3> signs{1.0f, -1.0f, -1.0f};
+        for (size_t row = 0; row < 3; ++row)
+            for (size_t column = 0; column < 3; ++column)
+                rotation[row * 3 + column] *= signs[row] * signs[column];
     }
 
     Result<std::vector<CalibratedCamera>> read_calibrated_cameras(const Resource& resource) {

@@ -150,5 +150,6 @@ namespace lfs::io::opf {
     [[nodiscard]] Result<SceneReferenceFrame> read_scene_reference_frame(const Resource& resource);
     void apply_scene_reference_frame(ImportedCamera& camera, const SceneReferenceFrame& frame);
     void apply_gltf_node_transform(ImportedCamera& camera, const std::array<float, 16>& matrix);
+    void apply_lichtfeld_coordinate_convention(ImportedCamera& camera);
 
 } // namespace lfs::io::opf
