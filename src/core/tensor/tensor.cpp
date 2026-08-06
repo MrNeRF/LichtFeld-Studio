@@ -1018,8 +1018,8 @@ namespace lfs::core {
                 tensor_ops::launch_strided_copy_immediate(
                     src_base, result.data_, shape_.dims(), strides_, numel(), dtype_, execution_stream);
             } else {
-                CudaDeviceMemory<size_t> d_shape(rank);
-                CudaDeviceMemory<size_t> d_strides(rank);
+                CudaDeviceMemory<size_t> d_shape(rank, execution_stream);
+                CudaDeviceMemory<size_t> d_strides(rank, execution_stream);
                 LFS_ASSERT_MSG(d_shape.valid() && d_strides.valid(),
                                "contiguous failed to allocate CUDA shape metadata");
                 LFS_CUDA_CHECK_ARGS(
@@ -1281,31 +1281,21 @@ namespace lfs::core {
                 }
 
                 // GENERIC PATH: For rank > 3, allocate device memory for metadata
+                // via the pool (slab for tiny rank metadata) — no bare cudaMalloc.
                 LOG_DEBUG("Using generic strided upload (requires metadata allocation for rank={})", shape_.rank());
 
                 const size_t metadata_bytes = shape_.rank() * sizeof(size_t);
-                size_t* d_shape = nullptr;
-                size_t* d_strides = nullptr;
-                LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMalloc(&d_shape, metadata_bytes),
-                    reinterpret_cast<uintptr_t>(d_shape), 0, metadata_bytes,
-                    "while allocating CUDA shape metadata for tensor '{}' shape={} dtype={} "
-                    "dst={} src={} bytes={} transfer_dst={} transfer_src={}",
-                    tensor_debug_name(*this), shape_.str(), dtype_name(dtype_),
-                    d_shape, nullptr, metadata_bytes, t.data_,
-                    static_cast<const void*>(src));
-                LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMalloc(&d_strides, metadata_bytes),
-                    reinterpret_cast<uintptr_t>(d_strides), 0, metadata_bytes,
-                    "while allocating CUDA stride metadata for tensor '{}' shape={} dtype={} "
-                    "dst={} src={} bytes={} transfer_dst={} transfer_src={}",
-                    tensor_debug_name(*this), shape_.str(), dtype_name(dtype_),
-                    d_strides, nullptr, metadata_bytes, t.data_,
-                    static_cast<const void*>(src));
+                auto& pool = CudaMemoryPool::instance();
+                size_t* d_shape = static_cast<size_t*>(
+                    pool.allocate(metadata_bytes, transfer_stream));
+                size_t* d_strides = static_cast<size_t*>(
+                    pool.allocate(metadata_bytes, transfer_stream));
+                LFS_ASSERT_MSG(d_shape != nullptr && d_strides != nullptr,
+                               "failed to allocate pooled CUDA shape/stride metadata");
 
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(d_shape, shape_.dims().data(), metadata_bytes,
-                               cudaMemcpyHostToDevice),
+                    cudaMemcpyAsync(d_shape, shape_.dims().data(), metadata_bytes,
+                                    cudaMemcpyHostToDevice, transfer_stream),
                     reinterpret_cast<uintptr_t>(d_shape),
                     reinterpret_cast<uintptr_t>(shape_.dims().data()),
                     metadata_bytes,
@@ -1315,8 +1305,8 @@ namespace lfs::core {
                     d_shape, shape_.dims().data(), metadata_bytes, t.data_,
                     static_cast<const void*>(src));
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(d_strides, strides_.data(), metadata_bytes,
-                               cudaMemcpyHostToDevice),
+                    cudaMemcpyAsync(d_strides, strides_.data(), metadata_bytes,
+                                    cudaMemcpyHostToDevice, transfer_stream),
                     reinterpret_cast<uintptr_t>(d_strides),
                     reinterpret_cast<uintptr_t>(strides_.data()),
                     metadata_bytes,
@@ -1337,24 +1327,9 @@ namespace lfs::core {
                     dtype_,
                     transfer_stream);
 
-                // Free metadata immediately (kernel has already captured the data)
-                // NO SYNC: Kernel launches asynchronously for better PCIe overlap
-                LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaFree(d_shape),
-                    0, reinterpret_cast<uintptr_t>(d_shape), metadata_bytes,
-                    "while freeing CUDA shape metadata for tensor '{}' shape={} dtype={} "
-                    "dst={} src={} bytes={} transfer_dst={} transfer_src={}",
-                    tensor_debug_name(*this), shape_.str(), dtype_name(dtype_),
-                    nullptr, d_shape, metadata_bytes, t.data_,
-                    static_cast<const void*>(src));
-                LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaFree(d_strides),
-                    0, reinterpret_cast<uintptr_t>(d_strides), metadata_bytes,
-                    "while freeing CUDA stride metadata for tensor '{}' shape={} dtype={} "
-                    "dst={} src={} bytes={} transfer_dst={} transfer_src={}",
-                    tensor_debug_name(*this), shape_.str(), dtype_name(dtype_),
-                    nullptr, d_strides, metadata_bytes, t.data_,
-                    static_cast<const void*>(src));
+                // Stream-ordered free: same stream as the kernel so reuse is ordered.
+                pool.deallocate(d_shape, transfer_stream);
+                pool.deallocate(d_strides, transfer_stream);
 
                 record_stream(transfer_stream);
 
@@ -2263,16 +2238,22 @@ namespace lfs::core {
                 tensor_ops::launch_strided_scatter_immediate(
                     src.data_ptr(), data_ptr(), shape_vec, strides_, numel(), dtype_, execution_stream);
             } else {
-                size_t* d_shape = nullptr;
-                size_t* d_strides = nullptr;
-                LFS_CUDA_CHECK(cudaMalloc(&d_shape, rank * sizeof(size_t)));
-                LFS_CUDA_CHECK(cudaMalloc(&d_strides, rank * sizeof(size_t)));
-                LFS_CUDA_CHECK(cudaMemcpy(d_shape, shape_vec.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
-                LFS_CUDA_CHECK(cudaMemcpy(d_strides, strides_.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
+                const size_t metadata_bytes = rank * sizeof(size_t);
+                auto& pool = CudaMemoryPool::instance();
+                size_t* d_shape = static_cast<size_t*>(
+                    pool.allocate(metadata_bytes, execution_stream));
+                size_t* d_strides = static_cast<size_t*>(
+                    pool.allocate(metadata_bytes, execution_stream));
+                LFS_ASSERT_MSG(d_shape != nullptr && d_strides != nullptr,
+                               "copy_from failed to allocate pooled shape/stride metadata");
+                LFS_CUDA_CHECK(cudaMemcpyAsync(d_shape, shape_vec.data(), metadata_bytes,
+                                               cudaMemcpyHostToDevice, execution_stream));
+                LFS_CUDA_CHECK(cudaMemcpyAsync(d_strides, strides_.data(), metadata_bytes,
+                                               cudaMemcpyHostToDevice, execution_stream));
                 tensor_ops::launch_strided_scatter(
                     src.data_ptr(), data_ptr(), d_shape, d_strides, rank, numel(), dtype_, execution_stream);
-                LFS_CUDA_CHECK(cudaFree(d_shape));
-                LFS_CUDA_CHECK(cudaFree(d_strides));
+                pool.deallocate(d_shape, execution_stream);
+                pool.deallocate(d_strides, execution_stream);
             }
             return *this;
         }

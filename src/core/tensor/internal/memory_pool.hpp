@@ -490,6 +490,9 @@ namespace lfs::core {
                 }
             }
             GPUSlabAllocator::instance().merge_all_streams_into_virgin();
+            // Return fully-empty slabs to the driver (steady-state VRAM hygiene).
+            // Device is synchronized above; free lists are stream-merged into virgin.
+            GPUSlabAllocator::instance().reclaim_empty_slabs();
             SizeBucketedPool::instance().retag_all_streams(nullptr);
             SizeBucketedPool::instance().trim_cache();
 

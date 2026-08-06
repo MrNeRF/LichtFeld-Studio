@@ -968,8 +968,8 @@ namespace lfs::core::tensor_ops {
         if (total == 0) {
             return;
         }
-        CudaDeviceMemory<size_t> d_in_shape(rank);
-        CudaDeviceMemory<size_t> d_idx_shape(rank);
+        CudaDeviceMemory<size_t> d_in_shape(rank, stream);
+        CudaDeviceMemory<size_t> d_idx_shape(rank, stream);
         LFS_CUDA_CHECK(d_in_shape.copy_from_host(in_shape, rank));
         LFS_CUDA_CHECK(d_idx_shape.copy_from_host(idx_shape, rank));
 
@@ -988,8 +988,8 @@ namespace lfs::core::tensor_ops {
         if (total == 0) {
             return;
         }
-        CudaDeviceMemory<size_t> d_in_shape(rank);
-        CudaDeviceMemory<size_t> d_idx_shape(rank);
+        CudaDeviceMemory<size_t> d_in_shape(rank, stream);
+        CudaDeviceMemory<size_t> d_idx_shape(rank, stream);
         LFS_CUDA_CHECK(d_in_shape.copy_from_host(in_shape, rank));
         LFS_CUDA_CHECK(d_idx_shape.copy_from_host(idx_shape, rank));
 
@@ -1120,7 +1120,7 @@ namespace lfs::core::tensor_ops {
     void launch_index_fill(T* data, const int* idx, T val,
                            const size_t* shape, size_t rank, int dim,
                            size_t n_idx, cudaStream_t stream) {
-        CudaDeviceMemory<T> val_buffer(n_idx);
+        CudaDeviceMemory<T> val_buffer(n_idx, stream);
         auto val_ptr = thrust::device_pointer_cast(val_buffer.get());
         thrust::fill(thrust::cuda::par.on(stream), val_ptr, val_ptr + n_idx, val);
 

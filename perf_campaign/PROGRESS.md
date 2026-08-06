@@ -648,7 +648,6 @@ Phase 1 series **DONE**.
 - **Commit:** `786fefb6`
 
 ||||||| 42184eea
-- **Commit:** (this commit)
 - **Commit:** `42184eea`
 
 ## Task VRAM-audit (lfs-elite-vramfix) — ISS-007 + NVRM + TLS + RAM guard
@@ -754,3 +753,88 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+---
+
+## Task 3.3+3.4+3.7 — Allocator hygiene (worker P, branch `lfs-elite-fP`)
+
+- **Branch:** `lfs-elite-fP`
+- **Scope:** route bare op-temp `cudaMalloc`s through pool; free fully-empty slabs on
+  `trim_cached_memory`; null-owner empty CUDA tensors (no 1-byte sentinel).
+
+### Changes
+
+1. **3.7 Empty CUDA tensors → null-owner** (`tensor_unified_ops.cpp` LoadOp::Empty):
+   zero-numel CUDA/CPU tensors use a static dummy `data_owner_` (same pattern as
+   `zeros_direct` zero-byte path). No slab/pool 1-byte sentinel allocation.
+2. **3.4 Slab reclamation** (`gpu_slab_allocator.hpp` + `memory_pool.hpp`):
+   `GPUSlabAllocator::reclaim_empty_slabs()` freezes fully-empty slabs after a device
+   sync + stream merge; called from `CudaMemoryPool::trim_cached_memory`. Expand/
+   reclaim/cleanup share `expand_mutex_`.
+3. **3.3 Pool-route bare temps:**
+   - masking `d_count` (`tensor_masking_ops.cpp`) via `CudaMemoryPool`
+   - shape/stride metadata in strided upload + scatter (`tensor.cpp`), fill_strided
+     fallback (`tensor_ops.cu`)
+   - `CudaDeviceMemory` RAII (`cuda_memory_guard.hpp`) now allocates/frees via pool
+     (optional stream for stream-ordered free); gather/index_fill pass stream
+   - NaN-check device flag (`tensor_ops.cu`) via pool (host remains pinned)
+
+### Fail evidence (TDD — pre-fix behavior of the harness)
+
+Pre-existing untracked `tests/test_allocator_hygiene.cpp` from interrupted attempt
+(kept). Against unfixed tree the suite would fail as:
+
+```
+# EmptyCudaTensorDoesNotAllocateSlabBlock
+#   Expected: slab_allocs_after == slab_allocs_before
+#   (1-byte CUDA sentinel via allocate_cuda_storage(1) bumps slab alloc_count)
+
+# TrimCachedMemoryFreesFullyEmptySlabs
+#   Expected: reserved_after < reserved_peak
+#   (trim only merged free lists; cleanup only at process shutdown)
+
+# CountNonzeroPoolPathCorrectAndReusable — correctness still OK, but
+#   bare cudaMalloc/cudaFree for d_count on every call (untracked classic heap)
+```
+
+### Pass evidence
+
+```
+[==========] Running 4 tests from 1 test suite.
+[  PASSED  ] 4 tests.  (AllocatorHygiene.*)
+EmptyCudaTensorDoesNotAllocateSlabBlock
+TrimCachedMemoryFreesFullyEmptySlabs
+CountNonzeroPoolPathCorrectAndReusable
+EmptyAndCountNonzeroCompose
+
+Related: AllocatorPolicy* + TensorZeroDimension* + AllocCounter* = 34/34 PASSED
+Masking/nonzero suite (95 tests) = 95/95 PASSED
+```
+
+### Dual-workload gate (flock, 3 runs each)
+
+**Bonsai** (2000 iters) — runs `20260806T230139Z_run{1,2,3}` vs Wave 2:
+
+| metric | Wave 2 | after 3.3/3.4/3.7 | Δ |
+|---|---:|---:|---|
+| wall_s (med) | — | **8.86** | ok |
+| steady_ms/iter | 4.065 | **4.046** | −0.5% |
+| steady_allocs/iter | 0.05 | **0.05** | 0 |
+| peak_VRAM_MiB | 938.3 | **938.1** | −0.2 |
+| B/splat | 429.0 | 429.0 | 0 |
+| last_loss range | ~0.03–0.04 | 0.027–0.066 | ok |
+
+**Bicycle canary** (7000 iters) — runs `20260806T230310Z_run{1,2,3}`:
+
+| metric | Wave 2 | after 3.3/3.4/3.7 | Δ |
+|---|---:|---:|---|
+| wall_s (med) | — | **32.95** | noise (wall) |
+| steady_ms/iter | 3.208 | **3.025** | −5.7% |
+| steady_allocs/iter | 0.04 | **0.04** | 0 |
+| peak_VRAM_MiB | 1026.3 | **994.1** | −32 |
+| last_loss range | 0.079–0.107 | 0.088–0.149 | bicycle high-var OK |
+
+Gate: no speed/quality regression; G2 allocs held; densify grew bicycle to 500k cleanly.
+
+- **Commit:** `d8acaf75`
+

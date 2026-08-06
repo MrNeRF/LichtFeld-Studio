@@ -369,35 +369,14 @@ namespace lfs::core {
             internal::telemetry_record_materialization(bytes);
 
             if (bytes == 0) {
-                if (result.device_ == Device::CUDA) {
-                    cudaStream_t s = result.stream();
-                    void* dummy = allocate_cuda_storage(1, s);
-                    LFS_ASSERT_MSG(dummy != nullptr,
-                                   "failed to allocate CUDA sentinel storage for an empty tensor");
-                    result.adopt_storage(dummy, [s](void* p) {
-                        CudaMemoryPool::instance().deallocate(p, s);
-                    });
-                } else {
-                    void* dummy = nullptr;
-                    if (args.use_pinned) {
-                        dummy = PinnedMemoryAllocator::instance().allocate(1);
-                        LFS_ASSERT_MSG(dummy != nullptr,
-                                       "failed to allocate pinned sentinel storage for an empty tensor");
-                        cudaStream_t s = result.stream();
-                        result.adopt_storage(dummy, [s](void* p) {
-                            if (p)
-                                PinnedMemoryAllocator::instance().deallocate(p, s);
-                        });
-                    } else {
-                        dummy = std::malloc(1);
-                        LFS_ASSERT_MSG(dummy != nullptr,
-                                       "failed to allocate sentinel storage for an empty tensor");
-                        result.adopt_storage(dummy, [](void* p) {
-                            std::free(p);
-                        });
-                    }
-                }
+                // Null-owner path: zero-numel tensors need a live data_owner_ for
+                // is_valid(), but must not touch CUDA/slab (no 1-byte sentinel).
+                // Same pattern as zeros_direct(total_bytes == 0).
                 result.data_ = nullptr;
+                static char empty_owner_sentinel = 0;
+                result.data_owner_ =
+                    std::shared_ptr<void>(&empty_owner_sentinel, [](void*) {});
+                result.init_storage_meta();
                 return result;
             }
 
