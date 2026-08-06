@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/point_cloud.hpp"
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
@@ -73,7 +74,14 @@ namespace lfs::io::opf {
     struct PointCloudManifest {
         std::filesystem::path gltf_path;
         std::vector<std::filesystem::path> buffer_paths;
+        std::filesystem::path positions_path;
+        std::filesystem::path colors_path;
+        std::uint32_t point_count = 0;
+        std::array<float, 16> node_matrix{1, 0, 0, 0, 0, 1, 0, 0,
+                                           0, 0, 1, 0, 0, 0, 0, 1};
     };
+
+    struct SceneReferenceFrame;
 
     struct SceneReferenceFrame {
         std::array<double, 3> scale{1.0, 1.0, 1.0};
@@ -126,6 +134,8 @@ namespace lfs::io::opf {
     [[nodiscard]] Result<std::vector<InputCapture>> read_input_captures(const Resource& resource);
     [[nodiscard]] Result<PointCloudManifest> read_point_cloud_manifest(
         const Resource& gltf_resource, const std::filesystem::path& project_root);
+    [[nodiscard]] Result<lfs::core::PointCloud> read_sparse_point_cloud(
+        const PointCloudManifest& manifest, const SceneReferenceFrame* frame = nullptr);
     [[nodiscard]] Result<std::vector<CalibratedCamera>> read_calibrated_cameras(
         const Resource& resource);
     [[nodiscard]] CalibratedPose to_calibrated_pose(const CalibratedCamera& camera);

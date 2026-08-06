@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <optional>
 
 namespace lfs::io {
     namespace {
@@ -74,6 +75,12 @@ namespace lfs::io {
                 return item.type == "scene_reference_frame" &&
                        resource.format == "application/opf-scene-reference-frame+json";
             });
+        const auto* sparse_resource = find_resource(
+            *project, [](const auto& item, const auto& resource) {
+                return (item.type == "calibration" || item.type == "point_cloud") &&
+                       resource.format == "model/gltf+json" &&
+                       resource.uri.find("sparse/") != std::string::npos;
+            });
         if (!camera_list_resource || !input_resource || !calibrated_resource)
             return make_error(ErrorCode::MISSING_REQUIRED_FILES,
                               "OPF project requires camera_list, input_cameras, and calibrated cameras resources.",
@@ -91,15 +98,30 @@ namespace lfs::io {
         auto imported = opf::assemble_cameras(*images, *sensors, *calibrated);
         if (!imported)
             return std::unexpected(imported.error());
+        std::optional<opf::SceneReferenceFrame> reference_frame;
         if (reference_frame_resource) {
-            auto reference_frame = opf::read_scene_reference_frame(*reference_frame_resource);
-            if (!reference_frame)
-                return std::unexpected(reference_frame.error());
+            auto parsed_reference_frame = opf::read_scene_reference_frame(*reference_frame_resource);
+            if (!parsed_reference_frame)
+                return std::unexpected(parsed_reference_frame.error());
+            reference_frame = std::move(*parsed_reference_frame);
             for (auto& camera : *imported)
                 opf::apply_scene_reference_frame(camera, *reference_frame);
         }
 
+        std::shared_ptr<PointCloud> point_cloud;
+        if (sparse_resource) {
+            auto manifest = opf::read_point_cloud_manifest(*sparse_resource, project_path.parent_path());
+            if (!manifest)
+                return std::unexpected(manifest.error());
+            auto sparse = opf::read_sparse_point_cloud(*manifest,
+                                                       reference_frame ? &*reference_frame : nullptr);
+            if (!sparse)
+                return std::unexpected(sparse.error());
+            point_cloud = std::make_shared<PointCloud>(std::move(*sparse));
+        }
+
         LoadedScene scene;
+        scene.point_cloud = std::move(point_cloud);
         if (!options.validate_only) {
             for (const auto& camera : *imported) {
                 auto loaded_camera = opf::make_camera(camera);
