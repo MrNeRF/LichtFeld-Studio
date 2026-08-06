@@ -63,6 +63,7 @@ namespace lfs::vis {
         VkImage depth_image = VK_NULL_HANDLE;
         VmaAllocation depth_allocation = VK_NULL_HANDLE;
         VkImageView depth_view = VK_NULL_HANDLE;
+        std::uint64_t image_generation = 0;
         VkBuffer readback_buffer = VK_NULL_HANDLE;
         VmaAllocation readback_allocation = VK_NULL_HANDLE;
         VkDeviceSize readback_size = 0;
@@ -140,8 +141,8 @@ namespace lfs::vis {
 
         void destroyTargets() {
             if (context != nullptr) {
-                context->imageBarriers().forgetImage(color_image);
-                context->imageBarriers().forgetImage(depth_image);
+                context->imageBarriers().forgetImage(color_image, image_generation);
+                context->imageBarriers().forgetImage(depth_image, image_generation);
             }
             if (device != VK_NULL_HANDLE && color_view != VK_NULL_HANDLE) {
                 vkDestroyImageView(device, color_view, nullptr);
@@ -322,10 +323,11 @@ namespace lfs::vis {
             context->setDebugObjectName(
                 VK_OBJECT_TYPE_BUFFER, readback_buffer, "mesh.offscreen.readback");
 
+            ++image_generation;
             context->imageBarriers().registerImage(
-                color_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, true);
+                color_image, image_generation, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, true);
             context->imageBarriers().registerImage(
-                depth_image, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED, true);
+                depth_image, image_generation, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED, true);
             return {};
         }
 
@@ -372,23 +374,27 @@ namespace lfs::vis {
                 return vkUnexpected("vkBeginCommandBuffer(mesh offscreen)", result);
             }
 
-            const VkImageLayout previous_color_layout = context->imageBarriers().imageLayout(color_image);
-            const VkImageLayout previous_depth_layout = context->imageBarriers().imageLayout(depth_image);
+            const VkImageLayout previous_color_layout =
+                context->imageBarriers().imageLayout(color_image, image_generation);
+            const VkImageLayout previous_depth_layout =
+                context->imageBarriers().imageLayout(depth_image, image_generation);
             const auto restoreTrackedLayouts = [&]() {
                 context->imageBarriers().registerImage(
-                    color_image, VK_IMAGE_ASPECT_COLOR_BIT, previous_color_layout, true);
+                    color_image, image_generation, VK_IMAGE_ASPECT_COLOR_BIT, previous_color_layout, true);
                 context->imageBarriers().registerImage(
-                    depth_image, VK_IMAGE_ASPECT_DEPTH_BIT, previous_depth_layout, true);
+                    depth_image, image_generation, VK_IMAGE_ASPECT_DEPTH_BIT, previous_depth_layout, true);
             };
 
             context->imageBarriers().transitionImage(
                 command_buffer,
                 color_image,
+                image_generation,
                 VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             context->imageBarriers().transitionImage(
                 command_buffer,
                 depth_image,
+                image_generation,
                 VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
@@ -431,11 +437,13 @@ namespace lfs::vis {
             context->imageBarriers().transitionImage(
                 command_buffer,
                 color_image,
+                image_generation,
                 VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
             context->imageBarriers().transitionImage(
                 command_buffer,
                 depth_image,
+                image_generation,
                 VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 

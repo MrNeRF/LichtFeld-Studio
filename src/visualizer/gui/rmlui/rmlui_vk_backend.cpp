@@ -758,6 +758,8 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
     (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
                                   (uint64_t)texture->m_p_vk_image,
                                   "rmlui.saved-layer.image");
+    texture->m_barrier_generation = ++m_image_barrier_generation;
+    m_image_barrier_generations[texture->m_p_vk_image] = texture->m_barrier_generation;
     texture->m_vram_scope = "vulkan.rmlui.saved_layer_texture";
     texture->m_vram_label = TextureVramLabel("saved_layer",
                                              "clip",
@@ -1258,6 +1260,8 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
     p_texture->m_p_vk_image = p_image;
     p_texture->m_p_vma_allocation = p_allocation;
+    p_texture->m_barrier_generation = ++m_image_barrier_generation;
+    m_image_barrier_generations[p_image] = p_texture->m_barrier_generation;
     const std::string image_debug_name = std::format("rmlui.texture.image[{}]", name);
     (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
                                   (uint64_t)p_texture->m_p_vk_image,
@@ -1351,8 +1355,9 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
         const bool uploaded = m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
             lfs::vis::VulkanImageBarrierTracker upload_barriers;
-            upload_barriers.registerImage(p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
-            upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            constexpr std::uint64_t kUploadGeneration = 1;
+            upload_barriers.registerImage(p_image, kUploadGeneration, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+            upload_barriers.transitionImage(p_cmd, p_image, kUploadGeneration, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
             VkBufferImageCopy region = {};
             region.bufferOffset = 0;
@@ -1367,7 +1372,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
             vkCmdCopyBufferToImage(p_cmd, cpu_buffer.m_p_vk_buffer, p_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-            upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            upload_barriers.transitionImage(p_cmd, p_image, kUploadGeneration, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         });
 
         DestroyResource_StagingBuffer(cpu_buffer);
@@ -2231,7 +2236,8 @@ void RenderInterface_VK::Destroy_Texture(const texture_data_t& texture) noexcept
     if (texture.m_p_vma_allocation) {
         if (!texture.m_vram_scope.empty() && !texture.m_vram_label.empty())
             RecordRmlUiVram(texture.m_vram_scope, texture.m_vram_label, 0);
-        m_image_barriers.forgetImage(texture.m_p_vk_image);
+        m_image_barriers.forgetImage(texture.m_p_vk_image, texture.m_barrier_generation);
+        m_image_barrier_generations.erase(texture.m_p_vk_image);
         if (texture.m_p_vk_image_view)
             vkDestroyImageView(m_p_device, texture.m_p_vk_image_view, nullptr);
         vmaDestroyImage(m_p_allocator, texture.m_p_vk_image, texture.m_p_vma_allocation);
@@ -2408,8 +2414,16 @@ void RenderInterface_VK::TransitionImageLayout(VkImage image, VkImageAspectFlags
     if (!m_p_current_command_buffer || !image || old_layout == new_layout)
         return;
 
-    m_image_barriers.registerImage(image, aspect_mask, old_layout);
-    m_image_barriers.transitionImage(m_p_current_command_buffer, image, aspect_mask, new_layout);
+    auto gen_it = m_image_barrier_generations.find(image);
+    std::uint64_t generation = 0;
+    if (gen_it != m_image_barrier_generations.end()) {
+        generation = gen_it->second;
+    } else {
+        generation = ++m_image_barrier_generation;
+        m_image_barrier_generations[image] = generation;
+    }
+    m_image_barriers.registerImage(image, generation, aspect_mask, old_layout);
+    m_image_barriers.transitionImage(m_p_current_command_buffer, image, generation, aspect_mask, new_layout);
 }
 
 void RenderInterface_VK::ResetDynamicRenderState() {

@@ -156,6 +156,8 @@ private:
         std::string m_vram_label;
         VkDeviceSize m_vram_allocation_size = 0;
         bool m_is_async_preview = false;
+        // Resource identity for VulkanImageBarrierTracker (#1478).
+        std::uint64_t m_barrier_generation = 0;
     };
 
     struct async_preview_result_t {
@@ -656,6 +658,8 @@ private:
     VkImageView m_external_depth_stencil_image_view = VK_NULL_HANDLE;
     VkImageLayout m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     lfs::vis::VulkanImageBarrierTracker m_image_barriers;
+    std::uint64_t m_image_barrier_generation = 0;
+    std::unordered_map<VkImage, std::uint64_t> m_image_barrier_generations;
     active_render_target_t m_active_render_target = active_render_target_t::None;
     Rml::LayerHandle m_active_layer = 0;
     int m_render_layer_stack_size = 0;

@@ -419,7 +419,7 @@ namespace lfs::vis {
                                              std::format("{}.frame{}",
                                                          channel.policy.debug_name_prefix,
                                                          frame_slot)) ||
-                !context.createExternalTimelineSemaphore(0, target->semaphore)) {
+                !context.createExternalTimelineSemaphore(0, target->semaphore, "vulkan.gui.interop_semaphore")) {
                 const std::string error = std::format("target creation failed: {}", context.lastError());
                 if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
                     target->destroy(context);

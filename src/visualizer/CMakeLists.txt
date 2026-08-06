@@ -29,6 +29,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         window/window_manager.cpp
         window/vulkan_context.cpp
         window/vulkan_image_barrier_tracker.cpp
+        window/gpu_object_census.cpp
         window/vulkan_loader_probe.cpp
 
         # Rendering

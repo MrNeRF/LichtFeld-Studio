@@ -601,6 +601,32 @@ namespace lfs::vis {
             }
         }
 
+        // #1488: surface leaked External* counts after idle, before device destroy.
+        {
+            const auto survivors = gpu_object_census_.report();
+            if (survivors.empty()) {
+                LOG_DEBUG("GpuObjectCensus: no live external GPU objects at shutdown");
+            } else {
+                auto kind_name = [](GpuObjectKind kind) -> const char* {
+                    switch (kind) {
+                    case GpuObjectKind::ExternalImage:
+                        return "ExternalImage";
+                    case GpuObjectKind::ExternalBuffer:
+                        return "ExternalBuffer";
+                    case GpuObjectKind::ExternalSemaphore:
+                        return "ExternalSemaphore";
+                    }
+                    return "Unknown";
+                };
+                for (const auto& row : survivors) {
+                    LOG_WARN("GpuObjectCensus leak: kind={} scope='{}' count={}",
+                             kind_name(row.kind),
+                             row.scope,
+                             row.count);
+                }
+            }
+        }
+
         for (VkFence& fence : in_flight_) {
             if (fence != VK_NULL_HANDLE) {
                 vkDestroyFence(device_, fence, nullptr);
@@ -1193,6 +1219,7 @@ namespace lfs::vis {
         image_barriers_.transitionImage(
             command_buffer,
             swapchain_images_[image_index],
+            swapchain_epoch_,
             VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VulkanImageBarrierTracker::AccessScope{
@@ -1212,6 +1239,7 @@ namespace lfs::vis {
         const DepthStencilResource& depth_stencil = depth_stencil_resources_[current_frame];
         image_barriers_.transitionImage(command_buffer,
                                         depth_stencil.image,
+                                        swapchain_epoch_,
                                         depthStencilAspectMask(),
                                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
@@ -1344,6 +1372,7 @@ namespace lfs::vis {
         }
         image_barriers_.transitionImage(command_buffer,
                                         swapchain_images_[active_image_index_],
+                                        swapchain_epoch_,
                                         VK_IMAGE_ASPECT_COLOR_BIT,
                                         VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
@@ -1655,6 +1684,7 @@ namespace lfs::vis {
         const VkImage image = swapchain_images_[active_image_index_];
         image_barriers_.transitionImage(command_buffer,
                                         image,
+                                        swapchain_epoch_,
                                         VK_IMAGE_ASPECT_COLOR_BIT,
                                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
@@ -3027,10 +3057,14 @@ namespace lfs::vis {
                             "interop.external.image[{}x{}].view",
                             extent.width,
                             extent.height);
+        gpu_object_census_.onCreate(GpuObjectKind::ExternalImage, out.diagnostic_scope);
         return true;
     }
 
     void VulkanContext::destroyExternalImage(ExternalImage& image) {
+        const bool was_live = image.image != VK_NULL_HANDLE || image.memory != VK_NULL_HANDLE ||
+                              image.view != VK_NULL_HANDLE;
+        const std::string scope = image.diagnostic_scope;
         if (!image.diagnostic_scope.empty() && !image.diagnostic_label.empty()) {
             recordCurrentVulkanBytes(image.diagnostic_scope, image.diagnostic_label, 0);
         }
@@ -3046,6 +3080,9 @@ namespace lfs::vis {
             }
         }
         closeExternalNativeHandle(image.native_handle);
+        if (was_live) {
+            gpu_object_census_.onDestroy(GpuObjectKind::ExternalImage, scope);
+        }
         image = {};
     }
 
@@ -3189,6 +3226,7 @@ namespace lfs::vis {
             destroyExternalBuffer(out);
             return fail(std::format("Exporting external buffer memory handle failed: {}", vkResultToString(result)));
         }
+        gpu_object_census_.onCreate(GpuObjectKind::ExternalBuffer, out.diagnostic_scope);
         return true;
     }
 
@@ -3344,10 +3382,13 @@ namespace lfs::vis {
             memory_requirements.memoryTypeBits,
             compatible_memory_type_bits,
             allocate_info.memoryTypeIndex);
+        gpu_object_census_.onCreate(GpuObjectKind::ExternalBuffer, out.diagnostic_scope);
         return true;
     }
 
     void VulkanContext::destroyExternalBuffer(ExternalBuffer& buffer) {
+        const bool was_live = buffer.buffer != VK_NULL_HANDLE || buffer.memory != VK_NULL_HANDLE;
+        const std::string scope = buffer.diagnostic_scope;
         if (!buffer.diagnostic_scope.empty() && !buffer.diagnostic_label.empty()) {
             recordCurrentVulkanBytes(buffer.diagnostic_scope, buffer.diagnostic_label, 0);
         }
@@ -3360,6 +3401,9 @@ namespace lfs::vis {
             }
         }
         closeExternalNativeHandle(buffer.native_handle);
+        if (was_live) {
+            gpu_object_census_.onDestroy(GpuObjectKind::ExternalBuffer, scope);
+        }
         buffer = {};
     }
 
@@ -3369,7 +3413,9 @@ namespace lfs::vis {
         return handle;
     }
 
-    bool VulkanContext::createExternalTimelineSemaphore(const std::uint64_t initial_value, ExternalSemaphore& out) {
+    bool VulkanContext::createExternalTimelineSemaphore(const std::uint64_t initial_value,
+                                                        ExternalSemaphore& out,
+                                                        const std::string_view diagnostic_scope) {
         out = {};
 
         if (!device_ || !physical_device_) {
@@ -3388,6 +3434,8 @@ namespace lfs::vis {
         }
 
         out.initial_value = initial_value;
+        out.diagnostic_scope =
+            diagnostic_scope.empty() ? "vulkan.external.semaphore" : std::string(diagnostic_scope);
 
         VkExportSemaphoreCreateInfo export_info{};
         export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
@@ -3452,10 +3500,13 @@ namespace lfs::vis {
             destroyExternalSemaphore(out);
             return fail(std::format("Exporting external timeline semaphore handle failed: {}", vkResultToString(result)));
         }
+        gpu_object_census_.onCreate(GpuObjectKind::ExternalSemaphore, out.diagnostic_scope);
         return true;
     }
 
     void VulkanContext::destroyExternalSemaphore(ExternalSemaphore& semaphore) {
+        const bool was_live = semaphore.semaphore != VK_NULL_HANDLE;
+        const std::string scope = semaphore.diagnostic_scope;
         if (semaphore.semaphore != VK_NULL_HANDLE) {
             const std::lock_guard lock(timeline_value_tracker_mutex_);
             last_frame_timeline_wait_values_.erase(semaphore.semaphore);
@@ -3466,6 +3517,9 @@ namespace lfs::vis {
             }
         }
         closeExternalNativeHandle(semaphore.native_handle);
+        if (was_live) {
+            gpu_object_census_.onDestroy(GpuObjectKind::ExternalSemaphore, scope);
+        }
         semaphore = {};
     }
 
@@ -3991,8 +4045,10 @@ namespace lfs::vis {
         active_acquire_index_ = 0;
         swapchain_extent_ = extent;
         swapchain_image_usage_ = create_info.imageUsage;
+        ++swapchain_epoch_;
         for (size_t i = 0; i < swapchain_images_.size(); ++i) {
             image_barriers_.registerImage(swapchain_images_[i],
+                                          swapchain_epoch_,
                                           VK_IMAGE_ASPECT_COLOR_BIT,
                                           VK_IMAGE_LAYOUT_UNDEFINED);
             setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
@@ -4131,6 +4187,7 @@ namespace lfs::vis {
                                 i);
 
             image_barriers_.registerImage(resource.image,
+                                          swapchain_epoch_,
                                           depthStencilAspectMask(),
                                           VK_IMAGE_LAYOUT_UNDEFINED);
         }
