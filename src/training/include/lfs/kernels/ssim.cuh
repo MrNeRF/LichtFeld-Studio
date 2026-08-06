@@ -24,10 +24,11 @@ namespace lfs::training::kernels {
     // Pre-allocated workspace for SSIM computation
     struct SSIMWorkspace {
         // Forward pass buffers
-        lfs::core::Tensor ssim_map;      // [N, C, H, W]
-        lfs::core::Tensor dm_dmu1;       // [N, C, H, W]
-        lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W]
-        lfs::core::Tensor dm_dsigma12;   // [N, C, H, W]
+        lfs::core::Tensor ssim_map; // [N, C, H, W] fp32
+        // Phase 6D.3: dm_* partials stored fp16 (same proven path as fused L1+SSIM).
+        lfs::core::Tensor dm_dmu1;       // [N, C, H, W] fp16
+        lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W] fp16
+        lfs::core::Tensor dm_dsigma12;   // [N, C, H, W] fp16
 
         // Backward pass buffers
         lfs::core::Tensor dL_dmap;  // [N, C, H, W]
@@ -184,14 +185,15 @@ namespace lfs::training::kernels {
     };
 
     struct DecoupledFusedL1SSIMWorkspace {
-        lfs::core::Tensor ssim_map;          // [N, 1, H, W] channel-mean decoupled SSIM map
-        lfs::core::Tensor app_dm_dmu1;       // [N, C, H, W] d(ssim_map)/d mu(corrected)
-        lfs::core::Tensor raw_dm_dmu1;       // [N, C, H, W] indirect mu(raw) contribution via sigma terms
-        lfs::core::Tensor raw_dm_dsigma1_sq; // [N, C, H, W] lambda-scaled d(ssim_map)/d sigma^2(raw)
-        lfs::core::Tensor raw_dm_dsigma12;   // [N, C, H, W] lambda-scaled d(ssim_map)/d sigma12(raw)
+        lfs::core::Tensor ssim_map; // [N, 1, H, W] channel-mean decoupled SSIM map
+        // Phase 6D.3: all dm_* partials fp16 (mirror fused path).
+        lfs::core::Tensor app_dm_dmu1;       // [N, C, H, W] fp16 d(ssim_map)/d mu(corrected)
+        lfs::core::Tensor raw_dm_dmu1;       // [N, C, H, W] fp16 indirect mu(raw) via sigma terms
+        lfs::core::Tensor raw_dm_dsigma1_sq; // [N, C, H, W] fp16 lambda-scaled d(ssim)/d sigma^2(raw)
+        lfs::core::Tensor raw_dm_dsigma12;   // [N, C, H, W] fp16 lambda-scaled d(ssim)/d sigma12(raw)
         // Phase 6D.2: zero_terms removed — app backward uses HasSigmaPartials=false.
-        lfs::core::Tensor grad_corrected;   // [N, C, H, W]
-        lfs::core::Tensor grad_raw;         // [N, C, H, W]
+        lfs::core::Tensor grad_corrected;   // [N, C, H, W] fp32
+        lfs::core::Tensor grad_raw;         // [N, C, H, W] fp32
         lfs::core::Tensor reduction_temp;   // [<=1024]
         lfs::core::Tensor reduction_result; // [1]
 
@@ -231,11 +233,12 @@ namespace lfs::training::kernels {
     // ============================================================================
 
     struct MaskedFusedL1SSIMWorkspace {
-        lfs::core::Tensor ssim_map;       // [N, 1, H, W] per-pixel channel-mean SSIM values
-        lfs::core::Tensor dm_dmu1;        // [N, C, H, W]
-        lfs::core::Tensor dm_dsigma1_sq;  // [N, C, H, W]
-        lfs::core::Tensor dm_dsigma12;    // [N, C, H, W]
-        lfs::core::Tensor grad_img;       // [N, C, H, W]
+        lfs::core::Tensor ssim_map; // [N, 1, H, W] per-pixel channel-mean SSIM values
+        // Phase 6D.3: dm_* partials fp16.
+        lfs::core::Tensor dm_dmu1;        // [N, C, H, W] fp16
+        lfs::core::Tensor dm_dsigma1_sq;  // [N, C, H, W] fp16
+        lfs::core::Tensor dm_dsigma12;    // [N, C, H, W] fp16
+        lfs::core::Tensor grad_img;       // [N, C, H, W] fp32
         lfs::core::Tensor reduction_temp; // [<=2048], split into loss and mask partial sums
         lfs::core::Tensor masked_loss;    // [1] scalar
         lfs::core::Tensor mask_sum;       // [1] scalar
@@ -272,14 +275,15 @@ namespace lfs::training::kernels {
         MaskedFusedL1SSIMWorkspace& workspace);
 
     struct MaskedDecoupledFusedL1SSIMWorkspace {
-        lfs::core::Tensor ssim_map;    // [N, 1, H, W]
-        lfs::core::Tensor app_dm_dmu1; // [N, C, H, W]
-        lfs::core::Tensor raw_dm_dmu1;
-        lfs::core::Tensor raw_dm_dsigma1_sq;
-        lfs::core::Tensor raw_dm_dsigma12;
+        lfs::core::Tensor ssim_map; // [N, 1, H, W]
+        // Phase 6D.3: dm_* partials fp16.
+        lfs::core::Tensor app_dm_dmu1;       // [N, C, H, W] fp16
+        lfs::core::Tensor raw_dm_dmu1;       // [N, C, H, W] fp16
+        lfs::core::Tensor raw_dm_dsigma1_sq; // [N, C, H, W] fp16
+        lfs::core::Tensor raw_dm_dsigma12;   // [N, C, H, W] fp16
         // Phase 6D.2: zero_terms removed — app backward uses HasSigmaPartials=false.
-        lfs::core::Tensor grad_corrected; // [N, C, H, W]
-        lfs::core::Tensor grad_raw;       // [N, C, H, W]
+        lfs::core::Tensor grad_corrected; // [N, C, H, W] fp32
+        lfs::core::Tensor grad_raw;       // [N, C, H, W] fp32
         lfs::core::Tensor reduction_temp; // [<=2048]
         lfs::core::Tensor masked_loss;    // [1]
         lfs::core::Tensor mask_sum;       // [1]

@@ -283,3 +283,126 @@ TEST_F(LossWorkspaceUnionTest, ZeroTermsDeletedAndDecoupledGradsStable) {
     }
     EXPECT_LT(max_combo, 5e-4) << "decoupled(corrected==raw) vs fused max abs " << max_combo;
 }
+
+// Phase 6D.3 — fp16 dm_* partials for pure-SSIM / decoupled / masked / masked-decoupled
+// (fused path already ships Float16 partials). Fail-first: dtype + workspace-byte
+// assertions against the pre-fp16 layout; then grad equivalence within fp16 tol.
+TEST_F(LossWorkspaceUnionTest, Fp16PartialsWorkspaceBytesAndGradEquiv) {
+    const int N = 1, C = 3, H = 48, W = 48;
+    const std::vector<size_t> shape = {1, 3, 48, 48};
+    const float ssim_weight = 0.2f;
+    const size_t image_f32 = static_cast<size_t>(N * C * H * W) * sizeof(float);
+    const size_t image_f16 = image_f32 / 2;
+    const size_t map_bytes = static_cast<size_t>(N * 1 * H * W) * sizeof(float);
+
+    // --- Dtype + alloc drop oracles (fail first under pre-6D.3 fp32 partials) ---
+    SSIMWorkspace pure_ws;
+    pure_ws.ensure_size(shape);
+    EXPECT_EQ(pure_ws.dm_dmu1.dtype(), DataType::Float16);
+    EXPECT_EQ(pure_ws.dm_dsigma1_sq.dtype(), DataType::Float16);
+    EXPECT_EQ(pure_ws.dm_dsigma12.dtype(), DataType::Float16);
+    // Pre-6D.3 pure: 6× image f32 + reduce. Post: 3× f16 dm + 3× f32 maps/grads.
+    const size_t pure_pre = 6 * image_f32 + 1024 * sizeof(float) + sizeof(float);
+    const size_t pure_post = 3 * image_f16 + 3 * image_f32 + 1024 * sizeof(float) + sizeof(float);
+    EXPECT_LE(pure_ssim_bytes(pure_ws), pure_post + 4096);
+    EXPECT_LT(pure_ssim_bytes(pure_ws), pure_pre);
+    EXPECT_GE(pure_pre - pure_ssim_bytes(pure_ws), 3 * image_f16 - 4096);
+
+    DecoupledFusedL1SSIMWorkspace dec_ws;
+    dec_ws.ensure_size(shape);
+    EXPECT_EQ(dec_ws.app_dm_dmu1.dtype(), DataType::Float16);
+    EXPECT_EQ(dec_ws.raw_dm_dmu1.dtype(), DataType::Float16);
+    EXPECT_EQ(dec_ws.raw_dm_dsigma1_sq.dtype(), DataType::Float16);
+    EXPECT_EQ(dec_ws.raw_dm_dsigma12.dtype(), DataType::Float16);
+    // Pre-6D.3 (after 6D.2): map + 4 dm f32 + 2 grad f32 + reduce.
+    // Post: map + 4 dm f16 + 2 grad f32 + reduce.
+    const size_t reduce = 1024 * sizeof(float) + sizeof(float);
+    const size_t dec_pre = map_bytes + 4 * image_f32 + 2 * image_f32 + reduce;
+    const size_t dec_post = map_bytes + 4 * image_f16 + 2 * image_f32 + reduce;
+    EXPECT_LE(decoupled_bytes(dec_ws), dec_post + 4096);
+    EXPECT_LT(decoupled_bytes(dec_ws), dec_pre);
+    EXPECT_GE(dec_pre - decoupled_bytes(dec_ws), 4 * image_f16 - 4096);
+
+    MaskedFusedL1SSIMWorkspace mask_ws;
+    mask_ws.ensure_size(shape);
+    EXPECT_EQ(mask_ws.dm_dmu1.dtype(), DataType::Float16);
+    EXPECT_EQ(mask_ws.dm_dsigma1_sq.dtype(), DataType::Float16);
+    EXPECT_EQ(mask_ws.dm_dsigma12.dtype(), DataType::Float16);
+    const size_t mask_reduce = 2048 * sizeof(float) + 2 * sizeof(float);
+    const size_t mask_pre = map_bytes + 3 * image_f32 + image_f32 + mask_reduce;
+    const size_t mask_post = map_bytes + 3 * image_f16 + image_f32 + mask_reduce;
+    EXPECT_LE(masked_bytes(mask_ws), mask_post + 4096);
+    EXPECT_LT(masked_bytes(mask_ws), mask_pre);
+
+    MaskedDecoupledFusedL1SSIMWorkspace mdec_ws;
+    mdec_ws.ensure_size(shape);
+    EXPECT_EQ(mdec_ws.app_dm_dmu1.dtype(), DataType::Float16);
+    EXPECT_EQ(mdec_ws.raw_dm_dmu1.dtype(), DataType::Float16);
+    EXPECT_EQ(mdec_ws.raw_dm_dsigma1_sq.dtype(), DataType::Float16);
+    EXPECT_EQ(mdec_ws.raw_dm_dsigma12.dtype(), DataType::Float16);
+    const size_t mdec_pre = map_bytes + 4 * image_f32 + 2 * image_f32 + mask_reduce;
+    const size_t mdec_post = map_bytes + 4 * image_f16 + 2 * image_f32 + mask_reduce;
+    EXPECT_LE(masked_decoupled_bytes(mdec_ws), mdec_post + 4096);
+    EXPECT_LT(masked_decoupled_bytes(mdec_ws), mdec_pre);
+
+    // Arena max_variant must also shrink with the new layouts.
+    const size_t arena_max = LossWorkspaceArena::max_variant_bytes(shape);
+    // Largest post-6D.3 is pure-SSIM or masked-decoupled; both << pre-6D.3 pure (~6*img).
+    EXPECT_LT(arena_max, pure_pre);
+
+    // --- Grad equivalence within fp16 tolerance vs fused (already fp16 partials) ---
+    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+
+    FusedL1SSIMWorkspace fused;
+    auto [floss, fctx] = fused_l1_ssim_forward(img1, img2, ssim_weight, fused, true);
+    auto fgrad = fused_l1_ssim_backward(fctx, fused).cpu().contiguous();
+
+    // Decoupled when corrected==raw: combined grads ≈ fused (both fp16 partials).
+    DecoupledFusedL1SSIMWorkspace dec;
+    auto [dloss, dctx] = decoupled_fused_l1_ssim_forward(img1, img1, img2, ssim_weight, dec, true);
+    auto dgrads = decoupled_fused_l1_ssim_backward(dctx, dec);
+    EXPECT_NEAR(floss.item<float>(), dloss.item<float>(), 1e-4f);
+    auto dcombo = (dgrads.grad_corrected + dgrads.grad_raw).cpu().contiguous();
+    double max_dec = 0;
+    for (size_t i = 0; i < fgrad.numel(); ++i) {
+        max_dec = std::max(max_dec,
+                           static_cast<double>(std::abs(dcombo.ptr<float>()[i] - fgrad.ptr<float>()[i])));
+    }
+    EXPECT_LT(max_dec, 2e-3) << "decoupled fp16 vs fused max abs " << max_dec;
+
+    // Masked full-ones mask must match unmasked fused within fp16 tol.
+    auto ones_mask = Tensor::ones({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA);
+    MaskedFusedL1SSIMWorkspace mws;
+    auto [mloss, mctx] = masked_fused_l1_ssim_forward(img1, img2, ones_mask, ssim_weight, mws);
+    auto mgrad = masked_fused_l1_ssim_backward(mctx, mws).cpu().contiguous();
+    // Masked normalizes by mask_sum (=H*W) vs fused valid-padding mean — use no padding
+    // path for a cleaner comparison.
+    FusedL1SSIMWorkspace fused_np;
+    auto [floss_np, fctx_np] = fused_l1_ssim_forward(img1, img2, ssim_weight, fused_np, false);
+    auto fgrad_np = fused_l1_ssim_backward(fctx_np, fused_np).cpu().contiguous();
+    EXPECT_NEAR(mloss.item<float>(), floss_np.item<float>(), 1e-4f);
+    double max_mask = 0;
+    for (size_t i = 0; i < fgrad_np.numel(); ++i) {
+        max_mask = std::max(max_mask,
+                            static_cast<double>(std::abs(mgrad.ptr<float>()[i] - fgrad_np.ptr<float>()[i])));
+    }
+    EXPECT_LT(max_mask, 2e-3) << "masked full fp16 vs fused(no pad) max abs " << max_mask;
+
+    // Pure SSIM: deterministic across workspaces; loss finite.
+    SSIMWorkspace pure_a, pure_b;
+    auto [sloss_a, sctx_a] = ssim_forward(img1, img2, pure_a, true);
+    auto sgrad_a = ssim_backward(sctx_a, pure_a, 1.0f);
+    auto [sloss_b, sctx_b] = ssim_forward(img1, img2, pure_b, true);
+    auto sgrad_b = ssim_backward(sctx_b, pure_b, 1.0f);
+    EXPECT_NEAR(sloss_a.item<float>(), sloss_b.item<float>(), 1e-6f);
+    auto sa = sgrad_a.cpu().contiguous();
+    auto sb = sgrad_b.cpu().contiguous();
+    double max_pure = 0;
+    for (size_t i = 0; i < sa.numel(); ++i) {
+        max_pure = std::max(max_pure,
+                            static_cast<double>(std::abs(sa.ptr<float>()[i] - sb.ptr<float>()[i])));
+    }
+    EXPECT_LT(max_pure, 1e-6);
+    EXPECT_TRUE(std::isfinite(sloss_a.item<float>()));
+}

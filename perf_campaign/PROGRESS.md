@@ -807,5 +807,44 @@ re-import; NVRM fix is densify/grow ordering for GUI.
   ```
   Alloc drop @48×48 NCHW: ≥1 full image (~27.6 KiB) vs pre-6D.2. Decoupled
   corrected==raw combined grads match fused within 5e-4 abs.
-- **Commit:** (recorded after commit)
+- **Commit:** `37aa467a`
+
+## Task 6D.3 — fp16 dm_* partials (decoupled / masked / pure-SSIM)
+
+- **Branch:** `lfs-elite-mem`
+- **Change:** Port fused-path Float16 partials to pure-SSIM, decoupled, masked-fused,
+  and masked-decoupled workspaces + kernels. `fusedssimCUDA` /
+  `fusedssim_backwardCUDA` / `maskedFusedL1SSIM{Forward,Backward}` /
+  `decoupledFusedL1SSIMForwardCUDA` template `PartialT=__half`. Arena layouts and
+  independent `ensure_size` allocate dm_* as Float16; grads stay fp32.
+- **Fail evidence (TDD):** Pre-6D.3, `dm_*.dtype() == Float32` and live bytes match
+  full-fp32 layouts; `Fp16PartialsWorkspaceBytesAndGradEquiv` would fail dtype +
+  `EXPECT_LT(live, pre_layout)` assertions.
+- **Pass evidence:**
+  ```
+  [  PASSED  ] LossWorkspaceUnionTest.Fp16PartialsWorkspaceBytesAndGradEquiv
+  [  PASSED  ] 55 tests (LossWorkspace×6 + FusedL1×15 + Masked×13 + MaskLoss)
+  ```
+  Unit: pure/decoupled/masked/mdec all Float16 dm_*; byte drop ≥ 3–4 × image_f16.
+  Grad: decoupled(corrected==raw) vs fused max abs < 2e-3; masked full-ones vs
+  fused(no pad) < 2e-3; pure SSIM deterministic.
+- **Bench dual gate (vs BASELINE / Wave-2):**
+
+  | metric | baseline | Wave-2 | after 6D.3 |
+  |---|---:|---:|---:|
+  | Bonsai wall_s (med) | 9.00 | 8.97ish | **8.88** |
+  | Bonsai steady_ms | 4.129 | 4.065 | **4.057** |
+  | Bonsai peak MiB | 1156 | 938 | **970** |
+  | Bonsai allocs/iter | 5.05 | 0.05 | **0.05** |
+  | Bicycle 7k steady_ms | 3.290 | 3.208 | **3.072** |
+  | Bicycle 7k peak MiB | 1038 | 1026 | **1026** |
+  | Bicycle final loss | 0.098–0.121 | 0.079–0.107 | **0.113–0.140** |
+
+  Default fused path already used fp16 partials — no ms regression (slight win /
+  noise). Bicycle loss curves healthy (monotonic densify, late loss ~0.08–0.16,
+  high variance as documented). Peak VRAM flat vs Wave-2; no quality stop.
+- **@1080p savings (when mode used):** decoupled/masked-dec ~47.5 MiB;
+  masked-fused/pure-SSIM ~35.6 MiB each (half of prior dm_* f32).
+- **Runs:** bonsai `20260806T210217Z_run{1,2,3}`; bicycle `20260806T210253Z_run{1,2,3}`
+- **Commit:** `63cecb84`
 
