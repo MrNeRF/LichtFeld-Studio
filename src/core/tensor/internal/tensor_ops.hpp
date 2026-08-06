@@ -70,6 +70,11 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_clamp_scalar(float* data, float min_val, float max_val, size_t n, cudaStream_t stream);
     LFS_CORE_API void launch_clamp_fused(const float* src, float* dst, float min_val, float max_val, size_t n, cudaStream_t stream);
     LFS_CORE_API void launch_clamp_scalar_int(int* data, int min_val, int max_val, size_t n, cudaStream_t stream);
+    // Float16 clamp (6D.5). Host gate still needs Float16 acceptance (see ISSUES).
+    LFS_CORE_API void launch_clamp_scalar_half(__half* data, float min_val, float max_val, size_t n,
+                                               cudaStream_t stream);
+    LFS_CORE_API void launch_clamp_fused_half(const __half* src, __half* dst, float min_val, float max_val,
+                                              size_t n, cudaStream_t stream);
 
     LFS_CORE_API void launch_reduce_op(const void* input, void* output,
                                        const size_t* shape, size_t rank,
@@ -377,6 +382,13 @@ namespace lfs::core::tensor_ops {
 
     LFS_CORE_API void launch_count_nonzero_float(const float* data, size_t* count,
                                                  size_t n, cudaStream_t stream);
+
+    // Multi-block device-side count (no host round-trip). Used by Tensor::count_nonzero
+    // and the masking wrappers above.
+    LFS_CORE_API void launch_count_nonzero_scalar_float(const float* data, size_t* result,
+                                                        size_t n, cudaStream_t stream);
+    LFS_CORE_API void launch_count_nonzero_scalar_bool(const unsigned char* data, size_t* result,
+                                                       size_t n, cudaStream_t stream);
 
     // ============= Indexing Operations =============
     LFS_CORE_API void launch_index_select(const float* input, const int* indices, float* output,

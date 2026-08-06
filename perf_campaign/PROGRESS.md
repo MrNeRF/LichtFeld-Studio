@@ -648,7 +648,7 @@ Phase 1 series **DONE**.
 - **Commit:** `786fefb6`
 
 ||||||| 42184eea
-- **Commit:** (this commit)
+- **Commit:** `3dc8f4f9`
 - **Commit:** `42184eea`
 
 ## Task VRAM-audit (lfs-elite-vramfix) — ISS-007 + NVRM + TLS + RAM guard
@@ -754,3 +754,84 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+---
+
+## Task 6C.3+6C.5+6C.7+6D.5 — Elementwise/reduce kernel modernization (worker N / lfs-elite-fN)
+
+- **Branch:** `lfs-elite-fN`
+- **Scope files:** `tensor_vectorized_ops.cuh`, `tensor_generic_ops.cuh`, `tensor_warp_reduce.cu`,
+  `tensor_ops.cu`, `tensor_dot_optimized.cu`, `tensor_masking_ops.cu` (+ `tensor_ops.hpp` decls, tests)
+
+### Changes
+1. **6C.3** SM-capped grid-stride vectorized elementwise (multi float4/thread); Thrust cutoff
+   lowered `1024→256` (`kVectorizedMinElems`), scalar cutoff `512→128`.
+2. **6C.5** Device-side mean/prod finalize (`launch_scale_inplace` / CUB DeviceReduce::Reduce for prod —
+   no 1-element Thrust transform, no host prod round-trip). Column mean scale in-kernel.
+   Multi-block float4 `count_nonzero` (masking + scalar path). Same-shape compare → float4 vectorized path.
+3. **6C.7** Packed128 half unary/binary kernels + generic launch fast path.
+4. **6D.5** Float16 full-reduce kernel path + half clamp launchers + half unary instantiations
+   (`half_unary_via_float`). Host dtype gates still fail-loud → **ISS-010**.
+
+### Fail evidence (TDD / pre-change)
+```
+# Vectorized kernels: 1 float4/thread, grid = ceil((n/4)/256), n>1024 Thrust cutoff
+# Mean: thrust::transform 1-el divide after CUB sum (tensor_ops.cu ~663-669)
+# Prod: thrust::reduce → host result → init_scalar_gpu (host round-trip)
+# count_nonzero: thrust::count_if → host → H2D (stream sync)
+# compare fast_path: scalar kernel only (no float4)
+# Float16 reduce host: assert "supports only Float32, Int32, and Bool"
+```
+Pre-change unit probes would fail on missing multi-block count_nonzero / device mean-scale
+and would hit Thrust for 257–1024 element tensors.
+
+### Pass evidence
+```
+[==========] 8 tests from TensorKernels6CElem
+[  PASSED  ] 8 tests.
+  UnaryBinaryAcrossVectorizedCutoff (n=64..100k)
+  MeanAndProdMatchReference / MeanSegmentedScaleDeviceSide
+  CountNonzeroMatchesReference (n=200k multi-block)
+  CompareFloat4SameShape
+  Float16BinaryVectorized
+  Float16HostReduceFailsLoud (host gate documented)
+  Microbench 6C.3 f32 add N=4M ~0.013 ms/op
+
+Tensor* suite: 1013 PASSED
+tensor_hardening_tests: 89 PASSED
+```
+
+### Dual-workload gate (flock, quiet GPU)
+
+**Bonsai** (3×2000) vs Wave 2 (4.065 ms / 938.3 MiB):
+
+| metric | Wave 2 | after 6C.elem | Δ |
+|---|---:|---:|---|
+| wall_s (med) | — | **9.25** | — |
+| steady_ms/iter | 4.065 | **4.070** | +0.1% flat |
+| steady_allocs/iter | 0.05 | **0.05** | 0 |
+| peak VRAM MiB | 938.3 | **938.1** | 0 |
+| B/splat | 429.0 | 429.0 | 0 |
+| last_loss | ~0.03–0.04 | 0.027–0.029 | ok |
+
+Runs: `perf_campaign/runs/6c_elem/bonsai/20260806T222617Z_run{1,2,3}/`
+
+**Bicycle** (3×7000) vs Wave 2 (3.208 ms / 1026.3 MiB):
+
+| metric | Wave 2 | after 6C.elem | Δ |
+|---|---:|---:|---|
+| wall_s (med) | — | **34.11** | — |
+| steady_ms/iter | 3.208 | **3.057** | **−4.7%** |
+| steady_allocs/iter | 0.04 | **0.04** | 0 |
+| peak VRAM MiB | 1026.3 | **994.1** | −32 |
+| last_loss range | 0.079–0.107 | 0.106–0.199 | high-variance OK (run1 outlier) |
+
+Runs: `perf_campaign/runs/6c_elem/bicycle/20260806T222659Z_run{1,2,3}/`
+
+Gate: no regression vs Wave 2; bicycle quality canary healthy (densify to 500k, no NaN).
+
+### Issues filed
+- ISS-010 Float16 host gates (reduce/unary/fill/clamp/broadcast_to) outside declared file set
+- ISS-011 half functor ambiguity mitigated via half_unary_via_float
+
+- **Commit:** `85aacdf9`

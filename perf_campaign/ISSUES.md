@@ -113,3 +113,27 @@
 - **Action:** Sync RULES from main when merging tensor work; until then follow
   work-order dual-gate + flock discipline.
 - **Status:** open (docs).
+
+## ISS-010 — Float16 host API gates still block kernel-ready half paths (6D.5 remainder)
+- **Severity:** medium (blocks fp16 intermediates end-to-end)
+- **Worker:** lfs-elite-fN (6C.3/5/7+6D.5)
+- **Kernel layer (done in this work):**
+  - Full-reduce Float16 → promote-to-float CUB path in `tensor_ops.cu` (`launch_reduce_op_float16`)
+  - Half Packed128 vectorized unary/binary kernels + generic launch path (`tensor_vectorized_ops.cuh`, `tensor_generic_ops.cuh`)
+  - Half clamp launchers `launch_clamp_scalar_half` / `launch_clamp_fused_half` in `tensor_ops.cu`
+  - Explicit half unary instantiations via `half_unary_via_float` wrappers
+- **Host gates still fail-loud (OUT OF SCOPE for declared file set):**
+  - `tensor_unified_ops.cpp:1106` — reduce only Float32/Int32/Bool (rejects Float16 before kernel)
+  - `tensor_impl.hpp:1755` — `neg()` only Float32/Int32
+  - Unary exports (`tensor_exports.cu`) only instantiate float/int for unaries — half unaries need host wiring to call half_unary_via_float or equivalent
+  - `fill_` / `clamp` host dtype checks (`tensor.cpp`, `tensor_unified_ops.cpp`) — Float32/Int32 only
+  - `broadcast_to` CUDA path (`tensor_broadcast.cpp`) — Float32 & Bool only
+- **Action:** Open follow-up on host dispatch only: accept Float16 in reduce/unary/clamp/fill_/broadcast_to and route to the new kernels. Partial-axis Float16 reduce still asserts (full-reduce only).
+- **Status:** open (kernel ready; host gating remains)
+
+## ISS-011 — Generic unary functors ambiguous on bare `__half` (relu/sigmoid/gelu/swish)
+- **Severity:** low (worked around)
+- **File:** `tensor_functors.hpp` (relu/sigmoid/gelu/swish use mixed float/half ternaries and `+`/`*`)
+- **Workaround:** `half_unary_via_float` in `tensor_ops.cu` promotes to float before applying the float-oriented functor.
+- **Action:** Optional later: specialize functors for `__half` using `__h*` intrinsics / half2.
+- **Status:** mitigated for explicit half unary instantiations.
