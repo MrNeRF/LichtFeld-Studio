@@ -97,7 +97,7 @@
   | B/splat | 429.0 | 429.0 | 0 |
   | last_loss | ~0.039 | ~0.030 | ok |
 
-- **Commit:** (see task 4.1 commit)
+- **Commit:** `e5f78be5`
 
 ## Task 4.2 — Capacity invariant guard
 
@@ -122,4 +122,4 @@
   (slow path counter=1 after first grow; second grow fast, alloc_delta≤2)
   ```
 - **Bench:** same gate table as 4.1 (measured together after both landed).
-- **Commit:** (see task 4.2 commit)
+- **Commit:** `a3bebc21`
