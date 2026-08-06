@@ -217,3 +217,30 @@ TEST_F(OpfFormatTest, RejectsPointCloudBufferEscape) {
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
 }
+
+TEST_F(OpfFormatTest, ParsesCalibratedCameraPoses) {
+    write(root / "calibrated.json", R"({
+        "format":"application/opf-calibrated-cameras+json", "version":"1.0",
+        "sensors":[{"id":7, "internals":{"type":"perspective"}}],
+        "cameras":[{"id":42, "sensor_id":7, "position":[1,2,3], "orientation_deg":[4,5,6]}]
+    })");
+    lfs::io::opf::Resource resource{"calibrated.json", "application/opf-calibrated-cameras+json",
+                                    root / "calibrated.json"};
+    auto result = lfs::io::opf::read_calibrated_cameras(resource);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+    ASSERT_EQ(result->size(), 1u);
+    EXPECT_EQ(result->front().sensor_id, 7u);
+    EXPECT_DOUBLE_EQ(result->front().position[2], 3.0);
+}
+
+TEST_F(OpfFormatTest, RejectsCalibratedCameraMissingSensor) {
+    write(root / "calibrated.json", R"({
+        "format":"application/opf-calibrated-cameras+json", "version":"1.0",
+        "sensors":[], "cameras":[{"id":42, "sensor_id":7, "position":[1,2,3], "orientation_deg":[4,5,6]}]
+    })");
+    lfs::io::opf::Resource resource{"calibrated.json", "application/opf-calibrated-cameras+json",
+                                    root / "calibrated.json"};
+    auto result = lfs::io::opf::read_calibrated_cameras(resource);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, lfs::io::ErrorCode::INVALID_DATASET);
+}

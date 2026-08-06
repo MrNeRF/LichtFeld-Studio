@@ -500,4 +500,57 @@ namespace lfs::io::opf {
         }
         return manifest;
     }
+
+    Result<std::vector<CalibratedCamera>> read_calibrated_cameras(const Resource& resource) {
+        if (resource.format != "application/opf-calibrated-cameras+json")
+            return invalid(resource.resolved_path, "OPF calibrated cameras resource has an unexpected format.");
+        std::ifstream input(resource.resolved_path, std::ios::binary);
+        if (!input)
+            return make_error(ErrorCode::READ_FAILURE, "Cannot open OPF calibrated cameras.", resource.resolved_path);
+        json root;
+        try {
+            root = json::parse(input);
+        } catch (const json::parse_error& error) {
+            return make_error(ErrorCode::MALFORMED_JSON,
+                              std::format("Malformed OPF calibrated cameras JSON: {}", error.what()),
+                              resource.resolved_path);
+        }
+        if (!root.is_object() || root.value("format", std::string{}) != "application/opf-calibrated-cameras+json")
+            return make_error(ErrorCode::UNSUPPORTED_FORMAT, "Unsupported OPF calibrated cameras format.", resource.resolved_path);
+        if (!root.contains("sensors") || !root["sensors"].is_array() ||
+            !root.contains("cameras") || !root["cameras"].is_array())
+            return invalid(resource.resolved_path, "OPF calibrated cameras requires sensors and cameras arrays.");
+        std::unordered_set<std::uint64_t> sensors;
+        for (const auto& sensor : root["sensors"]) {
+            if (!sensor.is_object() || !sensor.contains("id") || !sensor["id"].is_number_unsigned())
+                return invalid(resource.resolved_path, "OPF calibrated sensors require unsigned ids.");
+            if (!sensors.insert(sensor["id"].get<std::uint64_t>()).second)
+                return invalid(resource.resolved_path, "OPF calibrated sensor ids must be unique.");
+        }
+        std::unordered_set<std::uint64_t> camera_ids;
+        std::vector<CalibratedCamera> cameras;
+        for (const auto& camera : root["cameras"]) {
+            if (!camera.is_object() || !camera.contains("id") || !camera["id"].is_number_unsigned() ||
+                !camera.contains("sensor_id") || !camera["sensor_id"].is_number_unsigned() ||
+                !camera.contains("position") || !camera["position"].is_array() || camera["position"].size() != 3 ||
+                !camera.contains("orientation_deg") || !camera["orientation_deg"].is_array() ||
+                camera["orientation_deg"].size() != 3)
+                return invalid(resource.resolved_path, "OPF calibrated camera requires id, sensor_id, position[3] and orientation_deg[3].");
+            const auto id = camera["id"].get<std::uint64_t>();
+            const auto sensor_id = camera["sensor_id"].get<std::uint64_t>();
+            if (!camera_ids.insert(id).second)
+                return invalid(resource.resolved_path, "OPF calibrated camera ids must be unique.");
+            if (!sensors.contains(sensor_id))
+                return invalid(resource.resolved_path, "OPF calibrated camera references a missing sensor.");
+            CalibratedCamera parsed{id, sensor_id, {}, {}};
+            for (size_t i = 0; i < 3; ++i) {
+                if (!camera["position"][i].is_number() || !camera["orientation_deg"][i].is_number())
+                    return invalid(resource.resolved_path, "OPF calibrated camera coordinates must be numeric.");
+                parsed.position[i] = camera["position"][i].get<double>();
+                parsed.orientation_deg[i] = camera["orientation_deg"][i].get<double>();
+            }
+            cameras.push_back(parsed);
+        }
+        return cameras;
+    }
 } // namespace lfs::io::opf

@@ -5,6 +5,7 @@
 
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -71,6 +72,13 @@ namespace lfs::io::opf {
         std::vector<std::filesystem::path> buffer_paths;
     };
 
+    struct CalibratedCamera {
+        std::uint64_t id;
+        std::uint64_t sensor_id;
+        std::array<double, 3> position;
+        std::array<double, 3> orientation_deg;
+    };
+
     // Parses and validates the OPF project graph. Resource files are resolved
     // relative to the directory containing the project file and must remain
     // inside that directory. Unknown extension items/resources are retained
@@ -84,5 +92,7 @@ namespace lfs::io::opf {
     [[nodiscard]] Result<std::vector<InputCapture>> read_input_captures(const Resource& resource);
     [[nodiscard]] Result<PointCloudManifest> read_point_cloud_manifest(
         const Resource& gltf_resource, const std::filesystem::path& project_root);
+    [[nodiscard]] Result<std::vector<CalibratedCamera>> read_calibrated_cameras(
+        const Resource& resource);
 
 } // namespace lfs::io::opf
