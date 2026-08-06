@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 add_library(lfs_vulkan_rasterizer STATIC
+        src/barrier_planner.cpp
         src/buffer.cpp
         src/gs_pipeline.cpp
         src/gs_renderer.cpp
