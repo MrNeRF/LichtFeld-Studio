@@ -508,7 +508,7 @@ namespace lfs::io::opf {
             !root.contains("bufferViews") || !root["bufferViews"].is_array() ||
             !root.contains("meshes") || !root["meshes"].is_array() || root["meshes"].empty() ||
             !root["meshes"][0].contains("primitives") || root["meshes"][0]["primitives"].empty())
-            return invalid(gltf_resource.resolved_path, "OPF sparse point cloud glTF lacks mesh accessors.");
+            return manifest;
         const auto& attributes = root["meshes"][0]["primitives"][0]["attributes"];
         if (!attributes.contains("POSITION") || !attributes.contains("COLOR_0"))
             return invalid(gltf_resource.resolved_path, "OPF sparse point cloud requires POSITION and COLOR_0.");
