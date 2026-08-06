@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <optional>
 
 namespace lfs::io {
     namespace {
@@ -98,14 +97,10 @@ namespace lfs::io {
         auto imported = opf::assemble_cameras(*images, *sensors, *calibrated);
         if (!imported)
             return std::unexpected(imported.error());
-        std::optional<opf::SceneReferenceFrame> reference_frame;
         if (reference_frame_resource) {
             auto parsed_reference_frame = opf::read_scene_reference_frame(*reference_frame_resource);
             if (!parsed_reference_frame)
                 return std::unexpected(parsed_reference_frame.error());
-            reference_frame = std::move(*parsed_reference_frame);
-            for (auto& camera : *imported)
-                opf::apply_scene_reference_frame(camera, *reference_frame);
         }
 
         std::shared_ptr<PointCloud> point_cloud;
@@ -113,8 +108,10 @@ namespace lfs::io {
             auto manifest = opf::read_point_cloud_manifest(*sparse_resource, project_path.parent_path());
             if (!manifest)
                 return std::unexpected(manifest.error());
-            auto sparse = opf::read_sparse_point_cloud(*manifest,
-                                                       reference_frame ? &*reference_frame : nullptr);
+            // Calibrated cameras and OPF sparse coordinates are already in the
+            // canonical dataset frame. The scene reference frame's shift is
+            // georeference metadata, not an additional local-scene transform.
+            auto sparse = opf::read_sparse_point_cloud(*manifest, nullptr);
             if (!sparse)
                 return std::unexpected(sparse.error());
             point_cloud = std::make_shared<PointCloud>(std::move(*sparse));
