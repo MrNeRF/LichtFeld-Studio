@@ -1153,60 +1153,36 @@ void VulkanGSRenderer::executeProjectionForward(
     PerfTimer::Timer<PerfTimer::ProjectionForward> timer(this);
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
     const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
-
-    bufferMemoryBarrier({
-                            {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.sh0.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.shN.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ);
-
     size_t alloc_size = std::max(num_splats, alloc_reserve);
 
     // Two-stage sort: pre-fill primitive_depth_keys with 0xFFFFFFFFu so any
     // primitive that hits an early-return path inside the projection shader
-    // (z-near reject, opacity below threshold, degenerate covariance, zero
-    // tiles touched) keeps the max-key sentinel and sorts to the tail.
+    // keeps the max-key sentinel and sorts to the tail.
     auto& primitive_depth_keys =
         resizeDeviceBuffer(buffers.primitive_depth_keys, alloc_size);
-    bufferMemoryBarrier({{primitive_depth_keys, COMPUTE_SHADER_READ_WRITE}},
-                        TRANSFER_COMPUTE_SHADER_WRITE);
     validateFillRange(primitive_depth_keys, 0, primitive_depth_keys.size, "primitive-depth sentinel fill");
-    vkCmdFillBuffer(command_buffer, primitive_depth_keys.buffer,
-                    primitive_depth_keys.offset, primitive_depth_keys.size,
-                    0xFFFFFFFFu);
-    bufferMemoryBarrier({{primitive_depth_keys, TRANSFER_COMPUTE_SHADER_WRITE}},
-                        COMPUTE_SHADER_READ_WRITE);
-
-    // Ensure transfer writes to optional LOD buffers are visible to projection.
-    if (lod_indices.buffer != VK_NULL_HANDLE ||
-        lod_logical_indices.buffer != VK_NULL_HANDLE ||
-        lod_levels.buffer != VK_NULL_HANDLE ||
-        lod_weights.buffer != VK_NULL_HANDLE) {
-        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
-        if (lod_indices.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_indices, TRANSFER_COMPUTE_SHADER_WRITE});
+    {
+        const DeclaredAccess fill_access{
+            .buffer = &primitive_depth_keys,
+            .use = BufferUse::TransferWrite,
+        };
+        planTransfer(std::span{&fill_access, 1});
+        if (vulkan_dispatch_.cmd_fill_buffer == nullptr) {
+            lfs::rendering::throw_renderer_contract(
+                "executeProjectionForward requires VulkanDispatch::cmd_fill_buffer",
+                LFS_SOURCE_SITE_CURRENT());
         }
-        if (lod_logical_indices.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_logical_indices, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        if (lod_levels.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_levels, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        if (lod_weights.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_weights, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
+        vulkan_dispatch_.cmd_fill_buffer(command_buffer, primitive_depth_keys.buffer,
+                                         primitive_depth_keys.offset, primitive_depth_keys.size,
+                                         0xFFFFFFFFu);
     }
 
+    // Optional LOD inputs: null handles use dummy bindings (same as legacy).
+    // plan() skips VK_NULL_HANDLE; valid LOD buffers are tagged ComputeRead.
     const _VulkanBuffer lod_indices_binding =
         (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : primitive_depth_keys;
     const _VulkanBuffer lod_logical_indices_binding =
@@ -1218,49 +1194,62 @@ void VulkanGSRenderer::executeProjectionForward(
     const _VulkanBuffer lod_counts_binding =
         (lod_counts.buffer != VK_NULL_HANDLE) ? lod_counts : primitive_depth_keys;
 
-    std::vector<_VulkanBuffer> projection_buffers = {
-        // inputs
-        buffers.xyz_ws.deviceBuffer,
-        buffers.sh0.deviceBuffer,
-        buffers.shN.deviceBuffer,
-        buffers.rotations.deviceBuffer,
-        buffers.scaling_raw.deviceBuffer,
-        buffers.opacity_raw.deviceBuffer,
-        // outputs
-        resizeDeviceBuffer(buffers.tiles_touched, alloc_size),
-        resizeDeviceBuffer(buffers.rect_tile_space, alloc_size),
-        resizeDeviceBuffer(buffers.radii, alloc_size),
-        resizeDeviceBuffer(buffers.xy_vs, 2 * alloc_size),
-        resizeDeviceBuffer(buffers.depths, alloc_size),
-        resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size),
-        resizeDeviceBuffer(buffers.rgb, 3 * alloc_size),
-        resizeDeviceBuffer(buffers.overlay_flags, alloc_size),
-        transform_indices,
-        node_mask,
-        overlay_params,
-        model_transforms,
-        primitive_depth_keys,
-        lod_indices_binding,
-        lod_logical_indices_binding,
-        lod_levels_binding,
-        lod_weights_binding,
-        lod_counts_binding,
+    auto& tiles_touched = resizeDeviceBuffer(buffers.tiles_touched, alloc_size);
+    auto& rect_tile_space = resizeDeviceBuffer(buffers.rect_tile_space, alloc_size);
+    auto& radii = resizeDeviceBuffer(buffers.radii, alloc_size);
+    auto& xy_vs = resizeDeviceBuffer(buffers.xy_vs, 2 * alloc_size);
+    auto& depths = resizeDeviceBuffer(buffers.depths, alloc_size);
+    auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size);
+    auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * alloc_size);
+    auto& overlay_flags = resizeDeviceBuffer(buffers.overlay_flags, alloc_size);
+
+    // Binding order: catalog appendix "executeProjectionForward L1266 projection_buffers".
+    // Tags: attrs/transform/node/overlay/model/LOD reads; projection outputs write;
+    // primitive_depth_keys write (sentinel RMW after fill).
+    std::vector<TaggedBinding> tagged = {
+        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.shN.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
+        {tiles_touched, BufferUse::ComputeWrite},
+        {rect_tile_space, BufferUse::ComputeWrite},
+        {radii, BufferUse::ComputeWrite},
+        {xy_vs, BufferUse::ComputeWrite},
+        {depths, BufferUse::ComputeWrite},
+        {inv_cov, BufferUse::ComputeWrite},
+        {rgb, BufferUse::ComputeWrite},
+        {overlay_flags, BufferUse::ComputeWrite},
+        {transform_indices, BufferUse::ComputeRead},
+        {node_mask, BufferUse::ComputeRead},
+        {overlay_params, BufferUse::ComputeRead},
+        {model_transforms, BufferUse::ComputeRead},
+        {primitive_depth_keys, BufferUse::ComputeWrite},
+        {lod_indices_binding, BufferUse::ComputeRead},
+        {lod_logical_indices_binding, BufferUse::ComputeRead},
+        {lod_levels_binding, BufferUse::ComputeRead},
+        {lod_weights_binding, BufferUse::ComputeRead},
+        {lod_counts_binding, BufferUse::ComputeRead},
     };
 
     VulkanGSRendererUniforms projection_uniforms = uniforms;
     if (buffers.quant_pool) {
         projection_uniforms.lod_page_splats = buffers.pool_page_splats;
-        projection_buffers.push_back(buffers.page_frames.deviceBuffer);
+        tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead});
     }
+
+    auto& pipeline = buffers.quant_pool
+                         ? (use_gut_projection ? pipeline_projection_forward_quant_3dgut
+                                               : pipeline_projection_forward_quant)
+                         : (use_gut_projection ? pipeline_projection_forward_3dgut
+                                               : pipeline_projection_forward);
+    // Quant pipelines have 25 layouts; non-quant 24 — tagged size must match.
     executeCompute(
         {{num_splats, SUBGROUP_SIZE}},
         &projection_uniforms, sizeof(projection_uniforms),
-        buffers.quant_pool
-            ? (use_gut_projection ? pipeline_projection_forward_quant_3dgut
-                                  : pipeline_projection_forward_quant)
-            : (use_gut_projection ? pipeline_projection_forward_3dgut
-                                  : pipeline_projection_forward),
-        projection_buffers);
+        pipeline,
+        tagged);
 }
 
 void VulkanGSRenderer::executeLegacyDepthWaves(
@@ -1757,43 +1746,36 @@ void VulkanGSRenderer::executeSelectionMask(
     const _VulkanBuffer& ring_pick_out) {
     DEVICE_GUARD;
 
-    bufferMemoryBarrier({
-                            {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {primitives, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {selection_out, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {polygon_mask, COMPUTE_SHADER_READ_WRITE},
-                            {ring_pick_out, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
 
+    // Tags from selection_mask.slang bindings 0–10.
     const size_t num_words = _CEIL_DIV(static_cast<size_t>(uniforms.num_splats), 4);
     executeCompute(
         {{num_words, SUBGROUP_SIZE}},
         &uniforms, sizeof(uniforms),
         pipeline_selection_mask,
-        {
-            buffers.xyz_ws.deviceBuffer,
-            transform_indices,
-            node_mask,
-            primitives,
-            model_transforms,
-            buffers.rotations.deviceBuffer,
-            buffers.scaling_raw.deviceBuffer,
-            selection_out,
-            polygon_mask,
-            buffers.opacity_raw.deviceBuffer,
-            ring_pick_out,
+        std::vector<TaggedBinding>{
+            {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
+            {transform_indices, BufferUse::ComputeRead},
+            {node_mask, BufferUse::ComputeRead},
+            {primitives, BufferUse::ComputeRead},
+            {model_transforms, BufferUse::ComputeRead},
+            {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},
+            {selection_out, BufferUse::ComputeWrite},
+            {polygon_mask, BufferUse::ComputeRead},
+            {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
+            {ring_pick_out, BufferUse::ComputeWrite},
         });
 
-    bufferMemoryBarrier({{selection_out, COMPUTE_SHADER_WRITE},
-                         {ring_pick_out, COMPUTE_SHADER_WRITE}},
-                        TRANSFER_READ);
+    // Handoff: host/CUDA download consumers lack their own barrier site (§3.4.5).
+    // Catalog post was COMPUTE_SHADER_WRITE → TRANSFER_READ.
+    const DeclaredAccess transfer_handoff[] = {
+        {.buffer = &selection_out, .use = BufferUse::TransferRead},
+        {.buffer = &ring_pick_out, .use = BufferUse::TransferRead},
+    };
+    planTransfer(std::span{transfer_handoff});
 }
 
 void VulkanGSRenderer::executeSelectionPolygonRasterize(
@@ -1802,24 +1784,20 @@ void VulkanGSRenderer::executeSelectionPolygonRasterize(
     const _VulkanBuffer& polygon_mask) {
     DEVICE_GUARD;
 
-    bufferMemoryBarrier({
-                            {polygon_vertices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {polygon_mask, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
+    using lfs::rendering::vulkan::BufferUse;
 
+    // Tags from selection_polygon_rasterize.slang: vertices read, coverage_mask write.
+    // Post CSR deleted: selection_mask plans ComputeRead on polygon_mask (§3.4.5 co-migrated).
     constexpr size_t kBlockXY = 8;
     executeCompute(
         {{static_cast<size_t>(uniforms.aabb_w), kBlockXY},
          {static_cast<size_t>(uniforms.aabb_h), kBlockXY}},
         &uniforms, sizeof(uniforms),
         pipeline_selection_polygon_rasterize,
-        {
-            polygon_vertices,
-            polygon_mask,
+        std::vector<TaggedBinding>{
+            {polygon_vertices, BufferUse::ComputeRead},
+            {polygon_mask, BufferUse::ComputeWrite},
         });
-
-    bufferMemoryBarrier({{polygon_mask, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ);
 }
 
 void VulkanGSRenderer::executeCumsum(

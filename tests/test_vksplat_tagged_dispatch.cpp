@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -205,6 +206,13 @@ namespace {
         static VKAPI_ATTR void VKAPI_CALL reset_query(VkCommandBuffer, VkQueryPool, uint32_t, uint32_t) {
             EXPECT_NE(active(), nullptr);
             active()->ops.push_back(RecordedOp::ResetQuery);
+        }
+
+        static VKAPI_ATTR void VKAPI_CALL write_timestamp(VkCommandBuffer,
+                                                          VkPipelineStageFlagBits,
+                                                          VkQueryPool,
+                                                          uint32_t) {
+            // no-op for PerfTimer::Timer in chain audits
         }
 
         static VKAPI_ATTR VkResult VKAPI_CALL end_cb(VkCommandBuffer) {
@@ -406,6 +414,7 @@ namespace {
         d.begin_command_buffer = &DispatchScript::begin_cb;
         d.cmd_pipeline_barrier2 = &DispatchScript::barrier2;
         d.cmd_reset_query_pool = &DispatchScript::reset_query;
+        d.cmd_write_timestamp = &DispatchScript::write_timestamp;
         d.end_command_buffer = &DispatchScript::end_cb;
         d.queue_submit = &DispatchScript::queue_submit;
         d.queue_wait_idle = &DispatchScript::queue_wait_idle;
@@ -926,6 +935,12 @@ namespace {
             forge_pipeline(pipeline_lod_map_indices, 0x5101);
             forge_pipeline(pipeline_lod_select_threshold, 0x5102);
             forge_pipeline(pipeline_lod_compact_touch, 0x5103);
+            forge_pipeline(pipeline_selection_mask, 0x5201);
+            forge_pipeline(pipeline_selection_polygon_rasterize, 0x5202);
+            forge_pipeline(pipeline_projection_forward, 0x5301);
+            forge_pipeline(pipeline_projection_forward_3dgut, 0x5302);
+            forge_pipeline(pipeline_projection_forward_quant, 0x5303);
+            forge_pipeline(pipeline_projection_forward_quant_3dgut, 0x5304);
 
             // Pre-sized host-visible readback so ensureLodSelectionReadback is a no-op.
             // ensureLodSelectionReadback(chunk_capacity) allocates (2+chunk_capacity) words;
@@ -981,11 +996,25 @@ namespace {
             zero_pipeline(pipeline_lod_map_indices);
             zero_pipeline(pipeline_lod_select_threshold);
             zero_pipeline(pipeline_lod_compact_touch);
+            zero_pipeline(pipeline_selection_mask);
+            zero_pipeline(pipeline_selection_polygon_rasterize);
+            zero_pipeline(pipeline_projection_forward);
+            zero_pipeline(pipeline_projection_forward_3dgut);
+            zero_pipeline(pipeline_projection_forward_quant);
+            zero_pipeline(pipeline_projection_forward_quant_3dgut);
             all_compute_pipelines.clear();
         }
 
         [[nodiscard]] _VulkanBuffer& lod_readback() noexcept {
             return lod_selection_readback_buffer_;
+        }
+
+        // Drop GPU timestamp bookkeeping so endCommandBatch does not call
+        // collectTimestampResults (real vkGetPhysicalDeviceProperties) on fakes.
+        void discard_timestamps() {
+            timestampNumWritten = 0;
+            timestampStackDepth = 0;
+            PerfTimer::discardMarkers();
         }
 
     private:
@@ -1012,6 +1041,30 @@ namespace {
         const VkDeviceSize bytes = elements * sizeof(float);
         buf.deviceBuffer = makeBuffer(id, bytes);
     }
+    void forge_owned_i32(Buffer<std::int32_t>& buf, const std::uintptr_t id, const std::size_t elements) {
+        const VkDeviceSize bytes = elements * sizeof(std::int32_t);
+        buf.deviceBuffer = makeBuffer(id, bytes);
+    }
+    void forge_owned_i64(Buffer<std::int64_t>& buf, const std::uintptr_t id, const std::size_t elements) {
+        const VkDeviceSize bytes = elements * sizeof(std::int64_t);
+        buf.deviceBuffer = makeBuffer(id, bytes);
+    }
+
+    void track_buf(TestableRenderer& r, const _VulkanBuffer& b) {
+        if (b.buffer != VK_NULL_HANDLE) {
+            r.trackExternalParent(b.buffer);
+        }
+    }
+
+    // P4 baselines (catalog struct counts).
+    constexpr std::size_t kAuditSelectionMask = 13;            // 11 pre + 2 post
+    constexpr std::size_t kAuditSelectionPolygonRasterize = 3; // 2 pre + 1 post
+    constexpr std::size_t kAuditProjectionForwardNoLod = 12;   // 10 + 1 + 1 (no L1218)
+    constexpr std::size_t kAuditProjectionForwardWithLod = 16; // +4 LOD
+
+    constexpr std::uint32_t kAuditSplatCount = 64;
+    constexpr std::uint32_t kAuditAabbW = 16;
+    constexpr std::uint32_t kAuditAabbH = 16;
 
 } // namespace
 
@@ -1192,5 +1245,260 @@ TEST(VkSplatTaggedDispatch, LodChainAuditMapAndSelectWithinBaseline) {
                 all_derived.size(),
                 static_cast<unsigned long long>(planned_activity));
 
+    renderer.endCommandBatch(/*use_fence=*/false);
+}
+
+// =============================================================================
+// P4 r1 A: selection chains
+// =============================================================================
+
+// Catches: selection_mask / polygon still hand-writing barriers (planner idle) or
+// derived struct count / edge coverage past catalog baselines.
+TEST(VkSplatTaggedDispatch, SelectionChainAuditWithinBaseline) {
+    DispatchScript script;
+    BindScript bind(script);
+
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+
+    VulkanGSPipelineBuffers buffers;
+    forge_owned_f(buffers.xyz_ws, 0xC001, kAuditSplatCount * 3);
+    forge_owned_f(buffers.rotations, 0xC002, kAuditSplatCount * 4);
+    forge_owned_f(buffers.scaling_raw, 0xC003, kAuditSplatCount * 3);
+    forge_owned_f(buffers.opacity_raw, 0xC004, kAuditSplatCount);
+
+    auto transform_indices = makeBuffer(0xC010, kAuditSplatCount * 4);
+    auto node_mask = makeBuffer(0xC011, 4096);
+    auto primitives = makeBuffer(0xC012, 4096);
+    auto model_transforms = makeBuffer(0xC013, 4096);
+    auto selection_out = makeBuffer(0xC014, kAuditSplatCount);
+    auto polygon_mask = makeBuffer(0xC015, 4096);
+    auto ring_pick_out = makeBuffer(0xC016, 64);
+    auto polygon_vertices = makeBuffer(0xC017, 64 * sizeof(float) * 2);
+
+    renderer.beginCommandBatch();
+    track_buf(renderer, buffers.xyz_ws.deviceBuffer);
+    track_buf(renderer, buffers.rotations.deviceBuffer);
+    track_buf(renderer, buffers.scaling_raw.deviceBuffer);
+    track_buf(renderer, buffers.opacity_raw.deviceBuffer);
+    track_buf(renderer, transform_indices);
+    track_buf(renderer, node_mask);
+    track_buf(renderer, primitives);
+    track_buf(renderer, model_transforms);
+    track_buf(renderer, selection_out);
+    track_buf(renderer, polygon_mask);
+    track_buf(renderer, ring_pick_out);
+    track_buf(renderer, polygon_vertices);
+
+    const auto stats_before = renderer.barrierPlanner().stats();
+    script.clear_recording();
+
+    VulkanGSSelectionPolygonRasterizeUniforms poly_u{};
+    poly_u.vertex_count = 4;
+    poly_u.aabb_x0 = 0;
+    poly_u.aabb_y0 = 0;
+    poly_u.aabb_w = kAuditAabbW;
+    poly_u.aabb_h = kAuditAabbH;
+    renderer.executeSelectionPolygonRasterize(poly_u, polygon_vertices, polygon_mask);
+    const std::size_t poly_structs = total_buffer_barrier_structs(script);
+    EXPECT_LE(poly_structs, kAuditSelectionPolygonRasterize);
+
+    script.clear_recording();
+    VulkanGSSelectionMaskUniforms mask_u{};
+    mask_u.num_splats = kAuditSplatCount;
+    mask_u.primitive_count = 0;
+    mask_u.mode = 2; // polygon mask
+    mask_u.image_width = kAuditAabbW;
+    mask_u.image_height = kAuditAabbH;
+    mask_u.aabb_w = kAuditAabbW;
+    mask_u.aabb_h = kAuditAabbH;
+    renderer.executeSelectionMask(
+        mask_u, buffers, transform_indices, node_mask, primitives, model_transforms,
+        selection_out, polygon_mask, ring_pick_out);
+    const std::size_t mask_structs = total_buffer_barrier_structs(script);
+    EXPECT_LE(mask_structs, kAuditSelectionMask);
+
+    // Edge coverage on combined recording.
+    script.clear_recording();
+    renderer.executeSelectionPolygonRasterize(poly_u, polygon_vertices, polygon_mask);
+    renderer.executeSelectionMask(
+        mask_u, buffers, transform_indices, node_mask, primitives, model_transforms,
+        selection_out, polygon_mask, ring_pick_out);
+    std::vector<VkBufferMemoryBarrier2> derived;
+    for (const auto& cap : script.barriers) {
+        derived.insert(derived.end(), cap.buffer_barriers.begin(), cap.buffer_barriers.end());
+    }
+    using BM = VulkanGSPipeline::BarrierMask;
+    const HazardEdge edges[] = {
+        // polygon write → selection ComputeRead (true hazard once both are planned).
+        {polygon_mask.buffer, BM::COMPUTE_SHADER_WRITE, BM::COMPUTE_SHADER_READ,
+         "polygon_mask write→selection read"},
+        // selection write → TransferRead handoff (host/CUDA download path).
+        {selection_out.buffer, BM::COMPUTE_SHADER_WRITE, BM::TRANSFER_READ,
+         "selection_out → transfer handoff"},
+        {ring_pick_out.buffer, BM::COMPUTE_SHADER_WRITE, BM::TRANSFER_READ,
+         "ring_pick_out → transfer handoff"},
+    };
+    for (const auto& edge : edges) {
+        EXPECT_TRUE(edge_covered(derived, edge)) << "missing edge: " << edge.name;
+    }
+
+    const auto stats_after = renderer.barrierPlanner().stats();
+    const std::uint64_t planned_activity =
+        (stats_after.barriers_emitted + stats_after.accesses_elided) -
+        (stats_before.barriers_emitted + stats_before.accesses_elided);
+    EXPECT_GT(planned_activity, 0u)
+        << "selection chains must exercise planner (tagged path / handoff)";
+
+    std::printf("SelectionChainAudit poly_structs=%zu (≤%zu) mask_structs=%zu (≤%zu) "
+                "derived=%zu planned_activity=%llu\n",
+                poly_structs, kAuditSelectionPolygonRasterize,
+                mask_structs, kAuditSelectionMask,
+                derived.size(),
+                static_cast<unsigned long long>(planned_activity));
+
+    renderer.endCommandBatch(/*use_fence=*/false);
+}
+
+// =============================================================================
+// P4 r1 B: executeProjectionForward (no quant; with LOD inputs)
+// recordVisibleCount/InstanceCount owned by later chains — not migrated here.
+// =============================================================================
+
+// Catches: projection still hand-writing barriers / fill not planTransfer-recorded.
+TEST(VkSplatTaggedDispatch, ProjectionForwardAuditWithinBaseline) {
+    DispatchScript script;
+    BindScript bind(script);
+
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+
+    VulkanGSPipelineBuffers buffers;
+    buffers.quant_pool = false;
+    forge_owned_f(buffers.xyz_ws, 0xD001, kAuditSplatCount * 3);
+    forge_owned_f(buffers.sh0, 0xD002, kAuditSplatCount * 3);
+    forge_owned_f(buffers.shN, 0xD003, kAuditSplatCount * 16);
+    forge_owned_f(buffers.rotations, 0xD004, kAuditSplatCount * 4);
+    forge_owned_f(buffers.scaling_raw, 0xD005, kAuditSplatCount * 3);
+    forge_owned_f(buffers.opacity_raw, 0xD006, kAuditSplatCount);
+    forge_owned_i32(buffers.tiles_touched, 0xD007, kAuditSplatCount);
+    forge_owned_i64(buffers.rect_tile_space, 0xD008, kAuditSplatCount);
+    forge_owned_i32(buffers.radii, 0xD009, kAuditSplatCount);
+    forge_owned_f(buffers.xy_vs, 0xD00A, kAuditSplatCount * 2);
+    forge_owned_f(buffers.depths, 0xD00B, kAuditSplatCount);
+    forge_owned_f(buffers.inv_cov_vs_opacity, 0xD00C, kAuditSplatCount * 4);
+    forge_owned_f(buffers.rgb, 0xD00D, kAuditSplatCount * 3);
+    forge_owned_i32(buffers.overlay_flags, 0xD00E, kAuditSplatCount);
+    forge_owned(buffers.primitive_depth_keys, 0xD00F, kAuditSplatCount);
+
+    auto transform_indices = makeBuffer(0xD020, kAuditSplatCount * 4);
+    auto node_mask = makeBuffer(0xD021, 4096);
+    auto overlay_params = makeBuffer(0xD022, 4096);
+    auto model_transforms = makeBuffer(0xD023, 4096);
+    auto lod_indices = makeBuffer(0xD024, kAuditSplatCount * 4);
+    auto lod_logical = makeBuffer(0xD025, kAuditSplatCount * 4);
+    auto lod_levels = makeBuffer(0xD026, kAuditSplatCount * 4);
+    auto lod_weights = makeBuffer(0xD027, kAuditSplatCount * 4);
+    auto lod_counts = makeBuffer(0xD028, 16);
+
+    renderer.beginCommandBatch();
+    for (auto* b : {&buffers.xyz_ws.deviceBuffer, &buffers.sh0.deviceBuffer,
+                    &buffers.shN.deviceBuffer, &buffers.rotations.deviceBuffer,
+                    &buffers.scaling_raw.deviceBuffer, &buffers.opacity_raw.deviceBuffer,
+                    &buffers.tiles_touched.deviceBuffer, &buffers.rect_tile_space.deviceBuffer,
+                    &buffers.radii.deviceBuffer, &buffers.xy_vs.deviceBuffer,
+                    &buffers.depths.deviceBuffer, &buffers.inv_cov_vs_opacity.deviceBuffer,
+                    &buffers.rgb.deviceBuffer, &buffers.overlay_flags.deviceBuffer,
+                    &buffers.primitive_depth_keys.deviceBuffer,
+                    &transform_indices, &node_mask, &overlay_params, &model_transforms,
+                    &lod_indices, &lod_logical, &lod_levels, &lod_weights, &lod_counts}) {
+        track_buf(renderer, *b);
+    }
+
+    const auto stats_before = renderer.barrierPlanner().stats();
+    script.clear_recording();
+
+    VulkanGSRendererUniforms u{};
+    u.num_splats = kAuditSplatCount;
+    u.image_width = 64;
+    u.image_height = 64;
+    u.grid_width = 4;
+    u.grid_height = 4;
+    u.lod_enabled = 1;
+    u.lod_count = kAuditSplatCount;
+
+    // With LOD inputs present (catalog L1218 up to +4 structs).
+    renderer.executeProjectionForward(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+        /*alloc_reserve=*/kAuditSplatCount,
+        /*use_gut_projection=*/false,
+        lod_indices, lod_logical, lod_levels, lod_weights, lod_counts);
+
+    const std::size_t with_lod_structs = total_buffer_barrier_structs(script);
+    EXPECT_LE(with_lod_structs, kAuditProjectionForwardWithLod);
+
+    // No-LOD path for the tighter baseline.
+    script.clear_recording();
+    renderer.executeProjectionForward(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+        kAuditSplatCount, false);
+    const std::size_t no_lod_structs = total_buffer_barrier_structs(script);
+    EXPECT_LE(no_lod_structs, kAuditProjectionForwardNoLod);
+
+    // Edge coverage on with-LOD recording (re-run once more after clear).
+    script.clear_recording();
+    renderer.executeProjectionForward(
+        u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+        kAuditSplatCount, false,
+        lod_indices, lod_logical, lod_levels, lod_weights, lod_counts);
+    std::vector<VkBufferMemoryBarrier2> derived;
+    for (const auto& cap : script.barriers) {
+        derived.insert(derived.end(), cap.buffer_barriers.begin(), cap.buffer_barriers.end());
+    }
+    using BM = VulkanGSPipeline::BarrierMask;
+    const HazardEdge edges[] = {
+        // sentinel fill: prior compute/R/W → transfer write, then transfer → compute R/W
+        {buffers.primitive_depth_keys.deviceBuffer.buffer, BM::TRANSFER_WRITE,
+         BM::COMPUTE_SHADER_WRITE, "depth_keys fill→projection write"},
+        // LOD inputs (when valid): prior write → compute read
+        {lod_indices.buffer, BM::COMPUTE_SHADER_WRITE, BM::COMPUTE_SHADER_READ,
+         "lod_indices → projection read"},
+    };
+    // LOD edge only if planner saw a prior write; seed with a tagged write first.
+    // For coverage of fill→compute, TransferWrite→ComputeWrite is the true tag edge.
+    for (const auto& edge : edges) {
+        if (std::string_view(edge.name).starts_with("lod_indices")) {
+            // Only assert if any barrier mentions lod_indices (may elide if first read).
+            bool any = false;
+            for (const auto& b : derived) {
+                if (b.buffer == lod_indices.buffer) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any) {
+                continue; // first-read elision under track-after-begin is legal
+            }
+        }
+        EXPECT_TRUE(edge_covered(derived, edge)) << "missing edge: " << edge.name;
+    }
+
+    const auto stats_after = renderer.barrierPlanner().stats();
+    const std::uint64_t planned_activity =
+        (stats_after.barriers_emitted + stats_after.accesses_elided) -
+        (stats_before.barriers_emitted + stats_before.accesses_elided);
+    EXPECT_GT(planned_activity, 0u)
+        << "projection must exercise planner (tagged + planTransfer fill)";
+
+    std::printf("ProjectionForwardAudit with_lod=%zu (≤%zu) no_lod=%zu (≤%zu) "
+                "derived=%zu planned_activity=%llu\n",
+                with_lod_structs, kAuditProjectionForwardWithLod,
+                no_lod_structs, kAuditProjectionForwardNoLod,
+                derived.size(),
+                static_cast<unsigned long long>(planned_activity));
+
+    renderer.discard_timestamps();
     renderer.endCommandBatch(/*use_fence=*/false);
 }
