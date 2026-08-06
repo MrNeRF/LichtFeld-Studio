@@ -846,5 +846,5 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 - **@1080p savings (when mode used):** decoupled/masked-dec ~47.5 MiB;
   masked-fused/pure-SSIM ~35.6 MiB each (half of prior dm_* f32).
 - **Runs:** bonsai `20260806T210217Z_run{1,2,3}`; bicycle `20260806T210253Z_run{1,2,3}`
-- **Commit:** `63cecb84`
+- **Commit:** `d2204088`
 
