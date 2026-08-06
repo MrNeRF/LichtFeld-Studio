@@ -1472,7 +1472,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
                 {unsorted_keys, BufferUse::ComputeWrite},
                 {unsorted_indices, BufferUse::ComputeWrite},
-                {wave_buffer, BufferUse::ComputeReadWrite},
+                {wave_buffer, BufferUse::ComputeRead},
             });
         executeSortIndirectCountImpl(wave_uniforms,
                                      buffers,
@@ -1538,7 +1538,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                     {selection_mask, BufferUse::ComputeRead},
                     {preview_mask, BufferUse::ComputeRead},
                     {selection_colors, BufferUse::ComputeRead},
-                    {overlay_flags, BufferUse::ComputeWrite},
+                    {overlay_flags, BufferUse::ComputeRead},
                     {overlay_params, BufferUse::ComputeRead},
                 });
 
@@ -1556,7 +1556,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                       {{selection_mask, BufferUse::ComputeRead},
                                        {preview_mask, BufferUse::ComputeRead},
                                        {selection_colors, BufferUse::ComputeRead},
-                                       {overlay_flags, BufferUse::ComputeWrite},
+                                       {overlay_flags, BufferUse::ComputeRead},
                                        {overlay_params, BufferUse::ComputeRead}});
             }
             auto& batch_pipeline = overlays_active
@@ -1589,7 +1589,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                         {{selection_mask, BufferUse::ComputeRead},
                                          {preview_mask, BufferUse::ComputeRead},
                                          {selection_colors, BufferUse::ComputeRead},
-                                         {overlay_flags, BufferUse::ComputeWrite},
+                                         {overlay_flags, BufferUse::ComputeRead},
                                          {overlay_params, BufferUse::ComputeRead}});
             }
             executeComputeIndirect(
@@ -1643,7 +1643,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                         {selection_mask, BufferUse::ComputeRead},
                         {preview_mask, BufferUse::ComputeRead},
                         {selection_colors, BufferUse::ComputeRead},
-                        {overlay_flags, BufferUse::ComputeWrite},
+                        {overlay_flags, BufferUse::ComputeRead},
                         {overlay_params, BufferUse::ComputeRead},
                         {transform_indices, BufferUse::ComputeRead},
                         {model_transforms, BufferUse::ComputeRead},
@@ -1672,7 +1672,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                         {selection_mask, BufferUse::ComputeRead},
                         {preview_mask, BufferUse::ComputeRead},
                         {selection_colors, BufferUse::ComputeRead},
-                        {overlay_flags, BufferUse::ComputeWrite},
+                        {overlay_flags, BufferUse::ComputeRead},
                         {overlay_params, BufferUse::ComputeRead},
                     });
             }
@@ -1974,6 +1974,17 @@ void VulkanGSRenderer::executePrepareTileSort(
             LFS_SOURCE_SITE_CURRENT());
     }
     const uint32_t num_splats = uniforms.num_splats;
+    // Shader indexes index_buffer_offset[num_splats-1]; dual-source with cumsum size.
+    if (num_splats > 0 &&
+        buffers.index_buffer_offset.deviceSize() < static_cast<size_t>(num_splats)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "prepare_tile_sort requires index_buffer_offset covering uniforms.num_splats (num_splats={}, device_elements={}, buffer={:#x})",
+                num_splats,
+                buffers.index_buffer_offset.deviceSize(),
+                lfs::rendering::vkHandleValue(buffers.index_buffer_offset.deviceBuffer.buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
 
     // Tags from prepare_tile_sort.slang (non-visible): offset read, count write.
     executeCompute(
@@ -2273,6 +2284,16 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         PerfTimer::Timer<PerfTimer::PrepareVisibleSort> gpu_timer(this);
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.prepare_visible_sort");
+        // Shader indexes visible_prefix[num_splats-1]; dual-source with cumsum size.
+        if (num_splats > 0 && buffers.visible_prefix.deviceSize() < num_splats) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "prepare_visible_sort requires visible_prefix covering uniforms.num_splats (num_splats={}, device_elements={}, buffer={:#x})",
+                    num_splats,
+                    buffers.visible_prefix.deviceSize(),
+                    lfs::rendering::vkHandleValue(buffers.visible_prefix.deviceBuffer.buffer)),
+                LFS_SOURCE_SITE_CURRENT());
+        }
         executeCompute(
             {{1, 1}},
             &prepare_uniforms, sizeof(prepare_uniforms),
@@ -2863,7 +2884,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                 {unsorted_keys, BufferUse::ComputeWrite},
                 {unsorted_indices, BufferUse::ComputeWrite},
                 {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
-                {wave_buffer, BufferUse::ComputeReadWrite},
+                {wave_buffer, BufferUse::ComputeRead},
             });
 
         executeSortIndirectCountImpl(wave_uniforms,
@@ -2918,7 +2939,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                                    {{selection_mask, BufferUse::ComputeRead},
                                     {preview_mask, BufferUse::ComputeRead},
                                     {selection_colors, BufferUse::ComputeRead},
-                                    {buffers.overlay_flags.deviceBuffer, BufferUse::ComputeWrite},
+                                    {buffers.overlay_flags.deviceBuffer, BufferUse::ComputeRead},
                                     {overlay_params, BufferUse::ComputeRead},
                                     {buffers.orig_ids.deviceBuffer, BufferUse::ComputeRead}});
         }
@@ -2941,7 +2962,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                                     {{selection_mask, BufferUse::ComputeRead},
                                      {preview_mask, BufferUse::ComputeRead},
                                      {selection_colors, BufferUse::ComputeRead},
-                                     {buffers.overlay_flags.deviceBuffer, BufferUse::ComputeWrite},
+                                     {buffers.overlay_flags.deviceBuffer, BufferUse::ComputeRead},
                                      {overlay_params, BufferUse::ComputeRead},
                                      {buffers.orig_ids.deviceBuffer, BufferUse::ComputeRead}});
         }
@@ -3003,6 +3024,31 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
     auto& block_sums2 = resizeDeviceBuffer(buffers._cumsum_blockSums2, c2_capacity, true);
     auto& counts = buffers.cumsum_counts.deviceBuffer;
     auto& dispatch = buffers.visible_dispatch.deviceBuffer;
+
+    // Same host contract as classic executeCumsum (sweep_c C2.1): GPU indexes
+    // g_input[gid] for gid < visible-derived element counts without a length API.
+    const auto require_backing = [](const _VulkanBuffer& b, const size_t needed_elements,
+                                    const char* role) {
+        const size_t needed_bytes = needed_elements * sizeof(int32_t);
+        if (b.buffer == VK_NULL_HANDLE || b.allocSize < needed_bytes || b.size < needed_bytes) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "VkSplat visible-chain cumsum {} backing is smaller than the scan (label='{}', buffer={:#x}, alloc_bytes={}, capacity_bytes={}, active_bytes={}, needed_bytes={}, elements={})",
+                    role,
+                    b.label ? b.label : "?",
+                    lfs::rendering::vkHandleValue(b.buffer),
+                    b.allocSize,
+                    b.capacity,
+                    b.size,
+                    needed_bytes,
+                    needed_elements),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    };
+    require_backing(input, visible_capacity, "input");
+    require_backing(output, visible_capacity, "output");
+    require_backing(block_sums, c1_capacity, "block_sums");
+    require_backing(block_sums2, c2_capacity, "block_sums2");
 
     const auto level_uniform = [](uint32_t level) { return level; };
 
@@ -3090,6 +3136,17 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
         const uint32_t visible_limit = static_cast<uint32_t>(
             std::min<size_t>(visible_capacity,
                              static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+        // Visible path indexes index_buffer_offset[tail-1] with tail ≤ visible_limit.
+        if (visible_limit > 0 &&
+            buffers.index_buffer_offset.deviceSize() < static_cast<size_t>(visible_limit)) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "prepare_tile_sort_visible requires index_buffer_offset covering visible_limit (visible_limit={}, device_elements={}, buffer={:#x})",
+                    visible_limit,
+                    buffers.index_buffer_offset.deviceSize(),
+                    lfs::rendering::vkHandleValue(buffers.index_buffer_offset.deviceBuffer.buffer)),
+                LFS_SOURCE_SITE_CURRENT());
+        }
 
         // prepare_tile_sort.slang with visible_count binding.
         executeCompute(

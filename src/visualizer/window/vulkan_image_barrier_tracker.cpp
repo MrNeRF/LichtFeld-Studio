@@ -125,10 +125,6 @@ namespace lfs::vis {
         }
     }
 
-    void VulkanImageBarrierTracker::reset() {
-        images_.clear();
-    }
-
     void VulkanImageBarrierTracker::clearSwapchainOnly() {
         for (auto it = images_.begin(); it != images_.end();) {
             if (it->second.external) {

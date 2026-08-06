@@ -98,6 +98,10 @@ struct _VulkanBuffer {
     }
 };
 
+// Buffer<T> shallow-copies deviceBuffer (shared VkBuffer/VmaAllocation handle).
+// Ownership is external (pipeline destroyBuffer); copies are views, not RAII.
+// Accepted-risk design (epic #1496 sweep_c C1.1); trap mitigated by census,
+// require_backing, and prefer pass-by-reference. See debug/epic1496/sweep_c.md.
 template <typename T>
 class Buffer : public std::vector<T> {
 public:

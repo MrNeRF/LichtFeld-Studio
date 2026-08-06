@@ -6,10 +6,10 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "gpu_object_census.hpp"
 #include "renderer_terminal_state.hpp"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
-#include "gpu_object_census.hpp"
 #include "vulkan_image_barrier_tracker.hpp"
 
 #include <array>
@@ -113,6 +113,8 @@ namespace lfs::vis {
             std::string diagnostic_scope;
             std::string diagnostic_label;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
+            // #1488: true only after census onCreate; fail-path destroy must not onDestroy.
+            bool census_counted = false;
         };
 
         struct ExternalBuffer {
@@ -123,6 +125,7 @@ namespace lfs::vis {
             std::string diagnostic_scope;
             std::string diagnostic_label;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
+            bool census_counted = false;
         };
 
         struct ExternalSemaphore {
@@ -130,6 +133,7 @@ namespace lfs::vis {
             std::uint64_t initial_value = 0;
             std::string diagnostic_scope;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
+            bool census_counted = false;
         };
 
         struct TimelinePoint {

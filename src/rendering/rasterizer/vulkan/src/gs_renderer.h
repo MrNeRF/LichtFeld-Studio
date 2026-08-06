@@ -58,6 +58,7 @@ PACK_STRUCT(struct VulkanGSLodCompactUniforms {
     uint32_t miss_capacity;
     uint32_t pad0;
 });
+static_assert(sizeof(VulkanGSLodCompactUniforms) == 16);
 
 PACK_STRUCT(struct VulkanGSLodSelectUniforms {
     uint32_t node_count;
@@ -131,6 +132,7 @@ PACK_STRUCT(struct VulkanGSSelectionPolygonRasterizeUniforms {
     uint32_t pad1;
     uint32_t pad2;
 });
+static_assert(sizeof(VulkanGSSelectionPolygonRasterizeUniforms) == 32);
 
 inline constexpr uint32_t kLodCompactProtectedCap = 98304;
 inline constexpr uint32_t kLodCompactMissCap = 16384;

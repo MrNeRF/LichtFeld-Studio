@@ -109,22 +109,18 @@ public:
     size_t getCurrentAllocSize() const { return current_vram; }
     size_t getPeakAllocSize() const { return peak_vram; }
 
+    // Live barrier scopes used by tagged plan / BufferUse converters / mixed-mode
+    // tests. TRANSFER_COMPUTE_SHADER_WRITE is the conservative-src golden (tests +
+    // barrier_planner). Dead composites removed in epic #1496 sweep_a F1.
     enum BarrierMask {
         TRANSFER_READ,
         TRANSFER_WRITE,
-        TRANSFER_READ_WRITE,
         COMPUTE_SHADER_READ,
         COMPUTE_SHADER_WRITE,
         COMPUTE_SHADER_READ_WRITE,
-        TRANSFER_COMPUTE_SHADER_READ,
         TRANSFER_COMPUTE_SHADER_WRITE,
-        TRANSFER_COMPUTE_SHADER_READ_WRITE,
         HOST_READ,
-        HOST_WRITE,
-        HOST_READ_WRITE,
         INDIRECT_DISPATCH_READ,
-        COMPUTE_SHADER_INDIRECT_READ,
-        TRANSFER_COMPUTE_SHADER_INDIRECT_READ,
         CONDITIONAL_RENDERING_READ,
     };
 

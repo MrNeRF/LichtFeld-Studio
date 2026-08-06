@@ -1613,38 +1613,21 @@ void VulkanGSPipeline::setCpuTimerCallback(CpuTimerCallback callback) {
 
 VkAccessFlags2 toAccessMask(VulkanGSPipeline::BarrierMask barrierMask) {
     VkAccessFlags2 result = VK_ACCESS_2_NONE;
-    if (barrierMask == VulkanGSPipeline::TRANSFER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+    if (barrierMask == VulkanGSPipeline::TRANSFER_READ)
         result |= VK_ACCESS_2_TRANSFER_READ_BIT;
     if (barrierMask == VulkanGSPipeline::TRANSFER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
     if (barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_INDIRECT_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE)
         result |= VK_ACCESS_2_SHADER_READ_BIT;
     if (barrierMask == VulkanGSPipeline::COMPUTE_SHADER_WRITE ||
         barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_ACCESS_2_SHADER_WRITE_BIT;
-    if (barrierMask == VulkanGSPipeline::HOST_READ ||
-        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
+    if (barrierMask == VulkanGSPipeline::HOST_READ)
         result |= VK_ACCESS_2_HOST_READ_BIT;
-    if (barrierMask == VulkanGSPipeline::HOST_WRITE ||
-        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
-        result |= VK_ACCESS_2_HOST_WRITE_BIT;
-    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_INDIRECT_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ)
         result |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
     if (barrierMask == VulkanGSPipeline::CONDITIONAL_RENDERING_READ)
         result |= VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT;
@@ -1655,28 +1638,16 @@ VkPipelineStageFlags2 toStageMask(VulkanGSPipeline::BarrierMask barrierMask) {
     VkPipelineStageFlags2 result = VK_PIPELINE_STAGE_2_NONE;
     if (barrierMask == VulkanGSPipeline::TRANSFER_READ ||
         barrierMask == VulkanGSPipeline::TRANSFER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
     if (barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ ||
         barrierMask == VulkanGSPipeline::COMPUTE_SHADER_WRITE ||
         barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_INDIRECT_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    if (barrierMask == VulkanGSPipeline::HOST_READ ||
-        barrierMask == VulkanGSPipeline::HOST_WRITE ||
-        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
+    if (barrierMask == VulkanGSPipeline::HOST_READ)
         result |= VK_PIPELINE_STAGE_2_HOST_BIT;
-    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_INDIRECT_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ)
         result |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
     if (barrierMask == VulkanGSPipeline::CONDITIONAL_RENDERING_READ)
         result |= VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;

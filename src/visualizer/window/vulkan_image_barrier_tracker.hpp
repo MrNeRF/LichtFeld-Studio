@@ -38,7 +38,6 @@ namespace lfs::vis {
             bool external = false;
         };
 
-        void reset();
         void clearSwapchainOnly();
         void forgetImage(VkImage image, std::uint64_t generation);
         void registerImage(VkImage image,

@@ -625,6 +625,10 @@ namespace lfs::vis {
                              row.count);
                 }
             }
+            if (gpu_object_census_.underflowFlagged()) {
+                LOG_WARN("GpuObjectCensus: destroy-without-create underflow was observed "
+                         "this session (see debug/epic1496/sweep_b.md F-B12)");
+            }
         }
 
         for (VkFence& fence : in_flight_) {
@@ -3058,12 +3062,14 @@ namespace lfs::vis {
                             extent.width,
                             extent.height);
         gpu_object_census_.onCreate(GpuObjectKind::ExternalImage, out.diagnostic_scope);
+        out.census_counted = true;
         return true;
     }
 
     void VulkanContext::destroyExternalImage(ExternalImage& image) {
         const bool was_live = image.image != VK_NULL_HANDLE || image.memory != VK_NULL_HANDLE ||
                               image.view != VK_NULL_HANDLE;
+        const bool census_counted = image.census_counted;
         const std::string scope = image.diagnostic_scope;
         if (!image.diagnostic_scope.empty() && !image.diagnostic_label.empty()) {
             recordCurrentVulkanBytes(image.diagnostic_scope, image.diagnostic_label, 0);
@@ -3080,7 +3086,8 @@ namespace lfs::vis {
             }
         }
         closeExternalNativeHandle(image.native_handle);
-        if (was_live) {
+        // Fail-path scrubs never reached onCreate — do not under-count census (sweep_b F-B12).
+        if (was_live && census_counted) {
             gpu_object_census_.onDestroy(GpuObjectKind::ExternalImage, scope);
         }
         image = {};
@@ -3227,6 +3234,7 @@ namespace lfs::vis {
             return fail(std::format("Exporting external buffer memory handle failed: {}", vkResultToString(result)));
         }
         gpu_object_census_.onCreate(GpuObjectKind::ExternalBuffer, out.diagnostic_scope);
+        out.census_counted = true;
         return true;
     }
 
@@ -3383,11 +3391,13 @@ namespace lfs::vis {
             compatible_memory_type_bits,
             allocate_info.memoryTypeIndex);
         gpu_object_census_.onCreate(GpuObjectKind::ExternalBuffer, out.diagnostic_scope);
+        out.census_counted = true;
         return true;
     }
 
     void VulkanContext::destroyExternalBuffer(ExternalBuffer& buffer) {
         const bool was_live = buffer.buffer != VK_NULL_HANDLE || buffer.memory != VK_NULL_HANDLE;
+        const bool census_counted = buffer.census_counted;
         const std::string scope = buffer.diagnostic_scope;
         if (!buffer.diagnostic_scope.empty() && !buffer.diagnostic_label.empty()) {
             recordCurrentVulkanBytes(buffer.diagnostic_scope, buffer.diagnostic_label, 0);
@@ -3401,7 +3411,7 @@ namespace lfs::vis {
             }
         }
         closeExternalNativeHandle(buffer.native_handle);
-        if (was_live) {
+        if (was_live && census_counted) {
             gpu_object_census_.onDestroy(GpuObjectKind::ExternalBuffer, scope);
         }
         buffer = {};
@@ -3501,11 +3511,13 @@ namespace lfs::vis {
             return fail(std::format("Exporting external timeline semaphore handle failed: {}", vkResultToString(result)));
         }
         gpu_object_census_.onCreate(GpuObjectKind::ExternalSemaphore, out.diagnostic_scope);
+        out.census_counted = true;
         return true;
     }
 
     void VulkanContext::destroyExternalSemaphore(ExternalSemaphore& semaphore) {
         const bool was_live = semaphore.semaphore != VK_NULL_HANDLE;
+        const bool census_counted = semaphore.census_counted;
         const std::string scope = semaphore.diagnostic_scope;
         if (semaphore.semaphore != VK_NULL_HANDLE) {
             const std::lock_guard lock(timeline_value_tracker_mutex_);
@@ -3517,7 +3529,7 @@ namespace lfs::vis {
             }
         }
         closeExternalNativeHandle(semaphore.native_handle);
-        if (was_live) {
+        if (was_live && census_counted) {
             gpu_object_census_.onDestroy(GpuObjectKind::ExternalSemaphore, scope);
         }
         semaphore = {};

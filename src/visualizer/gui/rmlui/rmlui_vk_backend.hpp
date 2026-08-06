@@ -569,7 +569,7 @@ private:
     void BeginSwapchainRendering(VkAttachmentLoadOp color_load_op, VkAttachmentLoadOp depth_load_op);
     void EndActiveRendering();
     bool CopySwapchainToLayer(Rml::LayerHandle destination);
-    void TransitionImageLayout(VkImage image, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout);
+    void TransitionImageLayout(VkImage image, std::uint64_t generation, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout);
     VkImageAspectFlags DepthStencilAspectMask() const noexcept;
     void ApplyTransformState();
     VkRect2D ContextClipScissor() const noexcept;
@@ -658,8 +658,10 @@ private:
     VkImageView m_external_depth_stencil_image_view = VK_NULL_HANDLE;
     VkImageLayout m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     lfs::vis::VulkanImageBarrierTracker m_image_barriers;
+    // Per-image resource generation (same counter as textures; stored on texture_data_t /
+    // layer color+depth / external swapchain — no parallel handle map).
     std::uint64_t m_image_barrier_generation = 0;
-    std::unordered_map<VkImage, std::uint64_t> m_image_barrier_generations;
+    std::uint64_t m_external_swapchain_barrier_generation = 0;
     active_render_target_t m_active_render_target = active_render_target_t::None;
     Rml::LayerHandle m_active_layer = 0;
     int m_render_layer_stack_size = 0;

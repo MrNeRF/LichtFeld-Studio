@@ -20,3 +20,45 @@ the session scratchpad; verdicts mirrored here):
 - Fix on this branch: scripts/run_vulkan_validation.sh now defaults to core + synchronization
   validation (the epic's gate) with GPU-AV behind an explicit --gpu-av flag documenting the
   false-positive class. Revisit the flag default when the layer pin advances past a #11433 fix.
+
+## Sweep resolution (2026-08-06, tree 24a506368 + fix packet)
+
+Disposition of verified findings from `sweep_a.md`, `sweep_b.md`, `sweep_c.md`.
+
+### Sweep A
+| ID | Verdict | Disposition |
+|----|---------|-------------|
+| F1 | DEAD BarrierMask ×7 | **Fixed** — deleted TRANSFER_READ_WRITE, TRANSFER_COMPUTE_SHADER_READ, TRANSFER_COMPUTE_SHADER_READ_WRITE, HOST_WRITE, HOST_READ_WRITE, COMPUTE_SHADER_INDIRECT_READ, TRANSFER_COMPUTE_SHADER_INDIRECT_READ + converter arms. Kept TRANSFER_COMPUTE_SHADER_WRITE (tests). Enum doc updated. |
+| F2 | STALE bufferMemoryBarrier API | **Resolved: retained by design** — the epic (sub-task 3) requires `bufferMemoryBarrier()` to stay callable; the mixed-mode invalidate tests exercise it. Removal is a post-epic follow-up once nothing needs legacy emission. |
+| F3–F7, F10–F14 | OK | No code change. |
+| F8 | overlay_flags ComputeWrite on raster/compose | **Fixed** — 7 sites retagged to ComputeRead; projection producers remain Write. |
+| F9 | wave_buffer ReadWrite in keygen | **Fixed** — both keygen sites → ComputeRead. |
+| F15 | STALE spec prose | **Fixed** — status banner added to EPIC_1496_BARRIER_SPEC.md marking §0 as the pre-migration record. |
+
+### Sweep B
+| ID | Verdict | Disposition |
+|----|---------|-------------|
+| F-B01 | DEAD reset() | **Fixed** — deleted `VulkanImageBarrierTracker::reset()` decl+def (zero callers). |
+| F-B02–B06, B09–B11, B14, B17 | OK | No change. |
+| F-B07 + F-B08 | STALE dual map + layer gen 0 | **Fixed** — layers mint `m_barrier_generation` from `m_image_barrier_generation` at create (color+depth); removed `m_image_barrier_generations` map; TransitionImageLayout takes generation; external swapchain has `m_external_swapchain_barrier_generation`. |
+| F-B12 | fail-path census underflow | **Fixed** — `census_counted` on ExternalImage/Buffer/Semaphore; set only after onCreate; onDestroy only if counted. Census-level underflow contract already covered by `GpuObjectCensus` unit tests; app ordering is the fix. |
+| F-B13 | underflowFlagged never read | **Fixed** — shutdown census block logs a WARN when the underflow flag is set. |
+| F-B14 | owner-side External* inventory | **Resolved: covered** — the census itself is the runtime inventory; per-owner static tables would duplicate it. |
+| F-B15 | GITHUB_ISSUES.md stale tracker text | **Resolved: local scratch** — untracked working notes, not shipped by this branch; the issues themselves close when the PR lands. |
+| F-B16 | UI/RmlUi re-register-per-transition defeats reader accumulation | **Accepted-risk (documented)** — pre-existing pattern, over-sync only (never under-sync); changing UI transition seeding needs focused visual validation out of scope here. |
+| F-B18 | spec tense on reset()/dual-use | **Fixed** via the F15 status banner. |
+
+### Sweep C
+| ID | Verdict | Disposition |
+|----|---------|-------------|
+| C1.1 | shallow Buffer copy | **Accepted-risk** — doc comment on `Buffer<T>` pointing at sweep_c.md (no refactor). |
+| C1.2 | ScopedStagingBuffer copy | **Fixed** — copy/move deleted. |
+| C1.3 | ManagedBuffer copy | **Fixed** — copy deleted; move nulls source. |
+| C2.1 | visible cumsum require_backing | **Fixed** — host contract on input/output/block_sums/block_sums2 vs visible_capacity-derived sizes. |
+| C2.2 | prepare_visible_sort deviceSize | **Fixed** — throw if `visible_prefix.deviceSize() < num_splats`. |
+| C2.3 | prepare_tile_sort deviceSize | **Fixed** — classic + visible paths throw if indexed buffer too small. |
+| C3 S1 prepare_tile_sort.slang | — | **VERIFIED-GUARDED** — `if (uniforms.num_splats > 0u)` before `[num_splats-1]` (L31–36 classic; L23–29 visible). |
+| C3 S2 prepare_visible_sort.slang | — | **VERIFIED-GUARDED** — `if (uniforms.num_splats > 0u)` before `[num_splats-1]` (L19–20). |
+| C3 S3 compact_visible_primitives.slang | missing capacity clamp | **Fixed** — `if (compact_idx >= uniforms.num_splats) return;` before writes (lod_* style). |
+| C4 | missing sizeof asserts | **Fixed** — `static_assert` for LodCompact (16) and SelectionPolygonRasterize (32). |
+

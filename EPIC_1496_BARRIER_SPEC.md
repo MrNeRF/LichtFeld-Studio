@@ -1,5 +1,10 @@
 # Epic #1496: Computed Vulkan barriers — frozen implementation spec (v2)
 
+> STATUS 2026-08-06: implemented on this branch. §0's "82 hand-written calls" describes the
+> pre-migration state; `gs_renderer.cpp` now has zero — every dispatch declares tagged accesses
+> and the planner computes barriers. Kept as the design record; dispositions of post-migration
+> sweep findings live in `debug/epic1496/findings.md`.
+
 Branch: `epic-1496-computed-barriers`. Scope: `src/rendering/rasterizer/vulkan/src/` (buffer
 barriers), `src/visualizer/window/vulkan_image_barrier_tracker.*` + `vulkan_context.*` (image
 tracker + leak census, issues #1478/#1488, epic sub-task 4).

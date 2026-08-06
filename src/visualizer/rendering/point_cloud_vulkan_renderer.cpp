@@ -101,6 +101,22 @@ namespace lfs::vis {
             VkBufferUsageFlags usage = 0;
             std::string vram_scope;
             std::string vram_label;
+
+            ManagedBuffer() = default;
+            ManagedBuffer(const ManagedBuffer&) = delete;
+            ManagedBuffer& operator=(const ManagedBuffer&) = delete;
+            ManagedBuffer(ManagedBuffer&& other) noexcept { *this = std::move(other); }
+            ManagedBuffer& operator=(ManagedBuffer&& other) noexcept {
+                if (this != &other) {
+                    buffer = std::exchange(other.buffer, VK_NULL_HANDLE);
+                    allocation = std::exchange(other.allocation, VK_NULL_HANDLE);
+                    size = std::exchange(other.size, 0);
+                    usage = std::exchange(other.usage, 0);
+                    vram_scope = std::move(other.vram_scope);
+                    vram_label = std::move(other.vram_label);
+                }
+                return *this;
+            }
         };
 
         void destroyBuffer(VmaAllocator allocator, ManagedBuffer& buf) {
@@ -166,6 +182,12 @@ namespace lfs::vis {
             VmaAllocationInfo allocation_info{};
             std::string vram_scope;
             std::string vram_label;
+
+            ScopedStagingBuffer() = default;
+            ScopedStagingBuffer(const ScopedStagingBuffer&) = delete;
+            ScopedStagingBuffer& operator=(const ScopedStagingBuffer&) = delete;
+            ScopedStagingBuffer(ScopedStagingBuffer&&) = delete;
+            ScopedStagingBuffer& operator=(ScopedStagingBuffer&&) = delete;
 
             ~ScopedStagingBuffer() {
                 if (allocator != VK_NULL_HANDLE && buffer != VK_NULL_HANDLE) {
