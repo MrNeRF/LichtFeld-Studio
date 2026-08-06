@@ -824,4 +824,4 @@ Bicycle densify growth: 54k → 500k (cap) clean; no NaN/floater runaway.
 **Gate status:** G4 ms/iter improved vs Wave 2 on both workloads; quality canary clean;
 alloc residual ~0.07 (refine workspace HWM / rare growth). Tasks 4.3–4.8 **DONE**.
 
-- **Commit:** `9a0606dc`
+- **Commit:** `9bb8f6ee`
