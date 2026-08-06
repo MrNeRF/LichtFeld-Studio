@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/alloc_counter.hpp"
 #include "core/cuda_error.hpp"
 #include "core/export.hpp"
 #include "core/logger.hpp"
@@ -248,6 +249,7 @@ namespace lfs::core {
                                     CudaFailureDisposition::LogOnly);
                 return false;
             }
+            alloc_counter::record();
 
             const size_t num_blocks = slab_size / block_size;
             {

@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
@@ -1047,6 +1048,7 @@ namespace lfs::core {
             while (initial_size >= (64 << 20) && !allocated) {
                 err = cudaMalloc(&arena.fallback_buffer, initial_size);
                 if (err == cudaSuccess) {
+                    alloc_counter::record();
                     LOG_TRACE("Arena cudaMalloc: %zu MB", initial_size >> 20);
                     lfs::diagnostics::VramProfiler::instance().recordAllocation(
                         arena.fallback_buffer, initial_size,
@@ -1191,6 +1193,7 @@ namespace lfs::core {
                                 std::lock_guard<std::mutex> lock(arena.chunks_mutex);
                                 arena.chunks.push_back({chunk_handle, map_offset, chunk_size, true});
                             }
+                            alloc_counter::record();
                             lfs::diagnostics::VramProfiler::instance().recordAllocation(
                                 reinterpret_cast<void*>(arena.d_ptr + map_offset),
                                 chunk_size,
@@ -1252,6 +1255,7 @@ namespace lfs::core {
             std::lock_guard<std::mutex> lock(arena.chunks_mutex);
             arena.chunks.push_back({handle, map_offset, commit_size, true});
         }
+        alloc_counter::record();
         lfs::diagnostics::VramProfiler::instance().recordAllocation(
             reinterpret_cast<void*>(arena.d_ptr + map_offset),
             commit_size,
@@ -1589,6 +1593,7 @@ namespace lfs::core {
                                 CudaFailureDisposition::LogOnly);
             return false;
         }
+        alloc_counter::record();
         lfs::diagnostics::VramProfiler::instance().recordAllocation(
             new_buffer, new_capacity,
             lfs::diagnostics::VramAllocationMethod::Arena,

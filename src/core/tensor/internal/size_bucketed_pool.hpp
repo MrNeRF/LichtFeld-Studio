@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/alloc_counter.hpp"
 #include "core/cuda_error.hpp"
 #include "core/export.hpp"
 #include "core/logger.hpp"
@@ -219,6 +220,7 @@ namespace lfs::core {
                     return nullptr;
                 }
             }
+            alloc_counter::record();
             stats_.alloc_count.fetch_add(1, std::memory_order_relaxed);
             stats_.bytes_wasted.fetch_add(bucket_size - bytes, std::memory_order_relaxed);
             return ptr;

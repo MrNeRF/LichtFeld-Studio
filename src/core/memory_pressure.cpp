@@ -3,6 +3,7 @@
 
 #include "core/memory_pressure.hpp"
 
+#include "core/alloc_counter.hpp"
 #include "core/checked_arithmetic.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
@@ -99,6 +100,7 @@ namespace lfs::core {
             const auto pre_call_state = sample_cuda_pre_call_state();
             const cudaError_t status = cudaMalloc(&ptr, bytes);
             if (status == cudaSuccess) {
+                alloc_counter::record();
                 return ptr;
             }
             if (failure_status) {

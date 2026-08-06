@@ -47,6 +47,7 @@ set(TENSOR_SOURCES
 # Core module sources
 set(CORE_SOURCES
         abi.cpp
+        alloc_counter.cpp
         crash_handler.cpp
         cuda_error.cpp
         cuda_error_typed.cpp
