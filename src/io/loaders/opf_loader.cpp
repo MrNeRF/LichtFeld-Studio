@@ -7,6 +7,7 @@
 #include "io/formats/opf.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 
 namespace lfs::io {
@@ -74,12 +75,23 @@ namespace lfs::io {
                 return item.type == "scene_reference_frame" &&
                        resource.format == "application/opf-scene-reference-frame+json";
             });
-        const auto* sparse_resource = find_resource(
-            *project, [](const auto& item, const auto& resource) {
-                return (item.type == "calibration" || item.type == "point_cloud") &&
-                       resource.format == "model/gltf+json" &&
-                       resource.uri.find("sparse/") != std::string::npos;
-            });
+        // Prefer the canonical sparse reconstruction, then use another OPF
+        // point-cloud product only when sparse is absent. This keeps the
+        // current import semantics deterministic while allowing datasets such
+        // as PIX4Dcatch to expose dense/depth/fused products through the same
+        // validated glTF path.
+        const opf::Resource* point_cloud_resource = nullptr;
+        for (const auto kind : std::array<std::string_view, 4>{"sparse", "dense", "fused", "depth"}) {
+            point_cloud_resource = find_resource(
+                *project, [kind](const auto& item, const auto& resource) {
+                    return (item.type == "calibration" || item.type == "point_cloud") &&
+                           resource.format == "model/gltf+json" &&
+                           (resource.uri.find(std::string(kind) + "/") != std::string::npos ||
+                            resource.uri == std::string(kind) + "/pcl.gltf");
+                });
+            if (point_cloud_resource)
+                break;
+        }
         if (!camera_list_resource || !input_resource || !calibrated_resource)
             return make_error(ErrorCode::MISSING_REQUIRED_FILES,
                               "OPF project requires camera_list, input_cameras, and calibrated cameras resources.",
@@ -111,19 +123,19 @@ namespace lfs::io {
         }
 
         std::shared_ptr<PointCloud> point_cloud;
-        if (sparse_resource) {
-            auto manifest = opf::read_point_cloud_manifest(*sparse_resource, project_path.parent_path());
+        if (point_cloud_resource) {
+            auto manifest = opf::read_point_cloud_manifest(*point_cloud_resource, project_path.parent_path());
             if (!manifest)
                 return std::unexpected(manifest.error());
             // Calibrated cameras and OPF sparse coordinates are already in the
             // canonical dataset frame. The scene reference frame's shift is
             // georeference metadata, not an additional local-scene transform.
-            auto sparse = opf::read_sparse_point_cloud(*manifest, nullptr);
-            if (!sparse)
-                return std::unexpected(sparse.error());
+            auto parsed_point_cloud = opf::read_sparse_point_cloud(*manifest, nullptr);
+            if (!parsed_point_cloud)
+                return std::unexpected(parsed_point_cloud.error());
             for (auto& camera : *imported)
                 opf::apply_gltf_node_transform(camera, manifest->node_matrix);
-            point_cloud = std::make_shared<PointCloud>(std::move(*sparse));
+            point_cloud = std::make_shared<PointCloud>(std::move(*parsed_point_cloud));
         }
         for (auto& camera : *imported)
             opf::apply_lichtfeld_coordinate_convention(camera);
