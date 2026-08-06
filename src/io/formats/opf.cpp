@@ -665,10 +665,11 @@ namespace lfs::io::opf {
                                     sensor.height,
                                     sensor.model,
                                     sensor.principal_point,
-                                    sensor.focal_length,
-                                    sensor.radial_distortion,
-                                    sensor.tangential_distortion,
-                                    to_calibrated_pose(calibrated)};
+                                     sensor.focal_length,
+                                     sensor.radial_distortion,
+                                     sensor.tangential_distortion,
+                                     to_calibrated_pose(calibrated),
+                                     image_it->second->resolved_path};
             result.push_back(std::move(imported));
         }
         return result;
@@ -717,7 +718,8 @@ namespace lfs::io::opf {
         data._center_x = static_cast<float>(camera.principal_point[0]);
         data._center_y = static_cast<float>(camera.principal_point[1]);
         data._image_name = camera.uri;
-        data._image_path = camera.uri;
+        data._image_path = camera.resolved_image_path.empty() ? std::filesystem::path(camera.uri)
+                                                               : camera.resolved_image_path;
         data._camera_model_type = lfs::core::CameraModelType::PINHOLE;
         data._width = static_cast<int>(camera.width);
         data._height = static_cast<int>(camera.height);

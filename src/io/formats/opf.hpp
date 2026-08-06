@@ -105,6 +105,7 @@ namespace lfs::io::opf {
         std::vector<double> radial_distortion;
         std::vector<double> tangential_distortion;
         CalibratedPose pose;
+        std::filesystem::path resolved_image_path;
     };
 
     struct CameraTransform {
