@@ -244,6 +244,37 @@ TEST(TensorDispatch6A, BinaryFastPathInt32) {
     ASSERT_EQ(vals, (std::vector<int>{5, 7, 9}));
 }
 
+TEST(TensorDispatch6A, BinaryFastPathInt64) {
+    Dispatch6AGuard guard;
+    internal::lazy_ir_set_active_for_testing(false);
+
+    // from_vector has no int64 overload; promote from int32.
+    auto a = Tensor::from_vector(std::vector<int>{10, 20, 30}, {3}, Device::CPU)
+                 .to(DataType::Int64);
+    auto b = Tensor::from_vector(std::vector<int>{1, 2, 3}, {3}, Device::CPU)
+                 .to(DataType::Int64);
+    auto sum = a.add(b);
+    EXPECT_EQ(sum.dtype(), DataType::Int64);
+    auto vals = sum.to_vector_int64();
+    ASSERT_EQ(vals, (std::vector<int64_t>{11, 22, 33}));
+}
+
+TEST(TensorDispatch6A, BinaryFastPathFloat32Cuda) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    Dispatch6AGuard guard;
+    internal::lazy_ir_set_active_for_testing(false);
+
+    auto a = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::CUDA);
+    auto b = Tensor::from_vector({10.0f, 20.0f, 30.0f, 40.0f}, {4}, Device::CUDA);
+    auto sum = a.add(b).cpu();
+    auto prod = a.mul(b).cpu();
+    ASSERT_EQ(sum.to_vector(), (std::vector<float>{11.0f, 22.0f, 33.0f, 44.0f}));
+    ASSERT_EQ(prod.to_vector(), (std::vector<float>{10.0f, 40.0f, 90.0f, 160.0f}));
+}
+
 TEST(TensorDispatch6A, BinaryFastPathFloat16Cuda) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required";
@@ -292,4 +323,51 @@ TEST(TensorDispatch6A, BinaryPromotionAndBroadcastStillWork) {
     EXPECT_FLOAT_EQ(bv[3], 12.0f);
     EXPECT_FLOAT_EQ(bv[4], 22.0f);
     EXPECT_FLOAT_EQ(bv[5], 32.0f);
+}
+
+// Microbench: host dispatch cost for contiguous same-shape binary add/mul (6A.3).
+// Prints ns/op; does not assert a ratio (machine-dependent).
+TEST(TensorDispatch6A, MicrobenchBinaryFastPathNsPerOp) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    Dispatch6AGuard guard;
+    internal::lazy_ir_set_active_for_testing(false);
+    constexpr int kIters = 50000;
+
+    auto measure_ns = [&](const TensorShape& shape, bool use_mul) -> double {
+        auto a = Tensor::ones(shape, Device::CUDA, DataType::Float32);
+        auto b = Tensor::ones(shape, Device::CUDA, DataType::Float32);
+        for (int i = 0; i < 200; ++i) {
+            if (use_mul) {
+                (void)a.mul(b);
+            } else {
+                (void)a.add(b);
+            }
+        }
+        cudaDeviceSynchronize();
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int i = 0; i < kIters; ++i) {
+            if (use_mul) {
+                (void)a.mul(b);
+            } else {
+                (void)a.add(b);
+            }
+        }
+        cudaDeviceSynchronize();
+        const auto t1 = std::chrono::steady_clock::now();
+        const double sec = std::chrono::duration<double>(t1 - t0).count();
+        return (sec * 1e9) / static_cast<double>(kIters);
+    };
+
+    for (const auto& shape : {TensorShape({1}), TensorShape({4096})}) {
+        const double add_ns = measure_ns(shape, false);
+        const double mul_ns = measure_ns(shape, true);
+        std::cout << "MICROBENCH 6A.3 shape=" << shape.str()
+                  << " add=" << add_ns << " ns/op"
+                  << " mul=" << mul_ns << " ns/op\n";
+        EXPECT_GT(add_ns, 0.0);
+        EXPECT_GT(mul_ns, 0.0);
+    }
 }
