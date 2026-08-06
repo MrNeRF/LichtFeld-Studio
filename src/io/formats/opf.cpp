@@ -631,6 +631,26 @@ namespace lfs::io::opf {
             camera.pose.position[i] = static_cast<float>(position[i] * frame.scale[i] + frame.shift[i]);
     }
 
+    void apply_gltf_node_transform(ImportedCamera& camera, const std::array<float, 16>& matrix) {
+        const auto position = camera.pose.position;
+        camera.pose.position = {
+            matrix[0] * position[0] + matrix[4] * position[1] + matrix[8] * position[2] + matrix[12],
+            matrix[1] * position[0] + matrix[5] * position[1] + matrix[9] * position[2] + matrix[13],
+            matrix[2] * position[0] + matrix[6] * position[1] + matrix[10] * position[2] + matrix[14]};
+
+        const auto rotation = camera.pose.rotation;
+        std::array<float, 9> transformed{};
+        for (size_t row = 0; row < 3; ++row) {
+            for (size_t column = 0; column < 3; ++column) {
+                transformed[row * 3 + column] =
+                    matrix[row + 0 * 4] * rotation[0 * 3 + column] +
+                    matrix[row + 1 * 4] * rotation[1 * 3 + column] +
+                    matrix[row + 2 * 4] * rotation[2 * 3 + column];
+            }
+        }
+        camera.pose.rotation = transformed;
+    }
+
     Result<std::vector<CalibratedCamera>> read_calibrated_cameras(const Resource& resource) {
         if (resource.format != "application/opf-calibrated-cameras+json")
             return invalid(resource.resolved_path, "OPF calibrated cameras resource has an unexpected format.");

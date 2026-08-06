@@ -354,6 +354,20 @@ TEST_F(OpfFormatTest, AppliesSceneReferenceFrameToCameraCenters) {
     EXPECT_FLOAT_EQ(camera.pose.position[2], 42.0f);
 }
 
+TEST_F(OpfFormatTest, AppliesGltfNodeBasisToCameraPose) {
+    lfs::io::opf::ImportedCamera camera{
+        1, "image.jpg", 10, 10, "perspective", {5, 5}, 8, {0, 0, 0}, {0, 0},
+        {{1, 0, 0, 0, 1, 0, 0, 0, 1}, {1, 2, 3}}};
+    const std::array<float, 16> matrix{
+        1, 0, 0, 0,
+        0, 0, -1, 0,
+        0, 1, 0, 0,
+        0, 0, 0, 1};
+    lfs::io::opf::apply_gltf_node_transform(camera, matrix);
+    EXPECT_EQ(camera.pose.position, (std::array<float, 3>{1, -3, 2}));
+    EXPECT_EQ(camera.pose.rotation, (std::array<float, 9>{1, 0, 0, 0, 0, 1, 0, -1, 0}));
+}
+
 TEST_F(OpfFormatTest, LoadsOpfProjectWhenDatasetFolderIsSelected) {
     write(root / "project.opf", R"({
         "format":"application/opf-project+json", "version":"1.0", "id":"project",

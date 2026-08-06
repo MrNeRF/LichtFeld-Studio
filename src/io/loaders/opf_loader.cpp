@@ -114,6 +114,8 @@ namespace lfs::io {
             auto sparse = opf::read_sparse_point_cloud(*manifest, nullptr);
             if (!sparse)
                 return std::unexpected(sparse.error());
+            for (auto& camera : *imported)
+                opf::apply_gltf_node_transform(camera, manifest->node_matrix);
             point_cloud = std::make_shared<PointCloud>(std::move(*sparse));
         }
 

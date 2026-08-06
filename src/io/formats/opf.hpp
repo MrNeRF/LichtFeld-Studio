@@ -149,5 +149,6 @@ namespace lfs::io::opf {
         const ImportedCamera& camera);
     [[nodiscard]] Result<SceneReferenceFrame> read_scene_reference_frame(const Resource& resource);
     void apply_scene_reference_frame(ImportedCamera& camera, const SceneReferenceFrame& frame);
+    void apply_gltf_node_transform(ImportedCamera& camera, const std::array<float, 16>& matrix);
 
 } // namespace lfs::io::opf
