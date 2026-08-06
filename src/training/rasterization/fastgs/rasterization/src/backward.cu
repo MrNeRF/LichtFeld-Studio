@@ -8,7 +8,65 @@
 #include "kernels_backward.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
+#include <cstdio>
+#include <cstring>
 #include <functional>
+
+void fast_lfs::rasterization::bwd_teff_hist_arm() {
+    using Hist = fast_lfs::rasterization::kernels::backward::BwdTeffHist;
+    Hist zero{};
+    zero.armed = 1;
+    cudaMemcpyToSymbol(fast_lfs::rasterization::kernels::backward::d_bwd_teff_hist,
+                       &zero, sizeof(zero));
+}
+
+void fast_lfs::rasterization::bwd_teff_hist_flush() {
+    using Hist = fast_lfs::rasterization::kernels::backward::BwdTeffHist;
+    Hist h{};
+    cudaMemcpyFromSymbol(&h, fast_lfs::rasterization::kernels::backward::d_bwd_teff_hist,
+                         sizeof(h));
+    // Disarm immediately so later steps are free.
+    Hist off{};
+    cudaMemcpyToSymbol(fast_lfs::rasterization::kernels::backward::d_bwd_teff_hist,
+                       &off, sizeof(off));
+
+    if (h.n_tiles == 0) {
+        std::fprintf(stderr,
+                     "[BWD-A T_eff hist] armed but collected 0 tiles "
+                     "(blend_backward not launched this step?)\n");
+        return;
+    }
+    const double mean_n = static_cast<double>(h.sum_n) / static_cast<double>(h.n_tiles);
+    const double mean_teff = static_cast<double>(h.sum_teff) / static_cast<double>(h.n_tiles);
+    const double mean_waste_frac =
+        (h.sum_n > 0) ? (1.0 - static_cast<double>(h.sum_teff) / static_cast<double>(h.sum_n)) : 0.0;
+    std::fprintf(stderr,
+                 "[BWD-A T_eff hist] tiles=%llu  mean_tile_n=%.1f  mean_T_eff=%.1f  "
+                 "mean_waste_frac=%.3f  (skipped_tail = tile_n - T_eff)\n",
+                 static_cast<unsigned long long>(h.n_tiles),
+                 mean_n,
+                 mean_teff,
+                 mean_waste_frac);
+    static const char* kLogLabels[8] = {
+        "<=16", "<=32", "<=64", "<=128", "<=256", "<=512", "<=1024", ">1024"};
+    std::fprintf(stderr, "[BWD-A T_eff hist] tile_n bins:");
+    for (int i = 0; i < 8; ++i) {
+        std::fprintf(stderr, " %s=%llu", kLogLabels[i],
+                     static_cast<unsigned long long>(h.n_bins[i]));
+    }
+    std::fprintf(stderr, "\n[BWD-A T_eff hist] T_eff  bins:");
+    for (int i = 0; i < 8; ++i) {
+        std::fprintf(stderr, " %s=%llu", kLogLabels[i],
+                     static_cast<unsigned long long>(h.teff_bins[i]));
+    }
+    std::fprintf(stderr, "\n[BWD-A T_eff hist] waste_pct bins (0=0-10%% .. 10=100%%):");
+    for (int i = 0; i <= 10; ++i) {
+        std::fprintf(stderr, " %d=%llu", i * 10,
+                     static_cast<unsigned long long>(h.waste_pct_bins[i]));
+    }
+    std::fprintf(stderr, "\n");
+    std::fflush(stderr);
+}
 
 void fast_lfs::rasterization::backward(
     const float* densification_error_map,

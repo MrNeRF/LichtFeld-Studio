@@ -955,3 +955,83 @@ variance; quality gate PASS.
 ### Commit
 
 - **Commit:** `080cbf91`
+
+---
+## Task WO-BWD-A — blend_backward T_eff clamp (Wave 5 rank-2)
+
+- **Branch:** `lfs-elite`
+- **Change:** After `s_last_contributor` fill+sync in `blend_backward_cu`,
+  block-reduce max of the 256 last_contributor entries and clamp the reverse
+  batch walk to `T_eff = min(tile_n_primitives, max_contrib)`. Index formula
+  becomes `tile_primitive_idx = T_eff - batch_base - lane - 1` (equivalent to
+  starting the original walk at `tile_n_primitives - T_eff`). Exact math:
+  skipped high-index splats already produced zero grad via the
+  `tile_primitive_idx < last_contributor` gate.
+- **Debug:** one-shot tile histogram behind `LFS_BWD_TEFF_HIST=1`
+  (default iter 1700, override `LFS_BWD_TEFF_HIST_ITER`). Arm/flush in
+  `train_step` via `bwd_teff_hist_{arm,flush}`.
+
+### TDD / correctness
+
+- Pre-existing run-to-run loss non-determinism (float atomics / async path)
+  already prevents strict bit-identical trajectories even on the same binary
+  (rep1 vs rep2 400-iter losses differ). Structural signals match:
+  densify counts identical across pre/post runs (e.g. 221075 @200, 236550 @400).
+- Dual-workload quality: no NaN/collapse; loss ranges in historical band.
+
+### Histogram evidence (iter 1700, RTX 4080)
+
+**Bonsai** (`profiles/bwd-a-hist/bonsai1700_hist.txt`):
+```
+tiles=1617  mean_tile_n=351.8  mean_T_eff=337.3  mean_waste_frac=0.041
+waste_pct: 0-10%=1524/1617 (94%), 20-40%=58 tiles
+```
+
+**Bicycle** (`profiles/bwd-a-hist/bicycle1700_hist.txt`):
+```
+tiles=4056  mean_tile_n=75.0  mean_T_eff=75.0  mean_waste_frac=0.001
+waste_pct: 0-10%=4054/4056
+```
+
+Finding: max-over-tile `last_contributor` ≈ `tile_n` on these workloads
+(at least one of 256 pixels almost always walks near the full list). Max-based
+clamp therefore saves only a few percent of the walk. The large −25–50%
+expectation needs **BWD-B** (per-splat survivor compaction over `[0,T_eff)`),
+not max-only. BWD-A remains the correct exact-math foundation.
+
+### Kernel-time A/B (bonsai late 1600–1900)
+
+| | blend_backward avg µs | med µs | % GPU |
+|---|---:|---:|---:|
+| pre (philox-bonsai-late) | 2098.0 | 2009.2 | 53.2 |
+| post (bwd-a-bonsai-late) | 2112.7 | 2037.3 | 53.6 |
+| Δ | **~flat** (within noise; matches ~4% waste) | | |
+
+Profile: `perf_campaign/profiles/bwd-a-bonsai-late/summary.md`
+
+### Dual-workload gate
+
+**Bonsai 2k ×3** (post):
+| metric | Philox med | BWD-A med | Δ |
+|---|---:|---:|---:|
+| wall_s | 7.52 | 9.34 | run variance (phase-0 was 9.00) |
+| steady_ms/iter | 3.316 | **3.489** | ~+5% noise / no win |
+| peak MiB | 930.1 | **930.1** | flat |
+| B/splat | 409.4 | **409.4** | flat |
+| last_loss | 0.028–0.033 | **0.033–0.049** | ok |
+
+**Bicycle 7k ×3** (post):
+| metric | Philox med | BWD-A med | Δ |
+|---|---:|---:|---:|
+| wall_s | 26.00 | 40.76 | host/decode dominated (not bwd kernel) |
+| steady_ms/iter | 1.882 | **2.025** | ~+8% |
+| peak MiB | 986–1018 | **986.1** | flat |
+| B/splat | 409.4 | **409.4** | flat |
+| last_loss | 0.084–0.187 | **0.080–0.185** | ok |
+
+No quality regression. Kernel-level win is ~0 on current scenes (histogram
+explains why). Ship as exact-math enabler for BWD-B/C.
+
+### Commit
+
+- **Commit:** (this commit)

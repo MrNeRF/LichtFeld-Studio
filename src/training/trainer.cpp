@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "trainer.hpp"
+#include "backward.h" // BWD-A T_eff hist arm/flush
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
@@ -3784,10 +3785,14 @@ namespace lfs::training {
         //   LFS_PROFILE_STOP_ITER=M    -> cudaProfilerStop() at iteration M
         // Together with `nsys profile --capture-range=cudaProfilerApi` this captures
         // exactly the steady-state slice [N, M) with no warmup pollution.
+        //
+        // BWD-A debug (LFS_BWD_TEFF_HIST=1): one-shot tile_n vs T_eff histogram
+        // at LFS_BWD_TEFF_HIST_ITER (default 1700).
         struct StepProfilingHooks {
             bool nvtx = false;
             int start_iter = -1;
             int stop_iter = -1;
+            int bwd_teff_hist_iter = -1;
             static const StepProfilingHooks& get() {
                 static const StepProfilingHooks hooks = [] {
                     StepProfilingHooks h;
@@ -3797,6 +3802,13 @@ namespace lfs::training {
                         h.start_iter = std::atoi(e);
                     if (const char* e = std::getenv("LFS_PROFILE_STOP_ITER"))
                         h.stop_iter = std::atoi(e);
+                    if (const char* e = std::getenv("LFS_BWD_TEFF_HIST")) {
+                        if (e[0] == '1' || e[0] == 'y' || e[0] == 'Y') {
+                            h.bwd_teff_hist_iter = 1700;
+                            if (const char* it = std::getenv("LFS_BWD_TEFF_HIST_ITER"))
+                                h.bwd_teff_hist_iter = std::atoi(it);
+                        }
+                    }
                     return h;
                 }();
                 return hooks;
@@ -3807,6 +3819,13 @@ namespace lfs::training {
             ~NvtxIterationGuard() {
                 if (active)
                     nvtxRangePop();
+            }
+        };
+        struct BwdTeffHistGuard {
+            bool active = false;
+            ~BwdTeffHistGuard() {
+                if (active)
+                    fast_lfs::rasterization::bwd_teff_hist_flush();
             }
         };
     } // namespace
@@ -3830,6 +3849,11 @@ namespace lfs::training {
             std::snprintf(range_name, sizeof(range_name), "train_step:%d", iter);
             nvtxRangePushA(range_name);
             nvtx_iter_guard.active = true;
+        }
+        BwdTeffHistGuard bwd_teff_hist_guard;
+        if (iter == prof_hooks.bwd_teff_hist_iter) {
+            fast_lfs::rasterization::bwd_teff_hist_arm();
+            bwd_teff_hist_guard.active = true;
         }
         auto result = [&]() -> lfs::Result<StepDisposition> {
             try {
