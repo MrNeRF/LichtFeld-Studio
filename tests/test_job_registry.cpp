@@ -32,7 +32,6 @@ namespace {
         });
         worker.join();
 
-        ASSERT_TRUE(registry.hasCompletionPending());
         auto snapshot = registry.update(*first);
         ASSERT_TRUE(snapshot);
         EXPECT_EQ(

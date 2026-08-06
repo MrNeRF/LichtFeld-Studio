@@ -111,7 +111,6 @@ namespace lfs::app {
                     "training.resumed",
                     "training.completed",
                     "training.stopped",
-                    "checkpoint.saved",
                     "disk_space.save_failed",
                 });
             }
@@ -421,6 +420,7 @@ namespace lfs::app {
             const bool active = tasks.isExporting();
             const std::string error = tasks.getExportError();
             const std::string stage = tasks.getExportStage();
+            const std::string outcome = tasks.getExportOutcome();
             std::string path = core::path_to_utf8(tasks.getExportPath());
             json payload{
                 {"id", "export.scene"},
@@ -428,12 +428,13 @@ namespace lfs::app {
                 {"kind", "export"},
                 {"active", active},
                 {"status",
-                 active                                ? "running"
-                 : stage == "Cancelled"                ? "cancelled"
-                 : !error.empty() || stage == "Failed" ? "failed"
-                 : stage == "Complete"                 ? "finished"
-                                                       : "idle"},
+                 active                                  ? "running"
+                 : outcome == "cancelled"                ? "cancelled"
+                 : !error.empty() || outcome == "failed" ? "failed"
+                 : outcome == "completed"                ? "finished"
+                                                         : "idle"},
                 {"stage", stage},
+                {"outcome", outcome},
                 {"progress", tasks.getExportProgress()},
                 {"cancel_supported", active},
                 {"dismiss_supported", false},
@@ -466,14 +467,15 @@ namespace lfs::app {
             const bool show_completion = tasks.isImportCompletionShowing();
             const std::string error = tasks.getImportError();
             const std::string stage = tasks.getImportStage();
+            const std::string outcome = tasks.getImportOutcome();
             const bool success = tasks.getImportSuccess();
 
             std::string status = "idle";
             if (active) {
                 status = "running";
-            } else if (!error.empty() || stage == "Failed") {
+            } else if (!error.empty() || outcome == "failed") {
                 status = "failed";
-            } else if (stage == "Complete") {
+            } else if (outcome == "completed") {
                 status = "finished";
             }
 
@@ -484,6 +486,7 @@ namespace lfs::app {
                 {"active", active},
                 {"status", status},
                 {"stage", stage},
+                {"outcome", outcome},
                 {"progress", tasks.getImportProgress()},
                 {"cancel_supported", false},
                 {"dismiss_supported", show_completion},
@@ -520,6 +523,7 @@ namespace lfs::app {
             const bool active = tasks.isExportingVideo();
             const std::string error = tasks.getVideoExportError();
             const std::string stage = tasks.getVideoExportStage();
+            const std::string outcome = tasks.getVideoExportOutcome();
 
             json payload{
                 {"id", "export.video"},
@@ -527,11 +531,13 @@ namespace lfs::app {
                 {"kind", "video_export"},
                 {"active", active},
                 {"status",
-                 active                                ? "running"
-                 : !error.empty() || stage == "Failed" ? "failed"
-                 : stage == "Complete"                 ? "finished"
-                                                       : "idle"},
+                 active                                  ? "running"
+                 : outcome == "cancelled"                ? "cancelled"
+                 : !error.empty() || outcome == "failed" ? "failed"
+                 : outcome == "completed"                ? "finished"
+                                                         : "idle"},
                 {"stage", stage},
+                {"outcome", outcome},
                 {"progress", tasks.getVideoExportProgress()},
                 {"cancel_supported", active},
                 {"dismiss_supported", false},
@@ -564,6 +570,7 @@ namespace lfs::app {
             const bool active = tasks.isMesh2SplatActive();
             const std::string error = tasks.getMesh2SplatError();
             const std::string stage = tasks.getMesh2SplatStage();
+            const std::string outcome = tasks.getMesh2SplatOutcome();
 
             json payload{
                 {"id", "mesh2splat"},
@@ -571,11 +578,12 @@ namespace lfs::app {
                 {"kind", "conversion"},
                 {"active", active},
                 {"status",
-                 active                                ? "running"
-                 : !error.empty() || stage == "Failed" ? "failed"
-                 : stage == "Complete"                 ? "finished"
-                                                       : "idle"},
+                 active                                  ? "running"
+                 : !error.empty() || outcome == "failed" ? "failed"
+                 : outcome == "completed"                ? "finished"
+                                                         : "idle"},
                 {"stage", stage},
+                {"outcome", outcome},
                 {"progress", tasks.getMesh2SplatProgress()},
                 {"cancel_supported", false},
                 {"dismiss_supported", false},

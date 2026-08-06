@@ -14,16 +14,22 @@ python3 tools/licht_inspect/licht_inspect.py inspect FILE.licht --json
 python3 tools/licht_inspect/licht_inspect.py verify FILE.licht
 python3 tools/licht_inspect/licht_inspect.py extract FILE.licht \
   --fourcc PROJ --uuid UUID -o project.json
+python3 tools/licht_inspect/licht_inspect.py extract FILE.licht \
+  --fourcc PROJ --uuid UUID -o project.stored --stored
+python3 tools/licht_inspect/licht_inspect.py decode FILE.licht \
+  --fourcc PCLD --uuid UUID
 python3 tools/licht_inspect/licht_inspect.py preview FILE.licht -o preview.png
 python3 tools/licht_inspect/licht_inspect.py recovery MASTER.licht \
   MASTER.licht.autosave MASTER.licht.autosave.tmp
 ```
 
-The container is always opened read-only. `extract` and `preview` write only
-their explicitly named output and refuse to replace an existing file unless
-`--force` is used. `preview` deliberately uses the dependency-free
-`foreign_preview.py` path: it reads the superblock, fixed head slots, and
-selected locator without parsing a commit or index.
+The six subcommands are `inspect`, `verify`, `extract`, `decode`, `preview`,
+and `recovery`. The container is always opened read-only. `extract` and
+`preview` write only their explicitly named output and refuse to replace an
+existing file unless `--force` is used. `extract --stored` writes the
+on-disk payload bytes instead of the decoded payload. `preview` deliberately
+uses the dependency-free `foreign_preview.py` path: it reads the superblock,
+fixed head slots, and selected locator without parsing a commit or index.
 When the selected authority requires a newer reader version or an unknown
 required-reader capability, `inspect` still dumps its structurally validated
 headers/commit/index and exits 4 with `unsupported_newer`; `extract` and
@@ -62,16 +68,17 @@ python3 tools/licht_inspect/run_selftest.py
 ```
 
 The test covers every golden fixture class, full CRC verification, sidecar
-offer/stale-base behavior, all three CLI surfaces, the reader/writer
-compatibility matrix, and every randomized mutation family with fixed seeds.
+offer/stale-base behavior, the CLI surfaces (inspect/verify/extract including
+`--stored`/decode/preview/recovery), the reader/writer compatibility matrix,
+and every randomized mutation family with fixed seeds.
 
 ## Conformance battery
 
 `run_conformance.py` is the heavy robustness battery on top of the selftest:
 
 ```sh
-python3 tools/licht_inspect/run_conformance.py --quick        # CI, <60 s
-python3 tools/licht_inspect/run_conformance.py --full         # exhaustive, minutes
+python3 tools/licht_inspect/run_conformance.py --full         # CI, exhaustive, minutes
+python3 tools/licht_inspect/run_conformance.py --quick        # local smoke, <60 s
 python3 tools/licht_inspect/run_conformance.py --fuzz-minutes 10
 ```
 

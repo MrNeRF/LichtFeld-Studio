@@ -18,6 +18,7 @@ from .marketplace import (
     MarketplacePluginEntry,
     PluginMarketplaceCatalog,
 )
+from .localization import localized_count
 from .plugin import PluginInfo, PluginState
 from .types import Panel
 from .ui import RuntimeState
@@ -438,7 +439,15 @@ class PluginMarketplacePanel(Panel):
         status_text = ""
         status_class = "status-muted"
         if is_installed:
-            state_str = plugin_state.value if plugin_state else tr("plugin_manager.status_not_loaded")
+            state_keys = {
+                PluginState.UNLOADED: "plugin_manager.status_not_loaded",
+                PluginState.INSTALLING: "plugin_manager.status_installing",
+                PluginState.LOADING: "plugin_manager.status_loading",
+                PluginState.ACTIVE: "plugin_manager.status_active",
+                PluginState.ERROR: "plugin_manager.status_error",
+                PluginState.DISABLED: "plugin_manager.status_disabled",
+            }
+            state_str = tr(state_keys.get(plugin_state, "plugin_manager.status_not_loaded"))
             status_text = f"{tr('plugin_manager.status')}: {state_str}"
             if plugin_state == PluginState.ACTIVE:
                 status_class = "status-success"
@@ -937,15 +946,13 @@ class PluginMarketplacePanel(Panel):
             return
 
         if is_loading and entry_count == 0:
-            text = "Fetching plugin registry..."
+            text = lf.ui.tr("plugin_marketplace.loading")
             tone = "status-info"
         elif registry_loaded:
-            noun = "plugin" if entry_count == 1 else "plugins"
-            text = f"Registry loaded: {entry_count} {noun} in the marketplace catalog."
+            text = localized_count("plugin_marketplace.registry_loaded", entry_count)
             tone = "status-success" if entry_count > 0 else "status-info"
         else:
-            noun = "plugin" if entry_count == 1 else "plugins"
-            text = f"Registry unavailable: showing {entry_count} fallback {noun}."
+            text = localized_count("plugin_marketplace.registry_unavailable", entry_count)
             tone = "status-warning"
 
         status_el.set_text(text)

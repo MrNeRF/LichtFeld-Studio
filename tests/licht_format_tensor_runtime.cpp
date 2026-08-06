@@ -2,12 +2,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
+#include "core/mesh_data.hpp"
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
 #include "licht_test_support.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <format>
 #include <memory>
@@ -21,6 +24,11 @@
 namespace lfs::core {
 
     std::atomic<std::size_t> Tensor::next_id_{1};
+
+    uint64_t MeshData::next_id() {
+        static std::atomic<uint64_t> counter{0};
+        return counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
 
     namespace {
 

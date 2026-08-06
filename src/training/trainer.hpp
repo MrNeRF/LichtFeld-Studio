@@ -27,7 +27,6 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
-#include <deque>
 #include <expected>
 #include <filesystem>
 #include <functional>
@@ -490,7 +489,7 @@ namespace lfs::training {
                    !params.optimization.ppisp_sidecar_path.empty();
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
-        [[nodiscard]] lfs::core::param::TrainingParameters params_for_checkpoint_save() const;
+        [[nodiscard]] lfs::core::param::TrainingParameters params_for_project_snapshot() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
             int iter,
             bool in_controller_phase = false) const;

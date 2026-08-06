@@ -14,7 +14,6 @@
 #include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
 #include "internal/viewport.hpp"
-#include "ipc/view_context.hpp"
 #include "project/project_lifecycle.hpp"
 #include "project/session_state.hpp"
 #include "rendering/rendering.hpp"
@@ -129,7 +128,11 @@ namespace lfs::vis {
         Viewport& getViewport() { return viewport_; }
         [[nodiscard]] lfs::Result<
             lfs::io::project::ProjectSessionChapters>
-        captureProjectSession() const;
+        captureProjectSession(
+            lfs::io::project::ReferencesChapter*
+                references = nullptr,
+            const std::filesystem::path& project_root =
+                {}) const;
         void stagePreparedProjectSessionRestore(
             project::PreparedGuiSessionRestore prepared);
         [[nodiscard]] bool
@@ -398,6 +401,7 @@ namespace lfs::vis {
         std::chrono::nanoseconds plugin_preload_max_update_stall_{};
         bool update_work_processed_ = false;
         std::chrono::high_resolution_clock::time_point last_frame_time_ = std::chrono::high_resolution_clock::now();
+        float live_scene_clip_time_ = 0.0f;
         bool sequencer_ui_initialized_ = false;
         std::unique_ptr<python::SequencerUIStateData> sequencer_ui_state_;
         std::vector<std::filesystem::path> pending_view_paths_;

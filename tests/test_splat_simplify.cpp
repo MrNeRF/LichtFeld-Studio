@@ -5,12 +5,14 @@
 #include "core/splat_simplify.hpp"
 #include "core/splat_simplify_history.hpp"
 #include "core/tensor.hpp"
+#include "io/formats/ply.hpp"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #include <random>
 #include <vector>
@@ -1093,4 +1095,32 @@ TEST(SplatSimplify, VolumeBasedWeightsProduceDifferentResultThanAreaBased) {
 
     // Also verify it is very close to the large splat (within ~0.02)
     EXPECT_LT(actual_mean[0], 0.02);
+}
+
+TEST(SplatSimplify, RealPlySimplifyDoesNotUndershootRequestedTarget) {
+    const std::filesystem::path input_path =
+        std::filesystem::path(PROJECT_ROOT_PATH) / "data" / "kerstbol-isolated-rotated_137502.ply";
+    if (!std::filesystem::exists(input_path)) {
+        GTEST_SKIP() << "Missing simplify regression asset: " << input_path;
+    }
+
+    auto loaded = lfs::io::load_ply(input_path);
+    ASSERT_TRUE(loaded.has_value())
+        << "Failed to load simplify regression asset: " << loaded.error().user_message()
+        << " detail: " << loaded.error().detail();
+    lfs::core::SplatData source = std::move(loaded->value);
+    ASSERT_EQ(source.size(), 137502u);
+
+    SplatSimplifyOptions options;
+    options.ratio = 0.5;
+    options.opacity_prune_threshold = 0.0f;
+    const size_t target_count = static_cast<size_t>(std::ceil(static_cast<double>(source.size()) * options.ratio));
+
+    const auto source_size_before = source.size();
+    auto result = lfs::core::simplify_splats(source, options, {});
+
+    ASSERT_TRUE(result) << result.error();
+    ASSERT_NE(*result, nullptr);
+    EXPECT_EQ(source.size(), source_size_before);
+    EXPECT_EQ((*result)->size(), target_count);
 }

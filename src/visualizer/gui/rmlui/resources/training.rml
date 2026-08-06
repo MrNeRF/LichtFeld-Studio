@@ -52,15 +52,21 @@
   </div>
 
   <!-- ── Training Parameters ── -->
-  <div class="training-panel-title">
-    <img class="training-panel-title-icon" src="../icon/settings.png" />
-    <span>{{label_hdr_basic_params}}</span>
+  <div class="training-search-row">
+    <input type="text" class="number-input training-search-input"
+           placeholder="{{pv_search_placeholder}}" data-value="pv_search_query" />
+    <button type="button" class="btn btn--secondary training-search-clear"
+            data-if="pv_search_active" data-event-click="pv_search_clear">{{label_clear}}</button>
   </div>
-  <div class="training-panel-block">
+  <div class="training-panel-title" data-if="pv_section_basic_params_visible">
+    <img class="training-panel-title-icon" src="../icon/settings.png" />
+    <span>{{pv_header_basic_params}}</span>
+  </div>
+  <div class="training-panel-block" data-if="pv_section_basic_params_visible">
 
     <!-- Structural params (disabled when training started) -->
     <div data-class-disabled-overlay="struct_disabled">
-      <div class="setting-row" data-tooltip="training.tooltip.strategy">
+      <div class="setting-row" data-tooltip="training.tooltip.strategy" data-if="!pv_search_active">
         <span class="prop-label">{{label_strategy}}</span>
         <select data-value="strategy">
           <option value="mrnf" data-tooltip="training.tooltip.opt.strategy.mrnf">{{label_strategy_mrnf}}</option>
@@ -68,26 +74,36 @@
           <option value="mcmc" data-tooltip="training.tooltip.opt.strategy.mcmc">{{label_strategy_mcmc}}</option>
         </select>
       </div>
-      <div class="setting-row steps-scale-lock-row" data-tooltip="training.tooltip.iterations">
-        <span class="prop-label">{{label_iterations}}</span>
-        <input type="text" class="number-input" data-value="iterations_str" />
-        <button class="num-step-btn" data-event-mousedown="num_step('iterations', -1)">-</button>
-        <button class="num-step-btn" data-event-mousedown="num_step('iterations', 1)">+</button>
+      <div class="setting-row"
+           data-for="row : pv_basic_struct_rows"
+           data-attr-data-tooltip="row.tooltip_key"
+           data-class-steps-scale-lock-row="row.id == 'iterations'">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="text" class="number-input" data-if="row.kind == 'number'"
+               data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
+               data-event-focus="pv_focus(row.id)"
+               data-event-change="pv_change(row.id, ev.value)"
+               data-event-blur="pv_blur(row.id, row.text)"
+               data-event-escapecancel="pv_escape(row.id)" />
+        <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+               data-event-change="pv_value_change(row.id, row.checked)" />
+        <select data-if="row.kind == 'select'" data-value="row.value"
+                data-event-change="pv_value_change(row.id, ev.value)">
+          <option data-for="item : pv_basic_struct_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
+                  data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
+        </select>
+        <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
+        <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
         <button type="button"
                 class="icon-btn steps-scale-lock-btn"
+                data-if="row.id == 'iterations'"
                 data-class-selected="steps_scaling_lock_selected"
                 data-attr-title="steps_scaling_lock_tooltip"
                 data-event-click="toggle_step_scaling_lock">
           <img data-attr-src="steps_scaling_lock_icon" />
         </button>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.max_gaussians">
-        <span class="prop-label">{{label_max_cap}}</span>
-        <input type="text" class="number-input" data-value="max_cap_str" />
-        <button class="num-step-btn" data-event-mousedown="num_step('max_cap', -1)">-</button>
-        <button class="num-step-btn" data-event-mousedown="num_step('max_cap', 1)">+</button>
-      </div>
-      <div class="setting-row" data-tooltip="training.tooltip.sh_degree">
+      <div class="setting-row" data-tooltip="training.tooltip.sh_degree" data-if="!pv_search_active">
         <span class="prop-label">{{label_sh_degree}}</span>
         <select data-value="sh_degree_str">
           <option value="0" data-tooltip="training.tooltip.opt.sh_degree.0">0</option>
@@ -100,25 +116,18 @@
 
     <!-- Params that follow the main training edit lock -->
     <div data-class-disabled-overlay="live_disabled">
-      <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid">
-        <span class="prop-label">{{label_bilateral_grid}}</span>
-        <input type="checkbox" data-checked="use_bilateral_grid" />
-      </div>
-      <div class="setting-row" data-tooltip="training.tooltip.mask_mode">
-        <span class="prop-label">{{label_mask_mode}}</span>
-        <select data-value="mask_mode_str">
-          <option value="0" data-tooltip="training.tooltip.opt.mask_mode.none">{{label_mask_none}}</option>
-          <option value="1" data-tooltip="training.tooltip.opt.mask_mode.segment">{{label_mask_segment}}</option>
-          <option value="2" data-tooltip="training.tooltip.opt.mask_mode.ignore">{{label_mask_ignore}}</option>
-          <option value="3" data-tooltip="training.tooltip.opt.mask_mode.segment_and_ignore">{{label_mask_segment_and_ignore}}</option>
-          <option value="4" data-tooltip="training.tooltip.opt.mask_mode.alpha_consistent">{{label_mask_alpha_consistent}}</option>
+      <div class="setting-row" data-for="row : pv_basic_live_start_rows"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+               data-event-change="pv_value_change(row.id, row.checked)" />
+        <select data-if="row.kind == 'select'" data-value="row.value"
+                data-event-change="pv_value_change(row.id, ev.value)">
+          <option data-for="item : pv_basic_live_start_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
+                  data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
         </select>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.use_depth_loss">
-        <span class="prop-label">{{label_use_depth_loss}}</span>
-        <input type="checkbox" data-checked="use_depth_loss" />
-      </div>
-      <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss">
+      <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss &amp;&amp; !pv_search_active">
         <span class="prop-label">{{label_depth_loss_mode}}</span>
         <select data-value="depth_loss_mode_str">
           <option value="ssi" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi">{{label_depth_loss_ssi}}</option>
@@ -126,91 +135,107 @@
           <option value="ssi-depth" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi_depth">{{label_depth_loss_ssi_depth}}</option>
         </select>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.depth_loss_weight" data-if="dep_depth_loss">
-        <span class="prop-label">{{label_depth_loss_weight}}</span>
-        <input type="text" class="number-input" data-value="depth_loss_weight_str" />
-        <button class="num-step-btn" data-event-mousedown="num_step('depth_loss_weight', -1)">-</button>
-        <button class="num-step-btn" data-event-mousedown="num_step('depth_loss_weight', 1)">+</button>
+      <div class="setting-row" data-for="row : pv_basic_depth_weight_rows" data-if="dep_depth_loss"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+               data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+               data-event-change="pv_change(row.id, ev.value)"
+               data-event-blur="pv_blur(row.id, row.text)"
+               data-event-escapecancel="pv_escape(row.id)" />
+        <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.use_normal_loss">
-        <span class="prop-label">{{label_use_normal_loss}}</span>
-        <input type="checkbox" data-checked="use_normal_loss" />
+      <div class="setting-row" data-for="row : pv_basic_normal_toggle_rows"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-change="pv_value_change(row.id, row.checked)" />
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.normal_loss_weight" data-if="dep_normal_loss">
-        <span class="prop-label">{{label_normal_loss_weight}}</span>
-        <input type="text" class="number-input" data-value="normal_loss_weight_str" />
-        <button class="num-step-btn" data-event-mousedown="num_step('normal_loss_weight', -1)">-</button>
-        <button class="num-step-btn" data-event-mousedown="num_step('normal_loss_weight', 1)">+</button>
+      <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'number'"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+               data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+               data-event-change="pv_change(row.id, ev.value)"
+               data-event-blur="pv_blur(row.id, row.text)"
+               data-event-escapecancel="pv_escape(row.id)" />
+        <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.normal_consistency_weight" data-if="dep_normal_loss">
-        <span class="prop-label">{{label_normal_consistency_weight}}</span>
-        <input type="text" class="number-input" data-value="normal_consistency_weight_str" />
-        <button class="num-step-btn" data-event-mousedown="num_step('normal_consistency_weight', -1)">-</button>
-        <button class="num-step-btn" data-event-mousedown="num_step('normal_consistency_weight', 1)">+</button>
-      </div>
-      <div class="setting-row" data-tooltip="training.tooltip.normal_flatten_weight" data-if="dep_normal_loss">
-        <span class="prop-label">{{label_normal_flatten_weight}}</span>
-        <input type="text" class="number-input" data-value="normal_flatten_weight_str" />
-        <button class="num-step-btn" data-event-mousedown="num_step('normal_flatten_weight', -1)">-</button>
-        <button class="num-step-btn" data-event-mousedown="num_step('normal_flatten_weight', 1)">+</button>
+      <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'select'"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
+          <option data-for="item : pv_basic_normal_weights_options" data-if="item.prop_id == row.id"
+                  data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
+        </select>
       </div>
       <div class="mask-settings-group" data-if="dep_mask_mode">
-        <div class="setting-row" data-tooltip="training.tooltip.invert_masks">
-          <span class="prop-label">{{label_invert_masks}}</span>
-          <input type="checkbox" data-checked="invert_masks" />
+        <div class="setting-row" data-for="row : pv_mask_invert_rows"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+                 data-event-change="pv_value_change(row.id, row.checked)" />
         </div>
-        <div class="setting-row" data-if="dep_mask_threshold" data-tooltip="training.tooltip.mask_threshold">
-          <span class="prop-label">{{label_mask_threshold}}</span>
-          <input type="text" class="number-input" data-value="mask_threshold_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('mask_threshold', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('mask_threshold', 1)">+</button>
+        <div class="setting-row" data-for="row : pv_mask_threshold_rows" data-if="dep_mask_threshold"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                 data-event-change="pv_change(row.id, ev.value)"
+                 data-event-blur="pv_blur(row.id, row.text)"
+                 data-event-escapecancel="pv_escape(row.id)" />
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
         </div>
-        <div class="setting-row" data-tooltip="training.tooltip.use_alpha_as_mask">
-          <span class="prop-label">{{label_use_alpha_as_mask}}</span>
-          <input type="checkbox" data-checked="use_alpha_as_mask" />
+        <div class="setting-row" data-for="row : pv_mask_alpha_rows"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+                 data-event-change="pv_value_change(row.id, row.checked)" />
         </div>
         <div class="mask-settings-divider" data-if="dep_mask_segment"></div>
         <div data-if="dep_mask_segment">
-          <div class="setting-row" data-tooltip="training.tooltip.penalty_weight">
-            <span class="prop-label">{{label_opacity_penalty_weight}}</span>
-            <input type="text" class="number-input" data-value="mask_opacity_penalty_weight_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_weight', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_weight', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.penalty_power">
-            <span class="prop-label">{{label_opacity_penalty_power}}</span>
-            <input type="text" class="number-input" data-value="mask_opacity_penalty_power_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_power', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_power', 1)">+</button>
+          <div class="setting-row" data-for="row : pv_mask_penalties_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
         </div>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.sparsity">
-        <span class="prop-label">{{label_sparsity}}</span>
-        <input type="checkbox" data-checked="enable_sparsity" />
+      <div class="setting-row" data-for="row : pv_basic_sparsity_toggle_rows"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-change="pv_value_change(row.id, row.checked)" />
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.gut" data-class-disabled-overlay="gut_disabled">
-        <span class="prop-label">{{label_gut}}</span>
-        <input type="checkbox" data-checked="gut" />
+      <div class="setting-row" data-for="row : pv_basic_gut_rows"
+           data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="gut_disabled">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-change="pv_value_change(row.id, row.checked)" />
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.undistort">
-        <span class="prop-label">{{label_undistort}}</span>
-        <input type="checkbox" data-checked="undistort" />
-      </div>
-      <div class="setting-row" data-tooltip="training.tooltip.mip_filter">
-        <span class="prop-label">{{label_mip_filter}}</span>
-        <input type="checkbox" data-checked="mip_filter" />
-      </div>
-      <div class="setting-row" data-tooltip="training.tooltip.ppisp">
-        <span class="prop-label">{{label_ppisp}}</span>
-        <input type="checkbox" data-checked="ppisp" />
+      <div class="setting-row" data-for="row : pv_basic_after_gut_rows"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-change="pv_value_change(row.id, row.checked)" />
       </div>
       <div data-if="dep_ppisp">
-        <div class="setting-row" data-tooltip="training.tooltip.ppisp_freeze_from_sidecar">
-          <span class="prop-label">{{label_ppisp_freeze_from_sidecar}}</span>
-          <input type="checkbox" data-checked="ppisp_freeze_from_sidecar" />
+        <div class="setting-row" data-for="row : pv_ppisp_freeze_rows"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+                 data-event-change="pv_value_change(row.id, row.checked)" />
         </div>
-        <div data-if="dep_ppisp_frozen_sidecar">
+        <div data-if="dep_ppisp_frozen_sidecar &amp;&amp; !pv_search_active">
           <div class="setting-row" data-tooltip="training.tooltip.ppisp_sidecar_path">
             <span class="prop-label">{{label_ppisp_sidecar_path}}</span>
             <input type="text" data-value="ppisp_sidecar_path" />
@@ -221,46 +246,51 @@
             <button class="btn btn--secondary" data-tooltip="training.tooltip.ppisp_sidecar_clear" data-if="has_ppisp_sidecar_clear" data-event-click="action('clear_ppisp_sidecar')">{{label_ppisp_sidecar_clear}}</button>
           </div>
         </div>
-        <div class="setting-row" data-tooltip="training.tooltip.ppisp_controller">
-          <span class="prop-label">{{label_ppisp_controller}}</span>
-          <input type="checkbox" data-checked="ppisp_use_controller" />
+        <div class="setting-row" data-for="row : pv_ppisp_controller_rows"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+                 data-event-change="pv_value_change(row.id, row.checked)" />
         </div>
         <div data-if="dep_ppisp_controller">
-          <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step">
+          <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step" data-if="!pv_search_active">
             <span class="prop-label">{{label_ppisp_activation_step}}</span>
             <input type="text" class="number-input" data-value="ppisp_activation_step_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.ppisp_controller_lr">
-            <span class="prop-label">{{label_ppisp_controller_lr}}</span>
-            <input type="text" class="number-input" data-value="ppisp_controller_lr_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_controller_lr', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_controller_lr', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.ppisp_freeze_gaussians">
-            <span class="prop-label">{{label_ppisp_freeze_gaussians}}</span>
-            <input type="checkbox" data-checked="ppisp_freeze_gaussians" />
+          <div class="setting-row" data-for="row : pv_ppisp_controller_tail_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-if="row.kind == 'number'"
+                   data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
+                   data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+                   data-event-change="pv_value_change(row.id, row.checked)" />
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
         </div>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.bg_modulation">
-        <span class="prop-label">{{label_bg_mode}}</span>
-        <select data-value="bg_mode_str">
-          <option value="0" data-tooltip="training.tooltip.opt.bg_mode.color">{{label_bg_option_color}}</option>
-          <option value="1" data-tooltip="training.tooltip.opt.bg_mode.modulation">{{label_bg_option_modulation}}</option>
-          <option value="2" data-tooltip="training.tooltip.opt.bg_mode.image">{{label_bg_option_image}}</option>
-          <option value="3" data-tooltip="training.tooltip.opt.bg_mode.random">{{label_bg_option_random}}</option>
+      <div class="setting-row" data-for="row : pv_bg_mode_rows"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
+          <option data-for="item : pv_bg_mode_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
+                  data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
         </select>
       </div>
-      <div class="setting-row setting-row--aligned" data-tooltip="training.tooltip.bg_color" data-if="dep_bg_color">
+      <div class="setting-row setting-row--aligned" data-tooltip="training.tooltip.bg_color" data-if="dep_bg_color &amp;&amp; !pv_search_active">
         <span class="setting-row__label-col">{{label_bg_color}}</span>
         <div class="setting-row__control-col setting-row__control-col--color color-compact-control">
           <div class="color-swatch" id="swatch-bg_color" data-event-click="color_click('bg_color')"></div>
           <input type="text" class="color-hex visible" data-value="bg_color_hex" />
         </div>
       </div>
-      <div data-if="dep_bg_image">
+      <div data-if="dep_bg_image &amp;&amp; !pv_search_active">
         <div class="setting-row" data-tooltip="training.tooltip.bg_image_path">
           <span class="prop-label">{{label_bg_image}}</span>
           <span class="text-disabled">{{bg_image_path_display}}</span>
@@ -275,29 +305,29 @@
   </div>
 
   <!-- ── Advanced Parameters ── -->
-  <div class="training-panel-title training-panel-title--secondary">
+  <div class="training-panel-title training-panel-title--secondary" data-if="pv_section_advanced_params_visible">
     <img class="training-panel-title-icon" src="../icon/adjustments.png" />
-    <span>{{label_hdr_advanced_params}}</span>
+    <span>{{pv_header_advanced_params}}</span>
   </div>
-  <div class="training-panel-block">
+  <div class="training-panel-block" data-if="pv_section_advanced_params_visible">
 
     <!-- Dataset subsection -->
-    <div class="training-subsection">
+    <div class="training-subsection" data-if="pv_section_dataset_visible">
       <div class="section-header text-accent" id="hdr-dataset" data-event-click="toggle_section('dataset')">
         <span class="section-arrow text-accent" id="arrow-dataset">&#x25B6;</span>
-        <span class="text-accent">{{label_hdr_dataset}}</span>
+        <span class="text-accent">{{pv_header_dataset}}</span>
       </div>
       <div class="section-content collapsed" id="sec-dataset">
         <div data-if="has_dataset" data-class-disabled-overlay="dataset_disabled">
-          <div class="setting-row" data-tooltip="training.tooltip.dataset_path">
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_path" data-if="!pv_search_active">
             <span class="prop-label">{{label_dataset_path}}</span>
             <span class="text-disabled">{{dataset_path_display}}</span>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.dataset_images">
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_images" data-if="!pv_search_active">
             <span class="prop-label">{{label_dataset_images}}</span>
             <span class="text-disabled">{{dataset_images_display}}</span>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.resize_factor">
+          <div class="setting-row" data-tooltip="training.tooltip.resize_factor" data-if="!pv_search_active">
             <span class="prop-label">{{label_resize_factor}}</span>
             <select data-value="resize_factor_str">
               <option value="-1" data-tooltip="training.tooltip.opt.resize_factor.auto">{{label_auto}}</option>
@@ -307,310 +337,228 @@
               <option value="8" data-tooltip="training.tooltip.opt.resize_factor.8">8</option>
             </select>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.max_width">
+          <div class="setting-row" data-tooltip="training.tooltip.max_width" data-if="!pv_search_active">
             <span class="prop-label">{{label_max_width}}</span>
             <input type="text" class="number-input" data-value="max_width_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('max_width', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('max_width', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.cpu_cache">
+          <div class="setting-row" data-tooltip="training.tooltip.cpu_cache" data-if="!pv_search_active">
             <span class="prop-label">{{label_cpu_cache}}</span>
             <input type="checkbox" data-checked="use_cpu_cache" />
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.fs_cache">
+          <div class="setting-row" data-tooltip="training.tooltip.fs_cache" data-if="!pv_search_active">
             <span class="prop-label">{{label_fs_cache}}</span>
             <input type="checkbox" data-checked="use_fs_cache" />
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.use_16bit_color">
+          <div class="setting-row" data-tooltip="training.tooltip.use_16bit_color" data-if="!pv_search_active">
             <span class="prop-label">{{label_use_16bit_color}}</span>
             <input type="checkbox" data-checked="use_16bit_color" />
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.enable_eval">
-            <span class="prop-label">{{label_enable_eval}}</span>
-            <input type="checkbox" data-checked="enable_eval" />
+          <div class="setting-row" data-for="row : pv_dataset_eval_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+                   data-event-change="pv_value_change(row.id, row.checked)" />
           </div>
-          <div class="setting-row" data-if="dep_eval" data-tooltip="training.tooltip.test_every">
+          <div class="setting-row" data-if="dep_eval &amp;&amp; !pv_search_active" data-tooltip="training.tooltip.test_every">
             <span class="prop-label">{{label_test_every}}</span>
             <input type="text" class="number-input" data-value="test_every_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('test_every', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('test_every', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.dataset_output">
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_output" data-if="!pv_search_active">
             <span class="prop-label">{{label_dataset_output}}</span>
             <span class="text-disabled">{{dataset_output_display}}</span>
           </div>
         </div>
-        <span class="status-text status-muted" data-if="show_dataset_no_data">{{label_no_dataset}}</span>
+        <span class="status-text status-muted" data-if="show_dataset_no_data &amp;&amp; !pv_search_active">{{label_no_dataset}}</span>
       </div>
     </div>
 
     <!-- Optimization subsection -->
-    <div class="training-subsection">
+    <div class="training-subsection" data-if="pv_section_optimization_visible">
       <div class="section-header text-accent" id="hdr-optimization" data-event-click="toggle_section('optimization')">
         <span class="section-arrow text-accent" id="arrow-optimization">&#x25B6;</span>
-        <span class="text-accent">{{label_hdr_optimization}}</span>
+        <span class="text-accent">{{pv_header_optimization}}</span>
       </div>
       <div class="section-content collapsed" id="sec-optimization">
         <div data-class-disabled-overlay="adv_disabled">
-          <div class="setting-row" data-tooltip="training.tooltip.opt_strategy_display">
+          <div class="setting-row" data-tooltip="training.tooltip.opt_strategy_display" data-if="!pv_search_active">
             <span class="prop-label">{{label_opt_strategy}}</span>
             <span class="text-disabled">{{opt_strategy_display}}</span>
           </div>
-          <span class="status-text status-muted">{{label_lr_header}}</span>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_position">
-            <span class="prop-label">{{label_means_lr}}</span>
-            <input type="text" class="number-input" data-value="means_lr_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('means_lr', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('means_lr', 1)">+</button>
+          <span class="status-text status-muted" data-if="pv_section_learning_rates_visible">{{pv_header_learning_rates}}</span>
+          <div class="setting-row" data-for="row : pv_learning_rates_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id"
+                   data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_sh_coeff">
-            <span class="prop-label">{{label_shs_lr}}</span>
-            <input type="text" class="number-input" data-value="shs_lr_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('shs_lr', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('shs_lr', 1)">+</button>
+          <span class="status-text status-muted" data-if="pv_section_refinement_visible">{{pv_header_refinement}}</span>
+          <div class="setting-row" data-for="row : pv_refinement_locked_rows"
+               data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="step_scaling_params_locked">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_opacity">
-            <span class="prop-label">{{label_opacity_lr}}</span>
-            <input type="text" class="number-input" data-value="opacity_lr_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('opacity_lr', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('opacity_lr', 1)">+</button>
+          <div class="setting-row" data-for="row : pv_refinement_grow_rows" data-if="dep_mrnf"
+               data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="step_scaling_params_locked">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_scaling">
-            <span class="prop-label">{{label_scaling_lr}}</span>
-            <input type="text" class="number-input" data-value="scaling_lr_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('scaling_lr', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('scaling_lr', 1)">+</button>
+          <div class="setting-row" data-for="row : pv_refinement_locked_tail_rows"
+               data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="step_scaling_params_locked">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.lr_rotation">
-            <span class="prop-label">{{label_rotation_lr}}</span>
-            <input type="text" class="number-input" data-value="rotation_lr_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('rotation_lr', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('rotation_lr', 1)">+</button>
-          </div>
-          <span class="status-text status-muted">{{label_refinement_header}}</span>
-          <div class="setting-row" data-tooltip="training.tooltip.refine_every" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{label_refine_every}}</span>
-            <input type="text" class="number-input" data-value="refine_every_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('refine_every', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('refine_every', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.start_refine" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{label_start_refine}}</span>
-            <input type="text" class="number-input" data-value="start_refine_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('start_refine', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('start_refine', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.stop_refine" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{label_stop_refine}}</span>
-            <input type="text" class="number-input" data-value="stop_refine_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', 1)">+</button>
-          </div>
-          <div class="setting-row" data-if="dep_mrnf" data-tooltip="training.tooltip.grow_until_iter" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{label_grow_until_iter}}</span>
-            <input type="text" class="number-input" data-value="grow_until_iter_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('grow_until_iter', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('grow_until_iter', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.gradient_thr">
-            <span class="prop-label">{{label_grad_threshold}}</span>
-            <input type="text" class="number-input" data-value="grad_threshold_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('grad_threshold', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('grad_threshold', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.reset_every" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{label_reset_every}}</span>
-            <input type="text" class="number-input" data-value="reset_every_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('reset_every', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('reset_every', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.sh_upgrade_every" data-class-disabled-overlay="step_scaling_params_locked">
-            <span class="prop-label">{{label_sh_degree_interval}}</span>
-            <input type="text" class="number-input" data-value="sh_degree_interval_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', 1)">+</button>
-          </div>
-          <div class="setting-row" data-if="dep_igs" data-tooltip="training.tooltip.prune_opacity">
-            <span class="prop-label">{{label_prune_opacity}}</span>
-            <input type="text" class="number-input" data-value="prune_opacity_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', 1)">+</button>
-          </div>
-          <div class="setting-row" data-if="dep_igs" data-tooltip="training.tooltip.revised_opacity">
-            <span class="prop-label">{{label_revised_opacity}}</span>
-            <input type="checkbox" data-checked="revised_opacity" />
+          <div class="setting-row" data-for="row : pv_refinement_igs_rows" data-if="dep_igs"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-if="row.kind == 'number'"
+                   data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
+                   data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+                   data-event-change="pv_value_change(row.id, row.checked)" />
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Bilateral Grid subsection (conditional) -->
-    <div class="training-subsection" data-if="dep_bilateral">
-      <div class="training-subsection-title">{{label_hdr_bilateral}}</div>
+    <div class="training-subsection" data-if="dep_bilateral &amp;&amp; pv_section_bilateral_visible">
+      <div class="training-subsection-title">{{pv_header_bilateral}}</div>
       <div data-class-disabled-overlay="adv_disabled">
-        <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid_x">
-          <span class="prop-label">{{label_bilateral_grid_x}}</span>
-          <input type="text" class="number-input" data-value="bilateral_grid_x_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_x', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_x', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid_y">
-          <span class="prop-label">{{label_bilateral_grid_y}}</span>
-          <input type="text" class="number-input" data-value="bilateral_grid_y_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_y', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_y', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid_w">
-          <span class="prop-label">{{label_bilateral_grid_w}}</span>
-          <input type="text" class="number-input" data-value="bilateral_grid_w_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_w', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_w', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid_lr">
-          <span class="prop-label">{{label_bilateral_grid_lr}}</span>
-          <input type="text" class="number-input" data-value="bilateral_grid_lr_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_lr', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_lr', 1)">+</button>
+        <div class="setting-row" data-for="row : pv_bilateral_rows"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                 data-event-change="pv_change(row.id, ev.value)"
+                 data-event-blur="pv_blur(row.id, row.text)"
+                 data-event-escapecancel="pv_escape(row.id)" />
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
         </div>
       </div>
     </div>
 
     <!-- Losses subsection -->
-    <div class="training-subsection">
+    <div class="training-subsection" data-if="pv_section_losses_visible">
       <div class="section-header text-accent" id="hdr-losses" data-event-click="toggle_section('losses')">
         <span class="section-arrow text-accent" id="arrow-losses">&#x25B6;</span>
-        <span class="text-accent">{{label_hdr_losses}}</span>
+        <span class="text-accent">{{pv_header_losses}}</span>
       </div>
       <div class="section-content collapsed" id="sec-losses">
         <div data-class-disabled-overlay="adv_disabled">
-          <div class="setting-row" data-tooltip="training.tooltip.lambda_dssim">
+          <div class="setting-row" data-tooltip="training.tooltip.lambda_dssim" data-if="!pv_search_active">
             <span class="prop-label">{{label_lambda_dssim}}</span>
             <input type="range" class="setting-slider" data-value="lambda_dssim" min="0" max="1" step="0.01" />
             <span class="slider-value">{{lambda_dssim | format_float(3)}}</span>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.opacity_reg">
-            <span class="prop-label">{{label_opacity_reg}}</span>
-            <input type="text" class="number-input" data-value="opacity_reg_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('opacity_reg', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('opacity_reg', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.scale_reg">
-            <span class="prop-label">{{label_scale_reg}}</span>
-            <input type="text" class="number-input" data-value="scale_reg_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('scale_reg', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('scale_reg', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.tv_loss_weight">
-            <span class="prop-label">{{label_tv_loss_weight}}</span>
-            <input type="text" class="number-input" data-value="tv_loss_weight_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('tv_loss_weight', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('tv_loss_weight', 1)">+</button>
+          <div class="setting-row" data-for="row : pv_loss_numbers_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Initialization subsection -->
-    <div class="training-subsection">
+    <div class="training-subsection" data-if="pv_section_init_visible">
       <div class="section-header text-accent" id="hdr-init" data-event-click="toggle_section('init')">
         <span class="section-arrow text-accent" id="arrow-init">&#x25B6;</span>
-        <span class="text-accent">{{label_hdr_init}}</span>
+        <span class="text-accent">{{pv_header_init}}</span>
       </div>
       <div class="section-content collapsed" id="sec-init">
         <div data-class-disabled-overlay="adv_disabled">
-          <div class="setting-row" data-tooltip="training.tooltip.init_opacity">
+          <div class="setting-row" data-tooltip="training.tooltip.init_opacity" data-if="!pv_search_active">
             <span class="prop-label">{{label_init_opacity}}</span>
             <input type="range" class="setting-slider" data-value="init_opacity" min="0.01" max="1" step="0.01" />
             <span class="slider-value">{{init_opacity | format_float(3)}}</span>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.init_scaling">
-            <span class="prop-label">{{label_init_scaling}}</span>
-            <input type="text" class="number-input" data-value="init_scaling_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('init_scaling', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('init_scaling', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.random_init">
-            <span class="prop-label">{{label_random_init}}</span>
-            <input type="checkbox" data-checked="random" />
+          <div class="setting-row" data-for="row : pv_init_main_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-if="row.kind == 'number'"
+                   data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
+                   data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+                   data-event-change="pv_value_change(row.id, row.checked)" />
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
           <div data-if="dep_random">
-            <div class="setting-row" data-tooltip="training.tooltip.num_points">
-              <span class="prop-label">{{label_init_num_pts}}</span>
-              <input type="text" class="number-input" data-value="init_num_pts_str" />
-              <button class="num-step-btn" data-event-mousedown="num_step('init_num_pts', -1)">-</button>
-              <button class="num-step-btn" data-event-mousedown="num_step('init_num_pts', 1)">+</button>
-            </div>
-            <div class="setting-row" data-tooltip="training.tooltip.extent">
-              <span class="prop-label">{{label_init_extent}}</span>
-              <input type="text" class="number-input" data-value="init_extent_str" />
-              <button class="num-step-btn" data-event-mousedown="num_step('init_extent', -1)">-</button>
-              <button class="num-step-btn" data-event-mousedown="num_step('init_extent', 1)">+</button>
+            <div class="setting-row" data-for="row : pv_init_random_rows"
+                 data-attr-data-tooltip="row.tooltip_key">
+              <span class="prop-label">{{row.label}}</span>
+              <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                     data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                     data-event-change="pv_change(row.id, ev.value)"
+                     data-event-blur="pv_blur(row.id, row.text)"
+                     data-event-escapecancel="pv_escape(row.id)" />
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Pruning/Growing subsection (conditional) -->
-    <div class="training-subsection" data-if="dep_igs">
-      <div class="training-subsection-title">{{label_hdr_pruning_growing}}</div>
-      <div data-class-disabled-overlay="adv_disabled">
-        <div class="setting-row" data-tooltip="training.tooltip.min_opacity">
-          <span class="prop-label">{{label_min_opacity}}</span>
-          <input type="text" class="number-input" data-value="min_opacity_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('min_opacity', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('min_opacity', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.grow_scale_3d">
-          <span class="prop-label">{{label_grow_scale3d}}</span>
-          <input type="text" class="number-input" data-value="grow_scale3d_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('grow_scale3d', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('grow_scale3d', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.grow_scale_2d">
-          <span class="prop-label">{{label_grow_scale2d}}</span>
-          <input type="text" class="number-input" data-value="grow_scale2d_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('grow_scale2d', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('grow_scale2d', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.prune_scale_3d">
-          <span class="prop-label">{{label_prune_scale3d}}</span>
-          <input type="text" class="number-input" data-value="prune_scale3d_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('prune_scale3d', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('prune_scale3d', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.prune_scale_2d">
-          <span class="prop-label">{{label_prune_scale2d}}</span>
-          <input type="text" class="number-input" data-value="prune_scale2d_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('prune_scale2d', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('prune_scale2d', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.pause_refine_after_reset">
-          <span class="prop-label">{{label_pause_refine_after_reset}}</span>
-          <input type="text" class="number-input" data-value="pause_refine_after_reset_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('pause_refine_after_reset', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('pause_refine_after_reset', 1)">+</button>
         </div>
       </div>
     </div>
 
     <!-- Sparsity subsection (conditional) -->
-    <div class="training-subsection" data-if="dep_sparsity">
-      <div class="training-subsection-title">{{label_hdr_sparsity}}</div>
+    <div class="training-subsection" data-if="dep_sparsity &amp;&amp; pv_section_sparsity_visible">
+      <div class="training-subsection-title">{{pv_header_sparsity}}</div>
       <div data-class-disabled-overlay="adv_disabled">
-        <div class="setting-row" data-tooltip="training.tooltip.sparsify_steps">
-          <span class="prop-label">{{label_sparsify_steps}}</span>
-          <input type="text" class="number-input" data-value="sparsify_steps_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('sparsify_steps', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('sparsify_steps', 1)">+</button>
+        <div class="setting-row" data-for="row : pv_sparsity_rows"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                 data-event-change="pv_change(row.id, ev.value)"
+                 data-event-blur="pv_blur(row.id, row.text)"
+                 data-event-escapecancel="pv_escape(row.id)" />
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
         </div>
-        <div class="setting-row" data-tooltip="training.tooltip.init_rho">
-          <span class="prop-label">{{label_init_rho}}</span>
-          <input type="text" class="number-input" data-value="init_rho_str" />
-          <button class="num-step-btn" data-event-mousedown="num_step('init_rho', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="num_step('init_rho', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.prune_ratio">
+        <div class="setting-row" data-tooltip="training.tooltip.prune_ratio" data-if="!pv_search_active">
           <span class="prop-label">{{label_prune_ratio}}</span>
           <input type="range" class="setting-slider" data-value="prune_ratio" min="0" max="1" step="0.01" />
           <span class="slider-value">{{prune_ratio | format_float(3)}}</span>
@@ -619,10 +567,10 @@
     </div>
 
     <!-- Save Steps subsection -->
-    <div class="training-subsection">
+    <div class="training-subsection" data-if="!pv_search_active">
       <div class="section-header text-accent" id="hdr-save-steps" data-event-click="toggle_section('save_steps')" data-tooltip="training.tooltip.save_steps">
         <span class="section-arrow text-accent" id="arrow-save-steps">&#x25B6;</span>
-        <span class="text-accent">{{label_hdr_save_steps}}</span>
+        <span class="text-accent">{{pv_header_save_steps}}</span>
       </div>
       <div class="section-content collapsed" id="sec-save-steps">
         <div data-if="save_edit_mode" data-class-disabled-overlay="step_scaling_params_locked">
@@ -644,6 +592,37 @@
         <div data-if="save_readonly_mode">
           <span class="status-text status-info" data-if="has_save_steps">{{save_steps_display}}</span>
           <span class="status-text status-muted" data-if="no_save_steps_ro">{{label_no_save_steps}}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Auto-placed registry parameters -->
+    <div class="training-subsection" data-if="pv_section_advanced_registry_visible">
+      <div class="section-header text-accent" id="hdr-advanced-registry" data-event-click="toggle_section('advanced_registry')">
+        <span class="section-arrow text-accent" id="arrow-advanced-registry">&#x25B6;</span>
+        <span class="text-accent">{{pv_header_advanced_registry}}</span>
+      </div>
+      <div class="section-content collapsed" id="sec-advanced-registry">
+        <div data-class-disabled-overlay="adv_disabled">
+          <div class="setting-row" data-for="row : pv_advanced_registry_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-if="row.kind == 'number'"
+                   data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
+                   data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+                   data-event-change="pv_value_change(row.id, row.checked)" />
+            <select data-if="row.kind == 'select'" data-value="row.value"
+                    data-event-change="pv_value_change(row.id, ev.value)">
+              <option data-for="item : pv_advanced_registry_options" data-if="item.prop_id == row.id"
+                      data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
+            </select>
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          </div>
         </div>
       </div>
     </div>

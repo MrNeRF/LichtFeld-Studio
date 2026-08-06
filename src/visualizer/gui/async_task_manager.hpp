@@ -37,6 +37,7 @@ namespace lfs::vis {
     namespace gui {
 
         struct VideoExportEnvironmentState;
+        struct VideoExportMeshRendererState;
 
         class LFS_VIS_API AsyncTaskManager {
         public:
@@ -63,6 +64,9 @@ namespace lfs::vis {
             [[nodiscard]] std::string getExportStage() const {
                 return jobStage(export_state_.job);
             }
+            [[nodiscard]] std::string getExportOutcome() const {
+                return jobOutcome(export_state_.job);
+            }
             [[nodiscard]] std::string getExportError() const {
                 return jobError(export_state_.job);
             }
@@ -86,6 +90,9 @@ namespace lfs::vis {
             }
             [[nodiscard]] std::string getImportStage() const {
                 return jobStage(import_state_.job);
+            }
+            [[nodiscard]] std::string getImportOutcome() const {
+                return jobOutcome(import_state_.job);
             }
             [[nodiscard]] std::string getImportDatasetType() const {
                 std::lock_guard lock(import_state_.mutex);
@@ -133,6 +140,9 @@ namespace lfs::vis {
             [[nodiscard]] std::string getVideoExportStage() const {
                 return jobStage(video_export_state_.job);
             }
+            [[nodiscard]] std::string getVideoExportOutcome() const {
+                return jobOutcome(video_export_state_.job);
+            }
             [[nodiscard]] std::string getVideoExportError() const {
                 return jobError(video_export_state_.job);
             }
@@ -155,6 +165,9 @@ namespace lfs::vis {
             }
             [[nodiscard]] std::string getMesh2SplatStage() const {
                 return jobStage(mesh2splat_state_.job);
+            }
+            [[nodiscard]] std::string getMesh2SplatOutcome() const {
+                return jobOutcome(mesh2splat_state_.job);
             }
             [[nodiscard]] std::string getMesh2SplatError() const {
                 return jobError(mesh2splat_state_.job);
@@ -205,6 +218,7 @@ namespace lfs::vis {
             void startVideoExport(const std::filesystem::path& path,
                                   const io::video::VideoExportOptions& options);
             void resetVideoExportEnvironmentState();
+            void resetVideoExportMeshRendererState();
             void cancelImportCompletionDismiss();
             void scheduleImportCompletionDismiss();
             void publishExportFailureState(lfs::core::ExportFormat format,
@@ -221,6 +235,8 @@ namespace lfs::vis {
             jobStage(JobHandle handle) const;
             [[nodiscard]] std::string
             jobError(JobHandle handle) const;
+            [[nodiscard]] std::string
+            jobOutcome(JobHandle handle) const;
             [[nodiscard]] bool
             beginJob(JobHandle& handle, JobType type,
                      std::string stage);
@@ -233,7 +249,6 @@ namespace lfs::vis {
                 JobHandle job;
                 lfs::core::ExportFormat format{lfs::core::ExportFormat::PLY};
                 std::filesystem::path path;
-                bool rad_flip_y = false; // Y-flip for RAD export (off by default)
                 mutable std::mutex mutex;
                 std::optional<std::jthread> thread;
             };
@@ -249,6 +264,7 @@ namespace lfs::vis {
             };
             VideoExportState video_export_state_;
             std::unique_ptr<VideoExportEnvironmentState> video_export_environment_state_;
+            std::unique_ptr<VideoExportMeshRendererState> video_export_mesh_renderer_state_;
 
             struct ImportState {
                 JobHandle job;

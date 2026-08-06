@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Ellipsoid panel - controls for editing ellipsoid properties."""
 
-from typing import Optional
-
 import lichtfeld as lf
 
 

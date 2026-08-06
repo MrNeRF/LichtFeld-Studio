@@ -138,10 +138,12 @@ def _fixture_check(
         else:
             raise AssertionError("declared-safe write was not refused")
 
+        # Bits 0–8 are published core caps. The write-unsafe fixture sets an
+        # unassigned bit (9+) so a 0x1FF writer still fails the capability gate.
         version_satisfied = assess_write_compatibility(
             container,
             writer_version=(1, 1),
-            writer_capabilities=0xFF,
+            writer_capabilities=0x1FF,
         )
         if version_satisfied.safe or len(version_satisfied.reasons) != 1:
             raise AssertionError(
@@ -151,7 +153,7 @@ def _fixture_check(
             require_safe_write(
                 container,
                 writer_version=(1, 1),
-                writer_capabilities=0xFF,
+                writer_capabilities=0x1FF,
             )
         except WriteRefused as error:
             if error.offset != container.commit.offset + 208:
@@ -161,10 +163,11 @@ def _fixture_check(
         else:
             raise AssertionError("unknown writer capability did not refuse write")
 
+        # Satisfy every required writer bit including unassigned synthetic bit 9.
         capability_satisfied = assess_write_compatibility(
             container,
             writer_version=(1, 0),
-            writer_capabilities=0x1FF,
+            writer_capabilities=0x3FF,
         )
         if capability_satisfied.safe or len(capability_satisfied.reasons) != 1:
             raise AssertionError(
@@ -174,7 +177,7 @@ def _fixture_check(
             require_safe_write(
                 container,
                 writer_version=(1, 0),
-                writer_capabilities=0x1FF,
+                writer_capabilities=0x3FF,
             )
         except WriteRefused as error:
             if error.offset != container.commit.offset + 188:
@@ -256,8 +259,14 @@ def _cli_surface_check(fixture_dir: Path) -> str:
     write_unsafe = fixture_dir / "write-unsafe.licht"
     preview_source = fixture_dir / "preview-locator.licht"
 
+    stored = io.BytesIO()
+    stored_written = extract_payload(container, row, stored, stored=True)
+    if stored_written != row.stored_bytes:
+        raise AssertionError("API --stored extraction size mismatch")
+
     with tempfile.TemporaryDirectory(prefix="licht-selftest-cli-") as temp_dir:
         output = Path(temp_dir) / "proj.json"
+        stored_output = Path(temp_dir) / "proj.stored"
         preview_output = Path(temp_dir) / "preview.png"
         sink = io.StringIO()
         with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
@@ -275,6 +284,19 @@ def _cli_surface_check(fixture_dir: Path) -> str:
                     str(output),
                 ]
             )
+            extract_stored_rc = cli_main(
+                [
+                    "extract",
+                    str(source),
+                    "--fourcc",
+                    row.fourcc.decode("ascii"),
+                    "--uuid",
+                    str(row.instance_uuid),
+                    "--output",
+                    str(stored_output),
+                    "--stored",
+                ]
+            )
             preview_rc = cli_main(
                 [
                     "preview",
@@ -289,14 +311,22 @@ def _cli_surface_check(fixture_dir: Path) -> str:
             write_unsafe_start = sink.tell()
             write_unsafe_rc = cli_main(["inspect", str(write_unsafe), "--json"])
             write_unsafe_dump = sink.getvalue()[write_unsafe_start:]
-        if (inspect_rc, verify_rc, extract_rc, preview_rc) != (0, 0, 0, 0):
+        if (inspect_rc, verify_rc, extract_rc, extract_stored_rc, preview_rc) != (
+            0,
+            0,
+            0,
+            0,
+            0,
+        ):
             raise AssertionError(
                 "CLI return codes "
-                f"{(inspect_rc, verify_rc, extract_rc, preview_rc)}: "
+                f"{(inspect_rc, verify_rc, extract_rc, extract_stored_rc, preview_rc)}: "
                 f"{sink.getvalue()}"
             )
         if output.read_bytes() != decoded.getvalue():
             raise AssertionError("CLI extraction differs from API extraction")
+        if stored_output.read_bytes() != stored.getvalue():
+            raise AssertionError("CLI --stored extraction differs from API extraction")
         _, preview_bytes = read_foreign_preview(preview_source)
         if preview_output.read_bytes() != preview_bytes:
             raise AssertionError("CLI foreign preview extraction differs")
@@ -320,8 +350,8 @@ def _cli_surface_check(fixture_dir: Path) -> str:
         if not isinstance(write_compatibility, dict) or write_compatibility.get("safe") is not False:
             raise AssertionError("inspect did not classify the file write-unsafe")
     return (
-        "inspect, extract, verify, foreign preview, unsupported-newer dump, and write-unsafe "
-        "classification passed"
+        "inspect, extract, extract --stored, verify, foreign preview, unsupported-newer dump, "
+        "and write-unsafe classification passed"
     )
 
 

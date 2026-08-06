@@ -15,10 +15,6 @@ namespace Rml {
     class Event;
 } // namespace Rml
 
-namespace lfs::vis {
-    struct Theme;
-}
-
 namespace lfs::vis::editor {
 
     struct PythonEditorSymbol {

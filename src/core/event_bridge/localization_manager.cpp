@@ -58,6 +58,7 @@ namespace lfs::event {
     }
 
     bool LocalizationManager::initialize(const std::string& locales_dir) {
+        const std::lock_guard lock(mutex_);
         locales_dir_ = locales_dir;
 
         std::error_code ec;
@@ -103,39 +104,45 @@ namespace lfs::event {
 
         LOG_INFO("Found {} language(s)", available_languages_.size());
 
+        // Prefer the saved language, but never call setLanguage() here: it also
+        // takes mutex_ and this method already holds it (non-recursive).
         const std::string saved = loadLanguagePreference();
         const bool saved_available = !saved.empty() &&
                                      std::find(available_languages_.begin(),
                                                available_languages_.end(),
                                                saved) != available_languages_.end();
-        if (saved_available && setLanguage(saved)) {
-            return true;
-        }
-
         const bool has_default = std::find(available_languages_.begin(),
                                            available_languages_.end(),
                                            DEFAULT_LANGUAGE) != available_languages_.end();
-        return setLanguage(has_default ? DEFAULT_LANGUAGE : available_languages_[0]);
-    }
+        const std::string initial_language = saved_available
+                                                ? saved
+                                                : (has_default ? DEFAULT_LANGUAGE : available_languages_[0]);
+        if (!loadLanguage(initial_language))
+            return false;
 
-    bool LocalizationManager::contains(const std::string_view key) const {
-        const std::string key_str(key);
-        return overrides_.contains(key_str) ||
-               current_strings_.contains(key_str) ||
-               fallback_strings_.contains(key_str);
+        current_language_ = initial_language;
+        LOG_INFO("Language set to: {}", initial_language);
+        return true;
     }
 
     const char* LocalizationManager::get(std::string_view key) const {
+        thread_local std::array<std::string, 8> result_buffers;
+        thread_local size_t next_result_buffer = 0;
+        std::string& result = result_buffers[next_result_buffer++ % result_buffers.size()];
+
+        const std::lock_guard lock(mutex_);
         const std::string key_str(key);
 
         const auto override_it = overrides_.find(key_str);
         if (override_it != overrides_.end()) {
-            return override_it->second.c_str();
+            result = override_it->second;
+            return result.c_str();
         }
 
         const auto it = current_strings_.find(key_str);
         if (it != current_strings_.end()) {
-            return it->second.c_str();
+            result = it->second;
+            return result.c_str();
         }
 
         const auto fallback_it = fallback_strings_.find(key_str);
@@ -143,35 +150,67 @@ namespace lfs::event {
             if (current_language_ != DEFAULT_LANGUAGE && warned_missing_keys_.insert(key_str).second)
                 LOG_WARN("Missing localization key '{}' in '{}'; using English fallback",
                          key_str, current_language_);
-            return fallback_it->second.c_str();
+            result = fallback_it->second;
+            return result.c_str();
         }
 
         if (warned_missing_keys_.insert(key_str).second)
             LOG_WARN("Missing localization key: {}", key_str);
-        return key.data();
+        result.assign(key);
+        return result.c_str();
+    }
+
+    bool LocalizationManager::hasKey(std::string_view key) const {
+        const std::lock_guard lock(mutex_);
+        const std::string key_str(key);
+        return overrides_.find(key_str) != overrides_.end() ||
+               current_strings_.find(key_str) != current_strings_.end() ||
+               fallback_strings_.find(key_str) != fallback_strings_.end();
+    }
+
+    const char* LocalizationManager::getEnglishFallback(std::string_view key) const {
+        thread_local std::array<std::string, 8> result_buffers;
+        thread_local size_t next_result_buffer = 0;
+        std::string& result = result_buffers[next_result_buffer++ % result_buffers.size()];
+
+        const std::lock_guard lock(mutex_);
+        const auto fallback_it = fallback_strings_.find(std::string(key));
+        if (fallback_it != fallback_strings_.end()) {
+            result = fallback_it->second;
+            return result.c_str();
+        }
+
+        result.assign(key);
+        return result.c_str();
     }
 
     void LocalizationManager::setOverride(const std::string& key, const std::string& value) {
+        const std::lock_guard lock(mutex_);
         overrides_[key] = value;
     }
 
     void LocalizationManager::clearOverride(const std::string& key) {
+        const std::lock_guard lock(mutex_);
         overrides_.erase(key);
     }
 
     void LocalizationManager::clearAllOverrides() {
+        const std::lock_guard lock(mutex_);
         overrides_.clear();
     }
 
     bool LocalizationManager::hasOverride(const std::string& key) const {
+        const std::lock_guard lock(mutex_);
         return overrides_.find(key) != overrides_.end();
     }
 
     std::vector<std::string> LocalizationManager::getAvailableLanguages() const {
+        const std::lock_guard lock(mutex_);
         return available_languages_;
     }
 
     std::vector<std::string> LocalizationManager::getAvailableLanguageNames() const {
+        const std::lock_guard lock(mutex_);
         std::vector<std::string> names;
         names.reserve(available_languages_.size());
         for (const auto& lang : available_languages_) {
@@ -182,6 +221,7 @@ namespace lfs::event {
     }
 
     bool LocalizationManager::setLanguage(const std::string& language_code) {
+        const std::lock_guard lock(mutex_);
         const bool available = std::find(available_languages_.begin(),
                                          available_languages_.end(),
                                          language_code) != available_languages_.end();
@@ -200,12 +240,19 @@ namespace lfs::event {
     }
 
     std::string LocalizationManager::getCurrentLanguageName() const {
+        const std::lock_guard lock(mutex_);
         const auto it = language_names_.find(current_language_);
         return (it != language_names_.end()) ? it->second : current_language_;
     }
 
+    std::string LocalizationManager::getCurrentLanguage() const {
+        const std::lock_guard lock(mutex_);
+        return current_language_;
+    }
+
     bool LocalizationManager::reload() {
-        return !current_language_.empty() && loadLanguage(current_language_);
+        const std::string language_code = getCurrentLanguage();
+        return !language_code.empty() && setLanguage(language_code);
     }
 
     bool LocalizationManager::loadLanguage(const std::string& language_code) {

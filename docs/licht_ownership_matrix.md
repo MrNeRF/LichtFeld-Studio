@@ -135,14 +135,14 @@ Every row below is scoped to a **non-training** splat node. The equivalent train
 | Training PPISP dimensions/configuration, `step`, current/initial LR, total iterations, exposure/vignetting/colour/CRF tensors and Adam moments, camera/frame ID maps | `PPISP::serialize` @ `src/training/components/ppisp.cpp` | Optional LFKP `HAS_PPISP` block | `CKPT` | Wins over `PPIS`. Viewer manual overrides remain `VIEW`. Gradients/finalization caches rebuild. | PPISP optimizer step, mapping, or tensor mutation |
 | PPISP controller dimensions/configuration, `step`, current/initial LR, total iterations, CNN/FC weights and Adam moments | `PPISPControllerPool::serialize` @ `src/training/components/ppisp_controller_pool.cu` | Optional LFKP `HAS_PPISP_CONTROLLER` block | `CKPT` | Inference-only `PPIS` controller weights cannot override an active checkpoint controller. Runtime prediction buffers/last-camera cache rebuild. | Controller optimizer step/state mutation |
 | Sparsity ADMM `z`, `u`, `opa_sigmoid` | `ADMMSparsityOptimizer::serialize` @ `src/training/components/sparsity_optimizer.cpp` | Optional LFKP `HAS_SPARSITY` block | `CKPT` | Required for mid-sparsification resume. The C2 v2 block is covered by checkpoint and P3 matrix round-trip tests. | ADMM initialize/step/reset/topology change |
-| Active core/schedule params: `iterations`, `sh_degree_interval`, `means_lr`, `means_lr_end`, `shs_lr`, `opacity_lr`, `scaling_lr`, `scaling_lr_end`, `rotation_lr`, `lambda_dssim`, `min_opacity`, `refine_every`, `start_refine`, `stop_refine`, `grad_threshold`, `sh_degree`, `opacity_reg`, `scale_reg`, `init_opacity`, `init_scaling`, `max_cap` | `OptimizationParameters`; `OptimizationParameters::to_json`; `serialize_checkpoint` @ `src/core/include/core/parameters.hpp`, `src/core/parameters.cpp`, `src/training/checkpoint.cpp` | Embedded LFKP parameter JSON | `CKPT` | Active exact-resume values win. PRMS contains only role-qualified pending copies. `sh_degree` here is the training param — distinct from the identically named VIEW render setting. | Active trainer parameter mutation |
+| Active core/schedule params: `iterations`, `sh_degree_interval`, `means_lr`, `means_lr_end`, `shs_lr`, `opacity_lr`, `scaling_lr`, `scaling_lr_end`, `rotation_lr`, `lambda_dssim`, `min_opacity`, `refine_every`, `start_refine`, `stop_refine`, `sh_degree`, `opacity_reg`, `scale_reg`, `init_opacity`, `init_scaling`, `max_cap` | `OptimizationParameters`; `OptimizationParameters::to_json`; `serialize_checkpoint` @ `src/core/include/core/parameters.hpp`, `src/core/parameters.cpp`, `src/training/checkpoint.cpp` | Embedded LFKP parameter JSON | `CKPT` | Active exact-resume values win. PRMS contains only role-qualified pending copies. `sh_degree` here is the training param — distinct from the identically named VIEW render setting. | Active trainer parameter mutation |
 | Active evaluation/output schedule and strategy behavior: `eval_steps`, `save_steps`, `bg_modulation`, `enable_eval`, `enable_save_eval_images`, `strategy` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | Resume behavior uses checkpoint values; any explicit post-open edit is a new mutation. `headless` is excluded despite being serialized today. | Active trainer parameter mutation |
 | Active mask params: `mask_mode`, `invert_masks`, `mask_threshold`, `mask_opacity_penalty_weight`, `mask_opacity_penalty_power`, `use_alpha_as_mask` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | DatasetConfig's duplicated invert/threshold values are normalized to these active values for the trainer; pending dataset UI copies remain PRMS. | Active mask-policy mutation |
 | Active supervision/filter params: `use_depth_loss`, `depth_loss_weight`, `depth_loss_mode`, `use_normal_loss`, `normal_loss_weight`, `normal_consistency_weight`, `normal_flatten_weight`, `normal_loss_space`, `mip_filter` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | Exact active training behavior. `mip_filter` here is the training param — distinct from the identically named VIEW render setting. | Active supervision/filter mutation |
 | Active background behavior: `bg_mode`, `bg_color`, and binding to the background-image reference (currently represented by `bg_image_path`) | `OptimizationParameters::{bg_mode,bg_color,bg_image_path}` @ `src/core/include/core/parameters.hpp` | LFKP parameter JSON, including legacy raw path | `CKPT` | CKPT owns whether/how the selected reference is used; the referenced record's locator/fingerprint is the REFS row above. | Background mode/color/reference-binding mutation |
 | Active bilateral config: `use_bilateral_grid`, `bilateral_grid_X`, `bilateral_grid_Y`, `bilateral_grid_W`, `bilateral_grid_lr`, `tv_loss_weight` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | Must agree with the optional bilateral block; inconsistency is invalid. | Active bilateral config mutation |
 | Active PPISP config: `use_ppisp`, `ppisp_lr`, `ppisp_reg_weight`, `ppisp_warmup_steps`, `ppisp_freeze_from_sidecar`, `ppisp_use_controller`, `ppisp_freeze_gaussians_on_distill`, `ppisp_controller_activation_step`, `ppisp_controller_lr` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | `ppisp_sidecar_path` is source provenance/embedded `PPIS`, not exact path authority. Once full PPISP state exists in CKPT, it wins. | Active PPISP config mutation |
-| Active densification/shared controls: `prune_opacity`, `grow_scale3d`, `grow_scale2d`, `prune_scale3d`, `prune_scale2d`, `reset_every`, `pause_refine_after_reset`, `revised_opacity`, `gut`, `undistort`, `steps_scaler` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | Exact active strategy behavior. `gut` here is the training param — distinct from the VIEW compatibility mirror of `raster_backend`. | Active densification config mutation |
+| Active densification/shared controls: `prune_opacity`, `reset_every`, `gut`, `undistort`, `steps_scaler` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | Exact active strategy behavior. `gut` here is the training param — distinct from the VIEW compatibility mirror of `raster_backend`. | Active densification config mutation |
 | Active MRNF controls: `growth_grad_threshold`, `grow_fraction`, `grow_until_iter`, `opacity_decay`, `scale_decay`, `means_noise_weight`, `bounds_percentile`, `use_error_map`, `use_edge_map` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | Exact active strategy behavior; derived edge/error caches rebuild as documented. | Active MRNF config mutation |
 | Active random-init and sparsity controls: `random`, `init_num_pts`, `init_extent`, `enable_sparsity`, `sparsify_steps`, `init_rho`, `prune_ratio` | `OptimizationParameters::to_json` @ `src/core/parameters.cpp` | LFKP parameter JSON | `CKPT` | Preserve even after initialization because they govern resume validation/schedules. | Active config mutation |
 | Active dataset/decode behavior: `images`, `resize_factor`, `test_every`, `timelapse_images`, `timelapse_every`, `max_width`, `min_track_length`, `invert_masks`, `mask_threshold`, `use_16bit_color` | `DatasetConfig`, `LoadingParams`; `DatasetConfig::to_json` @ `src/core/include/core/parameters.hpp`, `src/core/parameters.cpp` | LFKP dataset JSON, except timelapse fields are currently dropped | `CKPT` | Dataset root comes from REFS. Cache/printing knobs are PRMS policy, not exact state. Missing timelapse persistence is contradiction C5. | Active dataset/decode mutation |
@@ -489,10 +489,7 @@ is its separate round-trip proof.
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.enable_sparsity authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.eval_steps authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.eval_steps[] authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.grad_threshold authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.grow_fraction authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.grow_scale2d authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.grow_scale3d authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.grow_until_iter authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.growth_grad_threshold authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.gut authority=PRMS -->
@@ -521,7 +518,6 @@ is its separate round-trip proof.
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.opacity_decay authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.opacity_lr authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.opacity_reg authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.pause_refine_after_reset authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.ppisp_controller_activation_step authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.ppisp_controller_lr authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.ppisp_freeze_from_sidecar authority=PRMS -->
@@ -533,12 +529,9 @@ is its separate round-trip proof.
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.ppisp_warmup_steps authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.prune_opacity authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.prune_ratio authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.prune_scale2d authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.prune_scale3d authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.random authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.refine_every authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.reset_every authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.revised_opacity authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.rotation_lr authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.save_steps authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.current.save_steps[] authority=PRMS -->
@@ -583,10 +576,7 @@ is its separate round-trip proof.
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.enable_sparsity authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.eval_steps authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.eval_steps[] authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.grad_threshold authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.grow_fraction authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.grow_scale2d authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.grow_scale3d authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.grow_until_iter authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.growth_grad_threshold authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.gut authority=PRMS -->
@@ -615,7 +605,6 @@ is its separate round-trip proof.
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.opacity_decay authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.opacity_lr authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.opacity_reg authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.pause_refine_after_reset authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.ppisp_controller_activation_step authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.ppisp_controller_lr authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.ppisp_freeze_from_sidecar authority=PRMS -->
@@ -627,12 +616,9 @@ is its separate round-trip proof.
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.ppisp_warmup_steps authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.prune_opacity authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.prune_ratio authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.prune_scale2d authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.prune_scale3d authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.random authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.refine_every authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.reset_every authority=PRMS -->
-<!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.revised_opacity authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.rotation_lr authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.save_steps authority=PRMS -->
 <!-- P8-RUNTIME chapter=PRMS kind=json path=presets.*.session.save_steps[] authority=PRMS -->

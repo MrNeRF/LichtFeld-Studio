@@ -174,6 +174,7 @@ namespace lfs::vis::gui {
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VulkanImageBarrierTracker image_barriers;
+        std::uint64_t image_generation_ = 0;
         struct PendingUpload {
             VkFence fence = VK_NULL_HANDLE;
             VkCommandBuffer command_buffer = VK_NULL_HANDLE;
@@ -507,8 +508,8 @@ namespace lfs::vis::gui {
             if (command_buffer == VK_NULL_HANDLE || image == VK_NULL_HANDLE || old_layout == new_layout) {
                 return;
             }
-            image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, old_layout);
-            image_barriers.transitionImage(command_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT, new_layout);
+            image_barriers.registerImage(image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, old_layout);
+            image_barriers.transitionImage(command_buffer, image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, new_layout);
         }
 
         [[nodiscard]] bool ensureImage(const int new_width, const int new_height) {
@@ -537,7 +538,7 @@ namespace lfs::vis::gui {
                         image_vram_label,
                         0);
                 }
-                image_barriers.forgetImage(image);
+                image_barriers.forgetImage(image, image_generation_);
                 if (image_view != VK_NULL_HANDLE) {
                     vkDestroyImageView(device, image_view, nullptr);
                 }
@@ -606,7 +607,8 @@ namespace lfs::vis::gui {
                                          "ui.texture.cpu[{}x{}].view",
                                          new_width,
                                          new_height);
-            image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+            ++image_generation_;
+            image_barriers.registerImage(image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
 
             if (descriptor_set == VK_NULL_HANDLE) {
                 VkDescriptorSetAllocateInfo alloc_info{};
@@ -664,7 +666,7 @@ namespace lfs::vis::gui {
                                               interop_image,
                                               "vulkan.ui_texture.interop_image",
                                               "rgba8") ||
-                !context->createExternalTimelineSemaphore(0, interop_semaphore)) {
+                !context->createExternalTimelineSemaphore(0, interop_semaphore, "vulkan.ui_texture.interop_semaphore")) {
                 LOG_WARN("Vulkan UI texture interop setup failed: {}", context->lastError());
                 destroyImage();
                 interop_disabled = true;
@@ -715,7 +717,8 @@ namespace lfs::vis::gui {
             image = interop_image.image;
             image_view = interop_image.view;
             image_layout = VK_IMAGE_LAYOUT_GENERAL;
-            image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+            ++image_generation_;
+            image_barriers.registerImage(image, image_generation_, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
             mode = Mode::CudaInterop;
 
             // Skip allocating an internal descriptor set: the interop path is consumed via RmlUi
@@ -958,7 +961,7 @@ namespace lfs::vis::gui {
                     }
                 }
                 if (image != VK_NULL_HANDLE) {
-                    image_barriers.forgetImage(image);
+                    image_barriers.forgetImage(image, image_generation_);
                 }
                 interop.reset();
                 if (context) {
@@ -984,7 +987,7 @@ namespace lfs::vis::gui {
                             image_vram_label,
                             0);
                     }
-                    image_barriers.forgetImage(image);
+                    image_barriers.forgetImage(image, image_generation_);
                     vmaDestroyImage(allocator, image, image_allocation);
                     image = VK_NULL_HANDLE;
                     image_allocation = VK_NULL_HANDLE;

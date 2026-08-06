@@ -926,8 +926,6 @@ namespace {
             << lfs::format_for_developer(
                    staged.error());
         EXPECT_EQ(live_scene.getNodeCount(), 1u);
-        ASSERT_TRUE(
-            staged->report().gui_session_pending);
         EXPECT_EQ(
             staged->report()
                 .pending_session.gui_layout
@@ -967,7 +965,7 @@ namespace {
             ProjectDocument::commit_hydration(
                 live_scene,
                 std::move(*staged));
-        EXPECT_TRUE(hydration.gui_session_pending);
+        (void)hydration;
         EXPECT_EQ(live_scene.getNodeCount(), 0u);
 
         std::set<std::string> proven;

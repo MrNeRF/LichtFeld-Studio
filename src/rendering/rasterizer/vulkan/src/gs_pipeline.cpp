@@ -212,6 +212,41 @@ const lfs::rendering::SubmissionState& VulkanGSPipeline::lastSubmissionState() c
     return last_submission_state_;
 }
 
+void VulkanGSPipeline::trackExternalParent(VkBuffer buffer) {
+    barrier_planner_.track(buffer);
+}
+
+void VulkanGSPipeline::untrackExternalParent(VkBuffer buffer) {
+    barrier_planner_.forget(buffer);
+}
+
+lfs::rendering::vulkan::BufferBarrierPlanner& VulkanGSPipeline::barrierPlanner() noexcept {
+    return barrier_planner_;
+}
+
+const lfs::rendering::vulkan::BufferBarrierPlanner& VulkanGSPipeline::barrierPlanner() const noexcept {
+    return barrier_planner_;
+}
+
+void VulkanGSPipeline::planTransfer(
+    std::span<const lfs::rendering::vulkan::DeclaredAccess> accesses) {
+    if (!commandBatchInProgress) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "planTransfer requires an active command batch (batch_active={}, access_count={}, command_buffer={:#x})",
+                commandBatchInProgress,
+                accesses.size(),
+                lfs::rendering::vkHandleValue(command_buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    const auto planned = barrier_planner_.plan(accesses);
+    emitPlannedBufferBarriers(planned);
+#ifndef NDEBUG
+    const int barrier2_emissions = planned.empty() ? 0 : 1;
+    assert(barrier2_emissions <= 1);
+#endif
+}
+
 VulkanGSPipeline::~VulkanGSPipeline() noexcept {
     cancelCommandBatch();
     try {
@@ -257,6 +292,8 @@ void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
     queue_family_index = external_queue_family_index;
     allocator = external_allocator;
     pipeline_cache = external_pipeline_cache;
+    // Epic #1496: planner queue family must match barrier emission shape.
+    barrier_planner_ = lfs::rendering::vulkan::BufferBarrierPlanner(external_queue_family_index);
 
     vk_cmd_push_descriptor_set_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
         vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR"));
@@ -445,13 +482,6 @@ void VulkanGSPipeline::cleanup() {
     }
     HOST_GUARD;
     lfs::diagnostics::VramProfiler::instance().clearStaticScope(kSlangShaderRootScope);
-
-    if (stager.buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(allocator, stager.buffer, stager.allocation);
-        stager.buffer = VK_NULL_HANDLE;
-        stager.allocation = VK_NULL_HANDLE;
-        stager.allocSize = 0;
-    }
 
     if (device != VK_NULL_HANDLE) {
         const VkResult idle_result = vkDeviceWaitIdle(device);
@@ -847,6 +877,9 @@ void VulkanGSPipeline::beginCommandBatch() {
         .pImageMemoryBarriers = nullptr,
     };
     vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &reuse_dependency);
+
+    // Epic #1496 §2.4: planner state matches the reuse barrier just recorded.
+    barrier_planner_.onBatchBegin();
 
     commandBatchInProgress = true;
     try {
@@ -1489,7 +1522,7 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     }
 }
 
-bool VulkanGSPipeline::writeTimestamp(int delta) {
+void VulkanGSPipeline::writeTimestamp(int delta) {
     if (!commandBatchInProgress) {
         lfs::rendering::throw_renderer_contract(
             std::format(
@@ -1540,7 +1573,6 @@ bool VulkanGSPipeline::writeTimestamp(int delta) {
         timestamp_query_pool, timestampNumWritten);
     timestampNumWritten += 1;
     timestampStackDepth += delta;
-    return true;
 }
 
 bool VulkanGSPipeline::writeTimestampNoExcept(int delta) {
@@ -1573,38 +1605,21 @@ void VulkanGSPipeline::setCpuTimerCallback(CpuTimerCallback callback) {
 
 VkAccessFlags2 toAccessMask(VulkanGSPipeline::BarrierMask barrierMask) {
     VkAccessFlags2 result = VK_ACCESS_2_NONE;
-    if (barrierMask == VulkanGSPipeline::TRANSFER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+    if (barrierMask == VulkanGSPipeline::TRANSFER_READ)
         result |= VK_ACCESS_2_TRANSFER_READ_BIT;
     if (barrierMask == VulkanGSPipeline::TRANSFER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
     if (barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_INDIRECT_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE)
         result |= VK_ACCESS_2_SHADER_READ_BIT;
     if (barrierMask == VulkanGSPipeline::COMPUTE_SHADER_WRITE ||
         barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_ACCESS_2_SHADER_WRITE_BIT;
-    if (barrierMask == VulkanGSPipeline::HOST_READ ||
-        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
+    if (barrierMask == VulkanGSPipeline::HOST_READ)
         result |= VK_ACCESS_2_HOST_READ_BIT;
-    if (barrierMask == VulkanGSPipeline::HOST_WRITE ||
-        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
-        result |= VK_ACCESS_2_HOST_WRITE_BIT;
-    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_INDIRECT_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ)
         result |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
     if (barrierMask == VulkanGSPipeline::CONDITIONAL_RENDERING_READ)
         result |= VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT;
@@ -1615,28 +1630,16 @@ VkPipelineStageFlags2 toStageMask(VulkanGSPipeline::BarrierMask barrierMask) {
     VkPipelineStageFlags2 result = VK_PIPELINE_STAGE_2_NONE;
     if (barrierMask == VulkanGSPipeline::TRANSFER_READ ||
         barrierMask == VulkanGSPipeline::TRANSFER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
     if (barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ ||
         barrierMask == VulkanGSPipeline::COMPUTE_SHADER_WRITE ||
         barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_INDIRECT_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    if (barrierMask == VulkanGSPipeline::HOST_READ ||
-        barrierMask == VulkanGSPipeline::HOST_WRITE ||
-        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
+    if (barrierMask == VulkanGSPipeline::HOST_READ)
         result |= VK_PIPELINE_STAGE_2_HOST_BIT;
-    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_INDIRECT_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_INDIRECT_READ)
+    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ)
         result |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
     if (barrierMask == VulkanGSPipeline::CONDITIONAL_RENDERING_READ)
         result |= VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
@@ -1666,6 +1669,8 @@ void VulkanGSPipeline::bufferMemoryBarrier(
         if (buffer.buffer == VK_NULL_HANDLE) {
             continue;
         }
+        // Epic #1496 §3.4: legacy barrier invalidates planner state for named buffers.
+        barrier_planner_.invalidate(buffer.buffer);
         validateBufferRange(buffer, 0, buffer.size, "bufferMemoryBarrier");
         VkBufferMemoryBarrier2 barrier = {};
         barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -1684,13 +1689,19 @@ void VulkanGSPipeline::bufferMemoryBarrier(
     if (barriers.empty())
         return;
 
+    if (vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr) {
+        throwRendererContractViolation(
+            "bufferMemoryBarrier requires VulkanDispatch::cmd_pipeline_barrier2",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
     const uint32_t barrier_count = static_cast<uint32_t>(barriers.size());
     VkDependencyInfo dependency = {};
     dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dependency.bufferMemoryBarrierCount = barrier_count;
     dependency.pBufferMemoryBarriers = barriers.data();
 
-    vkCmdPipelineBarrier2(command_buffer, &dependency);
+    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &dependency);
 }
 
 void VulkanGSPipeline::bufferMemoryBarrier(const std::vector<BufferBarrier>& requested_barriers) {
@@ -1710,6 +1721,8 @@ void VulkanGSPipeline::bufferMemoryBarrier(const std::vector<BufferBarrier>& req
         const auto& buffer = requested.buffer;
         if (buffer.buffer == VK_NULL_HANDLE)
             continue;
+        // Epic #1496 §3.4: legacy barrier invalidates planner state for named buffers.
+        barrier_planner_.invalidate(buffer.buffer);
         validateBufferRange(buffer, 0, buffer.size, "bufferMemoryBarrier");
         barriers.push_back(VkBufferMemoryBarrier2{
             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
@@ -1728,6 +1741,12 @@ void VulkanGSPipeline::bufferMemoryBarrier(const std::vector<BufferBarrier>& req
     if (barriers.empty())
         return;
 
+    if (vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr) {
+        throwRendererContractViolation(
+            "bufferMemoryBarrier requires VulkanDispatch::cmd_pipeline_barrier2",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
     const VkDependencyInfo dependency{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
         .pNext = nullptr,
@@ -1739,7 +1758,7 @@ void VulkanGSPipeline::bufferMemoryBarrier(const std::vector<BufferBarrier>& req
         .imageMemoryBarrierCount = 0,
         .pImageMemoryBarriers = nullptr,
     };
-    vkCmdPipelineBarrier2(command_buffer, &dependency);
+    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &dependency);
 }
 
 // Compute pipeline
@@ -1881,36 +1900,46 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const s
     all_compute_pipelines.push_back(&pipeline);
 }
 
-void VulkanGSPipeline::executeCompute(
+void VulkanGSPipeline::emitPlannedBufferBarriers(
+    const std::vector<VkBufferMemoryBarrier2>& barriers) {
+    if (barriers.empty()) {
+        return;
+    }
+    if (vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr) {
+        throwRendererContractViolation(
+            "tagged dispatch requires VulkanDispatch::cmd_pipeline_barrier2",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    const VkDependencyInfo dependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .pNext = nullptr,
+        .dependencyFlags = 0,
+        .memoryBarrierCount = 0,
+        .pMemoryBarriers = nullptr,
+        .bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size()),
+        .pBufferMemoryBarriers = barriers.data(),
+        .imageMemoryBarrierCount = 0,
+        .pImageMemoryBarriers = nullptr,
+    };
+    // Spec §2.6 / §3.1: at most one barrier2 call per tagged dispatch (coalescing).
+    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &dependency);
+}
+
+void VulkanGSPipeline::recordComputeDispatch(
     std::vector<std::pair<size_t, size_t>> dims,
     const void* uniformsPtr, size_t uniformSize,
     _ComputePipeline& pipeline,
     const std::vector<_VulkanBuffer>& buffers) {
-    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "executeCompute push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(uniformsPtr),
-                uniformSize,
-                MAX_UNIFORM_SIZE),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
-        vk_cmd_push_descriptor_set_ == nullptr) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "executeCompute requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(pipeline.pipeline),
-                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
-                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
+    if (vulkan_dispatch_.cmd_bind_pipeline == nullptr ||
+        vulkan_dispatch_.cmd_push_constants == nullptr ||
+        vulkan_dispatch_.cmd_dispatch == nullptr) {
+        throwRendererContractViolation(
+            "executeCompute requires VulkanDispatch cmd_bind_pipeline, "
+            "cmd_push_constants, and cmd_dispatch",
             LFS_SOURCE_SITE_CURRENT());
     }
 
-    DEVICE_GUARD;
-
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+    vulkan_dispatch_.cmd_bind_pipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
 
     const std::size_t num_buffers = pipeline.buffer_layouts.size();
     std::vector<VkDescriptorBufferInfo> buffer_infos(num_buffers);
@@ -1955,16 +1984,14 @@ void VulkanGSPipeline::executeCompute(
                                 static_cast<uint32_t>(writes.size()),
                                 writes.data());
 
-    // Push constants for uniforms
     if (uniformsPtr) {
-        vkCmdPushConstants(
+        vulkan_dispatch_.cmd_push_constants(
             command_buffer,
             pipeline.pipeline_layout,
             VK_SHADER_STAGE_COMPUTE_BIT,
             0, (uint32_t)uniformSize, uniformsPtr);
     }
 
-    // Dispatch compute shader
     if (dims.empty() || dims.size() > 3) {
         lfs::rendering::throw_renderer_contract(
             std::format(
@@ -2010,55 +2037,25 @@ void VulkanGSPipeline::executeCompute(
                 dims[2].first,
                 dims[2].second),
             LFS_SOURCE_SITE_CURRENT());
-    vkCmdDispatch(command_buffer, nGroupsX, nGroupsY, nGroupsZ);
+    vulkan_dispatch_.cmd_dispatch(command_buffer, nGroupsX, nGroupsY, nGroupsZ);
 }
 
-void VulkanGSPipeline::executeComputeIndirect(
+void VulkanGSPipeline::recordComputeDispatchIndirect(
     const _VulkanBuffer& indirect_buffer,
     VkDeviceSize indirect_offset,
     const void* uniformsPtr, size_t uniformSize,
     _ComputePipeline& pipeline,
     const std::vector<_VulkanBuffer>& buffers) {
-    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "executeComputeIndirect push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(uniformsPtr),
-                uniformSize,
-                MAX_UNIFORM_SIZE),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    if ((indirect_offset & 3u) != 0) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "executeComputeIndirect requires a four-byte-aligned VkDispatchIndirectCommand offset (pipeline='{}', buffer={:#x}, base_offset={}, relative_offset={}, relative_offset_mod4={})",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(indirect_buffer.buffer),
-                indirect_buffer.offset,
-                indirect_offset,
-                indirect_offset & 3u),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    validateBufferRange(indirect_buffer,
-                        indirect_offset,
-                        sizeof(VkDispatchIndirectCommand),
-                        "executeComputeIndirect dispatch arguments");
-    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
-        vk_cmd_push_descriptor_set_ == nullptr) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "executeComputeIndirect requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
-                pipeline.diagnostic_name,
-                lfs::rendering::vkHandleValue(pipeline.pipeline),
-                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
-                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
+    if (vulkan_dispatch_.cmd_bind_pipeline == nullptr ||
+        vulkan_dispatch_.cmd_push_constants == nullptr ||
+        vulkan_dispatch_.cmd_dispatch_indirect == nullptr) {
+        throwRendererContractViolation(
+            "executeComputeIndirect requires VulkanDispatch cmd_bind_pipeline, "
+            "cmd_push_constants, and cmd_dispatch_indirect",
             LFS_SOURCE_SITE_CURRENT());
     }
 
-    DEVICE_GUARD;
-
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+    vulkan_dispatch_.cmd_bind_pipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
 
     const std::size_t num_buffers = pipeline.buffer_layouts.size();
     std::vector<VkDescriptorBufferInfo> buffer_infos(num_buffers);
@@ -2104,14 +2101,238 @@ void VulkanGSPipeline::executeComputeIndirect(
                                 writes.data());
 
     if (uniformsPtr) {
-        vkCmdPushConstants(
+        vulkan_dispatch_.cmd_push_constants(
             command_buffer,
             pipeline.pipeline_layout,
             VK_SHADER_STAGE_COMPUTE_BIT,
             0, (uint32_t)uniformSize, uniformsPtr);
     }
 
-    vkCmdDispatchIndirect(command_buffer, indirect_buffer.buffer, indirect_buffer.offset + indirect_offset);
+    vulkan_dispatch_.cmd_dispatch_indirect(
+        command_buffer, indirect_buffer.buffer, indirect_buffer.offset + indirect_offset);
+}
+
+void VulkanGSPipeline::executeCompute(
+    std::vector<std::pair<size_t, size_t>> dims,
+    const void* uniformsPtr, size_t uniformSize,
+    _ComputePipeline& pipeline,
+    const std::vector<_VulkanBuffer>& buffers) {
+    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(uniformsPtr),
+                uniformSize,
+                MAX_UNIFORM_SIZE),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
+        vk_cmd_push_descriptor_set_ == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(pipeline.pipeline),
+                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
+                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    // Epic #1496 §3.4: untagged path invalidates every bound buffer (mixed-mode safety).
+    for (const auto& buffer : buffers) {
+        barrier_planner_.invalidate(buffer.buffer);
+    }
+
+    DEVICE_GUARD;
+    recordComputeDispatch(std::move(dims), uniformsPtr, uniformSize, pipeline, buffers);
+}
+
+void VulkanGSPipeline::executeComputeIndirect(
+    const _VulkanBuffer& indirect_buffer,
+    VkDeviceSize indirect_offset,
+    const void* uniformsPtr, size_t uniformSize,
+    _ComputePipeline& pipeline,
+    const std::vector<_VulkanBuffer>& buffers) {
+    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeComputeIndirect push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(uniformsPtr),
+                uniformSize,
+                MAX_UNIFORM_SIZE),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if ((indirect_offset & 3u) != 0) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeComputeIndirect requires a four-byte-aligned VkDispatchIndirectCommand offset (pipeline='{}', buffer={:#x}, base_offset={}, relative_offset={}, relative_offset_mod4={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(indirect_buffer.buffer),
+                indirect_buffer.offset,
+                indirect_offset,
+                indirect_offset & 3u),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    validateBufferRange(indirect_buffer,
+                        indirect_offset,
+                        sizeof(VkDispatchIndirectCommand),
+                        "executeComputeIndirect dispatch arguments");
+    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
+        vk_cmd_push_descriptor_set_ == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeComputeIndirect requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(pipeline.pipeline),
+                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
+                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    // Epic #1496 §3.4: untagged path invalidates every bound buffer + indirect args.
+    for (const auto& buffer : buffers) {
+        barrier_planner_.invalidate(buffer.buffer);
+    }
+    barrier_planner_.invalidate(indirect_buffer.buffer);
+
+    DEVICE_GUARD;
+    recordComputeDispatchIndirect(
+        indirect_buffer, indirect_offset, uniformsPtr, uniformSize, pipeline, buffers);
+}
+
+void VulkanGSPipeline::executeCompute(
+    std::vector<std::pair<size_t, size_t>> dims,
+    const void* uniformsPtr, size_t uniformSize,
+    _ComputePipeline& pipeline,
+    const std::vector<TaggedBinding>& bindings) {
+    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(uniformsPtr),
+                uniformSize,
+                MAX_UNIFORM_SIZE),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
+        vk_cmd_push_descriptor_set_ == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(pipeline.pipeline),
+                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
+                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    // Dense ordered list: same indexing as the untagged buffer array.
+    std::vector<_VulkanBuffer> buffers;
+    buffers.reserve(bindings.size());
+    for (const auto& binding : bindings) {
+        buffers.push_back(binding.buffer);
+    }
+
+    std::vector<lfs::rendering::vulkan::DeclaredAccess> accesses;
+    accesses.reserve(bindings.size());
+    for (std::size_t i = 0; i < bindings.size(); ++i) {
+        accesses.push_back(lfs::rendering::vulkan::DeclaredAccess{
+            .buffer = &buffers[i],
+            .use = bindings[i].use,
+        });
+    }
+
+    DEVICE_GUARD;
+
+    const auto planned = barrier_planner_.plan(accesses);
+    // Coalescing: one barrier2 for the whole planned set (0 or 1 emission).
+    emitPlannedBufferBarriers(planned);
+#ifndef NDEBUG
+    // Spec §2.6: each tagged dispatch emits ≤ 1 vkCmdPipelineBarrier2 call.
+    const int barrier2_emissions = planned.empty() ? 0 : 1;
+    assert(barrier2_emissions <= 1);
+#endif
+
+    recordComputeDispatch(std::move(dims), uniformsPtr, uniformSize, pipeline, buffers);
+}
+
+void VulkanGSPipeline::executeComputeIndirect(
+    const _VulkanBuffer& indirect_buffer,
+    VkDeviceSize indirect_offset,
+    const void* uniformsPtr, size_t uniformSize,
+    _ComputePipeline& pipeline,
+    const std::vector<TaggedBinding>& bindings) {
+    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeComputeIndirect push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(uniformsPtr),
+                uniformSize,
+                MAX_UNIFORM_SIZE),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if ((indirect_offset & 3u) != 0) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeComputeIndirect requires a four-byte-aligned VkDispatchIndirectCommand offset (pipeline='{}', buffer={:#x}, base_offset={}, relative_offset={}, relative_offset_mod4={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(indirect_buffer.buffer),
+                indirect_buffer.offset,
+                indirect_offset,
+                indirect_offset & 3u),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    validateBufferRange(indirect_buffer,
+                        indirect_offset,
+                        sizeof(VkDispatchIndirectCommand),
+                        "executeComputeIndirect dispatch arguments");
+    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
+        vk_cmd_push_descriptor_set_ == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeComputeIndirect requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(pipeline.pipeline),
+                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
+                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    std::vector<_VulkanBuffer> buffers;
+    buffers.reserve(bindings.size());
+    for (const auto& binding : bindings) {
+        buffers.push_back(binding.buffer);
+    }
+
+    std::vector<lfs::rendering::vulkan::DeclaredAccess> accesses;
+    accesses.reserve(bindings.size() + 1);
+    for (std::size_t i = 0; i < bindings.size(); ++i) {
+        accesses.push_back(lfs::rendering::vulkan::DeclaredAccess{
+            .buffer = &buffers[i],
+            .use = bindings[i].use,
+        });
+    }
+    // Implicit IndirectRead on the dispatch-args buffer (spec §3.1).
+    accesses.push_back(lfs::rendering::vulkan::DeclaredAccess{
+        .buffer = &indirect_buffer,
+        .use = lfs::rendering::vulkan::BufferUse::IndirectRead,
+    });
+
+    DEVICE_GUARD;
+
+    const auto planned = barrier_planner_.plan(accesses);
+    emitPlannedBufferBarriers(planned);
+#ifndef NDEBUG
+    const int barrier2_emissions = planned.empty() ? 0 : 1;
+    assert(barrier2_emissions <= 1);
+#endif
+
+    recordComputeDispatchIndirect(
+        indirect_buffer, indirect_offset, uniformsPtr, uniformSize, pipeline, buffers);
 }
 
 void VulkanGSPipeline::destroyComputePipeline(_ComputePipeline& pipeline) {

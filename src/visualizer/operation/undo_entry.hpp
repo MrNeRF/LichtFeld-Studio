@@ -385,7 +385,6 @@ namespace lfs::vis::op {
 
     enum class SceneGraphCaptureMode : uint8_t {
         FULL,
-        METADATA_ONLY,
     };
 
     struct SceneGraphCaptureOptions {

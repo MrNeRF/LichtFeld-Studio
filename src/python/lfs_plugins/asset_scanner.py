@@ -14,7 +14,7 @@ import re
 import struct
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import lichtfeld as lf
 

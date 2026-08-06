@@ -103,7 +103,6 @@ namespace lfs::vis {
         [[nodiscard]] bool cancelRequested(
             JobHandle handle) const;
         [[nodiscard]] bool anyRunning(JobType type) const;
-        [[nodiscard]] bool hasCompletionPending() const;
 
     private:
         struct Entry {

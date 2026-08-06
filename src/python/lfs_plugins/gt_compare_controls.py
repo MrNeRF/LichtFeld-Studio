@@ -4,6 +4,8 @@
 
 import lichtfeld as lf
 
+from .ui import RuntimeState
+
 
 _DEFAULT_MODE = "rgb"
 
@@ -80,7 +82,7 @@ class GTCompareControlsController:
             return ",".join(dirty_reasons) if dirty else None
 
         self._mode = self._read_mode()
-        state_key = self._mode
+        state_key = (RuntimeState.language_generation.value, self._mode)
         if state_key != self._last_state_key:
             self._last_state_key = state_key
             self._dirty_all()

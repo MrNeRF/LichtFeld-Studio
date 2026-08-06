@@ -271,7 +271,6 @@ TEST(ErrorEventBridgeTest, DiskSpaceCaseIsLeftToNativeHandler) {
 
     lfs::core::events::state::DiskSpaceSaveFailed other{};
     other.is_disk_space_error = false;
-    other.is_checkpoint = true;
     other.error = "write failed";
     const auto notification = lfs::vis::gui::translateDiskSpaceSaveFailed(other);
     ASSERT_TRUE(notification.has_value());

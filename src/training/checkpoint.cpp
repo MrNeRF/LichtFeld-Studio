@@ -44,12 +44,13 @@ namespace lfs::training {
 
         [[nodiscard]] ADMMSparsityOptimizer::Config sparsity_config_from_params(
             const lfs::core::param::OptimizationParameters& params) {
+            const int start_iteration = static_cast<int>(params.iterations);
             return {
                 .sparsify_steps = params.enable_sparsity ? std::max(0, params.sparsify_steps) : 0,
                 .init_rho = params.init_rho,
                 .prune_ratio = params.prune_ratio,
                 .update_every = 50,
-                .start_iteration = static_cast<int>(params.iterations),
+                .start_iteration = start_iteration,
             };
         }
 

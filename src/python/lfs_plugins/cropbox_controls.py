@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """CropBox panel - controls for editing crop box properties."""
 
-from typing import Optional
-
 import lichtfeld as lf
 
 

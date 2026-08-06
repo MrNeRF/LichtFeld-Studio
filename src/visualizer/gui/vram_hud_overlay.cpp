@@ -4,7 +4,10 @@
 
 #include "gui/vram_hud_overlay.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "gui/layout_state.hpp"
+#include "gui/string_keys.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Element.h>
@@ -633,6 +636,7 @@ namespace lfs::vis::gui {
         cached_throughput_text_.clear();
         cached_device_text_.clear();
         last_sequence_ = 0;
+        has_language_generation_ = false;
         last_visible_ = false;
         root_ = nullptr;
         header_ = nullptr;
@@ -723,7 +727,8 @@ namespace lfs::vis::gui {
             rows_root_->SetInnerRML("");
             auto empty_ptr = document_->CreateElement("div");
             empty_ptr->SetAttribute("class", "vram-hud-empty");
-            empty_ptr->SetInnerRML("Waiting for training diagnostics...");
+            empty_ptr->SetInnerRML(
+                lfs::event::LocalizationManager::getInstance().get("toolbar.waiting_training_diagnostics"));
             empty_row_ = rows_root_->AppendChild(std::move(empty_ptr));
         }
 
@@ -957,11 +962,24 @@ namespace lfs::vis::gui {
     }
 
     void VramHudOverlay::setState(State state) {
+        const auto language_generation = lfs::vis::app_store().language_generation.get();
+        const bool language_changed = !has_language_generation_ ||
+                                      language_generation != last_language_generation_;
         const bool visibility_changed = last_visible_ != state.visible;
         const bool data_changed = state.visible && last_sequence_ != state.snapshot.sequence;
         state_ = std::move(state);
-        if (!visibility_changed && !data_changed)
+        if (!visibility_changed && !data_changed && !language_changed)
             return;
+        if (language_changed) {
+            last_language_generation_ = language_generation;
+            has_language_generation_ = true;
+            cached_iteration_text_.clear();
+            cached_iteration_label_ = LOC("status.iteration_label");
+            if (empty_row_) {
+                empty_row_->SetInnerRML(
+                    lfs::event::LocalizationManager::getInstance().get("toolbar.waiting_training_diagnostics"));
+            }
+        }
         last_visible_ = state_.visible;
         last_sequence_ = state_.snapshot.sequence;
         apply();
@@ -990,7 +1008,8 @@ namespace lfs::vis::gui {
         const auto process_total = bestProcessTotal(s);
 
         if (iteration_label_) {
-            setText(iteration_label_, cached_iteration_text_, std::format("iter {}", s.iteration));
+            setText(iteration_label_, cached_iteration_text_,
+                    std::format("{} {}", cached_iteration_label_, s.iteration));
         }
 
         if (throughput_label_) {

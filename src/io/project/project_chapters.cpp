@@ -1774,6 +1774,220 @@ namespace lfs::io::project {
 
     namespace {
 
+        std::filesystem::path
+        absolute_lexically(const std::filesystem::path& path) {
+            std::error_code error;
+            auto absolute = std::filesystem::absolute(path, error);
+            if (error) {
+                return path.lexically_normal();
+            }
+            return absolute.lexically_normal();
+        }
+
+        bool path_is_under(
+            const std::filesystem::path& root,
+            const std::filesystem::path& candidate) {
+            if (root.empty()) {
+                return false;
+            }
+            const auto relative =
+                candidate.lexically_relative(root);
+            if (relative.empty() || relative == ".") {
+                return true;
+            }
+            const auto text = relative.generic_string();
+            return !text.starts_with("..");
+        }
+
+        bool fingerprint_content_matches(
+            const ReferenceFingerprint& expected,
+            const ReferenceFingerprint& observed) {
+            return expected.kind == observed.kind &&
+                   expected.size == observed.size &&
+                   expected.head_xxh3 == observed.head_xxh3 &&
+                   expected.tail_xxh3 == observed.tail_xxh3 &&
+                   (!expected.full_xxh3 ||
+                    expected.full_xxh3 == observed.full_xxh3);
+        }
+
+        std::vector<std::filesystem::path>
+        locator_candidates(
+            const ReferenceLocator& locator,
+            const std::filesystem::path& project_root) {
+            std::vector<std::filesystem::path> candidates;
+            const auto preferred =
+                lfs::core::utf8_to_path(locator.preferred);
+            switch (locator.base) {
+            case LocatorBase::Project:
+                if (!project_root.empty()) {
+                    candidates.push_back(
+                        absolute_lexically(project_root / preferred));
+                }
+                candidates.push_back(absolute_lexically(preferred));
+                break;
+            case LocatorBase::Absolute:
+            case LocatorBase::SearchRoot:
+            case LocatorBase::Dataset:
+                candidates.push_back(absolute_lexically(preferred));
+                if (!project_root.empty() && preferred.is_relative()) {
+                    candidates.push_back(
+                        absolute_lexically(project_root / preferred));
+                }
+                break;
+            }
+            if (locator.absolute_fallback &&
+                !locator.absolute_fallback->empty()) {
+                candidates.push_back(absolute_lexically(
+                    lfs::core::utf8_to_path(*locator.absolute_fallback)));
+            }
+            std::vector<std::filesystem::path> unique;
+            unique.reserve(candidates.size());
+            for (const auto& candidate : candidates) {
+                if (candidate.empty()) {
+                    continue;
+                }
+                if (std::ranges::find(unique, candidate) == unique.end()) {
+                    unique.push_back(candidate);
+                }
+            }
+            return unique;
+        }
+
+    } // namespace
+
+    lfs::Result<lfs::core::Uuid> upsert_path_reference(
+        ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        const std::filesystem::path& live_path,
+        const std::string_view key,
+        const std::string_view kind,
+        std::optional<lfs::core::Uuid> existing_uuid) {
+        if (key.empty() || kind.empty()) {
+            return fail<lfs::core::Uuid>(
+                lfs::ErrorCode::InvalidArgument,
+                "A path reference key or kind is empty.",
+                "REFS upsert_path_reference requires non-empty key and kind",
+                "REFS", "references");
+        }
+        if (live_path.empty()) {
+            return fail<lfs::core::Uuid>(
+                lfs::ErrorCode::InvalidArgument,
+                "A path reference path is empty.",
+                "REFS upsert_path_reference requires a non-empty live path",
+                "REFS", "references");
+        }
+        auto fingerprint = fingerprint_path(live_path);
+        if (!fingerprint) {
+            return std::move(fingerprint).error();
+        }
+        const auto absolute = absolute_lexically(live_path);
+        const auto absolute_text = lfs::core::path_to_utf8(absolute);
+        ReferenceLocator locator{
+            .preferred = absolute_text,
+            .base = LocatorBase::Absolute,
+            .absolute_fallback = absolute_text,
+        };
+        if (!project_root.empty()) {
+            const auto root = absolute_lexically(project_root);
+            if (path_is_under(root, absolute)) {
+                const auto relative = absolute.lexically_relative(root);
+                if (!relative.empty() && relative != "." &&
+                    !relative.generic_string().starts_with("..")) {
+                    locator.preferred =
+                        lfs::core::path_to_utf8(relative.generic_string());
+                    locator.base = LocatorBase::Project;
+                }
+            }
+        }
+
+        auto records = references.records();
+        if (!records) {
+            return std::move(records).error();
+        }
+        lfs::core::Uuid uuid;
+        if (existing_uuid && !existing_uuid->is_nil()) {
+            uuid = *existing_uuid;
+        } else if (const auto by_key = std::ranges::find(
+                       *records, std::string(key), &ReferenceRecord::key);
+                   by_key != records->end()) {
+            uuid = by_key->uuid;
+        } else {
+            uuid = lfs::core::generate_uuid_v4();
+        }
+
+        ReferenceRecord record{
+            .uuid = uuid,
+            .key = std::string(key),
+            .kind = std::string(kind),
+            .locator = std::move(locator),
+            .fingerprint = std::move(*fingerprint),
+            .unresolved = false,
+        };
+        if (auto status = references.upsert(record); !status) {
+            return std::move(status).error();
+        }
+        return uuid;
+    }
+
+    std::optional<std::filesystem::path> resolve_path_reference(
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        const lfs::core::Uuid& uuid,
+        const std::filesystem::path& hint) {
+        if (uuid.is_nil()) {
+            return hint.empty()
+                       ? std::optional<std::filesystem::path>{}
+                       : hint;
+        }
+        auto record = references.find(uuid);
+        if (!record || !*record) {
+            return hint.empty()
+                       ? std::optional<std::filesystem::path>{}
+                       : hint;
+        }
+        for (const auto& candidate :
+             locator_candidates((*record)->locator, project_root)) {
+            std::error_code error;
+            if (!std::filesystem::exists(candidate, error) || error) {
+                continue;
+            }
+            auto check =
+                check_fingerprint(candidate, (*record)->fingerprint);
+            if (check && check->matches()) {
+                return candidate;
+            }
+            // Content mismatch: try next candidate. Missing fingerprint
+            // observations also fall through.
+            if (check && check->observed &&
+                fingerprint_content_matches(
+                    (*record)->fingerprint, *check->observed)) {
+                return candidate;
+            }
+        }
+        if (!hint.empty()) {
+            return hint;
+        }
+        // Last resort: preferred path even without a match so callers can
+        // surface a missing/mismatched file at the stored locator.
+        const auto preferred = lfs::core::utf8_to_path(
+            (*record)->locator.preferred);
+        if ((*record)->locator.base == LocatorBase::Project &&
+            !project_root.empty() && preferred.is_relative()) {
+            return absolute_lexically(project_root / preferred);
+        }
+        if (!preferred.empty()) {
+            return absolute_lexically(preferred);
+        }
+        if ((*record)->locator.absolute_fallback &&
+            !(*record)->locator.absolute_fallback->empty()) {
+            return absolute_lexically(lfs::core::utf8_to_path(
+                *(*record)->locator.absolute_fallback));
+        }
+        return std::nullopt;
+    }
+
+    namespace {
+
         lfs::Result<PayloadBinding> parse_payload_binding(
             const Json& value, const std::string_view field) {
             if (auto valid = require_object(value, "SCNG", field); !valid) {

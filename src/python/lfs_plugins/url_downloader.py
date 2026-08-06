@@ -17,7 +17,10 @@ import zipfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+import lichtfeld as lf
+
 from .http import urlopen
+from .localization import safe_format
 
 logger = logging.getLogger(__name__)
 
@@ -210,20 +213,27 @@ def _download_with_progress(
                     speed_str = _format_bytes(speed) + "/s"
                     eta_str = _format_time(eta_seconds) if eta_seconds > 0 else ""
                     
-                    status = f"Downloading... {int(percent * 100)}% ({_format_bytes(downloaded)} / {_format_bytes(total_size)}) {speed_str}"
+                    status = safe_format(lf.ui.tr("asset_manager.download_progress_known"),
+                        percent=int(percent * 100),
+                        downloaded=_format_bytes(downloaded),
+                        total=_format_bytes(total_size),
+                        speed=speed_str,
+                    )
                     if eta_str:
-                        status += f" ETA: {eta_str}"
+                        status += safe_format(lf.ui.tr("asset_manager.download_eta"), eta=eta_str)
                     
                     on_progress(min(percent, 0.99), status)
                 else:
                     # Unknown size
                     elapsed = current_time - start_time
                     speed = downloaded / elapsed if elapsed > 0 else 0
-                    status = f"Downloading... {_format_bytes(downloaded)} ({_format_bytes(speed)}/s)"
+                    status = lf.ui.tr("asset_manager.download_progress_unknown").format(
+                        downloaded=_format_bytes(downloaded), speed=_format_bytes(speed)
+                    )
                     on_progress(-1.0, status)
     
     if on_progress:
-        on_progress(1.0, f"Download complete: {_format_bytes(downloaded)}")
+        on_progress(1.0, lf.ui.tr("asset_manager.download_complete").format(downloaded=_format_bytes(downloaded)))
 
 
 def _format_bytes(size: float) -> str:
@@ -260,7 +270,7 @@ def _download_http(
 ) -> None:
     """Download from HTTP(S) URL."""
     if on_progress:
-        on_progress(0.0, "Connecting...")
+        on_progress(0.0, lf.ui.tr("asset_manager.status_connecting"))
     
     req_headers = {"User-Agent": HTTP_USER_AGENT}
     if headers:
@@ -283,9 +293,16 @@ def _download_http(
             
             if on_progress:
                 if total_size:
-                    on_progress(0.0, f"Downloading... 0% (0 / {_format_bytes(total_size)})")
+                    status = safe_format(
+                        lf.ui.tr("asset_manager.download_progress_known"),
+                        percent=0,
+                        downloaded="0",
+                        total=_format_bytes(total_size),
+                        speed="",
+                    )
+                    on_progress(0.0, status.rstrip())
                 else:
-                    on_progress(0.0, "Downloading... (size unknown)")
+                    on_progress(0.0, lf.ui.tr("asset_manager.download_unknown_size"))
             
             _download_with_progress(
                 resp,
@@ -436,7 +453,7 @@ def _extract_zip(
             _raise_if_cancelled(should_cancel)
             if on_progress and i % 10 == 0:  # Report every 10 files
                 percent = i / total if total > 0 else 0
-                on_progress(percent, f"Extracting... {i}/{total} files")
+                on_progress(percent, lf.ui.tr("asset_manager.extracting_progress").format(current=i, total=total))
             
             # Security: Check for path traversal
             target_path = (dest_dir / member.filename).resolve()
@@ -454,7 +471,7 @@ def _extract_zip(
                     _copy_stream(src, dst, should_cancel)
         
         if on_progress:
-            on_progress(1.0, f"Extraction complete: {total} files")
+            on_progress(1.0, lf.ui.tr("asset_manager.extraction_complete").format(total=total))
 
 
 def _extract_tar(
@@ -472,7 +489,7 @@ def _extract_tar(
             _raise_if_cancelled(should_cancel)
             if on_progress and i % 10 == 0:  # Report every 10 files
                 percent = i / total if total > 0 else 0
-                on_progress(percent, f"Extracting... {i}/{total} files")
+                on_progress(percent, lf.ui.tr("asset_manager.extracting_progress").format(current=i, total=total))
             
             # Security: Check for path traversal
             target_path = (dest_dir / member.name).resolve()
@@ -492,7 +509,7 @@ def _extract_tar(
             # Skip symlinks and other special files for security
         
         if on_progress:
-            on_progress(1.0, f"Extraction complete: {total} files")
+            on_progress(1.0, lf.ui.tr("asset_manager.extraction_complete").format(total=total))
 
 
 def download_and_extract(
@@ -534,7 +551,7 @@ def download_and_extract(
         
         if extract and _is_archive(tmp_path):
             if on_progress:
-                on_progress(0.0, "Extracting archive...")
+                on_progress(0.0, lf.ui.tr("asset_manager.extracting_archive"))
             
             extract_dir = dest_dir / _strip_archive_suffix(filename)
             extract_dir.mkdir(parents=True, exist_ok=True)

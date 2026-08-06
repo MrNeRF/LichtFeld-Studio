@@ -58,6 +58,7 @@ PACK_STRUCT(struct VulkanGSLodCompactUniforms {
     uint32_t miss_capacity;
     uint32_t pad0;
 });
+static_assert(sizeof(VulkanGSLodCompactUniforms) == 16);
 
 PACK_STRUCT(struct VulkanGSLodSelectUniforms {
     uint32_t node_count;
@@ -131,6 +132,7 @@ PACK_STRUCT(struct VulkanGSSelectionPolygonRasterizeUniforms {
     uint32_t pad1;
     uint32_t pad2;
 });
+static_assert(sizeof(VulkanGSSelectionPolygonRasterizeUniforms) == 32);
 
 inline constexpr uint32_t kLodCompactProtectedCap = 98304;
 inline constexpr uint32_t kLodCompactMissCap = 16384;
@@ -336,7 +338,6 @@ protected:
         VulkanGSPipelineBuffers& buffers,
         Buffer<int32_t>& input_buffer,
         Buffer<int32_t>& output_buffer,
-        const std::vector<BufferBarrier>& additional_begin_barriers = {},
         bool record_timestamps = true);
 
     void executeSortIndirectCount(const VulkanGSRendererUniforms& uniforms,
@@ -369,7 +370,6 @@ protected:
     _ComputePipeline pipeline_selection_mask = _ComputePipeline(11);
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
     _ComputePipeline pipeline_generate_keys_wave = _ComputePipeline(8);
-    _ComputePipeline pipeline_seed_primitive_indices = _ComputePipeline(1);
     _ComputePipeline pipeline_apply_depth_ordering = _ComputePipeline(4);
     _ComputePipeline pipeline_visible_flags = _ComputePipeline(2);
     _ComputePipeline pipeline_prepare_visible_sort = _ComputePipeline(3);

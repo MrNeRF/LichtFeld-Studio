@@ -13,8 +13,10 @@
 
 #include <SDL3/SDL_mouse.h>
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <optional>
 #include <string>
 

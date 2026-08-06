@@ -42,6 +42,7 @@ namespace lfs::io {
         void* cuda_stream = nullptr;
         const lfs::core::UndistortParams* undistort = nullptr;
         bool output_uint8 = false;
+        bool skip_blob_cache = false;
     };
 
     struct CachedImageData {

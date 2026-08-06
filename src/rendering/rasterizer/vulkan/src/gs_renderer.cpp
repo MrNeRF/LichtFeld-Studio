@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <csignal>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -320,18 +321,33 @@ void VulkanGSRenderer::recordInstanceCountReadback(VulkanGSPipelineBuffers& buff
         instance_count_readback_signal_ != VK_NULL_HANDLE)
         return;
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
+    const auto& wave_buffer = buffers.depth_wave_dispatch.deviceBuffer;
+    const DeclaredAccess pre_copy[] = {
+        {.buffer = &count_buffer, .use = BufferUse::TransferRead},
+        {.buffer = &wave_buffer, .use = BufferUse::TransferRead},
+        {.buffer = &instance_count_readback_buffer_, .use = BufferUse::TransferWrite},
+    };
+    planTransfer(std::span{pre_copy});
+
     VkBufferCopy copy{};
     copy.srcOffset = buffers.tile_sort_count.deviceBuffer.offset;
     copy.dstOffset = 0;
     copy.size = sizeof(uint32_t);
     validateBufferRange(count_buffer, 0, copy.size, "tile-instance count readback source");
     validateBufferRange(instance_count_readback_buffer_, 0, copy.size, "tile-instance count readback destination");
-    vkCmdCopyBuffer(command_buffer,
-                    buffers.tile_sort_count.deviceBuffer.buffer,
-                    instance_count_readback_buffer_.buffer,
-                    1,
-                    &copy);
-    const auto& wave_buffer = buffers.depth_wave_dispatch.deviceBuffer;
+    if (vulkan_dispatch_.cmd_copy_buffer == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            "recordInstanceCountReadback requires VulkanDispatch::cmd_copy_buffer",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    vulkan_dispatch_.cmd_copy_buffer(command_buffer,
+                                     buffers.tile_sort_count.deviceBuffer.buffer,
+                                     instance_count_readback_buffer_.buffer,
+                                     1,
+                                     &copy);
     const VkDeviceSize needed_offset =
         indirect::byteOffset(indirect::DepthWave::kHeaderNeededWord);
     validateBufferRange(wave_buffer,
@@ -342,23 +358,27 @@ void VulkanGSRenderer::recordInstanceCountReadback(VulkanGSPipelineBuffers& buff
     wave_copy.srcOffset = wave_buffer.offset + needed_offset;
     wave_copy.dstOffset = sizeof(uint32_t);
     wave_copy.size = sizeof(uint32_t);
-    vkCmdCopyBuffer(command_buffer,
-                    wave_buffer.buffer,
-                    instance_count_readback_buffer_.buffer,
-                    1,
-                    &wave_copy);
+    vulkan_dispatch_.cmd_copy_buffer(command_buffer,
+                                     wave_buffer.buffer,
+                                     instance_count_readback_buffer_.buffer,
+                                     1,
+                                     &wave_copy);
     const uint32_t armed_u32 = static_cast<uint32_t>(armed);
     validateBufferRange(instance_count_readback_buffer_,
                         2 * sizeof(uint32_t),
                         sizeof(uint32_t),
                         "depth-wave armed-count readback destination");
+    // Host-side word write; plan TransferWrite already covers the dst buffer.
     vkCmdUpdateBuffer(command_buffer,
                       instance_count_readback_buffer_.buffer,
                       2 * sizeof(uint32_t),
                       sizeof(uint32_t),
                       &armed_u32);
-    bufferMemoryBarrier({{instance_count_readback_buffer_, TRANSFER_WRITE}},
-                        HOST_READ);
+    const DeclaredAccess host_read{
+        .buffer = &instance_count_readback_buffer_,
+        .use = BufferUse::HostRead,
+    };
+    planTransfer(std::span{&host_read, 1});
     instance_count_readback_pending_ = true;
     instance_count_readback_signal_ = VK_NULL_HANDLE;
     instance_count_readback_value_ = 0;
@@ -473,6 +493,15 @@ VulkanGSRenderer::TileInstanceGate VulkanGSRenderer::synchronizeTileInstanceGate
             LFS_SOURCE_SITE_CURRENT());
     }
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
+    const DeclaredAccess pre_copy[] = {
+        {.buffer = &count, .use = BufferUse::TransferRead},
+        {.buffer = &instance_gate_readback_buffer_, .use = BufferUse::TransferWrite},
+    };
+    planTransfer(std::span{pre_copy});
+
     const VkBufferCopy copy{
         .srcOffset = count.offset,
         .dstOffset = 0,
@@ -483,12 +512,21 @@ VulkanGSRenderer::TileInstanceGate VulkanGSRenderer::synchronizeTileInstanceGate
                         0,
                         copy.size,
                         "export tile-instance gate destination");
-    vkCmdCopyBuffer(command_buffer,
-                    count.buffer,
-                    instance_gate_readback_buffer_.buffer,
-                    1,
-                    &copy);
-    bufferMemoryBarrier({{instance_gate_readback_buffer_, TRANSFER_WRITE}}, HOST_READ);
+    if (vulkan_dispatch_.cmd_copy_buffer == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            "synchronizeTileInstanceGate requires VulkanDispatch::cmd_copy_buffer",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    vulkan_dispatch_.cmd_copy_buffer(command_buffer,
+                                     count.buffer,
+                                     instance_gate_readback_buffer_.buffer,
+                                     1,
+                                     &copy);
+    const DeclaredAccess host_read{
+        .buffer = &instance_gate_readback_buffer_,
+        .use = BufferUse::HostRead,
+    };
+    planTransfer(std::span{&host_read, 1});
 
     // This is the single intentional export stall: batch A has produced the
     // exact raw count. The dedicated gate has no deferred never-stomp state.
@@ -762,19 +800,38 @@ void VulkanGSRenderer::recordVisibleCountReadback(VulkanGSPipelineBuffers& buffe
         visible_count_readback_signal_ != VK_NULL_HANDLE)
         return;
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
+    // Plan TransferRead source + TransferWrite dst before the copy.
+    const DeclaredAccess pre_copy[] = {
+        {.buffer = &count_buffer, .use = BufferUse::TransferRead},
+        {.buffer = &visible_count_readback_buffer_, .use = BufferUse::TransferWrite},
+    };
+    planTransfer(std::span{pre_copy});
+
     VkBufferCopy copy{};
     copy.srcOffset = buffers.visible_count.deviceBuffer.offset;
     copy.dstOffset = 0;
     copy.size = 2 * sizeof(uint32_t);
     validateBufferRange(count_buffer, 0, copy.size, "visible-count readback source");
     validateBufferRange(visible_count_readback_buffer_, 0, copy.size, "visible-count readback destination");
-    vkCmdCopyBuffer(command_buffer,
-                    buffers.visible_count.deviceBuffer.buffer,
-                    visible_count_readback_buffer_.buffer,
-                    1,
-                    &copy);
-    bufferMemoryBarrier({{visible_count_readback_buffer_, TRANSFER_WRITE}},
-                        HOST_READ);
+    if (vulkan_dispatch_.cmd_copy_buffer == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            "recordVisibleCountReadback requires VulkanDispatch::cmd_copy_buffer",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    vulkan_dispatch_.cmd_copy_buffer(command_buffer,
+                                     buffers.visible_count.deviceBuffer.buffer,
+                                     visible_count_readback_buffer_.buffer,
+                                     1,
+                                     &copy);
+    // Host coherence still needs fence/timeline wait at batch end (§3.2 G3).
+    const DeclaredAccess host_read{
+        .buffer = &visible_count_readback_buffer_,
+        .use = BufferUse::HostRead,
+    };
+    planTransfer(std::span{&host_read, 1});
     visible_count_readback_pending_ = true;
     visible_count_readback_signal_ = VK_NULL_HANDLE;
     visible_count_readback_value_ = 0;
@@ -792,11 +849,19 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
         buffers.lod_compact_counts.deviceBuffer.buffer == VK_NULL_HANDLE)
         return;
 
-    bufferMemoryBarrier({{buffers.lod_gpu_counts.deviceBuffer, COMPUTE_SHADER_WRITE},
-                         {buffers.lod_compact_counts.deviceBuffer, COMPUTE_SHADER_WRITE},
-                         {buffers.lod_compact_protected.deviceBuffer, COMPUTE_SHADER_WRITE},
-                         {buffers.lod_compact_misses.deviceBuffer, COMPUTE_SHADER_WRITE}},
-                        TRANSFER_READ);
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
+    // Epic #1496 §3.2: plan TransferRead sources + TransferWrite dst before copies.
+    // Readback buffer is untracked → conservative rows (expected).
+    const DeclaredAccess pre_copy[] = {
+        {.buffer = &buffers.lod_gpu_counts.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &buffers.lod_compact_counts.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &buffers.lod_compact_protected.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &buffers.lod_compact_misses.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &lod_selection_readback_buffer_, .use = BufferUse::TransferWrite},
+    };
+    planTransfer(std::span{pre_copy});
 
     const auto copy_region = [&](const _VulkanBuffer& src, const size_t dst_word,
                                  const size_t words) {
@@ -809,16 +874,27 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
                             copy.dstOffset,
                             copy.size,
                             "LOD-selection readback destination");
-        vkCmdCopyBuffer(command_buffer, src.buffer,
-                        lod_selection_readback_buffer_.buffer, 1, &copy);
+        if (vulkan_dispatch_.cmd_copy_buffer == nullptr) {
+            lfs::rendering::throw_renderer_contract(
+                "recordLodSelectionReadback requires VulkanDispatch::cmd_copy_buffer",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        vulkan_dispatch_.cmd_copy_buffer(command_buffer, src.buffer,
+                                         lod_selection_readback_buffer_.buffer, 1, &copy);
     };
     copy_region(buffers.lod_gpu_counts.deviceBuffer, 0, 2);
     copy_region(buffers.lod_compact_counts.deviceBuffer, 2, 4);
     copy_region(buffers.lod_compact_protected.deviceBuffer, 6, kLodCompactProtectedCap);
     copy_region(buffers.lod_compact_misses.deviceBuffer, 6 + kLodCompactProtectedCap,
                 2 * kLodCompactMissCap);
-    bufferMemoryBarrier({{lod_selection_readback_buffer_, TRANSFER_WRITE}},
-                        HOST_READ);
+
+    // Host coherence still requires fence/timeline wait at endCommandBatch (§3.2 G3).
+    const DeclaredAccess host_read{
+        .buffer = &lod_selection_readback_buffer_,
+        .use = BufferUse::HostRead,
+    };
+    planTransfer(std::span{&host_read, 1});
+
     lod_selection_readback_pending_ = true;
     lod_selection_readback_signal_ = VK_NULL_HANDLE;
     lod_selection_readback_value_ = 0;
@@ -933,7 +1009,6 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     createComputePipeline(pipeline_sorting_indirect_2.upsweep, spirv_paths.at("radix_sort/upsweep_indirect"));
     createComputePipeline(pipeline_sorting_indirect_2.spine, spirv_paths.at("radix_sort/spine_indirect"));
     createComputePipeline(pipeline_sorting_indirect_2.downsweep, spirv_paths.at("radix_sort/downsweep_indirect"));
-    createComputePipeline(pipeline_seed_primitive_indices, spirv_paths.at("seed_primitive_indices"));
     createComputePipeline(pipeline_apply_depth_ordering, spirv_paths.at("apply_depth_ordering"));
     createComputePipeline(pipeline_visible_flags, spirv_paths.at("visible_flags"));
     createComputePipeline(pipeline_prepare_visible_sort, spirv_paths.at("prepare_visible_sort"));
@@ -1020,25 +1095,20 @@ void VulkanGSRenderer::executeMapLodIndices(const std::uint32_t lod_count,
     } map_uniforms{lod_count, chunk_splats, invalid_page, 0u};
 
     auto& out_indices = resizeDeviceBuffer(buffers.lod_indices, lod_count);
-    bufferMemoryBarrier({
-                            {buffers.lod_logical_indices.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {chunk_to_page, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {out_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
 
+    // Tags from lod_map_indices.slang: logical/chunk_to_page StructuredBuffer (read),
+    // out_indices RWStructuredBuffer (write). No post-barrier: projection still has
+    // legacy pre-barriers on these outputs (§3.4.5).
+    using lfs::rendering::vulkan::BufferUse;
     executeCompute(
         {{lod_count, 64}},
         &map_uniforms, sizeof(map_uniforms),
         pipeline_lod_map_indices,
-        {
-            buffers.lod_logical_indices.deviceBuffer,
-            chunk_to_page,
-            out_indices,
+        std::vector<TaggedBinding>{
+            {buffers.lod_logical_indices.deviceBuffer, BufferUse::ComputeRead},
+            {chunk_to_page, BufferUse::ComputeRead},
+            {out_indices, BufferUse::ComputeWrite},
         });
-
-    bufferMemoryBarrier({{out_indices, COMPUTE_SHADER_WRITE}},
-                        COMPUTE_SHADER_READ);
 }
 
 void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms& uniforms,
@@ -1074,49 +1144,26 @@ void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms
     // No sentinel fill of out_indices/out_logical_indices: projection gates on
     // the appended count in lod_gpu_counts[0], so entries past the valid prefix
     // are never read.
-    bufferMemoryBarrier({
-                            {node_bounds, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {node_links, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {chunk_to_page, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {counts, TRANSFER_WRITE},
-                            {out_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {out_logical_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {out_weights, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {chunk_touch, TRANSFER_WRITE},
-                            {out_levels, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {page_age, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {page_frames, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {page_to_chunk, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
-
+    // Tags from lod_select_threshold.slang bindings 0–11.
+    using lfs::rendering::vulkan::BufferUse;
     executeCompute(
         {{uniforms.physical_node_count, 128}},
         &uniforms, sizeof(uniforms),
         pipeline_lod_select_threshold,
-        {
-            node_bounds,
-            node_links,
-            chunk_to_page,
-            counts,
-            out_indices,
-            out_logical_indices,
-            out_weights,
-            chunk_touch,
-            out_levels,
-            page_age,
-            page_frames,
-            page_to_chunk,
+        std::vector<TaggedBinding>{
+            {node_bounds, BufferUse::ComputeRead},
+            {node_links, BufferUse::ComputeRead},
+            {chunk_to_page, BufferUse::ComputeRead},
+            {counts, BufferUse::ComputeReadWrite},
+            {out_indices, BufferUse::ComputeWrite},
+            {out_logical_indices, BufferUse::ComputeWrite},
+            {out_weights, BufferUse::ComputeWrite},
+            {chunk_touch, BufferUse::ComputeReadWrite},
+            {out_levels, BufferUse::ComputeWrite},
+            {page_age, BufferUse::ComputeRead},
+            {page_frames, BufferUse::ComputeRead},
+            {page_to_chunk, BufferUse::ComputeRead},
         });
-
-    bufferMemoryBarrier({
-                            {counts, COMPUTE_SHADER_WRITE},
-                            {out_indices, COMPUTE_SHADER_WRITE},
-                            {out_logical_indices, COMPUTE_SHADER_WRITE},
-                            {out_weights, COMPUTE_SHADER_WRITE},
-                            {out_levels, COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ);
 
     // Phase D: compact chunk_touch on the GPU so the readback and the CPU
     // request pass scale with the working set, not the logical chunk count.
@@ -1131,18 +1178,16 @@ void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms
         .miss_capacity = kLodCompactMissCap,
         .pad0 = 0,
     };
-    bufferMemoryBarrier({{chunk_touch, COMPUTE_SHADER_WRITE},
-                         {compact_counts, TRANSFER_WRITE}},
-                        COMPUTE_SHADER_READ_WRITE);
+    // Tags from lod_compact_touch.slang: chunk_touch read; counts/protected/misses write.
     executeCompute(
         {{uniforms.logical_chunk_count, 256}},
         &compact_uniforms, sizeof(compact_uniforms),
         pipeline_lod_compact_touch,
-        {
-            chunk_touch,
-            compact_counts,
-            compact_protected,
-            compact_misses,
+        std::vector<TaggedBinding>{
+            {chunk_touch, BufferUse::ComputeRead},
+            {compact_counts, BufferUse::ComputeWrite},
+            {compact_protected, BufferUse::ComputeWrite},
+            {compact_misses, BufferUse::ComputeWrite},
         });
     recordLodSelectionReadback(buffers, uniforms.output_capacity);
 }
@@ -1164,60 +1209,36 @@ void VulkanGSRenderer::executeProjectionForward(
     PerfTimer::Timer<PerfTimer::ProjectionForward> timer(this);
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
     const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
-
-    bufferMemoryBarrier({
-                            {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.sh0.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.shN.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ);
-
     size_t alloc_size = std::max(num_splats, alloc_reserve);
 
     // Two-stage sort: pre-fill primitive_depth_keys with 0xFFFFFFFFu so any
     // primitive that hits an early-return path inside the projection shader
-    // (z-near reject, opacity below threshold, degenerate covariance, zero
-    // tiles touched) keeps the max-key sentinel and sorts to the tail.
+    // keeps the max-key sentinel and sorts to the tail.
     auto& primitive_depth_keys =
         resizeDeviceBuffer(buffers.primitive_depth_keys, alloc_size);
-    bufferMemoryBarrier({{primitive_depth_keys, COMPUTE_SHADER_READ_WRITE}},
-                        TRANSFER_COMPUTE_SHADER_WRITE);
     validateFillRange(primitive_depth_keys, 0, primitive_depth_keys.size, "primitive-depth sentinel fill");
-    vkCmdFillBuffer(command_buffer, primitive_depth_keys.buffer,
-                    primitive_depth_keys.offset, primitive_depth_keys.size,
-                    0xFFFFFFFFu);
-    bufferMemoryBarrier({{primitive_depth_keys, TRANSFER_COMPUTE_SHADER_WRITE}},
-                        COMPUTE_SHADER_READ_WRITE);
-
-    // Ensure transfer writes to optional LOD buffers are visible to projection.
-    if (lod_indices.buffer != VK_NULL_HANDLE ||
-        lod_logical_indices.buffer != VK_NULL_HANDLE ||
-        lod_levels.buffer != VK_NULL_HANDLE ||
-        lod_weights.buffer != VK_NULL_HANDLE) {
-        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
-        if (lod_indices.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_indices, TRANSFER_COMPUTE_SHADER_WRITE});
+    {
+        const DeclaredAccess fill_access{
+            .buffer = &primitive_depth_keys,
+            .use = BufferUse::TransferWrite,
+        };
+        planTransfer(std::span{&fill_access, 1});
+        if (vulkan_dispatch_.cmd_fill_buffer == nullptr) {
+            lfs::rendering::throw_renderer_contract(
+                "executeProjectionForward requires VulkanDispatch::cmd_fill_buffer",
+                LFS_SOURCE_SITE_CURRENT());
         }
-        if (lod_logical_indices.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_logical_indices, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        if (lod_levels.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_levels, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        if (lod_weights.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_weights, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
+        vulkan_dispatch_.cmd_fill_buffer(command_buffer, primitive_depth_keys.buffer,
+                                         primitive_depth_keys.offset, primitive_depth_keys.size,
+                                         0xFFFFFFFFu);
     }
 
+    // Optional LOD inputs: null handles use dummy bindings (same as legacy).
+    // plan() skips VK_NULL_HANDLE; valid LOD buffers are tagged ComputeRead.
     const _VulkanBuffer lod_indices_binding =
         (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : primitive_depth_keys;
     const _VulkanBuffer lod_logical_indices_binding =
@@ -1229,49 +1250,62 @@ void VulkanGSRenderer::executeProjectionForward(
     const _VulkanBuffer lod_counts_binding =
         (lod_counts.buffer != VK_NULL_HANDLE) ? lod_counts : primitive_depth_keys;
 
-    std::vector<_VulkanBuffer> projection_buffers = {
-        // inputs
-        buffers.xyz_ws.deviceBuffer,
-        buffers.sh0.deviceBuffer,
-        buffers.shN.deviceBuffer,
-        buffers.rotations.deviceBuffer,
-        buffers.scaling_raw.deviceBuffer,
-        buffers.opacity_raw.deviceBuffer,
-        // outputs
-        resizeDeviceBuffer(buffers.tiles_touched, alloc_size),
-        resizeDeviceBuffer(buffers.rect_tile_space, alloc_size),
-        resizeDeviceBuffer(buffers.radii, alloc_size),
-        resizeDeviceBuffer(buffers.xy_vs, 2 * alloc_size),
-        resizeDeviceBuffer(buffers.depths, alloc_size),
-        resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size),
-        resizeDeviceBuffer(buffers.rgb, 3 * alloc_size),
-        resizeDeviceBuffer(buffers.overlay_flags, alloc_size),
-        transform_indices,
-        node_mask,
-        overlay_params,
-        model_transforms,
-        primitive_depth_keys,
-        lod_indices_binding,
-        lod_logical_indices_binding,
-        lod_levels_binding,
-        lod_weights_binding,
-        lod_counts_binding,
+    auto& tiles_touched = resizeDeviceBuffer(buffers.tiles_touched, alloc_size);
+    auto& rect_tile_space = resizeDeviceBuffer(buffers.rect_tile_space, alloc_size);
+    auto& radii = resizeDeviceBuffer(buffers.radii, alloc_size);
+    auto& xy_vs = resizeDeviceBuffer(buffers.xy_vs, 2 * alloc_size);
+    auto& depths = resizeDeviceBuffer(buffers.depths, alloc_size);
+    auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size);
+    auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * alloc_size);
+    auto& overlay_flags = resizeDeviceBuffer(buffers.overlay_flags, alloc_size);
+
+    // Binding order: catalog appendix "executeProjectionForward L1266 projection_buffers".
+    // Tags: attrs/transform/node/overlay/model/LOD reads; projection outputs write;
+    // primitive_depth_keys write (sentinel RMW after fill).
+    std::vector<TaggedBinding> tagged = {
+        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.shN.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},
+        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
+        {tiles_touched, BufferUse::ComputeWrite},
+        {rect_tile_space, BufferUse::ComputeWrite},
+        {radii, BufferUse::ComputeWrite},
+        {xy_vs, BufferUse::ComputeWrite},
+        {depths, BufferUse::ComputeWrite},
+        {inv_cov, BufferUse::ComputeWrite},
+        {rgb, BufferUse::ComputeWrite},
+        {overlay_flags, BufferUse::ComputeWrite},
+        {transform_indices, BufferUse::ComputeRead},
+        {node_mask, BufferUse::ComputeRead},
+        {overlay_params, BufferUse::ComputeRead},
+        {model_transforms, BufferUse::ComputeRead},
+        {primitive_depth_keys, BufferUse::ComputeWrite},
+        {lod_indices_binding, BufferUse::ComputeRead},
+        {lod_logical_indices_binding, BufferUse::ComputeRead},
+        {lod_levels_binding, BufferUse::ComputeRead},
+        {lod_weights_binding, BufferUse::ComputeRead},
+        {lod_counts_binding, BufferUse::ComputeRead},
     };
 
     VulkanGSRendererUniforms projection_uniforms = uniforms;
     if (buffers.quant_pool) {
         projection_uniforms.lod_page_splats = buffers.pool_page_splats;
-        projection_buffers.push_back(buffers.page_frames.deviceBuffer);
+        tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead});
     }
+
+    auto& pipeline = buffers.quant_pool
+                         ? (use_gut_projection ? pipeline_projection_forward_quant_3dgut
+                                               : pipeline_projection_forward_quant)
+                         : (use_gut_projection ? pipeline_projection_forward_3dgut
+                                               : pipeline_projection_forward);
+    // Quant pipelines have 25 layouts; non-quant 24 — tagged size must match.
     executeCompute(
         {{num_splats, SUBGROUP_SIZE}},
         &projection_uniforms, sizeof(projection_uniforms),
-        buffers.quant_pool
-            ? (use_gut_projection ? pipeline_projection_forward_quant_3dgut
-                                  : pipeline_projection_forward_quant)
-            : (use_gut_projection ? pipeline_projection_forward_3dgut
-                                  : pipeline_projection_forward),
-        projection_buffers);
+        pipeline,
+        tagged);
 }
 
 void VulkanGSRenderer::executeLegacyDepthWaves(
@@ -1384,49 +1418,22 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                        kCumsumBlock)));
     }
 
-    bufferMemoryBarrier({
-        {buffers.xy_vs.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.inv_cov_vs_opacity.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.rect_tile_space.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.index_buffer_offset.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.primitive_sort_indices.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.rgb.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.depths.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {selection_mask, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {preview_mask, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {selection_colors, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {overlay_flags, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.sorting_keys_1.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_READ_WRITE},
-        {buffers.sorting_keys_2.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_READ_WRITE},
-        {buffers.sorting_gauss_idx_1.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_READ_WRITE},
-        {buffers.sorting_gauss_idx_2.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_READ_WRITE},
-        {buffers._sorting_histogram.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_WRITE},
-        {buffers._sorting_histogram_cumsum.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_WRITE},
-    });
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+    // Mega-hoist removed: each tagged/indirect dispatch plans its own hazards.
 
     const auto& wave_buffer = buffers.depth_wave_dispatch.deviceBuffer;
     const auto& predicate_buffer = buffers.wave_predicates.deviceBuffer;
     for (size_t wave = 0; wave < armed; ++wave) {
         const bool conditional = predicate_waves && supports_conditional_rendering_;
+        // §3.4.5: ConditionalRenderingScope has no barrier site — plan ConditionalRead.
+        if (conditional) {
+            const DeclaredAccess pred{
+                .buffer = &predicate_buffer,
+                .use = BufferUse::ConditionalRead,
+            };
+            planTransfer(std::span{&pred, 1});
+        }
         const ConditionalRenderingScope conditional_scope(
             *this,
             conditional,
@@ -1435,57 +1442,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
             predicate_buffer,
             wave * sizeof(uint32_t));
 
-        if (wave > 0) {
-            std::vector<BufferBarrier> barriers{
-                {buffers.sorting_keys_1.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {buffers.sorting_keys_2.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {buffers.sorting_gauss_idx_1.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {buffers.sorting_gauss_idx_2.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {tile_ranges, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {pixel_state, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {pixel_depth, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {pixel_depth_weight,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {n_contributors, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {buffers._sorting_histogram.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {buffers._sorting_histogram_cumsum.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-            };
-            if (use_batched_raster) {
-                barriers.insert(barriers.end(),
-                                {{batch_counts,
-                                  COMPUTE_SHADER_READ_WRITE,
-                                  COMPUTE_SHADER_READ_WRITE},
-                                 {batch_offsets,
-                                  COMPUTE_SHADER_READ_WRITE,
-                                  COMPUTE_SHADER_READ_WRITE},
-                                 {batch_descriptors,
-                                  COMPUTE_SHADER_READ_WRITE,
-                                  COMPUTE_SHADER_READ_WRITE},
-                                 {batch_dispatch,
-                                  COMPUTE_SHADER_READ_WRITE,
-                                  COMPUTE_SHADER_READ_WRITE},
-                                 {batch_pixel_state,
-                                  COMPUTE_SHADER_READ_WRITE,
-                                  COMPUTE_SHADER_READ_WRITE},
-                                 {batch_n_contributors,
-                                  COMPUTE_SHADER_READ_WRITE,
-                                  COMPUTE_SHADER_READ_WRITE}});
-            }
-            bufferMemoryBarrier(barriers);
-        }
+        // Inter-wave CSRW mega-barrier removed; per-dispatch plans cover reuse.
 
         VulkanGSRendererUniforms wave_uniforms = uniforms;
         wave_uniforms.depth_wave = static_cast<uint32_t>(wave);
@@ -1500,22 +1457,23 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
 
         auto& unsorted_keys = buffers.unsorted_keys().deviceBuffer;
         auto& unsorted_indices = buffers.unsorted_gauss_idx().deviceBuffer;
-        // The §5.4 idle-path lever removes the defensive sentinel prefill. The
-        // partition count is exact, and keygen either emits that full interval
-        // or pads its conservative culling tail before radix consumes it.
-        executeComputeIndirect(record,
-                               indirect::byteOffset(indirect::DepthWave::kKeygenWordOffset),
-                               &wave_uniforms,
-                               sizeof(wave_uniforms),
-                               pipeline_generate_keys_wave,
-                               {buffers.xy_vs.deviceBuffer,
-                                buffers.inv_cov_vs_opacity.deviceBuffer,
-                                buffers.rect_tile_space.deviceBuffer,
-                                buffers.index_buffer_offset.deviceBuffer,
-                                buffers.primitive_sort_indices.deviceBuffer,
-                                unsorted_keys,
-                                unsorted_indices,
-                                wave_buffer});
+        // pipeline_generate_keys_wave: 8 bindings (catalog).
+        executeComputeIndirect(
+            record,
+            indirect::byteOffset(indirect::DepthWave::kKeygenWordOffset),
+            &wave_uniforms,
+            sizeof(wave_uniforms),
+            pipeline_generate_keys_wave,
+            std::vector<TaggedBinding>{
+                {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.rect_tile_space.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.index_buffer_offset.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
+                {unsorted_keys, BufferUse::ComputeWrite},
+                {unsorted_indices, BufferUse::ComputeWrite},
+                {wave_buffer, BufferUse::ComputeRead},
+            });
         executeSortIndirectCountImpl(wave_uniforms,
                                      buffers,
                                      sort_bits,
@@ -1528,43 +1486,34 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                      true);
 
         if (use_batched_raster) {
-            bufferMemoryBarrier({
-                {buffers.sorted_keys().deviceBuffer,
-                 COMPUTE_SHADER_WRITE,
-                 COMPUTE_SHADER_READ},
-                {buffers.sorted_gauss_idx().deviceBuffer,
-                 COMPUTE_SHADER_WRITE,
-                 COMPUTE_SHADER_READ},
-            });
-            executeComputeIndirect(record,
-                                   indirect::byteOffset(
-                                       indirect::DepthWave::kPerTileWordOffset),
-                                   &wave_uniforms,
-                                   sizeof(wave_uniforms),
-                                   pipeline_compute_tile_ranges_and_batch_counts
-                                       [buffers.is_unsorted_1],
-                                   {buffers.sorted_keys().deviceBuffer,
-                                    tile_ranges,
-                                    count,
-                                    batch_counts});
+            executeComputeIndirect(
+                record,
+                indirect::byteOffset(indirect::DepthWave::kPerTileWordOffset),
+                &wave_uniforms,
+                sizeof(wave_uniforms),
+                pipeline_compute_tile_ranges_and_batch_counts[buffers.is_unsorted_1],
+                std::vector<TaggedBinding>{
+                    {buffers.sorted_keys().deviceBuffer, BufferUse::ComputeRead},
+                    {tile_ranges, BufferUse::ComputeWrite},
+                    {count, BufferUse::ComputeRead},
+                    {batch_counts, BufferUse::ComputeWrite},
+                });
             executeCumsum(buffers,
                           buffers.tile_batch_counts,
                           buffers.tile_batch_offsets,
-                          {{tile_ranges, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ}},
                           wave < HIGS_DEPTH_MAX_WAVES);
-            bufferMemoryBarrier({
-                {batch_offsets, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-            });
-            executeComputeIndirect(record,
-                                   indirect::byteOffset(
-                                       indirect::DepthWave::kPerTileWordOffset),
-                                   &wave_uniforms,
-                                   sizeof(wave_uniforms),
-                                   pipeline_tile_batch_descriptors,
-                                   {tile_ranges,
-                                    batch_offsets,
-                                    batch_descriptors,
-                                    batch_dispatch});
+            executeComputeIndirect(
+                record,
+                indirect::byteOffset(indirect::DepthWave::kPerTileWordOffset),
+                &wave_uniforms,
+                sizeof(wave_uniforms),
+                pipeline_tile_batch_descriptors,
+                std::vector<TaggedBinding>{
+                    {tile_ranges, BufferUse::ComputeRead},
+                    {batch_offsets, BufferUse::ComputeRead},
+                    {batch_descriptors, BufferUse::ComputeWrite},
+                    {batch_dispatch, BufferUse::ComputeWrite},
+                });
 
             auto& light_pipeline = overlays_active
                                        ? pipeline_rasterize_forward_light
@@ -1575,45 +1524,40 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 &wave_uniforms,
                 sizeof(wave_uniforms),
                 light_pipeline[buffers.is_unsorted_1],
-                {buffers.sorted_gauss_idx().deviceBuffer,
-                 tile_ranges,
-                 buffers.xy_vs.deviceBuffer,
-                 buffers.inv_cov_vs_opacity.deviceBuffer,
-                 buffers.rgb.deviceBuffer,
-                 buffers.depths.deviceBuffer,
-                 pixel_state,
-                 pixel_depth,
-                 n_contributors,
-                 pixel_depth_weight,
-                 selection_mask,
-                 preview_mask,
-                 selection_colors,
-                 overlay_flags,
-                 overlay_params});
+                std::vector<TaggedBinding>{
+                    {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                    {tile_ranges, BufferUse::ComputeRead},
+                    {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.depths.deviceBuffer, BufferUse::ComputeRead},
+                    {pixel_state, BufferUse::ComputeReadWrite},
+                    {pixel_depth, BufferUse::ComputeReadWrite},
+                    {n_contributors, BufferUse::ComputeReadWrite},
+                    {pixel_depth_weight, BufferUse::ComputeReadWrite},
+                    {selection_mask, BufferUse::ComputeRead},
+                    {preview_mask, BufferUse::ComputeRead},
+                    {selection_colors, BufferUse::ComputeRead},
+                    {overlay_flags, BufferUse::ComputeRead},
+                    {overlay_params, BufferUse::ComputeRead},
+                });
 
-            bufferMemoryBarrier({
-                {batch_descriptors, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-                {batch_dispatch, COMPUTE_SHADER_WRITE, INDIRECT_DISPATCH_READ},
-                {pixel_state, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {pixel_depth, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {n_contributors, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ_WRITE},
-            });
-            std::vector<_VulkanBuffer> batch_bindings{
-                buffers.sorted_gauss_idx().deviceBuffer,
-                batch_descriptors,
-                buffers.xy_vs.deviceBuffer,
-                buffers.inv_cov_vs_opacity.deviceBuffer,
-                buffers.rgb.deviceBuffer,
-                batch_pixel_state,
-                batch_n_contributors,
+            std::vector<TaggedBinding> batch_bindings{
+                {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                {batch_descriptors, BufferUse::ComputeRead},
+                {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
+                {batch_pixel_state, BufferUse::ComputeReadWrite},
+                {batch_n_contributors, BufferUse::ComputeReadWrite},
             };
             if (overlays_active) {
                 batch_bindings.insert(batch_bindings.end(),
-                                      {selection_mask,
-                                       preview_mask,
-                                       selection_colors,
-                                       overlay_flags,
-                                       overlay_params});
+                                      {{selection_mask, BufferUse::ComputeRead},
+                                       {preview_mask, BufferUse::ComputeRead},
+                                       {selection_colors, BufferUse::ComputeRead},
+                                       {overlay_flags, BufferUse::ComputeRead},
+                                       {overlay_params, BufferUse::ComputeRead}});
             }
             auto& batch_pipeline = overlays_active
                                        ? pipeline_rasterize_forward_batches
@@ -1626,31 +1570,27 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 batch_pipeline[buffers.is_unsorted_1],
                 batch_bindings);
 
-            bufferMemoryBarrier({
-                {batch_pixel_state, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-                {batch_n_contributors, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-            });
-            std::vector<_VulkanBuffer> compose_bindings{
-                buffers.sorted_gauss_idx().deviceBuffer,
-                batch_descriptors,
-                batch_offsets,
-                buffers.xy_vs.deviceBuffer,
-                buffers.inv_cov_vs_opacity.deviceBuffer,
-                buffers.rgb.deviceBuffer,
-                buffers.depths.deviceBuffer,
-                batch_pixel_state,
-                batch_n_contributors,
-                pixel_state,
-                pixel_depth,
-                n_contributors,
+            std::vector<TaggedBinding> compose_bindings{
+                {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                {batch_descriptors, BufferUse::ComputeRead},
+                {batch_offsets, BufferUse::ComputeRead},
+                {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.depths.deviceBuffer, BufferUse::ComputeRead},
+                {batch_pixel_state, BufferUse::ComputeRead},
+                {batch_n_contributors, BufferUse::ComputeRead},
+                {pixel_state, BufferUse::ComputeReadWrite},
+                {pixel_depth, BufferUse::ComputeReadWrite},
+                {n_contributors, BufferUse::ComputeReadWrite},
             };
             if (overlays_active) {
                 compose_bindings.insert(compose_bindings.end(),
-                                        {selection_mask,
-                                         preview_mask,
-                                         selection_colors,
-                                         overlay_flags,
-                                         overlay_params});
+                                        {{selection_mask, BufferUse::ComputeRead},
+                                         {preview_mask, BufferUse::ComputeRead},
+                                         {selection_colors, BufferUse::ComputeRead},
+                                         {overlay_flags, BufferUse::ComputeRead},
+                                         {overlay_params, BufferUse::ComputeRead}});
             }
             executeComputeIndirect(
                 record,
@@ -1661,24 +1601,17 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                                 : pipeline_compose_tile_batches_plain,
                 compose_bindings);
         } else {
-            bufferMemoryBarrier({
-                {buffers.sorted_keys().deviceBuffer,
-                 COMPUTE_SHADER_WRITE,
-                 COMPUTE_SHADER_READ},
-                {buffers.sorted_gauss_idx().deviceBuffer,
-                 COMPUTE_SHADER_WRITE,
-                 COMPUTE_SHADER_READ},
-            });
-            executeComputeIndirect(record,
-                                   indirect::byteOffset(
-                                       indirect::DepthWave::kRangeWordOffset),
-                                   &wave_uniforms,
-                                   sizeof(wave_uniforms),
-                                   pipeline_compute_tile_ranges[buffers.is_unsorted_1],
-                                   {buffers.sorted_keys().deviceBuffer, tile_ranges, count});
-            bufferMemoryBarrier({
-                {tile_ranges, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-            });
+            executeComputeIndirect(
+                record,
+                indirect::byteOffset(indirect::DepthWave::kRangeWordOffset),
+                &wave_uniforms,
+                sizeof(wave_uniforms),
+                pipeline_compute_tile_ranges[buffers.is_unsorted_1],
+                std::vector<TaggedBinding>{
+                    {buffers.sorted_keys().deviceBuffer, BufferUse::ComputeRead},
+                    {tile_ranges, BufferUse::ComputeWrite},
+                    {count, BufferUse::ComputeRead},
+                });
         }
 
         if (!use_batched_raster) {
@@ -1692,27 +1625,29 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                     &wave_uniforms,
                     sizeof(wave_uniforms),
                     gut_pipeline[buffers.is_unsorted_1],
-                    {buffers.sorted_gauss_idx().deviceBuffer,
-                     tile_ranges,
-                     buffers.xy_vs.deviceBuffer,
-                     buffers.inv_cov_vs_opacity.deviceBuffer,
-                     buffers.rgb.deviceBuffer,
-                     buffers.depths.deviceBuffer,
-                     buffers.xyz_ws.deviceBuffer,
-                     buffers.rotations.deviceBuffer,
-                     buffers.scaling_raw.deviceBuffer,
-                     buffers.opacity_raw.deviceBuffer,
-                     pixel_state,
-                     pixel_depth,
-                     n_contributors,
-                     pixel_depth_weight,
-                     selection_mask,
-                     preview_mask,
-                     selection_colors,
-                     overlay_flags,
-                     overlay_params,
-                     transform_indices,
-                     model_transforms});
+                    std::vector<TaggedBinding>{
+                        {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                        {tile_ranges, BufferUse::ComputeRead},
+                        {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.depths.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
+                        {pixel_state, BufferUse::ComputeReadWrite},
+                        {pixel_depth, BufferUse::ComputeReadWrite},
+                        {n_contributors, BufferUse::ComputeReadWrite},
+                        {pixel_depth_weight, BufferUse::ComputeReadWrite},
+                        {selection_mask, BufferUse::ComputeRead},
+                        {preview_mask, BufferUse::ComputeRead},
+                        {selection_colors, BufferUse::ComputeRead},
+                        {overlay_flags, BufferUse::ComputeRead},
+                        {overlay_params, BufferUse::ComputeRead},
+                        {transform_indices, BufferUse::ComputeRead},
+                        {model_transforms, BufferUse::ComputeRead},
+                    });
             } else {
                 auto& raster_pipeline = overlays_active
                                             ? pipeline_rasterize_forward
@@ -1723,36 +1658,37 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                     &wave_uniforms,
                     sizeof(wave_uniforms),
                     raster_pipeline[buffers.is_unsorted_1],
-                    {buffers.sorted_gauss_idx().deviceBuffer,
-                     tile_ranges,
-                     buffers.xy_vs.deviceBuffer,
-                     buffers.inv_cov_vs_opacity.deviceBuffer,
-                     buffers.rgb.deviceBuffer,
-                     buffers.depths.deviceBuffer,
-                     pixel_state,
-                     pixel_depth,
-                     n_contributors,
-                     pixel_depth_weight,
-                     selection_mask,
-                     preview_mask,
-                     selection_colors,
-                     overlay_flags,
-                     overlay_params});
+                    std::vector<TaggedBinding>{
+                        {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                        {tile_ranges, BufferUse::ComputeRead},
+                        {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
+                        {buffers.depths.deviceBuffer, BufferUse::ComputeRead},
+                        {pixel_state, BufferUse::ComputeReadWrite},
+                        {pixel_depth, BufferUse::ComputeReadWrite},
+                        {n_contributors, BufferUse::ComputeReadWrite},
+                        {pixel_depth_weight, BufferUse::ComputeReadWrite},
+                        {selection_mask, BufferUse::ComputeRead},
+                        {preview_mask, BufferUse::ComputeRead},
+                        {selection_colors, BufferUse::ComputeRead},
+                        {overlay_flags, BufferUse::ComputeRead},
+                        {overlay_params, BufferUse::ComputeRead},
+                    });
             }
         }
     }
 
     if (uniforms.expected_far > 0.0f) {
-        bufferMemoryBarrier({
-            {pixel_depth, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ_WRITE},
-            {pixel_depth_weight, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        });
         const uint32_t finalize_uniforms = static_cast<uint32_t>(num_pixels);
         executeCompute({{num_pixels, 256u}},
                        &finalize_uniforms,
                        sizeof(finalize_uniforms),
                        pipeline_expected_depth_finalize,
-                       {pixel_depth, pixel_depth_weight});
+                       std::vector<TaggedBinding>{
+                           {pixel_depth, BufferUse::ComputeReadWrite},
+                           {pixel_depth_weight, BufferUse::ComputeRead},
+                       });
     }
 }
 
@@ -1768,43 +1704,36 @@ void VulkanGSRenderer::executeSelectionMask(
     const _VulkanBuffer& ring_pick_out) {
     DEVICE_GUARD;
 
-    bufferMemoryBarrier({
-                            {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {primitives, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {selection_out, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {polygon_mask, COMPUTE_SHADER_READ_WRITE},
-                            {ring_pick_out, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
 
+    // Tags from selection_mask.slang bindings 0–10.
     const size_t num_words = _CEIL_DIV(static_cast<size_t>(uniforms.num_splats), 4);
     executeCompute(
         {{num_words, SUBGROUP_SIZE}},
         &uniforms, sizeof(uniforms),
         pipeline_selection_mask,
-        {
-            buffers.xyz_ws.deviceBuffer,
-            transform_indices,
-            node_mask,
-            primitives,
-            model_transforms,
-            buffers.rotations.deviceBuffer,
-            buffers.scaling_raw.deviceBuffer,
-            selection_out,
-            polygon_mask,
-            buffers.opacity_raw.deviceBuffer,
-            ring_pick_out,
+        std::vector<TaggedBinding>{
+            {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
+            {transform_indices, BufferUse::ComputeRead},
+            {node_mask, BufferUse::ComputeRead},
+            {primitives, BufferUse::ComputeRead},
+            {model_transforms, BufferUse::ComputeRead},
+            {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},
+            {selection_out, BufferUse::ComputeWrite},
+            {polygon_mask, BufferUse::ComputeRead},
+            {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},
+            {ring_pick_out, BufferUse::ComputeWrite},
         });
 
-    bufferMemoryBarrier({{selection_out, COMPUTE_SHADER_WRITE},
-                         {ring_pick_out, COMPUTE_SHADER_WRITE}},
-                        TRANSFER_READ);
+    // Handoff: host/CUDA download consumers lack their own barrier site (§3.4.5).
+    // Catalog post was COMPUTE_SHADER_WRITE → TRANSFER_READ.
+    const DeclaredAccess transfer_handoff[] = {
+        {.buffer = &selection_out, .use = BufferUse::TransferRead},
+        {.buffer = &ring_pick_out, .use = BufferUse::TransferRead},
+    };
+    planTransfer(std::span{transfer_handoff});
 }
 
 void VulkanGSRenderer::executeSelectionPolygonRasterize(
@@ -1813,31 +1742,26 @@ void VulkanGSRenderer::executeSelectionPolygonRasterize(
     const _VulkanBuffer& polygon_mask) {
     DEVICE_GUARD;
 
-    bufferMemoryBarrier({
-                            {polygon_vertices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {polygon_mask, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
+    using lfs::rendering::vulkan::BufferUse;
 
+    // Tags from selection_polygon_rasterize.slang: vertices read, coverage_mask write.
+    // Post CSR deleted: selection_mask plans ComputeRead on polygon_mask (§3.4.5 co-migrated).
     constexpr size_t kBlockXY = 8;
     executeCompute(
         {{static_cast<size_t>(uniforms.aabb_w), kBlockXY},
          {static_cast<size_t>(uniforms.aabb_h), kBlockXY}},
         &uniforms, sizeof(uniforms),
         pipeline_selection_polygon_rasterize,
-        {
-            polygon_vertices,
-            polygon_mask,
+        std::vector<TaggedBinding>{
+            {polygon_vertices, BufferUse::ComputeRead},
+            {polygon_mask, BufferUse::ComputeWrite},
         });
-
-    bufferMemoryBarrier({{polygon_mask, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ);
 }
 
 void VulkanGSRenderer::executeCumsum(
     VulkanGSPipelineBuffers& buffers,
     Buffer<int32_t>& input_buffer,
     Buffer<int32_t>& output_buffer,
-    const std::vector<BufferBarrier>& additional_begin_barriers,
     const bool record_timestamps) {
     std::optional<PerfTimer::Timer<PerfTimer::_Cumsum>> timer;
     if (record_timestamps) {
@@ -1845,98 +1769,93 @@ void VulkanGSRenderer::executeCumsum(
     }
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+
     size_t num_elements = input_buffer.deviceSize();
     const size_t block_0 = 1024;
     const size_t block_limit = deviceInfo.subgroupSize * deviceInfo.subgroupSize * deviceInfo.subgroupSize;
     const size_t block = std::min(block_0, block_limit);
 
+    // Tags from cumsum.slang: input read, output write, blockSums rw.
     auto execute_cumsum_phase = [&](size_t active_elements,
                                     size_t threads_per_group,
                                     _ComputePipeline& pipeline,
-                                    const std::vector<_VulkanBuffer>& phase_buffers) {
+                                    const std::vector<TaggedBinding>& phase_bindings) {
         uint32_t phase_uniforms[1] = {static_cast<uint32_t>(active_elements)};
         executeCompute(
             {{active_elements, threads_per_group}},
             phase_uniforms,
             sizeof(uint32_t),
             pipeline,
-            phase_buffers);
+            phase_bindings);
     };
 
     resizeDeviceBuffer(output_buffer, num_elements);
 
-    const auto begin_cumsum = [&](const bool uses_level_1, const bool uses_level_2) {
-        std::vector<BufferBarrier> barriers = additional_begin_barriers;
-        barriers.insert(barriers.end(),
-                        {{input_buffer.deviceBuffer,
-                          COMPUTE_SHADER_WRITE,
-                          COMPUTE_SHADER_READ},
-                         {output_buffer.deviceBuffer,
-                          COMPUTE_SHADER_READ_WRITE,
-                          COMPUTE_SHADER_WRITE}});
-        if (uses_level_1) {
-            barriers.push_back({buffers._cumsum_blockSums.deviceBuffer,
-                                COMPUTE_SHADER_READ_WRITE,
-                                COMPUTE_SHADER_WRITE});
+    // A scan phase writes gid < active_elements into its bound storage. A backing
+    // smaller than that is silent out-of-bounds GPU writes with robustness off
+    // (caught live by GPU-AV as VUID 06936), so pin the contract host-side.
+    const auto require_backing = [](const _VulkanBuffer& b, const size_t needed_elements,
+                                    const char* role) {
+        const size_t needed_bytes = needed_elements * sizeof(int32_t);
+        if (b.buffer == VK_NULL_HANDLE || b.allocSize < needed_bytes || b.size < needed_bytes) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "VkSplat cumsum {} backing is smaller than the scan (label='{}', buffer={:#x}, alloc_bytes={}, capacity_bytes={}, active_bytes={}, needed_bytes={}, elements={})",
+                    role,
+                    b.label ? b.label : "?",
+                    lfs::rendering::vkHandleValue(b.buffer),
+                    b.allocSize,
+                    b.capacity,
+                    b.size,
+                    needed_bytes,
+                    needed_elements),
+                LFS_SOURCE_SITE_CURRENT());
         }
-        if (uses_level_2) {
-            barriers.push_back({buffers._cumsum_blockSums2.deviceBuffer,
-                                COMPUTE_SHADER_READ_WRITE,
-                                COMPUTE_SHADER_WRITE});
-        }
-        bufferMemoryBarrier(barriers);
     };
+    require_backing(input_buffer.deviceBuffer, num_elements, "input");
+    require_backing(output_buffer.deviceBuffer, num_elements, "output");
 
     if (num_elements <= block_0) {
-        begin_cumsum(false, false);
         execute_cumsum_phase(
             num_elements, block_0,
             pipeline_cumsum.single_pass,
             {
-                input_buffer.deviceBuffer,
-                output_buffer.deviceBuffer,
+                {input_buffer.deviceBuffer, BufferUse::ComputeRead},
+                {output_buffer.deviceBuffer, BufferUse::ComputeWrite},
             });
     }
 
     else if (num_elements <= block * block) {
         const size_t num_blocks = _CEIL_DIV(num_elements, block);
         resizeDeviceBuffer(buffers._cumsum_blockSums, num_blocks, true);
-        begin_cumsum(true, false);
+        require_backing(buffers._cumsum_blockSums.deviceBuffer, num_blocks, "block_sums");
 
         execute_cumsum_phase(
             num_elements, block,
             pipeline_cumsum.block_scan,
             {
-                input_buffer.deviceBuffer,
-                output_buffer.deviceBuffer,
-                buffers._cumsum_blockSums.deviceBuffer,
+                {input_buffer.deviceBuffer, BufferUse::ComputeRead},
+                {output_buffer.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeReadWrite},
             });
 
-        bufferMemoryBarrier({
-                                {buffers._cumsum_blockSums.deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
         execute_cumsum_phase(
             num_blocks, block,
             pipeline_cumsum.scan_block_sums,
             {
-                input_buffer.deviceBuffer,
-                output_buffer.deviceBuffer,
-                buffers._cumsum_blockSums.deviceBuffer,
+                {input_buffer.deviceBuffer, BufferUse::ComputeRead},
+                {output_buffer.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeReadWrite},
             });
 
-        bufferMemoryBarrier({
-                                {output_buffer.deviceBuffer, COMPUTE_SHADER_WRITE},
-                                {buffers._cumsum_blockSums.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
         execute_cumsum_phase(
             num_elements, block,
             pipeline_cumsum.add_block_offsets,
             {
-                input_buffer.deviceBuffer,
-                output_buffer.deviceBuffer,
-                buffers._cumsum_blockSums.deviceBuffer,
+                {input_buffer.deviceBuffer, BufferUse::ComputeRead},
+                {output_buffer.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeReadWrite},
             });
     }
 
@@ -1945,69 +1864,52 @@ void VulkanGSRenderer::executeCumsum(
         const size_t num_elements_2 = _CEIL_DIV(num_elements_1, block);
         resizeDeviceBuffer(buffers._cumsum_blockSums, num_elements_1, true);
         resizeDeviceBuffer(buffers._cumsum_blockSums2, num_elements_2, true);
-        begin_cumsum(true, true);
+        require_backing(buffers._cumsum_blockSums.deviceBuffer, num_elements_1, "block_sums");
+        require_backing(buffers._cumsum_blockSums2.deviceBuffer, num_elements_2, "block_sums2");
 
         execute_cumsum_phase(
             num_elements, block,
             pipeline_cumsum.block_scan,
             {
-                input_buffer.deviceBuffer,
-                output_buffer.deviceBuffer,
-                buffers._cumsum_blockSums.deviceBuffer,
+                {input_buffer.deviceBuffer, BufferUse::ComputeRead},
+                {output_buffer.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeReadWrite},
             });
 
-        bufferMemoryBarrier({
-                                {buffers._cumsum_blockSums.deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
         execute_cumsum_phase(
             num_elements_1, block,
             pipeline_cumsum.block_scan,
             {
-                buffers._cumsum_blockSums.deviceBuffer,
-                buffers._cumsum_blockSums.deviceBuffer,
-                buffers._cumsum_blockSums2.deviceBuffer,
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeRead},
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers._cumsum_blockSums2.deviceBuffer, BufferUse::ComputeReadWrite},
             });
 
-        bufferMemoryBarrier({
-                                {buffers._cumsum_blockSums.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                                {buffers._cumsum_blockSums2.deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
         execute_cumsum_phase(
             num_elements_2, block,
             pipeline_cumsum.scan_block_sums,
             {
-                buffers._cumsum_blockSums.deviceBuffer,
-                buffers._cumsum_blockSums.deviceBuffer,
-                buffers._cumsum_blockSums2.deviceBuffer,
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeRead},
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers._cumsum_blockSums2.deviceBuffer, BufferUse::ComputeReadWrite},
             });
 
-        bufferMemoryBarrier({
-                                {buffers._cumsum_blockSums2.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
         execute_cumsum_phase(
             num_elements_1, block,
             pipeline_cumsum.add_block_offsets,
             {
-                buffers._cumsum_blockSums.deviceBuffer,
-                buffers._cumsum_blockSums.deviceBuffer,
-                buffers._cumsum_blockSums2.deviceBuffer,
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeRead},
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers._cumsum_blockSums2.deviceBuffer, BufferUse::ComputeReadWrite},
             });
 
-        bufferMemoryBarrier({
-                                {output_buffer.deviceBuffer, COMPUTE_SHADER_WRITE},
-                                {buffers._cumsum_blockSums.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
         execute_cumsum_phase(
             num_elements, block,
             pipeline_cumsum.add_block_offsets,
             {
-                input_buffer.deviceBuffer,
-                output_buffer.deviceBuffer,
-                buffers._cumsum_blockSums.deviceBuffer,
+                {input_buffer.deviceBuffer, BufferUse::ComputeRead},
+                {output_buffer.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers._cumsum_blockSums.deviceBuffer, BufferUse::ComputeReadWrite},
             });
     }
 
@@ -2057,6 +1959,9 @@ void VulkanGSRenderer::executePrepareTileSort(
         timeCpuStage("vksplat.render.record.executePrepareTileSort");
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
     resizeDeviceBuffer(buffers.tile_sort_count, 1);
     if (buffers.tile_sort_count.deviceBuffer.size != sizeof(uint32_t)) {
         lfs::rendering::throw_renderer_contract(
@@ -2069,21 +1974,33 @@ void VulkanGSRenderer::executePrepareTileSort(
             LFS_SOURCE_SITE_CURRENT());
     }
     const uint32_t num_splats = uniforms.num_splats;
+    // Shader indexes index_buffer_offset[num_splats-1]; dual-source with cumsum size.
+    if (num_splats > 0 &&
+        buffers.index_buffer_offset.deviceSize() < static_cast<size_t>(num_splats)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "prepare_tile_sort requires index_buffer_offset covering uniforms.num_splats (num_splats={}, device_elements={}, buffer={:#x})",
+                num_splats,
+                buffers.index_buffer_offset.deviceSize(),
+                lfs::rendering::vkHandleValue(buffers.index_buffer_offset.deviceBuffer.buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
 
-    bufferMemoryBarrier({
-                            {buffers.index_buffer_offset.deviceBuffer, COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ);
+    // Tags from prepare_tile_sort.slang (non-visible): offset read, count write.
     executeCompute(
         {{1, 1}},
         &num_splats, sizeof(num_splats),
         pipeline_prepare_tile_sort,
-        {
-            buffers.index_buffer_offset.deviceBuffer,
-            buffers.tile_sort_count.deviceBuffer,
+        std::vector<TaggedBinding>{
+            {buffers.index_buffer_offset.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.tile_sort_count.deviceBuffer, BufferUse::ComputeWrite},
         });
-    bufferMemoryBarrier({{buffers.tile_sort_count.deviceBuffer, COMPUTE_SHADER_WRITE}},
-                        TRANSFER_COMPUTE_SHADER_READ);
+    // Handoff for wave/host consumers that still use TRANSFER_COMPUTE read scopes.
+    const DeclaredAccess handoff[] = {
+        {.buffer = &buffers.tile_sort_count.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &buffers.tile_sort_count.deviceBuffer, .use = BufferUse::ComputeRead},
+    };
+    planTransfer(std::span{handoff});
 }
 
 void VulkanGSRenderer::executeSortIndirectCount(
@@ -2200,28 +2117,14 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
     }
 
     DEVICE_GUARD;
+    using lfs::rendering::vulkan::BufferUse;
+
     {
         [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".clear_histogram"));
-        // The primitive-depth and tile-key radix passes reuse these workspaces
-        // inside one command buffer. Finish the earlier pass before resetting
-        // its global histogram and before the next upsweep overwrites the
-        // partition histogram.
-        if (!wave_barriers_hoisted) {
-            bufferMemoryBarrier({
-                {globalHistogram.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_WRITE},
-                {partitionHistogram.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_WRITE},
-                {buffers.unsorted_keys().deviceBuffer,
-                 COMPUTE_SHADER_WRITE,
-                 COMPUTE_SHADER_READ},
-                {buffers.unsorted_gauss_idx().deviceBuffer,
-                 COMPUTE_SHADER_WRITE,
-                 COMPUTE_SHADER_READ},
-            });
-        }
+        // Tags from radix_histogram_clear.slang: both histograms write.
+        // Upsweep's ComputeRead on keys plans RAW vs prior keygen/pass.
+        // When wave_barriers_hoisted, also plan key reads here so the wave
+        // keygen→radix edge is not lost if the caller only hoisted wave reuse.
         const uint32_t clear_uniforms[2]{
             static_cast<uint32_t>(num_passes * RADIX),
             static_cast<uint32_t>(num_parts_capacity * RADIX),
@@ -2230,33 +2133,22 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
                        clear_uniforms,
                        sizeof(clear_uniforms),
                        pipeline_radix_histogram_clear,
-                       {globalHistogram.deviceBuffer, partitionHistogram.deviceBuffer});
-        std::vector<BufferBarrier> clear_barriers{
-            {globalHistogram.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ_WRITE},
-            {partitionHistogram.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ_WRITE},
-        };
+                       std::vector<TaggedBinding>{
+                           {globalHistogram.deviceBuffer, BufferUse::ComputeWrite},
+                           {partitionHistogram.deviceBuffer, BufferUse::ComputeWrite},
+                       });
         if (wave_barriers_hoisted) {
-            // The partition's record/indirect-read transition and the prior
-            // wave's reuse hazards are hoisted outside this helper. Fold the
-            // wave keygen -> radix dependency into the histogram-clear edge.
-            clear_barriers.insert(
-                clear_barriers.end(),
-                {{buffers.unsorted_keys().deviceBuffer,
-                  COMPUTE_SHADER_WRITE,
-                  COMPUTE_SHADER_READ},
-                 {buffers.unsorted_gauss_idx().deviceBuffer,
-                  COMPUTE_SHADER_WRITE,
-                  COMPUTE_SHADER_READ}});
+            const lfs::rendering::vulkan::DeclaredAccess key_reads[] = {
+                {.buffer = &buffers.unsorted_keys().deviceBuffer,
+                 .use = BufferUse::ComputeRead},
+                {.buffer = &buffers.unsorted_gauss_idx().deviceBuffer,
+                 .use = BufferUse::ComputeRead},
+            };
+            planTransfer(std::span{key_reads});
         }
-        bufferMemoryBarrier(clear_barriers);
     }
-    if (!wave_barriers_hoisted) {
-        [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".prepare_count_and_dispatch"));
-        bufferMemoryBarrier({
-            {count_buffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-            {dispatch_args_buffer, COMPUTE_SHADER_WRITE, INDIRECT_DISPATCH_READ},
-        });
-    }
+    // count/dispatch → compute/indirect: planned by upsweep (IndirectRead implicit
+    // + count ComputeRead). When wave_barriers_hoisted, caller already ordered them.
 
     for (int pass = 0; 8 * pass < max_nonzero_bit; pass++) {
         auto& pipeline_sorting = buffers.is_unsorted_1 ? pipeline_sorting_indirect_1
@@ -2266,73 +2158,54 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
         sort_uniforms[0] = static_cast<uint32_t>(pass);
         sort_uniforms[1] = 0;
 
-        if (pass) {
-            [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".pass_pingpong_barrier"));
-            bufferMemoryBarrier({
-                                    {buffers.unsorted_keys().deviceBuffer, COMPUTE_SHADER_WRITE},
-                                    {buffers.unsorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE},
-                                },
-                                COMPUTE_SHADER_READ_WRITE);
-        }
+        // Pass ping-pong: prior downsweep wrote sorted_* which become unsorted_*
+        // after the flip at end of pass. Tags on upsweep/downsweep plan the RAW/WAW.
         {
             [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".pass_upsweep"));
+            // upsweep.comp: keys R, global RW, partition W, count R
             executeComputeIndirect(
                 dispatch_args_buffer,
                 indirect::byteOffset(radix_word_offset),
                 sort_uniforms, 2 * sizeof(int32_t),
                 pipeline_sorting.upsweep,
-                {
-                    buffers.unsorted_keys().deviceBuffer,
-                    globalHistogram.deviceBuffer,
-                    partitionHistogram.deviceBuffer,
-                    count_buffer,
+                std::vector<TaggedBinding>{
+                    {buffers.unsorted_keys().deviceBuffer, BufferUse::ComputeRead},
+                    {globalHistogram.deviceBuffer, BufferUse::ComputeReadWrite},
+                    {partitionHistogram.deviceBuffer, BufferUse::ComputeWrite},
+                    {count_buffer, BufferUse::ComputeRead},
                 });
         }
 
         {
-            [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".pass_upsweep_to_spine_barrier"));
-            bufferMemoryBarrier({
-                                    {globalHistogram.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                                    {partitionHistogram.deviceBuffer, COMPUTE_SHADER_WRITE},
-                                },
-                                COMPUTE_SHADER_READ_WRITE);
-        }
-        {
             [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".pass_spine"));
+            // spine.comp: global RW, partition RW, count R
             executeCompute(
                 {{RADIX, 1}},
                 sort_uniforms, 2 * sizeof(int32_t),
                 pipeline_sorting.spine,
-                {
-                    globalHistogram.deviceBuffer,
-                    partitionHistogram.deviceBuffer,
-                    count_buffer,
+                std::vector<TaggedBinding>{
+                    {globalHistogram.deviceBuffer, BufferUse::ComputeReadWrite},
+                    {partitionHistogram.deviceBuffer, BufferUse::ComputeReadWrite},
+                    {count_buffer, BufferUse::ComputeRead},
                 });
         }
 
         {
-            [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".pass_spine_to_downsweep_barrier"));
-            bufferMemoryBarrier({
-                                    {globalHistogram.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                                    {partitionHistogram.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                                },
-                                COMPUTE_SHADER_READ);
-        }
-        {
             [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".pass_downsweep"));
+            // downsweep.comp: hist R, keys/values in R, keys/values out W, count R
             executeComputeIndirect(
                 dispatch_args_buffer,
                 indirect::byteOffset(radix_word_offset),
                 sort_uniforms, 2 * sizeof(int32_t),
                 pipeline_sorting.downsweep,
-                {
-                    globalHistogram.deviceBuffer,
-                    partitionHistogram.deviceBuffer,
-                    buffers.unsorted_keys().deviceBuffer,
-                    buffers.unsorted_gauss_idx().deviceBuffer,
-                    buffers.sorted_keys().deviceBuffer,
-                    buffers.sorted_gauss_idx().deviceBuffer,
-                    count_buffer,
+                std::vector<TaggedBinding>{
+                    {globalHistogram.deviceBuffer, BufferUse::ComputeRead},
+                    {partitionHistogram.deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.unsorted_keys().deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.unsorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                    {buffers.sorted_keys().deviceBuffer, BufferUse::ComputeWrite},
+                    {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeWrite},
+                    {count_buffer, BufferUse::ComputeRead},
                 });
         }
 
@@ -2377,21 +2250,20 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         uint32_t pad0, pad1, pad2;
     } visible_uniforms{static_cast<uint32_t>(num_splats), 0, 0, 0};
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
     {
         PerfTimer::Timer<PerfTimer::BuildVisibleFlags> gpu_timer(this);
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.build_visible_flags");
-        bufferMemoryBarrier({
-                                {buffers.tiles_touched.deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ);
         executeCompute(
             {{num_splats, 64}},
             &visible_uniforms, sizeof(visible_uniforms),
             pipeline_visible_flags,
-            {
-                buffers.tiles_touched.deviceBuffer,
-                buffers.visible_flags.deviceBuffer,
+            std::vector<TaggedBinding>{
+                {buffers.tiles_touched.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.visible_flags.deviceBuffer, BufferUse::ComputeWrite},
             });
     }
 
@@ -2412,23 +2284,31 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         PerfTimer::Timer<PerfTimer::PrepareVisibleSort> gpu_timer(this);
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.prepare_visible_sort");
-        bufferMemoryBarrier({
-                                {buffers.visible_prefix.deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ);
+        // Shader indexes visible_prefix[num_splats-1]; dual-source with cumsum size.
+        if (num_splats > 0 && buffers.visible_prefix.deviceSize() < num_splats) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "prepare_visible_sort requires visible_prefix covering uniforms.num_splats (num_splats={}, device_elements={}, buffer={:#x})",
+                    num_splats,
+                    buffers.visible_prefix.deviceSize(),
+                    lfs::rendering::vkHandleValue(buffers.visible_prefix.deviceBuffer.buffer)),
+                LFS_SOURCE_SITE_CURRENT());
+        }
         executeCompute(
             {{1, 1}},
             &prepare_uniforms, sizeof(prepare_uniforms),
             pipeline_prepare_visible_sort,
-            {
-                buffers.visible_prefix.deviceBuffer,
-                buffers.visible_count.deviceBuffer,
-                buffers.visible_sort_dispatch_args.deviceBuffer,
+            std::vector<TaggedBinding>{
+                {buffers.visible_prefix.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.visible_count.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.visible_sort_dispatch_args.deviceBuffer, BufferUse::ComputeWrite},
             });
-        bufferMemoryBarrier({
-                                {buffers.visible_count.deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            TRANSFER_COMPUTE_SHADER_READ);
+        // Handoff for readback TransferRead + sort count ComputeRead.
+        const DeclaredAccess count_handoff[] = {
+            {.buffer = &buffers.visible_count.deviceBuffer, .use = BufferUse::TransferRead},
+            {.buffer = &buffers.visible_count.deviceBuffer, .use = BufferUse::ComputeRead},
+        };
+        planTransfer(std::span{count_handoff});
         recordVisibleCountReadback(buffers, num_splats);
     }
 
@@ -2436,37 +2316,27 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         PerfTimer::Timer<PerfTimer::CompactVisiblePrimitives> gpu_timer(this);
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.compact_visible_primitives");
-        bufferMemoryBarrier({
-                                {buffers.primitive_depth_keys.deviceBuffer, COMPUTE_SHADER_WRITE},
-                                {buffers.visible_prefix.deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ);
         executeCompute(
             {{num_splats, 64}},
             &visible_uniforms, sizeof(visible_uniforms),
             pipeline_compact_visible_primitives,
-            {
-                buffers.tiles_touched.deviceBuffer,
-                buffers.visible_prefix.deviceBuffer,
-                buffers.primitive_depth_keys.deviceBuffer,
-                *unsorted_keys,
-                *unsorted_idx,
+            std::vector<TaggedBinding>{
+                {buffers.tiles_touched.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.visible_prefix.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.primitive_depth_keys.deviceBuffer, BufferUse::ComputeRead},
+                {*unsorted_keys, BufferUse::ComputeWrite},
+                {*unsorted_idx, BufferUse::ComputeWrite},
             });
     }
 
     {
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.sort_visible_primitives");
-        bufferMemoryBarrier({
-                                {*unsorted_keys, COMPUTE_SHADER_WRITE},
-                                {*unsorted_idx, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
-
         // Stage 1 sort: num_bits=32 is intentional. Projection writes the full
         // float-as-uint bit pattern of a non-negative radial-distance key, whose
         // unsigned ordering is monotonic. This visible layout contains only the
         // radix command; range construction belongs to the later tile layout.
+        // Unsorted keys/idx → radix planned by SortIndirectCountImpl upsweep.
         executeSortIndirectCount(uniforms,
                                  buffers,
                                  32,
@@ -2485,10 +2355,11 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.copy_primitive_sort_indices");
         auto& sort_indices = resizeDeviceBuffer(buffers.primitive_sort_indices, num_splats);
-        bufferMemoryBarrier({{buffers.sorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE}},
-                            TRANSFER_READ);
-        bufferMemoryBarrier({{sort_indices, COMPUTE_SHADER_READ}},
-                            TRANSFER_WRITE);
+        const DeclaredAccess pre_copy[] = {
+            {.buffer = &buffers.sorted_gauss_idx().deviceBuffer, .use = BufferUse::TransferRead},
+            {.buffer = &sort_indices, .use = BufferUse::TransferWrite},
+        };
+        planTransfer(std::span{pre_copy});
         VkBufferCopy copy{};
         copy.srcOffset = buffers.sorted_gauss_idx().deviceBuffer.offset;
         copy.dstOffset = sort_indices.offset;
@@ -2501,11 +2372,19 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
                             0,
                             copy.size,
                             "primitive sort-index snapshot destination");
-        vkCmdCopyBuffer(command_buffer,
-                        buffers.sorted_gauss_idx().deviceBuffer.buffer,
-                        sort_indices.buffer, 1, &copy);
-        bufferMemoryBarrier({{sort_indices, TRANSFER_WRITE}},
-                            COMPUTE_SHADER_READ);
+        if (vulkan_dispatch_.cmd_copy_buffer == nullptr) {
+            lfs::rendering::throw_renderer_contract(
+                "primitive sort-index snapshot requires VulkanDispatch::cmd_copy_buffer",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        vulkan_dispatch_.cmd_copy_buffer(command_buffer,
+                                         buffers.sorted_gauss_idx().deviceBuffer.buffer,
+                                         sort_indices.buffer, 1, &copy);
+        const DeclaredAccess post_copy{
+            .buffer = &sort_indices,
+            .use = BufferUse::ComputeRead,
+        };
+        planTransfer(std::span{&post_copy, 1});
     }
 }
 
@@ -2515,17 +2394,14 @@ void VulkanGSRenderer::executeApplyDepthOrdering(
     PerfTimer::Timer<PerfTimer::ApplyDepthOrdering> timer(this);
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+
     const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
     if (num_splats == 0)
         return;
 
     auto& tiles_touched_ordered =
         resizeDeviceBuffer(buffers.tiles_touched_depth_ordered, num_splats);
-
-    bufferMemoryBarrier({{buffers.primitive_sort_indices.deviceBuffer, TRANSFER_WRITE},
-                         {buffers.tiles_touched.deviceBuffer, COMPUTE_SHADER_WRITE},
-                         {buffers.visible_count.deviceBuffer, COMPUTE_SHADER_WRITE}},
-                        COMPUTE_SHADER_READ);
 
     struct ApplyUniforms {
         uint32_t num_splats;
@@ -2536,11 +2412,11 @@ void VulkanGSRenderer::executeApplyDepthOrdering(
         {{num_splats, 64}},
         &apply_uniforms, sizeof(apply_uniforms),
         pipeline_apply_depth_ordering,
-        {
-            buffers.primitive_sort_indices.deviceBuffer,
-            buffers.tiles_touched.deviceBuffer,
-            tiles_touched_ordered,
-            buffers.visible_count.deviceBuffer,
+        std::vector<TaggedBinding>{
+            {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.tiles_touched.deviceBuffer, BufferUse::ComputeRead},
+            {tiles_touched_ordered, BufferUse::ComputeWrite},
+            {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
         });
 }
 
@@ -2557,20 +2433,14 @@ void VulkanGSRenderer::executeCullSplats(
     PerfTimer::Timer<PerfTimer::CullSplats> timer(this);
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+
     const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
     if (num_splats == 0)
         return;
 
-    bufferMemoryBarrier({
-                            {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ);
-
     auto& survivors = resizeDeviceBuffer(buffers.survivors, num_splats);
+    // clearDeviceBuffer records TransferWrite via planTransfer (§3.2).
     auto& survivor_state = clearDeviceBuffer(
         buffers.survivor_state,
         indirect::SurvivorState::kLayout.word_count);
@@ -2578,20 +2448,9 @@ void VulkanGSRenderer::executeCullSplats(
                                  indirect::SurvivorState::kLayout,
                                  "cull_prepare survivor-state producer");
     auto& emit_count = resizeDeviceBuffer(buffers.visible_emit_count, 1);
-    bufferMemoryBarrier({{survivor_state, TRANSFER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
 
-    if (lod_indices.buffer != VK_NULL_HANDLE ||
-        lod_logical_indices.buffer != VK_NULL_HANDLE) {
-        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
-        if (lod_indices.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_indices, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        if (lod_logical_indices.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_logical_indices, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
-    }
-
+    // Optional LOD inputs: null → dummy bind to survivor_state (legacy parity).
+    // plan() on tagged path covers valid LOD reads (replaces L2592 conditional).
     const _VulkanBuffer lod_indices_binding =
         (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : survivor_state;
     const _VulkanBuffer lod_logical_indices_binding =
@@ -2599,39 +2458,37 @@ void VulkanGSRenderer::executeCullSplats(
     const _VulkanBuffer lod_counts_binding =
         (lod_counts.buffer != VK_NULL_HANDLE) ? lod_counts : survivor_state;
 
+    // Tags from cull_splats.slang CULL_ENTRY_CULL bindings 0–9.
     executeCompute(
         {{num_splats, 256}},
         &uniforms, sizeof(uniforms),
         pipeline_cull_splats,
-        {
-            buffers.xyz_ws.deviceBuffer,
-            transform_indices,
-            node_mask,
-            overlay_params,
-            model_transforms,
-            lod_indices_binding,
-            lod_logical_indices_binding,
-            lod_counts_binding,
-            survivors,
-            survivor_state,
+        std::vector<TaggedBinding>{
+            {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},
+            {transform_indices, BufferUse::ComputeRead},
+            {node_mask, BufferUse::ComputeRead},
+            {overlay_params, BufferUse::ComputeRead},
+            {model_transforms, BufferUse::ComputeRead},
+            {lod_indices_binding, BufferUse::ComputeRead},
+            {lod_logical_indices_binding, BufferUse::ComputeRead},
+            {lod_counts_binding, BufferUse::ComputeRead},
+            {survivors, BufferUse::ComputeWrite},
+            {survivor_state, BufferUse::ComputeWrite},
         });
 
-    bufferMemoryBarrier({{survivor_state, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
+    // Tags from cull_splats.slang CULL_ENTRY_PREPARE: state R/W, emit_count write.
+    // L2619 catalog only barriered survivor_state (emit_count mismatch — first write).
     executeCompute(
         {{1, 1}},
         nullptr, 0,
         pipeline_cull_prepare,
-        {
-            survivor_state,
-            emit_count,
+        std::vector<TaggedBinding>{
+            {survivor_state, BufferUse::ComputeReadWrite},
+            {emit_count, BufferUse::ComputeWrite},
         });
 
-    bufferMemoryBarrier({{survivor_state, COMPUTE_SHADER_WRITE}}, INDIRECT_DISPATCH_READ);
-    bufferMemoryBarrier({
-                            {survivors, COMPUTE_SHADER_WRITE},
-                            {emit_count, COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
+    // Post L2629/L2630 deleted: executeProjectionForwardSurvivors (co-migrated)
+    // plans survivors/emit_count reads + implicit IndirectRead on survivor_state (§3.4.5).
 }
 
 void VulkanGSRenderer::executeProjectionForwardSurvivors(
@@ -2650,28 +2507,10 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     PerfTimer::Timer<PerfTimer::ProjectionSurvivors> timer(this);
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+
     if (visible_capacity == 0)
         return;
-
-    bufferMemoryBarrier({
-                            {buffers.sh0.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.shN.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ);
-
-    if (lod_levels.buffer != VK_NULL_HANDLE || lod_weights.buffer != VK_NULL_HANDLE) {
-        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
-        if (lod_levels.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_levels, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        if (lod_weights.buffer != VK_NULL_HANDLE) {
-            barriers.push_back({lod_weights, TRANSFER_COMPUTE_SHADER_WRITE});
-        }
-        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
-    }
 
     VulkanGSRendererUniforms survivor_uniforms = uniforms;
     survivor_uniforms.sort_capacity = static_cast<uint32_t>(
@@ -2683,6 +2522,13 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
 
     auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), visible_capacity);
     auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), visible_capacity);
+    auto& rect_tile_space = resizeDeviceBuffer(buffers.rect_tile_space, visible_capacity);
+    auto& xy_vs = resizeDeviceBuffer(buffers.xy_vs, 2 * visible_capacity);
+    auto& depths = resizeDeviceBuffer(buffers.depths, visible_capacity);
+    auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * visible_capacity);
+    auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * visible_capacity);
+    auto& overlay_flags = resizeDeviceBuffer(buffers.overlay_flags, visible_capacity);
+    auto& orig_ids = resizeDeviceBuffer(buffers.orig_ids, visible_capacity);
 
     const _VulkanBuffer lod_indices_binding =
         (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : unsorted_keys;
@@ -2695,50 +2541,52 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     const _VulkanBuffer lod_counts_binding =
         (lod_counts.buffer != VK_NULL_HANDLE) ? lod_counts : unsorted_keys;
 
-    std::vector<_VulkanBuffer> projection_buffers = {
-        // inputs
-        buffers.xyz_ws.deviceBuffer,
-        buffers.sh0.deviceBuffer,
-        buffers.shN.deviceBuffer,
-        buffers.rotations.deviceBuffer,
-        buffers.scaling_raw.deviceBuffer,
-        buffers.opacity_raw.deviceBuffer,
-        // compact-slot outputs (slots 6 and 8 are absent from the
-        // pipeline layout; the entries are placeholders)
-        unsorted_keys,
-        resizeDeviceBuffer(buffers.rect_tile_space, visible_capacity),
-        unsorted_keys,
-        resizeDeviceBuffer(buffers.xy_vs, 2 * visible_capacity),
-        resizeDeviceBuffer(buffers.depths, visible_capacity),
-        resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * visible_capacity),
-        resizeDeviceBuffer(buffers.rgb, 3 * visible_capacity),
-        resizeDeviceBuffer(buffers.overlay_flags, visible_capacity),
-        transform_indices,
-        node_mask,
-        overlay_params,
-        model_transforms,
-        unsorted_keys,
-        lod_indices_binding,
-        lod_logical_indices_binding,
-        lod_levels_binding,
-        lod_weights_binding,
-        lod_counts_binding,
-        buffers.survivors.deviceBuffer,
-        buffers.survivor_state.deviceBuffer,
-        unsorted_idx,
-        buffers.visible_emit_count.deviceBuffer,
-        resizeDeviceBuffer(buffers.orig_ids, visible_capacity),
+    // Dense buffer array indexed by binding number (catalog appendix L2735).
+    // Pipeline layouts skip bindings 6 and 8 (placeholders still occupy slots).
+    // Tags: attr/LOD/survivors/state reads; compact outputs write; emit_count R/W atomic.
+    std::vector<TaggedBinding> tagged = {
+        {buffers.xyz_ws.deviceBuffer, BufferUse::ComputeRead},                  // 0
+        {buffers.sh0.deviceBuffer, BufferUse::ComputeRead},                     // 1
+        {buffers.shN.deviceBuffer, BufferUse::ComputeRead},                     // 2
+        {buffers.rotations.deviceBuffer, BufferUse::ComputeRead},               // 3
+        {buffers.scaling_raw.deviceBuffer, BufferUse::ComputeRead},             // 4
+        {buffers.opacity_raw.deviceBuffer, BufferUse::ComputeRead},             // 5
+        {unsorted_keys, BufferUse::ComputeWrite},                               // 6 placeholder
+        {rect_tile_space, BufferUse::ComputeWrite},                             // 7
+        {unsorted_keys, BufferUse::ComputeWrite},                               // 8 placeholder
+        {xy_vs, BufferUse::ComputeWrite},                                       // 9
+        {depths, BufferUse::ComputeWrite},                                      // 10
+        {inv_cov, BufferUse::ComputeWrite},                                     // 11
+        {rgb, BufferUse::ComputeWrite},                                         // 12
+        {overlay_flags, BufferUse::ComputeWrite},                               // 13
+        {transform_indices, BufferUse::ComputeRead},                            // 14
+        {node_mask, BufferUse::ComputeRead},                                    // 15
+        {overlay_params, BufferUse::ComputeRead},                               // 16
+        {model_transforms, BufferUse::ComputeRead},                             // 17
+        {unsorted_keys, BufferUse::ComputeWrite},                               // 18 placeholder
+        {lod_indices_binding, BufferUse::ComputeRead},                          // 19
+        {lod_logical_indices_binding, BufferUse::ComputeRead},                  // 20
+        {lod_levels_binding, BufferUse::ComputeRead},                           // 21
+        {lod_weights_binding, BufferUse::ComputeRead},                          // 22
+        {lod_counts_binding, BufferUse::ComputeRead},                           // 23
+        {buffers.survivors.deviceBuffer, BufferUse::ComputeRead},               // 24
+        {buffers.survivor_state.deviceBuffer, BufferUse::ComputeRead},          // 25
+        {unsorted_idx, BufferUse::ComputeWrite},                                // 26
+        {buffers.visible_emit_count.deviceBuffer, BufferUse::ComputeReadWrite}, // 27
+        {orig_ids, BufferUse::ComputeWrite},                                    // 28
     };
     if (buffers.quant_pool) {
-        projection_buffers.push_back(buffers.page_frames.deviceBuffer);
+        tagged.push_back({buffers.page_frames.deviceBuffer, BufferUse::ComputeRead}); // 29
     }
+
+    // Indirect: plan() adds implicit IndirectRead on survivor_state (replaces L2629 handoff).
     executeComputeIndirect(
         buffers.survivor_state.deviceBuffer,
         indirect::byteOffset(indirect::SurvivorState::kProjectionWordOffset),
         &survivor_uniforms, sizeof(survivor_uniforms),
         buffers.quant_pool ? pipeline_projection_forward_quant_survivors
                            : pipeline_projection_forward_survivors,
-        projection_buffers);
+        tagged);
 }
 
 void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
@@ -2770,29 +2618,31 @@ void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
                              static_cast<size_t>(std::numeric_limits<uint32_t>::max()))),
         512u * 8u, 0, 0};
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
     {
         PerfTimer::Timer<PerfTimer::PrepareVisibleSort> gpu_timer(this);
-        bufferMemoryBarrier({
-                                {buffers.visible_emit_count.deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ);
+        // Tags from prepare_visible_chain.slang.
         executeCompute(
             {{1, 1}},
             &prepare_uniforms, sizeof(prepare_uniforms),
             pipeline_prepare_visible_chain,
-            {
-                buffers.visible_emit_count.deviceBuffer,
-                buffers.visible_count.deviceBuffer,
-                visible_dispatch,
-                cumsum_counts,
+            std::vector<TaggedBinding>{
+                {buffers.visible_emit_count.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.visible_count.deviceBuffer, BufferUse::ComputeWrite},
+                {visible_dispatch, BufferUse::ComputeWrite},
+                {cumsum_counts, BufferUse::ComputeWrite},
             });
-        bufferMemoryBarrier({
-                                {buffers.visible_count.deviceBuffer, COMPUTE_SHADER_WRITE},
-                                {cumsum_counts, COMPUTE_SHADER_WRITE},
-                            },
-                            TRANSFER_COMPUTE_SHADER_READ);
-        bufferMemoryBarrier({{visible_dispatch, COMPUTE_SHADER_WRITE}},
-                            INDIRECT_DISPATCH_READ);
+        // Handoff: count/cumsum for transfer+compute consumers; dispatch for
+        // IndirectRead is planned by subsequent executeComputeIndirect.
+        const DeclaredAccess handoff[] = {
+            {.buffer = &buffers.visible_count.deviceBuffer, .use = BufferUse::TransferRead},
+            {.buffer = &buffers.visible_count.deviceBuffer, .use = BufferUse::ComputeRead},
+            {.buffer = &cumsum_counts, .use = BufferUse::TransferRead},
+            {.buffer = &cumsum_counts, .use = BufferUse::ComputeRead},
+        };
+        planTransfer(std::span{handoff});
         // The readback's bound must be the render domain: clamping the raw
         // count to the frame's *capacity* would mask exactly the clamping the
         // raw count exists to detect.
@@ -2800,11 +2650,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
     }
 
     {
-        bufferMemoryBarrier({
-                                {buffers.unsorted_keys().deviceBuffer, COMPUTE_SHADER_WRITE},
-                                {buffers.unsorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
+        // Unsorted keys → radix planned by SortIndirectCountImpl.
         executeSortIndirectCount(uniforms,
                                  buffers,
                                  32,
@@ -2822,20 +2668,22 @@ void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
             uint32_t capacity;
             uint32_t pad0, pad1, pad2;
         } copy_uniforms{prepare_uniforms.visible_capacity, 0, 0, 0};
-        bufferMemoryBarrier({{buffers.sorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE}},
-                            COMPUTE_SHADER_READ);
         executeComputeIndirect(
             visible_dispatch,
             indirect::byteOffset(indirect::VisibleChainDispatch::kPerElementWordOffset),
             &copy_uniforms, sizeof(copy_uniforms),
             pipeline_copy_visible_indices,
-            {
-                buffers.sorted_gauss_idx().deviceBuffer,
-                sort_indices,
-                buffers.visible_count.deviceBuffer,
+            std::vector<TaggedBinding>{
+                {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+                {sort_indices, BufferUse::ComputeWrite},
+                {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
             });
-        bufferMemoryBarrier({{sort_indices, COMPUTE_SHADER_WRITE}},
-                            COMPUTE_SHADER_READ);
+        // Handoff for downstream compute consumers of sort_indices.
+        const DeclaredAccess post{
+            .buffer = &sort_indices,
+            .use = BufferUse::ComputeRead,
+        };
+        planTransfer(std::span{&post, 1});
     }
 }
 
@@ -2846,6 +2694,8 @@ void VulkanGSRenderer::executeMacroCoverage(
     PerfTimer::Timer<PerfTimer::ApplyDepthOrdering> timer(this);
     DEVICE_GUARD;
 
+    using lfs::rendering::vulkan::BufferUse;
+
     if (visible_capacity == 0)
         return;
 
@@ -2855,21 +2705,18 @@ void VulkanGSRenderer::executeMacroCoverage(
     auto& macro_counts =
         resizeDeviceBuffer(buffers.tiles_touched_depth_ordered, visible_capacity);
 
-    bufferMemoryBarrier({{buffers.rect_tile_space.deviceBuffer, COMPUTE_SHADER_WRITE}},
-                        COMPUTE_SHADER_READ);
-
     executeComputeIndirect(
         buffers.visible_dispatch.deviceBuffer,
         indirect::byteOffset(indirect::VisibleChainDispatch::kPerElementWordOffset),
         &uniforms, sizeof(uniforms),
         pipeline_macro_coverage,
-        {
-            buffers.primitive_sort_indices.deviceBuffer,
-            buffers.rect_tile_space.deviceBuffer,
-            macro_counts,
-            buffers.visible_count.deviceBuffer,
-            buffers.xy_vs.deviceBuffer,
-            buffers.inv_cov_vs_opacity.deviceBuffer,
+        std::vector<TaggedBinding>{
+            {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.rect_tile_space.deviceBuffer, BufferUse::ComputeRead},
+            {macro_counts, BufferUse::ComputeWrite},
+            {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
         });
 }
 
@@ -2985,43 +2832,21 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                                  ? pipeline_macro_compose_overlays
                                  : pipeline_macro_compose;
 
-    bufferMemoryBarrier({
-        {buffers.xy_vs.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.inv_cov_vs_opacity.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.rect_tile_space.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.index_buffer_offset.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.primitive_sort_indices.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.visible_count.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.rgb.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.depths.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {selection_mask, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {preview_mask, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {selection_colors, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.sorting_keys_1.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_READ_WRITE},
-        {buffers.sorting_keys_2.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_READ_WRITE},
-        {buffers.sorting_gauss_idx_1.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_READ_WRITE},
-        {buffers.sorting_gauss_idx_2.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_READ_WRITE},
-        {buffers._sorting_histogram.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_WRITE},
-        {buffers._sorting_histogram_cumsum.deviceBuffer,
-         COMPUTE_SHADER_READ_WRITE,
-         COMPUTE_SHADER_WRITE},
-    });
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+    // Mega-hoist removed: per-wave tagged dispatches plan hazards exactly.
 
     const auto& wave_buffer = buffers.depth_wave_dispatch.deviceBuffer;
     const auto& predicate_buffer = buffers.wave_predicates.deviceBuffer;
     for (size_t wave = 0; wave < armed; ++wave) {
         const bool conditional = predicate_waves && supports_conditional_rendering_;
+        if (conditional) {
+            const DeclaredAccess pred{
+                .buffer = &predicate_buffer,
+                .use = BufferUse::ConditionalRead,
+            };
+            planTransfer(std::span{&pred, 1});
+        }
         const ConditionalRenderingScope conditional_scope(
             *this,
             conditional,
@@ -3029,37 +2854,6 @@ void VulkanGSRenderer::executeMacroDepthWaves(
             vk_cmd_end_conditional_rendering_,
             predicate_buffer,
             wave * sizeof(uint32_t));
-
-        if (wave > 0) {
-            bufferMemoryBarrier({
-                {buffers.sorting_keys_1.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {buffers.sorting_keys_2.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {buffers.sorting_gauss_idx_1.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {buffers.sorting_gauss_idx_2.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {tile_ranges, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {batch_counts, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {batch_offsets, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {macro_wave_args, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {partials, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {active_mask, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {pixel_state, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {pixel_depth, COMPUTE_SHADER_READ_WRITE, COMPUTE_SHADER_READ_WRITE},
-                {buffers._sorting_histogram.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-                {buffers._sorting_histogram_cumsum.deviceBuffer,
-                 COMPUTE_SHADER_READ_WRITE,
-                 COMPUTE_SHADER_READ_WRITE},
-            });
-        }
 
         VulkanGSRendererUniforms wave_uniforms = uniforms;
         wave_uniforms.depth_wave = static_cast<uint32_t>(wave);
@@ -3074,23 +2868,24 @@ void VulkanGSRenderer::executeMacroDepthWaves(
 
         auto& unsorted_keys = buffers.unsorted_keys().deviceBuffer;
         auto& unsorted_indices = buffers.unsorted_gauss_idx().deviceBuffer;
-        // See the legacy loop: exact emission/padding replaces the defensive
-        // sentinel prefill and saves one per-wave dependency barrier.
+        // pipeline_generate_macro_keys_wave: 9 bindings.
         executeComputeIndirect(
             record,
             indirect::byteOffset(indirect::DepthWave::kKeygenWordOffset),
             &wave_uniforms,
             sizeof(wave_uniforms),
             pipeline_generate_macro_keys_wave,
-            {buffers.xy_vs.deviceBuffer,
-             buffers.inv_cov_vs_opacity.deviceBuffer,
-             buffers.rect_tile_space.deviceBuffer,
-             buffers.index_buffer_offset.deviceBuffer,
-             buffers.primitive_sort_indices.deviceBuffer,
-             unsorted_keys,
-             unsorted_indices,
-             buffers.visible_count.deviceBuffer,
-             wave_buffer});
+            std::vector<TaggedBinding>{
+                {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.rect_tile_space.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.index_buffer_offset.deviceBuffer, BufferUse::ComputeRead},
+                {buffers.primitive_sort_indices.deviceBuffer, BufferUse::ComputeRead},
+                {unsorted_keys, BufferUse::ComputeWrite},
+                {unsorted_indices, BufferUse::ComputeWrite},
+                {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
+                {wave_buffer, BufferUse::ComputeRead},
+            });
 
         executeSortIndirectCountImpl(wave_uniforms,
                                      buffers,
@@ -3103,90 +2898,78 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                                      "vksplat.render.record.sort_macro_depth_wave",
                                      true);
 
-        bufferMemoryBarrier({
-            {buffers.sorted_keys().deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-            {buffers.sorted_gauss_idx().deviceBuffer,
-             COMPUTE_SHADER_WRITE,
-             COMPUTE_SHADER_READ},
-        });
         executeComputeIndirect(
             record,
             indirect::byteOffset(indirect::DepthWave::kPerTileWordOffset),
             &wave_uniforms,
             sizeof(wave_uniforms),
             pipeline_compute_macro_ranges[buffers.is_unsorted_1],
-            {buffers.sorted_keys().deviceBuffer, tile_ranges, count, batch_counts});
+            std::vector<TaggedBinding>{
+                {buffers.sorted_keys().deviceBuffer, BufferUse::ComputeRead},
+                {tile_ranges, BufferUse::ComputeWrite},
+                {count, BufferUse::ComputeRead},
+                {batch_counts, BufferUse::ComputeWrite},
+            });
 
         executeCumsum(buffers,
                       buffers.tile_batch_counts,
                       buffers.tile_batch_offsets,
-                      {{tile_ranges, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ}},
                       wave < HIGS_DEPTH_MAX_WAVES);
-        bufferMemoryBarrier({
-            {batch_offsets, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        });
         executeCompute({{1, 1}},
                        &wave_uniforms,
                        sizeof(wave_uniforms),
                        pipeline_macro_batch_prepare,
-                       {batch_offsets, macro_wave_args});
-        bufferMemoryBarrier({
-            {macro_wave_args, COMPUTE_SHADER_WRITE, INDIRECT_DISPATCH_READ},
-        });
+                       std::vector<TaggedBinding>{
+                           {batch_offsets, BufferUse::ComputeRead},
+                           {macro_wave_args, BufferUse::ComputeWrite},
+                       });
 
-        std::vector<_VulkanBuffer> raster_bindings{
-            buffers.sorted_gauss_idx().deviceBuffer,
-            tile_ranges,
-            batch_offsets,
-            buffers.xy_vs.deviceBuffer,
-            buffers.inv_cov_vs_opacity.deviceBuffer,
-            buffers.rgb.deviceBuffer,
-            partials,
-            active_mask,
+        std::vector<TaggedBinding> raster_bindings{
+            {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+            {tile_ranges, BufferUse::ComputeRead},
+            {batch_offsets, BufferUse::ComputeRead},
+            {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
+            {partials, BufferUse::ComputeReadWrite},
+            {active_mask, BufferUse::ComputeReadWrite},
         };
         if (overlays_active) {
             raster_bindings.insert(raster_bindings.end(),
-                                   {selection_mask,
-                                    preview_mask,
-                                    selection_colors,
-                                    buffers.overlay_flags.deviceBuffer,
-                                    overlay_params,
-                                    buffers.orig_ids.deviceBuffer});
+                                   {{selection_mask, BufferUse::ComputeRead},
+                                    {preview_mask, BufferUse::ComputeRead},
+                                    {selection_colors, BufferUse::ComputeRead},
+                                    {buffers.overlay_flags.deviceBuffer, BufferUse::ComputeRead},
+                                    {overlay_params, BufferUse::ComputeRead},
+                                    {buffers.orig_ids.deviceBuffer, BufferUse::ComputeRead}});
         }
-        std::vector<_VulkanBuffer> compose_bindings{
-            buffers.sorted_gauss_idx().deviceBuffer,
-            tile_ranges,
-            batch_offsets,
-            buffers.xy_vs.deviceBuffer,
-            buffers.inv_cov_vs_opacity.deviceBuffer,
-            buffers.rgb.deviceBuffer,
-            buffers.depths.deviceBuffer,
-            partials,
-            active_mask,
-            pixel_state,
-            pixel_depth,
-            n_contributors,
+        std::vector<TaggedBinding> compose_bindings{
+            {buffers.sorted_gauss_idx().deviceBuffer, BufferUse::ComputeRead},
+            {tile_ranges, BufferUse::ComputeRead},
+            {batch_offsets, BufferUse::ComputeRead},
+            {buffers.xy_vs.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.inv_cov_vs_opacity.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.rgb.deviceBuffer, BufferUse::ComputeRead},
+            {buffers.depths.deviceBuffer, BufferUse::ComputeRead},
+            {partials, BufferUse::ComputeRead},
+            {active_mask, BufferUse::ComputeRead},
+            {pixel_state, BufferUse::ComputeReadWrite},
+            {pixel_depth, BufferUse::ComputeReadWrite},
+            {n_contributors, BufferUse::ComputeReadWrite},
         };
         if (overlays_active) {
             compose_bindings.insert(compose_bindings.end(),
-                                    {selection_mask,
-                                     preview_mask,
-                                     selection_colors,
-                                     buffers.overlay_flags.deviceBuffer,
-                                     overlay_params,
-                                     buffers.orig_ids.deviceBuffer});
+                                    {{selection_mask, BufferUse::ComputeRead},
+                                     {preview_mask, BufferUse::ComputeRead},
+                                     {selection_colors, BufferUse::ComputeRead},
+                                     {buffers.overlay_flags.deviceBuffer, BufferUse::ComputeRead},
+                                     {overlay_params, BufferUse::ComputeRead},
+                                     {buffers.orig_ids.deviceBuffer, BufferUse::ComputeRead}});
         }
 
         for (size_t batch_wave = 0; batch_wave < batch_waves; ++batch_wave) {
             wave_uniforms.wave_base =
                 static_cast<uint32_t>(batch_wave * HIGS_RASTER_WAVE_BATCHES);
-            if (batch_wave > 0) {
-                bufferMemoryBarrier({
-                    {partials, COMPUTE_SHADER_READ, COMPUTE_SHADER_READ_WRITE},
-                    {pixel_state, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ_WRITE},
-                    {pixel_depth, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ_WRITE},
-                });
-            }
             executeComputeIndirect(
                 macro_wave_args,
                 indirect::byteOffset(indirect::MacroWaveDispatch::rasterWordOffset(batch_wave)),
@@ -3194,10 +2977,6 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                 sizeof(wave_uniforms),
                 raster_pipeline[buffers.is_unsorted_1],
                 raster_bindings);
-            bufferMemoryBarrier({
-                {partials, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-                {active_mask, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-            });
             executeComputeIndirect(
                 macro_wave_args,
                 indirect::byteOffset(indirect::MacroWaveDispatch::composeWordOffset(batch_wave)),
@@ -3236,6 +3015,9 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
             LFS_SOURCE_SITE_CURRENT());
     }
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
     auto& input = buffers.tiles_touched_depth_ordered.deviceBuffer;
     auto& output = resizeDeviceBuffer(buffers.index_buffer_offset, visible_capacity);
     auto& block_sums = resizeDeviceBuffer(buffers._cumsum_blockSums, c1_capacity, true);
@@ -3243,10 +3025,36 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
     auto& counts = buffers.cumsum_counts.deviceBuffer;
     auto& dispatch = buffers.visible_dispatch.deviceBuffer;
 
+    // Same host contract as classic executeCumsum (sweep_c C2.1): GPU indexes
+    // g_input[gid] for gid < visible-derived element counts without a length API.
+    const auto require_backing = [](const _VulkanBuffer& b, const size_t needed_elements,
+                                    const char* role) {
+        const size_t needed_bytes = needed_elements * sizeof(int32_t);
+        if (b.buffer == VK_NULL_HANDLE || b.allocSize < needed_bytes || b.size < needed_bytes) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "VkSplat visible-chain cumsum {} backing is smaller than the scan (label='{}', buffer={:#x}, alloc_bytes={}, capacity_bytes={}, active_bytes={}, needed_bytes={}, elements={})",
+                    role,
+                    b.label ? b.label : "?",
+                    lfs::rendering::vkHandleValue(b.buffer),
+                    b.allocSize,
+                    b.capacity,
+                    b.size,
+                    needed_bytes,
+                    needed_elements),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    };
+    require_backing(input, visible_capacity, "input");
+    require_backing(output, visible_capacity, "output");
+    require_backing(block_sums, c1_capacity, "block_sums");
+    require_backing(block_sums2, c2_capacity, "block_sums2");
+
     const auto level_uniform = [](uint32_t level) { return level; };
 
-    bufferMemoryBarrier({{input, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ);
-
+    // Indirect cumsum tags (cumsum.slang CUMSUM_INDIRECT): input R, output W,
+    // blockSums RW, counts R. plan() merges per buffer; inter-phase barriers
+    // are derived. Implicit IndirectRead on dispatch for each indirect phase.
     {
         PerfTimer::Timer<PerfTimer::_Cumsum> cumsum_timer(this);
 
@@ -3257,47 +3065,59 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
                                indirect::byteOffset(indirect::VisibleChainDispatch::kCumsumLevel0WordOffset),
                                &level, sizeof(level),
                                pipeline_cumsum_indirect.block_scan,
-                               {input, output, block_sums, counts});
+                               std::vector<TaggedBinding>{
+                                   {input, BufferUse::ComputeRead},
+                                   {output, BufferUse::ComputeWrite},
+                                   {block_sums, BufferUse::ComputeReadWrite},
+                                   {counts, BufferUse::ComputeRead},
+                               });
 
-        bufferMemoryBarrier({{block_sums, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
         level = level_uniform(1);
         executeComputeIndirect(dispatch,
                                indirect::byteOffset(indirect::VisibleChainDispatch::kCumsumLevel1WordOffset),
                                &level, sizeof(level),
                                pipeline_cumsum_indirect.block_scan,
-                               {block_sums, block_sums, block_sums2, counts});
+                               std::vector<TaggedBinding>{
+                                   {block_sums, BufferUse::ComputeRead},
+                                   {block_sums, BufferUse::ComputeWrite},
+                                   {block_sums2, BufferUse::ComputeReadWrite},
+                                   {counts, BufferUse::ComputeRead},
+                               });
 
-        bufferMemoryBarrier({
-                                {block_sums, COMPUTE_SHADER_READ_WRITE},
-                                {block_sums2, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
         level = level_uniform(2);
         executeCompute({{1, 1}},
                        &level, sizeof(level),
                        pipeline_cumsum_indirect.scan_block_sums,
-                       {block_sums, block_sums, block_sums2, counts});
+                       std::vector<TaggedBinding>{
+                           {block_sums, BufferUse::ComputeRead},
+                           {block_sums, BufferUse::ComputeWrite},
+                           {block_sums2, BufferUse::ComputeReadWrite},
+                           {counts, BufferUse::ComputeRead},
+                       });
 
-        bufferMemoryBarrier({{block_sums2, COMPUTE_SHADER_READ_WRITE}},
-                            COMPUTE_SHADER_READ_WRITE);
         level = level_uniform(1);
         executeComputeIndirect(dispatch,
                                indirect::byteOffset(indirect::VisibleChainDispatch::kCumsumLevel1WordOffset),
                                &level, sizeof(level),
                                pipeline_cumsum_indirect.add_block_offsets,
-                               {block_sums, block_sums, block_sums2, counts});
+                               std::vector<TaggedBinding>{
+                                   {block_sums, BufferUse::ComputeRead},
+                                   {block_sums, BufferUse::ComputeWrite},
+                                   {block_sums2, BufferUse::ComputeReadWrite},
+                                   {counts, BufferUse::ComputeRead},
+                               });
 
-        bufferMemoryBarrier({
-                                {output, COMPUTE_SHADER_WRITE},
-                                {block_sums, COMPUTE_SHADER_READ_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
         level = level_uniform(0);
         executeComputeIndirect(dispatch,
                                indirect::byteOffset(indirect::VisibleChainDispatch::kCumsumLevel0WordOffset),
                                &level, sizeof(level),
                                pipeline_cumsum_indirect.add_block_offsets,
-                               {input, output, block_sums, counts});
+                               std::vector<TaggedBinding>{
+                                   {input, BufferUse::ComputeRead},
+                                   {output, BufferUse::ComputeWrite},
+                                   {block_sums, BufferUse::ComputeReadWrite},
+                                   {counts, BufferUse::ComputeRead},
+                               });
     }
 
     {
@@ -3316,21 +3136,35 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
         const uint32_t visible_limit = static_cast<uint32_t>(
             std::min<size_t>(visible_capacity,
                              static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+        // Visible path indexes index_buffer_offset[tail-1] with tail ≤ visible_limit.
+        if (visible_limit > 0 &&
+            buffers.index_buffer_offset.deviceSize() < static_cast<size_t>(visible_limit)) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "prepare_tile_sort_visible requires index_buffer_offset covering visible_limit (visible_limit={}, device_elements={}, buffer={:#x})",
+                    visible_limit,
+                    buffers.index_buffer_offset.deviceSize(),
+                    lfs::rendering::vkHandleValue(buffers.index_buffer_offset.deviceBuffer.buffer)),
+                LFS_SOURCE_SITE_CURRENT());
+        }
 
-        bufferMemoryBarrier({{output, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ);
+        // prepare_tile_sort.slang with visible_count binding.
         executeCompute(
             {{1, 1}},
             &visible_limit, sizeof(visible_limit),
             pipeline_prepare_tile_sort_visible,
-            {
-                output,
-                buffers.tile_sort_count.deviceBuffer,
-                buffers.visible_count.deviceBuffer,
+            std::vector<TaggedBinding>{
+                {output, BufferUse::ComputeRead},
+                {buffers.tile_sort_count.deviceBuffer, BufferUse::ComputeWrite},
+                {buffers.visible_count.deviceBuffer, BufferUse::ComputeRead},
             });
     }
 
-    bufferMemoryBarrier({{buffers.tile_sort_count.deviceBuffer, COMPUTE_SHADER_WRITE}},
-                        TRANSFER_COMPUTE_SHADER_READ);
+    const DeclaredAccess tile_count_handoff[] = {
+        {.buffer = &buffers.tile_sort_count.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &buffers.tile_sort_count.deviceBuffer, .use = BufferUse::ComputeRead},
+    };
+    planTransfer(std::span{tile_count_handoff});
 }
 
 void VulkanGSRenderer::executeWavePartition(const VulkanGSRendererUniforms& uniforms,
@@ -3381,18 +3215,23 @@ void VulkanGSRenderer::executeWavePartition(const VulkanGSRendererUniforms& unif
                                  indirect::DepthWave::layout(armed),
                                  "depth-wave partition producer");
 
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
     VulkanGSRendererUniforms partition_uniforms = uniforms;
     partition_uniforms.sort_capacity = HIGS_DEPTH_WAVE_INSTANCES;
     partition_uniforms.depth_wave = static_cast<uint32_t>(armed);
-    bufferMemoryBarrier({
-        {buffers.index_buffer_offset.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-        {buffers.tile_sort_count.deviceBuffer, COMPUTE_SHADER_WRITE, COMPUTE_SHADER_READ},
-    });
-    std::vector<_VulkanBuffer> bindings{buffers.index_buffer_offset.deviceBuffer};
-    if (visible_bounded)
-        bindings.push_back(buffers.visible_count.deviceBuffer);
-    bindings.insert(bindings.end(),
-                    {buffers.tile_sort_count.deviceBuffer, wave_dispatch, predicates});
+
+    // pipeline_wave_partition: 4 bindings; visible variant: 5 (inserts visible_count).
+    std::vector<TaggedBinding> bindings{
+        {buffers.index_buffer_offset.deviceBuffer, BufferUse::ComputeRead},
+    };
+    if (visible_bounded) {
+        bindings.push_back({buffers.visible_count.deviceBuffer, BufferUse::ComputeRead});
+    }
+    bindings.push_back({buffers.tile_sort_count.deviceBuffer, BufferUse::ComputeRead});
+    bindings.push_back({wave_dispatch, BufferUse::ComputeWrite});
+    bindings.push_back({predicates, BufferUse::ComputeWrite});
     executeCompute({{1, 1}},
                    &partition_uniforms,
                    sizeof(partition_uniforms),
@@ -3400,16 +3239,17 @@ void VulkanGSRenderer::executeWavePartition(const VulkanGSRendererUniforms& unif
                                    : pipeline_wave_partition,
                    bindings);
 
-    std::vector<BufferBarrier> post_barriers{
-        {wave_dispatch, COMPUTE_SHADER_WRITE, TRANSFER_COMPUTE_SHADER_INDIRECT_READ},
-        {buffers.tile_sort_count.deviceBuffer,
-         COMPUTE_SHADER_WRITE,
-         TRANSFER_COMPUTE_SHADER_READ},
+    // Handoffs: waves consume dispatch as IndirectRead (planned by per-wave
+    // executeComputeIndirect); tile_sort_count for transfer/host; predicates for
+    // ConditionalRenderingScope which has no barrier site of its own (§3.4.5).
+    std::vector<DeclaredAccess> handoff{
+        {.buffer = &wave_dispatch, .use = BufferUse::IndirectRead},
+        {.buffer = &buffers.tile_sort_count.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &buffers.tile_sort_count.deviceBuffer, .use = BufferUse::ComputeRead},
     };
     if (supports_conditional_rendering_) {
-        post_barriers.push_back(
-            {predicates, COMPUTE_SHADER_WRITE, CONDITIONAL_RENDERING_READ});
+        handoff.push_back({.buffer = &predicates, .use = BufferUse::ConditionalRead});
     }
-    bufferMemoryBarrier(post_barriers);
+    planTransfer(std::span{handoff});
     recordInstanceCountReadback(buffers, armed);
 }

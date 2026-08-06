@@ -33,16 +33,22 @@ layout(push_constant) uniform Push {
     vec4 divider;
     // Grip line config: spacing, half-width, half-length, line count (rounded up).
     vec4 grip;
+
+    // Per-panel valid-region UV: left scale, left clamp, right scale, right clamp.
+    vec4 left_uv_scale_clamp;  // xy = scale, zw = clamp max
+    vec4 right_uv_scale_clamp;
 } pc;
 
-vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normalize, float flip_y) {
+vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normalize, float flip_y,
+                  vec2 uv_scale, vec2 uv_clamp_max) {
     float u = uv.x;
     if (normalize > 0.5) {
         float span = max(end - start, 1e-6);
         u = (uv.x - start) / span;
     }
     float v = flip_y > 0.5 ? 1.0 - uv.y : uv.y;
-    return texture(tex, vec2(u, v)).rgb;
+    vec2 st = min(vec2(u, v) * uv_scale, uv_clamp_max);
+    return texture(tex, st).rgb;
 }
 
 void main() {
@@ -67,9 +73,11 @@ void main() {
 
     vec3 color = use_left
         ? sample_panel(u_left, content_uv, pc.panel_norm.x, pc.panel_norm.y,
-                       pc.panel_flags.x, pc.split.y)
+                       pc.panel_flags.x, pc.split.y,
+                       pc.left_uv_scale_clamp.xy, pc.left_uv_scale_clamp.zw)
         : sample_panel(u_right, content_uv, pc.panel_norm.z, pc.panel_norm.w,
-                       pc.panel_flags.y, pc.split.z);
+                       pc.panel_flags.y, pc.split.z,
+                       pc.right_uv_scale_clamp.xy, pc.right_uv_scale_clamp.zw);
 
     // Divider/handle/grip overlay. Mirrors compositeSplitImages CPU geometry
     // pixel-for-pixel: vertical bar + rounded handle + horizontal grip lines.

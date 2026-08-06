@@ -9,7 +9,6 @@
 
 #include <core/export.hpp>
 
-#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <memory>

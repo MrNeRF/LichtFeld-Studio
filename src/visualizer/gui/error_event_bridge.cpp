@@ -91,7 +91,7 @@ namespace lfs::vis::gui {
         }
         const lfs::ErrorCode code =
             e.resource_exhausted ? lfs::ErrorCode::ResourceExhausted : lfs::ErrorCode::Internal;
-        std::string message = e.error.value_or("Unknown error occurred during training.");
+        std::string message = e.error.value_or(LOC(lichtfeld::Strings::Runtime::TRAINING_UNKNOWN_ERROR));
         return makeNotification(code, lfs::ErrorDomain::Training, lfs::Severity::Error,
                                 std::move(message), error_op::kTrain, LFS_SOURCE_SITE_CURRENT());
     }
@@ -107,8 +107,7 @@ namespace lfs::vis::gui {
 
     std::optional<lfs::ErrorNotification>
     translateConfigLoadFailed(const state::ConfigLoadFailed& e) {
-        std::string message = std::format("Could not load '{}':\n\n{}",
-                                          lfs::core::path_to_utf8(e.path.filename()), e.error);
+        std::string message = LOCF("runtime.config_load_failed", lfs::core::path_to_utf8(e.path.filename()), e.error);
         return makeNotification(lfs::ErrorCode::InvalidArgument, lfs::ErrorDomain::App,
                                 lfs::Severity::Error, std::move(message), error_op::kLoadConfig,
                                 LFS_SOURCE_SITE_CURRENT());
@@ -123,21 +122,21 @@ namespace lfs::vis::gui {
                                     lfs::ErrorSurface::StatusOnly, /*actions=*/{});
         }
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
-                                std::format("Failed to export:\n\n{}", e.error), error_op::kExport,
+                                LOCF("runtime.export_failed", e.error), error_op::kExport,
                                 LFS_SOURCE_SITE_CURRENT());
     }
 
     std::optional<lfs::ErrorNotification>
     translateVideoExportFailed(const state::VideoExportFailed& e) {
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
-                                std::format("Failed to export video:\n\n{}", e.error),
+                                LOCF("runtime.video_export_failed", e.error),
                                 error_op::kExportVideo, LFS_SOURCE_SITE_CURRENT());
     }
 
     std::optional<lfs::ErrorNotification>
     translateMesh2SplatFailed(const state::Mesh2SplatFailed& e) {
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::Rendering,
-                                lfs::Severity::Error, std::format("Conversion failed:\n\n{}", e.error),
+                                lfs::Severity::Error, LOCF("runtime.conversion_failed", e.error),
                                 error_op::kMesh2Splat, LFS_SOURCE_SITE_CURRENT());
     }
 
@@ -181,12 +180,8 @@ namespace lfs::vis::gui {
 
     std::optional<lfs::ErrorNotification>
     translateCudaVersionUnsupported(const state::CudaVersionUnsupported& e) {
-        std::string message = std::format(
-            "Your CUDA driver version ({}.{}) is not supported.\n\n"
-            "LichtFeld Studio requires CUDA {}.{} or later\n"
-            "(NVIDIA driver 570+).\n\n"
-            "Please update your NVIDIA driver for full functionality.",
-            e.major, e.minor, e.min_major, e.min_minor);
+        std::string message = LOCF(lichtfeld::Strings::Runtime::CUDA_DRIVER_UNSUPPORTED,
+                                   e.major, e.minor, e.min_major, e.min_minor);
         return makeNotification(lfs::ErrorCode::FailedPrecondition, lfs::ErrorDomain::CUDA,
                                 lfs::Severity::Warning, std::move(message), error_op::kCudaCheck,
                                 LFS_SOURCE_SITE_CURRENT(), lfs::ErrorSurface::Toast, /*actions=*/{});
@@ -197,10 +192,7 @@ namespace lfs::vis::gui {
         if (e.is_disk_space_error) {
             return std::nullopt; // the native GuiManager rich disk-space modal owns this case
         }
-        std::string message =
-            e.is_checkpoint
-                ? std::format("Failed to save checkpoint at iteration {}:\n\n{}", e.iteration, e.error)
-                : std::format("Failed to export:\n\n{}", e.error);
+        std::string message = LOCF("runtime.export_failed", e.error);
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
                                 std::move(message), error_op::kSave, LFS_SOURCE_SITE_CURRENT());
     }

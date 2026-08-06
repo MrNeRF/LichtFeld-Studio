@@ -355,6 +355,15 @@ namespace {
             << lfs::format_for_developer(imported.error());
         EXPECT_EQ(imported->lfsp_version(), 4u);
 
+        // SPZ imports use ImportedSpz (not ImportedPly); embed is allowed.
+        auto imported_spz = SplatChapterPayload::capture(
+            *model, SplatSourceKind::ImportedSpz, false);
+        ASSERT_TRUE(imported_spz)
+            << lfs::format_for_developer(imported_spz.error());
+        EXPECT_EQ(imported_spz->lfsp_version(), 4u);
+        EXPECT_TRUE(std::ranges::equal(imported_spz->bytes(),
+                                       imported->bytes()));
+
         auto reparsed =
             SplatChapterPayload::from_lfsp(imported->bytes());
         ASSERT_TRUE(reparsed)
@@ -479,6 +488,56 @@ namespace {
         EXPECT_EQ(restored.error().code(), lfs::ErrorCode::DataLoss);
         EXPECT_EQ(live.getNodeCount(), 1u);
         EXPECT_NE(live.getNode("Existing"), nullptr);
+    }
+
+    TEST(SceneChapterAdapterTest,
+         ChildOrderSortsSiblingsWhenDomArrayIsShuffled) {
+        SceneGraphChapter chapter;
+        const Uuid root = fixed_uuid(930);
+        const Uuid first = fixed_uuid(931);
+        const Uuid second = fixed_uuid(932);
+        const Uuid third = fixed_uuid(933);
+        // Intentionally upsert in reverse sibling order; child_order is
+        // authoritative for restore insertion order.
+        require_status(chapter.upsert_node(SceneNodeRecord{
+            .uuid = root,
+            .type = "group",
+            .name = "Root",
+            .child_order = 0,
+        }));
+        require_status(chapter.upsert_node(SceneNodeRecord{
+            .uuid = third,
+            .type = "group",
+            .name = "Third",
+            .parent_uuid = root,
+            .child_order = 2,
+        }));
+        require_status(chapter.upsert_node(SceneNodeRecord{
+            .uuid = first,
+            .type = "group",
+            .name = "First",
+            .parent_uuid = root,
+            .child_order = 0,
+        }));
+        require_status(chapter.upsert_node(SceneNodeRecord{
+            .uuid = second,
+            .type = "group",
+            .name = "Second",
+            .parent_uuid = root,
+            .child_order = 1,
+        }));
+
+        Scene live;
+        auto restored =
+            hydrate_scene_graph(chapter, live, ScenePayloadResolver{});
+        ASSERT_TRUE(restored)
+            << lfs::format_for_developer(restored.error());
+        const auto* root_node = live.getNodeByUuid(root);
+        ASSERT_NE(root_node, nullptr);
+        ASSERT_EQ(root_node->children.size(), 3u);
+        EXPECT_EQ(live.getNodeUuid(root_node->children[0]), first);
+        EXPECT_EQ(live.getNodeUuid(root_node->children[1]), second);
+        EXPECT_EQ(live.getNodeUuid(root_node->children[2]), third);
     }
 
     TEST(ProjectDocumentTest,

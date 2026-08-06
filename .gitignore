@@ -8,10 +8,18 @@ external/libtorch
 external/release/libtorch/
 external/debug/libtorch/
 output*
+# Epic #1497: pool sources match the training-output glob above.
+!src/visualizer/rendering/output_image_pool.hpp
+!src/visualizer/rendering/output_image_pool.cpp
 results
 .idea
 imgui.ini
 data
+!tests/data/
+tests/data/*
+!tests/data/param_json_golden/
+tests/data/param_json_golden/*
+!tests/data/param_json_golden/*.json
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py

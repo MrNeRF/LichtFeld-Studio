@@ -13,6 +13,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
+#include "visualizer/app_store.hpp"
 
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 
@@ -255,7 +256,24 @@ namespace lfs::vis::gui {
     }
 
     bool RmlPanelHost::ensureDocumentLoaded() {
-        return ensureContext() && loadDocument();
+        if (!ensureContext() || !loadDocument())
+            return false;
+        syncLocalizedContent();
+        return true;
+    }
+
+    // The cached panel texture survives a language switch, so the document has to be
+    // re-translated and re-rendered from the host that owns that texture.
+    void RmlPanelHost::syncLocalizedContent() {
+        const auto generation = app_store().language_generation.get();
+        if (generation == localized_language_generation_)
+            return;
+
+        localized_language_generation_ = generation;
+        rml_documents::refreshLocalizedContent(document_);
+        content_dirty_ = true;
+        direct_cache_dirty_ = true;
+        render_needed_ = true;
     }
 
     bool RmlPanelHost::reloadDocument() {

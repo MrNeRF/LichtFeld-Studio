@@ -9,6 +9,7 @@ import time
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .ui import RuntimeState
 
 
 _DEFAULT_FORMAT = "jpg"
@@ -46,6 +47,10 @@ def _ui_label(key: str, fallback: str) -> str:
     return fallback
 
 
+def _format_ui_label(key: str, fallback: str, **values) -> str:
+    return _ui_label(key, fallback).format(**values)
+
+
 def _parse_int(value, fallback):
     try:
         parsed = int(round(float(value)))
@@ -81,6 +86,10 @@ def _normalize_resolution(value):
 class ViewportExportControlsController:
     _DIRTY_FIELDS = (
         "viewport_export_tool_label",
+        "ui_resolution_label",
+        "ui_viewport_label",
+        "ui_custom_label",
+        "ui_alpha_label",
         "viewport_export_format_value",
         "viewport_export_resolution_value",
         "viewport_export_has_scene",
@@ -124,11 +133,15 @@ class ViewportExportControlsController:
             "viewport_export_tool_label",
             lambda: _ui_label("toolbar.viewport_export", "Viewport Export"),
         )
+        model.bind_func("ui_resolution_label", lambda: _ui_label("ui.resolution", "Resolution"))
+        model.bind_func("ui_viewport_label", lambda: _ui_label("ui.viewport", "Viewport"))
+        model.bind_func("ui_custom_label", lambda: _ui_label("ui.custom", "Custom"))
+        model.bind_func("ui_alpha_label", lambda: _ui_label("ui.alpha", "Alpha"))
         model.bind_func("viewport_export_has_scene", lambda: self._has_scene)
         model.bind_func("viewport_export_can_export", lambda: self._has_scene and not self._is_exporting)
         model.bind_func("viewport_export_show_transparency", lambda: self._format == "png")
         model.bind_func("viewport_export_show_custom_size", lambda: self._resolution == "custom")
-        model.bind_func("viewport_export_export_label", lambda: "Export")
+        model.bind_func("viewport_export_export_label", lambda: _ui_label("export.export", "Export"))
         model.bind_func("viewport_export_status_text", lambda: self._status_text)
         model.bind_func("viewport_export_has_status", lambda: bool(self._status_text))
         model.bind(
@@ -247,6 +260,7 @@ class ViewportExportControlsController:
 
     def _state_key(self):
         return (
+            RuntimeState.language_generation.value,
             self._visible,
             self._has_scene,
             self._is_exporting,
@@ -333,7 +347,7 @@ class ViewportExportControlsController:
         if self._is_exporting:
             return
         if not self._has_scene:
-            self._set_status("Load a scene first.")
+            self._set_status(_ui_label("ui.viewport_export_load_scene_first", "Load a scene first."))
             return
 
         extension = "png" if self._format == "png" else "jpg"
@@ -353,7 +367,7 @@ class ViewportExportControlsController:
 
         width, height = self._export_dimensions()
         self._is_exporting = True
-        self._set_status("Exporting...", transient=False)
+        self._set_status(_ui_label("ui.viewport_export_exporting", "Exporting..."), transient=False)
         self._dirty_all()
         try:
             result = lf.export_viewport_image(
@@ -366,11 +380,16 @@ class ViewportExportControlsController:
             result_width = int(result.get("width", 0) or 0)
             result_height = int(result.get("height", 0) or 0)
             if result_width > 0 and result_height > 0:
-                self._set_status(f"Saved {result_width} x {result_height}")
+                self._set_status(_format_ui_label(
+                    "ui.viewport_export_saved_dimensions",
+                    "Saved {width} x {height}",
+                    width=result_width,
+                    height=result_height,
+                ))
             else:
-                self._set_status("Saved")
+                self._set_status(_ui_label("ui.viewport_export_saved", "Saved"))
         except Exception as exc:
-            self._set_status("Export failed.")
+            self._set_status(_ui_label("ui.viewport_export_failed", "Export failed."))
             self._report_error(str(exc).strip() or "Viewport export failed.")
         finally:
             self._is_exporting = False

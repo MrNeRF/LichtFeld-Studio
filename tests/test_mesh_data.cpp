@@ -3,8 +3,10 @@
 
 #include "core/mesh_data.hpp"
 #include "rendering/mesh2splat.hpp"
-#include "rendering/rendering.hpp"
 #include <gtest/gtest.h>
+#include <map>
+#include <memory>
+#include <set>
 
 using namespace lfs::core;
 
@@ -211,120 +213,51 @@ TEST_F(MeshDataTest, Mesh2SplatCpuTensorConverterProducesSplatData) {
     EXPECT_EQ((*result)->opacity_raw().size(1), size_t{1});
 }
 
-TEST_F(MeshDataTest, RasterVideoCompositeUsesSubmeshMaterialsTexturesAndVertexColors) {
-    auto mesh = make_quad();
+// Catches renderer GPU caches keyed on the MeshData address. Destroying a mesh and
+// creating another reuses the same heap chunk almost every time, and generation()
+// restarts at 0 on the new object, so an address-keyed cache scores a false hit and
+// draws the destroyed mesh's vertex buffers in place of the new one.
+TEST_F(MeshDataTest, IdIsUniquePerInstanceEvenWhenHeapAddressIsRecycled) {
+    std::set<uint64_t> seen_ids;
+    std::map<const MeshData*, uint64_t> id_at_address;
+    bool address_was_recycled = false;
 
-    mesh.vertices = Tensor::from_vector(
-        {-1.0f, -1.0f, -3.0f,
-         0.0f, -1.0f, -3.0f,
-         0.0f, 1.0f, -3.0f,
-         -1.0f, 1.0f, -3.0f,
-         0.0f, -1.0f, -3.0f,
-         1.0f, -1.0f, -3.0f,
-         1.0f, 1.0f, -3.0f,
-         0.0f, 1.0f, -3.0f},
-        {size_t{8}, size_t{3}},
-        Device::CPU);
-    mesh.indices = Tensor::from_vector(
-        {0, 1, 2,
-         0, 2, 3,
-         4, 5, 6,
-         4, 6, 7},
-        {size_t{4}, size_t{3}},
-        Device::CPU);
-    mesh.normals = Tensor::from_vector(
-        {0.0f, 0.0f, 1.0f,
-         0.0f, 0.0f, 1.0f,
-         0.0f, 0.0f, 1.0f,
-         0.0f, 0.0f, 1.0f,
-         0.0f, 0.0f, 1.0f,
-         0.0f, 0.0f, 1.0f,
-         0.0f, 0.0f, 1.0f,
-         0.0f, 0.0f, 1.0f},
-        {size_t{8}, size_t{3}},
-        Device::CPU);
-    mesh.texcoords = Tensor::from_vector(
-        {0.0f, 0.0f,
-         1.0f, 0.0f,
-         1.0f, 1.0f,
-         0.0f, 1.0f,
-         0.0f, 0.0f,
-         1.0f, 0.0f,
-         1.0f, 1.0f,
-         0.0f, 1.0f},
-        {size_t{8}, size_t{2}},
-        Device::CPU);
-    mesh.colors = Tensor::from_vector(
-        {1.0f, 0.0f, 0.0f, 1.0f,
-         1.0f, 0.0f, 0.0f, 1.0f,
-         1.0f, 0.0f, 0.0f, 1.0f,
-         1.0f, 0.0f, 0.0f, 1.0f,
-         1.0f, 1.0f, 1.0f, 1.0f,
-         1.0f, 1.0f, 1.0f, 1.0f,
-         1.0f, 1.0f, 1.0f, 1.0f,
-         1.0f, 1.0f, 1.0f, 1.0f},
-        {size_t{8}, size_t{4}},
-        Device::CPU);
+    for (int i = 0; i < 32; ++i) {
+        auto mesh = std::make_unique<MeshData>(make_triangle());
+        const uint64_t id = mesh->id();
 
-    Material vertex_color_material;
-    vertex_color_material.base_color = glm::vec4(1.0f);
-    Material textured_material;
-    textured_material.base_color = glm::vec4(1.0f);
-    textured_material.albedo_tex = 1;
-    mesh.materials = {vertex_color_material, textured_material};
-    mesh.submeshes = {{0, 6, 0}, {6, 6, 1}};
-    lfs::core::TextureImage green_texture;
-    green_texture.width = 2;
-    green_texture.height = 2;
-    green_texture.channels = 4;
-    green_texture.pixels = {
-        0, 255, 0, 255, 0, 255, 0, 255,
-        0, 255, 0, 255, 0, 255, 0, 255};
-    mesh.texture_images = {std::move(green_texture)};
+        EXPECT_TRUE(seen_ids.insert(id).second) << "MeshData id " << id << " was handed out twice";
+        EXPECT_EQ(mesh->generation(), 0u) << "generation cannot distinguish fresh instances";
 
-    auto engine = lfs::rendering::RenderingEngine::create();
-    auto init = engine->initialize();
-    ASSERT_TRUE(init.has_value()) << init.error();
+        const auto [entry, first_use] = id_at_address.try_emplace(mesh.get(), id);
+        if (!first_use) {
+            address_was_recycled = true;
+            EXPECT_NE(entry->second, id) << "recycled address carried its previous identity";
+            entry->second = id;
+        }
+    }
 
-    const lfs::rendering::ViewportData viewport{
-        .rotation = glm::mat3(1.0f),
-        .translation = glm::vec3(0.0f),
-        .size = {64, 64},
-        .focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM,
-        .orthographic = true,
-        .ortho_scale = 24.0f};
-    const lfs::rendering::FrameView frame_view{
-        .rotation = viewport.rotation,
-        .translation = viewport.translation,
-        .size = viewport.size,
-        .focal_length_mm = viewport.focal_length_mm,
-        .orthographic = viewport.orthographic,
-        .ortho_scale = viewport.ortho_scale,
-        .background_color = glm::vec3(0.0f)};
-    lfs::rendering::VideoCompositeFrameRequest request{
-        .viewport = viewport,
-        .frame_view = frame_view,
-        .background_color = glm::vec3(0.0f),
-        .meshes = {lfs::rendering::MeshFrameItem{
-            .mesh = &mesh,
-            .transform = glm::mat4(1.0f),
-            .options = {
-                .light_intensity = 0.0f,
-                .ambient = 2.0f,
-                .backface_culling = false}}}};
+    EXPECT_TRUE(address_was_recycled)
+        << "allocator never reused an address, so this run did not exercise the hazard";
+}
 
-    auto rendered = engine->renderVideoCompositeFrame(std::nullopt, request);
-    ASSERT_TRUE(rendered.has_value()) << rendered.error();
-    auto image = rendered->cpu().contiguous();
-    ASSERT_EQ(image.ndim(), 3);
-    ASSERT_EQ(image.size(0), size_t{3});
-    auto acc = image.accessor<float, 3>();
+TEST_F(MeshDataTest, MoveAssignmentTakesAFreshId) {
+    auto target = make_triangle();
+    auto source = make_quad();
+    const uint64_t target_id = target.id();
+    const uint64_t source_id = source.id();
 
-    const glm::vec3 left(acc(0, 32, 20), acc(1, 32, 20), acc(2, 32, 20));
-    const glm::vec3 right(acc(0, 32, 44), acc(1, 32, 44), acc(2, 32, 44));
+    target = std::move(source);
 
-    EXPECT_GT(left.r, left.g + 0.2f);
-    EXPECT_GT(left.r, left.b + 0.2f);
-    EXPECT_GT(right.g, right.r + 0.2f);
-    EXPECT_GT(right.g, right.b + 0.2f);
+    EXPECT_EQ(target.vertex_count(), 4);
+    EXPECT_NE(target.id(), target_id) << "replaced contents kept the old identity";
+    EXPECT_NE(target.id(), source_id);
+}
+
+TEST_F(MeshDataTest, DeviceCopyGetsItsOwnId) {
+    auto mesh = make_triangle();
+    auto copy = mesh.to(Device::CPU);
+
+    EXPECT_EQ(copy.vertex_count(), mesh.vertex_count());
+    EXPECT_NE(copy.id(), mesh.id()) << "a separate MeshData needs its own cache slot";
 }

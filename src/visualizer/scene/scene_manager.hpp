@@ -31,9 +31,6 @@ namespace lfs::vis {
         class SceneSnapshot;
     }
 
-    // Forward declarations
-    class Trainer;
-
     class LFS_VIS_API SceneManager {
     public:
         // Content type - what's loaded, not execution state

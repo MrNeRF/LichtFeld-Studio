@@ -45,7 +45,9 @@ namespace lfs::core::prop {
         Color3,
         Color4,
         // GPU tensor type
-        Tensor
+        Tensor,
+        FloatVector,
+        IntVector
     };
 
     enum class PropUIHint { Default,
@@ -62,6 +64,8 @@ namespace lfs::core::prop {
         PROP_LIVE_UPDATE = 1 << 1,
         PROP_NEEDS_RESTART = 1 << 2,
         PROP_ANIMATABLE = 1 << 3,
+        PROP_OPERATOR_ARG = 1 << 4,
+        PROP_ADVANCED = 1 << 5,
     };
 
     inline PropFlags operator|(PropFlags a, PropFlags b) {
@@ -76,7 +80,13 @@ namespace lfs::core::prop {
         std::string name;
         std::string identifier;
         int value;
+        std::string locale_key;
+        std::string wire_value;
     };
+
+    using PropDefault = std::variant<bool, int64_t, double, std::string,
+                                     std::array<double, 2>, std::array<double, 3>,
+                                     std::array<double, 4>, std::array<double, 16>>;
 
     struct PropertyMeta {
         std::string id;
@@ -88,34 +98,25 @@ namespace lfs::core::prop {
         uint32_t flags = PROP_NONE;
         PropSource source = PropSource::CPP;
 
-        double min_value = 0.0;
-        double max_value = 1.0;
+        std::string ui_locale_key;
+        std::string ui_tooltip_key;
+        std::optional<int> ui_precision;
+        std::string json_key;
+        bool json_required = false;
+
+        std::optional<int> vector_size;
+        std::optional<double> min_value;
+        std::optional<double> max_value;
         double soft_min = 0.0;
         double soft_max = 1.0;
         double step = 1.0;
-        double default_value = 0.0;
-        std::string default_string;
+        std::optional<PropDefault> default_value;
         std::vector<EnumItem> enum_items;
-        int default_enum = 0;
-
-        // Geometric type defaults
-        std::array<double, 2> default_vec2{};
-        std::array<double, 3> default_vec3{};
-        std::array<double, 4> default_vec4{};
-        std::array<double, 4> default_quat{1.0, 0.0, 0.0, 0.0};                              // w, x, y, z
-        std::array<double, 16> default_mat4{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}; // identity
+        std::vector<std::string> strategies;
+        bool strategy_applicability_explicit = false;
 
         std::function<std::any(const PropertyObjectRef&)> getter;
         std::function<void(PropertyObjectRef&, const std::any&)> setter;
-
-        // AnimatableProperty bridge for Python descriptor support
-        std::function<void*(const PropertyObjectRef&)> get_animatable_ptr;
-        bool supports_descriptor = false;
-
-        bool is_collection = false;
-        std::string collection_item_type;
-        std::function<size_t(const PropertyObjectRef&)> collection_size;
-        std::function<PropertyObjectRef(const PropertyObjectRef&, size_t)> collection_get;
 
         std::function<void(const PropertyObjectRef&, const std::any&, const std::any&)> on_update;
 
@@ -124,12 +125,7 @@ namespace lfs::core::prop {
         [[nodiscard]] bool is_live_update() const { return has_flag(PROP_LIVE_UPDATE); }
         [[nodiscard]] bool needs_restart() const { return has_flag(PROP_NEEDS_RESTART); }
         [[nodiscard]] bool is_animatable() const { return has_flag(PROP_ANIMATABLE); }
-
-        [[nodiscard]] bool is_geometric_type() const {
-            return type == PropType::Vec2 || type == PropType::Vec3 || type == PropType::Vec4 ||
-                   type == PropType::Quat || type == PropType::Mat4 ||
-                   type == PropType::Color3 || type == PropType::Color4;
-        }
+        [[nodiscard]] bool is_advanced() const { return has_flag(PROP_ADVANCED); }
     };
 
     struct PropertyGroup {

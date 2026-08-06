@@ -13,6 +13,10 @@ namespace nb = nanobind;
 
 namespace lfs::python {
 
+    [[nodiscard]] std::any resolve_optimization_default(
+        const core::prop::PropertyMeta& meta,
+        const core::param::OptimizationParameters& source);
+
     class PyOptimizationParams {
     public:
         PyOptimizationParams() = default;
@@ -49,7 +53,6 @@ namespace lfs::python {
         [[nodiscard]] bool can_edit() const;
     };
 
-    void register_optimization_properties();
     void register_dataset_properties();
     void register_params(nb::module_& m);
 

@@ -182,10 +182,12 @@ nanobind_add_module(
     lfs/py_scene.cpp
     lfs/py_scripts.cpp
     lfs/py_cameras.cpp
+    lfs/py_diagnostics.cpp
     lfs/py_io.cpp
     lfs/py_packages.cpp
     lfs/py_params.cpp
     lfs/py_plugins.cpp
+    lfs/py_operator_properties.cpp
     lfs/py_ui.cpp
     lfs/py_ui_context.cpp
     lfs/py_ui_theme.cpp

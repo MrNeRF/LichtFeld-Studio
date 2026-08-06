@@ -44,6 +44,20 @@ PROCESS_TERMINATE_GRACE_SECONDS = 0.5
 PROCESS_OUTPUT_TAIL_LINES = 100
 
 
+def _localized_progress(key: str, fallback: str, **values: object) -> str:
+    from .localization import safe_format
+
+    try:
+        import lichtfeld as lf
+
+        text = lf.ui.tr(key)
+        if text and text != key:
+            return safe_format(text, **values)
+    except Exception:
+        pass
+    return safe_format(fallback, **values)
+
+
 def _is_windows() -> bool:
     return os.name == "nt"
 
@@ -289,7 +303,7 @@ def _download_url_to_temp(
     req = urllib.request.Request(url, headers=req_headers)
 
     if on_progress:
-        on_progress(f"Downloading {url}...")
+        on_progress(_localized_progress("plugin_marketplace.progress.download_url", "Downloading {url}...", url=url))
 
     with urlopen(req, timeout=60) as resp:
         with tempfile.NamedTemporaryFile(suffix=".archive", delete=False) as tmp:
@@ -431,7 +445,13 @@ def prepare_github_archive(
 
     if on_progress:
         ref_text = f"@{ref}" if ref else ""
-        on_progress(f"Downloading {owner}/{repo}{ref_text} archive...")
+        on_progress(_localized_progress(
+            "plugin_marketplace.progress.download_archive",
+            "Downloading {owner}/{repo}{ref} archive...",
+            owner=owner,
+            repo=repo,
+            ref=ref_text,
+        ))
 
     staging_dir = prepare_archive_from_download_url(
         archive_url,
@@ -773,7 +793,11 @@ class PluginInstaller:
             ]
             logger.info("Creating venv (%s): %s", label, " ".join(cmd))
             if on_progress:
-                on_progress(f"Creating plugin environment ({label})...")
+                on_progress(_localized_progress(
+                    "plugin_marketplace.progress.create_environment",
+                    "Creating plugin environment ({label})...",
+                    label=label,
+                ))
 
             result = _run_cancellable_process(
                 cmd,
@@ -864,7 +888,10 @@ class PluginInstaller:
         logger.info("uv sync command: %s", " ".join(cmd))
 
         if on_progress:
-            on_progress("Syncing dependencies with uv...")
+            on_progress(_localized_progress(
+                "plugin_marketplace.progress.sync_dependencies",
+                "Syncing dependencies with uv...",
+            ))
 
         result = _run_cancellable_process(
             cmd,
@@ -1001,7 +1028,12 @@ def clone_from_url(
     temp_dir = Path(tempfile.mkdtemp(prefix=f".{repo}-", dir=plugins_dir))
 
     if on_progress:
-        on_progress(f"Cloning {owner}/{repo}...")
+        on_progress(_localized_progress(
+            "plugin_marketplace.progress.cloning",
+            "Cloning {owner}/{repo}...",
+            owner=owner,
+            repo=repo,
+        ))
 
     # Check if git is available
     git = shutil.which("git")
@@ -1043,7 +1075,11 @@ def clone_from_url(
         temp_dir.replace(target_dir)
 
     if on_progress:
-        on_progress(f"Cloned {final_name}")
+        on_progress(_localized_progress(
+            "plugin_marketplace.progress.cloned",
+            "Cloned {name}",
+            name=final_name,
+        ))
 
     return target_dir
 
@@ -1070,7 +1106,11 @@ def update_plugin(
         raise PluginError("git not found in PATH")
 
     if on_progress:
-        on_progress(f"Updating {plugin_dir.name}...")
+        on_progress(_localized_progress(
+            "plugin_marketplace.progress.updating",
+            "Updating {name}...",
+            name=plugin_dir.name,
+        ))
 
     result = subprocess.run(
         [git, "pull", "--ff-only"],
@@ -1083,7 +1123,11 @@ def update_plugin(
         raise PluginError(f"Failed to update plugin: {result.stderr}")
 
     if on_progress:
-        on_progress(f"Updated {plugin_dir.name}")
+        on_progress(_localized_progress(
+            "plugin_marketplace.progress.updated",
+            "Updated {name}",
+            name=plugin_dir.name,
+        ))
 
     return True
 

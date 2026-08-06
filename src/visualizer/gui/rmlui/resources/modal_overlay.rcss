@@ -101,10 +101,6 @@ body {
     margin: 2dp 0;
 }
 
-.content-label {
-    display: inline;
-}
-
 .details-block {
     display: block;
     font-family: "JetBrains Mono";

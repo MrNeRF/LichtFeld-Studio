@@ -411,6 +411,7 @@ namespace lfs::python {
         bool active = false;
         float progress = 0.0f;
         std::string stage;
+        std::string outcome{"idle"};
         std::string format;
     };
 

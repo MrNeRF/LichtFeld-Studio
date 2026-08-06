@@ -7,29 +7,24 @@
   },
   "configurePresets": [
     {
-      "name": "base",
-      "hidden": true,
+      "name": "build",
+      "displayName": "Build",
+      "description": "Release build: full application dependency set, one locally detected CUDA architecture, tests off, compiler cache on",
       "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_CUDA_ARCHITECTURES": "native"
-      }
-    },
-    {
-      "name": "release",
-      "displayName": "Release",
-      "description": "Optimised build in build/",
-      "inherits": "base",
       "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTS": "OFF",
+        "BUILD_UNICODE_TEST_ONLY": "OFF",
+        "ENABLE_COMPILER_CACHE": "ON"
       }
     },
     {
       "name": "debug",
       "displayName": "Debug",
-      "description": "Debug build in debug/",
-      "inherits": "base",
-      "binaryDir": "${sourceDir}/debug",
+      "description": "Same feature set as build, compiled with debug information",
+      "inherits": "build",
+      "binaryDir": "${sourceDir}/build-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
@@ -37,23 +32,14 @@
   ],
   "buildPresets": [
     {
-      "name": "release",
-      "configurePreset": "release",
-      "jobs": 16
+      "name": "build",
+      "configurePreset": "build",
+      "jobs": 6
     },
     {
       "name": "debug",
       "configurePreset": "debug",
-      "jobs": 16
-    }
-  ],
-  "testPresets": [
-    {
-      "name": "release",
-      "configurePreset": "release",
-      "output": {
-        "outputOnFailure": true
-      }
+      "jobs": 6
     }
   ]
 }

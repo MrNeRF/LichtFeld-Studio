@@ -6,7 +6,6 @@
 #include "control/command_api.hpp"
 #include "core/camera.hpp"
 #include "core/cuda_error.hpp"
-#include "core/cuda_version.hpp"
 #include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -150,15 +149,17 @@ namespace lfs::vis::gui {
                 return state;
 
             if (stats.full_quality_reference) {
-                state.status_text = "Full quality reference";
+                state.status_text = LOC("runtime.lod_full_quality_reference");
             } else if (stats.active && stats.gpu_selection) {
-                state.status_text = "Active, GPU select";
+                state.status_text = LOC("runtime.lod_active_gpu_select");
             } else if (stats.active) {
-                state.status_text = stats.async_result_ready ? "Active, async ready" : "Active";
+                state.status_text = LOC(stats.async_result_ready ? "runtime.lod_active_async_ready"
+                                                                 : "runtime.lod_active");
             } else if (stats.has_tree || stats.available) {
-                state.status_text = stats.enabled ? "Waiting for frame" : "Tree loaded, off";
+                state.status_text = LOC(stats.enabled ? "runtime.lod_waiting_for_frame"
+                                                      : "runtime.lod_tree_loaded_off");
             } else {
-                state.status_text = stats.enabled ? "Enabled, no tree" : "No RAD LOD";
+                state.status_text = LOC(stats.enabled ? "runtime.lod_enabled_no_tree" : "runtime.lod_disabled");
             }
 
             const std::size_t selected = stats.selected_splats > 0 ? stats.selected_splats : stats.output_size;
@@ -272,8 +273,8 @@ namespace lfs::vis::gui {
                                                  formatLodFloat(stats.pixel_scale_limit),
                                                  formatLodFloat(stats.min_pixel_scale));
             state.render_text = stats.full_quality_reference
-                                    ? "leaf-only reference"
-                                    : std::format("LOD scale x{:.1f}", stats.lod_render_scale);
+                                    ? LOC("runtime.lod_leaf_only_reference")
+                                    : LOCF("runtime.lod_scale", stats.lod_render_scale);
             state.foveation_text = stats.gpu_selection
                                        ? std::format("cone {:.0f}/{:.0f} deg | edge x{:.2f} | behind x{:.2f}",
                                                      stats.cone_inner_degrees,
@@ -3024,15 +3025,6 @@ namespace lfs::vis::gui {
         async_tasks_.setupEvents();
         sequencer_ui_.setupEvents();
         gizmo_manager_.setupEvents();
-        checkCudaVersionAndNotify();
-    }
-
-    void GuiManager::checkCudaVersionAndNotify() {
-        using namespace lfs::core;
-        const auto info = check_cuda_version();
-        if (!info.query_failed && !info.supported) {
-            pending_cuda_warning_ = info;
-        }
     }
 
     void GuiManager::promptFileAssociation() {
@@ -3701,6 +3693,10 @@ namespace lfs::vis::gui {
             rendering->markDirty(DirtyFlag::OVERLAY);
     }
 
+    void GuiManager::requestLocalizationUiRefresh() {
+        pending_localization_ui_refresh_ = true;
+    }
+
     bool GuiManager::shouldDeferDevResourceHotReload() const {
         if (rmlui_manager_.wantsTextInput() || rmlui_manager_.anyItemActive())
             return true;
@@ -3995,8 +3991,7 @@ namespace lfs::vis::gui {
             appendScreenOverlayCommandOverlays(params, rendering_manager->getScreenOverlayRenderer());
 
             // Pull GPU mesh / environment frame populated by renderVulkanFrame.
-            // vulkan_viewport_pass rasterizes these on the GPU instead of the
-            // auxiliary CPU mesh / environment paths.
+            // vulkan_viewport_pass rasterizes these on the GPU.
             auto mesh_frame = rendering_manager->getVulkanMeshFrame();
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
@@ -4441,22 +4436,10 @@ namespace lfs::vis::gui {
                                                LFS_SOURCE_SITE_CURRENT());
         }
 
-        if (pending_cuda_warning_) {
-            constexpr int MIN_MAJOR = lfs::core::MIN_CUDA_VERSION / 1000;
-            constexpr int MIN_MINOR = (lfs::core::MIN_CUDA_VERSION % 1000) / 10;
-            lfs::core::events::state::CudaVersionUnsupported{
-                .major = pending_cuda_warning_->major,
-                .minor = pending_cuda_warning_->minor,
-                .min_major = MIN_MAJOR,
-                .min_minor = MIN_MINOR}
-                .emit();
-            pending_cuda_warning_.reset();
-        }
-
         if (!cuda_unavailable_notified_ && lfs::core::cuda_is_unavailable()) {
             cuda_unavailable_notified_ = true;
             lfs::core::events::state::CudaUnavailable{
-                .message = "CUDA unavailable — GPU features disabled. A driver restart may be required."}
+                .message = LOC("runtime.cuda_unavailable_message")}
                 .emit();
         }
 
@@ -4562,6 +4545,20 @@ namespace lfs::vis::gui {
         if (should_poll_dev_resources) {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.dev_resource_poll", 0.25);
             pollDevResourceHotReload();
+        }
+
+        const auto language_generation = app_store().language_generation.get();
+        if (language_generation != localized_rml_language_generation_)
+            pending_localization_ui_refresh_ = true;
+
+        if (pending_localization_ui_refresh_) {
+            pending_localization_ui_refresh_ = false;
+            localized_rml_language_generation_ = language_generation;
+            ui_layout_settle_frames_ = std::max<uint8_t>(ui_layout_settle_frames_, 3);
+            if (rmlui_manager_.refreshLocalizedDocuments()) {
+                if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
+                    rendering->markDirty(DirtyFlag::OVERLAY);
+            }
         }
 
         // Hot-reload themes (check once per second)
@@ -6243,9 +6240,7 @@ namespace lfs::vis::gui {
                 return std::format("{} bytes", bytes);
             };
 
-            const std::string subtitle = e.is_checkpoint
-                                             ? std::format("{} {})", LOC(DiskSpaceDialog::CHECKPOINT_SAVE_FAILED), e.iteration)
-                                             : std::string(LOC(DiskSpaceDialog::EXPORT_FAILED));
+            const std::string subtitle = LOC(DiskSpaceDialog::EXPORT_FAILED);
 
             std::string body;
             body += std::format("<div>{}</div>", LOC(DiskSpaceDialog::INSUFFICIENT_SPACE_PREFIX));
@@ -6271,54 +6266,22 @@ namespace lfs::vis::gui {
                 {LOC(DiskSpaceDialog::RETRY), "primary"}};
 
             auto path = e.path;
-            auto iteration = e.iteration;
-            auto is_checkpoint = e.is_checkpoint;
 
-            req.on_result = [this, path, iteration, is_checkpoint](const lfs::core::ModalResult& result) {
+            req.on_result = [path](const lfs::core::ModalResult& result) {
                 if (result.button_label == LOC(DiskSpaceDialog::RETRY)) {
-                    if (is_checkpoint) {
-                        if (auto* tm = viewer_->getTrainerManager()) {
-                            if (tm->isFinished() || !tm->isTrainingActive()) {
-                                if (auto* trainer = tm->getTrainer()) {
-                                    LOG_INFO("Retrying save at iteration {}", iteration);
-                                    trainer->save_final_project(iteration);
-                                }
-                            } else {
-                                tm->requestSaveProject();
-                            }
-                        }
-                    }
+                    LOG_INFO("Export disk-space failure: re-export manually from File > Export");
                 } else if (result.button_label == LOC(DiskSpaceDialog::CHANGE_LOCATION)) {
                     std::filesystem::path new_location = PickFolderDialog(path.parent_path());
-                    if (!new_location.empty() && is_checkpoint) {
-                        if (auto* tm = viewer_->getTrainerManager()) {
-                            if (auto* trainer = tm->getTrainer()) {
-                                auto params = trainer->getParams();
-                                params.dataset.output_path = new_location;
-                                trainer->setParams(params);
-                                LOG_INFO("Output path changed to: {}", lfs::core::path_to_utf8(new_location));
-                                if (tm->isFinished() || !tm->isTrainingActive())
-                                    trainer->save_final_project(iteration);
-                                else
-                                    tm->requestSaveProject();
-                            }
-                        }
-                    } else if (!new_location.empty()) {
+                    if (!new_location.empty()) {
                         LOG_INFO("Re-export manually using File > Export to: {}",
                                  lfs::core::path_to_utf8(new_location));
                     }
                 } else {
-                    if (is_checkpoint)
-                        LOG_WARN("Checkpoint save cancelled by user");
-                    else
-                        LOG_INFO("Export cancelled by user");
+                    LOG_INFO("Export cancelled by user");
                 }
             };
-            req.on_cancel = [is_checkpoint]() {
-                if (is_checkpoint)
-                    LOG_WARN("Checkpoint save cancelled by user");
-                else
-                    LOG_INFO("Export cancelled by user");
+            req.on_cancel = []() {
+                LOG_INFO("Export cancelled by user");
             };
 
             enqueueModal(std::move(req));
@@ -6332,11 +6295,11 @@ namespace lfs::vis::gui {
 
         state::SplatFileLoadFailed::when([this](const auto& e) {
             lfs::core::ModalRequest req;
-            req.title = "Failed to load file";
+            req.title = LOC(lichtfeld::Strings::ErrorModal::FILE_OPEN_FAILED);
             req.body_rml = std::format(
-                "<div>Could not load <b>{}</b>:</div>"
+                "<div>{}</div>"
                 "<div class=\"content-row error-text\" style=\"margin-top: 8dp;\">{}</div>",
-                lfs::core::path_to_utf8(e.path.filename()),
+                LOCF(lichtfeld::Strings::Runtime::FILE_LOAD_FAILED_BODY, lfs::core::path_to_utf8(e.path.filename())),
                 e.error);
             req.style = lfs::core::ModalStyle::Error;
             req.width_dp = 520;

@@ -31,6 +31,7 @@ namespace lfs::vis {
         const lfs::core::Tensor* uploaded_scene_tensor = nullptr;
         bool scene_image_external = false;
         std::uint64_t scene_image_external_generation = 0;
+        std::uint64_t owned_image_generation = 0;
 
         [[nodiscard]] bool init(VulkanContext& vulkan_context, const VkSampler sampler) {
             if (device != VK_NULL_HANDLE) {
@@ -61,7 +62,9 @@ namespace lfs::vis {
         }
 
         void clearSceneImageBinding() {
-            scene_image_barriers.forgetImage(scene_image);
+            const std::uint64_t forget_gen =
+                scene_image_external ? scene_image_external_generation : owned_image_generation;
+            scene_image_barriers.forgetImage(scene_image, forget_gen);
             scene_image = VK_NULL_HANDLE;
             scene_image_allocation = VK_NULL_HANDLE;
             scene_image_view = VK_NULL_HANDLE;
@@ -206,7 +209,8 @@ namespace lfs::vis {
                                          size.y);
 
             scene_image_size = size;
-            scene_image_barriers.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+            ++owned_image_generation;
+            scene_image_barriers.registerImage(scene_image, owned_image_generation, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
             updateSceneDescriptor(scene_descriptor_set, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }
@@ -223,7 +227,7 @@ namespace lfs::vis {
                 scene_image == params.external_scene_image &&
                 scene_image_view == params.external_scene_image_view &&
                 scene_image_size == params.scene_image_size &&
-                scene_image_barriers.imageLayout(scene_image, VK_IMAGE_LAYOUT_UNDEFINED) == params.external_scene_image_layout &&
+                scene_image_barriers.imageLayout(scene_image, params.external_scene_image_generation, VK_IMAGE_LAYOUT_UNDEFINED) == params.external_scene_image_layout &&
                 scene_image_external_generation == params.external_scene_image_generation) {
                 updateSceneDescriptor(scene_descriptor_set, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 return true;
@@ -244,7 +248,7 @@ namespace lfs::vis {
                                          scene_image_view,
                                          "viewport.scene.external[{}].view",
                                          scene_image_external_generation);
-            scene_image_barriers.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, params.external_scene_image_layout);
+            scene_image_barriers.registerImage(scene_image, scene_image_external_generation, VK_IMAGE_ASPECT_COLOR_BIT, params.external_scene_image_layout);
             updateSceneDescriptor(scene_descriptor_set, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }

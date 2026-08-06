@@ -150,6 +150,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool wantsCaptureKeyboard() const;
         [[nodiscard]] bool wantsTextInput() const;
         [[nodiscard]] bool anyItemActive() const;
+        bool refreshLocalizedDocuments();
 
     private:
         struct VulkanContextCommand {

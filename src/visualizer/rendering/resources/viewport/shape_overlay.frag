@@ -15,8 +15,10 @@ layout(push_constant) uniform ShapeOverlayPush {
     vec4 viewport_rect;
     // x: depth available (1.0 = sample splat depth, 0.0 = no fade),
     // y: flip-y for depth UV (1.0 = flip),
-    // z,w: unused.
+    // z,w: unused (thickness/projection on frustum path).
     vec4 params;
+    // Valid-region UV for padded splat depth: xy = scale, zw = clamp max.
+    vec4 uv_region;
 } pc;
 
 float sdSegment(vec2 p, vec2 a, vec2 b) {
@@ -55,6 +57,7 @@ void main() {
         if (pc.params.y > 0.5) {
             uv.y = 1.0 - uv.y;
         }
+        uv = min(uv * pc.uv_region.xy, pc.uv_region.zw);
         float splat_depth = texture(u_splat_depth, uv).r;
         if (splat_depth > 0.0 && splat_depth < 1.0e9) {
             float fade = smoothstep(0.01, 0.15, ViewDepth - splat_depth);

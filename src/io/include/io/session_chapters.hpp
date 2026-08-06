@@ -9,6 +9,7 @@
 #include "core/export.hpp"
 #include "io/json_chapter_dom.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -18,6 +19,20 @@
 #include <vector>
 
 namespace lfs::io::project {
+
+    // User-global GUI fields that must never persist in project GUIL chapters.
+    // Shared by sanitize/validate (session_chapters) and runtime capture checks
+    // (session_state). Keys are matched case-insensitively after lowercasing.
+    inline constexpr std::array<std::string_view, 7>
+        kUserGlobalGuiFieldKeys = {
+            "theme",
+            "language",
+            "scale",
+            "ui_scale",
+            "hud",
+            "vram_hud",
+            "vram_hud_visible",
+    };
 
     enum class SessionJsonChapterKind : std::uint8_t {
         GuiLayout,

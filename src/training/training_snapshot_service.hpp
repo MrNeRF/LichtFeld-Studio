@@ -19,7 +19,6 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <string>
 #include <vector>
 
 namespace lfs::training {

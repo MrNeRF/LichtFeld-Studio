@@ -13,14 +13,12 @@ from typing import Iterator
 try:
     from .licht_inspect import (
         FormatError,
-        UnsupportedNewer,
         classify_open,
         open_container,
     )
 except ImportError:  # Direct script execution.
     from licht_inspect import (
         FormatError,
-        UnsupportedNewer,
         classify_open,
         open_container,
     )
@@ -142,16 +140,6 @@ def assert_outcome(
             f"{path.name}: recovery_warning expected {recovery_warning}, "
             f"got {has_warning}: {container.warnings}"
         )
-
-
-def inspectable_container(path: Path, timeout_seconds: float):
-    """Return normal or unsupported-newer inspection state."""
-
-    with case_deadline(timeout_seconds):
-        try:
-            return open_container(path)
-        except UnsupportedNewer as error:
-            return error.inspection
 
 
 def deterministic_uuid(namespace: int, value: int) -> uuid.UUID:

@@ -183,6 +183,28 @@ namespace lfs::python {
      */
     bool has_frame_callback();
 
+    /**
+     * @brief Set a callback evaluated at an absolute scene clip time.
+     * @param callback Function(clip_time) called with time in seconds.
+     */
+    void set_scene_time_callback(std::function<void(float)> callback);
+
+    /**
+     * @brief Clear the scene-time callback.
+     */
+    void clear_scene_time_callback();
+
+    /**
+     * @brief Call the scene-time callback if set.
+     * @param clip_time Absolute clip time in seconds.
+     */
+    void tick_scene_time_callback(float clip_time);
+
+    /**
+     * @brief Check if a scene-time callback is set.
+     */
+    bool has_scene_time_callback();
+
     std::filesystem::path get_user_packages_dir();
 
     void update_python_path();

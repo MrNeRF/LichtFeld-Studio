@@ -214,6 +214,7 @@ namespace lfs::training {
         int translate_frame(int uid) const;
 
         void allocate_tensors();
+        void init_color_pinv_block_diag();
 
         // Parameter tensors (all on GPU)
         // Exposure: [num_frames] - per-frame exposure in log-space

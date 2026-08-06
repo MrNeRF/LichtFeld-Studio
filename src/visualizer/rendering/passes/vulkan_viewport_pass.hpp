@@ -106,6 +106,8 @@ namespace lfs::vis {
 
         std::shared_ptr<const lfs::core::Tensor> scene_image;
         glm::ivec2 scene_image_size{0, 0};
+        // Bucketed VkImage extent for padded output slots (defaults to size).
+        glm::ivec2 scene_image_alloc_size{0, 0};
         bool scene_image_flip_y = false;
         VkImage external_scene_image = VK_NULL_HANDLE;
         VkImageView external_scene_image_view = VK_NULL_HANDLE;
@@ -145,7 +147,7 @@ namespace lfs::vis {
         std::vector<VulkanViewportFrustumBatch> frustum_batches;
 
         // GPU-rendered meshes drawn into the same color/depth attachments as the
-        // viewport pass. Replaces the old CPU `rasterizeMeshTriangle` fallback path.
+        // viewport pass.
         glm::mat4 mesh_view_projection{1.0f};
         glm::vec3 mesh_camera_position{0.0f};
         std::vector<VulkanMeshDrawItem> mesh_items;

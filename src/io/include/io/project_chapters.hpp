@@ -193,11 +193,11 @@ namespace lfs::io::project {
         JsonChapterDom dom_;
     };
 
+    // In-memory check result only — not serialized on the wire.
     enum class FingerprintDisposition : std::uint8_t {
         MatchFastPath,
         MatchMtimeRefreshed,
         Missing,
-        SizeMismatch,
         ContentMismatch,
         TypeMismatch,
     };
@@ -244,6 +244,7 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<FingerprintCheck>
         verify_and_refresh(const lfs::core::Uuid& uuid,
                            const std::filesystem::path& resolved_path);
+        // accept_content_change=true is reserved for a future force-relink UI.
         [[nodiscard]] lfs::Result<void>
         relink(const lfs::core::Uuid& uuid, const ReferenceLocator& locator,
                const std::filesystem::path& resolved_path,
@@ -252,6 +253,26 @@ namespace lfs::io::project {
     private:
         JsonChapterDom dom_;
     };
+
+    // Path ↔ REFS helpers for production adapters. Mint fingerprints a live
+    // path and upserts a row (reusing the UUID for an existing key). Resolve
+    // tries preferred then absolute_fallback with fingerprint precedence
+    // (size+xxh3; mtime-only drift is not a relink), then falls back to hint.
+    [[nodiscard]] LFS_IO_API lfs::Result<lfs::core::Uuid>
+    upsert_path_reference(
+        ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        const std::filesystem::path& live_path,
+        std::string_view key,
+        std::string_view kind,
+        std::optional<lfs::core::Uuid> existing_uuid = std::nullopt);
+
+    [[nodiscard]] LFS_IO_API std::optional<std::filesystem::path>
+    resolve_path_reference(
+        const ReferencesChapter& references,
+        const std::filesystem::path& project_root,
+        const lfs::core::Uuid& uuid,
+        const std::filesystem::path& hint = {});
 
     struct GeorefPose {
         // Quaternion is stored as w,x,y,z.

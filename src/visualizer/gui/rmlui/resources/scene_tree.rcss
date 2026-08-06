@@ -650,11 +650,6 @@ scene-graph,
     color: #a6adc8;
 }
 
-.virtual-spacer {
-    display: block;
-    height: 0;
-}
-
 .empty-state {
     padding: 6dp 0;
 }

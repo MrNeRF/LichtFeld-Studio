@@ -25,7 +25,7 @@ check() { # check <label> <expected-substring> <file>
 }
 
 [ -f "$BUILD_DIR/compile_commands.json" ] || {
-    echo "no compile_commands.json in $BUILD_DIR — configure with: cmake --preset release" >&2
+    echo "no compile_commands.json in $BUILD_DIR — configure with: cmake --preset build" >&2
     exit 2
 }
 

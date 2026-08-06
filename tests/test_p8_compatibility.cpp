@@ -126,7 +126,8 @@ namespace {
         EXPECT_EQ(reader->commit().kind, kind);
         EXPECT_LE(reader->commit().min_reader_version,
                   (Version{1, 0}));
-        for (std::uint8_t bit = 8; bit < 128; ++bit) {
+        // Bits 0–8 are published core caps (through CHUNK_BYTESHUFFLE_ZSTD_V1).
+        for (std::uint8_t bit = 9; bit < 128; ++bit) {
             EXPECT_FALSE(reader->commit()
                              .required_reader_capabilities
                              .contains(bit));
@@ -203,7 +204,6 @@ namespace {
                 .snapshot_uuid = fixed_uuid(80'402),
                 .creation_time_unix_ns = FIXED_CREATION_NS + 80'400,
                 .wallclock_unix_ns = FIXED_COMMIT_NS + 80'400,
-                .keep_tombstones = false,
                 .disk_reserve_bytes = 0,
             }));
 
@@ -330,7 +330,8 @@ namespace {
         options.writer_version = Version{1, 0};
         options.reader_capabilities = CapabilitySet{};
         options.writer_capabilities = CapabilitySet{};
-        for (std::uint8_t bit = 0; bit < 8; ++bit) {
+        // Bits 0–8: published core caps through CHUNK_BYTESHUFFLE_ZSTD_V1.
+        for (std::uint8_t bit = 0; bit <= CHUNK_BYTESHUFFLE_ZSTD_V1; ++bit) {
             options.reader_capabilities.set(bit);
             options.writer_capabilities.set(bit);
         }
@@ -446,6 +447,26 @@ namespace {
         const fs::path release =
             fs::path(PROJECT_ROOT_PATH) /
             "tests/fixtures/licht/release_corpus";
+        // Sanctioned re-emit: RELEASE_FIXTURE_UPDATE=1 copies deterministic
+        // production fixtures into the candidate corpus root (manifest relock
+        // is a separate scripts/licht_compat_matrix.py --write-manifest step).
+        if (const char* update = std::getenv("RELEASE_FIXTURE_UPDATE");
+            update != nullptr && std::string_view(update) == "1") {
+            for (const auto& entry : fs::directory_iterator(temporary.path)) {
+                if (!entry.is_regular_file()) {
+                    continue;
+                }
+                const auto name = entry.path().filename();
+                if (name == "headless-train-output.licht") {
+                    continue; // non-reproducible SHA-locked row
+                }
+                std::error_code copy_error;
+                fs::copy_file(entry.path(), release / name,
+                              fs::copy_options::overwrite_existing, copy_error);
+                ASSERT_FALSE(copy_error) << copy_error.message() << " for "
+                                         << name.string();
+            }
+        }
         std::ifstream manifest_stream(release / "manifest.json");
         ASSERT_TRUE(manifest_stream.good());
         Json manifest;
@@ -510,7 +531,9 @@ namespace {
                 << lfs::format_for_developer(reader.error());
             EXPECT_LE(reader->commit().min_reader_version,
                       (Version{1, 0}));
-            for (std::uint8_t bit = 8; bit < 128; ++bit) {
+            // Bit 8 (CHUNK_BYTESHUFFLE_ZSTD_V1) is a published core cap; bits
+            // 9+ remain reserved for later revisions.
+            for (std::uint8_t bit = 9; bit < 128; ++bit) {
                 EXPECT_FALSE(reader->commit()
                                  .required_reader_capabilities
                                  .contains(bit));
@@ -564,7 +587,8 @@ namespace {
                     (capability_gate ? 81'110 : 81'210),
             };
             if (capability_gate) {
-                options.extra_reader_capabilities.set(8);
+                // Unassigned core bit (9+); bit 8 is CHUNK_BYTESHUFFLE_ZSTD_V1.
+                options.extra_reader_capabilities.set(9);
             } else {
                 options.min_reader_version = Version{1, 1};
             }
@@ -613,7 +637,7 @@ namespace {
             .snapshot_uuid = fixed_uuid(81'301),
             .wallclock_unix_ns = FIXED_COMMIT_NS + 81'300,
         };
-        higher_commit.extra_reader_capabilities.set(8);
+        higher_commit.extra_reader_capabilities.set(9);
         append_generation_with_requirements(
             higher, higher_commit, std::nullopt, {},
             IndexCompression::StoredForDeterministicTests);
@@ -626,10 +650,10 @@ namespace {
         enum class Gate { MinWriter,
                           Bit5,
                           Bit6,
-                          Bit8,
+                          Bit9,
                           VendorBit112 };
         constexpr std::array gates{
-            Gate::MinWriter, Gate::Bit5, Gate::Bit6, Gate::Bit8,
+            Gate::MinWriter, Gate::Bit5, Gate::Bit6, Gate::Bit9,
             Gate::VendorBit112};
         TemporaryDirectory temporary;
 
@@ -649,8 +673,8 @@ namespace {
                 options.commit.extra_writer_capabilities.set(5);
             } else if (gates[index] == Gate::Bit6) {
                 options.commit.extra_writer_capabilities.set(6);
-            } else if (gates[index] == Gate::Bit8) {
-                options.commit.extra_writer_capabilities.set(8);
+            } else if (gates[index] == Gate::Bit9) {
+                options.commit.extra_writer_capabilities.set(9);
             } else {
                 options.commit.extra_writer_capabilities.set(112);
             }
@@ -733,7 +757,6 @@ namespace {
                     .snapshot_uuid = fixed_uuid(82'506 + index * 10),
                     .creation_time_unix_ns = FIXED_CREATION_NS,
                     .wallclock_unix_ns = FIXED_COMMIT_NS,
-                    .keep_tombstones = false,
                     .disk_reserve_bytes = 0,
                 });
             ASSERT_FALSE(compacted);
@@ -875,7 +898,6 @@ namespace {
                 .snapshot_uuid = fixed_uuid(83'052),
                 .creation_time_unix_ns = FIXED_CREATION_NS + 83'050,
                 .wallclock_unix_ns = FIXED_COMMIT_NS + 83'050,
-                .keep_tombstones = false,
                 .disk_reserve_bytes = 0,
             }));
         auto after_compact = require_result(ProjectReader::open(path));
@@ -1210,7 +1232,6 @@ namespace {
                     .snapshot_uuid = fixed_uuid(85'023),
                     .creation_time_unix_ns = FIXED_CREATION_NS,
                     .wallclock_unix_ns = FIXED_COMMIT_NS,
-                    .keep_tombstones = false,
                     .disk_reserve_bytes = 0,
                 });
             if (blocked_compact ||
@@ -1258,5 +1279,419 @@ namespace {
         EXPECT_TRUE(fs::is_regular_file(save_as));
     }
 #endif
+
+    TEST(P8CompatibilityTest, CkptContainerZstdLogicalPayloadByteVerbatim) {
+        // INVARIANT: container zstd is transparent — inflate(chunk) == the
+        // exact logical CKPT/LFKP bytes staged for write (standalone-serialize
+        // equivalent). Exercises write_chunk Zstd + reader decompress path
+        // used by ProjectDocument lazy_binary_options.
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "ckpt-zstd-verbatim.licht";
+
+        std::vector<std::byte> lfkp_bytes(4096);
+        for (std::size_t index = 0; index < lfkp_bytes.size(); ++index) {
+            lfkp_bytes[index] =
+                static_cast<std::byte>((index * 131u + 17u) & 0xffu);
+        }
+        for (std::size_t index = 0; index < 512; ++index) {
+            lfkp_bytes[index] = std::byte{0};
+        }
+
+        const ChunkKey key{
+            .fourcc = FOURCC_CKPT,
+            .instance_uuid = fixed_uuid(93'001),
+        };
+        {
+            ProjectWriter writer = require_result(ProjectWriter::create(
+                path,
+                CreateOptions{
+                    .project_uuid = fixed_uuid(93'000),
+                    .file_uuid = fixed_uuid(93'002),
+                    .role = ContainerRole::Master,
+                    .creation_time_unix_ns = FIXED_CREATION_NS + 93'000,
+                    .index_compression = IndexCompression::Zstd,
+                    .disk_reserve_bytes = 0,
+                }));
+            require_status(writer.plan_commit(CommitOptions{
+                .kind = CommitKind::Explicit,
+                .commit_uuid = fixed_uuid(93'003),
+                .snapshot_uuid = key.instance_uuid,
+                .wallclock_unix_ns = FIXED_COMMIT_NS + 93'100,
+            }));
+            require_status(writer.preflight(lfkp_bytes.size()));
+            // Mirror document lazy_binary_options: Zstd + tensor_payload CKPT.
+            require_status(writer.write_chunk(
+                key, lfkp_bytes,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::Zstd,
+                    .tensor_payload = true,
+                    .block_crcs = false,
+                    .expected_stream_bytes = lfkp_bytes.size(),
+                }));
+            require_status(writer.commit());
+        }
+
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        const ChunkInfo* row = reader.find(key.fourcc, key.instance_uuid);
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(row->compression, Compression::Zstd);
+        EXPECT_EQ(row->uncompressed_bytes, lfkp_bytes.size());
+        EXPECT_LT(row->stored_bytes, row->uncompressed_bytes);
+        EXPECT_TRUE(reader.commit()
+                        .required_reader_capabilities
+                        .contains(CHUNK_ZSTD_V1));
+        auto inflated = require_result(reader.read_chunk(*row));
+        ASSERT_EQ(inflated.size(), lfkp_bytes.size());
+        EXPECT_TRUE(std::equal(
+            inflated.begin(), inflated.end(), lfkp_bytes.begin()));
+    }
+
+    TEST(P8CompatibilityTest, BytePlaneF32FilterInverseProperty) {
+        // Random-like + patterned f32-word buffers: shuffle then unshuffle
+        // is the identity. Filter lives in the writer path; reimplement the
+        // same plane transpose here so the inverse property is locked without
+        // file I/O.
+        auto plane = [](const std::vector<std::byte>& in) {
+            EXPECT_EQ(in.size() % 4, 0u);
+            const std::size_t n = in.size() / 4;
+            std::vector<std::byte> out(in.size());
+            const auto* s = reinterpret_cast<const std::uint8_t*>(in.data());
+            auto* d = reinterpret_cast<std::uint8_t*>(out.data());
+            for (std::size_t w = 0; w < n; ++w) {
+                d[0 * n + w] = s[w * 4 + 0];
+                d[1 * n + w] = s[w * 4 + 1];
+                d[2 * n + w] = s[w * 4 + 2];
+                d[3 * n + w] = s[w * 4 + 3];
+            }
+            return out;
+        };
+        auto unplane = [](const std::vector<std::byte>& in) {
+            EXPECT_EQ(in.size() % 4, 0u);
+            const std::size_t n = in.size() / 4;
+            std::vector<std::byte> out(in.size());
+            const auto* s = reinterpret_cast<const std::uint8_t*>(in.data());
+            auto* d = reinterpret_cast<std::uint8_t*>(out.data());
+            for (std::size_t w = 0; w < n; ++w) {
+                d[w * 4 + 0] = s[0 * n + w];
+                d[w * 4 + 1] = s[1 * n + w];
+                d[w * 4 + 2] = s[2 * n + w];
+                d[w * 4 + 3] = s[3 * n + w];
+            }
+            return out;
+        };
+
+        std::vector<std::byte> randomish(4096);
+        for (std::size_t i = 0; i < randomish.size(); ++i) {
+            randomish[i] = static_cast<std::byte>((i * 37u + 91u) & 0xffu);
+        }
+        EXPECT_EQ(unplane(plane(randomish)), randomish);
+
+        // Real-ish float pattern: interleave 1.0f / 2.0f / small integers.
+        std::vector<std::byte> floats(1024 * 4);
+        for (std::size_t i = 0; i < 1024; ++i) {
+            float v = static_cast<float>(i) * 0.125f;
+            std::memcpy(floats.data() + i * 4, &v, 4);
+        }
+        EXPECT_EQ(unplane(plane(floats)), floats);
+
+        // Empty is a valid multiple of 4.
+        EXPECT_EQ(unplane(plane({})), std::vector<std::byte>{});
+    }
+
+    TEST(P8CompatibilityTest, CkptByteShuffleZstdLogicalPayloadByteVerbatim) {
+        TemporaryDirectory temporary;
+        const fs::path path =
+            temporary.path / "ckpt-byteshuffle-zstd-verbatim.licht";
+
+        // Size multiple of 4 so ByteShuffle is retained (not Zstd fallback).
+        std::vector<std::byte> lfkp_bytes(8192);
+        for (std::size_t index = 0; index < lfkp_bytes.size(); ++index) {
+            lfkp_bytes[index] =
+                static_cast<std::byte>((index * 131u + 17u) & 0xffu);
+        }
+        for (std::size_t index = 0; index < 512; ++index) {
+            lfkp_bytes[index] = std::byte{0};
+        }
+
+        const ChunkKey key{
+            .fourcc = FOURCC_CKPT,
+            .instance_uuid = fixed_uuid(94'001),
+        };
+        {
+            ProjectWriter writer = require_result(ProjectWriter::create(
+                path,
+                CreateOptions{
+                    .project_uuid = fixed_uuid(94'000),
+                    .file_uuid = fixed_uuid(94'002),
+                    .role = ContainerRole::Master,
+                    .creation_time_unix_ns = FIXED_CREATION_NS + 94'000,
+                    .index_compression = IndexCompression::Zstd,
+                    .disk_reserve_bytes = 0,
+                }));
+            require_status(writer.plan_commit(CommitOptions{
+                .kind = CommitKind::Explicit,
+                .commit_uuid = fixed_uuid(94'003),
+                .snapshot_uuid = key.instance_uuid,
+                .wallclock_unix_ns = FIXED_COMMIT_NS + 94'100,
+            }));
+            require_status(writer.preflight(lfkp_bytes.size()));
+            require_status(writer.write_chunk(
+                key, lfkp_bytes,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::ByteShuffleZstd,
+                    .tensor_payload = true,
+                    .block_crcs = false,
+                    .expected_stream_bytes = lfkp_bytes.size(),
+                }));
+            require_status(writer.commit());
+        }
+
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        const ChunkInfo* row = reader.find(key.fourcc, key.instance_uuid);
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(row->compression, Compression::ByteShuffleZstd);
+        EXPECT_EQ(row->uncompressed_bytes, lfkp_bytes.size());
+        EXPECT_LT(row->stored_bytes, row->uncompressed_bytes);
+        EXPECT_TRUE(reader.commit()
+                        .required_reader_capabilities
+                        .contains(CHUNK_BYTESHUFFLE_ZSTD_V1));
+        EXPECT_FALSE(reader.commit()
+                         .required_reader_capabilities
+                         .contains(CHUNK_ZSTD_V1)); // no plain Zstd chunks
+        auto inflated = require_result(reader.read_chunk(*row));
+        ASSERT_EQ(inflated.size(), lfkp_bytes.size());
+        EXPECT_TRUE(std::equal(
+            inflated.begin(), inflated.end(), lfkp_bytes.begin()));
+    }
+
+    TEST(P8CompatibilityTest, ByteShuffleFallsBackToZstdWhenSizeNotMultipleOf4) {
+        TemporaryDirectory temporary;
+        const fs::path path =
+            temporary.path / "ckpt-byteshuffle-fallback.licht";
+
+        std::vector<std::byte> lfkp_bytes(4097); // 4097 % 4 == 1
+        for (std::size_t index = 0; index < lfkp_bytes.size(); ++index) {
+            lfkp_bytes[index] =
+                static_cast<std::byte>((index * 17u + 3u) & 0xffu);
+        }
+
+        const ChunkKey key{
+            .fourcc = FOURCC_CKPT,
+            .instance_uuid = fixed_uuid(95'001),
+        };
+        {
+            ProjectWriter writer = require_result(ProjectWriter::create(
+                path,
+                CreateOptions{
+                    .project_uuid = fixed_uuid(95'000),
+                    .file_uuid = fixed_uuid(95'002),
+                    .role = ContainerRole::Master,
+                    .creation_time_unix_ns = FIXED_CREATION_NS + 95'000,
+                    .index_compression = IndexCompression::Zstd,
+                    .disk_reserve_bytes = 0,
+                }));
+            require_status(writer.plan_commit(CommitOptions{
+                .kind = CommitKind::Explicit,
+                .commit_uuid = fixed_uuid(95'003),
+                .snapshot_uuid = key.instance_uuid,
+                .wallclock_unix_ns = FIXED_COMMIT_NS + 95'100,
+            }));
+            require_status(writer.preflight(lfkp_bytes.size()));
+            require_status(writer.write_chunk(
+                key, lfkp_bytes,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::ByteShuffleZstd,
+                    .tensor_payload = true,
+                    .block_crcs = false,
+                    .expected_stream_bytes = lfkp_bytes.size(),
+                }));
+            require_status(writer.commit());
+        }
+
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        const ChunkInfo* row = reader.find(key.fourcc, key.instance_uuid);
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(row->compression, Compression::Zstd);
+        EXPECT_TRUE(reader.commit()
+                        .required_reader_capabilities
+                        .contains(CHUNK_ZSTD_V1));
+        EXPECT_FALSE(reader.commit()
+                         .required_reader_capabilities
+                         .contains(CHUNK_BYTESHUFFLE_ZSTD_V1));
+        auto inflated = require_result(reader.read_chunk(*row));
+        ASSERT_EQ(inflated.size(), lfkp_bytes.size());
+        EXPECT_TRUE(std::equal(
+            inflated.begin(), inflated.end(), lfkp_bytes.begin()));
+    }
+
+    TEST(P8CompatibilityTest, MixedZstdAndByteShuffleChunksOpenCorrectly) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "mixed-encodings.licht";
+
+        std::vector<std::byte> jsonish = {
+            std::byte{'{'}, std::byte{'"'}, std::byte{'a'}, std::byte{'"'},
+            std::byte{':'}, std::byte{'1'}, std::byte{'}'}};
+        // Not multiple of 4 intentionally — plain Zstd only.
+        std::vector<std::byte> shuffle_payload(4096);
+        for (std::size_t i = 0; i < shuffle_payload.size(); ++i) {
+            shuffle_payload[i] =
+                static_cast<std::byte>((i * 19u + 5u) & 0xffu);
+        }
+        std::vector<std::byte> plain_payload(3000);
+        for (std::size_t i = 0; i < plain_payload.size(); ++i) {
+            plain_payload[i] =
+                static_cast<std::byte>((i * 23u + 7u) & 0xffu);
+        }
+
+        const ChunkKey json_key{
+            .fourcc = FOURCC_PROJ,
+            .instance_uuid = fixed_uuid(96'001),
+        };
+        const ChunkKey shuffle_key{
+            .fourcc = FOURCC_CKPT,
+            .instance_uuid = fixed_uuid(96'002),
+        };
+        const ChunkKey plain_key{
+            .fourcc = FOURCC_SPLT,
+            .instance_uuid = fixed_uuid(96'003),
+        };
+        {
+            ProjectWriter writer = require_result(ProjectWriter::create(
+                path,
+                CreateOptions{
+                    .project_uuid = fixed_uuid(96'000),
+                    .file_uuid = fixed_uuid(96'010),
+                    .role = ContainerRole::Master,
+                    .creation_time_unix_ns = FIXED_CREATION_NS + 96'000,
+                    .index_compression = IndexCompression::Zstd,
+                    .disk_reserve_bytes = 0,
+                }));
+            require_status(writer.plan_commit(CommitOptions{
+                .kind = CommitKind::Explicit,
+                .commit_uuid = fixed_uuid(96'020),
+                .snapshot_uuid = fixed_uuid(96'021),
+                .wallclock_unix_ns = FIXED_COMMIT_NS + 96'100,
+            }));
+            const std::uint64_t preflight =
+                jsonish.size() + shuffle_payload.size() + plain_payload.size();
+            require_status(writer.preflight(preflight));
+            require_status(writer.write_chunk(
+                json_key, jsonish,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::Zstd,
+                    .tensor_payload = false,
+                    .block_crcs = false,
+                    .expected_stream_bytes = std::nullopt,
+                }));
+            require_status(writer.write_chunk(
+                shuffle_key, shuffle_payload,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::ByteShuffleZstd,
+                    .tensor_payload = true,
+                    .block_crcs = false,
+                    .expected_stream_bytes = shuffle_payload.size(),
+                }));
+            require_status(writer.write_chunk(
+                plain_key, plain_payload,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::Zstd,
+                    .tensor_payload = true,
+                    .block_crcs = false,
+                    .expected_stream_bytes = plain_payload.size(),
+                }));
+            require_status(writer.commit());
+        }
+
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        EXPECT_TRUE(reader.commit()
+                        .required_reader_capabilities
+                        .contains(CHUNK_ZSTD_V1));
+        EXPECT_TRUE(reader.commit()
+                        .required_reader_capabilities
+                        .contains(CHUNK_BYTESHUFFLE_ZSTD_V1));
+
+        const ChunkInfo* j = reader.find(json_key.fourcc, json_key.instance_uuid);
+        const ChunkInfo* s =
+            reader.find(shuffle_key.fourcc, shuffle_key.instance_uuid);
+        const ChunkInfo* p =
+            reader.find(plain_key.fourcc, plain_key.instance_uuid);
+        ASSERT_NE(j, nullptr);
+        ASSERT_NE(s, nullptr);
+        ASSERT_NE(p, nullptr);
+        EXPECT_EQ(j->compression, Compression::Zstd);
+        EXPECT_EQ(s->compression, Compression::ByteShuffleZstd);
+        EXPECT_EQ(p->compression, Compression::Zstd);
+
+        auto j_bytes = require_result(reader.read_chunk(*j));
+        auto s_bytes = require_result(reader.read_chunk(*s));
+        auto p_bytes = require_result(reader.read_chunk(*p));
+        EXPECT_EQ(j_bytes, jsonish);
+        EXPECT_EQ(s_bytes, shuffle_payload);
+        EXPECT_EQ(p_bytes, plain_payload);
+    }
+
+    TEST(P8CompatibilityTest, StreamingZstdLargeChunkRoundTrip) {
+        // Above the 8 MiB stream threshold; exercises ZSTD_compressStream2
+        // path and measures that logical bytes round-trip bit-exactly.
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "large-stream-zstd.licht";
+
+        constexpr std::size_t kSize = 9ull * 1024 * 1024; // 9 MiB
+        std::vector<std::byte> payload(kSize);
+        for (std::size_t i = 0; i < payload.size(); ++i) {
+            payload[i] = static_cast<std::byte>((i * 31u + 11u) & 0xffu);
+        }
+        // Force %4==0 for ByteShuffle path too (9 MiB is divisible by 4).
+        ASSERT_EQ(payload.size() % 4, 0u);
+
+        const ChunkKey key{
+            .fourcc = FOURCC_CKPT,
+            .instance_uuid = fixed_uuid(97'001),
+        };
+        {
+            ProjectWriter writer = require_result(ProjectWriter::create(
+                path,
+                CreateOptions{
+                    .project_uuid = fixed_uuid(97'000),
+                    .file_uuid = fixed_uuid(97'002),
+                    .role = ContainerRole::Master,
+                    .creation_time_unix_ns = FIXED_CREATION_NS + 97'000,
+                    .index_compression = IndexCompression::Zstd,
+                    .disk_reserve_bytes = 0,
+                }));
+            require_status(writer.plan_commit(CommitOptions{
+                .kind = CommitKind::Explicit,
+                .commit_uuid = fixed_uuid(97'003),
+                .snapshot_uuid = key.instance_uuid,
+                .wallclock_unix_ns = FIXED_COMMIT_NS + 97'100,
+            }));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(
+                key, payload,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::ByteShuffleZstd,
+                    .tensor_payload = true,
+                    .block_crcs = false,
+                    .expected_stream_bytes = payload.size(),
+                }));
+            require_status(writer.commit());
+        }
+
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        const ChunkInfo* row = reader.find(key.fourcc, key.instance_uuid);
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(row->compression, Compression::ByteShuffleZstd);
+        auto inflated = require_result(reader.read_chunk(*row));
+        ASSERT_EQ(inflated.size(), payload.size());
+        EXPECT_TRUE(std::equal(
+            inflated.begin(), inflated.end(), payload.begin()));
+    }
 
 } // namespace

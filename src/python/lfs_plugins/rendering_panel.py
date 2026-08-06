@@ -191,6 +191,10 @@ LOCALE_KEY = {
     "grid_opacity": "main_panel.grid_opacity",
     "focal_length_mm": "main_panel.focal_length",
     "render_scale": "main_panel.render_scale",
+    "environment_mode": "main_panel.environment",
+    "environment_map_path": "main_panel.environment_map_path",
+    "environment_exposure": "main_panel.environment_exposure",
+    "environment_rotation_degrees": "main_panel.environment_rotation",
     "camera_metrics_mode": "main_panel.camera_metrics",
     "sh_degree": "main_panel.sh_degree",
     "grid_plane": "main_panel.plane",
@@ -249,7 +253,7 @@ def _entry_label(text: str) -> str:
     text = str(text).strip()
     if not text:
         return ":"
-    return text if text.endswith(":") else f"{text}:"
+    return text if text.endswith((":", "：")) else f"{text}:"
 
 
 def _normalize_raster_backend(value):
@@ -448,8 +452,6 @@ class RenderingPanel(Panel):
                     lambda: str(getattr(s(), "ppisp_mode", "")),
                     lambda v: self._set_ppisp_mode(v))
 
-        model.bind_func("environment_enabled",
-                        lambda: s() is not None and getattr(s(), "environment_mode", "") == "EQUIRECTANGULAR")
         model.bind_func("mesh_wireframe_supported", _mesh_wireframe_supported)
         model.bind_func("mesh_wide_lines_supported", _mesh_wide_lines_supported)
 
@@ -533,22 +535,20 @@ class RenderingPanel(Panel):
         model.bind_func("ppisp_auto",
                          lambda: s() is not None and getattr(s(), "ppisp_mode", "") != "MANUAL")
 
-        model.bind_func("label_panel_title",
-                         lambda: lf.ui.tr("rendering") or "Rendering")
         model.bind_func("label_hdr_viewport",
-                         lambda: "Viewport")
+                         lambda: _tr_fallback("rendering_panel.section_viewport", "Viewport"))
         model.bind_func("label_hdr_camera",
-                         lambda: "Camera & Projection")
+                         lambda: _tr_fallback("rendering_panel.section_camera", "Camera & Projection"))
         model.bind_func("label_hdr_lod",
                          lambda: _tr_fallback("rendering_panel.section_lod", "LOD"))
         model.bind_func("label_hdr_simplify",
                          lambda: _tr_fallback("rendering_panel.section_simplify", "Splat Simplify"))
         model.bind_func("label_hdr_selection",
-                         lambda: "Selection & Overlays")
+                         lambda: _tr_fallback("rendering_panel.section_selection", "Selection & Overlays"))
         model.bind_func("label_hdr_mesh",
                          lambda: lf.ui.tr("main_panel.mesh") or "Mesh")
         model.bind_func("label_hdr_post_process",
-                         lambda: "Post Processing")
+                         lambda: _tr_fallback("rendering_panel.section_post_process", "Post Processing"))
         model.bind_func("label_environment_map_browse",
                          lambda: lf.ui.tr("common.browse") or "Browse...")
         model.bind_func("label_simplify_source",

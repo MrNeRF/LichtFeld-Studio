@@ -47,6 +47,11 @@ MAX_PREVIEW_BYTES = 16 * 1024 * 1024
 MAX_INDEX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 MAX_INDEX_STORED_BYTES = 520 * 1024 * 1024
 MAX_BLOCK_TABLE_BYTES = 512 * 1024 * 1024
+# Non-payload-class materialize / anti-zstd-bomb (JSON and small chunks).
+MAX_MATERIALIZED_CHUNK_BYTES = 512 * 1024 * 1024
+# TENSOR_PAYLOAD / lazy-binary (CKPT, PPIS): declared logical size is
+# header-authoritative and CRC-cross-checked; allow large addressable payloads.
+MAX_PAYLOAD_MATERIALIZED_BYTES = 16 * 1024 * 1024 * 1024
 
 SUPER_MAGIC = b"\x89LFS\r\n\x1a\n"
 HEAD_MAGIC = b"LFSHEAD\x00"
@@ -60,7 +65,8 @@ ROLE_SIDECAR = 1
 
 COMPRESSION_STORED = 0
 COMPRESSION_ZSTD = 1
-COMPRESSION_NAMES = {0: "stored", 1: "zstd"}
+COMPRESSION_BYTESHUFFLE_ZSTD = 2
+COMPRESSION_NAMES = {0: "stored", 1: "zstd", 2: "byteshuffle_zstd"}
 JSON_CHAPTER_FOURCCS = {
     b"PROJ",
     b"REFS",
@@ -102,13 +108,18 @@ CAP_SIDECAR = 1 << 4
 CAP_OPAQUE = 1 << 5
 CAP_RETAINED_JSON = 1 << 6
 CAP_CLEAN_PROOF = 1 << 7
+CAP_CHUNK_BYTESHUFFLE_ZSTD = 1 << 8
 
 CURRENT_VERSION = (1, 0)
 _BASE_READER_CAPS = CAP_BLOCK_CRC | CAP_TOMBSTONES | CAP_SIDECAR
-SUPPORTED_READER_CAPS = _BASE_READER_CAPS | (
-    (CAP_INDEX_ZSTD | CAP_CHUNK_ZSTD) if _zstd is not None else 0
+_ZSTD_READER_CAPS = (
+    (CAP_INDEX_ZSTD | CAP_CHUNK_ZSTD | CAP_CHUNK_BYTESHUFFLE_ZSTD)
+    if _zstd is not None
+    else 0
 )
-DECLARED_V1_WRITER_CAPS = (1 << 8) - 1
+SUPPORTED_READER_CAPS = _BASE_READER_CAPS | _ZSTD_READER_CAPS
+# Bits 0–8 inclusive (CLEAN_PROOF_REUSE through CHUNK_BYTESHUFFLE_ZSTD_V1).
+DECLARED_V1_WRITER_CAPS = (1 << 9) - 1
 
 _FOURCC_RE = re.compile(br"^[A-Z0-9]{4}$")
 NULL_UUID = uuid.UUID(int=0)
@@ -774,9 +785,34 @@ def _validate_lineage(
     return tuple(reversed(newest_to_oldest))
 
 
-def _decode_zstd_exact(path: str, offset: int, field: str, stored: bytes, expected_bytes: int) -> bytes:
+def _is_payload_class_row(row: "IndexRow") -> bool:
+    """TENSOR_PAYLOAD flag or lazy-binary fourccs (CKPT/PPIS)."""
+    return bool(row.chunk_flags & CHUNK_TENSOR) or row.fourcc in (b"CKPT", b"PPIS")
+
+
+def _max_materialized_bytes_for_row(row: "IndexRow") -> int:
+    return MAX_PAYLOAD_MATERIALIZED_BYTES if _is_payload_class_row(row) else MAX_MATERIALIZED_CHUNK_BYTES
+
+
+def _decode_zstd_exact(
+    path: str,
+    offset: int,
+    field: str,
+    stored: bytes,
+    expected_bytes: int,
+    *,
+    maximum_decoded_bytes: int | None = None,
+) -> bytes:
     if _zstd is None:
         raise UnsupportedFeature(path, offset, field, "Python package 'zstandard' installed", "module unavailable")
+    if maximum_decoded_bytes is not None and expected_bytes > maximum_decoded_bytes:
+        raise FormatError(
+            path,
+            offset,
+            field,
+            f"decoded size <= implementation maximum {maximum_decoded_bytes} and addressable by this build",
+            expected_bytes,
+        )
     try:
         frame_content_size = _zstd.frame_content_size(stored)
     except Exception as exc:
@@ -799,6 +835,33 @@ def _decode_zstd_exact(path: str, offset: int, field: str, stored: bytes, expect
         raise FormatError(path, offset, field, f"one zstd frame decoding to {expected_bytes} bytes", f"{type(exc).__name__}: {exc}") from exc
     _require(len(decoded) == expected_bytes, path, offset, field + ".decoded_size", expected_bytes, len(decoded))
     return decoded
+
+
+def _byte_plane_unshuffle_f32(planes: bytes) -> bytes:
+    """Inverse f32-word byte-plane: plane0||plane1||plane2||plane3 -> interleaved."""
+    if len(planes) % 4 != 0:
+        raise ValueError(f"byte-plane buffer size {len(planes)} is not a multiple of 4")
+    n_words = len(planes) // 4
+    out = bytearray(len(planes))
+    for w in range(n_words):
+        out[w * 4 + 0] = planes[0 * n_words + w]
+        out[w * 4 + 1] = planes[1 * n_words + w]
+        out[w * 4 + 2] = planes[2 * n_words + w]
+        out[w * 4 + 3] = planes[3 * n_words + w]
+    return bytes(out)
+
+
+def _byte_plane_shuffle_f32(interleaved: bytes) -> bytes:
+    if len(interleaved) % 4 != 0:
+        raise ValueError(f"buffer size {len(interleaved)} is not a multiple of 4")
+    n_words = len(interleaved) // 4
+    out = bytearray(len(interleaved))
+    for w in range(n_words):
+        out[0 * n_words + w] = interleaved[w * 4 + 0]
+        out[1 * n_words + w] = interleaved[w * 4 + 1]
+        out[2 * n_words + w] = interleaved[w * 4 + 2]
+        out[3 * n_words + w] = interleaved[w * 4 + 3]
+    return bytes(out)
 
 
 def _parse_block_table(
@@ -1053,6 +1116,12 @@ def _parse_index(
         required_caps |= CAP_INDEX_ZSTD
     if any(row.compression == COMPRESSION_ZSTD for row in rows if row.row_kind != ROW_TOMBSTONE):
         required_caps |= CAP_CHUNK_ZSTD
+    if any(
+        row.compression == COMPRESSION_BYTESHUFFLE_ZSTD
+        for row in rows
+        if row.row_kind != ROW_TOMBSTONE
+    ):
+        required_caps |= CAP_CHUNK_BYTESHUFFLE_ZSTD
     if any(row.block_table is not None for row in rows):
         required_caps |= CAP_BLOCK_CRC
     if has_tombstone:
@@ -1403,9 +1472,18 @@ def verify_container(container: Container) -> list[str]:
             _require(running_crc == row.payload_crc32c, reader.path, row.payload_offset, f"payload[{row.key_text}].crc32c", _fmt_u32(row.payload_crc32c), _fmt_u32(running_crc))
             if row.block_table is not None:
                 _require(block_count == len(row.block_table.entries), reader.path, row.block_table.offset + 40, f"payload[{row.key_text}].block_count", len(row.block_table.entries), block_count)
-            if row.compression == COMPRESSION_ZSTD:
+            if row.compression in (COMPRESSION_ZSTD, COMPRESSION_BYTESHUFFLE_ZSTD):
                 decoded_size = _measure_zstd_payload(reader, row, container.commit.committed_file_end)
                 _require(decoded_size == row.uncompressed_bytes, reader.path, row.payload_offset, f"payload[{row.key_text}].decoded_size", row.uncompressed_bytes, decoded_size)
+                if row.compression == COMPRESSION_BYTESHUFFLE_ZSTD:
+                    _require(
+                        decoded_size % 4 == 0,
+                        reader.path,
+                        row.payload_offset,
+                        f"payload[{row.key_text}].byteshuffle_alignment",
+                        "decoded size multiple of 4",
+                        decoded_size,
+                    )
             reports.append(f"{row.key_text}: stored_bytes={row.stored_bytes} crc32c={_fmt_u32(running_crc)}")
     return reports
 
@@ -1527,6 +1605,15 @@ class _BoundedPread(io.RawIOBase):
 def _measure_zstd_payload(reader: FileReader, row: IndexRow, authority_end: int) -> int:
     if _zstd is None:
         raise UnsupportedFeature(reader.path, row.payload_offset, f"payload[{row.key_text}].zstd", "Python package 'zstandard' installed", "module unavailable")
+    materialize_max = _max_materialized_bytes_for_row(row)
+    if row.uncompressed_bytes > materialize_max:
+        raise FormatError(
+            reader.path,
+            row.payload_offset,
+            f"payload[{row.key_text}].zstd",
+            f"decoded size <= implementation maximum {materialize_max} and addressable by this build",
+            row.uncompressed_bytes,
+        )
     source = io.BufferedReader(_BoundedPread(reader, row.payload_offset, row.stored_bytes, authority_end, f"payload[{row.key_text}].stored"))
     total = 0
     try:
@@ -1536,7 +1623,9 @@ def _measure_zstd_payload(reader: FileReader, row: IndexRow, authority_end: int)
                 if not data:
                     break
                 total += len(data)
-                if total > row.uncompressed_bytes:
+                # Bound growth against the declared logical size (and the
+                # class-level implementation maximum as a hard ceiling).
+                if total > row.uncompressed_bytes or total > materialize_max:
                     break
     except Exception as exc:
         raise FormatError(reader.path, row.payload_offset, f"payload[{row.key_text}].zstd", f"one frame decoding to {row.uncompressed_bytes} bytes", f"{type(exc).__name__}: {exc}") from exc
@@ -1569,19 +1658,60 @@ def extract_payload(
                 output.write(data)
                 written += len(data)
             return written
+        if row.compression not in (COMPRESSION_ZSTD, COMPRESSION_BYTESHUFFLE_ZSTD):
+            raise FormatError(
+                reader.path,
+                row.payload_offset,
+                f"payload[{row.key_text}].compression",
+                "stored, zstd, or byteshuffle_zstd",
+                COMPRESSION_NAMES.get(row.compression, row.compression),
+            )
         if _zstd is None:
             raise UnsupportedFeature(reader.path, row.payload_offset, f"payload[{row.key_text}].zstd", "Python package 'zstandard' installed", "module unavailable")
+        materialize_max = _max_materialized_bytes_for_row(row)
+        if row.uncompressed_bytes > materialize_max:
+            raise FormatError(
+                reader.path,
+                row.payload_offset,
+                f"payload[{row.key_text}].zstd",
+                f"decoded size <= implementation maximum {materialize_max} and addressable by this build",
+                row.uncompressed_bytes,
+            )
         source = io.BufferedReader(_BoundedPread(reader, row.payload_offset, row.stored_bytes, container.commit.committed_file_end, f"payload[{row.key_text}].stored"))
+        parts: list[bytes] = []
         written = 0
         with _zstd.ZstdDecompressor().stream_reader(source, read_across_frames=False) as stream:
             while True:
                 data = stream.read(1024 * 1024)
                 if not data:
                     break
-                output.write(data)
+                parts.append(data)
                 written += len(data)
+                if written > materialize_max:
+                    break
         _require(written == row.uncompressed_bytes, reader.path, row.payload_offset, f"payload[{row.key_text}].decoded_size", row.uncompressed_bytes, written)
-        return written
+        inflated = b"".join(parts)
+        if row.compression == COMPRESSION_BYTESHUFFLE_ZSTD:
+            try:
+                inflated = _byte_plane_unshuffle_f32(inflated)
+            except ValueError as exc:
+                raise FormatError(
+                    reader.path,
+                    row.payload_offset,
+                    f"payload[{row.key_text}].byteshuffle",
+                    "decoded size multiple of 4",
+                    str(exc),
+                ) from exc
+            _require(
+                len(inflated) == row.uncompressed_bytes,
+                reader.path,
+                row.payload_offset,
+                f"payload[{row.key_text}].logical_size",
+                row.uncompressed_bytes,
+                len(inflated),
+            )
+        output.write(inflated)
+        return len(inflated)
 
 
 @dataclasses.dataclass(frozen=True)

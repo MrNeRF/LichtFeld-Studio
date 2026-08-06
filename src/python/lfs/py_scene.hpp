@@ -22,9 +22,6 @@ namespace nb = nanobind;
 
 namespace lfs::python {
 
-    class PyScene;
-    class PyCameraDataset;
-
     struct PySelectionGroup {
         uint8_t id;
         std::string name;

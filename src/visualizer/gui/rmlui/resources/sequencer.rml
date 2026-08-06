@@ -5,10 +5,10 @@
 <body id="body" class="docked-panel">
     <div id="panel">
         <div id="floating-header" class="hidden">
-            <span id="floating-title">Sequencer</span>
+            <span id="floating-title">@tr:toolbar.sequencer</span>
             <div id="floating-actions">
                 <div id="btn-close-panel" class="transport-btn text wide floating-header-action" data-tooltip="common.close">
-                    <span id="close-panel-label" class="transport-label">Close</span>
+                    <span id="close-panel-label" class="transport-label">@tr:common.close</span>
                 </div>
             </div>
         </div>
@@ -16,7 +16,7 @@
             <div id="left-controls">
                 <div id="btn-camera-path" class="transport-btn toggle text" data-tooltip="tooltip.seq_camera_path">
                     <img class="transport-icon cam-path-icon" src="../icon/sequencer/camera-path.png" />
-                    <span class="transport-label cam-path-label">Path</span>
+                    <span class="transport-label cam-path-label">@tr:ui.path</span>
                 </div>
                 <div class="transport-sep"></div>
                 <div id="transport">
@@ -55,7 +55,7 @@
                 <div class="transport-sep"></div>
                 <div id="btn-speed" class="transport-btn text speed-group" data-tooltip="tooltip.seq_speed">
                     <span id="speed-label" class="speed-val">1x</span>
-                    <span class="speed-text">Speed</span>
+                    <span class="speed-text">@tr:ui.speed</span>
                     <span class="dropdown-arrow">&#x25be;</span>
                 </div>
                 <div id="sequence-fps-field" class="sequence-fps-field" data-tooltip="tooltip.seq_sequence_fps">
@@ -64,7 +64,7 @@
                 </div>
                 <div id="btn-snap" class="transport-btn toggle text snap-toggle" data-tooltip="tooltip.seq_snap">
                     <div class="snap-check"></div>
-                    <span class="transport-label">Snap</span>
+                    <span class="transport-label">@tr:ui.snap</span>
                     <span class="ctx-indicator">&#x25E2;</span>
                 </div>
                 <div class="transport-sep"></div>
@@ -79,22 +79,22 @@
                     <span class="ctx-indicator">&#x25E2;</span>
                 </div>
                 <div id="btn-equirect" class="transport-btn toggle text wide" data-tooltip="tooltip.equirectangular">
-                    <span class="transport-label">Pano</span>
+                    <span class="transport-label">@tr:ui.pano</span>
                 </div>
             </div>
             <div id="right-controls">
                 <div id="btn-save-path" class="transport-btn text" data-tooltip="tooltip.seq_save_path">
-                    <span class="transport-label">Save Path&#x2026;</span>
+                    <span class="transport-label">@tr:ui.save_path</span>
                 </div>
                 <div id="btn-load-path" class="transport-btn text" data-tooltip="tooltip.seq_load_path">
-                    <span class="transport-label">Load Path&#x2026;</span>
+                    <span class="transport-label">@tr:ui.load_path</span>
                 </div>
                 <div id="btn-load-sequence" class="transport-btn text" data-tooltip="tooltip.seq_load_sequence">
-                    <span class="transport-label">Load Seq&#x2026;</span>
+                    <span class="transport-label">@tr:ui.load_sequence</span>
                 </div>
                 <div class="transport-sep"></div>
                 <div id="btn-format" class="transport-btn text wide format-badge" data-tooltip="tooltip.seq_format">
-                    <span id="format-label" class="transport-label">YouTube 1080p</span>
+                    <span id="format-label" class="transport-label">@tr:ui.youtube_1080p</span>
                     <span class="dropdown-arrow">&#x25be;</span>
                     <span class="ctx-indicator">&#x25E2;</span>
                 </div>
@@ -108,17 +108,17 @@
                 <div class="transport-sep"></div>
                 <div id="btn-export" class="transport-btn text primary" data-tooltip="tooltip.seq_export">
                     <img class="transport-icon export-icon" src="../icon/sequencer/export.png" />
-                    <span class="transport-label export-label">Export</span>
+                    <span class="transport-label export-label">@tr:export.export</span>
                 </div>
                 <div class="transport-sep"></div>
                 <div id="btn-clear" class="transport-btn text error" data-tooltip="tooltip.seq_clear">
                     <img class="transport-icon clear-icon" src="../icon/scene/trash.png" />
-                    <span class="transport-label clear-label">Clear</span>
+                    <span class="transport-label clear-label">@tr:main_panel.clear</span>
                     <span class="ctx-indicator">&#x25E2;</span>
                 </div>
                 <div id="dock-toggle-sep" class="transport-sep"></div>
                 <div id="btn-dock-toggle" class="transport-btn text wide" data-tooltip="tooltip.seq_undock">
-                    <span id="dock-toggle-label" class="transport-label">Undock</span>
+                    <span id="dock-toggle-label" class="transport-label">@tr:ui.undock</span>
                 </div>
             </div>
         </div>

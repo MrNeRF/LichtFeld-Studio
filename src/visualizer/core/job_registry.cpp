@@ -248,13 +248,4 @@ namespace lfs::vis {
         return active_by_type_.contains(type);
     }
 
-    bool JobRegistry::hasCompletionPending() const {
-        const std::lock_guard lock(mutex_);
-        return std::ranges::any_of(
-            entries_, [](const auto& item) {
-                return item.second.status ==
-                       JobStatus::CompletionPending;
-            });
-    }
-
 } // namespace lfs::vis

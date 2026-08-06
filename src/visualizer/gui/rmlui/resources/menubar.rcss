@@ -31,6 +31,7 @@ body {
     flex: 1;
     min-width: 0;
     height: 30dp;
+    overflow: hidden;
 }
 
 #menu-right {
@@ -58,6 +59,10 @@ body {
     flex: none;
     height: 30dp;
     margin-left: 2dp;
+}
+
+#menu-toolbar.hidden {
+    display: none;
 }
 
 #menu-toolbar {

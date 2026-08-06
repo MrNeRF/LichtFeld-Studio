@@ -4,6 +4,7 @@
 
 #include "gui/rmlui/rml_document_utils.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
@@ -11,16 +12,79 @@
 #include "internal/resource_paths.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 
 #include <format>
 #include <fstream>
 #include <iterator>
 #include <regex>
+#include <string_view>
 
 namespace lfs::vis::gui::rml_documents {
 
     namespace {
         constexpr std::string_view kFallbackFontResource = "rmlui/font_fallback.rcss";
+
+        std::string preserveTranslationDirectives(std::string document_rml) {
+            static const std::regex kTranslatedAttributePattern(
+                R"((\s)(title|placeholder)\s*=\s*(["'])@tr:([A-Za-z0-9_.-]+)\3)",
+                std::regex_constants::icase);
+            static const std::regex kTranslatedTextPattern(
+                R"((<[A-Za-z][^>]*)(>)([ \t\r\n]*)@tr:([A-Za-z0-9_.-]+)([ \t\r\n]*)(</[A-Za-z][^>]*>))");
+
+            std::string with_attribute_metadata;
+            std::size_t last_pos = 0;
+            for (std::sregex_iterator it(document_rml.begin(), document_rml.end(),
+                                         kTranslatedAttributePattern),
+                 end;
+                 it != end; ++it) {
+                const auto& match = *it;
+                const auto match_pos = static_cast<std::size_t>(match.position());
+                const auto match_end = match_pos + static_cast<std::size_t>(match.length());
+                with_attribute_metadata.append(document_rml, last_pos, match_end - last_pos);
+                with_attribute_metadata += " data-lfs-i18n-";
+                with_attribute_metadata += match[2].str();
+                with_attribute_metadata += "=\"";
+                with_attribute_metadata += match[4].str();
+                with_attribute_metadata += '"';
+                last_pos = match_end;
+            }
+            if (with_attribute_metadata.empty()) {
+                with_attribute_metadata = std::move(document_rml);
+            } else {
+                with_attribute_metadata.append(document_rml, last_pos, std::string::npos);
+            }
+
+            std::string with_text_metadata;
+            last_pos = 0;
+            for (std::sregex_iterator it(with_attribute_metadata.begin(),
+                                         with_attribute_metadata.end(),
+                                         kTranslatedTextPattern),
+                 end;
+                 it != end; ++it) {
+                const auto& match = *it;
+                const auto match_pos = static_cast<std::size_t>(match.position());
+                const auto match_end = match_pos + static_cast<std::size_t>(match.length());
+                with_text_metadata.append(with_attribute_metadata, last_pos,
+                                          match_pos - last_pos);
+                with_text_metadata += match[1].str();
+                with_text_metadata += " data-lfs-i18n=\"";
+                with_text_metadata += match[4].str();
+                with_text_metadata += '"';
+                with_text_metadata += match[2].str();
+                with_text_metadata += match[3].str();
+                with_text_metadata += "@tr:";
+                with_text_metadata += match[4].str();
+                with_text_metadata += match[5].str();
+                with_text_metadata += match[6].str();
+                last_pos = match_end;
+            }
+            if (with_text_metadata.empty())
+                return with_attribute_metadata;
+
+            with_text_metadata.append(with_attribute_metadata, last_pos, std::string::npos);
+            return with_text_metadata;
+        }
 
         std::string injectParseTimeFontFallback(std::string document_rml,
                                                 const std::filesystem::path& fallback_rcss_path) {
@@ -192,6 +256,7 @@ namespace lfs::vis::gui::rml_documents {
     namespace {
         std::string preprocessDocumentSource(std::string document_rml,
                                              const std::filesystem::path& document_path) {
+            document_rml = preserveTranslationDirectives(std::move(document_rml));
             document_rml = rewriteRelativeImageSources(std::move(document_rml), document_path);
             const auto fallback_rcss_path =
                 lfs::vis::getAssetPath(std::string(kFallbackFontResource));
@@ -214,12 +279,86 @@ namespace lfs::vis::gui::rml_documents {
         if (!context)
             return nullptr;
 
+        Rml::ElementDocument* document = nullptr;
         if (auto document_source = loadDocumentSource(document_path)) {
-            return context->LoadDocumentFromMemory(*document_source,
-                                                   rml_paths::filesystemPathToFileUri(document_path));
+            document = context->LoadDocumentFromMemory(
+                *document_source, rml_paths::filesystemPathToFileUri(document_path));
+        } else {
+            document = context->LoadDocument(rml_paths::filesystemPathToFileUri(document_path));
         }
 
-        return context->LoadDocument(rml_paths::filesystemPathToFileUri(document_path));
+        if (document)
+            refreshLocalizedContent(document);
+        return document;
+    }
+
+    bool refreshLocalizedContent(Rml::Element* const root) {
+        if (!root)
+            return false;
+
+        auto& localization = lfs::event::LocalizationManager::getInstance();
+        bool changed = false;
+
+        const auto text_key = root->GetAttribute<Rml::String>("data-lfs-i18n", "");
+        if (!text_key.empty()) {
+            constexpr std::string_view kLastTextAttribute = "data-lfs-i18n-last";
+            // Translations are text, not markup: a value such as "--python-script <path>"
+            // would otherwise be parsed into elements and lost.
+            const auto localized_text =
+                Rml::StringUtilities::EncodeRml(std::string(localization.get(text_key)));
+            const auto previous_text = root->GetAttribute<Rml::String>(kLastTextAttribute.data(), "");
+            const auto current_text = root->GetInnerRML();
+            if (previous_text.empty() || current_text == previous_text) {
+                if (current_text != localized_text) {
+                    root->SetInnerRML(localized_text);
+                    changed = true;
+                }
+                root->SetAttribute(kLastTextAttribute.data(), root->GetInnerRML());
+            }
+        }
+
+        for (const std::string_view attribute : {"title", "placeholder"}) {
+            const std::string metadata_name = std::format("data-lfs-i18n-{}", attribute);
+            const auto key = root->GetAttribute<Rml::String>(metadata_name, "");
+            if (key.empty())
+                continue;
+            const std::string last_value_name = std::format("data-lfs-i18n-{}-last", attribute);
+            const auto localized_value = std::string(localization.get(key));
+            const auto previous_value = root->GetAttribute<Rml::String>(last_value_name, "");
+            const auto current_value = root->GetAttribute<Rml::String>(std::string(attribute), "");
+            if (previous_value.empty() || current_value == previous_value) {
+                if (current_value != localized_value) {
+                    root->SetAttribute(std::string(attribute), localized_value);
+                    changed = true;
+                }
+                root->SetAttribute(last_value_name,
+                                   root->GetAttribute<Rml::String>(std::string(attribute), ""));
+            }
+        }
+
+        for (int i = 0; i < root->GetNumChildren(true); ++i)
+            changed |= refreshLocalizedContent(root->GetChild(i));
+
+        // RmlUI stores the closed select label separately from its option elements.
+        // Re-apply the selected option content after translated option nodes have
+        // been refreshed in place; SetSelection(current) is a no-op in some RmlUI
+        // versions and therefore cannot refresh that cached label reliably.
+        if (changed) {
+            if (auto* const select = dynamic_cast<Rml::ElementFormControlSelect*>(root)) {
+                const auto* const option = select->GetOption(select->GetSelection());
+                if (option) {
+                    const auto selected_rml = option->GetInnerRML();
+                    for (int i = 0; i < select->GetNumChildren(true); ++i) {
+                        auto* const child = select->GetChild(i);
+                        if (child && child->GetTagName() == "selectvalue") {
+                            child->SetInnerRML(selected_rml);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        return changed;
     }
 
 } // namespace lfs::vis::gui::rml_documents

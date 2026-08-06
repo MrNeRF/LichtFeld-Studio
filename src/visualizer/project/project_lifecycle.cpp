@@ -15,6 +15,7 @@
 #include "io/project_recovery.hpp"
 #include "io/scene_chapter_adapter.hpp"
 #include "io/selection_chapter.hpp"
+#include "ipc/view_context.hpp"
 #include "operation/undo_history.hpp"
 #include "project/session_state.hpp"
 #include "rendering/image_layout.hpp"
@@ -25,14 +26,17 @@
 #include <stb_image_write.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <format>
 #include <fstream>
 #include <ranges>
 #include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -94,6 +98,150 @@ namespace lfs::vis::project {
             return lfs::format_for_developer(error);
         }
 
+        [[nodiscard]] std::filesystem::path
+        projectRootFor(
+            const ProjectDocument& document) {
+            if (const auto source =
+                    document.source_path();
+                source && !source->empty()) {
+                return source->parent_path();
+            }
+            return {};
+        }
+
+        void bindRolePathReference(
+            lfs::io::project::ReferencesChapter&
+                references,
+            const std::filesystem::path& project_root,
+            const std::filesystem::path& live_path,
+            const std::string_view key,
+            const std::string_view kind,
+            std::optional<lfs::core::Uuid>& binding) {
+            if (live_path.empty()) {
+                binding = std::nullopt;
+                return;
+            }
+            auto minted =
+                lfs::io::project::upsert_path_reference(
+                    references, project_root, live_path,
+                    key, kind, binding);
+            if (minted) {
+                binding = *minted;
+            }
+        }
+
+        void mintParameterPathReferences(
+            lfs::io::project::ReferencesChapter&
+                references,
+            const std::filesystem::path& project_root,
+            lfs::io::project::ParameterManagerSnapshot&
+                snapshot) {
+            using Role = std::tuple<
+                lfs::core::param::OptimizationParameters*,
+                lfs::io::project::
+                    ParameterManagerSnapshot::
+                        ReferenceBindings*,
+                std::string_view>;
+            const std::array roles{
+                Role{&snapshot.mcmc_session,
+                     &snapshot.mcmc_session_references,
+                     "mcmc.session"},
+                Role{&snapshot.mrnf_session,
+                     &snapshot.mrnf_session_references,
+                     "mrnf.session"},
+                Role{&snapshot.igs_session,
+                     &snapshot.igs_session_references,
+                     "igs+.session"},
+                Role{&snapshot.mcmc_current,
+                     &snapshot.mcmc_current_references,
+                     "mcmc.current"},
+                Role{&snapshot.mrnf_current,
+                     &snapshot.mrnf_current_references,
+                     "mrnf.current"},
+                Role{&snapshot.igs_current,
+                     &snapshot.igs_current_references,
+                     "igs+.current"},
+            };
+            for (const auto& [params, bindings, role] :
+                 roles) {
+                bindRolePathReference(
+                    references, project_root,
+                    params->bg_image_path,
+                    std::format(
+                        "presets.{}.background_image",
+                        role),
+                    "background_image",
+                    bindings->background_image_reference);
+                bindRolePathReference(
+                    references, project_root,
+                    params->ppisp_sidecar_path,
+                    std::format(
+                        "presets.{}.ppisp_sidecar",
+                        role),
+                    "ppisp_sidecar",
+                    bindings->ppisp_reference);
+            }
+        }
+
+        void resolveParameterPathReferences(
+            const lfs::io::project::ReferencesChapter&
+                references,
+            const std::filesystem::path& project_root,
+            lfs::io::project::ParameterManagerSnapshot&
+                snapshot) {
+            using Role = std::tuple<
+                lfs::core::param::OptimizationParameters*,
+                const lfs::io::project::
+                    ParameterManagerSnapshot::
+                        ReferenceBindings*>;
+            const std::array roles{
+                Role{&snapshot.mcmc_session,
+                     &snapshot.mcmc_session_references},
+                Role{&snapshot.mrnf_session,
+                     &snapshot.mrnf_session_references},
+                Role{&snapshot.igs_session,
+                     &snapshot.igs_session_references},
+                Role{&snapshot.mcmc_current,
+                     &snapshot.mcmc_current_references},
+                Role{&snapshot.mrnf_current,
+                     &snapshot.mrnf_current_references},
+                Role{&snapshot.igs_current,
+                     &snapshot.igs_current_references},
+            };
+            for (const auto& [params, bindings] :
+                 roles) {
+                if (bindings
+                        ->background_image_reference) {
+                    if (auto resolved =
+                            lfs::io::project::
+                                resolve_path_reference(
+                                    references,
+                                    project_root,
+                                    *bindings
+                                         ->background_image_reference,
+                                    params
+                                        ->bg_image_path)) {
+                        params->bg_image_path =
+                            *resolved;
+                    }
+                }
+                if (bindings->ppisp_reference) {
+                    if (auto resolved =
+                            lfs::io::project::
+                                resolve_path_reference(
+                                    references,
+                                    project_root,
+                                    *bindings
+                                         ->ppisp_reference,
+                                    params
+                                        ->ppisp_sidecar_path)) {
+                        params->ppisp_sidecar_path =
+                            *resolved;
+                    }
+                }
+            }
+        }
+
         [[nodiscard]] std::vector<lfs::core::Uuid>
         selectedNodeUuids(VisualizerImpl& viewer);
 
@@ -109,8 +257,13 @@ namespace lfs::vis::project {
                 lfs::io::project::WriterLockLease>
                 writer_lock_lease =
                     std::nullopt) {
-            auto session =
-                viewer.captureProjectSession();
+            const auto project_root =
+                projectRootFor(document);
+            // Mutable REFS for minting; training context
+            // carries the updated chapter.
+            auto references = document.references();
+            auto session = viewer.captureProjectSession(
+                &references, project_root);
             if (!session) {
                 return std::move(session).error();
             }
@@ -129,6 +282,8 @@ namespace lfs::vis::project {
             if (!parameters) {
                 return std::move(parameters).error();
             }
+            mintParameterPathReferences(
+                references, project_root, *parameters);
             return lfs::training::
                 ProjectSnapshotDocumentContext{
                     .project_uuid =
@@ -137,7 +292,7 @@ namespace lfs::vis::project {
                         document.source_path(),
                     .project = document.project(),
                     .references =
-                        document.references(),
+                        std::move(references),
                     .gui_layout =
                         std::move(
                             session->gui_layout),
@@ -2320,6 +2475,8 @@ namespace lfs::vis::project {
                 std::move(selection);
         }
 
+        const auto project_root =
+            projectRootFor(*document_);
         if (auto* parameters =
                 viewer_.getParameterManager()) {
             auto snapshot =
@@ -2329,6 +2486,9 @@ namespace lfs::vis::project {
                 return lfs::Status::failure(
                     std::move(snapshot).error());
             }
+            mintParameterPathReferences(
+                document_->edit_references(),
+                project_root, *snapshot);
             lfs::io::project::ParametersChapter
                 staged_parameters;
             if (auto set =
@@ -2352,7 +2512,9 @@ namespace lfs::vis::project {
         // chapters with those defaults.
         if (!viewer_.isProjectSessionRestorePending()) {
             auto session =
-                viewer_.captureProjectSession();
+                viewer_.captureProjectSession(
+                    &document_->edit_references(),
+                    project_root);
             if (!session) {
                 return lfs::Status::failure(
                     std::move(session).error());
@@ -3090,6 +3252,8 @@ namespace lfs::vis::project {
         auto candidate =
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
+        const auto project_root =
+            projectRootFor(*candidate);
         auto session =
             prepareGuiSessionRestore(
                 {
@@ -3100,7 +3264,9 @@ namespace lfs::vis::project {
                     .sequencer =
                         candidate->sequencer(),
                     .metrics = candidate->metrics(),
-                });
+                },
+                &candidate->references(),
+                project_root);
         if (!session) {
             return lfs::Status::failure(
                 std::move(session).error());
@@ -3111,6 +3277,9 @@ namespace lfs::vis::project {
             return lfs::Status::failure(
                 std::move(parameters).error());
         }
+        resolveParameterPathReferences(
+            candidate->references(), project_root,
+            *parameters);
         auto* parameter_manager =
             viewer_.getParameterManager();
         if (!parameter_manager) {

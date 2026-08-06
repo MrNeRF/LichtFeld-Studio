@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Validate shipped locale keys and std::format placeholders against en.json."""
+"""Validate locale keys, formatting, and std::format placeholders against en.json."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import string
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,8 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOCALES_DIR = PROJECT_ROOT / "src" / "visualizer" / "gui" / "resources" / "locales"
+JSON_KEY_PATTERN = re.compile(r'(?<!\\)"(?:\\.|[^"\\])*"\s*:')
+INDENTED_JSON_KEY_PATTERN = re.compile(r'^( +)"(?:\\.|[^"\\])*"\s*:')
 
 
 def flatten_strings(data: dict[str, Any], prefix: str = "") -> dict[str, str]:
@@ -36,6 +39,20 @@ def load_locale(path: Path) -> dict[str, str]:
     return flatten_strings(data)
 
 
+def locale_layout_findings(path: Path) -> list[str]:
+    """Return physical-line layout violations that JSON parsing alone cannot detect."""
+    findings: list[str] = []
+    with path.open(encoding="utf-8") as locale_file:
+        for line_number, line in enumerate(locale_file, start=1):
+            key_count = len(JSON_KEY_PATTERN.findall(line))
+            if key_count > 1:
+                findings.append(f"line {line_number}: {key_count} keys; keep one key per line")
+            indentation = INDENTED_JSON_KEY_PATTERN.match(line)
+            if indentation and len(indentation.group(1)) % 2:
+                findings.append(f"line {line_number}: odd indentation; use multiples of two spaces")
+    return findings
+
+
 def placeholders(value: str) -> tuple[str, ...]:
     """Return normalized format placeholders, raising ValueError for malformed braces."""
     return tuple(sorted(
@@ -53,6 +70,8 @@ en.json is the canonical locale. The default check validates every shipped
 locale and exits with status 1 when a locale:
   - omits a key from en.json;
   - contains an unexpected or obsolete key; or
+  - places more than one JSON key on the same physical line;
+  - uses odd indentation for a JSON key; or
   - has malformed or mismatched std::format placeholders.
 
 Named placeholders may be reordered to suit the target language. Identical
@@ -101,6 +120,10 @@ def main() -> int:
     identical_reports: list[tuple[str, list[str]]] = []
 
     for locale_path in sorted(LOCALES_DIR.glob("*.json")):
+        layout_findings = locale_layout_findings(locale_path)
+        if layout_findings:
+            failures.append(f"{locale_path.name} has JSON layout violations:")
+            failures.extend(f"  {finding}" for finding in layout_findings)
         if locale_path == english_path:
             continue
         locale = load_locale(locale_path)

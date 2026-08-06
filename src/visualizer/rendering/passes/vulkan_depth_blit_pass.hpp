@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <glm/glm.hpp>
 #include <memory>
 #include <vulkan/vulkan.h>
 
@@ -25,6 +26,9 @@ namespace lfs::vis {
         // by gui_manager) and skips the staging upload path.
         VkImageView external_image_view = VK_NULL_HANDLE;
         std::uint64_t external_image_generation = 0;
+        // Valid-region UV for padded depth images (default identity).
+        glm::vec2 uv_scale{1.0f, 1.0f};
+        glm::vec2 uv_clamp_max{1.0f, 1.0f};
     };
 
     // Writes a sampled depth value into the framebuffer's depth attachment via

@@ -34,10 +34,13 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         window/window_manager.cpp
         window/vulkan_context.cpp
         window/vulkan_image_barrier_tracker.cpp
+        window/gpu_object_census.cpp
         window/vulkan_loader_probe.cpp
 
         # Rendering
         rendering/camera_interaction_service.cpp
+        rendering/output_image_pool.cpp
+        rendering/mesh_offscreen_renderer.cpp
         rendering/rendering_manager.cpp
         rendering/rendering_manager_events.cpp
         rendering/rendering_manager_frame.cpp
@@ -153,7 +156,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/operator_context.cpp
         operator/operator_id.cpp
         operator/operator_registry.cpp
-        operator/property_schema.cpp
         operator/ops/align_ops.cpp
         operator/ops/edit_ops.cpp
         operator/ops/scene_ops.cpp

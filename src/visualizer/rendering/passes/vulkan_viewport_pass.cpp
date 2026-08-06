@@ -7,6 +7,7 @@
 #include "config.h"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "rendering/output_image_pool.hpp"
 #include "rendering/vulkan_wait.hpp"
 #include "viewport_pass_graph.hpp"
 #include "vulkan_environment_pass.hpp"
@@ -108,6 +109,11 @@ namespace lfs::vis {
             glm::vec4 color_opacity{0.26f, 0.59f, 0.98f, 1.0f};
         };
 
+        struct ScenePush {
+            glm::vec2 uv_scale{1.0f, 1.0f};
+            glm::vec2 uv_clamp_max{1.0f, 1.0f};
+        };
+
         struct TexturedOverlayPush {
             glm::vec4 tint_opacity{1.0f, 1.0f, 1.0f, 0.8f};
             glm::vec4 effects{0.0f};
@@ -115,23 +121,31 @@ namespace lfs::vis {
             glm::vec4 viewport_rect{0.0f, 0.0f, 0.0f, 0.0f};
             // x: depth_available, y: flip-y, z/w unused.
             glm::vec4 depth_params{0.0f, 0.0f, 0.0f, 0.0f};
+            // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
+            glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
         };
 
         struct ShapeOverlayPush {
             // x,y: viewport origin (framebuffer px). z,w: viewport size (framebuffer px).
             glm::vec4 viewport_rect{0.0f, 0.0f, 0.0f, 0.0f};
             // x: depth_available (1.0 = sample splat depth, 0.0 = skip fade),
-            // y: flip-y when sampling depth UV. z,w unused.
+            // y: flip-y when sampling depth UV. z,w unused (or thickness/projection).
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
+            // xy = uv_scale, zw = uv_clamp_max for padded splat depth.
+            glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
         };
 
         struct FrustumPush {
             glm::vec4 viewport_rect{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
+            glm::vec4 uv_region{1.0f, 1.0f, 1.0f, 1.0f};
             glm::mat4 view{1.0f};
             glm::vec4 viewport_panel{0.0f, 0.0f, 0.0f, 0.0f};
             glm::vec4 projection{0.0f, 0.0f, 0.0f, 0.0f};
         };
+        // 144 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
+        // Acceptable only because CUDA requires NVIDIA hardware (reports 256).
+        static_assert(sizeof(FrustumPush) <= 256);
 
         constexpr std::uint32_t kFrustumVertexCount = 48;
         constexpr float kFrustumLineThickness = 1.5f;
@@ -1294,7 +1308,8 @@ namespace lfs::vis {
                                           PipelineVertexLayout vertex_layout,
                                           VkPipelineLayout& pipeline_layout,
                                           VkPipeline& pipeline,
-                                          VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE) {
+                                          VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE,
+                                          bool depth_test = false) {
             VkShaderModule vertex_module = lfs::vis::createShaderModule(device, vertex_spv, "Viewport");
             VkShaderModule fragment_module = lfs::vis::createShaderModule(device, fragment_spv, "Viewport");
             if (vertex_module == VK_NULL_HANDLE || fragment_module == VK_NULL_HANDLE) {
@@ -1417,7 +1432,10 @@ namespace lfs::vis {
 
             VkPipelineDepthStencilStateCreateInfo depth{};
             depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-            depth.depthTestEnable = VK_FALSE;
+            // World-space passes opt in so geometry drawn earlier in the frame occludes
+            // them. They never write depth: they are blended overlays, and occluding the
+            // overlays that follow them in the same phase is not wanted.
+            depth.depthTestEnable = depth_test ? VK_TRUE : VK_FALSE;
             depth.depthWriteEnable = VK_FALSE;
             depth.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
@@ -1552,15 +1570,19 @@ namespace lfs::vis {
             frustum_push.size = sizeof(FrustumPush);
             using namespace viewport_shaders;
 
+            VkPushConstantRange scene_push{};
+            scene_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            scene_push.offset = 0;
+            scene_push.size = sizeof(ScenePush);
             return createPipeline(kScreenQuadVertSpv, kSceneFragSpv, "scene",
-                                  scene_descriptor_layout, nullptr, true, PipelineVertexLayout::ScreenQuad,
+                                  scene_descriptor_layout, &scene_push, true, PipelineVertexLayout::ScreenQuad,
                                   scene_pipeline_layout, scene_pipeline) &&
                    createPipeline(kScreenQuadVertSpv, kVignetteFragSpv, "vignette",
                                   VK_NULL_HANDLE, &vignette_push, true, PipelineVertexLayout::ScreenQuad,
                                   vignette_pipeline_layout, vignette_pipeline) &&
                    createPipeline(kGridVertSpv, kGridFragSpv, "grid",
                                   grid_descriptor_layout, &grid_push, true, PipelineVertexLayout::PositionOnly,
-                                  grid_pipeline_layout, grid_pipeline) &&
+                                  grid_pipeline_layout, grid_pipeline, VK_NULL_HANDLE, /*depth_test=*/true) &&
                    createPipeline(kOverlayVertSpv, kOverlayFragSpv, "overlay",
                                   VK_NULL_HANDLE, nullptr, true, PipelineVertexLayout::ColorOverlay,
                                   overlay_pipeline_layout, overlay_pipeline) &&
@@ -2181,6 +2203,21 @@ namespace lfs::vis {
                                         &frame.scene_descriptor_set,
                                         0,
                                         nullptr);
+                const glm::ivec2 valid = params.scene_image_size;
+                const glm::ivec2 alloc =
+                    params.scene_image_alloc_size.x > 0 && params.scene_image_alloc_size.y > 0
+                        ? params.scene_image_alloc_size
+                        : valid;
+                const ScenePush scene_push{
+                    .uv_scale = outputUvScale(valid, alloc),
+                    .uv_clamp_max = outputUvClampMax(valid, alloc),
+                };
+                vkCmdPushConstants(command_buffer,
+                                   scene_pipeline_layout,
+                                   VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0,
+                                   sizeof(scene_push),
+                                   &scene_push);
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
             }
         }
@@ -2302,6 +2339,8 @@ namespace lfs::vis {
                 push.effects = overlay.effects;
                 push.viewport_rect = ctx.viewport_rect_push;
                 push.depth_params = depth_params;
+                push.uv_region = glm::vec4(params.depth_blit.uv_scale,
+                                           params.depth_blit.uv_clamp_max);
                 vkCmdBindDescriptorSets(command_buffer,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         textured_overlay_pipeline_layout,
@@ -2344,7 +2383,9 @@ namespace lfs::vis {
             auto& frame = resourcesForFrame(params.frame_slot);
             const ShapeOverlayPush world_shape_overlay_push{
                 .viewport_rect = ctx.viewport_rect_push,
-                .params = ctx.world_depth_params_push};
+                .params = ctx.world_depth_params_push,
+                .uv_region = glm::vec4(params.depth_blit.uv_scale,
+                                       params.depth_blit.uv_clamp_max)};
             recordShapeOverlays(ctx.cmd, frame.shape_overlay, frame, world_shape_overlay_push);
         }
 
@@ -2397,6 +2438,8 @@ namespace lfs::vis {
                                         ctx.world_depth_params_push.y,
                                         kFrustumLineThickness,
                                         projection_mode);
+                push.uv_region = glm::vec4(params.depth_blit.uv_scale,
+                                           params.depth_blit.uv_clamp_max);
                 push.view = batch.view;
                 push.viewport_panel = glm::vec4(batch.viewport_pos, batch.viewport_size);
                 push.projection = glm::vec4(batch.render_size, batch.focal_x, batch.focal_y);

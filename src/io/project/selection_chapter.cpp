@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -522,16 +523,25 @@ namespace lfs::io::project {
             result,
             6,
             static_cast<std::uint16_t>(HEADER_BYTES));
+        assert(
+            chapter.groups().size() <=
+            std::numeric_limits<std::uint32_t>::max());
         write_u32(
             result,
             8,
             static_cast<std::uint32_t>(
                 chapter.groups().size()));
+        assert(
+            encoded_slices.size() <=
+            std::numeric_limits<std::uint32_t>::max());
         write_u32(
             result,
             12,
             static_cast<std::uint32_t>(
                 encoded_slices.size()));
+        assert(
+            chapter.selected_node_uuids().size() <=
+            std::numeric_limits<std::uint32_t>::max());
         write_u32(
             result,
             16,

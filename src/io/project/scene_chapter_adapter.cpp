@@ -11,7 +11,9 @@
 #include <cassert>
 #include <cmath>
 #include <format>
+#include <functional>
 #include <glm/gtc/type_ptr.hpp>
+#include <ranges>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -739,9 +741,61 @@ namespace lfs::io::project {
                 staged.push_back(StagedNode{record, std::move(desc)});
             }
 
+            // Contiguity was already checked by validate_hierarchy. Restore in
+            // parent-first order with siblings sorted by child_order so a foreign
+            // writer that shuffles the DOM array but keeps child_order is correct.
+            std::unordered_map<lfs::core::Uuid, std::vector<std::size_t>>
+                children_by_parent;
+            std::vector<std::size_t> roots;
+            roots.reserve(staged.size());
+            children_by_parent.reserve(staged.size());
+            for (std::size_t index = 0; index < staged.size(); ++index) {
+                if (staged[index].record.parent_uuid) {
+                    children_by_parent[*staged[index].record.parent_uuid]
+                        .push_back(index);
+                } else {
+                    roots.push_back(index);
+                }
+            }
+            const auto by_child_order =
+                [&](const std::size_t lhs, const std::size_t rhs) {
+                    return staged[lhs].record.child_order <
+                           staged[rhs].record.child_order;
+                };
+            std::ranges::sort(roots, by_child_order);
+            for (auto& [parent, children] : children_by_parent) {
+                (void)parent;
+                std::ranges::sort(children, by_child_order);
+            }
+
+            std::vector<std::size_t> restore_order;
+            restore_order.reserve(staged.size());
+            std::function<void(std::size_t)> append_subtree;
+            append_subtree = [&](const std::size_t index) {
+                restore_order.push_back(index);
+                const auto children =
+                    children_by_parent.find(staged[index].record.uuid);
+                if (children == children_by_parent.end()) {
+                    return;
+                }
+                for (const std::size_t child : children->second) {
+                    append_subtree(child);
+                }
+            };
+            for (const std::size_t root : roots) {
+                append_subtree(root);
+            }
+            if (restore_order.size() != staged.size()) {
+                return fail<void>(
+                    lfs::ErrorCode::Internal,
+                    "The staged scene hierarchy could not be ordered.",
+                    "SCNG restore order is incomplete after child_order sort");
+            }
+
             std::unordered_map<lfs::core::Uuid, lfs::core::NodeId> ids;
             ids.reserve(staged.size());
-            for (StagedNode& node : staged) {
+            for (const std::size_t index : restore_order) {
+                StagedNode& node = staged[index];
                 if (node.record.parent_uuid) {
                     const auto parent = ids.find(*node.record.parent_uuid);
                     if (parent == ids.end()) {

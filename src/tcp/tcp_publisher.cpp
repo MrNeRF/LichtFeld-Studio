@@ -44,8 +44,7 @@ namespace lfs::core::events::state {
     ENABLE_TO_JSON(EvaluationCompleted, iteration, psnr, ssim, lpips, elapsed_time, num_gaussians);
 
     // System state
-    ENABLE_TO_JSON(CheckpointSaved, iteration, path);
-    ENABLE_TO_JSON(DiskSpaceSaveFailed, iteration, path, error, required_bytes, available_bytes, is_disk_space_error, is_checkpoint);
+    ENABLE_TO_JSON(DiskSpaceSaveFailed, iteration, path, error, required_bytes, available_bytes, is_disk_space_error);
     ENABLE_TO_JSON(MemoryUsage, gpu_used, gpu_total, gpu_percent, ram_used, ram_total, ram_percent);
     ENABLE_TO_JSON(FrameRendered, render_ms, fps, num_gaussians);
     ENABLE_TO_JSON(KeyframeListChanged, count);
@@ -175,7 +174,6 @@ namespace lfs::tcp {
             SUBSCRIBE_EVENT(EvaluationStarted);
             SUBSCRIBE_EVENT(EvaluationProgress);
             SUBSCRIBE_EVENT(EvaluationCompleted);
-            SUBSCRIBE_EVENT(CheckpointSaved);
             SUBSCRIBE_EVENT(DiskSpaceSaveFailed);
             SUBSCRIBE_EVENT(MemoryUsage);
             SUBSCRIBE_EVENT(FrameRendered);

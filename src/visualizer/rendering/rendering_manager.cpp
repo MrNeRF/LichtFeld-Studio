@@ -111,6 +111,9 @@ namespace lfs::vis {
     // RenderingManager Implementation
     RenderingManager::RenderingManager() {
         viewport_interop_ = std::make_unique<ViewportInteropService>();
+        gt_comparison_image_worker_ = std::jthread([this](std::stop_token stop_token) {
+            gtComparisonImageWorkerLoop(stop_token);
+        });
         camera_metrics_worker_ = std::jthread([this](std::stop_token stop_token) {
             cameraMetricsWorkerLoop(stop_token);
         });
@@ -118,6 +121,12 @@ namespace lfs::vis {
     }
 
     RenderingManager::~RenderingManager() {
+        invalidateGTComparisonImageCache();
+        gt_comparison_image_worker_.request_stop();
+        gt_comparison_image_cv_.notify_all();
+        if (gt_comparison_image_worker_.joinable()) {
+            gt_comparison_image_worker_.join();
+        }
         shutdownViewportInterop();
         if (lod_controller_) {
             lod_controller_->setReadyCallback(nullptr);
@@ -370,20 +379,22 @@ namespace lfs::vis {
     }
 
     void RenderingManager::clearVulkanViewportImageState(const glm::ivec2 size,
-                                                         const bool flip_y) {
+                                                         const bool flip_y,
+                                                         const glm::ivec2 alloc_size) {
         vulkan_viewport_image_.reset();
         vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         vulkan_external_viewport_image_generation_ = 0;
         vulkan_viewport_image_size_ = size;
+        vulkan_viewport_image_alloc_size_ = alloc_size.x > 0 && alloc_size.y > 0 ? alloc_size : size;
         vulkan_viewport_image_flip_y_ = flip_y;
         vulkan_gt_comparison_content_size_ = {0, 0};
     }
 
     void RenderingManager::releaseSceneRenderResources() {
         viewport_artifact_service_.clearViewportOutput();
-        gt_comparison_image_cache_ = {};
+        invalidateGTComparisonImageCache();
         clearVulkanViewportImageState();
         last_logged_vksplat_render_error_.clear();
         vulkan_viewport_image_generation_ = 0;
@@ -732,8 +743,7 @@ namespace lfs::vis {
                 active_camera_metrics_request_ &&
                 request_matches(*active_camera_metrics_request_, request);
 
-            if ((immediate_refresh || stale_iteration) &&
-                refresh_interval_elapsed &&
+            if ((immediate_refresh || (stale_iteration && refresh_interval_elapsed)) &&
                 !same_as_pending &&
                 !same_as_active) {
                 request.generation = ++camera_metrics_request_generation_;

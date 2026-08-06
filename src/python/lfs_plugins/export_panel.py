@@ -386,6 +386,18 @@ class ExportPanel(Panel):
         except Exception:
             return ""
 
+    def _get_colmap_export_extension(self):
+        source_path = self._get_colmap_sparse_path_raw()
+        if not source_path:
+            return "txt"
+
+        path = Path(source_path)
+        try:
+            has_binary_metadata = (path / "cameras.bin").exists() and (path / "images.bin").exists()
+        except OSError:
+            has_binary_metadata = False
+        return "bin" if has_binary_metadata else "txt"
+
     def _get_colmap_suggested_export_path_raw(self):
         source_path = self._get_colmap_sparse_path_raw()
         if not source_path:
@@ -395,12 +407,6 @@ class ExportPanel(Panel):
         if path.parent.name == "sparse":
             return str(path.parent)
         return source_path
-
-    def _get_colmap_output_file_names(self):
-        source_path = Path(self._get_colmap_sparse_path_raw())
-        if (source_path / "cameras.bin").exists() and (source_path / "images.bin").exists():
-            return ("cameras.bin", "images.bin", "points3D.bin")
-        return ("cameras.txt", "images.txt", "points3D.txt")
 
     def _colmap_sparse_data_exists(self, folder):
         path = Path(folder)
@@ -655,22 +661,28 @@ class ExportPanel(Panel):
         return None
 
     def _confirm_colmap_overwrite(self, path, selected_nodes):
-        file_names = self._get_colmap_output_file_names()
-        file_list = f"{file_names[0]}, {file_names[1]}, and {file_names[2]}"
-        message = (
-            "COLMAP export will overwrite existing sparse reconstruction data in:\n"
-            f"{path}\n\n"
-            f"This writes {file_list}."
+        tr = lf.ui.tr
+        from .localization import safe_format
+
+        written_files = safe_format(
+            tr("export_dialog.colmap_writes_sparse"),
+            self._get_colmap_export_extension(),
         )
+        message = (
+            f"{tr('runtime.colmap_overwrite_message')}\n"
+            f"{path}\n\n"
+            f"{written_files}."
+        )
+        overwrite_label = tr("export.overwrite")
 
         def on_result(button_label):
-            if button_label == "Overwrite":
+            if button_label == overwrite_label:
                 self._start_export(path, selected_nodes)
 
         lf.ui.confirm_dialog(
-            "Export COLMAP sparse",
+            tr("export.format.colmap_sparse"),
             message,
-            ["Overwrite", "Cancel"],
+            [overwrite_label, tr("common.cancel")],
             on_result,
         )
 
@@ -704,7 +716,7 @@ class ExportPanel(Panel):
             self._cached_export_state = {
                 "active": True,
                 "progress": 0.0,
-                "stage": "Starting",
+                "stage": lf.ui.tr("runtime.task_starting"),
                 "format": _progress_format_name(self._format),
             }
             self._dirty_model(
@@ -755,7 +767,7 @@ class ExportPanel(Panel):
             self._exporting = False
             self._selection_seeded = False
             # Register export with Asset Manager if successful
-            completed = state.get("stage") == "Complete" and not state.get("error")
+            completed = state.get("outcome") == "completed" and not state.get("error")
             if completed and self._last_export_path and self._last_export_format is not None:
                 self._register_export(self._last_export_path, self._last_export_format)
             self._last_export_path = None

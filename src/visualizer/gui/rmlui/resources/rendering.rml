@@ -29,8 +29,8 @@
       <span class="setting-row__label-col">{{label_environment_mode}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="environment_mode">
-          <option value="SOLID_COLOR" data-tooltip="tooltip.opt.environment_mode.solid_color">Solid Color</option>
-          <option value="EQUIRECTANGULAR" data-tooltip="tooltip.opt.environment_mode.equirect">Equirectangular HDRI</option>
+          <option value="SOLID_COLOR" data-tooltip="tooltip.opt.environment_mode.solid_color">@tr:ui.solid_color</option>
+          <option value="EQUIRECTANGULAR" data-tooltip="tooltip.opt.environment_mode.equirect">@tr:ui.equirectangular_hdri</option>
         </select>
       </div>
     </div>
@@ -101,9 +101,9 @@
         <span class="setting-row__label-col">{{label_grid_plane}}</span>
         <div class="setting-row__control-col setting-row__control-col--fill">
           <select data-value="grid_plane">
-            <option value="0" data-tooltip="tooltip.opt.grid_plane.yz">YZ (Right)</option>
-            <option value="1" data-tooltip="tooltip.opt.grid_plane.xz">XZ (Top)</option>
-            <option value="2" data-tooltip="tooltip.opt.grid_plane.xy">XY (Front)</option>
+            <option value="0" data-tooltip="tooltip.opt.grid_plane.yz">@tr:ui.grid_plane_yz</option>
+            <option value="1" data-tooltip="tooltip.opt.grid_plane.xz">@tr:ui.grid_plane_xz</option>
+            <option value="2" data-tooltip="tooltip.opt.grid_plane.xy">@tr:ui.grid_plane_xy</option>
           </select>
         </div>
       </div>
@@ -146,7 +146,7 @@
       </div>
     </div>
     <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">FOV:</span>
+      <span class="setting-row__label-col">@tr:main_panel.fov</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <span class="text-disabled">{{fov_display}}</span>
       </div>
@@ -187,9 +187,9 @@
       <span class="setting-row__label-col">{{label_camera_metrics_mode}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="camera_metrics_mode">
-          <option value="OFF" data-tooltip="tooltip.opt.camera_metrics.off">Off</option>
-          <option value="PSNR" data-tooltip="tooltip.opt.camera_metrics.psnr">PSNR</option>
-          <option value="PSNR_SSIM" data-tooltip="tooltip.opt.camera_metrics.psnr_ssim">PSNR + SSIM</option>
+          <option value="OFF" data-tooltip="tooltip.opt.camera_metrics.off">@tr:ui.off</option>
+          <option value="PSNR" data-tooltip="tooltip.opt.camera_metrics.psnr">@tr:ui.psnr</option>
+          <option value="PSNR_SSIM" data-tooltip="tooltip.opt.camera_metrics.psnr_ssim">@tr:ui.psnr_ssim</option>
         </select>
       </div>
     </div>
@@ -515,8 +515,8 @@
         <span class="setting-row__label-col">{{label_ppisp_mode}}</span>
         <div class="setting-row__control-col setting-row__control-col--fill">
           <select data-value="ppisp_mode">
-            <option value="MANUAL" data-tooltip="tooltip.opt.ppisp_mode.manual">Manual</option>
-            <option value="AUTO" data-tooltip="tooltip.opt.ppisp_mode.auto">Auto (Controller)</option>
+            <option value="MANUAL" data-tooltip="tooltip.opt.ppisp_mode.manual">@tr:ui.manual</option>
+            <option value="AUTO" data-tooltip="tooltip.opt.ppisp_mode.auto">@tr:ui.auto_controller</option>
           </select>
         </div>
       </div>

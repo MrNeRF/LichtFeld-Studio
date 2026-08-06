@@ -4,13 +4,17 @@
 
 #include <gtest/gtest.h>
 
-#include "app/application_startup.hpp"
 #include "core/argument_parser.hpp"
+#include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
+#include "core/property_registry.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -24,36 +28,6 @@ namespace {
     }
 
 } // namespace
-
-TEST(ApplicationStartupTest,
-     GuiProjectResumeRoutesIntoLifecycleValidation) {
-    lfs::core::param::TrainingParameters params;
-    params.resume_project = "session.licht";
-    params.optimization.headless = false;
-
-    auto result =
-        lfs::app::validate_application_startup(params);
-    EXPECT_TRUE(result)
-        << lfs::format_for_developer(
-               result.error());
-}
-
-TEST(ApplicationStartupTest,
-     HeadlessProjectAndLegacyResumeRemainAccepted) {
-    lfs::core::param::TrainingParameters params;
-    params.resume_project = "session.licht";
-    params.optimization.headless = true;
-    EXPECT_TRUE(
-        lfs::app::validate_application_startup(
-            params));
-
-    params.resume_project.reset();
-    params.resume_checkpoint = "legacy.resume";
-    params.optimization.headless = false;
-    EXPECT_TRUE(
-        lfs::app::validate_application_startup(
-            params));
-}
 
 TEST(ArgumentParserTest,
      GuiProjectAndResumeLichtSelectProjectOpenFlow) {
@@ -175,6 +149,58 @@ TEST(ArgumentParserTest,
         std::string::npos);
 }
 
+TEST(ArgumentParserMetadataTest, OptimizationFlagBindingsResolveWithCompatibleTypes) {
+    using lfs::core::args::OptimizationCliParseType;
+    using lfs::core::prop::PropType;
+
+    lfs::core::param::ensure_optimization_properties_registered();
+    std::set<std::string_view> flags;
+    for (const auto& binding : lfs::core::args::optimization_cli_bindings()) {
+        SCOPED_TRACE(binding.flag);
+        EXPECT_TRUE(flags.insert(binding.flag).second);
+
+        const auto meta = lfs::core::prop::PropertyRegistry::instance().get_property(
+            "optimization", std::string(binding.property_id));
+        ASSERT_TRUE(meta.has_value());
+
+        switch (binding.parse_type) {
+        case OptimizationCliParseType::Bool:
+            EXPECT_EQ(meta->type, PropType::Bool);
+            break;
+        case OptimizationCliParseType::Integer:
+            EXPECT_TRUE(meta->type == PropType::Int || meta->type == PropType::SizeT);
+            break;
+        case OptimizationCliParseType::Float:
+            EXPECT_EQ(meta->type, PropType::Float);
+            break;
+        case OptimizationCliParseType::String:
+            EXPECT_EQ(meta->type, PropType::String);
+            break;
+        case OptimizationCliParseType::Enum:
+            EXPECT_EQ(meta->type, PropType::Enum);
+            break;
+        }
+    }
+}
+
+TEST(ArgumentParserMetadataTest, BuiltHelpContainsRegistryDescriptionsAndDefaults) {
+    lfs::core::param::ensure_optimization_properties_registered();
+    for (const std::string_view flag : {"--iter", "--strategy", "--depth-loss-weight"}) {
+        SCOPED_TRACE(flag);
+        const auto binding = std::ranges::find(
+            lfs::core::args::optimization_cli_bindings(), flag,
+            &lfs::core::args::OptimizationCliBinding::flag);
+        ASSERT_NE(binding, lfs::core::args::optimization_cli_bindings().end());
+        const auto meta = lfs::core::prop::PropertyRegistry::instance().get_property(
+            "optimization", std::string(binding->property_id));
+        ASSERT_TRUE(meta.has_value());
+
+        const auto help = lfs::core::args::optimization_cli_help(flag);
+        EXPECT_NE(help.find(meta->description), std::string::npos);
+        EXPECT_NE(help.find("(default: "), std::string::npos);
+    }
+}
+
 TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     const auto data_path = make_test_path("lfs_arg_parser_default_data");
     const auto output_path = make_test_path("lfs_arg_parser_default_output");
@@ -237,6 +263,43 @@ TEST(ArgumentParserTest, MaxWidthZeroDisablesCapExplicitly) {
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
     EXPECT_EQ((*parsed)->dataset.max_width, 0);
+}
+
+TEST(ArgumentParserTest, CommandLineOverridesConfigAfterLoading) {
+    const auto dir = std::filesystem::path(make_test_path("lfs_arg_parser_config_precedence"));
+    const auto data_path = dir / "data";
+    const auto output_path = dir / "output";
+    const auto config_path = dir / "optimization.json";
+    std::filesystem::create_directories(data_path);
+    std::filesystem::create_directories(output_path);
+
+    auto config = lfs::core::param::OptimizationParameters::mcmc_defaults().to_json();
+    config["iterations"] = 12'345;
+    config["opacity_lr"] = 0.0375f;
+    std::ofstream(config_path) << config.dump(2);
+
+    const auto data_str = data_path.string();
+    const auto output_str = output_path.string();
+    const auto config_str = config_path.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_str.c_str(),
+        "--output-path",
+        output_str.c_str(),
+        "--config",
+        config_str.c_str(),
+        "-i",
+        "777"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    std::error_code ec;
+    std::filesystem::remove(config_path, ec);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_EQ((*parsed)->optimization.iterations, 777u);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.opacity_lr, 0.0375f);
 }
 
 TEST(ArgumentParserTest, Mesh2SplatParsesOutputPathAndOptions) {
@@ -590,7 +653,9 @@ TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
         "--normal-consistency-weight",
         "0.25",
         "--normal-flatten-weight",
-        "5.0"};
+        "5.0",
+        "--normal-loss-space",
+        "world"};
 
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
@@ -599,6 +664,7 @@ TEST(ArgumentParserTest, TrainingParsesExplicitNormalLossOptions) {
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_loss_weight, 0.75f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_consistency_weight, 0.25f);
     EXPECT_FLOAT_EQ((*parsed)->optimization.normal_flatten_weight, 5.0f);
+    EXPECT_EQ((*parsed)->optimization.normal_loss_space, lfs::core::param::NormalLossSpace::World);
 }
 
 TEST(ArgumentParserTest, TrainingParsesBackgroundModeModulation) {

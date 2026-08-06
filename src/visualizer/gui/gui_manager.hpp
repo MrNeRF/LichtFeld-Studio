@@ -4,12 +4,9 @@
 
 #pragma once
 
-#include "core/cuda_version.hpp"
 #include "core/error_bus.hpp"
 #include "core/events.hpp"
 #include "core/export.hpp"
-#include "core/parameters.hpp"
-#include "core/path_utils.hpp"
 #include "gui/async_task_manager.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/global_context_menu.hpp"
@@ -33,29 +30,24 @@
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
 
 struct SDL_Cursor;
 
-namespace lfs::core {
-    class Tensor;
-}
-
 namespace lfs::vis {
     class VisualizerImpl;
-    class VulkanContext;
     class WindowManager;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
     class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -154,6 +146,9 @@ namespace lfs::vis {
             void dismissStartupOverlay();
             void setStartupPluginLoadState(bool started, bool active, float progress,
                                            const std::string& stage);
+            // Rebuild static @tr: RML content after a runtime language switch.
+            // The reload is deferred until no RML interaction is active.
+            void requestLocalizationUiRefresh();
             void captureKey(int physical_key, int logical_key, int mods);
             void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
             void captureMouseButtonRelease(int button);
@@ -187,7 +182,6 @@ namespace lfs::vis {
                                       VkExtent2D extent,
                                       const VulkanViewportPassParams& params);
             void setupEventHandlers();
-            void checkCudaVersionAndNotify();
             void applyDefaultStyle();
             void initMenuBar();
             void registerNativePanels();
@@ -323,8 +317,6 @@ namespace lfs::vis {
             float current_ui_scale_ = 1.0f;
             float pending_ui_scale_ = 0.0f;
 
-            // Deferred CUDA version warning (emitted on first drawFrame)
-            std::optional<lfs::core::CudaVersionInfo> pending_cuda_warning_;
             bool cuda_unavailable_notified_ = false;
 
             // File association prompt (Windows only, one-shot)
@@ -384,6 +376,8 @@ namespace lfs::vis {
             };
 
             DevResourceWatchState dev_resource_watch_;
+            bool pending_localization_ui_refresh_ = false;
+            std::uint64_t localized_rml_language_generation_ = std::numeric_limits<std::uint64_t>::max();
 
             // Native ErrorBus surfacing (Phase 8). Declared last so
             // error_subscription_ unsubscribes before any other member (the

@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <limits>
@@ -1035,17 +1036,6 @@ namespace lfs::vis::project {
             }
             if (!value.is_object())
                 return false;
-            constexpr std::array<
-                std::string_view, 7>
-                excluded = {
-                    "theme",
-                    "language",
-                    "scale",
-                    "ui_scale",
-                    "hud",
-                    "vram_hud",
-                    "vram_hud_visible",
-                };
             for (const auto& [key, child] :
                  value.items()) {
                 auto normalized = key;
@@ -1056,8 +1046,12 @@ namespace lfs::vis::project {
                             std::tolower(character));
                     });
                 if (std::ranges::find(
-                        excluded, normalized) !=
-                        excluded.end() ||
+                        lfs::io::project::
+                            kUserGlobalGuiFieldKeys,
+                        std::string_view(normalized)) !=
+                        lfs::io::project::
+                            kUserGlobalGuiFieldKeys
+                                .end() ||
                     contains_gui_global_field(child)) {
                     return true;
                 }
@@ -1321,7 +1315,10 @@ namespace lfs::vis::project {
     lfs::Result<PreparedGuiSessionRestore>
     prepareGuiSessionRestore(
         lfs::io::project::ProjectSessionChapters
-            chapters) {
+            chapters,
+        const lfs::io::project::ReferencesChapter*
+            references,
+        const std::filesystem::path& project_root) {
         if (auto valid =
                 chapters.gui_layout.validate();
             !valid)
@@ -1375,8 +1372,65 @@ namespace lfs::vis::project {
             !valid)
             return std::move(valid).error();
 
-        return PreparedGuiSessionRestore{
+        PreparedGuiSessionRestore prepared{
             .chapters = std::move(chapters)};
+        if (references) {
+            const auto env_uuid_json =
+                prepared.chapters.view.dom().get_json(
+                    "render_settings.environment_reference_uuid");
+            if (env_uuid_json &&
+                env_uuid_json->is_string()) {
+                if (const auto uuid =
+                        lfs::core::Uuid::from_string(
+                            env_uuid_json
+                                ->get<std::string>());
+                    uuid && !uuid->is_nil()) {
+                    prepared.environment_map_path =
+                        lfs::io::project::
+                            resolve_path_reference(
+                                *references,
+                                project_root,
+                                *uuid);
+                }
+            }
+            const auto clips_json =
+                prepared.chapters.sequencer.dom()
+                    .get_json("ply_sequences");
+            if (clips_json && clips_json->is_array() &&
+                !clips_json->empty() &&
+                (*clips_json)[0].is_object()) {
+                const auto& clip = (*clips_json)[0];
+                const auto ref = clip.find(
+                    "directory_reference_uuid");
+                const auto hint =
+                    clip.value("directory_hint",
+                               std::string{});
+                if (ref != clip.end() &&
+                    ref->is_string()) {
+                    if (const auto uuid =
+                            lfs::core::Uuid::
+                                from_string(
+                                    ref->get<
+                                        std::string>());
+                        uuid && !uuid->is_nil()) {
+                        prepared
+                            .ply_sequence_directory =
+                            lfs::io::project::
+                                resolve_path_reference(
+                                    *references,
+                                    project_root,
+                                    *uuid,
+                                    lfs::core::
+                                        utf8_to_path(
+                                            hint));
+                    }
+                } else if (!hint.empty()) {
+                    prepared.ply_sequence_directory =
+                        lfs::core::utf8_to_path(hint);
+                }
+            }
+        }
+        return prepared;
     }
 
     bool pluginPreloadTerminalForGuiPanels(
@@ -1772,7 +1826,9 @@ namespace lfs::vis::project {
         const lfs::io::project::
             ProjectSessionChapters& retained,
         const std::vector<
-            CameraBookmarkProjectState>& bookmarks) {
+            CameraBookmarkProjectState>& bookmarks,
+        lfs::io::project::ReferencesChapter* references,
+        const std::filesystem::path& project_root) {
         auto result = retained;
         const auto* gui_manager =
             viewer.getGuiManager();
@@ -2053,14 +2109,43 @@ namespace lfs::vis::project {
         if (!settings.environment_map_path.empty() &&
             settings.environment_map_path !=
                 lfs::vis::kDefaultEnvironmentMapPath) {
+            std::optional<lfs::core::Uuid>
+                retained_uuid;
             const auto retained_reference =
                 result.view.dom().get_json(
                     "render_settings.environment_reference_uuid");
             if (retained_reference &&
                 retained_reference->is_string()) {
+                retained_uuid =
+                    lfs::core::Uuid::from_string(
+                        retained_reference
+                            ->get<std::string>());
+            }
+            if (references) {
+                auto minted =
+                    lfs::io::project::
+                        upsert_path_reference(
+                            *references,
+                            project_root,
+                            lfs::core::utf8_to_path(
+                                settings
+                                    .environment_map_path),
+                            "view.environment",
+                            "environment_map",
+                            retained_uuid);
+                if (minted) {
+                    project_render_settings
+                        ["environment_reference_uuid"] =
+                            minted->to_string();
+                } else if (retained_uuid) {
+                    project_render_settings
+                        ["environment_reference_uuid"] =
+                            retained_uuid->to_string();
+                }
+            } else if (retained_uuid) {
                 project_render_settings
                     ["environment_reference_uuid"] =
-                        *retained_reference;
+                        retained_uuid->to_string();
             }
         }
         const Json view_known{
@@ -2250,6 +2335,8 @@ namespace lfs::vis::project {
                 {"frames", std::move(frames)},
                 {"fps", clip->fps},
             };
+            std::optional<lfs::core::Uuid>
+                retained_uuid;
             if (retained_clips &&
                 retained_clips->is_array()) {
                 const auto retained =
@@ -2271,11 +2358,71 @@ namespace lfs::vis::project {
                     if (reference !=
                             retained->end() &&
                         reference->is_string()) {
-                        saved_clip
-                            ["directory_reference_uuid"] =
-                                *reference;
+                        retained_uuid =
+                            lfs::core::Uuid::
+                                from_string(
+                                    reference->get<
+                                        std::string>());
                     }
                 }
+            }
+            if (references &&
+                !clip->directory.empty()) {
+                const auto key = std::format(
+                    "sequencer.ply_sequence.{}",
+                    clip->node_uuid.to_string());
+                auto minted =
+                    lfs::io::project::
+                        upsert_path_reference(
+                            *references,
+                            project_root,
+                            clip->directory,
+                            key,
+                            "ply_sequence_directory",
+                            retained_uuid);
+                if (minted) {
+                    saved_clip
+                        ["directory_reference_uuid"] =
+                            minted->to_string();
+                    if (!project_root.empty()) {
+                        std::error_code error;
+                        const auto absolute =
+                            std::filesystem::absolute(
+                                clip->directory, error)
+                                .lexically_normal();
+                        const auto root =
+                            std::filesystem::absolute(
+                                project_root, error)
+                                .lexically_normal();
+                        if (!error) {
+                            const auto relative =
+                                absolute
+                                    .lexically_relative(
+                                        root);
+                            if (!relative.empty() &&
+                                relative != "." &&
+                                !relative
+                                     .generic_string()
+                                     .starts_with(
+                                         "..")) {
+                                saved_clip
+                                    ["directory_hint"] =
+                                        lfs::core::
+                                            path_to_utf8(
+                                                relative
+                                                    .generic_string());
+                            }
+                        }
+                    }
+                } else if (retained_uuid) {
+                    saved_clip
+                        ["directory_reference_uuid"] =
+                            retained_uuid->to_string();
+                }
+            } else if (retained_uuid) {
+                saved_clip
+                    ["directory_reference_uuid"] =
+                        retained_uuid->to_string();
             }
             clips.push_back(std::move(saved_clip));
         }
@@ -2731,7 +2878,10 @@ namespace lfs::vis::project {
             const Json& root,
             std::vector<
                 CameraBookmarkProjectState>&
-                bookmarks) {
+                bookmarks,
+            const std::optional<
+                std::filesystem::path>&
+                environment_map_path) {
             auto* rendering =
                 viewer.getRenderingManager();
             auto* input =
@@ -2753,6 +2903,12 @@ namespace lfs::vis::project {
                     rendering->getSettings());
             if (!restored)
                 return;
+            if (environment_map_path &&
+                !environment_map_path->empty()) {
+                restored->environment_map_path =
+                    lfs::core::path_to_utf8(
+                        *environment_map_path);
+            }
             const auto desired_split =
                 restored->split_view_mode;
             restored->split_view_mode =
@@ -3047,7 +3203,10 @@ namespace lfs::vis::project {
 
         void apply_sequencer(
             VisualizerImpl& viewer,
-            const Json& root) {
+            const Json& root,
+            const std::optional<
+                std::filesystem::path>&
+                resolved_directory) {
             auto* gui_manager =
                 viewer.getGuiManager();
             if (!gui_manager)
@@ -3096,8 +3255,12 @@ namespace lfs::vis::project {
                             .value_or(
                                 std::string{});
                     const auto directory =
-                        lfs::core::utf8_to_path(
-                            directory_hint);
+                        resolved_directory &&
+                                !resolved_directory
+                                     ->empty()
+                            ? *resolved_directory
+                            : lfs::core::utf8_to_path(
+                                  directory_hint);
                     for (const auto& frame :
                          *frames) {
                         const auto locator =
@@ -3232,10 +3395,14 @@ namespace lfs::vis::project {
 
         // VIEW runs after SCNG/CKPT/PPIS hydration. GUIL then applies only at
         // the panels-ready boundary that delivered this prepared bundle.
-        apply_view(viewer, *view, bookmarks);
+        apply_view(
+            viewer, *view, bookmarks,
+            prepared.environment_map_path);
         apply_guil(viewer, *gui);
         apply_editor(*editor);
-        apply_sequencer(viewer, *sequencer);
+        apply_sequencer(
+            viewer, *sequencer,
+            prepared.ply_sequence_directory);
         if (auto* trainer =
                 viewer.getTrainerManager()) {
             trainer->restoreProjectMetrics(

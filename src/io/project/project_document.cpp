@@ -363,7 +363,8 @@ namespace lfs::io::project {
             for (const auto& [key, chunk] : chunks) {
                 (void)key;
                 std::uint64_t estimate = chunk.bytes.size();
-                if (chunk.options.compression == Compression::Zstd) {
+                if (chunk.options.compression == Compression::Zstd ||
+                    chunk.options.compression == Compression::ByteShuffleZstd) {
                     estimate = ZSTD_compressBound(chunk.bytes.size());
                 }
                 auto added = checked_add(total, estimate, "save.preflight_bytes");
@@ -398,7 +399,11 @@ namespace lfs::io::project {
         ChunkWriteOptions tensor_options(const std::size_t size) {
             return ChunkWriteOptions{
                 .chunk_version = P3_CHUNK_VERSION,
-                .compression = Compression::Stored,
+                // Prefer ByteShuffleZstd (CHUNK_BYTESHUFFLE_ZSTD_V1) when the
+                // payload is a multiple of 4; write_chunk falls back to plain
+                // Zstd otherwise. Logical payload remains bit-exact after
+                // unshuffle + inflate.
+                .compression = Compression::ByteShuffleZstd,
                 .tensor_payload = true,
                 .block_crcs =
                     size >= static_cast<std::size_t>(BLOCK_CRC_REQUIRED_AT),
@@ -411,7 +416,10 @@ namespace lfs::io::project {
             const std::uint64_t size) {
             return ChunkWriteOptions{
                 .chunk_version = P3_CHUNK_VERSION,
-                .compression = Compression::Stored,
+                // Byte-plane + zstd of the whole CKPT/PPIS stream when size % 4
+                // == 0; else plain zstd. Decompress (and unshuffle) before
+                // LFKP/PPISP parse — byte-verbatim logical payload.
+                .compression = Compression::ByteShuffleZstd,
                 .tensor_payload = fourcc == FOURCC_CKPT,
                 .block_crcs = size >= BLOCK_CRC_REQUIRED_AT,
                 .expected_stream_bytes = size,
@@ -497,13 +505,55 @@ namespace lfs::io::project {
         std::optional<ChunkInfo> source;
         std::optional<CleanProof> proof;
         std::shared_ptr<const std::vector<std::byte>> owned;
+        // Cache of container-decompressed logical bytes for Zstd /
+        // ByteShuffleZstd sources. Stored sources keep streaming via
+        // read_stored_at (no second copy). Full-buffer inflate is intentional:
+        // consumers need the whole tensor/LFKP payload.
+        mutable std::shared_ptr<const std::vector<std::byte>> inflated;
         lfs::core::Uuid snapshot_uuid;
 
         [[nodiscard]] std::uint64_t size() const noexcept {
             if (owned) {
                 return owned->size();
             }
+            if (inflated) {
+                return inflated->size();
+            }
             return source ? source->uncompressed_bytes : 0;
+        }
+
+        [[nodiscard]] lfs::Result<std::span<const std::byte>>
+        logical_owned_or_inflated() const {
+            if (owned) {
+                return std::span<const std::byte>(owned->data(),
+                                                  owned->size());
+            }
+            if (inflated) {
+                return std::span<const std::byte>(inflated->data(),
+                                                  inflated->size());
+            }
+            if (!reader || !source) {
+                return fail<std::span<const std::byte>>(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "The lazy chapter has no byte source.",
+                    "Neither clean file range nor owned storage is available",
+                    "lazy_chunk.source");
+            }
+            if (source->compression == Compression::Stored) {
+                return fail<std::span<const std::byte>>(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "Stored lazy chapters stream from the file.",
+                    "logical_owned_or_inflated is for owned/compressed sources",
+                    "lazy_chunk.compression");
+            }
+            auto decoded = reader->read_chunk(*source);
+            if (!decoded) {
+                return std::move(decoded).error();
+            }
+            inflated = std::make_shared<const std::vector<std::byte>>(
+                std::move(*decoded));
+            return std::span<const std::byte>(inflated->data(),
+                                              inflated->size());
         }
     };
 
@@ -598,8 +648,19 @@ namespace lfs::io::project {
                 "Neither clean file range nor owned storage is available",
                 "lazy_chunk.source");
         }
-        return impl_->reader->read_stored_at(
-            *impl_->source, offset, destination);
+        // Stored: random-access on file payload. Compressed: inflate once
+        // (and unshuffle for ByteShuffleZstd) then slice.
+        if (impl_->source->compression == Compression::Stored) {
+            return impl_->reader->read_stored_at(
+                *impl_->source, offset, destination);
+        }
+        auto logical = impl_->logical_owned_or_inflated();
+        if (!logical) {
+            return lfs::Result<void>::failure(std::move(logical).error());
+        }
+        std::memcpy(
+            destination.data(), logical->data() + offset, destination.size());
+        return {};
     }
 
     lfs::Result<void>
@@ -625,13 +686,22 @@ namespace lfs::io::project {
                 "Neither clean file range nor owned storage is available",
                 "lazy_chunk.source");
         }
-        auto bounded =
-            impl_->reader->open_bounded_stream(*impl_->source);
-        if (!bounded) {
-            return lfs::Result<void>::failure(
-                std::move(bounded).error());
+        if (impl_->source->compression == Compression::Stored) {
+            auto bounded =
+                impl_->reader->open_bounded_stream(*impl_->source);
+            if (!bounded) {
+                return lfs::Result<void>::failure(
+                    std::move(bounded).error());
+            }
+            return visitor(bounded->stream(), bounded->size());
         }
-        return visitor(bounded->stream(), bounded->size());
+        auto logical = impl_->logical_owned_or_inflated();
+        if (!logical) {
+            return lfs::Result<void>::failure(std::move(logical).error());
+        }
+        ReadOnlyMemoryBuffer buffer(*logical);
+        std::istream stream(&buffer);
+        return visitor(stream, logical->size());
     }
 
     lfs::Result<void>
@@ -1547,11 +1617,18 @@ namespace lfs::io::project {
                 is_project_managed_fourcc(row.key.fourcc);
             const bool thumbnail =
                 row.key.fourcc == FOURCC_THMB;
+            // Lazy binary (CKPT/PPIS): Stored (legacy), plain Zstd
+            // (CHUNK_ZSTD_V1), or ByteShuffleZstd (CHUNK_BYTESHUFFLE_ZSTD_V1).
+            // Any other encoding is opaque/unsupported.
+            const bool lazy_binary_encoding_ok =
+                !lazy_binary ||
+                row.compression == Compression::Stored ||
+                row.compression == Compression::Zstd ||
+                row.compression == Compression::ByteShuffleZstd;
             const bool unsupported_known_encoding =
                 (managed || lazy_binary || thumbnail) &&
                 (row.chunk_version != P3_CHUNK_VERSION ||
-                 (lazy_binary &&
-                  row.compression != Compression::Stored));
+                 !lazy_binary_encoding_ok);
             const bool opaque =
                 unsupported_known_encoding ||
                 (!managed && !lazy_binary && !thumbnail);
@@ -3090,18 +3167,30 @@ namespace lfs::io::project {
                     .fourcc = fourcc,
                     .instance_uuid = uuid,
                 };
-                auto stream = writer->begin_chunk(
-                    key, lazy_binary_options(fourcc, payload.size()));
-                if (!stream) {
-                    return lfs::Result<void>::failure(
-                        std::move(stream).error());
-                }
-                if (auto copied = payload.copy_to(**stream);
-                    !copied) {
-                    return copied;
-                }
-                if (auto ended = writer->end_chunk(); !ended) {
-                    return ended;
+                // Container zstd goes through write_chunk (begin_chunk is
+                // Stored-streaming only). Owned staged bytes avoid an extra
+                // materialization; clean-file sources materialize once.
+                const auto options =
+                    lazy_binary_options(fourcc, payload.size());
+                if (payload.impl_->owned) {
+                    if (auto written = writer->write_chunk(
+                            key, *payload.impl_->owned, options);
+                        !written) {
+                        return written;
+                    }
+                } else {
+                    std::vector<std::byte> materialized(
+                        static_cast<std::size_t>(payload.size()));
+                    if (auto read = payload.read_at(
+                            0, std::span<std::byte>(materialized));
+                        !read) {
+                        return read;
+                    }
+                    if (auto written = writer->write_chunk(
+                            key, materialized, options);
+                        !written) {
+                        return written;
+                    }
                 }
                 ++report.rewritten_chunks;
             }
@@ -3286,7 +3375,6 @@ namespace lfs::io::project {
                 .creation_time_unix_ns =
                     options.save_as_creation_time_unix_ns,
                 .wallclock_unix_ns = options.commit.wallclock_unix_ns,
-                .keep_tombstones = false,
                 .disk_reserve_bytes = options.disk_reserve_bytes,
                 .boundary_observer = {},
             });
@@ -3948,7 +4036,6 @@ namespace lfs::io::project {
                         checkpoint_uuid.has_value(),
                     .pending_session =
                         std::move(pending_session),
-                    .gui_session_pending = true,
                 };
             return ProjectHydrationPlan(std::move(plan));
         } catch (const std::bad_alloc& error) {

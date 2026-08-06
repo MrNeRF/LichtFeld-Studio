@@ -17,6 +17,7 @@ namespace lfs::core {
         int max_width = 0;
         void* stream = nullptr;
         bool output_uint8 = false;
+        bool skip_blob_cache = false;
     };
 
     using ImageLoadFunc = std::function<Tensor(const ImageLoadParams&)>;

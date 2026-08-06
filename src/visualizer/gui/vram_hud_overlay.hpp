@@ -107,6 +107,8 @@ namespace lfs::vis::gui {
 
         State state_;
         std::uint64_t last_sequence_ = 0;
+        std::uint64_t last_language_generation_ = 0;
+        bool has_language_generation_ = false;
         bool last_visible_ = false;
         bool default_collapse_applied_ = false;
 
@@ -229,6 +231,7 @@ namespace lfs::vis::gui {
         };
         std::unordered_map<std::string, SummaryEntry> summary_by_key_;
         std::string cached_iteration_text_;
+        std::string cached_iteration_label_;
         std::string cached_device_text_;
         Rml::Element* device_label_ = nullptr;
 

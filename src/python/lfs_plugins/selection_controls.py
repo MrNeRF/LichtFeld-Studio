@@ -7,6 +7,7 @@ import math
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .ui import RuntimeState
 
 try:
     from .ui import native_value as _native_store_value
@@ -80,7 +81,7 @@ def _execute_stage(stage):
     result = stage.execute()
     result_get = getattr(result, "get", None)
     if result_get is None:
-        return "Operation returned an invalid result."
+        return _ui_label("selection.operation_failed_generic", "Operation failed.")
     if bool(result_get("ok", False)):
         return None
     error = str(result_get("error", "") or "").strip()
@@ -286,6 +287,7 @@ class SelectionControlsController:
 
     def _state_items(self):
         return (
+            ("language_generation", RuntimeState.language_generation.value),
             ("active_tool", self._active_tool),
             ("active_mode", self._active_mode),
             ("has_scene", self._has_scene),
@@ -563,7 +565,7 @@ class SelectionControlsController:
 
         dirty_fields = []
         for changed in changed_fields:
-            if changed == "active_tool":
+            if changed in {"active_tool", "language_generation"}:
                 self._dirty_all()
                 return
             dirty_fields.extend(field_map.get(changed, ()))

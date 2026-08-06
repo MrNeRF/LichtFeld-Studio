@@ -144,7 +144,6 @@ namespace lfs::io::project {
         std::optional<lfs::core::CheckpointHeader> checkpoint_header;
         bool trainer_state_pending = false;
         ProjectSessionChapters pending_session;
-        bool gui_session_pending = true;
         std::size_t hydrated_payload_units = 0;
         std::size_t invalidated_payload_units = 0;
         bool selection_installed = false;

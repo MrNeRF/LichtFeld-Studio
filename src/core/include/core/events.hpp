@@ -94,8 +94,6 @@ namespace lfs::core {
             EVENT(RemoveNodeById, int32_t node_id; bool keep_children = false;);
             EVENT(RenameNodeById, int32_t node_id; std::string new_name;);
             EVENT(SetNodeVisibilityById, int32_t node_id; bool visible;);
-            EVENT(ExportNodeAs, std::string name; ExportFormat format;);
-            EVENT(ExportAllMergedAs, ExportFormat format;);
             EVENT(ReparentNode, std::string node_name; std::string new_parent_name;);    // Empty parent = root
             EVENT(ReparentNodeById, int32_t node_id; int32_t new_parent_id;);            // -1 parent = root
             EVENT(MoveNodeById, int32_t node_id; int32_t new_parent_id; int32_t index;); // -1 parent = root, -1 index = append
@@ -139,10 +137,15 @@ namespace lfs::core {
             EVENT(SelectByDescription, std::string description; int camera_index;);
             EVENT(ApplySelectionMask, std::vector<uint8_t> mask;);
             // Sequencer
-            EVENT(SequencerAddKeyframe, );
+            // Empty time places the keyframe at the playhead. An explicit time is the
+            // only way to author a keyframe past the current clip duration, because
+            // seeking there first is clamped to that duration.
+            EVENT(SequencerAddKeyframe, std::optional<float> time;);
             EVENT(SequencerUpdateKeyframe, ); // Update selected keyframe to current camera
             EVENT(SequencerPlayPause, );
-            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf;);
+            // Empty path opens the save dialog; a path set by a script exports straight
+            // to it, since a modal dialog cannot be answered from an automation client.
+            EVENT(SequencerExportVideo, int width; int height; int framerate; int crf; std::string path;);
             EVENT(SequencerGoToKeyframe, size_t keyframe_index;);
             EVENT(SequencerSelectKeyframe, size_t keyframe_index;);
             EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);
@@ -228,7 +231,6 @@ namespace lfs::core {
                   size_t output_chars;
                   bool success;
                   bool interrupted;);
-            EVENT(CheckpointSaved, int iteration; std::filesystem::path path;);
             EVENT(ExportCompleted, std::filesystem::path path; ExportFormat format;);
             EVENT(DiskSpaceSaveFailed,
                   int iteration;
@@ -236,8 +238,7 @@ namespace lfs::core {
                   std::string error;
                   size_t required_bytes;
                   size_t available_bytes;
-                  bool is_disk_space_error;
-                  bool is_checkpoint = true;);
+                  bool is_disk_space_error;);
             EVENT(MemoryUsage,
                   size_t gpu_used;
                   size_t gpu_total;

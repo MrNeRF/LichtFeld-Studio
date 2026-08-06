@@ -58,7 +58,27 @@ namespace lfs::io::project {
         constexpr std::uint32_t KNOWN_CHUNK_FLAGS = TENSOR_PAYLOAD | HAS_BLOCK_CRCS;
         constexpr std::uint64_t MAX_INDEX_UNCOMPRESSED_BYTES = 512ull * 1024 * 1024;
         constexpr std::uint64_t MAX_BLOCK_CRC_TABLE_BYTES = 512ull * 1024 * 1024;
+        // Anti-zstd-bomb for JSON/index-era small chunk classes (and any
+        // non-payload-class materialize). Declared logical size is still
+        // cross-checked against the zstd frame content size before allocate.
         constexpr std::uint64_t MAX_MATERIALIZED_CHUNK_BYTES = 512ull * 1024 * 1024;
+        // TENSOR_PAYLOAD / lazy-binary (CKPT, PPIS, ByteShuffleZstd): decoded
+        // size is declared in the chunk header and CRC-validated, so the
+        // bomb-guard property does not need a small blanket cap. 16 GiB is
+        // still size_t-bounded via decompress_zstd_exact / read_vector.
+        constexpr std::uint64_t MAX_PAYLOAD_MATERIALIZED_BYTES =
+            16ull * 1024 * 1024 * 1024;
+
+        bool is_payload_class_chunk(const ChunkInfo& row) noexcept {
+            return (row.flags & TENSOR_PAYLOAD) != 0 ||
+                   row.key.fourcc == FOURCC_CKPT ||
+                   row.key.fourcc == FOURCC_PPIS;
+        }
+
+        std::uint64_t max_materialized_bytes_for(const ChunkInfo& row) noexcept {
+            return is_payload_class_chunk(row) ? MAX_PAYLOAD_MATERIALIZED_BYTES
+                                               : MAX_MATERIALIZED_CHUNK_BYTES;
+        }
 
         lfs::Result<void> status_failure(lfs::Error error) {
             return lfs::Result<void>::failure(std::move(error));
@@ -887,6 +907,23 @@ namespace lfs::io::project {
             return newest_to_oldest;
         }
 
+        // Inverse of writer byte-plane: planes of f32-word significance bytes
+        // back to interleaved little-endian words. Requires size % 4 == 0.
+        std::vector<std::byte>
+        unbyte_plane_f32_words(const std::span<const std::byte> planes) {
+            const std::size_t n_words = planes.size() / 4;
+            std::vector<std::byte> out(planes.size());
+            const auto* src = reinterpret_cast<const std::uint8_t*>(planes.data());
+            auto* dst = reinterpret_cast<std::uint8_t*>(out.data());
+            for (std::size_t w = 0; w < n_words; ++w) {
+                dst[w * 4 + 0] = src[0 * n_words + w];
+                dst[w * 4 + 1] = src[1 * n_words + w];
+                dst[w * 4 + 2] = src[2 * n_words + w];
+                dst[w * 4 + 3] = src[3 * n_words + w];
+            }
+            return out;
+        }
+
         lfs::Result<std::vector<std::byte>>
         decompress_zstd_exact(const std::filesystem::path& path, const std::uint64_t offset,
                               const std::string_view field,
@@ -1134,8 +1171,10 @@ namespace lfs::io::project {
             }
             if (auto valid =
                     require(row.compression == Compression::Stored ||
-                                row.compression == Compression::Zstd,
-                            file.path(), row_offset + 7, prefix + ".compression", "0 or 1",
+                                row.compression == Compression::Zstd ||
+                                row.compression == Compression::ByteShuffleZstd,
+                            file.path(), row_offset + 7, prefix + ".compression",
+                            "0, 1, or 2",
                             std::to_string(static_cast<std::uint16_t>(row.compression)));
                 !valid) {
                 return std::move(valid).error();
@@ -1698,8 +1737,8 @@ namespace lfs::io::project {
                         return std::move(valid).error();
                     }
                     if (auto valid =
-                            require(compression_value <= 1, file.path(), absolute + 7,
-                                    prefix + ".compression", "0 or 1",
+                            require(compression_value <= 2, file.path(), absolute + 7,
+                                    prefix + ".compression", "0, 1, or 2",
                                     std::to_string(compression_value));
                         !valid) {
                         return std::move(valid).error();
@@ -1839,6 +1878,12 @@ namespace lfs::io::project {
                            row.compression == Compression::Zstd;
                 })) {
                 derived_capabilities.set(CHUNK_ZSTD_V1);
+            }
+            if (std::any_of(rows.begin(), rows.end(), [](const ChunkInfo& row) {
+                    return row.row_kind != RowKind::Tombstone &&
+                           row.compression == Compression::ByteShuffleZstd;
+                })) {
+                derived_capabilities.set(CHUNK_BYTESHUFFLE_ZSTD_V1);
             }
             if (std::any_of(rows.begin(), rows.end(), [](const ChunkInfo& row) {
                     return row.block_crc_table.has_value();
@@ -2553,7 +2598,8 @@ namespace lfs::io::project {
 
     CapabilitySet supported_reader_capabilities() {
         CapabilitySet result;
-        for (std::uint8_t bit = INDEX_ZSTD_V1; bit <= CLEAN_PROOF_REUSE; ++bit) {
+        for (std::uint8_t bit = INDEX_ZSTD_V1;
+             bit <= CHUNK_BYTESHUFFLE_ZSTD_V1; ++bit) {
             result.set(bit);
         }
         return result;
@@ -2945,19 +2991,22 @@ namespace lfs::io::project {
                 std::to_string(row.block_crc_table->entries.size()),
                 std::to_string(block_index)));
         }
-        if (row.compression == Compression::Zstd) {
+        if (row.compression == Compression::Zstd ||
+            row.compression == Compression::ByteShuffleZstd) {
             if (row.stored_bytes > std::numeric_limits<std::size_t>::max()) {
                 return status_failure(format_error(
                     path(), row.payload_offset, "payload.zstd",
                     "stored size addressable by this build",
                     std::to_string(row.stored_bytes)));
             }
+            const std::uint64_t materialize_max =
+                max_materialized_bytes_for(row);
             auto stored = read_vector(*impl_->state->file, row.payload_offset,
                                       row.stored_bytes,
                                       impl_->state->physical_size,
                                       commit().committed_file_end,
                                       "payload.zstd",
-                                      MAX_MATERIALIZED_CHUNK_BYTES,
+                                      materialize_max,
                                       lfs::ErrorCode::ResourceExhausted);
             if (!stored) {
                 return status_failure(std::move(stored).error());
@@ -2965,9 +3014,16 @@ namespace lfs::io::project {
             auto decoded = decompress_zstd_exact(path(), row.payload_offset,
                                                  "payload.zstd", *stored,
                                                  row.uncompressed_bytes,
-                                                 MAX_MATERIALIZED_CHUNK_BYTES);
+                                                 materialize_max);
             if (!decoded) {
                 return status_failure(std::move(decoded).error());
+            }
+            if (row.compression == Compression::ByteShuffleZstd &&
+                decoded->size() % 4 != 0) {
+                return status_failure(format_error(
+                    path(), row.payload_offset, "payload.byteshuffle",
+                    "decoded size multiple of 4",
+                    std::to_string(decoded->size())));
             }
         }
         return {};
@@ -2994,8 +3050,10 @@ namespace lfs::io::project {
         if (!resolved) {
             return std::move(resolved).error();
         }
-        if ((*resolved)->stored_bytes > MAX_MATERIALIZED_CHUNK_BYTES ||
-            (*resolved)->uncompressed_bytes > MAX_MATERIALIZED_CHUNK_BYTES) {
+        const std::uint64_t materialize_max =
+            max_materialized_bytes_for(**resolved);
+        if ((*resolved)->stored_bytes > materialize_max ||
+            (*resolved)->uncompressed_bytes > materialize_max) {
             return detail::project_error(
                 lfs::ErrorCode::ResourceExhausted,
                 "This project chunk is too large to materialize in memory.",
@@ -3003,7 +3061,7 @@ namespace lfs::io::project {
                             "use the bounded stream or mapped-range API",
                             (*resolved)->stored_bytes,
                             (*resolved)->uncompressed_bytes,
-                            MAX_MATERIALIZED_CHUNK_BYTES),
+                            materialize_max),
                 path(), (*resolved)->payload_offset, "payload.materialized_size");
         }
         if (auto verified = verify_chunk(**resolved); !verified) {
@@ -3013,7 +3071,7 @@ namespace lfs::io::project {
         auto stored = read_vector(*impl_->state->file, row.payload_offset,
                                   row.stored_bytes, impl_->state->physical_size,
                                   commit().committed_file_end, "payload.read",
-                                  MAX_MATERIALIZED_CHUNK_BYTES,
+                                  materialize_max,
                                   lfs::ErrorCode::ResourceExhausted);
         if (!stored) {
             return std::move(stored).error();
@@ -3021,9 +3079,34 @@ namespace lfs::io::project {
         if (row.compression == Compression::Stored) {
             return stored;
         }
-        return decompress_zstd_exact(path(), row.payload_offset, "payload.zstd",
-                                     *stored, row.uncompressed_bytes,
-                                     MAX_MATERIALIZED_CHUNK_BYTES);
+        if (row.compression != Compression::Zstd &&
+            row.compression != Compression::ByteShuffleZstd) {
+            return detail::project_error(
+                lfs::ErrorCode::InvalidArgument,
+                "This project chunk uses an unsupported compression encoding.",
+                std::format("compression {}",
+                            static_cast<std::uint16_t>(row.compression)),
+                path(), row.payload_offset, "payload.compression");
+        }
+        auto decoded = decompress_zstd_exact(path(), row.payload_offset,
+                                             "payload.zstd", *stored,
+                                             row.uncompressed_bytes,
+                                             materialize_max);
+        if (!decoded) {
+            return std::move(decoded).error();
+        }
+        if (row.compression == Compression::Zstd) {
+            return decoded;
+        }
+        // ByteShuffleZstd: zstd frame content is the plane-shuffled buffer;
+        // uncompressed_bytes is the logical (pre-filter) size, equal to the
+        // frame size because the filter is size-preserving.
+        if (decoded->size() % 4 != 0) {
+            return format_error(path(), row.payload_offset, "payload.byteshuffle",
+                                "decoded size multiple of 4",
+                                std::to_string(decoded->size()));
+        }
+        return unbyte_plane_f32_words(*decoded);
     }
 
     lfs::Result<std::vector<std::byte>> ProjectReader::read_preview() const {
@@ -3263,8 +3346,10 @@ namespace lfs::io::project {
             return detail::project_error(
                 lfs::ErrorCode::FailedPrecondition,
                 "A random-access stream requires a stored project chunk.",
-                std::format("{} is zstd-compressed", (*resolved)->key_string()), path(),
-                (*resolved)->payload_offset, "bounded_stream.compression");
+                std::format("{} is compressed (not STORED)",
+                            (*resolved)->key_string()),
+                path(), (*resolved)->payload_offset,
+                "bounded_stream.compression");
         }
         if (!(*resolved)->block_crc_table.has_value()) {
             if (auto verified = verify_chunk(**resolved); !verified) {

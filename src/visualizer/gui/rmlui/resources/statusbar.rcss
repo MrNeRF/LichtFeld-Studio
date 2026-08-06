@@ -6,17 +6,24 @@ body {
     font-family: Inter;
     font-size: 12dp;
     width: 100%;
+    height: 100%;
+    box-sizing: border-box;
     display: flex;
     flex-direction: row;
+    flex-wrap: nowrap;
     align-items: stretch;
-    padding: 0;
+    padding: 0 6dp;
     margin: 0;
     background-color: transparent;
+    white-space: nowrap;
     overflow: hidden;
 }
 
 #status-left {
-    flex: 1;
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-basis: 0;
+    min-width: 0;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -28,6 +35,21 @@ body {
     flex-direction: row;
     align-items: center;
     flex-shrink: 0;
+    margin-left: 12dp;
+}
+
+#mode-text,
+#status-left > div,
+#status-right > *,
+.status-item,
+.status-item > * {
+    flex-shrink: 0;
+}
+
+.status-item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
 }
 
 #training-section,
@@ -52,13 +74,16 @@ body {
     display: none;
 }
 
-/* Within-training separators: 12dp each side */
+/* Within-training separators: 12dp each side. The shared components sheet styles .separator as a
+   1dp divider line; here it is a glyph, so the divider geometry has to be undone. */
 .separator {
     margin: 0 12dp;
+    height: auto;
+    background-color: transparent;
 }
 
 /* Section-level separator in training: 20dp left, 12dp right */
-#training-section > .separator:first-child {
+#training-section > .section-sep {
     margin-left: 20dp;
 }
 
@@ -134,6 +159,23 @@ body {
     line-height: 16dp;
 }
 
+#account-chip {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 16dp;
+    margin-right: 12dp;
+    padding: 0 6dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+    cursor: pointer;
+}
+
+#account-tier {
+    margin-left: 4dp;
+    font-size: 10dp;
+}
+
 #gpu-icon {
     width: 14dp;
     height: 14dp;
@@ -202,4 +244,98 @@ body {
 
 #split-detail {
     margin-left: 4dp;
+}
+
+/* Responsive fit levels. RmlStatusBar measures the laid-out bar and sets fit-1 .. fit-9 on the body
+   cumulatively, so level N carries every rule up to N. Each level must only ever remove width. */
+body.fit-1 #git-commit {
+    display: none;
+}
+
+body.fit-1 .separator {
+    margin: 0 6dp;
+}
+
+body.fit-1 .separator.thin {
+    margin: 0 2dp;
+}
+
+body.fit-1 #training-section > .section-sep,
+body.fit-1 #splat-section > .separator:first-child,
+body.fit-1 #split-section > .separator:first-child,
+body.fit-1 #wasd-section > .separator:first-child,
+body.fit-1 #zoom-section > .separator:first-child,
+body.fit-1 #status-message-section > .separator:first-child {
+    margin-left: 10dp;
+}
+
+body.fit-2 #gpu-model,
+body.fit-2 #account-tier {
+    display: none;
+}
+
+body.fit-3 #progress-container {
+    width: 220dp;
+}
+
+body.fit-3 #time-metric {
+    display: none;
+}
+
+body.fit-4 #eval-metric,
+body.fit-4 #fps-label,
+body.fit-4 #wasd-section,
+body.fit-4 #zoom-section {
+    display: none;
+}
+
+body.fit-5 #progress-container {
+    width: 140dp;
+}
+
+body.fit-5 .metric-label {
+    display: none;
+}
+
+body.fit-6 #progress-group,
+body.fit-6 #lfs-mem-group {
+    display: none;
+}
+
+body.fit-7 #loss-metric,
+body.fit-7 #split-detail {
+    display: none;
+}
+
+body.fit-8 #gaussians-metric,
+body.fit-8 #splat-section,
+body.fit-8 #split-section {
+    display: none;
+}
+
+body.fit-9 #mode-text,
+body.fit-9 #status-message {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.fit-9 #status-message-section {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+body.fit-9 #status-right {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+body.fit-9 #gpu-mem {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }

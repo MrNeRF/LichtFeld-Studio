@@ -5,9 +5,12 @@
 #include "core/argument_parser.hpp"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
+#include "core/optimization_properties.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/property_registry.hpp"
 #include <algorithm>
+#include <any>
 #include <args.hxx>
 #include <array>
 #include <cctype>
@@ -25,6 +28,125 @@
 #ifdef _WIN32
 #include <Windows.h>
 #endif
+
+namespace lfs::core::args {
+    namespace {
+        using enum OptimizationCliParseType;
+
+        // Registry ranges are UI-clamp semantics; CLI acceptance is intentionally wider.
+        constexpr std::array OPTIMIZATION_CLI_BINDINGS{
+            OptimizationCliBinding{"--iter", "iterations", Integer},
+            OptimizationCliBinding{"--strategy", "strategy", String, false, "; legacy aliases: mnrf, lfs"},
+            OptimizationCliBinding{"--sh-degree", "sh_degree", Integer},
+            OptimizationCliBinding{"--sh-degree-interval", "sh_degree_interval", Integer},
+            OptimizationCliBinding{"--max-cap", "max_cap", Integer},
+            OptimizationCliBinding{"--min-opacity", "min_opacity", Float},
+            OptimizationCliBinding{"--cropbox-lr-scale", "cropbox_lr_scale", Float},
+            OptimizationCliBinding{"--cropbox-loss-weight", "cropbox_loss_weight", Float},
+            OptimizationCliBinding{"--steps-scaler", "steps_scaler", Float},
+            OptimizationCliBinding{"--no-error-map", "use_error_map", Bool, true},
+            OptimizationCliBinding{"--no-edge-map", "use_edge_map", Bool, true},
+            OptimizationCliBinding{"--bg-mode", "bg_mode", Enum, false,
+                                   "; values: solidcolor, modulation, image, random", "solid_color", "solidcolor"},
+            OptimizationCliBinding{"--random", "random", Bool},
+            OptimizationCliBinding{"--init-num-pts", "init_num_pts", Integer},
+            OptimizationCliBinding{"--init-extent", "init_extent", Float},
+            OptimizationCliBinding{"--mask-mode", "mask_mode", Enum, false,
+                                   "; values: none, segment, ignore, segment_and_ignore, alpha_consistent"},
+            OptimizationCliBinding{"--invert-masks", "invert_masks", Bool},
+            OptimizationCliBinding{"--no-alpha-as-mask", "use_alpha_as_mask", Bool, true},
+            OptimizationCliBinding{"--use-depth-loss", "use_depth_loss", Bool},
+            OptimizationCliBinding{"--depth-loss-weight", "depth_loss_weight", Float},
+            OptimizationCliBinding{"--depth-loss-mode", "depth_loss_mode", String},
+            OptimizationCliBinding{"--use-normal-loss", "use_normal_loss", Bool},
+            OptimizationCliBinding{"--normal-loss-weight", "normal_loss_weight", Float},
+            OptimizationCliBinding{"--normal-consistency-weight", "normal_consistency_weight", Float},
+            OptimizationCliBinding{"--normal-flatten-weight", "normal_flatten_weight", Float},
+            OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", Enum},
+            OptimizationCliBinding{"--enable-sparsity", "enable_sparsity", Bool},
+            OptimizationCliBinding{"--sparsify-steps", "sparsify_steps", Integer},
+            OptimizationCliBinding{"--init-rho", "init_rho", Float},
+            OptimizationCliBinding{"--prune-ratio", "prune_ratio", Float},
+            OptimizationCliBinding{"--enable-mip", "mip_filter", Bool},
+            OptimizationCliBinding{"--bilateral-grid", "use_bilateral_grid", Bool},
+            OptimizationCliBinding{"--ppisp", "ppisp", Bool},
+            OptimizationCliBinding{"--ppisp-controller", "ppisp_use_controller", Bool},
+            OptimizationCliBinding{"--ppisp-freeze", "ppisp_freeze_from_sidecar", Bool},
+            OptimizationCliBinding{"--gut", "gut", Bool},
+            OptimizationCliBinding{"--eval", "enable_eval", Bool},
+            OptimizationCliBinding{"--headless", "headless", Bool},
+            OptimizationCliBinding{"--undistort", "undistort", Bool},
+        };
+
+        std::string optimization_default_display(
+            const OptimizationCliBinding& binding,
+            const prop::PropertyMeta& meta) {
+            if (!meta.getter)
+                throw std::runtime_error("Optimization property has no getter: " + meta.id);
+            auto defaults = param::OptimizationParameters::mrnf_defaults();
+            const auto ref = prop::PropertyObjectRef::cpp(&defaults);
+            const auto value = meta.getter(ref);
+
+            std::string display;
+            switch (meta.type) {
+            case prop::PropType::Bool:
+                display = std::any_cast<bool>(value) ? "true" : "false";
+                break;
+            case prop::PropType::Int:
+                display = std::format("{}", std::any_cast<int>(value));
+                break;
+            case prop::PropType::SizeT:
+                display = std::format("{}", std::any_cast<size_t>(value));
+                break;
+            case prop::PropType::Float:
+                display = std::format("{}", std::any_cast<float>(value));
+                break;
+            case prop::PropType::String:
+                display = std::any_cast<std::string>(value);
+                break;
+            case prop::PropType::Enum: {
+                const int enum_value = std::any_cast<int>(value);
+                const auto item = std::ranges::find_if(meta.enum_items, [enum_value](const auto& candidate) {
+                    return candidate.value == enum_value;
+                });
+                if (item == meta.enum_items.end())
+                    throw std::runtime_error("Invalid default for optimization enum: " + meta.id);
+                display = item->wire_value.empty() ? item->identifier : item->wire_value;
+                break;
+            }
+            default:
+                throw std::runtime_error("Unsupported CLI metadata type for optimization property: " + meta.id);
+            }
+
+            if (!binding.registry_default_alias.empty() && display == binding.registry_default_alias)
+                display = binding.cli_default_alias;
+            return display;
+        }
+    } // namespace
+
+    std::span<const OptimizationCliBinding> optimization_cli_bindings() {
+        return OPTIMIZATION_CLI_BINDINGS;
+    }
+
+    std::string optimization_cli_help(const std::string_view flag) {
+        param::ensure_optimization_properties_registered();
+        const auto binding = std::ranges::find(OPTIMIZATION_CLI_BINDINGS, flag,
+                                               &OptimizationCliBinding::flag);
+        if (binding == OPTIMIZATION_CLI_BINDINGS.end())
+            throw std::invalid_argument("Unknown optimization CLI flag: " + std::string(flag));
+
+        const auto meta = prop::PropertyRegistry::instance().get_property(
+            "optimization", std::string(binding->property_id));
+        if (!meta)
+            throw std::runtime_error("Missing optimization property for CLI flag: " + std::string(flag));
+
+        return std::format("{}{}{} (default: {})",
+                           binding->inverted ? "Disable: " : "",
+                           meta->description,
+                           binding->help_suffix,
+                           optimization_default_display(*binding, *meta));
+    }
+} // namespace lfs::core::args
 
 namespace {
 
@@ -168,6 +290,7 @@ namespace {
         lfs::core::param::TrainingParameters& params) {
 
         try {
+            lfs::core::param::ensure_optimization_properties_registered();
             ::args::ArgumentParser parser(
                 "LichtFeld Studio: High-performance CUDA implementation of 3D Gaussian Splatting algorithm.\n",
                 "\nSUBCOMMANDS:\n"
@@ -180,6 +303,9 @@ namespace {
                 "\n"
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
+                "lichtfeld-studio --project session.licht\n"
+                "lichtfeld-studio --headless --project session.licht --recover\n"
+                "lichtfeld-studio -d ./data -o ./output --save-project-at-iter 7000\n"
                 "lichtfeld-studio --resume checkpoint.resume\n"
                 "lichtfeld-studio --render-camera-path path.json --render-load model.ply --render-output out.mp4\n"
                 "lichtfeld-studio -v model.ply\n"
@@ -239,18 +365,18 @@ namespace {
             // =============================================================================
             ::args::Group training_sep(parser, " ");
             ::args::Group training_group(parser, "TRAINING PARAMETERS:");
-            ::args::ValueFlag<uint32_t> iterations(training_group, "iterations", "Number of iterations", {'i', "iter"});
-            ::args::ValueFlag<std::string> strategy(training_group, "strategy", "Optimization strategy: mcmc, mrnf, igs+ (legacy aliases: mnrf, lfs)", {"strategy"});
-            ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", "Max SH degree [0-3]", {"sh-degree"});
-            ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", "SH degree interval", {"sh-degree-interval"});
-            ::args::ValueFlag<int> max_cap(training_group, "max_cap", "Maximum number of Gaussians", {"max-cap"});
-            ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", "Minimum opacity threshold", {"min-opacity"});
-            ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", "Adam-step and refinement-signal scale for splats rejected by the active crop box; strategy noise, decay, and resets remain active (default: 0.1)", {"cropbox-lr-scale"});
-            ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", "Loss weight for pixels whose camera rays miss the active crop box (default: 0.1)", {"cropbox-loss-weight"});
-            ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", "Scale training steps by factor", {"steps-scaler"});
-            ::args::Flag no_error_map(training_group, "no_error_map", "Disable per-pixel SSIM error-map weighting of the MRNF refine signal (default: enabled)", {"no-error-map"});
-            ::args::Flag no_edge_map(training_group, "no_edge_map", "Disable Sobel edge-map weighting of the MRNF refine signal (default: enabled)", {"no-edge-map"});
-            ::args::ValueFlag<std::string> bg_mode(training_group, "mode", "Background mode: solidcolor, modulation, image, random (default: solidcolor)", {"bg-mode"});
+            ::args::ValueFlag<uint32_t> iterations(training_group, "iterations", lfs::core::args::optimization_cli_help("--iter"), {'i', "iter"});
+            ::args::ValueFlag<std::string> strategy(training_group, "strategy", lfs::core::args::optimization_cli_help("--strategy"), {"strategy"});
+            ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", lfs::core::args::optimization_cli_help("--sh-degree"), {"sh-degree"});
+            ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", lfs::core::args::optimization_cli_help("--sh-degree-interval"), {"sh-degree-interval"});
+            ::args::ValueFlag<int> max_cap(training_group, "max_cap", lfs::core::args::optimization_cli_help("--max-cap"), {"max-cap"});
+            ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", lfs::core::args::optimization_cli_help("--min-opacity"), {"min-opacity"});
+            ::args::ValueFlag<float> cropbox_lr_scale(training_group, "scale", lfs::core::args::optimization_cli_help("--cropbox-lr-scale"), {"cropbox-lr-scale"});
+            ::args::ValueFlag<float> cropbox_loss_weight(training_group, "weight", lfs::core::args::optimization_cli_help("--cropbox-loss-weight"), {"cropbox-loss-weight"});
+            ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", lfs::core::args::optimization_cli_help("--steps-scaler"), {"steps-scaler"});
+            ::args::Flag no_error_map(training_group, "no_error_map", lfs::core::args::optimization_cli_help("--no-error-map"), {"no-error-map"});
+            ::args::Flag no_edge_map(training_group, "no_edge_map", lfs::core::args::optimization_cli_help("--no-edge-map"), {"no-edge-map"});
+            ::args::ValueFlag<std::string> bg_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--bg-mode"), {"bg-mode"});
             ::args::ValueFlag<std::string> bg_color(training_group, "color", "solidcolor background color as #RRGGBB or (R,G,B) with 0-255 channels (default: #000000)", {"bg-color"});
             ::args::ValueFlag<std::string> bg_image_path(training_group, "path", "Background image path (required when --bg-mode image)", {"bg-image-path"});
 
@@ -259,9 +385,9 @@ namespace {
             // =============================================================================
             ::args::Group init_sep(parser, " ");
             ::args::Group init_group(parser, "INITIALIZATION:");
-            ::args::Flag random(init_group, "random", "Use random initialization instead of SfM", {"random"});
-            ::args::ValueFlag<int> init_num_pts(init_group, "init_num_pts", "Number of random initialization points", {"init-num-pts"});
-            ::args::ValueFlag<float> init_extent(init_group, "init_extent", "Extent of random initialization", {"init-extent"});
+            ::args::Flag random(init_group, "random", lfs::core::args::optimization_cli_help("--random"), {"random"});
+            ::args::ValueFlag<int> init_num_pts(init_group, "init_num_pts", lfs::core::args::optimization_cli_help("--init-num-pts"), {"init-num-pts"});
+            ::args::ValueFlag<float> init_extent(init_group, "init_extent", lfs::core::args::optimization_cli_help("--init-extent"), {"init-extent"});
 
             // =============================================================================
             // DATASET OPTIONS
@@ -284,7 +410,7 @@ namespace {
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag no_fs_cache(dataset_group, "no_fs_cache", "Disable filesystem caching (default: enabled)", {"no-fs-cache"});
             ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
-            ::args::Flag undistort(dataset_group, "undistort", "Undistort images on-the-fly before training", {"undistort"});
+            ::args::Flag undistort(dataset_group, "undistort", lfs::core::args::optimization_cli_help("--undistort"), {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
                                                                  "Centralize dataset origin: off, by_pointcloud, by_cameras (default: off)",
                                                                  {"centralize"},
@@ -299,7 +425,7 @@ namespace {
             ::args::Group mask_sep(parser, " ");
             ::args::Group mask_group(parser, "MASK / DEPTH / NORMAL OPTIONS:");
             ::args::MapFlag<std::string, lfs::core::param::MaskMode> mask_mode(mask_group, "mask_mode",
-                                                                               "Mask mode: none, segment, ignore, segment_and_ignore, alpha_consistent (default: none)",
+                                                                               lfs::core::args::optimization_cli_help("--mask-mode"),
                                                                                {"mask-mode"},
                                                                                std::unordered_map<std::string, lfs::core::param::MaskMode>{
                                                                                    {"none", lfs::core::param::MaskMode::None},
@@ -307,46 +433,46 @@ namespace {
                                                                                    {"ignore", lfs::core::param::MaskMode::Ignore},
                                                                                    {"segment_and_ignore", lfs::core::param::MaskMode::SegmentAndIgnore},
                                                                                    {"alpha_consistent", lfs::core::param::MaskMode::AlphaConsistent}});
-            ::args::Flag invert_masks(mask_group, "invert_masks", "Invert mask values (swap object/background)", {"invert-masks"});
-            ::args::Flag no_alpha_as_mask(mask_group, "no_alpha_as_mask", "Disable automatic alpha-as-mask for RGBA images", {"no-alpha-as-mask"});
-            ::args::Flag use_depth_loss(mask_group, "use_depth_loss", "Load depth maps and enable depth-map supervision", {"use-depth-loss"});
-            ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", "Depth loss weight (default: 2.0)", {"depth-loss-weight"});
-            ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", "Depth prior convention: ssi (auto-detect), ssi-disparity, ssi-depth (default: ssi)", {"depth-loss-mode"});
-            ::args::Flag use_normal_loss(mask_group, "use_normal_loss", "Load normal maps and enable normal supervision", {"use-normal-loss"});
-            ::args::ValueFlag<float> normal_loss_weight(mask_group, "normal_loss_weight", "Prior normal loss weight (default: 0.05)", {"normal-loss-weight"});
-            ::args::ValueFlag<float> normal_consistency_weight(mask_group, "normal_consistency_weight", "Depth-normal consistency weight (default: 0.05)", {"normal-consistency-weight"});
-            ::args::ValueFlag<float> normal_flatten_weight(mask_group, "normal_flatten_weight", "Min-axis scale flattening weight while normal supervision is active (default: 1.0)", {"normal-flatten-weight"});
-            ::args::ValueFlag<std::string> normal_loss_space(mask_group, "normal_loss_space", "Normal prior space: auto, camera-opencv, camera-opengl, world (default: auto)", {"normal-loss-space"});
+            ::args::Flag invert_masks(mask_group, "invert_masks", lfs::core::args::optimization_cli_help("--invert-masks"), {"invert-masks"});
+            ::args::Flag no_alpha_as_mask(mask_group, "no_alpha_as_mask", lfs::core::args::optimization_cli_help("--no-alpha-as-mask"), {"no-alpha-as-mask"});
+            ::args::Flag use_depth_loss(mask_group, "use_depth_loss", lfs::core::args::optimization_cli_help("--use-depth-loss"), {"use-depth-loss"});
+            ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", lfs::core::args::optimization_cli_help("--depth-loss-weight"), {"depth-loss-weight"});
+            ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", lfs::core::args::optimization_cli_help("--depth-loss-mode"), {"depth-loss-mode"});
+            ::args::Flag use_normal_loss(mask_group, "use_normal_loss", lfs::core::args::optimization_cli_help("--use-normal-loss"), {"use-normal-loss"});
+            ::args::ValueFlag<float> normal_loss_weight(mask_group, "normal_loss_weight", lfs::core::args::optimization_cli_help("--normal-loss-weight"), {"normal-loss-weight"});
+            ::args::ValueFlag<float> normal_consistency_weight(mask_group, "normal_consistency_weight", lfs::core::args::optimization_cli_help("--normal-consistency-weight"), {"normal-consistency-weight"});
+            ::args::ValueFlag<float> normal_flatten_weight(mask_group, "normal_flatten_weight", lfs::core::args::optimization_cli_help("--normal-flatten-weight"), {"normal-flatten-weight"});
+            ::args::ValueFlag<std::string> normal_loss_space(mask_group, "normal_loss_space", lfs::core::args::optimization_cli_help("--normal-loss-space"), {"normal-loss-space"});
 
             // =============================================================================
             // SPARSITY OPTIMIZATION
             // =============================================================================
             ::args::Group sparsity_sep(parser, " ");
             ::args::Group sparsity_group(parser, "SPARSITY OPTIMIZATION:");
-            ::args::Flag enable_sparsity(sparsity_group, "enable_sparsity", "Enable sparsity optimization", {"enable-sparsity"});
-            ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", "Number of sparsification steps to run after regular training (default: 15000)", {"sparsify-steps"});
-            ::args::ValueFlag<float> init_rho(sparsity_group, "init_rho", "Initial ADMM penalty parameter (default: 0.0005)", {"init-rho"});
-            ::args::ValueFlag<float> prune_ratio(sparsity_group, "prune_ratio", "Final pruning ratio for sparsity (default: 0.6)", {"prune-ratio"});
+            ::args::Flag enable_sparsity(sparsity_group, "enable_sparsity", lfs::core::args::optimization_cli_help("--enable-sparsity"), {"enable-sparsity"});
+            ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", lfs::core::args::optimization_cli_help("--sparsify-steps"), {"sparsify-steps"});
+            ::args::ValueFlag<float> init_rho(sparsity_group, "init_rho", lfs::core::args::optimization_cli_help("--init-rho"), {"init-rho"});
+            ::args::ValueFlag<float> prune_ratio(sparsity_group, "prune_ratio", lfs::core::args::optimization_cli_help("--prune-ratio"), {"prune-ratio"});
 
             // =============================================================================
             // RENDERING OPTIONS
             // =============================================================================
             ::args::Group rendering_sep(parser, " ");
             ::args::Group rendering_group(parser, "RENDERING OPTIONS:");
-            ::args::Flag enable_mip(rendering_group, "enable_mip", "Enable mip filter (anti-aliasing)", {"enable-mip"});
-            ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", "Enable bilateral grid filtering", {"bilateral-grid"});
-            ::args::Flag use_ppisp(rendering_group, "ppisp", "Enable PPISP for per-camera appearance modeling", {"ppisp"});
-            ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", "Enable PPISP controller for novel views", {"ppisp-controller"});
-            ::args::Flag ppisp_freeze_from_sidecar(rendering_group, "ppisp_freeze", "Freeze PPISP learning and load PPISP weights from a sidecar file", {"ppisp-freeze"});
+            ::args::Flag enable_mip(rendering_group, "enable_mip", lfs::core::args::optimization_cli_help("--enable-mip"), {"enable-mip"});
+            ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", lfs::core::args::optimization_cli_help("--bilateral-grid"), {"bilateral-grid"});
+            ::args::Flag use_ppisp(rendering_group, "ppisp", lfs::core::args::optimization_cli_help("--ppisp"), {"ppisp"});
+            ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", lfs::core::args::optimization_cli_help("--ppisp-controller"), {"ppisp-controller"});
+            ::args::Flag ppisp_freeze_from_sidecar(rendering_group, "ppisp_freeze", lfs::core::args::optimization_cli_help("--ppisp-freeze"), {"ppisp-freeze"});
             ::args::ValueFlag<std::string> ppisp_sidecar_path(rendering_group, "path", "Path to PPISP sidecar (.ppisp) used for frozen PPISP training", {"ppisp-sidecar"});
-            ::args::Flag gut(rendering_group, "gut", "Enable GUT mode", {"gut"});
+            ::args::Flag gut(rendering_group, "gut", lfs::core::args::optimization_cli_help("--gut"), {"gut"});
 
             // =============================================================================
             // OUTPUT OPTIONS
             // =============================================================================
             ::args::Group output_sep(parser, " ");
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
-            ::args::Flag enable_eval(output_group, "eval", "Enable evaluation during training", {"eval"});
+            ::args::Flag enable_eval(output_group, "eval", lfs::core::args::optimization_cli_help("--eval"), {"eval"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
             ::args::ValueFlag<int> timelapse_every(output_group, "timelapse_every", "Render timelapse image every N iterations (default: 50)", {"timelapse-every"});
@@ -356,7 +482,7 @@ namespace {
                 {"save-project-at-iter"});
             ::args::ValueFlag<std::string> save_project_path(
                 output_group, "path",
-                "Destination for --save-project-at-iter (default: <output>/snapshot_<iteration>.licht)",
+                "Destination for --save-project-at-iter (default: <output>/project.licht)",
                 {"save-project-path"});
 
             // =============================================================================
@@ -364,7 +490,7 @@ namespace {
             // =============================================================================
             ::args::Group ui_sep(parser, " ");
             ::args::Group ui_group(parser, "UI OPTIONS:");
-            ::args::Flag headless(ui_group, "headless", "Disable visualization during training", {"headless"});
+            ::args::Flag headless(ui_group, "headless", lfs::core::args::optimization_cli_help("--headless"), {"headless"});
             ::args::Flag auto_train(ui_group, "train", "Start training immediately on startup", {"train"});
 #ifndef LFS_BUILD_PORTABLE
             ::args::Flag no_splash(ui_group, "no_splash", "Skip splash screen on startup", {"no-splash"});
@@ -650,10 +776,12 @@ namespace {
                 params.resume_checkpoint.has_value() ||
                 params.resume_project.has_value();
 
-            // If headless mode, require data path or resume checkpoint
+            // If headless mode, require data path, project, or resume
+            // (--resume accepts both .resume checkpoints and .licht projects).
             if (headless && !has_data_path && !has_resume) {
                 return std::unexpected(std::format(
-                    "ERROR: Headless mode requires --data-path or --resume\n\n{}",
+                    "ERROR: Headless mode requires --data-path, --project, or --resume "
+                    "(--resume file.licht counts as a project source)\n\n{}",
                     parser.Help()));
             }
 
@@ -1006,7 +1134,13 @@ namespace {
                 setVal(normal_loss_weight_val, opt.normal_loss_weight);
                 setVal(normal_consistency_weight_val, opt.normal_consistency_weight);
                 setVal(normal_flatten_weight_val, opt.normal_flatten_weight);
-                setVal(normal_loss_space_val, opt.normal_loss_space);
+                if (normal_loss_space_val) {
+                    if (const auto parsed = lfs::core::param::normal_loss_space_from_string(*normal_loss_space_val)) {
+                        opt.normal_loss_space = *parsed;
+                    } else {
+                        opt.normal_loss_space = static_cast<lfs::core::param::NormalLossSpace>(-1);
+                    }
+                }
                 // Also propagate to dataset config for loading
                 ds.invert_masks = opt.invert_masks;
                 ds.mask_threshold = opt.mask_threshold;

@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 #include "core/export.hpp"
+#include "gpu_object_census.hpp"
 #include "renderer_terminal_state.hpp"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <expected>
 #include <format>
+#include <mutex>
 #include <optional>
 #include <source_location>
 #include <string>
@@ -57,7 +59,11 @@ namespace lfs::vis {
         void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
         [[nodiscard]] bool hasPendingSwapchainResize() const {
-            return framebuffer_resize_deferred_ || framebuffer_resize_exact_after_interactive_;
+            // A forced rebuild is pending work too, otherwise render-on-demand can idle for
+            // half a second holding an out-of-date swapchain. Zero framebuffers are excluded:
+            // beginFrame skips those without rebuilding, so they would never clear the flag.
+            return framebuffer_resize_deferred_ || framebuffer_resize_exact_after_interactive_ ||
+                   (framebuffer_resized_ && framebuffer_width_ > 0 && framebuffer_height_ > 0);
         }
         [[nodiscard]] bool pendingSwapchainResizeReady() const;
         [[nodiscard]] double secondsUntilPendingSwapchainResizeReady() const;
@@ -107,6 +113,8 @@ namespace lfs::vis {
             std::string diagnostic_scope;
             std::string diagnostic_label;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
+            // #1488: true only after census onCreate; fail-path destroy must not onDestroy.
+            bool census_counted = false;
         };
 
         struct ExternalBuffer {
@@ -117,12 +125,15 @@ namespace lfs::vis {
             std::string diagnostic_scope;
             std::string diagnostic_label;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
+            bool census_counted = false;
         };
 
         struct ExternalSemaphore {
             VkSemaphore semaphore = VK_NULL_HANDLE;
             std::uint64_t initial_value = 0;
+            std::string diagnostic_scope;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
+            bool census_counted = false;
         };
 
         struct TimelinePoint {
@@ -252,6 +263,12 @@ namespace lfs::vis {
         [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
         [[nodiscard]] bool waitForCurrentFrameSlot();
         [[nodiscard]] bool waitForSubmittedFrames();
+        // Serial of the most recent graphics frame submission.
+        [[nodiscard]] std::uint64_t lastFrameSubmitSerial() const;
+        // Highest serial S such that every graphics submit with serial <= S has
+        // retired. Non-blocking (vkGetFenceStatus); serial-0 slots ignored.
+        // device_ null returns frame_submit_serial_ (everything retired).
+        [[nodiscard]] std::uint64_t retiredFrameSubmitSerial() const;
         [[nodiscard]] bool waitForImmediateSubmits();
         [[nodiscard]] bool deviceWaitIdle();
         void addFrameTimelineWait(VkSemaphore semaphore,
@@ -286,7 +303,10 @@ namespace lfs::vis {
                                                 ExternalBuffer& out,
                                                 std::string_view diagnostic_scope = "vulkan.external.imported_buffer",
                                                 std::string_view diagnostic_label = {});
-        [[nodiscard]] bool createExternalTimelineSemaphore(std::uint64_t initial_value, ExternalSemaphore& out);
+        [[nodiscard]] bool createExternalTimelineSemaphore(
+            std::uint64_t initial_value,
+            ExternalSemaphore& out,
+            std::string_view diagnostic_scope = "vulkan.external.semaphore");
         void destroyExternalSemaphore(ExternalSemaphore& semaphore);
         [[nodiscard]] ExternalNativeHandle releaseExternalSemaphoreNativeHandle(ExternalSemaphore& semaphore) const;
         [[nodiscard]] static bool externalNativeHandleValid(ExternalNativeHandle handle);
@@ -358,6 +378,7 @@ namespace lfs::vis {
         bool finishActiveRendering(VkCommandBuffer command_buffer);
         void deferSwapchainResizeRecreate(bool requires_recreate = true,
                                           std::optional<bool> allow_headroom = std::nullopt);
+        void requireSwapchainRecreateAfterOutOfDate();
         [[nodiscard]] bool promoteDeferredSwapchainResizeIfSettled();
         [[nodiscard]] bool framebufferFitsSwapchainExtent() const;
         [[nodiscard]] bool framebufferResizeRequiresSwapchainRecreate() const;
@@ -423,7 +444,11 @@ namespace lfs::vis {
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
         std::size_t swapchain_estimated_bytes_ = 0;
+        // Bumped once per createSwapchain; keys swapchain + depth registrations and
+        // their transitions against VulkanImageBarrierTracker (epic #1496 / #1478).
+        std::uint64_t swapchain_epoch_ = 0;
         VulkanImageBarrierTracker image_barriers_;
+        GpuObjectCensus gpu_object_census_;
         VkFormat depth_stencil_format_ = VK_FORMAT_UNDEFINED;
         std::vector<DepthStencilResource> depth_stencil_resources_;
 
@@ -447,6 +472,7 @@ namespace lfs::vis {
         [[nodiscard]] bool drainCompletedImmediateSubmits();
         std::vector<FrameTimelineWait> frame_timeline_waits_;
         bool frame_timeline_waits_valid_ = true;
+        std::mutex timeline_value_tracker_mutex_;
         std::unordered_map<VkSemaphore, std::uint64_t> last_frame_timeline_wait_values_;
         std::unordered_map<VkSemaphore, std::uint64_t> last_immediate_timeline_wait_values_;
         std::unordered_map<VkSemaphore, std::uint64_t> last_immediate_timeline_signal_values_;

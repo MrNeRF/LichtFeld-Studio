@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 add_library(lfs_vulkan_rasterizer STATIC
+        src/barrier_planner.cpp
         src/buffer.cpp
         src/gs_pipeline.cpp
         src/gs_renderer.cpp
@@ -193,7 +194,6 @@ _vulkan_add_slang_shader(compute_tile_ranges       tile_shader.slang EXPORT_MODE
 _vulkan_add_slang_shader(compute_tile_ranges_and_batch_counts tile_shader.slang EXPORT_MODE=0 ENTRY=3)
 
 # Two-stage sort helper shaders
-_vulkan_add_slang_shader(seed_primitive_indices    seed_primitive_indices.slang)
 _vulkan_add_slang_shader(apply_depth_ordering      apply_depth_ordering.slang)
 _vulkan_add_slang_shader(visible_flags             visible_flags.slang)
 _vulkan_add_slang_shader(prepare_visible_sort      prepare_visible_sort.slang)

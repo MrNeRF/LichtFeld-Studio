@@ -10,6 +10,8 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include <core/export.hpp>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -88,6 +90,7 @@ namespace lfs::vis::gui {
         bool forwardInput(float panel_x, float panel_y);
         bool syncThemeProperties();
         bool loadDocument();
+        void syncLocalizedContent();
         void cacheContentElements();
         float computeScrollHeightCap() const;
         float computeContentHeight() const;
@@ -133,6 +136,7 @@ namespace lfs::vis::gui {
 
         bool render_needed_ = true;
         bool animation_active_ = false;
+        std::uint64_t localized_language_generation_ = std::numeric_limits<std::uint64_t>::max();
         bool direct_cache_dirty_ = true;
         CachedVulkanContextRender direct_cache_;
         int last_fbo_w_ = 0;

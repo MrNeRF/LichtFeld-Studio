@@ -5,20 +5,18 @@ publication: release-corpus entries are append-only, and bytes already named by 
 not be regenerated under that row's writer SHA.
 
 P8 authority/base writer SHA: `8ca8028e6214b1f424c373b24d479cd90ff2e918`.
-Current candidate producer base SHA: `bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb`.
+Current candidate producer base SHA: `d2bab709751e226863fa038c36ec7bfe539d620f`.
 
 ## Published-grammar register
 
 | Spec | Release manifest root SHA-256 | Tagged parser tree SHA-256 | Reader capabilities | Minimum reader | Minimum safe writer | Writer SHA | Status |
 |---|---|---|---|---|---|---|---|
 | 1.0 P8 baseline | `690a820b806dc8e633e8aaacd7b381a4a9f25963160e5e92e3b490217bc63326` | `9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d` | bits 0–7 (`INDEX_ZSTD_V1`, `CHUNK_ZSTD_V1`, `BLOCK_CRC32C_V1`, `INDEX_TOMBSTONES_V1`, `SIDECAR_OVERLAY_V1`, `OPAQUE_CHUNK_PRESERVATION`, `RETAINED_JSON_FIELDS`, `CLEAN_PROOF_REUSE`) | 1.0 | 1.0 | `8ca8028e6214b1f424c373b24d479cd90ff2e918` | Frozen P8 content authority |
-| 1.0 current candidate | `43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb` | `9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d` | bits 0–7 (`INDEX_ZSTD_V1`, `CHUNK_ZSTD_V1`, `BLOCK_CRC32C_V1`, `INDEX_TOMBSTONES_V1`, `SIDECAR_OVERLAY_V1`, `OPAQUE_CHUNK_PRESERVATION`, `RETAINED_JSON_FIELDS`, `CLEAN_PROOF_REUSE`) | 1.0 | 1.0 | `bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb` | Pre-release SELM withdrawal; RawU8 fixture appended |
+| 1.0 current candidate | `75ae8ccf0423796672c70f8fb8c681c868a5819fa28f70a3c40b106cd5e78ca8` | `9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d` | bits 0–8 (`INDEX_ZSTD_V1`, `CHUNK_ZSTD_V1`, `BLOCK_CRC32C_V1`, `INDEX_TOMBSTONES_V1`, `SIDECAR_OVERLAY_V1`, `OPAQUE_CHUNK_PRESERVATION`, `RETAINED_JSON_FIELDS`, `CLEAN_PROOF_REUSE`, `CHUNK_BYTESHUFFLE_ZSTD_V1`) | 1.0 | 1.0 | `d2bab709751e226863fa038c36ec7bfe539d620f` | Pre-release candidate; CKPT/SPLT prefer ByteShuffleZstd (bit 8) with plain Zstd fallback when size % 4 != 0 |
 
 Published-grammar register line: `licht/1.0 manifest=690a820b806dc8e633e8aaacd7b381a4a9f25963160e5e92e3b490217bc63326 tagged_tree=9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d reader=1.0 writer=1.0 caps=0-7 writer_sha=8ca8028e6214b1f424c373b24d479cd90ff2e918`.
 
-Current-candidate register line: `licht/1.0 manifest=43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb tagged_tree=9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d reader=1.0 writer=1.0 caps=0-7 writer_sha=bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb`.
-
-Known provenance defect: the SHA-locked `selection-raw-u8.licht` row records `writer_sha=bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb`; the fixture and SELM withdrawal were actually introduced by `cc3e63b20ee7ec5c0d00f4fd64ba394955d4ad0c`.
+Current-candidate register line: `licht/1.0 manifest=75ae8ccf0423796672c70f8fb8c681c868a5819fa28f70a3c40b106cd5e78ca8 tagged_tree=9c951ac2aac079dbc7569242d26432de0f747c8510aad0f3e4088b2034e1f96d reader=1.0 writer=1.0 caps=0-8 writer_sha=d2bab709751e226863fa038c36ec7bfe539d620f`.
 
 The current candidate becomes **Published** only after all three events occur: the machinery and
 locked artifacts merge to the main branch; a release tag names the current manifest root and
@@ -59,6 +57,29 @@ Fixture update note: before 1.0 publication, selection encoding value 2
 fixtures remain byte-identical because their `SELM` chapters contain no mask slices. The
 append-only `selection-raw-u8.licht` row records a populated production `SELM` chapter using
 encoding 1 (`RawU8`) and updates the candidate manifest root.
+
+Fixture update note: pre-1.0 candidate re-lock after master `#1556` removed optimization
+fields from the PRMS wire JSON. Container grammar, capability bits, and the frozen
+`tools/licht_inspect/baseline/release_manifest.json` / tagged `v1_0` parser are unchanged;
+production-path emission of the reproducible candidate rows was re-run and the candidate
+manifest root re-derived. The non-reproducible `headless-train-output.licht` row remains
+SHA-locked and byte-identical. Chapter-content shape only — not a min_safe_writer or
+capability bump.
+
+Fixture update note: container chunk encoding for newly written `CKPT` / `SPLT` (and other
+tensor / lazy-binary chapters) first used whole-chunk `Compression::Zstd` under
+`CHUNK_ZSTD_V1` (bit 1). A subsequent pre-1.0 candidate step adds
+`Compression::ByteShuffleZstd` (wire 2) under new capability
+`CHUNK_BYTESHUFFLE_ZSTD_V1` (bit 8): f32-word byte-plane transpose then zstd level 3.
+Writers apply ByteShuffle only when payload size `% 4 == 0`; otherwise they fall back to
+plain `Zstd` for that chunk (deterministic, no knob). JSON chapters remain plain Zstd.
+Chapter content is unchanged: after unshuffle + inflate, `CKPT` logical payload remains
+byte-verbatim LFKP identical to a standalone serialize. Readers that lack bit 8 refuse
+ByteShuffle generations at the capability gate; older Stored / plain-Zstd `CKPT`/`SPLT`
+bytes remain valid. Large-chunk zstd uses streaming (`ZSTD_compressStream2`) above a fixed
+8 MiB threshold to bound peak transient RAM. Candidate manifest root is re-derived after
+production re-emission; baseline `690a820b…` and tagged `v1_0` parser tree stay frozen
+(tagged parser classifies bit-8 files as requires-newer-reader).
 
 ## Minimum-safe-writer and capability bump checklist
 

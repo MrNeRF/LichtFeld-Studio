@@ -130,27 +130,13 @@ namespace lfs::vis::gui {
             return lfs::io::find_colmap_sparse_model_path(dataset_path);
         }
 
-        enum class ColmapSparseOutputFormat : uint8_t {
-            Binary,
-            Text,
-        };
-
-        [[nodiscard]] ColmapSparseOutputFormat colmapSparseOutputFormat(
-            const std::filesystem::path& source_sparse_path) {
+        [[nodiscard]] std::string_view colmapExportExtension(const std::filesystem::path& source_path) {
             std::error_code ec;
-            const bool has_binary_pair =
-                std::filesystem::exists(source_sparse_path / "cameras.bin", ec) &&
-                std::filesystem::exists(source_sparse_path / "images.bin", ec);
-            return has_binary_pair ? ColmapSparseOutputFormat::Binary
-                                   : ColmapSparseOutputFormat::Text;
-        }
-
-        [[nodiscard]] std::array<std::string_view, 3> colmapSparseOutputFileNames(
-            const ColmapSparseOutputFormat format) {
-            if (format == ColmapSparseOutputFormat::Binary) {
-                return {"cameras.bin", "images.bin", "points3D.bin"};
-            }
-            return {"cameras.txt", "images.txt", "points3D.txt"};
+            const bool has_binary_cameras = std::filesystem::exists(source_path / "cameras.bin", ec);
+            ec.clear();
+            const bool has_binary_images = std::filesystem::exists(source_path / "images.bin", ec);
+            const bool has_binary_metadata = has_binary_cameras && has_binary_images;
+            return has_binary_metadata ? "bin" : "txt";
         }
 
         [[nodiscard]] bool colmapSparseDataExists(const std::filesystem::path& output_path) {
@@ -169,11 +155,6 @@ namespace lfs::vis::gui {
                 }
             }
             return false;
-        }
-
-        [[nodiscard]] std::string colmapSparseOutputFileList(
-            const std::array<std::string_view, 3>& file_names) {
-            return std::format("{}, {}, and {}", file_names[0], file_names[1], file_names[2]);
         }
 
         [[nodiscard]] float currentDpRatio(const Rml::Element* element) {
@@ -852,9 +833,9 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::PLY_SEQUENCE: {
                 const size_t frame_count = node->gaussian_count.load(std::memory_order_acquire);
-                snapshot.label = std::format("{}  ({} frames)",
-                                             node->name,
-                                             formatWithThousands(frame_count > 0 ? frame_count : node->children.size()));
+                snapshot.label = LOCF(string_keys::Scene::PLY_SEQUENCE_LABEL,
+                                      node->name,
+                                      formatWithThousands(frame_count > 0 ? frame_count : node->children.size()));
                 break;
             }
             case core::NodeType::CAMERA_GROUP:
@@ -864,9 +845,9 @@ namespace lfs::vis::gui {
                 break;
             case core::NodeType::KEYFRAME:
                 if (node->keyframe)
-                    snapshot.label = std::format("Keyframe {}  ({:.2f}s)",
-                                                 node->keyframe->keyframe_index + 1,
-                                                 node->keyframe->time);
+                    snapshot.label = LOCF(string_keys::Scene::KEYFRAME_NODE_LABEL,
+                                          node->keyframe->keyframe_index + 1,
+                                          node->keyframe->time);
                 else
                     snapshot.label = node->name;
                 break;
@@ -2188,7 +2169,7 @@ namespace lfs::vis::gui {
             case core::NodeType::DATASET:
                 if (colmapSparseSourcePath(*scene_manager)) {
                     items.push_back(makeAction(
-                        "Export COLMAP sparse...",
+                        tr("export.format.colmap_sparse") + "...",
                         prefixedAction("export_colmap")));
                 }
                 break;
@@ -2410,9 +2391,6 @@ namespace lfs::vis::gui {
             // sparse root to sparse/0; overwrite checks and writes must hit the same folder.
             const auto output_path = selected_path;
             const std::string output_path_text = lfs::core::path_to_utf8(output_path);
-            const auto output_format = colmapSparseOutputFormat(*path_result);
-            const auto output_file_names = colmapSparseOutputFileNames(output_format);
-            const std::string output_file_list = colmapSparseOutputFileList(output_file_names);
 
             if (!colmapSparseDataExists(output_path)) {
                 gui->asyncTasks().performExport(core::ExportFormat::COLMAP, output_path, {}, 0);
@@ -2421,23 +2399,24 @@ namespace lfs::vis::gui {
 
             LOG_INFO("Confirming COLMAP sparse overwrite folder: {}", output_path_text);
 
-            const std::string export_button = "Overwrite";
+            const std::string export_button = LOC("export.overwrite");
+            const std::string written_files =
+                LOCF("export_dialog.colmap_writes_sparse", colmapExportExtension(*path_result));
             lfs::core::ModalRequest request;
-            request.title = "Export COLMAP sparse";
+            request.title = LOC(lichtfeld::Strings::Window::EXPORT);
             request.style = lfs::core::ModalStyle::Warning;
             request.width_dp = 560;
             request.body_rml =
-                std::string("<div>COLMAP export will overwrite existing sparse reconstruction data in:</div>") +
-                "<div class=\"content-row\" style=\"margin-top: 8dp;\">"
-                "<span class=\"dim-text\">Folder </span>" +
+                std::format("<div>{}</div>", LOC(lichtfeld::Strings::Runtime::COLMAP_OVERWRITE_MESSAGE)) +
+                "<div class=\"content-row\" style=\"margin-top: 8dp;\">" +
+                std::format("<span class=\"dim-text\">{} </span>", LOC(lichtfeld::Strings::Runtime::FOLDER_LABEL)) +
                 encode(output_path_text) +
                 "</div>"
-                "<div class=\"warning-text\" style=\"margin-top: 8dp;\">"
-                "This writes " +
-                encode(output_file_list) +
+                "<div class=\"warning-text\" style=\"margin-top: 8dp;\">" +
+                encode(written_files) +
                 "</div>";
             request.buttons = {
-                {"Cancel", "secondary"},
+                {LOC(lichtfeld::Strings::Common::CANCEL), "secondary"},
                 {export_button, "warning"},
             };
             request.on_result = [gui, output_path, export_button](const lfs::core::ModalResult& result) {

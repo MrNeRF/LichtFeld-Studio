@@ -29,6 +29,7 @@ from .import_panels import (
     open_url_import_panel,
     open_watch_dirs_dialog,
 )
+from .localization import localized_count
 from .types import Panel
 from .ui import RuntimeState
 
@@ -57,9 +58,6 @@ ASSET_MANAGER_PERF_LOG_THRESHOLD_MS = 50.0
 try:
     from .asset_index import (
         AssetIndex,
-        Folder,
-        Scene,
-        Asset,
         resolve_asset_manager_storage_path,
     )
     from .asset_scanner import AssetScanner
@@ -841,7 +839,7 @@ class AssetManagerPanel(Panel):
             return tr("asset_manager.status.select_item")
         if count == 1:
             return tr("asset_manager.status.one_item_selected")
-        return tr("asset_manager.status.multi_items_selected", count=count)
+        return tr("asset_manager.status.multi_items_selected").format(count=count)
 
     def get_has_selection(self) -> bool:
         """Return True if any assets are selected."""
@@ -1275,9 +1273,7 @@ class AssetManagerPanel(Panel):
         total = self._last_asset_match_count
         if total <= 0:
             return ""
-        if total == 1:
-            return "Showing 1 asset"
-        return f"Showing {total:,} assets"
+        return localized_count("asset_manager.status.showing_assets", total)
 
     def _asset_scroll_container(self, doc=None):
         root = doc or self._doc
@@ -5367,48 +5363,6 @@ class AssetManagerPanel(Panel):
 
         except Exception as e:
             _logger.error(f"Failed to create training context: {e}")
-            return None
-
-    def on_checkpoint_saved(
-        self, scene_id: str, checkpoint_path: str, iteration: int
-    ) -> Optional[str]:
-        """Called when checkpoint is saved - add checkpoint asset.
-
-        Returns:
-            Asset ID if created, None otherwise.
-        """
-        if not self._asset_index:
-            return None
-
-        try:
-            scene = (
-                self._asset_index.scenes.get(scene_id)
-                if hasattr(self._asset_index, "scenes")
-                else None
-            )
-            if not scene:
-                return None
-
-            asset = self._scan_and_register_asset(
-                checkpoint_path,
-                folder_id=scene.get("folder_id"),
-                scene_id=scene_id,
-                fallback_role="training_checkpoint",
-                override_type="checkpoint",
-                override_role="training_checkpoint",
-            )
-
-            if asset:
-                self._asset_index.save()
-
-                # Refresh UI
-                self.refresh_catalog()
-
-                return asset.id
-            return None
-
-        except Exception as e:
-            _logger.error(f"Failed to register checkpoint: {e}")
             return None
 
     def on_training_completed(

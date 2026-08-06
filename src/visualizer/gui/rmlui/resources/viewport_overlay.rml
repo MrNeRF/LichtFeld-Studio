@@ -497,61 +497,61 @@
 
     <div id="lod-stats-overlay" class="viewport-lod-stats-overlay hidden">
         <div class="viewport-lod-stats-card">
-            <div class="viewport-lod-stats-title">RAD LOD</div>
+            <div class="viewport-lod-stats-title">@tr:ui.rad_lod</div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Status</span>
+                <span class="viewport-lod-stats-label">@tr:ui.status</span>
                 <span id="lod-stats-status" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Selected</span>
+                <span class="viewport-lod-stats-label">@tr:ui.selected</span>
                 <span id="lod-stats-selected" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Budget</span>
+                <span class="viewport-lod-stats-label">@tr:ui.budget</span>
                 <span id="lod-stats-budget" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Model</span>
+                <span class="viewport-lod-stats-label">@tr:ui.model</span>
                 <span id="lod-stats-model" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Tree</span>
+                <span class="viewport-lod-stats-label">@tr:ui.tree</span>
                 <span id="lod-stats-tree" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Traversal</span>
+                <span class="viewport-lod-stats-label">@tr:ui.traversal</span>
                 <span id="lod-stats-traversal" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Stop</span>
+                <span class="viewport-lod-stats-label">@tr:ui.stop</span>
                 <span id="lod-stats-stop" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Chunks</span>
+                <span class="viewport-lod-stats-label">@tr:ui.chunks</span>
                 <span id="lod-stats-chunks" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Cache</span>
+                <span class="viewport-lod-stats-label">@tr:ui.cache</span>
                 <span id="lod-stats-cache" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Selector</span>
+                <span class="viewport-lod-stats-label">@tr:ui.selector</span>
                 <span id="lod-stats-selector" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Pixel</span>
+                <span class="viewport-lod-stats-label">@tr:ui.pixel</span>
                 <span id="lod-stats-pixel" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Render</span>
+                <span class="viewport-lod-stats-label">@tr:ui.render</span>
                 <span id="lod-stats-render" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Foveation</span>
+                <span class="viewport-lod-stats-label">@tr:ui.foveation</span>
                 <span id="lod-stats-foveation" class="viewport-lod-stats-value">--</span>
             </div>
             <div class="viewport-lod-stats-row">
-                <span class="viewport-lod-stats-label">Source</span>
+                <span class="viewport-lod-stats-label">@tr:ui.source</span>
                 <span id="lod-stats-hash" class="viewport-lod-stats-value">--</span>
             </div>
         </div>
@@ -658,7 +658,7 @@
                  data-if="selection_depth_mode_active"
                  data-tooltip="tooltip.selection_depth_range">
                 <div class="viewport-transform-axis viewport-selection-depth-axis" data-tooltip="tooltip.selection_depth_near">
-                    <span class="viewport-transform-axis-label">Near</span>
+                    <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                     <input type="range"
                            class="setting-slider viewport-selection-slider"
                            min="0"
@@ -675,7 +675,7 @@
                            data-attrif-disabled="!selection_has_scene" />
                 </div>
                 <div class="viewport-transform-axis viewport-selection-depth-axis" data-tooltip="tooltip.selection_depth_far">
-                    <span class="viewport-transform-axis-label">Far</span>
+                    <span class="viewport-transform-axis-label">{{ui_far_label}}</span>
                     <input type="range"
                            class="setting-slider viewport-selection-slider"
                            min="0"
@@ -704,14 +704,14 @@
                             data-value="depth_view_mode_value"
                             data-tooltip="tooltip.depth_view_mode"
                             data-attrif-disabled="!depth_view_has_scene">
-                        <option value="palette">Color</option>
-                        <option value="gray">Gray</option>
+                        <option value="palette">{{ui_color_label}}</option>
+                        <option value="gray">{{ui_gray_label}}</option>
                     </select>
                 </div>
 
                 <div class="viewport-selection-depth-fields viewport-depth-fields" data-tooltip="tooltip.depth_view_range">
                     <div class="viewport-transform-axis viewport-selection-depth-axis viewport-depth-axis" data-tooltip="tooltip.depth_view_near">
-                        <span class="viewport-transform-axis-label">Near</span>
+                        <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                         <input type="range"
                                class="setting-slider viewport-selection-slider viewport-depth-slider"
                                min="0"
@@ -729,7 +729,7 @@
                                 data-attrif-disabled="!depth_view_has_scene">+</button>
                     </div>
                     <div class="viewport-transform-axis viewport-selection-depth-axis viewport-depth-axis" data-tooltip="tooltip.depth_view_far">
-                        <span class="viewport-transform-axis-label">Far</span>
+                        <span class="viewport-transform-axis-label">{{ui_far_label}}</span>
                         <input type="range"
                                class="setting-slider viewport-selection-slider viewport-depth-slider"
                                min="0"
@@ -770,8 +770,8 @@
                             data-value="gt_compare_mode_value"
                             data-tooltip="tooltip.gt_compare_mode">
                         <option value="rgb">RGB</option>
-                        <option value="normal">Normal</option>
-                        <option value="depth">Depth</option>
+                        <option value="normal">@tr:ui.normal</option>
+                        <option value="depth">@tr:ui.depth</option>
                     </select>
                 </div>
             </div>
@@ -797,11 +797,11 @@
 
                 <div class="viewport-export-fields" data-tooltip="tooltip.viewport_export_settings">
                     <div class="viewport-transform-axis viewport-export-axis" data-tooltip="tooltip.viewport_export_resolution">
-                        <span class="viewport-transform-axis-label">Resolution</span>
+                        <span class="viewport-transform-axis-label">{{ui_resolution_label}}</span>
                         <select class="viewport-export-resolution-select"
                                 data-value="viewport_export_resolution_value"
                                 data-attrif-disabled="!viewport_export_has_scene">
-                            <option value="viewport">Viewport</option>
+                        <option value="viewport">{{ui_viewport_label}}</option>
                             <option value="1080p">1080p</option>
                             <option value="4k">4K</option>
                             <option value="8k">8K</option>
@@ -811,7 +811,7 @@
                             <option value="24k">24K</option>
                             <option value="28k">28K</option>
                             <option value="32k">32K</option>
-                            <option value="custom">Custom</option>
+                        <option value="custom">{{ui_custom_label}}</option>
                         </select>
                     </div>
 
@@ -836,7 +836,7 @@
                         <input type="checkbox"
                                data-checked="viewport_export_transparency"
                                data-attrif-disabled="!viewport_export_has_scene" />
-                        <span>Alpha</span>
+                        <span>{{ui_alpha_label}}</span>
                     </label>
                 </div>
 
@@ -1017,63 +1017,63 @@
                 <span class="vram-hud-title">VRAM</span>
                 <span class="vram-hud-header-meta">
                     <span id="vram-hud-throughput" class="vram-hud-throughput hidden"></span>
-                    <span id="vram-hud-iteration" class="vram-hud-iteration">iter 0</span>
+                    <span id="vram-hud-iteration" class="vram-hud-iteration"></span>
                 </span>
             </div>
             <div id="vram-hud-tabs" class="vram-hud-tabs">
-                <button id="vram-hud-tab-overview" class="vram-hud-tab active" data-vram-tab="overview">Overview</button>
-                <button id="vram-hud-tab-allocations" class="vram-hud-tab" data-vram-tab="allocations">Allocations</button>
-                <button id="vram-hud-tab-annotations" class="vram-hud-tab" data-vram-tab="annotations">Annotations</button>
-                <button id="vram-hud-tab-tree" class="vram-hud-tab" data-vram-tab="tree">Drill-down</button>
+                <button id="vram-hud-tab-overview" class="vram-hud-tab active" data-vram-tab="overview">@tr:ui.vram_tab_overview</button>
+                <button id="vram-hud-tab-allocations" class="vram-hud-tab" data-vram-tab="allocations">@tr:ui.vram_tab_allocations</button>
+                <button id="vram-hud-tab-annotations" class="vram-hud-tab" data-vram-tab="annotations">@tr:ui.vram_tab_annotations</button>
+                <button id="vram-hud-tab-tree" class="vram-hud-tab" data-vram-tab="tree">@tr:ui.vram_tab_drill_down</button>
             </div>
             <div id="vram-hud-panel-overview" class="vram-hud-panel">
                 <div id="vram-hud-summary" class="vram-hud-summary"></div>
-                <div class="vram-hud-breakdown-header">Breakdown of process VRAM</div>
+                <div class="vram-hud-breakdown-header">@tr:ui.breakdown_process_vram</div>
                 <div id="vram-hud-breakdown" class="vram-hud-breakdown"></div>
-                <div class="vram-hud-counters-header">Counters (this iter)</div>
+                <div class="vram-hud-counters-header">@tr:ui.counters_this_iter</div>
                 <div id="vram-hud-counters" class="vram-hud-counters">
-                    <div id="vram-hud-counters-empty" class="vram-hud-counters-empty">(none)</div>
+                    <div id="vram-hud-counters-empty" class="vram-hud-counters-empty">@tr:ui.none</div>
                 </div>
             </div>
             <div id="vram-hud-panel-allocations" class="vram-hud-panel hidden">
                 <div class="vram-hud-allocs-summary">
-                    <span class="vram-hud-allocs-summary-label">Live allocations</span>
+                    <span class="vram-hud-allocs-summary-label">@tr:ui.live_allocations</span>
                     <span id="vram-hud-allocs-summary-value" class="vram-hud-allocs-summary-value"></span>
                 </div>
                 <div id="vram-hud-allocs-rows" class="vram-hud-allocs-rows"></div>
             </div>
             <div id="vram-hud-panel-annotations" class="vram-hud-panel hidden">
                 <div class="vram-hud-filter-row">
-                    <input id="vram-hud-anno-filter" type="text" placeholder="Search annotations..." />
+                    <input id="vram-hud-anno-filter" type="text" placeholder="@tr:ui.search_annotations" />
                     <button id="vram-hud-anno-filter-clear" class="vram-hud-filter-clear hidden">X</button>
                 </div>
                 <div class="vram-hud-anno-summary">
-                    <span class="vram-hud-anno-summary-label">Annotated entities</span>
+                    <span class="vram-hud-anno-summary-label">@tr:ui.annotated_entities</span>
                     <span id="vram-hud-anno-summary-value" class="vram-hud-anno-summary-value"></span>
                 </div>
                 <div class="vram-hud-anno-row vram-hud-anno-row-header">
-                    <span class="vram-hud-anno-cat">Cat</span>
-                    <span class="vram-hud-anno-name">Name</span>
-                    <span class="vram-hud-anno-bytes">Live</span>
-                    <span class="vram-hud-anno-peak">Peak</span>
-                    <span class="vram-hud-anno-wall">Wall ms</span>
-                    <span class="vram-hud-anno-gpu">GPU ms</span>
-                    <span class="vram-hud-anno-calls">Calls</span>
+                    <span class="vram-hud-anno-cat">@tr:ui.category</span>
+                    <span class="vram-hud-anno-name">@tr:ui.name</span>
+                    <span class="vram-hud-anno-bytes">@tr:ui.live</span>
+                    <span class="vram-hud-anno-peak">@tr:ui.peak</span>
+                    <span class="vram-hud-anno-wall">@tr:ui.wall_ms</span>
+                    <span class="vram-hud-anno-gpu">@tr:ui.gpu_ms</span>
+                    <span class="vram-hud-anno-calls">@tr:ui.calls</span>
                 </div>
                 <div id="vram-hud-anno-rows" class="vram-hud-anno-rows"></div>
             </div>
             <div id="vram-hud-panel-tree" class="vram-hud-panel hidden">
                 <div class="vram-hud-filter-row">
-                    <input id="vram-hud-filter" type="text" placeholder="Filter..." />
+                    <input id="vram-hud-filter" type="text" placeholder="@tr:common.filter" />
                     <button id="vram-hud-filter-clear" class="vram-hud-filter-clear hidden">X</button>
                 </div>
                 <div class="vram-hud-tree-row vram-hud-row-header">
-                    <span class="vram-hud-col-source">Source</span>
-                    <span class="vram-hud-col-live">Live</span>
-                    <span class="vram-hud-col-peak">Peak</span>
-                    <span class="vram-hud-col-delta">Delta</span>
-                    <span class="vram-hud-col-time">Time</span>
-                    <span class="vram-hud-col-gpu">GPU</span>
+                    <span class="vram-hud-col-source">@tr:ui.source</span>
+                    <span class="vram-hud-col-live">@tr:ui.live</span>
+                    <span class="vram-hud-col-peak">@tr:ui.peak</span>
+                    <span class="vram-hud-col-delta">@tr:ui.delta</span>
+                    <span class="vram-hud-col-time">@tr:ui.time</span>
+                    <span class="vram-hud-col-gpu">@tr:ui.gpu</span>
                 </div>
                 <div id="vram-hud-rows" class="vram-hud-rows"></div>
             </div>

@@ -6,6 +6,7 @@ import math
 import lichtfeld as lf
 
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
+from .ui import RuntimeState
 
 
 _DEPTH_MIN = 0.0
@@ -59,6 +60,10 @@ def _normalize_mode(value):
 class DepthViewControlsController:
     _DIRTY_FIELDS = (
         "depth_view_tool_label",
+        "ui_color_label",
+        "ui_gray_label",
+        "ui_near_label",
+        "ui_far_label",
         "depth_view_mode_value",
         "depth_view_has_scene",
         "depth_view_near_value",
@@ -91,8 +96,15 @@ class DepthViewControlsController:
 
     def bind_model(self, model):
         model.bind_func("depth_view_tool_label", lambda: _ui_label("toolbar.depth_map", "Depth Map"))
+        model.bind_func("ui_color_label", lambda: _ui_label("ui.color", "Color"))
+        model.bind_func("ui_gray_label", lambda: _ui_label("ui.gray", "Gray"))
+        model.bind_func("ui_near_label", lambda: _ui_label("ui.near", "Near"))
+        model.bind_func("ui_far_label", lambda: _ui_label("ui.far", "Far"))
         model.bind_func("depth_view_has_scene", lambda: self._has_scene)
-        model.bind_func("depth_view_disable_label", lambda: "Disable Depth Map")
+        model.bind_func(
+            "depth_view_disable_label",
+            lambda: _ui_label("toolbar.depth_map_disable", "Disable Depth Map"),
+        )
         model.bind(
             "depth_view_mode_value",
             lambda: self._mode,
@@ -198,6 +210,7 @@ class DepthViewControlsController:
 
     def _state_items(self):
         return (
+            ("language_generation", RuntimeState.language_generation.value),
             ("has_scene", self._has_scene),
             ("depth_near", round(self._depth_near, 3)),
             ("depth_far", round(self._depth_far, 3)),
@@ -330,6 +343,14 @@ class DepthViewControlsController:
             return
 
         field_map = {
+            "language_generation": (
+                "depth_view_tool_label",
+                "ui_color_label",
+                "ui_gray_label",
+                "ui_near_label",
+                "ui_far_label",
+                "depth_view_disable_label",
+            ),
             "has_scene": ("depth_view_has_scene",),
             "depth_near": (
                 "depth_view_near_value",

@@ -31,6 +31,10 @@ void main(
         return;
 
     uint32_t compact_idx = uint32_t(prefix - 1);
+    // Host sizes compact outs to num_splats (sort capacity); clamp data-dependent
+    // write index the same way lod_* guards output_capacity / protected_capacity.
+    if (compact_idx >= uniforms.num_splats)
+        return;
     out_compact_depth_keys[compact_idx] = sortingKey_t(primitive_depth_keys[primitive_idx]);
     out_compact_indices[compact_idx] = int32_t(primitive_idx);
 }

@@ -8,11 +8,13 @@
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "internal/viewport.hpp"
+#include "io/project_chapters.hpp"
 #include "io/session_chapters.hpp"
 #include "rendering/rendering_types.hpp"
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -91,12 +93,19 @@ namespace lfs::vis {
 
         struct PreparedGuiSessionRestore {
             lfs::io::project::ProjectSessionChapters chapters;
+            // REFS-resolved paths (open-time). Apply injects these into live
+            // owners; VIEW/SEQR chapters store UUIDs, not raw machine paths.
+            std::optional<std::filesystem::path> environment_map_path;
+            std::optional<std::filesystem::path> ply_sequence_directory;
         };
 
         [[nodiscard]] LFS_VIS_API
             lfs::Result<PreparedGuiSessionRestore>
             prepareGuiSessionRestore(
-                lfs::io::project::ProjectSessionChapters chapters);
+                lfs::io::project::ProjectSessionChapters chapters,
+                const lfs::io::project::ReferencesChapter* references =
+                    nullptr,
+                const std::filesystem::path& project_root = {});
 
         // Once startup made its preload attempt, not_started is terminal for
         // native-only/autoload-off sessions. Enabled autoload publishes
@@ -143,7 +152,10 @@ namespace lfs::vis {
                 const lfs::io::project::ProjectSessionChapters&
                     retained,
                 const std::vector<
-                    CameraBookmarkProjectState>& bookmarks);
+                    CameraBookmarkProjectState>& bookmarks,
+                lfs::io::project::ReferencesChapter* references =
+                    nullptr,
+                const std::filesystem::path& project_root = {});
 
         LFS_VIS_API void applyGuiSession(
             VisualizerImpl& viewer,

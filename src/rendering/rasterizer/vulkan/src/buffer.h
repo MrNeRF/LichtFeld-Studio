@@ -1,9 +1,6 @@
 #pragma once
 
-#include <cmath>
-#include <cstring> // memcpy
 #include <map>
-#include <mutex>
 #include <string>
 #include <vector>
 #include <vk_mem_alloc.h>
@@ -66,14 +63,6 @@ struct _VulkanBuffer {
         return *this;
     }
 
-    // used to test if descriptor needs to be updated
-    bool operator==(const _VulkanBuffer& other) const {
-        return buffer == other.buffer && allocation == other.allocation &&
-               allocSize == other.allocSize && capacity == other.capacity &&
-               offset == other.offset && extra_usage == other.extra_usage &&
-               created_with_extra_usage == other.created_with_extra_usage;
-    }
-
     // A view is described in two coordinate systems: offset is absolute in the
     // VkBuffer, while capacity and all operation offsets are relative to that
     // view. Keeping this check here prevents callers from accidentally treating
@@ -98,6 +87,10 @@ struct _VulkanBuffer {
     }
 };
 
+// Buffer<T> shallow-copies deviceBuffer (shared VkBuffer/VmaAllocation handle).
+// Ownership is external (pipeline destroyBuffer); copies are views, not RAII.
+// Accepted-risk design (epic #1496 sweep_c C1.1); trap mitigated by census,
+// require_backing, and prefer pass-by-reference. See debug/epic1496/sweep_c.md.
 template <typename T>
 class Buffer : public std::vector<T> {
 public:

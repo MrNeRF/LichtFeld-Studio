@@ -9,6 +9,7 @@
 #include "lod_page_cache.hpp"
 #include "lod_pool_quant.hpp"
 #include "lod_upload_engine.hpp"
+#include "output_image_pool.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
 #include "rendering/rendering.hpp"
@@ -44,7 +45,8 @@ namespace lfs::vis {
             VkImageView depth_image_view = VK_NULL_HANDLE;
             VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t depth_generation = 0;
-            glm::ivec2 size{0, 0};
+            glm::ivec2 size{0, 0};       // valid/logical extent (compose/readback)
+            glm::ivec2 alloc_size{0, 0}; // bucketed VkImage extent (may exceed size)
             bool flip_y = false;
             VkSemaphore completion_semaphore = VK_NULL_HANDLE;
             std::uint64_t completion_value = 0;
@@ -227,8 +229,6 @@ namespace lfs::vis {
         void reset();
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
             const lfs::core::SplatData& splat_data);
-        [[nodiscard]] std::optional<LodPageCache::Snapshot> lodPageCacheSnapshot(
-            const lfs::core::SplatData& splat_data) const;
         // VRAM page-pool budget in splats for RAD-backed LoD streaming; 0 = full residency.
         void setLodPagePoolBudget(std::size_t splats) {
             lod_pool_sizing_dirty_ = lod_pool_sizing_dirty_ || lod_page_pool_splats_ != splats;
@@ -438,6 +438,15 @@ namespace lfs::vis {
         // reached. force=true destroys all of them unconditionally and is only
         // safe after vkDeviceWaitIdle (reset/teardown).
         void drainRetiredScratchBuffers(bool force);
+        // True when the render timeline has passed `value` (0 / no timeline =
+        // trivially retired; a failed query holds the resource for retry).
+        [[nodiscard]] bool renderTimelineValueRetired(std::uint64_t value);
+        // Drain/trim the viewport output-image pool. Predicates mirror scratch
+        // retirement (producer timeline) plus graphics-frame submit serials.
+        // force=true only after device idle; never destroys live acquisitions.
+        void drainOutputImagePool(bool force);
+        void trimOutputImagePoolAged();
+        void trimOutputImagePoolIdle();
         // Clamps input-storage retirements left keyed to a timeline value a
         // failed/early-exit frame never signalled (run on every render exit).
         void clampOrphanedInputRetirements();
@@ -570,10 +579,19 @@ namespace lfs::vis {
         struct OutputImageSlot {
             VulkanContext::ExternalImage image{};
             VulkanContext::ExternalImage depth_image{};
-            glm::ivec2 size{0, 0};
+            glm::ivec2 size{0, 0};       // valid/logical extent
+            glm::ivec2 alloc_size{0, 0}; // allocated (ceil64) extent
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkImageLayout depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            // Content identity for consumers (compose may overwrite). Not a tracker key.
             std::uint64_t generation = 0;
+            // Resource identity for VulkanImageBarrierTracker (#1478). Set from the
+            // color pool acquisition serial when the VkImages are (re)acquired.
+            std::uint64_t image_generation = 0;
+            // Pool acquisition serials (0 = none). Slot images are non-owning
+            // copies; the pool Entry holds the authoritative ExternalImage.
+            std::uint64_t color_pool_serial = 0;
+            std::uint64_t depth_pool_serial = 0;
             // Timeline value signalled by the compute submission that produced
             // this exact ring image. Graphics-queue readbacks wait this value;
             // a host wait alone is not a Vulkan cross-queue memory dependency.
@@ -582,6 +600,7 @@ namespace lfs::vis {
         static constexpr std::size_t kOutputSlotCount = 4;
         static constexpr std::size_t kFrameRingSize = 3;
         std::array<std::array<OutputImageSlot, kFrameRingSize>, kOutputSlotCount> output_slots_{};
+        OutputImagePool output_pool_{};
         std::array<std::size_t, kOutputSlotCount> latest_output_ring_slot_{};
         std::array<std::uint64_t, kOutputSlotCount> output_generations_{};
         // Vulkan-only completion counter for queue-to-queue dependencies. Keep

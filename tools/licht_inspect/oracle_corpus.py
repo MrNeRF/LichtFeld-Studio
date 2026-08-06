@@ -566,13 +566,14 @@ def _random_cases(
             mutated = bytearray(minimal)
             commit_offset = int(minimal_gen["commit_offset"])
             # Alternate the two reader gates on a sole authority. Commit +186
-            # is min_reader_minor; reader bitmap bit 8 is byte +193 bit 0.
+            # is min_reader_minor; reader bitmap bit 9 is byte +193 bit 1
+            # (bit 8 is now CHUNK_BYTESHUFFLE_ZSTD_V1 and is supported).
             if (case_number // family_count) % 2 == 0:
                 struct.pack_into("<H", mutated, commit_offset + 186, 1)
                 gate_description = "raise min_reader_version from 1.0 to 1.1"
             else:
-                mutated[commit_offset + 193] |= 0x01
-                gate_description = "set unknown required-reader capability bit 8"
+                mutated[commit_offset + 193] |= 0x02
+                gate_description = "set unknown required-reader capability bit 9"
             _refresh_commit_and_heads(
                 mutated,
                 commit_offset,
@@ -587,34 +588,34 @@ def _random_cases(
             )
         elif family == 21:
             mutated = bytearray(multi)
-            # Commit +192 is the LE reader bitmap; byte +193 carries bit 8.
-            mutated[gen2_commit + 193] |= 0x01
+            # Commit +192 is the LE reader bitmap; byte +193 bit 1 is cap bit 9.
+            mutated[gen2_commit + 193] |= 0x02
             _refresh_commit_and_heads(mutated, gen2_commit, (1,))
             yield OracleCase(
                 case_id,
                 bytes(mutated),
                 "hard_fail",
-                "set unknown required-reader capability bit 8 on the greater-sequence generation-2 authority and restore its commit/head CRC envelope; the reader must hard-fail rather than roll back to supported generation 1",
+                "set unknown required-reader capability bit 9 on the greater-sequence generation-2 authority and restore its commit/head CRC envelope; the reader must hard-fail rather than roll back to supported generation 1",
                 multi_name,
             )
         else:
             mutated = bytearray(minimal)
             commit_offset = int(minimal_gen["commit_offset"])
             # Alternate the two independent writer gates. Commit +190 is
-            # min_safe_writer_minor; writer bitmap bit 8 is the low bit of
+            # min_safe_writer_minor; writer bitmap bit 9 is bit 1 of
             # byte +209. Neither field affects read compatibility.
             if (case_number // family_count) % 2 == 0:
                 struct.pack_into("<H", mutated, commit_offset + 190, 1)
                 gate_description = "raise min_safe_writer_version to 1.1"
             else:
-                mutated[commit_offset + 209] |= 0x01
-                gate_description = "set unknown required-writer capability bit 8"
+                mutated[commit_offset + 209] |= 0x02
+                gate_description = "set unknown required-writer capability bit 9"
             _refresh_commit_and_heads(mutated, commit_offset, (0,))
             yield OracleCase(
                 case_id,
                 bytes(mutated),
                 "open_gen_1",
-                f"{gate_description} while restoring the commit/head CRC envelope; inspection opens generation 1 but the declared 1.0/bits-0-through-7 writer is unsafe and must refuse",
+                f"{gate_description} while restoring the commit/head CRC envelope; inspection opens generation 1 but the declared 1.0/bits-0-through-8 writer is unsafe and must refuse",
                 minimal_name,
                 write_expected="unsafe",
             )

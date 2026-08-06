@@ -4,6 +4,7 @@
  */
 
 #include "io/project_chapters.hpp"
+#include "io/project_document.hpp"
 #include "licht_test_support.hpp"
 
 #include <gtest/gtest.h>
@@ -419,6 +420,247 @@ namespace {
                 "presets.mrnf.current.background_image_reference_uuid"),
             snapshot.mrnf_current_references
                 .background_image_reference->to_string());
+    }
+
+    TEST(ProjectChapterTest, PathReferenceMintAndResolveRoundTrip) {
+        TemporaryDirectory temporary;
+        const fs::path project_root = temporary.path / "project";
+        const fs::path assets = project_root / "assets";
+        fs::create_directories(assets);
+        const fs::path env_path = assets / "studio.hdr";
+        const fs::path bg_path = assets / "background.png";
+        const fs::path seq_dir = assets / "frames";
+        fs::create_directories(seq_dir);
+        {
+            std::ofstream stream(env_path, std::ios::binary);
+            stream << "environment-hdr-bytes";
+        }
+        {
+            std::ofstream stream(bg_path, std::ios::binary);
+            stream << "background-image-bytes";
+        }
+        {
+            std::ofstream stream(seq_dir / "frame_000.ply", std::ios::binary);
+            stream << "ply";
+        }
+
+        ReferencesChapter references;
+        auto env_uuid = upsert_path_reference(
+            references, project_root, env_path, "view.environment",
+            "environment_map");
+        ASSERT_TRUE(env_uuid) << lfs::format_for_developer(env_uuid.error());
+        auto bg_uuid = upsert_path_reference(
+            references, project_root, bg_path,
+            "presets.mrnf.current.background_image", "background_image");
+        ASSERT_TRUE(bg_uuid) << lfs::format_for_developer(bg_uuid.error());
+        auto seq_uuid = upsert_path_reference(
+            references, project_root, seq_dir, "sequencer.ply_sequence.clip",
+            "ply_sequence_directory");
+        ASSERT_TRUE(seq_uuid) << lfs::format_for_developer(seq_uuid.error());
+
+        // Re-mint with same key reuses the UUID.
+        auto env_again = upsert_path_reference(
+            references, project_root, env_path, "view.environment",
+            "environment_map");
+        ASSERT_TRUE(env_again);
+        EXPECT_EQ(*env_again, *env_uuid);
+
+        const auto resolved_env = resolve_path_reference(
+            references, project_root, *env_uuid);
+        const auto resolved_bg = resolve_path_reference(
+            references, project_root, *bg_uuid);
+        const auto resolved_seq = resolve_path_reference(
+            references, project_root, *seq_uuid, fs::path{"frames"});
+        ASSERT_TRUE(resolved_env);
+        ASSERT_TRUE(resolved_bg);
+        ASSERT_TRUE(resolved_seq);
+        EXPECT_EQ(resolved_env->lexically_normal(),
+                  env_path.lexically_normal());
+        EXPECT_EQ(resolved_bg->lexically_normal(),
+                  bg_path.lexically_normal());
+        EXPECT_EQ(resolved_seq->lexically_normal(),
+                  seq_dir.lexically_normal());
+
+        auto rows = references.records();
+        ASSERT_TRUE(rows);
+        ASSERT_EQ(rows->size(), 3u);
+        for (const auto& row : *rows) {
+            EXPECT_EQ(row.locator.base, LocatorBase::Project);
+            EXPECT_FALSE(row.unresolved);
+        }
+    }
+
+    TEST(ProjectChapterTest,
+         ParameterReferenceBindingsRoundTripThroughDocumentSaveOpen) {
+        TemporaryDirectory temporary;
+        const fs::path project_root = temporary.path;
+        const fs::path bg_path = project_root / "bg.png";
+        const fs::path ppisp_path = project_root / "model.ppisp";
+        {
+            std::ofstream stream(bg_path, std::ios::binary);
+            stream << "bg";
+        }
+        {
+            std::ofstream stream(ppisp_path, std::ios::binary);
+            stream << "ppisp";
+        }
+
+        auto document = ProjectDocument::create(
+            uuid_literal("40000000-0000-4000-8000-000000000001"), 100);
+        ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+
+        auto snapshot = parameter_snapshot();
+        snapshot.mrnf_current.bg_image_path = bg_path;
+        snapshot.mrnf_current.ppisp_sidecar_path = ppisp_path;
+        snapshot.mrnf_current_references = {};
+
+        auto bg_uuid = upsert_path_reference(
+            document->edit_references(), project_root, bg_path,
+            "presets.mrnf.current.background_image", "background_image");
+        auto ppisp_uuid = upsert_path_reference(
+            document->edit_references(), project_root, ppisp_path,
+            "presets.mrnf.current.ppisp_sidecar", "ppisp_sidecar");
+        ASSERT_TRUE(bg_uuid);
+        ASSERT_TRUE(ppisp_uuid);
+        snapshot.mrnf_current_references.background_image_reference = *bg_uuid;
+        snapshot.mrnf_current_references.ppisp_reference = *ppisp_uuid;
+        // Paths are not serialized; only reference UUIDs.
+        snapshot.mrnf_current.bg_image_path.clear();
+        snapshot.mrnf_current.ppisp_sidecar_path.clear();
+        require_status(document->edit_parameters().set_snapshot(snapshot));
+
+        const auto path = temporary.path / "params-refs.licht";
+        auto saved = document->save(
+            path,
+            ProjectDocumentSaveOptions{
+                .file_uuid =
+                    uuid_literal(
+                        "40000000-0000-4000-8000-000000000099"),
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reopened = ProjectDocument::open(path);
+        ASSERT_TRUE(reopened) << lfs::format_for_developer(reopened.error());
+        auto restored = reopened->parameters().snapshot();
+        ASSERT_TRUE(restored);
+        ASSERT_TRUE(restored->mrnf_current_references.background_image_reference);
+        ASSERT_TRUE(restored->mrnf_current_references.ppisp_reference);
+        EXPECT_EQ(
+            *restored->mrnf_current_references.background_image_reference,
+            *bg_uuid);
+        EXPECT_EQ(
+            *restored->mrnf_current_references.ppisp_reference, *ppisp_uuid);
+        EXPECT_TRUE(restored->mrnf_current.bg_image_path.empty());
+        EXPECT_TRUE(restored->mrnf_current.ppisp_sidecar_path.empty());
+
+        const auto resolved_bg = resolve_path_reference(
+            reopened->references(), project_root,
+            *restored->mrnf_current_references.background_image_reference);
+        const auto resolved_ppisp = resolve_path_reference(
+            reopened->references(), project_root,
+            *restored->mrnf_current_references.ppisp_reference);
+        ASSERT_TRUE(resolved_bg);
+        ASSERT_TRUE(resolved_ppisp);
+        EXPECT_EQ(resolved_bg->lexically_normal(), bg_path.lexically_normal());
+        EXPECT_EQ(resolved_ppisp->lexically_normal(),
+                  ppisp_path.lexically_normal());
+    }
+
+    TEST(ProjectChapterTest,
+         ViewAndSequencerReferenceUuidsRoundTripWithResolvedPaths) {
+        TemporaryDirectory temporary;
+        const fs::path project_root = temporary.path;
+        const fs::path env_path = project_root / "env.hdr";
+        const fs::path seq_dir = project_root / "seq";
+        fs::create_directories(seq_dir);
+        {
+            std::ofstream stream(env_path, std::ios::binary);
+            stream << "hdr";
+        }
+        {
+            std::ofstream stream(seq_dir / "a.ply", std::ios::binary);
+            stream << "ply";
+        }
+
+        auto document = ProjectDocument::create(
+            uuid_literal("41000000-0000-4000-8000-000000000001"), 100);
+        ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+
+        auto env_uuid = upsert_path_reference(
+            document->edit_references(), project_root, env_path,
+            "view.environment", "environment_map");
+        auto seq_uuid = upsert_path_reference(
+            document->edit_references(), project_root, seq_dir,
+            "sequencer.ply_sequence.clip", "ply_sequence_directory");
+        ASSERT_TRUE(env_uuid);
+        ASSERT_TRUE(seq_uuid);
+
+        require_status(document->edit_view().dom().set(
+            "render_settings.environment_reference_uuid",
+            env_uuid->to_string()));
+        require_status(document->edit_sequencer().dom().set_json(
+            "ply_sequences",
+            lfs::io::JsonChapterDom::Json::array({
+                {
+                    {"node_name", "clip"},
+                    {"node_uuid",
+                     uuid_literal(
+                         "41000000-0000-4000-8000-000000000002")
+                         .to_string()},
+                    {"directory_reference_uuid",
+                     seq_uuid->to_string()},
+                    {"directory_hint", "seq"},
+                    {"frames",
+                     lfs::io::JsonChapterDom::Json::array(
+                         {{{"locator", "a.ply"},
+                           {"node_name", "a"},
+                           {"node_uuid",
+                            uuid_literal(
+                                "41000000-0000-4000-8000-000000000003")
+                                .to_string()}}})},
+                    {"fps", 24.0f},
+                },
+            })));
+
+        const auto path = temporary.path / "session-refs.licht";
+        auto saved = document->save(
+            path,
+            ProjectDocumentSaveOptions{
+                .file_uuid =
+                    uuid_literal(
+                        "41000000-0000-4000-8000-000000000099"),
+                .index_compression =
+                    IndexCompression::StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+
+        auto reopened = ProjectDocument::open(path);
+        ASSERT_TRUE(reopened) << lfs::format_for_developer(reopened.error());
+        const auto env_json = reopened->view().dom().get_json(
+            "render_settings.environment_reference_uuid");
+        ASSERT_TRUE(env_json && env_json->is_string());
+        EXPECT_EQ(env_json->get<std::string>(), env_uuid->to_string());
+        const auto clips =
+            reopened->sequencer().dom().get_json("ply_sequences");
+        ASSERT_TRUE(clips && clips->is_array() && !clips->empty());
+        EXPECT_EQ((*clips)[0]["directory_reference_uuid"].get<std::string>(),
+                  seq_uuid->to_string());
+
+        const auto resolved_env = resolve_path_reference(
+            reopened->references(), project_root, *env_uuid);
+        const auto resolved_seq = resolve_path_reference(
+            reopened->references(), project_root, *seq_uuid,
+            fs::path{"seq"});
+        ASSERT_TRUE(resolved_env);
+        ASSERT_TRUE(resolved_seq);
+        EXPECT_EQ(resolved_env->lexically_normal(),
+                  env_path.lexically_normal());
+        EXPECT_EQ(resolved_seq->lexically_normal(),
+                  seq_dir.lexically_normal());
     }
 
 } // namespace

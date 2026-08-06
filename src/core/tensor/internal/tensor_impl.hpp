@@ -10,7 +10,6 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
-#include <cmath>
 #include <concepts>
 #include <cstring>
 #include <cuda_runtime.h>
@@ -179,14 +178,12 @@ namespace lfs::core {
         Permute = 1,
         Expand = 2,
         Pad = 3,
-        Shrink = 4,
         Flip = 5,
         Transpose = 6,
         Squeeze = 7,
         Unsqueeze = 8,
         Flatten = 9,
         Cat = 10,
-        Stack = 11,
         Slice = 12
     };
 
@@ -1320,12 +1317,10 @@ namespace lfs::core {
                     (std::is_same_v<Value, float> && dtype_ == DataType::Float32) ||
                     (std::is_same_v<Value, __half> && dtype_ == DataType::Float16) ||
                     ((std::is_same_v<Value, int> || std::is_same_v<Value, int32_t> ||
-                      std::is_same_v<Value, uint32_t>) &&
-                     dtype_ == DataType::Int32) ||
+                      std::is_same_v<Value, uint32_t>)&&dtype_ == DataType::Int32) ||
                     (std::is_same_v<Value, int64_t> && dtype_ == DataType::Int64) ||
                     ((std::is_same_v<Value, bool> || std::is_same_v<Value, unsigned char> ||
-                      std::is_same_v<Value, uint8_t>) &&
-                     (dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
+                      std::is_same_v<Value, uint8_t>)&&(dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
                 LFS_ASSERT_MSG(dtype_matches,
                                "ptr<T>() type does not match tensor dtype");
             }

@@ -31,13 +31,13 @@ namespace lfs::vis::gui {
     PanelLayoutManager::PanelLayoutManager() = default;
 
     void PanelLayoutManager::loadState() {
+        // Legacy layout.json remains an import-only first-run reader. Project
+        // panel geometry is authoritative in GUIL (right_panel_width,
+        // scene_panel_ratio, python_console_width, bottom_dock_height,
+        // left_dock_width, sequencer visibility). Do not seed those from
+        // layout.json so a later GUIL restore cannot fight stale user prefs.
         LayoutState state;
         state.load();
-        // right_panel_width_ intentionally not loaded — always start at default
-        scene_panel_ratio_ = state.scene_panel_ratio;
-        python_console_width_ = state.python_console_width;
-        bottom_dock_height_ = state.bottom_dock_height;
-        left_dock_width_ = state.left_dock_width;
         show_sequencer_ = false;
     }
 

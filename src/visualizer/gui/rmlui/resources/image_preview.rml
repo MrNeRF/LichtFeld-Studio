@@ -122,7 +122,7 @@
       <span class="hk"><span class="hk-key">&#x2190;&#x2192;</span><span class="hk-label" id="hk-navigate"></span></span>
       <span class="hk"><span class="hk-key">F</span><span class="hk-label" id="hk-fit"></span></span>
       <span class="hk"><span class="hk-key">1</span><span class="hk-label">100%</span></span>
-      <span class="hk"><span class="hk-key">+ &#x2212; / Scroll</span><span class="hk-label" id="hk-zoom"></span></span>
+      <span class="hk"><span class="hk-key">@tr:image_preview.zoom_shortcut</span><span class="hk-label" id="hk-zoom"></span></span>
       <span class="hk"><span class="hk-key">I</span><span class="hk-label" id="hk-info"></span></span>
       <span class="hk"><span class="hk-key">T</span><span class="hk-label" id="hk-thumbnails"></span></span>
       <span class="hk"><span class="hk-key">M</span><span class="hk-label" id="hk-mask"></span></span>

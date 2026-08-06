@@ -708,6 +708,162 @@ namespace lfs::core {
             return groups;
         }
 
+        void split_group_by_extent(
+            const NativeRows& rows,
+            std::vector<int> indices,
+            const int max_group_size,
+            std::vector<std::vector<int>>& out_groups) {
+            if (indices.empty())
+                return;
+            if (static_cast<int>(indices.size()) <= max_group_size) {
+                std::sort(indices.begin(), indices.end());
+                out_groups.push_back(std::move(indices));
+                return;
+            }
+
+            float min[3], max[3];
+            const size_t first3 = static_cast<size_t>(indices.front()) * 3;
+            for (int axis = 0; axis < 3; ++axis)
+                min[axis] = max[axis] = rows.means[first3 + static_cast<size_t>(axis)];
+            for (const int idx : indices) {
+                const size_t idx3 = static_cast<size_t>(idx) * 3;
+                for (int axis = 0; axis < 3; ++axis) {
+                    const float value = rows.means[idx3 + static_cast<size_t>(axis)];
+                    min[axis] = std::min(min[axis], value);
+                    max[axis] = std::max(max[axis], value);
+                }
+            }
+
+            int split_axis = 0;
+            float max_extent = max[0] - min[0];
+            for (int axis = 1; axis < 3; ++axis) {
+                const float extent = max[axis] - min[axis];
+                if (extent > max_extent) {
+                    max_extent = extent;
+                    split_axis = axis;
+                }
+            }
+
+            if (max_extent <= 1e-6f) {
+                std::sort(indices.begin(), indices.end());
+                for (size_t begin = 0; begin < indices.size(); begin += static_cast<size_t>(max_group_size)) {
+                    const size_t end = std::min(indices.size(), begin + static_cast<size_t>(max_group_size));
+                    out_groups.emplace_back(indices.begin() + static_cast<std::ptrdiff_t>(begin),
+                                            indices.begin() + static_cast<std::ptrdiff_t>(end));
+                }
+                return;
+            }
+
+            std::sort(indices.begin(), indices.end(), [&](const int lhs, const int rhs) {
+                const float lhs_value = rows.means[static_cast<size_t>(lhs) * 3 + static_cast<size_t>(split_axis)];
+                const float rhs_value = rows.means[static_cast<size_t>(rhs) * 3 + static_cast<size_t>(split_axis)];
+                if (lhs_value == rhs_value)
+                    return lhs < rhs;
+                return lhs_value < rhs_value;
+            });
+
+            const size_t mid = indices.size() / 2;
+            std::vector<int> left(indices.begin(), indices.begin() + static_cast<std::ptrdiff_t>(mid));
+            std::vector<int> right(indices.begin() + static_cast<std::ptrdiff_t>(mid), indices.end());
+            split_group_by_extent(rows, std::move(left), max_group_size, out_groups);
+            split_group_by_extent(rows, std::move(right), max_group_size, out_groups);
+        }
+
+        [[nodiscard]] std::vector<std::vector<int>> cap_voxel_group_sizes(
+            const NativeRows& rows,
+            std::vector<std::vector<int>> groups,
+            const int max_group_size) {
+            if (max_group_size <= 1)
+                return groups;
+
+            std::vector<std::vector<int>> capped_groups;
+            capped_groups.reserve(groups.size());
+            for (auto& group : groups) {
+                if (static_cast<int>(group.size()) > max_group_size) {
+                    split_group_by_extent(rows, std::move(group), max_group_size, capped_groups);
+                } else {
+                    capped_groups.push_back(std::move(group));
+                }
+            }
+
+            std::sort(capped_groups.begin(), capped_groups.end(), [](const auto& lhs, const auto& rhs) {
+                return lhs.front() < rhs.front();
+            });
+            return capped_groups;
+        }
+
+        [[nodiscard]] std::vector<std::vector<int>> limit_groups_to_target(
+            const std::vector<std::vector<int>>& groups,
+            const int current_count,
+            const int target_count) {
+            int remaining_savings = current_count - target_count;
+            if (remaining_savings <= 0) {
+                std::vector<std::vector<int>> singletons;
+                singletons.reserve(static_cast<size_t>(current_count));
+                for (const auto& group : groups) {
+                    for (const int idx : group)
+                        singletons.push_back({idx});
+                }
+                return singletons;
+            }
+
+            int possible_savings = 0;
+            for (const auto& group : groups)
+                possible_savings += std::max(0, static_cast<int>(group.size()) - 1);
+            if (possible_savings <= remaining_savings)
+                return groups;
+
+            std::vector<size_t> order;
+            order.reserve(groups.size());
+            for (size_t i = 0; i < groups.size(); ++i)
+                order.push_back(i);
+            std::sort(order.begin(), order.end(), [&](const size_t lhs, const size_t rhs) {
+                const int lhs_savings = std::max(0, static_cast<int>(groups[lhs].size()) - 1);
+                const int rhs_savings = std::max(0, static_cast<int>(groups[rhs].size()) - 1);
+                if (lhs_savings != rhs_savings)
+                    return lhs_savings < rhs_savings;
+                return groups[lhs].front() < groups[rhs].front();
+            });
+
+            std::vector<uint8_t> consumed(groups.size(), uint8_t{0});
+            std::vector<std::vector<int>> adjusted_groups;
+            adjusted_groups.reserve(static_cast<size_t>(current_count));
+            for (const size_t group_index : order) {
+                const auto& group = groups[group_index];
+                const int savings = static_cast<int>(group.size()) - 1;
+                if (savings <= 0 || remaining_savings <= 0)
+                    continue;
+
+                std::vector<int> sorted_group = group;
+                std::sort(sorted_group.begin(), sorted_group.end());
+                consumed[group_index] = 1;
+                if (savings <= remaining_savings) {
+                    adjusted_groups.push_back(std::move(sorted_group));
+                    remaining_savings -= savings;
+                    continue;
+                }
+
+                const auto merge_size = static_cast<size_t>(remaining_savings + 1);
+                adjusted_groups.emplace_back(sorted_group.begin(),
+                                             sorted_group.begin() + static_cast<std::ptrdiff_t>(merge_size));
+                for (size_t i = merge_size; i < sorted_group.size(); ++i)
+                    adjusted_groups.push_back({sorted_group[i]});
+                remaining_savings = 0;
+            }
+
+            for (size_t group_index = 0; group_index < groups.size(); ++group_index) {
+                if (consumed[group_index])
+                    continue;
+                for (const int idx : groups[group_index])
+                    adjusted_groups.push_back({idx});
+            }
+
+            std::sort(adjusted_groups.begin(), adjusted_groups.end(), [](const auto& lhs, const auto& rhs) {
+                return lhs.front() < rhs.front();
+            });
+            return adjusted_groups;
+        }
+
         [[nodiscard]] NativeRows merge_voxel_groups(
             const NativeRows& input,
             const std::vector<std::vector<int>>& groups,
@@ -983,6 +1139,13 @@ namespace lfs::core {
                     bool reduced = false;
                     for (int attempt = 0; attempt < 10 && !reduced; ++attempt) {
                         auto groups = group_into_voxels(current, voxel_size, bounds_min);
+                        const int max_group_size = std::max(
+                            2,
+                            static_cast<int>(std::ceil(static_cast<double>(current.count) /
+                                                       static_cast<double>(pass_target_count))) +
+                                1);
+                        groups = cap_voxel_group_sizes(current, std::move(groups), max_group_size);
+                        groups = limit_groups_to_target(groups, current.count, pass_target_count);
 
                         int merge_count = 0;
                         for (const auto& g : groups)

@@ -84,7 +84,7 @@ namespace {
         if (!result.success) {
             editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
-                state.addError("[Format] " + result.error);
+                state.addError(LOCF(lichtfeld::Strings::PythonConsole::FORMAT_ERROR, result.error));
             }
             return;
         }
@@ -108,7 +108,7 @@ namespace {
         if (!result.success) {
             editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
-                state.addError("[Cleanup] " + result.error);
+                state.addError(LOCF(lichtfeld::Strings::PythonConsole::CLEANUP_ERROR, result.error));
             }
             return;
         }
@@ -458,16 +458,18 @@ namespace {
 
         std::vector<lfs::vis::gui::ContextMenuItem> items;
         if (has_selection) {
-            items.push_back(lfs::vis::gui::ContextMenuItem{.label = "Copy", .action = "copy"});
+            items.push_back(lfs::vis::gui::ContextMenuItem{
+                .label = lfs::event::LocalizationManager::getInstance().get("common.copy"),
+                .action = "copy"});
         }
         items.push_back(lfs::vis::gui::ContextMenuItem{
-            .label = "Copy All",
+            .label = lfs::event::LocalizationManager::getInstance().get("common.copy_all"),
             .action = "copy-all",
             .separator_before = has_selection,
         });
         if (!read_only) {
             items.push_back(lfs::vis::gui::ContextMenuItem{
-                .label = "Paste",
+                .label = lfs::event::LocalizationManager::getInstance().get("common.paste"),
                 .action = "paste",
                 .separator_before = !items.empty(),
             });
@@ -495,6 +497,7 @@ namespace {
 
     bool can_stop_python_work(lfs::vis::gui::panels::PythonConsoleState& state) {
         return lfs::python::has_frame_callback() ||
+               lfs::python::has_scene_time_callback() ||
                state.isScriptRunning() ||
                (state.getOutputTerminal() && state.getOutputTerminal()->is_running()) ||
                lfs::python::PackageManager::instance().has_running_operation();
@@ -503,6 +506,8 @@ namespace {
     void stop_python_work(lfs::vis::gui::panels::PythonConsoleState& state) {
         if (lfs::python::has_frame_callback())
             lfs::python::clear_frame_callback();
+        if (lfs::python::has_scene_time_callback())
+            lfs::python::clear_scene_time_callback();
         if (state.isScriptRunning())
             state.interruptScript();
         if (lfs::python::PackageManager::instance().has_running_operation())
@@ -1095,9 +1100,9 @@ namespace {
 
         std::string status;
         if (pane.packages_loading)
-            status = "Loading...";
+            status = LOC("status.loading");
         else if (!pane.packages_error.empty())
-            status = "Error";
+            status = LOC("status.error");
         else if (pane.packages_search_filter.empty())
             status = std::format("({})", pane.packages.size());
         else
@@ -1371,7 +1376,7 @@ namespace {
     bool load_script(const std::filesystem::path& path, lfs::vis::gui::panels::PythonConsoleState& state) {
         std::ifstream file;
         if (!lfs::core::open_file_for_read(path, file)) {
-            state.addError("Failed to open: " + lfs::core::path_to_utf8(path));
+            state.addError(LOCF(lichtfeld::Strings::PythonConsole::OPEN_FAILED, lfs::core::path_to_utf8(path)));
             return false;
         }
 
@@ -1396,7 +1401,7 @@ namespace {
 
         std::ofstream file;
         if (!lfs::core::open_file_for_write(path, file)) {
-            state.addError("Failed to save: " + lfs::core::path_to_utf8(path));
+            state.addError(LOCF(lichtfeld::Strings::PythonConsole::SAVE_FAILED, lfs::core::path_to_utf8(path)));
             return false;
         }
 
@@ -1499,7 +1504,7 @@ namespace lfs::vis::gui::panels {
 
     void PythonConsoleState::runScriptAsync(const std::string& code) {
         if (script_running_.load()) {
-            addError("A script is already running");
+            addError(LOC("python_console.already_running"));
             return;
         }
 

@@ -1,0 +1,45 @@
+# Exact reviewed strings intentionally excluded from check_ui_hardcoded.py.
+# Add an explanatory comment beside every new entry.
+
+# Renderer/backend diagnostics: API names are developer diagnostics, not UI copy.
+re:\[Vulkan\].*
+re:failed to (?:vk|vma).*
+re:failed to create saved RmlUi layer.*
+re:failed to create RmlUi Vulkan layer.*
+
+# Asset names and external handles retain their canonical spelling.
+Kloofendal Pure Sky
+Alps Field
+
+# Python LSP startup state is internal-only: the status field has no UI consumer.
+No Python language server configured
+Starting Python completions...
+Python completions unavailable
+Restarting Python completions...
+Python completions ready
+
+# Python editor outline labels are structural diagnostics, not translatable UI copy.
+re:\{\}\{\} \{\}  L\{\}
+re:\{\} \{\} block  L\{\}-\{\}
+
+# Language-server launch labels identify the selected technical implementation.
+custom Python language server
+basedpyright via uv
+re:Starting .+\.\.\.
+Starting
+
+# Canonical keyboard, URL and renderer-backend identifiers must match their protocols.
+Esc
+owner/repo
+3DGS
+3DGUT
+
+# CSS class passed through the widget helper; it is not user-facing copy.
+setting-row__control-col
+# Stable operator metadata exposed outside the localized GUI registry.
+Play/Pause
+
+# Dynamic UI composition templates contain no fixed user-facing words.
+{error_prefix}: {detail}
+{tr('plugin_manager.status.unload_failed')}: {e}
+{group.name} ({group.count})

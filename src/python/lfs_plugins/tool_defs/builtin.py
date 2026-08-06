@@ -147,6 +147,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
     ToolDef(
         id="builtin.select",
         label="Select",
+        label_key="tool_defs.select",
         icon="selection",
         group="select",
         order=10,
@@ -167,6 +168,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
     ToolDef(
         id="builtin.translate",
         label="Move",
+        label_key="tool_defs.move",
         icon="translation",
         group="transform",
         order=20,
@@ -186,6 +188,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
     ToolDef(
         id="builtin.rotate",
         label="Rotate",
+        label_key="tool_defs.rotate",
         icon="rotation",
         group="transform",
         order=30,
@@ -205,6 +208,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
     ToolDef(
         id="builtin.scale",
         label="Scale",
+        label_key="tool_defs.scale",
         icon="scaling",
         group="transform",
         order=40,
@@ -224,6 +228,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
     ToolDef(
         id="builtin.mirror",
         label="Mirror",
+        label_key="tool_defs.mirror",
         icon="mirror",
         group="transform",
         order=50,
@@ -239,6 +244,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
     ToolDef(
         id="builtin.cropbox",
         label="Crop",
+        label_key="tool_defs.crop",
         icon="cropbox",
         group="utility",
         order=70,
@@ -249,6 +255,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
     ToolDef(
         id="builtin.align",
         label="Align",
+        label_key="tool_defs.align",
         icon="align",
         group="utility",
         order=80,

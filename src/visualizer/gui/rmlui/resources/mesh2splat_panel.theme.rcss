@@ -5,7 +5,6 @@
     color: @{text};
 }
 
-.m2s-label,
 .m2s-list-name {
     color: @{text};
 }

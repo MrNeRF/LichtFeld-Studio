@@ -15,6 +15,7 @@
 #include "gui/string_keys.hpp"
 #include "gui/translation_gizmo.hpp"
 #include "input/input_router.hpp"
+#include "input/input_types.hpp"
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
@@ -24,7 +25,6 @@
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/ppisp_overrides_utils.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
@@ -2467,44 +2467,10 @@ namespace lfs::vis {
         }
 
         if (auto* trainer_mgr = services().trainerOrNull(); trainer_mgr && trainer_mgr->getTrainer()) {
-            std::string metrics_suffix;
-            if (rendering_manager) {
-                const auto settings = rendering_manager->getSettings();
-                if (settings.camera_metrics_mode != RenderSettings::CameraMetricsMode::Off) {
-                    const bool include_ssim =
-                        settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::PSNRSSIM;
-                    lfs::training::Trainer::CameraMetricsAppearanceConfig appearance{};
-                    appearance.enabled = settings.apply_appearance_correction;
-                    appearance.use_controller =
-                        settings.ppisp_mode == RenderSettings::PPISPMode::AUTO;
-                    appearance.overrides = toTrainerPPISPOverrides(settings.ppisp_overrides);
-
-                    if (auto metrics = trainer_mgr->computeCameraMetricsForCameraId(
-                            event.cam_id, include_ssim, appearance);
-                        metrics) {
-                        metrics_suffix = std::format(", psnr={:.4f}", metrics->psnr);
-                        if (metrics->ssim.has_value()) {
-                            metrics_suffix += std::format(", ssim={:.4f}", *metrics->ssim);
-                        }
-                        rendering_manager->setLatestCameraMetrics({.camera_id = event.cam_id,
-                                                                   .iteration = trainer_mgr->getCurrentIteration(),
-                                                                   .psnr = metrics->psnr,
-                                                                   .ssim = metrics->ssim,
-                                                                   .used_mask = metrics->used_mask});
-                    } else {
-                        rendering_manager->clearLatestCameraMetrics();
-                        LOG_WARN("Camera {} metrics unavailable: {}", event.cam_id, metrics.error());
-                    }
-                } else {
-                    rendering_manager->clearLatestCameraMetrics();
-                }
-            }
-
-            LOG_INFO("Camera {} view: iter={}, last_loss={:.6f}{}",
+            LOG_INFO("Camera {} view: iter={}, last_loss={:.6f}",
                      event.cam_id,
                      trainer_mgr->getCurrentIteration(),
-                     trainer_mgr->getCurrentLoss(),
-                     metrics_suffix);
+                     trainer_mgr->getCurrentLoss());
         } else if (rendering_manager) {
             rendering_manager->clearLatestCameraMetrics();
         }

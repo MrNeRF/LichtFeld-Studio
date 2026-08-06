@@ -8,7 +8,6 @@
 #include "core/export.hpp"
 #include "core/services.hpp"
 #include "input/input_bindings.hpp"
-#include "input/input_types.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>

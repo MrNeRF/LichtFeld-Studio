@@ -222,24 +222,137 @@ namespace lfs::io::project {
             }
         }
 
+        // Fixed internal level 3 (no knobs). Below the stream threshold, one-shot
+        // compress; above it, ZSTD_compressStream2 with a bounded output window
+        // so peak transient RAM is ~input + final-compressed + window, not
+        // input + ZSTD_compressBound(~input).
+        constexpr std::size_t ZSTD_STREAM_THRESHOLD_BYTES = 8ull * 1024 * 1024;
+        constexpr std::size_t ZSTD_STREAM_OUT_WINDOW_BYTES = 8ull * 1024 * 1024;
+        constexpr int ZSTD_FIXED_LEVEL = 3;
+
+        // f32-word byte-plane transpose: [b0 b1 b2 b3 | b0 b1 b2 b3 | ...]
+        // -> plane0 || plane1 || plane2 || plane3. Requires size % 4 == 0.
+        std::vector<std::byte>
+        byte_plane_f32_words(const std::span<const std::byte> interleaved) {
+            const std::size_t n_words = interleaved.size() / 4;
+            std::vector<std::byte> out(interleaved.size());
+            const auto* src =
+                reinterpret_cast<const std::uint8_t*>(interleaved.data());
+            auto* dst = reinterpret_cast<std::uint8_t*>(out.data());
+            for (std::size_t w = 0; w < n_words; ++w) {
+                dst[0 * n_words + w] = src[w * 4 + 0];
+                dst[1 * n_words + w] = src[w * 4 + 1];
+                dst[2 * n_words + w] = src[w * 4 + 2];
+                dst[3 * n_words + w] = src[w * 4 + 3];
+            }
+            return out;
+        }
+
         lfs::Result<std::vector<std::byte>>
         compress_zstd(const std::span<const std::byte> input,
                       const std::filesystem::path& path,
                       const std::string_view field) {
-            const std::size_t bound = ZSTD_compressBound(input.size());
-            std::vector<std::byte> compressed(bound);
-            const std::size_t result =
-                ZSTD_compress(compressed.data(), compressed.size(), input.data(),
-                              input.size(), 3);
-            if (ZSTD_isError(result)) {
+            if (input.size() < ZSTD_STREAM_THRESHOLD_BYTES) {
+                const std::size_t bound = ZSTD_compressBound(input.size());
+                std::vector<std::byte> compressed(bound);
+                const std::size_t result = ZSTD_compress(
+                    compressed.data(), compressed.size(), input.data(),
+                    input.size(), ZSTD_FIXED_LEVEL);
+                if (ZSTD_isError(result)) {
+                    return writer_error(
+                        lfs::ErrorCode::Internal, path,
+                        "Project data compression failed.",
+                        std::format("ZSTD_compress failed: {}",
+                                    ZSTD_getErrorName(result)),
+                        field);
+                }
+                compressed.resize(result);
+                return compressed;
+            }
+
+            ZSTD_CCtx* cctx = ZSTD_createCCtx();
+            if (cctx == nullptr) {
+                return writer_error(
+                    lfs::ErrorCode::ResourceExhausted, path,
+                    "Project data compression failed.",
+                    "ZSTD_createCCtx returned null", field);
+            }
+            auto free_cctx = [&]() { ZSTD_freeCCtx(cctx); };
+
+            if (const std::size_t rc = ZSTD_CCtx_setParameter(
+                    cctx, ZSTD_c_compressionLevel, ZSTD_FIXED_LEVEL);
+                ZSTD_isError(rc)) {
+                free_cctx();
                 return writer_error(
                     lfs::ErrorCode::Internal, path,
                     "Project data compression failed.",
-                    std::format("ZSTD_compress failed: {}",
-                                ZSTD_getErrorName(result)),
+                    std::format("ZSTD_CCtx_setParameter failed: {}",
+                                ZSTD_getErrorName(rc)),
                     field);
             }
-            compressed.resize(result);
+            // Readers require a single frame with known content size
+            // (decompress_zstd_exact checks ZSTD_getFrameContentSize).
+            if (const std::size_t rc = ZSTD_CCtx_setParameter(
+                    cctx, ZSTD_c_contentSizeFlag, 1);
+                ZSTD_isError(rc)) {
+                free_cctx();
+                return writer_error(
+                    lfs::ErrorCode::Internal, path,
+                    "Project data compression failed.",
+                    std::format("ZSTD_c_contentSizeFlag failed: {}",
+                                ZSTD_getErrorName(rc)),
+                    field);
+            }
+            if (const std::size_t rc = ZSTD_CCtx_setPledgedSrcSize(
+                    cctx, input.size());
+                ZSTD_isError(rc)) {
+                free_cctx();
+                return writer_error(
+                    lfs::ErrorCode::Internal, path,
+                    "Project data compression failed.",
+                    std::format("ZSTD_CCtx_setPledgedSrcSize failed: {}",
+                                ZSTD_getErrorName(rc)),
+                    field);
+            }
+
+            std::vector<std::byte> compressed;
+            // Conservative reserve: mature CKPT payloads compress ~10–20%.
+            compressed.reserve(input.size());
+            std::vector<std::byte> out_window(ZSTD_STREAM_OUT_WINDOW_BYTES);
+
+            std::size_t in_pos = 0;
+            while (in_pos < input.size()) {
+                const std::size_t chunk = std::min(ZSTD_STREAM_OUT_WINDOW_BYTES,
+                                                   input.size() - in_pos);
+                ZSTD_inBuffer zin{input.data() + in_pos, chunk, 0};
+                const ZSTD_EndDirective mode =
+                    (in_pos + chunk == input.size()) ? ZSTD_e_end
+                                                     : ZSTD_e_continue;
+                std::size_t remaining = 1;
+                while (zin.pos < zin.size ||
+                       (mode == ZSTD_e_end && remaining != 0)) {
+                    ZSTD_outBuffer zout{out_window.data(), out_window.size(), 0};
+                    remaining =
+                        ZSTD_compressStream2(cctx, &zout, &zin, mode);
+                    if (ZSTD_isError(remaining)) {
+                        free_cctx();
+                        return writer_error(
+                            lfs::ErrorCode::Internal, path,
+                            "Project data compression failed.",
+                            std::format("ZSTD_compressStream2 failed: {}",
+                                        ZSTD_getErrorName(remaining)),
+                            field);
+                    }
+                    compressed.insert(compressed.end(), out_window.begin(),
+                                      out_window.begin() +
+                                          static_cast<std::ptrdiff_t>(zout.pos));
+                    if (mode != ZSTD_e_end && zin.pos == zin.size) {
+                        break;
+                    }
+                }
+                in_pos += chunk;
+            }
+            free_cctx();
             return compressed;
         }
 
@@ -412,6 +525,9 @@ namespace lfs::io::project {
                 if (row.row_kind == RowKind::Live) {
                     if (row.compression == Compression::Zstd) {
                         capabilities.set(CHUNK_ZSTD_V1);
+                    }
+                    if (row.compression == Compression::ByteShuffleZstd) {
+                        capabilities.set(CHUNK_BYTESHUFFLE_ZSTD_V1);
                     }
                     if ((row.flags & HAS_BLOCK_CRCS) != 0) {
                         capabilities.set(BLOCK_CRC32C_V1);
@@ -1718,7 +1834,24 @@ namespace lfs::io::project {
 
         std::vector<std::byte> compressed;
         std::span<const std::byte> stored = payload;
-        if (options.compression == Compression::Zstd) {
+        ChunkWriteOptions placed_options = options;
+        if (options.compression == Compression::ByteShuffleZstd) {
+            // Deterministic fallback: non-multiple-of-4 payloads cannot be
+            // f32-word plane-shuffled; emit plain Zstd instead (no knob).
+            if (payload.size() % 4 != 0) {
+                placed_options.compression = Compression::Zstd;
+            } else {
+                const std::vector<std::byte> planes = byte_plane_f32_words(payload);
+                auto result =
+                    compress_zstd(planes, impl_->active_path, "chunk.byteshuffle_zstd");
+                if (!result) {
+                    return status_failure(std::move(result).error());
+                }
+                compressed = std::move(*result);
+                stored = compressed;
+            }
+        }
+        if (placed_options.compression == Compression::Zstd) {
             auto result =
                 compress_zstd(payload, impl_->active_path, "chunk.zstd");
             if (!result) {
@@ -1726,16 +1859,17 @@ namespace lfs::io::project {
             }
             compressed = std::move(*result);
             stored = compressed;
-        } else if (options.compression != Compression::Stored) {
+        } else if (placed_options.compression != Compression::Stored &&
+                   placed_options.compression != Compression::ByteShuffleZstd) {
             return status_failure(writer_error(
                 lfs::ErrorCode::InvalidArgument, impl_->destination_path,
                 "The project chunk compression is invalid.",
-                "compression must be STORED or ZSTD",
+                "compression must be STORED, ZSTD, or BYTESHUFFLE_ZSTD",
                 "chunk.compression"));
         }
 
-        auto placed =
-            impl_->place_stored_chunk(key, stored, payload.size(), options);
+        auto placed = impl_->place_stored_chunk(key, stored, payload.size(),
+                                                placed_options);
         if (!placed) {
             impl_->poisoned = true;
             return status_failure(std::move(placed).error());
@@ -1830,7 +1964,7 @@ namespace lfs::io::project {
             return writer_error(
                 lfs::ErrorCode::InvalidArgument, impl_->destination_path,
                 "Streaming project chunks must use stored encoding.",
-                "begin_chunk streams bytes directly; use write_chunk for ZSTD",
+                "begin_chunk streams bytes directly; use write_chunk for compressed encodings",
                 "chunk.compression");
         }
         if (impl_->touched.contains(key)) {
@@ -2879,14 +3013,8 @@ namespace lfs::io::project {
                 }
                 writer.impl_->rows[copied->key] = std::move(*copied);
                 writer.impl_->touched.insert(source_row.key);
-            } else if (source_row.row_kind == RowKind::Tombstone &&
-                       options.keep_tombstones) {
-                ChunkInfo tombstone = source_row;
-                tombstone.source_generation = 1;
-                writer.impl_->rows[tombstone.key] = std::move(tombstone);
-                writer.impl_->touched.insert(source_row.key);
-                writer.impl_->mutation_started = true;
             }
+            // Tombstones are discarded on compaction (spec MAY; no keep_tombstones producer).
         }
 
         return writer.commit();

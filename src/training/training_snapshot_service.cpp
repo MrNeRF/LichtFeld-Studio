@@ -32,6 +32,7 @@
 #include <set>
 #include <stdexcept>
 #include <streambuf>
+#include <string>
 #include <thread>
 #include <utility>
 

@@ -226,7 +226,7 @@ and the first four header bytes; there is no additional chunk magic.
 | 6 | 2 | u16 | `header_bytes` | `64`. |
 | 8 | 16 | UUID | `instance_uuid` | Non-null logical key component. |
 | 24 | 4 | u32 bitmap | `chunk_flags` | Bits below; all other bits zero. |
-| 28 | 2 | u16 enum | `compression` | `STORED` or `ZSTD`. |
+| 28 | 2 | u16 enum | `compression` | `STORED` (0), `ZSTD` (1), or `BYTESHUFFLE_ZSTD` (2). |
 | 30 | 2 | u16 enum | `block_crc_kind` | `CRC_NONE` or `CRC32C_BLOCKS_V1`. |
 | 32 | 8 | u64 | `stored_bytes` | Exact stored payload size. |
 | 40 | 8 | u64 | `uncompressed_bytes` | Exact decoded payload size. |
@@ -533,6 +533,11 @@ START
 Validation order is security-relevant: enclosing CRC and bounds checks happen
 before interpreting variable counts or allocating decoded sizes. A parser MUST
 cap/decode to `index_uncompressed_bytes`, checked against row-count arithmetic.
+Index, block-CRC tables, and non-payload (JSON/small) materialized chunks are
+implementation-capped at 512 MiB; `TENSOR_PAYLOAD` and lazy-binary (`CKPT`/`PPIS`,
+including `ByteShuffleZstd`) payload-class chunks raise that materialize bound
+to 16 GiB, remain `size_t`-addressable, and MUST still cross-check the declared
+`uncompressed_bytes` against the zstd frame content size before allocate.
 It MUST NOT scan EOF for a replacement head.
 
 Head resolution is exact. In this list, “structurally valid” means that all
@@ -699,7 +704,8 @@ Capability bits share this 128-bit registry:
 | 5 | `OPAQUE_CHUNK_PRESERVATION` | Writer carries unknown live chunks byte-for-byte when declared safe. |
 | 6 | `RETAINED_JSON_FIELDS` | Semantic writer preserves unknown JSON object and UUID-addressed array fields. |
 | 7 | `CLEAN_PROOF_REUSE` | Writer enforces snapshot/mutation-epoch proof before reusing spans. |
-| 8-31 | Core container | Reserved for assignment by a later published format revision. |
+| 8 | `CHUNK_BYTESHUFFLE_ZSTD_V1` | Reader/writer handles f32-word byte-plane prefilter + zstd (`Compression::ByteShuffleZstd` = 2). Size-preserving filter; payload size must be a multiple of 4. Writers fall back to plain `ZSTD` when size `% 4 != 0`. |
+| 9-31 | Core container | Reserved for assignment by a later published format revision. |
 | 32-63 | Built-in chapters | Cross-chapter semantic features. |
 | 64-95 | Embedded protocols | LFKP/LFSP/LFAD and successors. |
 | 96-111 | Experimental | MUST be zero in released files. |

@@ -204,7 +204,7 @@ namespace lfs::app {
 
             auto& localization =
                 lfs::event::LocalizationManager::getInstance();
-            if (!localization.contains(value)) {
+            if (!localization.hasKey(value)) {
                 return std::string(value);
             }
             return localization.get(value);

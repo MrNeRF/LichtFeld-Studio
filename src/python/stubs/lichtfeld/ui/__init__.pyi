@@ -2490,8 +2490,10 @@ def clear_keyframes() -> None:
 def set_playback_speed(speed: float) -> None:
     """Set sequencer playback speed"""
 
-def export_video(width: int, height: int, framerate: int, crf: int) -> None:
-    """Export video with specified settings"""
+def export_video(width: int, height: int, framerate: int, crf: int, path: str = '') -> None:
+    """
+    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly.
+    """
 
 def add_keyframe() -> None:
     """Add a keyframe at current camera position"""
@@ -2794,3 +2796,6 @@ def register_property_group(group_id: str, group_name: str, property_group_class
 
 def unregister_property_group(group_id: str) -> None:
     """Unregister a Python PropertyGroup from the property registry"""
+
+def property_group_info(group_id: str) -> dict:
+    """Get registered property metadata for a property group"""

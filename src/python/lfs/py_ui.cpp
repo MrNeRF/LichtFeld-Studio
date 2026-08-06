@@ -43,7 +43,6 @@
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
-#include "visualizer/operator/property_schema.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/theme/theme.hpp"
@@ -79,6 +78,11 @@
 #ifdef _WIN32
 #include <shellapi.h>
 #include <windows.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+
+extern char** environ;
 #endif
 
 namespace lfs::python {
@@ -885,206 +889,109 @@ namespace lfs::python {
             return vis::op::OperatorResult::CANCELLED;
         }
 
-        std::vector<vis::op::PropertySchema> extract_property_schemas(nb::object cls) {
-            std::vector<vis::op::PropertySchema> schemas;
-
-            try {
-                if (!nb::hasattr(cls, "__dict__")) {
-                    return schemas;
-                }
-                nb::object dict_obj = cls.attr("__dict__");
-                if (!nb::isinstance<nb::dict>(dict_obj)) {
-                    return schemas;
-                }
-                nb::dict class_dict = nb::cast<nb::dict>(dict_obj);
-
-                for (auto item : class_dict) {
-                    nb::object name = nb::borrow(item.first);
-                    nb::object value = nb::borrow(item.second);
-
-                    if (!nb::hasattr(value, "_attr_name")) {
-                        continue;
-                    }
-
-                    vis::op::PropertySchema schema;
-                    schema.name = nb::cast<std::string>(name);
-
-                    std::string type_name = nb::cast<std::string>(nb::borrow(value.type()).attr("__name__"));
-
-                    if (type_name == "FloatProperty") {
-                        schema.type = vis::op::PropertyType::FLOAT;
-                        if (nb::hasattr(value, "min")) {
-                            double min_val = nb::cast<double>(value.attr("min"));
-                            if (min_val > -1e30) {
-                                schema.min = min_val;
-                            }
-                        }
-                        if (nb::hasattr(value, "max")) {
-                            double max_val = nb::cast<double>(value.attr("max"));
-                            if (max_val < 1e30) {
-                                schema.max = max_val;
-                            }
-                        }
-                        if (nb::hasattr(value, "precision")) {
-                            schema.precision = nb::cast<int>(value.attr("precision"));
-                        }
-                    } else if (type_name == "IntProperty") {
-                        schema.type = vis::op::PropertyType::INT;
-                        if (nb::hasattr(value, "min")) {
-                            schema.min = static_cast<double>(nb::cast<int64_t>(value.attr("min")));
-                        }
-                        if (nb::hasattr(value, "max")) {
-                            schema.max = static_cast<double>(nb::cast<int64_t>(value.attr("max")));
-                        }
-                        if (nb::hasattr(value, "step")) {
-                            schema.step = nb::cast<int>(value.attr("step"));
-                        }
-                    } else if (type_name == "BoolProperty") {
-                        schema.type = vis::op::PropertyType::BOOL;
-                    } else if (type_name == "StringProperty") {
-                        schema.type = vis::op::PropertyType::STRING;
-                        if (nb::hasattr(value, "maxlen")) {
-                            schema.maxlen = nb::cast<int>(value.attr("maxlen"));
-                        }
-                    } else if (type_name == "EnumProperty") {
-                        schema.type = vis::op::PropertyType::ENUM;
-                        if (nb::hasattr(value, "items")) {
-                            nb::object items_list = value.attr("items");
-                            for (auto enum_item : items_list) {
-                                auto tuple = nb::cast<nb::tuple>(enum_item);
-                                if (nb::len(tuple) >= 3) {
-                                    schema.enum_items.emplace_back(
-                                        nb::cast<std::string>(tuple[0]),
-                                        nb::cast<std::string>(tuple[1]),
-                                        nb::cast<std::string>(tuple[2]));
-                                }
-                            }
-                        }
-                    } else if (type_name == "FloatVectorProperty") {
-                        schema.type = vis::op::PropertyType::FLOAT_VECTOR;
-                        if (nb::hasattr(value, "size")) {
-                            schema.size = nb::cast<int>(value.attr("size"));
-                        }
-                        if (nb::hasattr(value, "min")) {
-                            double min_val = nb::cast<double>(value.attr("min"));
-                            if (min_val > -1e30) {
-                                schema.min = min_val;
-                            }
-                        }
-                        if (nb::hasattr(value, "max")) {
-                            double max_val = nb::cast<double>(value.attr("max"));
-                            if (max_val < 1e30) {
-                                schema.max = max_val;
-                            }
-                        }
-                    } else if (type_name == "IntVectorProperty") {
-                        schema.type = vis::op::PropertyType::INT_VECTOR;
-                        if (nb::hasattr(value, "size")) {
-                            schema.size = nb::cast<int>(value.attr("size"));
-                        }
-                        if (nb::hasattr(value, "min")) {
-                            schema.min = static_cast<double>(nb::cast<int64_t>(value.attr("min")));
-                        }
-                        if (nb::hasattr(value, "max")) {
-                            schema.max = static_cast<double>(nb::cast<int64_t>(value.attr("max")));
-                        }
-                    } else if (type_name == "TensorProperty") {
-                        schema.type = vis::op::PropertyType::TENSOR;
-                    } else {
-                        continue;
-                    }
-
-                    if (nb::hasattr(value, "subtype")) {
-                        schema.subtype = nb::cast<std::string>(value.attr("subtype"));
-                    }
-                    if (nb::hasattr(value, "description")) {
-                        schema.description = nb::cast<std::string>(value.attr("description"));
-                    }
-
-                    schemas.push_back(std::move(schema));
-                }
-            } catch (const std::exception& e) {
-                LOG_DEBUG("Failed to extract property schemas: {}", e.what());
-            }
-            return schemas;
-        }
-
         void apply_operator_props_to_python_instance(const std::string& operator_id,
                                                      const vis::op::OperatorProperties& props,
                                                      nb::object instance) {
-            const auto* schemas = vis::op::propertySchemas().getSchema(operator_id);
-            if (!schemas || !instance.is_valid() || instance.is_none()) {
+            const auto group = core::prop::PropertyRegistry::instance().get_group_snapshot(
+                "operator." + operator_id);
+            if (!group || !instance.is_valid() || instance.is_none()) {
                 return;
             }
 
-            for (const auto& schema : *schemas) {
-                if (!props.has(schema.name)) {
+            for (const auto& property : group->properties) {
+                if (!property.has_flag(core::prop::PROP_OPERATOR_ARG) || !props.has(property.id)) {
                     continue;
                 }
 
                 try {
-                    switch (schema.type) {
-                    case vis::op::PropertyType::BOOL:
-                        if (const auto value = props.get<bool>(schema.name)) {
-                            nb::setattr(instance, schema.name.c_str(), nb::bool_(*value));
+                    switch (property.type) {
+                    case core::prop::PropType::Bool:
+                        if (const auto value = props.get<bool>(property.id)) {
+                            nb::setattr(instance, property.id.c_str(), nb::bool_(*value));
                         }
                         break;
-                    case vis::op::PropertyType::INT:
-                        if (const auto value = props.get<int>(schema.name)) {
-                            nb::setattr(instance, schema.name.c_str(), nb::int_(*value));
+                    case core::prop::PropType::Int:
+                    case core::prop::PropType::SizeT:
+                        if (const auto value = props.get<int>(property.id)) {
+                            nb::setattr(instance, property.id.c_str(), nb::int_(*value));
                         }
                         break;
-                    case vis::op::PropertyType::FLOAT:
-                        if (const auto value = props.get<float>(schema.name)) {
-                            nb::setattr(instance, schema.name.c_str(), nb::float_(*value));
+                    case core::prop::PropType::Float:
+                        if (const auto value = props.get<float>(property.id)) {
+                            nb::setattr(instance, property.id.c_str(), nb::float_(*value));
                         }
                         break;
-                    case vis::op::PropertyType::STRING:
-                    case vis::op::PropertyType::ENUM:
-                        if (const auto value = props.get<std::string>(schema.name)) {
-                            nb::setattr(instance, schema.name.c_str(), nb::str(value->c_str()));
+                    case core::prop::PropType::String:
+                    case core::prop::PropType::Enum:
+                        if (const auto value = props.get<std::string>(property.id)) {
+                            nb::setattr(instance, property.id.c_str(), nb::str(value->c_str()));
                         }
                         break;
-                    case vis::op::PropertyType::FLOAT_VECTOR: {
+                    case core::prop::PropType::Vec3:
+                    case core::prop::PropType::Color3: {
                         nb::list values;
-                        if (schema.size && *schema.size == 3) {
-                            if (const auto value = props.get<glm::vec3>(schema.name)) {
-                                values.append(nb::float_(value->x));
-                                values.append(nb::float_(value->y));
-                                values.append(nb::float_(value->z));
-                                nb::setattr(instance, schema.name.c_str(), values);
-                            }
-                        } else if (const auto value = props.get<std::vector<float>>(schema.name)) {
-                            for (float item : *value) {
-                                values.append(nb::float_(item));
-                            }
-                            nb::setattr(instance, schema.name.c_str(), values);
+                        if (const auto value = props.get<glm::vec3>(property.id)) {
+                            values.append(nb::float_(value->x));
+                            values.append(nb::float_(value->y));
+                            values.append(nb::float_(value->z));
+                            nb::setattr(instance, property.id.c_str(), values);
                         }
                         break;
                     }
-                    case vis::op::PropertyType::INT_VECTOR: {
-                        if (const auto value = props.get<std::vector<int>>(schema.name)) {
+                    case core::prop::PropType::FloatVector: {
+                        nb::list values;
+                        if (property.vector_size == 3) {
+                            if (const auto value = props.get<glm::vec3>(property.id)) {
+                                values.append(nb::float_(value->x));
+                                values.append(nb::float_(value->y));
+                                values.append(nb::float_(value->z));
+                                nb::setattr(instance, property.id.c_str(), values);
+                            }
+                        } else if (const auto value = props.get<std::vector<float>>(property.id)) {
+                            for (float item : *value) {
+                                values.append(nb::float_(item));
+                            }
+                            nb::setattr(instance, property.id.c_str(), values);
+                        }
+                        break;
+                    }
+                    case core::prop::PropType::Vec2:
+                    case core::prop::PropType::Vec4:
+                    case core::prop::PropType::Quat:
+                    case core::prop::PropType::Mat4:
+                    case core::prop::PropType::Color4: {
+                        if (const auto value = props.get<std::vector<float>>(property.id)) {
+                            nb::list values;
+                            for (float item : *value) {
+                                values.append(nb::float_(item));
+                            }
+                            nb::setattr(instance, property.id.c_str(), values);
+                        }
+                        break;
+                    }
+                    case core::prop::PropType::IntVector: {
+                        if (const auto value = props.get<std::vector<int>>(property.id)) {
                             nb::list values;
                             for (int item : *value) {
                                 values.append(nb::int_(item));
                             }
-                            nb::setattr(instance, schema.name.c_str(), values);
+                            nb::setattr(instance, property.id.c_str(), values);
                         }
                         break;
                     }
-                    case vis::op::PropertyType::TENSOR:
+                    case core::prop::PropType::Tensor:
                         LOG_DEBUG("Skipping tensor property '{}' for Python operator '{}'",
-                                  schema.name, operator_id);
+                                  property.id, operator_id);
                         break;
                     }
                 } catch (const std::exception& e) {
                     LOG_ERROR("Failed to assign Python operator property '{}.{}': {}",
-                              operator_id, schema.name, e.what());
+                              operator_id, property.id, e.what());
                 }
             }
         }
 
-        void register_python_operator_to_cpp(nb::object cls) {
+        bool register_python_operator_to_cpp(nb::object cls) {
             std::string id = get_class_id(cls);
             std::string label;
             std::string description;
@@ -1101,7 +1008,7 @@ namespace lfs::python {
                 instance = cls();
             } catch (const std::exception& e) {
                 LOG_ERROR("register_python_operator: failed to create instance for '{}': {}", id, e.what());
-                return;
+                return false;
             }
 
             bool has_poll = nb::hasattr(cls, "poll");
@@ -1218,15 +1125,17 @@ namespace lfs::python {
                 };
             }
 
-            store_python_operator_instance(id, instance);
-            vis::op::operators().registerCallbackOperator(std::move(desc), std::move(callbacks));
-
-            auto schemas = extract_property_schemas(cls);
-            if (!schemas.empty()) {
-                vis::op::propertySchemas().registerSchema(id, std::move(schemas));
+            try {
+                store_python_operator_instance(id, instance);
+                vis::op::operators().registerCallbackOperator(std::move(desc), std::move(callbacks));
+            } catch (const std::exception& e) {
+                remove_python_operator_instance(id);
+                LOG_ERROR("register_python_operator: failed to publish '{}': {}", id, e.what());
+                return false;
             }
 
             LOG_DEBUG("Operator '{}' registered", id);
+            return true;
         }
     } // namespace
 
@@ -3506,8 +3415,19 @@ namespace lfs::python {
 #ifdef _WIN32
                 ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 #else
-                const std::string cmd = "xdg-open \"" + url + "\" &";
-                std::system(cmd.c_str());
+                std::thread([url] {
+                    pid_t child = -1;
+                    std::array<char*, 3> arguments{
+                        const_cast<char*>("xdg-open"),
+                        const_cast<char*>(url.c_str()),
+                        nullptr,
+                    };
+                    if (posix_spawnp(&child, "xdg-open", nullptr, nullptr,
+                                     arguments.data(), environ) == 0) {
+                        int status = 0;
+                        static_cast<void>(waitpid(child, &status, 0));
+                    }
+                }).detach();
 #endif
             },
             nb::arg("url"), "Open a URL in the default browser.");
@@ -4493,6 +4413,7 @@ namespace lfs::python {
                 state["active"] = export_state.active;
                 state["progress"] = export_state.progress;
                 state["stage"] = export_state.stage;
+                state["outcome"] = export_state.outcome;
                 state["format"] = export_state.format;
                 return state;
             },
@@ -4580,16 +4501,19 @@ namespace lfs::python {
 
         m.def(
             "export_video",
-            [](int width, int height, int framerate, int crf) {
+            [](int width, int height, int framerate, int crf, const std::string& path) {
                 lfs::core::events::cmd::SequencerExportVideo{
                     .width = width,
                     .height = height,
                     .framerate = framerate,
-                    .crf = crf}
+                    .crf = crf,
+                    .path = path}
                     .emit();
             },
             nb::arg("width"), nb::arg("height"), nb::arg("framerate"), nb::arg("crf"),
-            "Export video with specified settings");
+            nb::arg("path") = std::string{},
+            "Export video with specified settings. Without a path a save dialog opens, "
+            "which a script cannot answer; pass one to export directly.");
 
         m.def(
             "add_keyframe",
@@ -4874,6 +4798,8 @@ namespace lfs::python {
                         if (auto* const gui_manager = get_gui_manager())
                             gui_manager->ensureCjkFontsLoaded();
                     lfs::vis::publish_language_generation();
+                    if (auto* const gui_manager = get_gui_manager())
+                        gui_manager->requestLocalizationUiRefresh();
                 }
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
@@ -5276,6 +5202,10 @@ namespace lfs::python {
             "unregister_property_group", &unregister_python_property_group, nb::arg("group_id"),
             "Unregister a Python PropertyGroup from the property registry");
 
+        m.def(
+            "property_group_info", &property_group_info, nb::arg("group_id"),
+            "Get registered property metadata for a property group");
+
         set_python_hook_invoker([](const char* panel, const char* section, bool prepend) {
             auto& registry = PyUIHookRegistry::instance();
             if (registry.has_hooks(panel, section)) {
@@ -5330,13 +5260,18 @@ namespace lfs::python {
                 if (nb::cast<bool>(issubclass(cls, Panel_type))) {
                     PyPanelRegistry::instance().register_panel(cls);
                 } else if (nb::cast<bool>(issubclass(cls, Operator_type))) {
-                    register_python_operator_to_cpp(cls);
                     std::string idname = get_class_id(cls);
                     std::string label = idname;
-                    if (nb::hasattr(cls, "label")) {
+                    if (nb::hasattr(cls, "label"))
                         label = nb::cast<std::string>(cls.attr("label"));
-                    }
                     register_python_property_group("operator." + idname, label, cls);
+                    const bool group_registered =
+                        core::prop::PropertyRegistry::instance()
+                            .get_group_snapshot("operator." + idname)
+                            .has_value();
+                    if (!group_registered || !register_python_operator_to_cpp(cls)) {
+                        unregister_python_property_group("operator." + idname);
+                    }
                 } else if (nb::cast<bool>(issubclass(cls, Menu_type))) {
                     PyMenuRegistry::instance().register_menu(cls);
                 } else {
@@ -5362,7 +5297,7 @@ namespace lfs::python {
                 } else if (nb::cast<bool>(issubclass(cls, Operator_type))) {
                     std::string idname = get_class_id(cls);
                     vis::op::operators().unregisterOperator(idname);
-                    vis::op::propertySchemas().unregisterSchema(idname);
+                    unregister_python_property_group("operator." + idname);
                     remove_python_operator_instance(idname);
                 } else if (nb::cast<bool>(issubclass(cls, Menu_type))) {
                     PyMenuRegistry::instance().unregister_menu(cls);

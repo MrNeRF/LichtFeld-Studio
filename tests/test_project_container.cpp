@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/project/crc32c.hpp"
+#include "io/project/project_container_internal.hpp"
 #include "io/project_container.hpp"
 #include "io/project_recovery.hpp"
 #include "licht_test_support.hpp"
@@ -232,6 +233,30 @@ namespace {
         EXPECT_EQ(crc32c(0, CHECK.data(), 0), 0u);
         EXPECT_EQ(crc32c(crc32c(0, CHECK.data(), 3), CHECK.data() + 3, 6),
                   0xe3069283u);
+    }
+
+    TEST(ProjectContainerFormat, Crc32cKnownAnswersLengths0To9) {
+        // Kills: crc32c const/arithmetic survivors on short lengths.
+        // Castagnoli CRC32C of bytes {0,1,...,n-1} for n in 0..9 (seed 0).
+        constexpr std::array<std::uint32_t, 10> kExpected{
+            0x00000000u,
+            0x527d5351u,
+            0x030af4d1u,
+            0x92fd4bfau,
+            0xd9331aa3u,
+            0x2425b106u,
+            0x41098514u,
+            0xa359ed4cu,
+            0x8a2cbc3bu,
+            0x7144c5a8u,
+        };
+        std::array<std::uint8_t, 9> sequential{};
+        for (std::size_t n = 0; n < sequential.size(); ++n) {
+            sequential[n] = static_cast<std::uint8_t>(n);
+        }
+        for (std::size_t n = 0; n <= 9; ++n) {
+            EXPECT_EQ(crc32c(0, sequential.data(), n), kExpected[n]) << "n=" << n;
+        }
     }
 
     TEST(ProjectContainerReader, GoldenFixtureClassificationsAndVerification) {
@@ -763,7 +788,8 @@ namespace {
         CommitOptions write_unsafe_commit =
             fixture_commit_options(117, 216, 1);
         write_unsafe_commit.min_safe_writer_version = Version{1, 1};
-        write_unsafe_commit.extra_writer_capabilities.set(8);
+        // Unassigned core bit; bit 8 is CHUNK_BYTESHUFFLE_ZSTD_V1.
+        write_unsafe_commit.extra_writer_capabilities.set(9);
         generated["write-unsafe.licht"] = create_single_chunk_fixture(
             write_unsafe_path, 22, 117, 216,
             fixed_key("PROJ", 300),
@@ -789,7 +815,8 @@ namespace {
             const auto payload = byte_vector(
                 R"({"fixture":"unsupported-higher","generation":2})");
             CommitOptions commit = fixture_commit_options(116, 215, 2);
-            commit.extra_reader_capabilities.set(8);
+            // Unassigned core bit; bit 8 is CHUNK_BYTESHUFFLE_ZSTD_V1.
+            commit.extra_reader_capabilities.set(9);
             require_status(writer.plan_commit(commit));
             require_status(writer.preflight(payload.size()));
             require_status(writer.reuse_if_clean(proof, 23));
@@ -2139,7 +2166,6 @@ namespace {
             .snapshot_uuid = fixed_uuid(607),
             .creation_time_unix_ns = FIXED_CREATION_TIME_NS + 10,
             .wallclock_unix_ns = FIXED_COMMIT_TIME_NS + 10,
-            .keep_tombstones = false,
             .disk_reserve_bytes = 0,
         };
         require_status(ProjectWriter::compact(path, compaction));
@@ -2687,8 +2713,6 @@ namespace {
                                     static_cast<
                                         std::uint64_t>(
                                         boundary_value),
-                                .keep_tombstones =
-                                    false,
                                 .disk_reserve_bytes =
                                     0,
                                 .boundary_observer =
@@ -2993,8 +3017,6 @@ namespace {
                     .wallclock_unix_ns =
                         FIXED_COMMIT_TIME_NS +
                         1,
-                    .keep_tombstones =
-                        false,
                     .disk_reserve_bytes =
                         0,
                     .boundary_observer =
@@ -3074,5 +3096,318 @@ namespace {
         EXPECT_EQ(WEXITSTATUS(status), 0);
     }
 #endif
+
+    [[nodiscard]] std::optional<std::uint64_t>
+    error_field_u64(const lfs::Error& error, const std::string_view key) {
+        if (error.frames().empty()) {
+            return std::nullopt;
+        }
+        for (const auto& entry : error.frames().front().fields.entries()) {
+            if (entry.key != key) {
+                continue;
+            }
+            if (const auto* value = std::get_if<std::uint64_t>(&entry.value)) {
+                return *value;
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::string>
+    error_field_string(const lfs::Error& error, const std::string_view key) {
+        if (error.frames().empty()) {
+            return std::nullopt;
+        }
+        for (const auto& entry : error.frames().front().fields.entries()) {
+            if (entry.key != key) {
+                continue;
+            }
+            if (const auto* value = std::get_if<std::string>(&entry.value)) {
+                return *value;
+            }
+        }
+        return std::nullopt;
+    }
+
+    TEST(ProjectContainerReader, CorruptFixturesReportDiagnosticOffsetAndField) {
+        // Kills: diagnostic-offset arithmetic (require offset+N / format_error field path).
+        TemporaryDirectory temporary;
+
+        // Superblock magic at absolute offset 0.
+        {
+            const fs::path path = temporary.path / "bad-magic.licht";
+            fs::copy_file(FIXTURES / "minimal-valid-single-generation.licht", path);
+            auto bytes = read_file_bytes(path);
+            bytes[0] = std::byte{0x00};
+            write_file_bytes(path, bytes);
+            auto opened = ProjectReader::open(path);
+            ASSERT_FALSE(opened);
+            const auto& error = opened.error();
+            EXPECT_EQ(error.code(), lfs::ErrorCode::DataLoss);
+            EXPECT_EQ(error_field_u64(error, "offset"), 0u);
+            EXPECT_EQ(error_field_string(error, "field"), "superblock.magic");
+            EXPECT_NE(std::string(error.detail()).find("0x0000000000000000"),
+                      std::string::npos);
+        }
+
+        // Superblock header CRC at offset 252.
+        {
+            const fs::path path = temporary.path / "bad-superblock-crc.licht";
+            fs::copy_file(FIXTURES / "minimal-valid-single-generation.licht", path);
+            auto bytes = read_file_bytes(path);
+            bytes[252] = static_cast<std::byte>(
+                static_cast<std::uint8_t>(bytes[252]) ^ 0xffu);
+            write_file_bytes(path, bytes);
+            auto opened = ProjectReader::open(path);
+            ASSERT_FALSE(opened);
+            const auto& error = opened.error();
+            EXPECT_EQ(error_field_u64(error, "offset"), 252u);
+            EXPECT_EQ(error_field_string(error, "field"), "superblock.crc32c");
+            EXPECT_NE(std::string(error.detail()).find("0x00000000000000fc"),
+                      std::string::npos);
+        }
+
+        // Corrupt commit body without refreshing CRC so open fails with a
+        // structured offset/field on the commit or head path.
+        {
+            const fs::path path = temporary.path / "bad-commit-crc.licht";
+            fs::copy_file(FIXTURES / "minimal-valid-single-generation.licht", path);
+            ProjectReader original = require_result(ProjectReader::open(path));
+            auto bytes = read_file_bytes(path);
+            // Flip a content byte inside the CRC-covered prefix (generation u64).
+            const auto gen_i =
+                static_cast<std::size_t>(original.commit().offset + 64);
+            bytes[gen_i] = static_cast<std::byte>(
+                static_cast<std::uint8_t>(bytes[gen_i]) ^ 0xffu);
+            write_file_bytes(path, bytes);
+            auto opened = ProjectReader::open(path);
+            ASSERT_FALSE(opened);
+            const auto& error = opened.error();
+            ASSERT_TRUE(error_field_u64(error, "offset").has_value());
+            ASSERT_TRUE(error_field_string(error, "field").has_value());
+            const auto field = *error_field_string(error, "field");
+            EXPECT_TRUE(field.find("commit") != std::string::npos ||
+                        field.find("head") != std::string::npos)
+                << field;
+            EXPECT_NE(std::string(error.detail()).find("0x"), std::string::npos);
+        }
+
+        // Corrupt first stored payload byte so payload CRC validation fails at
+        // payload_offset (kills wrong-offset arithmetic on payload CRC path).
+        {
+            const fs::path path = temporary.path / "bad-chunk-payload-crc.licht";
+            fs::copy_file(FIXTURES / "minimal-valid-single-generation.licht", path);
+            ProjectReader original = require_result(ProjectReader::open(path));
+            ASSERT_FALSE(original.chunks().empty());
+            const ChunkInfo& row = original.chunks().front();
+            ASSERT_GT(row.stored_bytes, 0u);
+            auto bytes = read_file_bytes(path);
+            const auto payload_i = static_cast<std::size_t>(row.payload_offset);
+            bytes[payload_i] = static_cast<std::byte>(
+                static_cast<std::uint8_t>(bytes[payload_i]) ^ 0xffu);
+            write_file_bytes(path, bytes);
+            auto reader = ProjectReader::open(path);
+            ASSERT_TRUE(reader) << lfs::format_for_developer(reader.error());
+            auto verified = reader->verify_chunk(reader->chunks().front());
+            ASSERT_FALSE(verified);
+            const auto& error = verified.error();
+            EXPECT_EQ(error_field_u64(error, "offset"), row.payload_offset);
+            const auto field = error_field_string(error, "field");
+            ASSERT_TRUE(field.has_value());
+            EXPECT_NE(field->find("crc32c"), std::string::npos);
+        }
+    }
+
+    TEST(ProjectContainerReader, NegativeMagicGenerationAndDualHeadClassify) {
+        // Kills: equality mutants on magic/generation/dual-head comparisons.
+        {
+            const OpenClassification split =
+                ProjectReader::classify(FIXTURES / "split-brain.licht");
+            EXPECT_EQ(split.state, OpenState::HardFail);
+            EXPECT_EQ(split.outcome_name(), "hard_fail");
+        }
+        {
+            const OpenClassification torn =
+                ProjectReader::classify(FIXTURES / "torn-head.licht");
+            EXPECT_EQ(torn.outcome_name(), "open_gen_1");
+            auto reader = ProjectReader::open(FIXTURES / "torn-head.licht");
+            ASSERT_TRUE(reader);
+            EXPECT_EQ(reader->commit().generation, 1u);
+        }
+        {
+            TemporaryDirectory temporary;
+            const fs::path path = temporary.path / "bad-superblock-magic.licht";
+            fs::copy_file(FIXTURES / "minimal-valid-single-generation.licht", path);
+            auto bytes = read_file_bytes(path);
+            // Flip magic second byte — still four ASCII-ish but wrong tag.
+            bytes[1] = std::byte{'X'};
+            write_file_bytes(path, bytes);
+            const OpenClassification classified = ProjectReader::classify(path);
+            EXPECT_NE(classified.outcome_name(), "open_gen_1");
+            auto opened = ProjectReader::open(path);
+            EXPECT_FALSE(opened);
+            if (!opened) {
+                EXPECT_EQ(opened.error().code(), lfs::ErrorCode::DataLoss);
+            }
+        }
+        {
+            // Hostile generation envelope: bump generation without parent chain.
+            TemporaryDirectory temporary;
+            const fs::path path = temporary.path / "hostile-generation.licht";
+            fs::copy_file(FIXTURES / "minimal-valid-single-generation.licht", path);
+            ProjectReader original = require_result(ProjectReader::open(path));
+            auto hostile = read_file_bytes(path);
+            // commit.generation is at commit offset + 64 (u64) in the record layout.
+            write_u64_le(hostile,
+                         static_cast<std::size_t>(original.commit().offset + 64),
+                         original.commit().generation + 99);
+            constexpr std::array<std::uint32_t, 1> SLOT_A = {0};
+            refresh_generation_envelope(hostile, original, SLOT_A);
+            write_file_bytes(path, hostile);
+            const OpenClassification classified = ProjectReader::classify(path);
+            // Mutated generation (with refreshed envelope CRCs) must surface the
+            // new generation value or refuse — never silently keep gen 1 only.
+            if (classified.state == OpenState::Open) {
+                auto reader = ProjectReader::open(path);
+                ASSERT_TRUE(reader);
+                EXPECT_EQ(reader->commit().generation,
+                          original.commit().generation + 99);
+            } else {
+                EXPECT_NE(classified.outcome_name(), "open_gen_1");
+            }
+        }
+    }
+
+    // Highly compressible zeros just over the historical 512 MiB bomb guard.
+    // Runtime stays sane because zstd collapses the stored frame; materialize
+    // still allocates the full logical size once (payload-class 16 GiB bound).
+    TEST(ProjectContainerWriter, ZstdPayloadClassJustOver512MiBRoundTrip) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "payload-over-512mib.licht";
+        constexpr std::size_t kLogical =
+            static_cast<std::size_t>(512ull * 1024 * 1024) + 1u;
+        const std::vector<std::byte> payload(kLogical, std::byte{0});
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::create(path, fixture_create_options(9300)));
+            require_status(
+                writer.plan_commit(fixture_commit_options(9301, 9302, 1)));
+            require_status(writer.preflight(payload.size()));
+            require_status(writer.write_chunk(
+                fixed_key("CKPT", 9303), payload,
+                ChunkWriteOptions{
+                    .chunk_version = 1,
+                    .compression = Compression::Zstd,
+                    .tensor_payload = true,
+                }));
+            // verify-before-publish must accept payload-class >512 MiB.
+            require_status(writer.commit());
+        }
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        require_status(reader.verify_all());
+        const ChunkInfo* row = reader.find(fixed_key("CKPT", 9303));
+        ASSERT_NE(row, nullptr);
+        EXPECT_EQ(row->uncompressed_bytes, kLogical);
+        EXPECT_LT(row->stored_bytes, row->uncompressed_bytes);
+        EXPECT_EQ(require_result(reader.read_chunk(*row)), payload);
+    }
+
+    TEST(ProjectContainerWriter, ZstdNonPayloadClassOver512MiBRefused) {
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "json-over-512mib.licht";
+        constexpr std::size_t kLogical =
+            static_cast<std::size_t>(512ull * 1024 * 1024) + 1u;
+        const std::vector<std::byte> payload(kLogical, std::byte{0});
+        ProjectWriter writer = require_result(
+            ProjectWriter::create(path, fixture_create_options(9310)));
+        require_status(
+            writer.plan_commit(fixture_commit_options(9311, 9312, 1)));
+        require_status(writer.preflight(payload.size()));
+        require_status(writer.write_chunk(
+            fixed_key("PROJ", 9313), payload,
+            ChunkWriteOptions{
+                .chunk_version = 1,
+                .compression = Compression::Zstd,
+                .tensor_payload = false,
+            }));
+        // Create-mode post-publish verify applies the 512 MiB small-class cap.
+        auto published = writer.commit();
+        ASSERT_FALSE(published);
+        EXPECT_EQ(published.error().code(), lfs::ErrorCode::ResourceExhausted);
+        const std::string detail = lfs::format_for_developer(published.error());
+        EXPECT_TRUE(detail.find("implementation maximum") != std::string::npos ||
+                    detail.find("536870912") != std::string::npos ||
+                    detail.find("materialized") != std::string::npos)
+            << detail;
+    }
+
+    TEST(ProjectContainerWriter, PreviewMaxBytesAtLimitAndOneOver) {
+        // Kills: boundary mutants on MAX_* limit guards (</<=).
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "preview-max.licht";
+        {
+            ProjectWriter writer = require_result(
+                ProjectWriter::create(path, fixture_create_options(9200)));
+            require_status(writer.plan_commit(
+                fixture_commit_options(9201, 9202, 1)));
+            std::vector<std::byte> at_limit(MAX_PREVIEW_BYTES, std::byte{0xab});
+            // PNG signature so convenience readers remain happy if accepted.
+            constexpr std::array png_signature{
+                std::byte{0x89}, std::byte{0x50}, std::byte{0x4e}, std::byte{0x47},
+                std::byte{0x0d}, std::byte{0x0a}, std::byte{0x1a}, std::byte{0x0a}};
+            std::copy(png_signature.begin(), png_signature.end(), at_limit.begin());
+            require_status(writer.preflight(at_limit.size()));
+            auto at_ok = writer.set_preview(at_limit);
+            EXPECT_TRUE(at_ok) << lfs::format_for_developer(at_ok.error());
+
+            std::vector<std::byte> one_over(MAX_PREVIEW_BYTES + 1u, std::byte{0xcd});
+            auto over = writer.set_preview(one_over);
+            ASSERT_FALSE(over);
+            EXPECT_EQ(over.error().code(), lfs::ErrorCode::InvalidArgument);
+            EXPECT_NE(std::string(over.error().detail()).find(std::to_string(MAX_PREVIEW_BYTES)),
+                      std::string::npos);
+            // Still publish the at-limit preview generation.
+            require_status(writer.commit());
+        }
+        ProjectReader reader = require_result(ProjectReader::open(path));
+        ASSERT_TRUE(reader.preview().has_value());
+        EXPECT_EQ(reader.preview()->bytes, MAX_PREVIEW_BYTES);
+    }
+
+    TEST(ProjectContainerFile, CheckedAddAndMultiplyOverflow) {
+        // Kills: project_file checked_add/checked_multiply overflow and short-write paths.
+        // Short-write errno injection is not feasible without new deps/seams; overflow
+        // oracles cover the structured BoundsViolation path in the same TU.
+        const fs::path path = "overflow-probe.licht";
+        constexpr std::uint64_t kMax = std::numeric_limits<std::uint64_t>::max();
+        {
+            auto sum = detail::checked_add(kMax, 1, path, 0x10, "probe.add");
+            ASSERT_FALSE(sum);
+            EXPECT_EQ(sum.error().code(), lfs::ErrorCode::BoundsViolation);
+            EXPECT_EQ(error_field_u64(sum.error(), "offset"), 0x10u);
+            EXPECT_EQ(error_field_string(sum.error(), "field"), "probe.add");
+            EXPECT_NE(std::string(sum.error().detail()).find("overflow"),
+                      std::string::npos);
+        }
+        {
+            auto product =
+                detail::checked_multiply(kMax, 2, path, 0x20, "probe.mul");
+            ASSERT_FALSE(product);
+            EXPECT_EQ(product.error().code(), lfs::ErrorCode::BoundsViolation);
+            EXPECT_EQ(error_field_u64(product.error(), "offset"), 0x20u);
+            EXPECT_EQ(error_field_string(product.error(), "field"), "probe.mul");
+            EXPECT_NE(std::string(product.error().detail()).find("overflow"),
+                      std::string::npos);
+        }
+        {
+            auto ok_add = detail::checked_add(kMax - 1, 1, path, 0, "probe.add.ok");
+            ASSERT_TRUE(ok_add);
+            EXPECT_EQ(*ok_add, kMax);
+            auto ok_mul = detail::checked_multiply(1ull << 32, 1ull << 31, path, 0,
+                                                   "probe.mul.ok");
+            ASSERT_TRUE(ok_mul);
+            EXPECT_EQ(*ok_mul, 1ull << 63);
+        }
+    }
 
 } // namespace

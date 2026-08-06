@@ -465,21 +465,12 @@ namespace lfs::io::project {
 
         bool is_user_global_gui_key(
             const std::string_view key) {
-            constexpr std::array excluded = {
-                std::string_view{"theme"},
-                std::string_view{"language"},
-                std::string_view{"scale"},
-                std::string_view{"ui_scale"},
-                std::string_view{"hud"},
-                std::string_view{"vram_hud"},
-                std::string_view{"vram_hud_visible"},
-            };
             const auto normalized =
                 lowercase(std::string(key));
             return std::ranges::find(
-                       excluded,
+                       kUserGlobalGuiFieldKeys,
                        std::string_view(normalized)) !=
-                   excluded.end();
+                   kUserGlobalGuiFieldKeys.end();
         }
 
         bool contains_user_global_gui_state(

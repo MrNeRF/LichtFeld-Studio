@@ -5,6 +5,7 @@
 #include "operator_registry.hpp"
 #include "control/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "python/python_runtime.hpp"
 #include "scene/scene_manager.hpp"
@@ -36,7 +37,9 @@ namespace lfs::vis::op {
 
         [[nodiscard]] std::string historyLabel(const OperatorDescriptor& descriptor, const std::string& fallback_id) {
             if (!descriptor.label.empty()) {
-                return descriptor.label;
+                auto& localization = event::LocalizationManager::getInstance();
+                return localization.hasKey(descriptor.label) ? localization.get(descriptor.label)
+                                                             : descriptor.label;
             }
             return fallback_id;
         }

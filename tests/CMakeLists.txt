@@ -3,6 +3,31 @@
 
 # Testing module - comprehensive tests for all components
 
+# =============================================================================
+# Headless localization contracts (no LibTorch/CUDA)
+# =============================================================================
+if(BUILD_LOCALIZATION_TESTS)
+    find_package(Python REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME LocalizationContracts
+        COMMAND ${Python_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/python/test_localization_contracts.py
+    )
+    set_tests_properties(LocalizationContracts PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        TIMEOUT 30
+    )
+    add_custom_target(test_localization_contracts
+        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -R LocalizationContracts
+        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/CTestTestfile.cmake
+        USES_TERMINAL
+    )
+    message(STATUS "Registered headless localization contract tests (no LibTorch)")
+    if(NOT BUILD_TESTS AND NOT BUILD_UNICODE_TEST_ONLY AND NOT BUILD_FORMAT_TESTS)
+        return()
+    endif()
+endif()
+
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
@@ -48,7 +73,9 @@ if(BUILD_UNICODE_TEST_ONLY)
     )
 
     message(STATUS "Building standalone Unicode path test (no CUDA)")
-    return()  # Skip the rest of the file
+    if(NOT BUILD_TESTS)
+        return()  # Skip LibTorch-dependent tests when only Unicode coverage was requested.
+    endif()
 endif()
 
 # MSVC resolves every object reference before /OPT:REF, while GNU ld can discard
@@ -61,7 +88,9 @@ set(LICHT_FORMAT_WINDOWS_FILES
     licht_format_test_runtime.cpp
     ${CMAKE_SOURCE_DIR}/src/core/error.cpp
     ${CMAKE_SOURCE_DIR}/src/core/memory_domain.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/optimization_properties.cpp
     ${CMAKE_SOURCE_DIR}/src/core/parameters.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/property_registry.cpp
     ${CMAKE_SOURCE_DIR}/src/core/uuid.cpp
     ${CMAKE_SOURCE_DIR}/src/io/json_chapter_dom.cpp
     ${CMAKE_SOURCE_DIR}/src/io/project/project_chapters.cpp
@@ -243,6 +272,7 @@ set(TEST_FILES
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
+    test_training_parameters.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
@@ -281,10 +311,12 @@ set(TEST_FILES
     test_argument_parser.cpp
     test_crash_handler.cpp
     test_logger.cpp
+    test_system_info.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
     test_mcp_training_state.cpp
     test_mcp_app_utils.cpp
+    test_mcp_operator_schema.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
     test_tcp_publisher.cpp
@@ -356,6 +388,7 @@ set(TEST_FILES
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
+    test_ppisp_checkpoint_roundtrip.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_ppisp_banded_region.cpp
     test_export_env_composite.cpp
@@ -363,6 +396,7 @@ set(TEST_FILES
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
     test_mesh_data.cpp
+    test_mesh_offscreen_renderer.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
@@ -371,6 +405,7 @@ set(TEST_FILES
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rml_im_mode_layout.cpp
+    test_status_bar_fit.cpp
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp
     test_tensor_d4_from_blob_stream.cpp
@@ -397,6 +432,13 @@ list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_vulkan_wait_bounded.cpp)
 list(APPEND TEST_FILES test_submission_state_transitions.cpp)
 list(APPEND TEST_FILES test_vksplat_failed_submit_no_publish.cpp)
+# Epic #1496: computed barriers (GPU-free planner/tracker suites).
+list(APPEND TEST_FILES test_vksplat_barrier_planner.cpp)
+list(APPEND TEST_FILES test_vksplat_tagged_dispatch.cpp)
+list(APPEND TEST_FILES test_vulkan_image_tracker.cpp)
+list(APPEND TEST_FILES test_vulkan_gpu_census.cpp)
+# Epic #1497: output image pool (GPU-free host bookkeeping).
+list(APPEND TEST_FILES test_output_image_pool.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)
 list(APPEND TEST_FILES test_lod_page_dequant.cpp)
 list(APPEND TEST_FILES test_lod_upload_engine.cpp)
@@ -411,12 +453,15 @@ set(TEST_SOURCES test_main.cpp ${TEST_FILES})
 
 # PyModalRegistry and its native-modal dispatch path for regression tests.
 list(APPEND TEST_SOURCES
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_error.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_modal_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_operator_properties.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_ui_modals.cpp
     ${CMAKE_SOURCE_DIR}/src/python/lfs/rml_im_mode_layout.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
-    ${CMAKE_SOURCE_DIR}/src/app/application_startup.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/mcp_operator_schema.cpp
     ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
+    ${CMAKE_SOURCE_DIR}/src/python/lfs/py_params.cpp
 )
 
 # Create test executable
@@ -453,6 +498,46 @@ target_compile_definitions(lichtfeld_tests PRIVATE
     TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data"
     PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
 )
+
+# Large test assets are hosted in the public Cloudflare R2 bucket
+# 'lichtfeld-test-assets' and fetched at configure time. A failed download only
+# warns: tests guard on the file's existence and GTEST_SKIP when it is missing.
+set(LFS_SIMPLIFY_TEST_PLY "${CMAKE_SOURCE_DIR}/data/kerstbol-isolated-rotated_137502.ply")
+set(LFS_SIMPLIFY_TEST_PLY_SHA256 "7fc85d1b0f4b7ab26acaa988b397b41b4ecf83f90e78cfb91b65ed474cb671fc")
+set(LFS_SIMPLIFY_TEST_PLY_OK FALSE)
+if(EXISTS "${LFS_SIMPLIFY_TEST_PLY}")
+    file(SHA256 "${LFS_SIMPLIFY_TEST_PLY}" LFS_SIMPLIFY_TEST_PLY_HASH)
+    if(LFS_SIMPLIFY_TEST_PLY_HASH STREQUAL LFS_SIMPLIFY_TEST_PLY_SHA256)
+        set(LFS_SIMPLIFY_TEST_PLY_OK TRUE)
+    endif()
+endif()
+if(NOT LFS_SIMPLIFY_TEST_PLY_OK)
+    message(STATUS "Downloading simplify regression asset kerstbol-isolated-rotated_137502.ply (33 MB)")
+    file(DOWNLOAD
+        "https://pub-c3fee24842994e5d866dbd9cc41c3f66.r2.dev/kerstbol-isolated-rotated_137502.ply"
+        "${LFS_SIMPLIFY_TEST_PLY}.tmp"
+        INACTIVITY_TIMEOUT 60
+        TIMEOUT 300
+        STATUS LFS_SIMPLIFY_TEST_PLY_STATUS
+    )
+    list(GET LFS_SIMPLIFY_TEST_PLY_STATUS 0 LFS_SIMPLIFY_TEST_PLY_RC)
+    list(GET LFS_SIMPLIFY_TEST_PLY_STATUS 1 LFS_SIMPLIFY_TEST_PLY_ERR)
+    if(LFS_SIMPLIFY_TEST_PLY_RC EQUAL 0)
+        file(SHA256 "${LFS_SIMPLIFY_TEST_PLY}.tmp" LFS_SIMPLIFY_TEST_PLY_HASH)
+        if(LFS_SIMPLIFY_TEST_PLY_HASH STREQUAL LFS_SIMPLIFY_TEST_PLY_SHA256)
+            file(RENAME "${LFS_SIMPLIFY_TEST_PLY}.tmp" "${LFS_SIMPLIFY_TEST_PLY}")
+            set(LFS_SIMPLIFY_TEST_PLY_OK TRUE)
+        else()
+            set(LFS_SIMPLIFY_TEST_PLY_ERR "SHA256 mismatch: got ${LFS_SIMPLIFY_TEST_PLY_HASH}")
+        endif()
+    endif()
+    if(NOT LFS_SIMPLIFY_TEST_PLY_OK)
+        file(REMOVE "${LFS_SIMPLIFY_TEST_PLY}.tmp")
+        message(WARNING "Failed to download simplify regression asset "
+            "kerstbol-isolated-rotated_137502.ply (${LFS_SIMPLIFY_TEST_PLY_ERR}); "
+            "SplatSimplify.RealPlySimplifyDoesNotUndershootRequestedTarget will be skipped.")
+    endif()
+endif()
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_TEST_INTERNAL_LINK_LIBS
@@ -495,6 +580,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
 
     # System libraries
     spdlog::spdlog
+    SDL3::SDL3
 )
 
 target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulkan)
@@ -663,6 +749,17 @@ add_test(NAME lichtfeld.discovery
         "--gtest_filter=DiscoveryFuzz.*:DiscoverySweep.*"
         --gtest_color=no
 )
+
+add_test(NAME system_info
+    COMMAND $<TARGET_FILE:lichtfeld_tests>
+        "--gtest_filter=SystemInfoTest.*:SessionBreadcrumbTest.*:LoggerTailTest.*"
+        --gtest_color=no
+)
+set_tests_properties(system_info PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    LABELS "fast"
+    TIMEOUT 30
+)
 set_tests_properties(lichtfeld.discovery PROPERTIES
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     LABELS "discovery;gpu"
@@ -672,6 +769,7 @@ set_tests_properties(lichtfeld.discovery PROPERTIES
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_event_keypad_mapping.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py

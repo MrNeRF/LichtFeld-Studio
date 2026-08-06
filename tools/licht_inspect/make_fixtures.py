@@ -67,7 +67,10 @@ CAP_SIDECAR = 1 << 4
 CAP_OPAQUE = 1 << 5
 CAP_RETAINED_JSON = 1 << 6
 CAP_CLEAN_PROOF = 1 << 7
-CAP_FUTURE_BIT_8 = 1 << 8
+CAP_CHUNK_BYTESHUFFLE_ZSTD = 1 << 8
+# Unassigned core bit used only by synthetic "unsupported newer" fixtures.
+CAP_FUTURE_UNASSIGNED = 1 << 9
+CAP_FUTURE_BIT_8 = CAP_FUTURE_UNASSIGNED  # historical name in fixture builders
 
 FIXED_CREATION_TIME_NS = 1_735_689_600_000_000_000  # 2025-01-01T00:00:00Z
 FIXED_COMMIT_TIME_NS = 1_735_689_601_000_000_000
@@ -381,6 +384,8 @@ class FixtureWriter:
         caps = 0
         if any(row.compression == 1 for row in rows):
             caps |= CAP_CHUNK_ZSTD
+        if any(row.compression == 2 for row in rows):
+            caps |= CAP_CHUNK_BYTESHUFFLE_ZSTD
         if any(row.flags & CHUNK_BLOCK_CRCS for row in rows if row.row_kind == ROW_LIVE):
             caps |= CAP_BLOCK_CRC
         if any(row.row_kind == ROW_TOMBSTONE for row in rows):
@@ -1075,6 +1080,25 @@ def _release_manifest_root(rows: Sequence[dict[str, object]]) -> str:
     return digest.hexdigest()
 
 
+def _compatibility_candidate_manifest_root(repository: Path) -> str | None:
+    """Return the Current-candidate register manifest root, if present."""
+    register_path = repository / "docs/compatibility.md"
+    if not register_path.is_file():
+        return None
+    prefix = "Current-candidate register line: `licht/1.0 "
+    for line in register_path.read_text(encoding="utf-8").splitlines():
+        if not line.startswith(prefix):
+            continue
+        for token in line.removeprefix(prefix).removesuffix("`.").split():
+            if token.startswith("manifest="):
+                value = token.removeprefix("manifest=")
+                if len(value) == 64 and all(
+                    char in "0123456789abcdef" for char in value
+                ):
+                    return value
+    return None
+
+
 def check_release_corpus(output_dir: Path) -> tuple[int, str | None]:
     release_dir = output_dir / "release_corpus"
     manifest_path = release_dir / "manifest.json"
@@ -1151,8 +1175,11 @@ def check_release_corpus(output_dir: Path) -> tuple[int, str | None]:
     # Once a manifest has landed, its existing rows are immutable. A release
     # update may append rows only. During the initial P8 addition HEAD has no
     # manifest, so there is no baseline to compare.
+    # Pre-publication exception: the current-candidate corpus may re-pin existing
+    # path content when docs/compatibility.md's Current-candidate register line
+    # already records the re-derived manifest root (deliberate candidate relock).
     repository = Path(__file__).resolve().parents[2]
-    relative_manifest = manifest_path.relative_to(repository).as_posix()
+    relative_manifest = manifest_path.resolve().relative_to(repository).as_posix()
     baseline = subprocess.run(
         ["git", "show", f"HEAD:{relative_manifest}"],
         cwd=repository,
@@ -1164,6 +1191,8 @@ def check_release_corpus(output_dir: Path) -> tuple[int, str | None]:
         old = json.loads(baseline.stdout)
         old_rows = {row["path"]: row for row in old.get("fixtures", [])}
         new_rows = {row["path"]: row for row in rows}
+        register_candidate_root = _compatibility_candidate_manifest_root(repository)
+        authorized_candidate_relock = register_candidate_root == actual_root
         for path, old_row in old_rows.items():
             if path not in new_rows:
                 raise AssertionError(f"release corpus is append-only; removed row: {path}")
@@ -1187,6 +1216,11 @@ def check_release_corpus(output_dir: Path) -> tuple[int, str | None]:
                 and bool(new_row["relock_reason"])
                 and new_row.get("capabilities") == old_row.get("capabilities")
             )
+            # Register-root match already content-addresses the full candidate
+            # row set (including capability fields re-derived from production
+            # bytes). Allow pre-publication re-pins without a per-field freeze.
+            if authorized_candidate_relock:
+                continue
             if not authorized_recovery_relock:
                 raise AssertionError(
                     f"release corpus is SHA-locked; changed existing row: {path}"

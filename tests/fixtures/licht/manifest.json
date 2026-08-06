@@ -900,7 +900,7 @@
             0
           ],
           "preview": null,
-          "required_reader_capabilities": "0x00000000000000000000000000000100",
+          "required_reader_capabilities": "0x00000000000000000000000000000200",
           "required_writer_capabilities": "0x000000000000000000000000000000a0",
           "rows": [
             {
@@ -924,7 +924,7 @@
           ]
         }
       ],
-      "sha256": "7cbb8d7a6d90c71b0e313e5bc7610f589cbc307a928232ac4ee06f2f343bd42a",
+      "sha256": "64cd8309d2c94caba942cbc49ade0a8703092144705f1238d828e626923e24b6",
       "verify": false
     },
     "unsupported-newer-single-head.licht": {
@@ -994,7 +994,7 @@
           ],
           "preview": null,
           "required_reader_capabilities": "0x00000000000000000000000000000000",
-          "required_writer_capabilities": "0x000000000000000000000000000001a0",
+          "required_writer_capabilities": "0x000000000000000000000000000002a0",
           "rows": [
             {
               "fourcc": "PROJ",
@@ -1008,7 +1008,7 @@
           ]
         }
       ],
-      "sha256": "244dbe5a8dfaae3a2a1e66454cb02b145a5636c80a68c2cd12b271469df8cacb",
+      "sha256": "aeb0b78bc292d1d8b32925f878a346a4010840c3dece11d667bafb764305d303",
       "verify": true,
       "write_expected": "unsafe"
     }

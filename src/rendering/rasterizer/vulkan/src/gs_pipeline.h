@@ -1,25 +1,23 @@
 #pragma once
 
-#include <algorithm> // std::sort
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstring> // memcpy
 #include <exception>
 #include <functional>
-#include <map>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
 #include <cassert>
 
+#include "barrier_planner.h"
 #include "buffer.h"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -28,6 +26,12 @@ class VulkanGSPipeline {
 public:
     using TimerCallback = std::function<void(const std::vector<std::pair<size_t, double>>&)>;
     using CpuTimerCallback = std::function<void(std::string_view, double)>;
+
+    // Epic #1496: binding + usage tag for the planner-driven dispatch path.
+    struct TaggedBinding {
+        _VulkanBuffer buffer;
+        lfs::rendering::vulkan::BufferUse use = lfs::rendering::vulkan::BufferUse::ComputeRead;
+    };
 
     VulkanGSPipeline();
     ~VulkanGSPipeline() noexcept;
@@ -51,6 +55,18 @@ public:
     // (including rejected submit). Timeline publication bits must match
     // wasTimelineSignalSubmitted.
     [[nodiscard]] const lfs::rendering::SubmissionState& lastSubmissionState() const noexcept;
+
+    // Epic #1496: adopt/drop external parent VkBuffers for whole-buffer planner state
+    // (shared-scratch import path). Passthrough to BufferBarrierPlanner::track/forget.
+    void trackExternalParent(VkBuffer buffer);
+    void untrackExternalParent(VkBuffer buffer);
+    // Test / audit access to the host-side planner (not a render-path seam).
+    [[nodiscard]] lfs::rendering::vulkan::BufferBarrierPlanner& barrierPlanner() noexcept;
+    [[nodiscard]] const lfs::rendering::vulkan::BufferBarrierPlanner& barrierPlanner() const noexcept;
+
+    // Epic #1496 §3.2: plan transfer/fill/host accesses and emit ≤1 barrier2 when non-empty.
+    // Requires an active command batch. No trailing barrier after the transfer op itself.
+    void planTransfer(std::span<const lfs::rendering::vulkan::DeclaredAccess> accesses);
 
     void createBuffer(size_t size, _VulkanBuffer& buffer);
     void destroyBuffer(_VulkanBuffer& buffer);
@@ -81,7 +97,7 @@ public:
     VkCommandBuffer activeCommandBuffer() const {
         return command_buffer;
     }
-    bool writeTimestamp(int delta);
+    void writeTimestamp(int delta);
     bool writeTimestampNoExcept(int delta);
     void addTimerCallback(TimerCallback callback);
     void setCpuTimerCallback(CpuTimerCallback callback);
@@ -89,22 +105,18 @@ public:
     size_t getCurrentAllocSize() const { return current_vram; }
     size_t getPeakAllocSize() const { return peak_vram; }
 
+    // Live barrier scopes used by tagged plan / BufferUse converters / mixed-mode
+    // tests. TRANSFER_COMPUTE_SHADER_WRITE is the conservative-src golden (tests +
+    // barrier_planner). Dead composites removed in epic #1496 sweep_a F1.
     enum BarrierMask {
         TRANSFER_READ,
         TRANSFER_WRITE,
-        TRANSFER_READ_WRITE,
         COMPUTE_SHADER_READ,
         COMPUTE_SHADER_WRITE,
         COMPUTE_SHADER_READ_WRITE,
-        TRANSFER_COMPUTE_SHADER_READ,
         TRANSFER_COMPUTE_SHADER_WRITE,
-        TRANSFER_COMPUTE_SHADER_READ_WRITE,
         HOST_READ,
-        HOST_WRITE,
-        HOST_READ_WRITE,
         INDIRECT_DISPATCH_READ,
-        COMPUTE_SHADER_INDIRECT_READ,
-        TRANSFER_COMPUTE_SHADER_INDIRECT_READ,
         CONDITIONAL_RENDERING_READ,
     };
 
@@ -188,6 +200,10 @@ protected:
     // authorizes replaceFenceSignaled — policy stays NoResetNoReplacement.
     std::atomic<bool> gpu_wait_quarantined_{false};
 
+    // Epic #1496: host-side buffer hazard planner. Reconstructed in
+    // initializeExternal with the real queue_family_index.
+    lfs::rendering::vulkan::BufferBarrierPlanner barrier_planner_{};
+
     // Vulkan objects
     VkInstance instance;
     VkPhysicalDevice physical_device;
@@ -256,17 +272,6 @@ protected:
 
     uint32_t queue_family_index;
 
-    // For CPU-GPU transfers
-    struct _Stager {
-        VkBuffer buffer = VK_NULL_HANDLE;
-        VmaAllocation allocation = VK_NULL_HANDLE;
-        size_t allocSize = 0;
-        std::mutex mutex;
-    };
-    _Stager stager;
-
-    void allocStagingBuffer(size_t size);
-
     void populateDeviceInfo(VkPhysicalDevice selected_physical_device);
     void createCommandPool();
     void createFence();
@@ -308,8 +313,36 @@ protected:
         _ComputePipeline& pipeline,
         const std::vector<_VulkanBuffer>& buffers);
 
+    // Epic #1496 §3.1: planner-driven dispatch (plan once, emit ≤1 barrier2, shared bind path).
+    void executeCompute(
+        std::vector<std::pair<size_t, size_t>> dims,
+        const void* uniformsPtr, size_t uniformSize,
+        _ComputePipeline& pipeline,
+        const std::vector<TaggedBinding>& bindings);
+    void executeComputeIndirect(
+        const _VulkanBuffer& indirect_buffer,
+        VkDeviceSize indirect_offset,
+        const void* uniformsPtr, size_t uniformSize,
+        _ComputePipeline& pipeline,
+        const std::vector<TaggedBinding>& bindings);
+
 private:
     void destroyComputePipeline(_ComputePipeline& pipeline);
+
+    // Shared bind / push-descriptor / push-constants / dispatch recording (batch must be active).
+    void recordComputeDispatch(
+        std::vector<std::pair<size_t, size_t>> dims,
+        const void* uniformsPtr, size_t uniformSize,
+        _ComputePipeline& pipeline,
+        const std::vector<_VulkanBuffer>& buffers);
+    void recordComputeDispatchIndirect(
+        const _VulkanBuffer& indirect_buffer,
+        VkDeviceSize indirect_offset,
+        const void* uniformsPtr, size_t uniformSize,
+        _ComputePipeline& pipeline,
+        const std::vector<_VulkanBuffer>& buffers);
+    // Emit planned buffer barriers as a single vkCmdPipelineBarrier2 (0 or 1 call).
+    void emitPlannedBufferBarriers(const std::vector<VkBufferMemoryBarrier2>& barriers);
 };
 
 class [[nodiscard]] DeviceGuard {

@@ -4,6 +4,8 @@ import math
 
 import lichtfeld as lf
 
+from ..ui import RuntimeState
+
 from .. import toolbar as viewport_toolbar
 
 try:
@@ -126,6 +128,7 @@ class _OverlayDocumentController:
         import_visible = import_active or import_completion
         if import_visible:
             import_signature = (
+                RuntimeState.language_generation.value,
                 import_active,
                 import_completion,
                 import_state.get("success", False),
@@ -138,11 +141,12 @@ class _OverlayDocumentController:
                 import_state.get("error", ""),
             )
         else:
-            import_signature = (False,)
+            import_signature = (RuntimeState.language_generation.value, False)
 
         video_active = video_state.get("active", False)
         if video_active:
             video_signature = (
+                RuntimeState.language_generation.value,
                 True,
                 round(video_state.get("progress", 0.0), 3),
                 video_state.get("current_frame", 0),
@@ -150,7 +154,7 @@ class _OverlayDocumentController:
                 video_state.get("stage", ""),
             )
         else:
-            video_signature = (False,)
+            video_signature = (RuntimeState.language_generation.value, False)
 
         dirty_sources = []
         status_dirty = False

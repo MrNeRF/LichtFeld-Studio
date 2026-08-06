@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <expected>
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace lfs::mcp {
@@ -29,7 +30,7 @@ namespace lfs::app {
         std::function<bool()> is_visible;
         std::function<void(bool)> set_visible;
         std::function<python::SequencerUIStateData*()> ui_state;
-        std::function<void()> add_keyframe;
+        std::function<void(std::optional<float>)> add_keyframe;
         std::function<void()> update_selected_keyframe;
         std::function<void(size_t)> select_keyframe;
         std::function<void(size_t)> go_to_keyframe;

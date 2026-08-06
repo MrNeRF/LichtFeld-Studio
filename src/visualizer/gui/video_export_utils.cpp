@@ -3,7 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/video_export_utils.hpp"
+#include "core/event_bridge/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "io/loader.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
@@ -99,7 +102,7 @@ namespace lfs::vis::gui {
             if (auto allocator = lfs::vis::makeViewerSplatTensorAllocator()) {
                 if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(*snapshot.combined_model, allocator);
                     !migrated) {
-                    return std::unexpected("Failed to prepare splat tensors for video export: " +
+                    return std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_SPLAT_PREPARATION_FAILED)) +
                                            migrated.error().format());
                 }
             }
@@ -119,6 +122,7 @@ namespace lfs::vis::gui {
                 continue;
             snapshot.meshes.push_back(VideoExportMeshSnapshot{
                 .mesh = cloneMeshData(*vm.mesh),
+                .node_id = vm.node_id,
                 .transform = vm.transform,
                 .is_selected = vm.is_selected,
             });
@@ -171,10 +175,21 @@ namespace lfs::vis::gui {
         }
 
         if (!snapshot.hasRenderableContent()) {
-            return std::unexpected("No renderable content to export");
+            return std::unexpected(std::string(LOC(lichtfeld::Strings::Runtime::VIDEO_NO_RENDERABLE_CONTENT)));
         }
 
         return snapshot;
+    }
+
+    void refreshVideoExportMeshTransforms(
+        VideoExportSceneSnapshot& snapshot,
+        const lfs::core::Scene& scene) {
+        for (auto& mesh : snapshot.meshes) {
+            if (mesh.node_id == lfs::core::NULL_NODE || !scene.getNodeById(mesh.node_id))
+                continue;
+            mesh.transform = rendering::dataWorldTransformToVisualizerWorld(
+                scene.getWorldTransform(mesh.node_id));
+        }
     }
 
     std::expected<lfs::io::video::VideoExportOptions, std::string> validateVideoExportOptions(

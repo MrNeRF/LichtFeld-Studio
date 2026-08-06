@@ -184,6 +184,46 @@ namespace lfs::gui {
             return true;
         }
 
+        template <size_t N>
+        [[nodiscard]] bool setCachedSelectLabels(
+            Rml::ElementFormControlSelect* const select,
+            const std::array<const char*, N>& keys) {
+            if (!select)
+                return false;
+
+            bool changed = false;
+            for (size_t i = 0; i < N; ++i) {
+                auto* const option = select->GetOption(static_cast<int>(i));
+                if (!option)
+                    continue;
+
+                const std::string localized = LOC(keys[i]);
+                if (option->GetInnerRML() == localized)
+                    continue;
+
+                option->SetInnerRML(localized);
+                changed = true;
+            }
+
+            if (!changed)
+                return false;
+
+            auto* const selected = select->GetOption(select->GetSelection());
+            if (!selected)
+                return true;
+
+            const std::string selected_rml = selected->GetInnerRML();
+            for (int i = 0; i < select->GetNumChildren(true); ++i) {
+                auto* const child = select->GetChild(i);
+                if (child && child->GetTagName() == "selectvalue") {
+                    child->SetInnerRML(selected_rml);
+                    break;
+                }
+            }
+
+            return true;
+        }
+
         template <typename... Args>
         [[nodiscard]] std::string localizedFormat(const char* const key, Args... args) {
             char buffer[256]{};
@@ -307,6 +347,10 @@ namespace lfs::gui {
     }
 
     bool VideoExtractorDialog::needsAnimationFrame() const {
+        const std::string current_language =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        if (!current_language.empty() && current_language != last_language_)
+            return true;
         return hasDynamicState() || (host_ && host_->needsAnimationFrame());
     }
 
@@ -896,6 +940,31 @@ namespace lfs::gui {
         changed |= setCachedAttribute(custom_width_input_el_, "title", LOC(VideoExtractor::WIDTH));
         changed |= setCachedAttribute(custom_height_input_el_, "title", LOC(VideoExtractor::HEIGHT));
         changed |= setCachedAttribute(pattern_input_el_, "title", LOC(VideoExtractor::PATTERN_TOOLTIP));
+        changed |= setCachedSelectLabels(
+            mode_select_el_,
+            std::array{"video_extractor.mode_fps", "video_extractor.mode_interval"});
+        changed |= setCachedSelectLabels(
+            format_select_el_,
+            std::array{"video_extractor.format_png", "video_extractor.format_jpeg"});
+        changed |= setCachedSelectLabels(
+            resolution_select_el_,
+            std::array{"video_extractor.res_original", "video_extractor.res_scale",
+                       "video_extractor.res_custom"});
+        changed |= setCachedSelectLabels(
+            sharpness_algorithm_select_el_,
+            std::array{"video_extractor.sharpness_algo_combined",
+                       "video_extractor.sharpness_algo_tenengrad",
+                       "video_extractor.sharpness_algo_laplacian"});
+        changed |= setCachedSelectLabels(
+            sharpness_mode_select_el_,
+            std::array{"video_extractor.sharpness_mode_threshold",
+                       "video_extractor.sharpness_mode_window"});
+        changed |= setCachedSelectLabels(
+            dynamic_cast<Rml::ElementFormControlSelect*>(window_candidates_select_el_),
+            std::array{"video_extractor.candidates_auto", "video_extractor.candidates_fast",
+                       "video_extractor.candidates_balanced", "video_extractor.candidates_quality",
+                       "video_extractor.candidates_high_quality",
+                       "video_extractor.candidates_very_high", "video_extractor.candidates_all"});
         changed |= setCachedText(stop_btn_el_, LOC(VideoExtractor::STOP));
         changed |= setCachedText(cancel_btn_el_, LOC(VideoExtractor::CANCEL));
         markContentDirty();

@@ -4,8 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
 #include <unordered_map>
-#include <unordered_set>
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
@@ -27,15 +27,27 @@ namespace lfs::vis {
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkPipelineStageFlags2 last_stage = VK_PIPELINE_STAGE_2_NONE;
             VkAccessFlags2 last_access = VK_ACCESS_2_NONE;
+            // Readers since the last write (WAR sources for the next writer).
+            VkPipelineStageFlags2 reader_stages = VK_PIPELINE_STAGE_2_NONE;
+            VkAccessFlags2 reader_access = VK_ACCESS_2_NONE;
         };
 
-        void reset();
+        struct Entry {
+            std::uint64_t generation = 0;
+            ImageState state{};
+            bool external = false;
+        };
+
         void clearSwapchainOnly();
-        void forgetImage(VkImage image);
-        void registerImage(VkImage image, VkImageAspectFlags aspect_mask, VkImageLayout layout,
+        void forgetImage(VkImage image, std::uint64_t generation);
+        void registerImage(VkImage image,
+                           std::uint64_t generation,
+                           VkImageAspectFlags aspect_mask,
+                           VkImageLayout layout,
                            bool external = false);
 
         [[nodiscard]] VkImageLayout imageLayout(VkImage image,
+                                                std::uint64_t generation,
                                                 VkImageLayout fallback = VK_IMAGE_LAYOUT_UNDEFINED) const;
 
         [[nodiscard]] static AccessScope layoutAccess(VkImageLayout layout,
@@ -43,6 +55,7 @@ namespace lfs::vis {
 
         void transitionImage(VkCommandBuffer command_buffer,
                              VkImage image,
+                             std::uint64_t generation,
                              VkImageAspectFlags aspect_mask,
                              VkImageLayout new_layout);
 
@@ -51,14 +64,31 @@ namespace lfs::vis {
         // submission's semaphore edges instead of inheriting a graphics-only scope.
         void transitionImage(VkCommandBuffer command_buffer,
                              VkImage image,
+                             std::uint64_t generation,
                              VkImageAspectFlags aspect_mask,
                              VkImageLayout new_layout,
                              AccessScope source,
                              AccessScope destination);
 
+        // Injectable emission seam (tests capture barriers without a device).
+        void setPipelineBarrierEmitter(PFN_vkCmdPipelineBarrier2 emitter) noexcept {
+            cmd_pipeline_barrier2_ = emitter != nullptr ? emitter : vkCmdPipelineBarrier2;
+        }
+
     private:
-        std::unordered_map<VkImage, ImageState> images_;
-        std::unordered_set<VkImage> external_images_;
+        [[nodiscard]] static bool isWriteScope(AccessScope scope) noexcept;
+        void emitBarrier(VkCommandBuffer command_buffer,
+                         VkImage image,
+                         VkImageAspectFlags aspect_mask,
+                         VkImageLayout old_layout,
+                         VkImageLayout new_layout,
+                         AccessScope source,
+                         AccessScope destination) const;
+        void accumulateReader(ImageState& state, AccessScope destination) noexcept;
+        void applyWriteDestination(ImageState& state, AccessScope destination) noexcept;
+
+        std::unordered_map<VkImage, Entry> images_;
+        PFN_vkCmdPipelineBarrier2 cmd_pipeline_barrier2_ = vkCmdPipelineBarrier2;
     };
 
 } // namespace lfs::vis

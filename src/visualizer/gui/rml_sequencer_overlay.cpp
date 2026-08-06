@@ -488,9 +488,9 @@ namespace lfs::vis::gui {
         overlay_px_height_ = 80.0f * dp;
 
         const size_t kf_num = selected + 1;
-        el_edit_label_->SetInnerRML(
-            fmt::format(fmt::runtime(LOC(lichtfeld::Strings::Sequencer::EDITING_KEYFRAME)), kf_num));
-        el_edit_delta_->SetInnerRML(fmt::format("{:.3f}m  {:.1f}{}", pos_delta, rot_delta, DEG_SIGN));
+        el_edit_label_->SetInnerRML(LOCF(lichtfeld::Strings::Sequencer::EDITING_KEYFRAME, kf_num));
+        el_edit_delta_->SetInnerRML(
+            LOCF(lichtfeld::Strings::Sequencer::EDIT_DELTA, pos_delta, rot_delta, DEG_SIGN));
 
         if (!edit_overlay_visible_) {
             el_edit_overlay_->SetProperty("display", "block");

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,6 +30,41 @@ namespace lfs::core {
             SegmentAndIgnore, // 3-band mask (0-255): value<128 ignore, 128<=value<=250 segment, value>250 keep
             AlphaConsistent   // Enforce exact alpha values from mask
         };
+
+        enum class NormalLossSpace {
+            Auto,
+            CameraOpenCV,
+            CameraOpenGL,
+            World,
+        };
+
+        [[nodiscard]] inline constexpr std::string_view normal_loss_space_name(
+            const NormalLossSpace space) noexcept {
+            switch (space) {
+            case NormalLossSpace::Auto:
+                return "auto";
+            case NormalLossSpace::CameraOpenCV:
+                return "camera-opencv";
+            case NormalLossSpace::CameraOpenGL:
+                return "camera-opengl";
+            case NormalLossSpace::World:
+                return "world";
+            }
+            return "auto";
+        }
+
+        [[nodiscard]] inline constexpr std::optional<NormalLossSpace> normal_loss_space_from_string(
+            const std::string_view value) noexcept {
+            if (value == "auto")
+                return NormalLossSpace::Auto;
+            if (value == "camera-opencv")
+                return NormalLossSpace::CameraOpenCV;
+            if (value == "camera-opengl")
+                return NormalLossSpace::CameraOpenGL;
+            if (value == "world")
+                return NormalLossSpace::World;
+            return std::nullopt;
+        }
 
         // Background mode for training - only one can be active at a time
         enum class BackgroundMode {
@@ -103,7 +139,6 @@ namespace lfs::core {
             size_t refine_every = 100;
             size_t start_refine = 500;
             size_t stop_refine = 25'000;
-            float grad_threshold = 0.0002f;
             int sh_degree = 3;
             float opacity_reg = 0.01f;
             float scale_reg = 0.01f;
@@ -112,7 +147,7 @@ namespace lfs::core {
             int max_cap = 1000000;
 
             std::vector<size_t> eval_steps = {7'000, 30'000};  // Steps to evaluate the model
-            std::vector<size_t> save_steps = {7'000, 30'000};  // Steps to save the model
+            std::vector<size_t> save_steps = {7'000, 30'000};  // Steps at which to save the project (project.licht)
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
             bool enable_eval = false;                          // Only evaluate when explicitly enabled
             bool enable_save_eval_images = true;               // Save during evaluation images
@@ -141,7 +176,7 @@ namespace lfs::core {
             float normal_loss_weight = 0.05f;        // Prior normal supervision weight
             float normal_consistency_weight = 0.05f; // Depth-normal consistency weight
             float normal_flatten_weight = 1.0f;      // L1 on the smallest scale axis while normal supervision is active
-            std::string normal_loss_space = "auto";  // auto, camera-opencv, camera-opengl, or world
+            NormalLossSpace normal_loss_space = NormalLossSpace::Auto;
 
             // Mip filter (anti-aliasing)
             bool mip_filter = false;
@@ -173,13 +208,7 @@ namespace lfs::core {
 
             // Shared densification thresholds and reset controls
             float prune_opacity = 0.005f;
-            float grow_scale3d = 0.01f;
-            float grow_scale2d = 0.05f;
-            float prune_scale3d = 0.1f;
-            float prune_scale2d = 0.15f;
             size_t reset_every = 3'000;
-            size_t pause_refine_after_reset = 0;
-            bool revised_opacity = false;
             bool gut = false;
             bool undistort = false;
             float steps_scaler = 1.f; // Scales training step counts; values <= 0 disable scaling
@@ -223,6 +252,7 @@ namespace lfs::core {
             static OptimizationParameters mcmc_defaults();
             static OptimizationParameters mrnf_defaults();
             static OptimizationParameters igs_plus_defaults();
+            static OptimizationParameters defaults_for_strategy(std::string_view strategy);
         };
 
         struct LFS_CORE_API LoadingParams {
@@ -254,7 +284,8 @@ namespace lfs::core {
             bool invert_masks = false;
             float mask_threshold = 0.5f;
 
-            // Not serialized — UI-controlled per import.
+            // PRMS-authoritative pending import option (ownership matrix).
+            // DatasetConfig::to_json omits it; project PRMS round-trips it.
             std::string centralize_dataset = "off";
 
             nlohmann::json to_json() const;
@@ -319,7 +350,7 @@ namespace lfs::core {
 
             // Headless/integration-test trigger for the production training
             // snapshot path. An empty path derives
-            // <output>/snapshot_<iteration>.licht.
+            // <output>/project.licht (Trainer::default_project_path).
             std::optional<size_t> save_project_at_iteration = std::nullopt;
             std::filesystem::path save_project_path;
 

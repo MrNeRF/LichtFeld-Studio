@@ -128,6 +128,61 @@ class _ParamsStub:
         self.eval_steps.append(step)
 
 
+class _StrategyParamsStub:
+    def __init__(self):
+        self._strategy = "mrnf"
+        self._slots = {
+                "mrnf": {
+                "max_cap": 5_000_000,
+                "means_lr": 2e-5,
+                "scaling_lr": 0.007,
+                "lambda_dssim": 0.2,
+                "init_opacity": 0.5,
+                "prune_ratio": 0.6,
+                "sh_degree": 3,
+                "depth_loss_mode": "ssi",
+                "ppisp_controller_activation_step": 25_000,
+                "bg_color": (0.0, 0.0, 0.0),
+                "save_steps": [7_000, 30_000],
+                "use_edge_map": True,
+            },
+            "igs+": {
+                "max_cap": 4_000_000,
+                "means_lr": 1.6e-5,
+                "scaling_lr": 0.02,
+                "lambda_dssim": 0.35,
+                "init_opacity": 0.1,
+                "prune_ratio": 0.4,
+                "sh_degree": 2,
+                "depth_loss_mode": "ssi-depth",
+                "ppisp_controller_activation_step": 12_000,
+                "bg_color": (0.1, 0.2, 0.3),
+                "save_steps": [5_000],
+                "use_edge_map": False,
+            },
+        }
+        self.gut = False
+
+    def has_params(self):
+        return True
+
+    @property
+    def strategy(self):
+        return self._strategy
+
+    def set_strategy(self, strategy):
+        self._strategy = strategy
+
+    def get(self, prop):
+        return self._slots[self._strategy][prop]
+
+    def __getattr__(self, prop):
+        try:
+            return self._slots[self._strategy][prop]
+        except KeyError as exc:
+            raise AttributeError(prop) from exc
+
+
 class _DatasetStub:
     def __init__(self):
         self.data_path = "/data/scene_a"
@@ -144,6 +199,91 @@ class _ModelStub:
 
     def bind(self, name, getter, setter):
         self.bindings[name] = (getter, setter)
+
+
+def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
+    training_panel_module, monkeypatch
+):
+    params = _StrategyParamsStub()
+    dataset = _DatasetStub()
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "optimization_params",
+        lambda: params,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "dataset_params",
+        lambda: dataset,
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "schedule_on_ui_thread",
+        lambda _callback: None,
+        raising=False,
+    )
+
+    def row(prop_id, *, is_int=False, precision=6, strategies=()):
+        return {
+            "id": prop_id,
+            "kind": "number",
+            "label_key": "",
+            "tooltip_key": "",
+            "precision": precision,
+            "step": 1,
+            "min": 0,
+            "max": 10_000_000,
+            "is_int": is_int,
+            "name": prop_id,
+            "items": [],
+            "strategies": strategies,
+        }
+
+    binding = training_panel_module.property_view.SectionBinding(
+        "strategy_values",
+        [
+            row("max_cap", is_int=True, precision=0),
+            row("means_lr"),
+            row("scaling_lr"),
+            {
+                **row("use_edge_map"),
+                "kind": "checkbox",
+                "strategies": ("mrnf",),
+            },
+        ],
+        lambda: params,
+        panel._text_bufs,
+        panel._queue_pv_publish,
+    )
+    panel._pv_bindings = (binding,)
+    model = _ModelStub()
+    panel._bind_select_props(model, lambda: params, lambda: dataset)
+
+    assert "use_edge_map" in {record["id"] for record in binding._records()}
+    panel._set_strategy("igs+")
+
+    assert params.strategy == "igs+"
+    assert "use_edge_map" not in {
+        record["id"] for record in binding._records()
+    }
+    assert panel._text_bufs[binding.input_key("max_cap")] == "4,000,000"
+    assert panel._text_bufs[binding.input_key("means_lr")] == "0.000016"
+    assert panel._text_bufs[binding.input_key("scaling_lr")] == "0.020000"
+    assert panel._get_scrub_value("lambda_dssim") == pytest.approx(0.35)
+    assert panel._get_scrub_value("init_opacity") == pytest.approx(0.1)
+    assert panel._get_scrub_value("prune_ratio") == pytest.approx(0.4)
+    assert model.bindings["sh_degree_str"][0]() == "2"
+    assert model.bindings["depth_loss_mode_str"][0]() == "ssi-depth"
+    assert panel._text_bufs["ppisp_activation_step_str"] == "12,000"
+    assert panel._text_bufs[training_panel_module.BG_COLOR_HEX_KEY] == (
+        training_panel_module.w.color_to_hex(params.bg_color)
+    )
+    assert params.save_steps == [5_000]
+    assert panel._handle.dirty_all_count == 1
+    assert panel._handle.request_update_count == 1
 
 
 def test_auto_scale_marker_survives_reset_but_not_dataset_change(
@@ -373,29 +513,6 @@ def test_numeric_parser_normalizes_integer_commas_and_keeps_float_validation(tra
         training_panel_module._parse_num("1,5", float)
 
 
-def test_integer_commas_are_normalized_while_float_decimal_commas_still_fail(training_panel_module, monkeypatch):
-    params = _ParamsStub()
-    monkeypatch.setattr(
-        training_panel_module,
-        "lf",
-        SimpleNamespace(optimization_params=lambda: params),
-    )
-
-    panel = training_panel_module.TrainingPanel()
-
-    assert panel._set_num_prop("iterations", "1,234", int, 1, None) is True
-    assert params.iterations == 1234
-
-    assert panel._set_num_prop("iterations", "1,5", int, 1, None) is True
-    assert params.iterations == 15
-
-    assert panel._set_num_prop("iterations", "1,0001,00", int, 1, None) is True
-    assert params.iterations == 1000100
-
-    assert panel._set_num_prop("means_lr", "0,0001", float, 0, None) is False
-    assert params.means_lr == 0.25
-
-
 def test_max_width_zero_disables_cap(training_panel_module, monkeypatch):
     dataset = _DatasetStub()
     monkeypatch.setattr(
@@ -432,7 +549,6 @@ def test_max_width_step_clamps_at_zero(training_panel_module, monkeypatch):
 @pytest.mark.parametrize(
     ("binding_name", "expected_text"),
     [
-        ("iterations_str", "1,234"),
         ("ppisp_activation_step_str", "5,678"),
         ("max_width_str", "2,048"),
         ("new_step_str", "7,000"),
@@ -454,7 +570,7 @@ def test_cleared_numeric_fields_restore_model_value(training_panel_module, monke
         ),
     )
 
-    panel._bind_num_props(model, lambda: params, lambda: dataset)
+    panel._bind_bespoke_num_props(model, lambda: params, lambda: dataset)
 
     getter, setter = model.bindings[binding_name]
     setter("")
@@ -467,7 +583,6 @@ def test_cleared_numeric_fields_restore_model_value(training_panel_module, monke
 @pytest.mark.parametrize(
     ("binding_name", "input_text", "expected_text"),
     [
-        ("iterations_str", "300000", "300,000"),
         ("ppisp_activation_step_str", "300000", "300,000"),
         ("max_width_str", "3000", "3,000"),
         ("new_step_str", "300000", "300,000"),
@@ -491,7 +606,7 @@ def test_committed_numeric_fields_reformat_and_dirty(
         ),
     )
 
-    panel._bind_num_props(model, lambda: params, lambda: dataset)
+    panel._bind_bespoke_num_props(model, lambda: params, lambda: dataset)
 
     getter, setter = model.bindings[binding_name]
     setter(input_text)
@@ -506,7 +621,6 @@ def test_committed_numeric_fields_reformat_and_dirty(
 @pytest.mark.parametrize(
     ("binding_name", "input_text", "expected_text"),
     [
-        ("iterations_str", "1,11110", "111,110"),
         ("ppisp_activation_step_str", "56,7800", "567,800"),
         ("max_width_str", "2,0,4,8", "2,048"),
         ("new_step_str", "70,0000", "700,000"),
@@ -530,7 +644,7 @@ def test_integer_fields_strip_arbitrary_commas_and_reformat(
         ),
     )
 
-    panel._bind_num_props(model, lambda: params, lambda: dataset)
+    panel._bind_bespoke_num_props(model, lambda: params, lambda: dataset)
 
     getter, setter = model.bindings[binding_name]
     setter(input_text)
@@ -543,7 +657,6 @@ def test_integer_fields_strip_arbitrary_commas_and_reformat(
 @pytest.mark.parametrize(
     ("binding_name", "buffer_text", "expected_text"),
     [
-        ("iterations_str", "1a1110", "1,234"),
         ("ppisp_activation_step_str", "56x7800", "5,678"),
         ("max_width_str", "20x48", "2,048"),
         ("new_step_str", "70x000", "7,000"),
@@ -573,8 +686,10 @@ def test_invalid_numeric_commit_restores_canonical_value(
     assert panel._handle.dirty_fields == [binding_name]
 
 
-def test_steps_scaler_syncs_dependent_text_bufs(training_panel_module, monkeypatch):
-    """Issue #970: steps_scaler change must refresh all dependent param buffers."""
+def test_locked_iterations_rescale_dependent_property_view_buffers(
+    training_panel_module, monkeypatch
+):
+    """Issue #970: an iterations edit refreshes every auto-scaled row buffer."""
     panel = training_panel_module.TrainingPanel()
     panel._handle = _HandleStub()
     params = _ParamsStub()
@@ -594,15 +709,41 @@ def test_steps_scaler_syncs_dependent_text_bufs(training_panel_module, monkeypat
         ),
     )
 
-    model = _ModelStub()
-    panel._bind_num_props(model, lambda: params, lambda: dataset)
+    def row(prop_id):
+        return {
+            "id": prop_id,
+            "kind": "number",
+            "label_key": "",
+            "tooltip_key": "",
+            "precision": 0,
+            "step": 100,
+            "min": 0,
+            "max": 100000,
+            "is_int": True,
+            "name": prop_id,
+            "items": [],
+        }
 
-    assert panel._set_num_prop("steps_scaler", "2.0", float, 0.01, None) is True
+    queued = []
+    binding = training_panel_module.property_view.SectionBinding(
+        "dependent_steps",
+        [row("iterations"), row("grow_until_iter")],
+        lambda: params,
+        panel._text_bufs,
+        queued.append,
+    )
+    panel._pv_bindings = (binding,)
+    panel._pv_binding_by_prop = {
+        row_meta["id"]: binding for row_meta in binding.rows
+    }
+
+    assert panel._set_iterations(params, 60000) is True
     assert params.steps_scaler == 2.0
     assert params.iterations == 60000
     assert params.grow_until_iter == 30000
-    assert panel._text_bufs["iterations_str"] == "60,000"
-    assert panel._text_bufs["grow_until_iter_str"] == "30,000"
+    assert panel._text_bufs[binding.input_key("iterations")] == "60,000"
+    assert panel._text_bufs[binding.input_key("grow_until_iter")] == "30,000"
+    assert queued == [binding]
     assert panel._handle.dirty_all_count >= 1
 
 
@@ -625,7 +766,7 @@ def test_legacy_negative_ppisp_activation_step_displays_resolved_value(training_
         ),
     )
 
-    panel._bind_num_props(model, lambda: params, lambda: dataset)
+    panel._bind_bespoke_num_props(model, lambda: params, lambda: dataset)
 
     getter, _setter = model.bindings["ppisp_activation_step_str"]
     assert getter() == "50,000"
@@ -737,11 +878,9 @@ def test_training_rml_exposes_mrnf_grow_until_iter():
     training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
     content = training_rml.read_text()
 
-    assert 'data-value="grow_until_iter_str"' in content
-    assert "{{label_grow_until_iter}}" in content
-    assert "num_step('grow_until_iter', -1)" in content
-    assert 'data-tooltip="training.tooltip.grow_until_iter"' in content
-    assert 'data-if="dep_mrnf"' in content
+    assert 'data-for="row : pv_refinement_grow_rows" data-if="dep_mrnf"' in content
+    assert 'data-value="row.text"' in content
+    assert 'data-event-mousedown="pv_step(row.id, -1)"' in content
 
 
 def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):

@@ -57,7 +57,7 @@
           <input id="trim-end-input" class="time-input time-input--end" type="text" value="0.0" />
           <button id="btn-trim-end-set" class="btn btn--secondary mini-btn" type="button" title="@tr:video_extractor.set_end">@tr:video_extractor.set</button>
           <button id="btn-trim-reset" class="btn btn--secondary mini-btn" type="button">@tr:video_extractor.reset</button>
-          <span id="estimated-frames" class="inline-note">(~0 frames)</span>
+          <span id="estimated-frames" class="inline-note"></span>
         </div>
 
         <div class="section">
@@ -150,7 +150,7 @@
                 <option value="50">@tr:video_extractor.candidates_very_high</option>
                 <option value="0">@tr:video_extractor.candidates_all</option>
               </select>
-              <span id="window-candidates-readout" class="inline-note">10 / ~25 frames</span>
+              <span id="window-candidates-readout" class="inline-note"></span>
               </div>
             </div>
           </div>
@@ -209,7 +209,7 @@
               <span class="dimension-separator">x</span>
               <input id="custom-height-input" class="dimension-input" type="text" value="1080" />
             </div>
-            <span id="output-resolution" class="inline-note">Output: --</span>
+            <span id="output-resolution" class="inline-note"></span>
           </div>
         </div>
 

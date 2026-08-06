@@ -19,9 +19,9 @@ namespace lfs::io::project {
     enum class SplatSourceKind : std::uint8_t {
         ImportedPly,
         ImportedSpz,
-        ImportedSog,
+        ImportedSog, // reserved: SOG embed / bake-to-embedded (owner decision 2026-07-30)
         Generated,
-        BakedRad,
+        BakedRad, // reserved: SOG embed / bake-to-embedded (owner decision 2026-07-30)
         LiveRad,
     };
 

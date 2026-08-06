@@ -276,6 +276,12 @@ def _tr(key: str) -> str:
     return lf.ui.tr(key)
 
 
+def _tr_format(key: str, **values) -> str:
+    from .localization import safe_format
+
+    return safe_format(_tr(key), **values)
+
+
 def _index_library_path(index) -> str:
     return str(getattr(index, "library_path", "<unknown library path>"))
 
@@ -2035,11 +2041,13 @@ class WatchDirsDialogPanel(Panel):
 
     def _get_scan_save_label(self) -> str:
         with self._scan_state_lock:
-            if self._scan_active:
-                return lf.ui.tr("watch_dirs.scanning")
-            if self._scan_terminal:
-                return lf.ui.tr("watch_dirs.done")
-            return lf.ui.tr("watch_dirs.save_scan")
+            active = self._scan_active
+            terminal = self._scan_terminal
+        if active:
+            return lf.ui.tr("watch_dirs.scanning")
+        if terminal:
+            return lf.ui.tr("watch_dirs.done")
+        return lf.ui.tr("watch_dirs.save_scan")
 
     def _get_scan_terminal(self) -> bool:
         with self._scan_state_lock:
@@ -2135,9 +2143,10 @@ class WatchDirsDialogPanel(Panel):
         self._queue_dirty_scan_model()
 
     def _set_scan_log_entry(self, index: int, path: str, status: str) -> None:
+        queued_status = _tr("watch_dirs.scan_log_queued")
         with self._scan_state_lock:
             while len(self._scan_log) <= index:
-                self._scan_log.append({"status": "Queued", "path": ""})
+                self._scan_log.append({"status": queued_status, "path": ""})
             self._scan_log[index] = {"status": status, "path": path}
         self._queue_dirty_scan_model()
 
@@ -2191,7 +2200,7 @@ class WatchDirsDialogPanel(Panel):
     def _on_cancel(self, _handle=None, _ev=None, _args=None):
         if self._get_scan_active():
             self._scan_cancel_event.set()
-            self._set_scan_state(status="Cancelling scan...")
+            self._set_scan_state(status=_tr("watch_dirs.scan_cancelling"))
             return
         lf.ui.set_panel_enabled(self.id, False)
 
@@ -2206,7 +2215,7 @@ class WatchDirsDialogPanel(Panel):
             self._set_scan_state(
                 active=False,
                 progress=0.0,
-                status="No watched directories to scan.",
+                status=_tr("watch_dirs.scan_no_directories"),
                 terminal=False,
                 reset_log=True,
             )
@@ -2252,12 +2261,16 @@ class WatchDirsDialogPanel(Panel):
         self._set_scan_state(
             active=True,
             progress=0.0,
-            status=f"Preparing scan for {total_dirs} folder{'s' if total_dirs != 1 else ''}...",
+            status=(
+                _tr("watch_dirs.scan_preparing_one")
+                if total_dirs == 1
+                else _tr_format("watch_dirs.scan_preparing_many", count=total_dirs)
+            ),
             terminal=False,
             reset_log=True,
         )
         for idx, path in enumerate(watch_dirs):
-            self._set_scan_log_entry(idx, path, "Queued")
+            self._set_scan_log_entry(idx, path, _tr("watch_dirs.scan_log_queued"))
         thread = threading.Thread(
             target=self._scan_worker,
             args=(
@@ -2294,7 +2307,7 @@ class WatchDirsDialogPanel(Panel):
             self._set_scan_state(
                 active=False,
                 progress=0.0,
-                status="Scan failed: Asset Manager backend is unavailable.",
+                status=_tr("watch_dirs.scan_backend_unavailable"),
                 terminal=True,
             )
             self._clear_scan_thread()
@@ -2311,21 +2324,21 @@ class WatchDirsDialogPanel(Panel):
                     path,
                     folder_id,
                 )
-                self._set_scan_log_entry(path_index, path, "Cancelled")
+                self._set_scan_log_entry(path_index, path, _tr("watch_dirs.scan_cancelled"))
                 self._set_scan_state(
                     active=False,
                     progress=path_index / total_dirs,
-                    status="Scan cancelled.",
+                    status=_tr("watch_dirs.scan_cancelled"),
                     terminal=True,
                 )
                 self._clear_scan_thread()
                 return
             try:
-                self._set_scan_log_entry(path_index, path, "Scanning")
+                self._set_scan_log_entry(path_index, path, _tr("watch_dirs.scanning"))
                 self._set_scan_state(
                     active=True,
                     progress=path_index / total_dirs,
-                    status=f"Scanning {path}",
+                    status=_tr_format("watch_dirs.scan_path", path=path),
                 )
                 progress_base = path_index / total_dirs
                 progress_span = 1.0 / total_dirs
@@ -2352,14 +2365,16 @@ class WatchDirsDialogPanel(Panel):
                     self._set_scan_log_entry(
                         path_index,
                         path,
-                        f"Scanning ({found_count} found)",
+                        _tr_format("watch_dirs.scan_log_scanning_found", count=found_count),
                     )
                     self._set_scan_state(
                         active=True,
                         progress=progress_base + progress_span * inner_progress,
-                        status=(
-                            f"Scanning {current_path} "
-                            f"({scanned_dirs:,} folders, {found_count:,} assets found)"
+                    status=_tr_format(
+                            "watch_dirs.scan_progress",
+                            path=current_path,
+                            folders=scanned_dirs,
+                            assets=found_count,
                         ),
                     )
 
@@ -2375,22 +2390,26 @@ class WatchDirsDialogPanel(Panel):
                 discovered += len(metadata_list)
                 if not metadata_list:
                     _watch_log("info", "no importable assets found path=%s", path)
-                    self._set_scan_log_entry(path_index, path, "No assets")
+                    self._set_scan_log_entry(path_index, path, _tr("watch_dirs.scan_log_no_assets"))
                     self._set_scan_state(
                         active=True,
                         progress=(path_index + 1) / total_dirs,
-                        status=f"No importable assets found in {path}",
+                        status=_tr_format("watch_dirs.scan_no_assets", path=path),
                     )
                     continue
                 self._set_scan_log_entry(
                     path_index,
                     path,
-                    f"Registering ({len(metadata_list)} found)",
+                    _tr_format("watch_dirs.scan_log_registering_found", count=len(metadata_list)),
                 )
                 self._set_scan_state(
                     active=True,
                     progress=progress_base + progress_span * 0.95,
-                    status=f"Registering {len(metadata_list):,} assets from {path}",
+                    status=_tr_format(
+                        "watch_dirs.scan_registering",
+                        count=len(metadata_list),
+                        path=path,
+                    ),
                 )
 
                 def _on_register_progress(
@@ -2408,7 +2427,11 @@ class WatchDirsDialogPanel(Panel):
                     self._set_scan_log_entry(
                         path_index,
                         path,
-                        f"Registering ({created_count} new, {skipped_count} skipped)",
+                        _tr_format(
+                            "watch_dirs.scan_log_registering_counts",
+                            created=created_count,
+                            skipped=skipped_count,
+                        ),
                     )
                     self._set_scan_state(
                         active=True,
@@ -2416,9 +2439,11 @@ class WatchDirsDialogPanel(Panel):
                             progress_base
                             + progress_span * (0.95 + 0.05 * register_progress)
                         ),
-                        status=(
-                            f"Registering {processed_count:,}/{total_count:,} "
-                            f"assets from {path}"
+                        status=_tr_format(
+                            "watch_dirs.scan_registering_progress",
+                            processed=processed_count,
+                            total=total_count,
+                            path=path,
                         ),
                     )
 
@@ -2436,14 +2461,20 @@ class WatchDirsDialogPanel(Panel):
                 )
                 added += len(created_assets)
                 if created_assets:
-                    status = f"Added {len(created_assets)} of {len(metadata_list)}"
+                    status = _tr_format(
+                        "watch_dirs.scan_added",
+                        added=len(created_assets),
+                        total=len(metadata_list),
+                    )
                 else:
-                    status = f"Found {len(metadata_list)}, already cataloged"
+                    status = _tr_format(
+                        "watch_dirs.scan_already_cataloged", count=len(metadata_list)
+                    )
                 self._set_scan_log_entry(path_index, path, status)
                 self._set_scan_state(
                     active=True,
                     progress=(path_index + 1) / total_dirs,
-                    status=f"{status}: {path}",
+                    status=_tr_format("watch_dirs.scan_status_path", status=status, path=path),
                 )
             except InterruptedError:
                 _watch_log(
@@ -2452,11 +2483,11 @@ class WatchDirsDialogPanel(Panel):
                     path,
                     folder_id,
                 )
-                self._set_scan_log_entry(path_index, path, "Cancelled")
+                self._set_scan_log_entry(path_index, path, _tr("watch_dirs.scan_cancelled"))
                 self._set_scan_state(
                     active=False,
                     progress=path_index / total_dirs,
-                    status="Scan cancelled.",
+                    status=_tr("watch_dirs.scan_cancelled"),
                     terminal=True,
                 )
                 self._clear_scan_thread()
@@ -2469,11 +2500,11 @@ class WatchDirsDialogPanel(Panel):
                     e,
                     exc_info=True,
                 )
-                self._set_scan_log_entry(path_index, path, "Failed")
+                self._set_scan_log_entry(path_index, path, _tr("watch_dirs.scan_log_failed"))
                 self._set_scan_state(
                     active=True,
                     progress=(path_index + 1) / total_dirs,
-                    status=f"Failed to scan {path}: {e}",
+                    status=_tr_format("watch_dirs.scan_failed_path", path=path, error=e),
                 )
 
         try:
@@ -2488,7 +2519,11 @@ class WatchDirsDialogPanel(Panel):
                 self._set_scan_state(
                     active=False,
                     progress=1.0,
-                    status=f"Scan cancelled. Found {discovered}, added {added}.",
+                    status=_tr_format(
+                        "watch_dirs.scan_cancelled_summary",
+                        discovered=discovered,
+                        added=added,
+                    ),
                     terminal=True,
                 )
                 return
@@ -2505,7 +2540,11 @@ class WatchDirsDialogPanel(Panel):
                     self._set_scan_state(
                         active=False,
                         progress=1.0,
-                        status=f"Scan complete. Found {discovered}, added {added}.",
+                        status=_tr_format(
+                            "watch_dirs.scan_complete_summary",
+                            discovered=discovered,
+                            added=added,
+                        ),
                         terminal=True,
                     )
                 else:
@@ -2520,7 +2559,11 @@ class WatchDirsDialogPanel(Panel):
                     self._set_scan_state(
                         active=False,
                         progress=1.0,
-                        status=f"Scan finished, but saving failed. Found {discovered}, added {added}.",
+                        status=_tr_format(
+                            "watch_dirs.scan_save_failed_summary",
+                            discovered=discovered,
+                            added=added,
+                        ),
                         terminal=True,
                     )
             else:
@@ -2534,7 +2577,9 @@ class WatchDirsDialogPanel(Panel):
                 self._set_scan_state(
                     active=False,
                     progress=1.0,
-                    status=f"Scan complete. Found {discovered}, no new assets added.",
+                    status=_tr_format(
+                        "watch_dirs.scan_complete_no_new", discovered=discovered
+                    ),
                     terminal=True,
                 )
             refresh_active_panel()
@@ -2543,7 +2588,7 @@ class WatchDirsDialogPanel(Panel):
             self._set_scan_state(
                 active=False,
                 progress=1.0,
-                status=f"Failed to finish scan: {e}",
+                status=_tr_format("watch_dirs.scan_finish_failed", error=e),
                 terminal=True,
             )
         finally:

@@ -93,6 +93,8 @@ endif()
 
 project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SelectFastLinker.cmake")
+
 # On Linux, hide symbols pulled in from third-party image / compression static
 # archives so they don't escape into the dynamic symbol tables of the binaries
 # we ship. Without this, every .so/exe we build re-exports e.g.
@@ -192,6 +194,7 @@ configure_file(
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_FORMAT_TESTS "Build only the CPU-only .licht format tests (no CUDA)" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
+option(BUILD_LOCALIZATION_TESTS "Register headless localization contract tests without LibTorch" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
@@ -237,6 +240,8 @@ endif()
 # Compiler caching is part of the default developer loop. Disable it for clean
 # compiler benchmarks or when diagnosing a launcher-specific problem.
 option(ENABLE_COMPILER_CACHE "Auto-detect and use sccache/ccache compiler launchers" ON)
+set(LFS_CUDA_COMPILER_CACHE "" CACHE STRING
+    "Compiler cache for CUDA only: empty follows the auto-detected launcher, OFF disables CUDA caching, or name/path of a launcher such as ccache")
 if(ENABLE_COMPILER_CACHE)
     if(NOT WIN32 AND
        NOT MSVC AND
@@ -310,7 +315,27 @@ if(ENABLE_COMPILER_CACHE)
             # Keep the existing CUDA launcher unchanged. sccache decomposes
             # nvcc compilations after canonicalizing their input path, so the
             # C/C++ source alias does not provide cross-worktree CUDA hits.
-            set(CMAKE_CUDA_COMPILER_LAUNCHER "${_lfs_compiler_cache_program}")
+            #
+            # LFS_CUDA_COMPILER_CACHE retargets the CUDA launcher without
+            # touching the C/C++ one. Some nvcc versions cannot be wrapped by
+            # sccache: with CUDA 13.3 a single invocation emitting both PTX and
+            # SASS fails as "fatbinary fatal: Could not open input file
+            # <name>.ptx", because sccache relocates the intermediate. Earlier
+            # toolkits are unaffected, so the default is deliberately unchanged.
+            if(LFS_CUDA_COMPILER_CACHE STREQUAL "")
+                set(CMAKE_CUDA_COMPILER_LAUNCHER "${_lfs_compiler_cache_program}")
+            elseif(LFS_CUDA_COMPILER_CACHE MATCHES "^(OFF|NO|FALSE|0)$")
+                unset(CMAKE_CUDA_COMPILER_LAUNCHER)
+                message(STATUS "Compiler cache: CUDA uncached (LFS_CUDA_COMPILER_CACHE=${LFS_CUDA_COMPILER_CACHE})")
+            else()
+                find_program(LFS_CUDA_COMPILER_CACHE_PROGRAM NAMES "${LFS_CUDA_COMPILER_CACHE}")
+                if(NOT LFS_CUDA_COMPILER_CACHE_PROGRAM)
+                    message(FATAL_ERROR
+                        "LFS_CUDA_COMPILER_CACHE=${LFS_CUDA_COMPILER_CACHE} was not found")
+                endif()
+                set(CMAKE_CUDA_COMPILER_LAUNCHER "${LFS_CUDA_COMPILER_CACHE_PROGRAM}")
+                message(STATUS "Compiler cache: CUDA via ${LFS_CUDA_COMPILER_CACHE_PROGRAM}")
+            endif()
             message(STATUS "Compiler cache: ${_lfs_compiler_cache_name}")
             if(_lfs_compiler_cache_paths_normalized)
                 message(STATUS "Compiler cache: C/C++ checkout-local paths normalized")
@@ -397,6 +422,7 @@ if(BUILD_CUDA_PTX_ONLY)
     endif()
 
     set(LichtFeld-Studio_CUDA_ARCH "${BUILD_CUDA_MIN_SM}-virtual")
+    set(LFS_RUNTIME_MIN_SM "${BUILD_CUDA_MIN_SM}")
 
     math(EXPR _maj "${BUILD_CUDA_MIN_SM}/10")
     math(EXPR _min "${BUILD_CUDA_MIN_SM}%10")
@@ -406,8 +432,16 @@ if(BUILD_CUDA_PTX_ONLY)
 else()
     # Native GPU only
     set(TORCH_CUDA_ARCH_LIST "${DETECTED_COMPUTE_CAP}" CACHE STRING "" FORCE)
+    string(REPLACE "." "" LFS_RUNTIME_MIN_SM "${DETECTED_COMPUTE_CAP}")
     message(STATUS "CUDA: native (${LichtFeld-Studio_CUDA_ARCH})")
 endif()
+
+if(NOT LFS_RUNTIME_MIN_SM MATCHES "^[0-9]+$")
+    message(WARNING "Could not derive a runtime SM floor from '${LFS_RUNTIME_MIN_SM}'; "
+        "falling back to 70. The startup GPU check will be permissive.")
+    set(LFS_RUNTIME_MIN_SM "70")
+endif()
+message(STATUS "Runtime GPU floor: SM ${LFS_RUNTIME_MIN_SM}")
 
 enable_language(CUDA)
 find_package(CUDAToolkit 12.8 REQUIRED)
@@ -598,6 +632,8 @@ if(MSVC)
     add_compile_options(
         $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
         $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
+        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>
     )
 endif()
 
@@ -637,8 +673,8 @@ add_subdirectory(src/python)
 add_executable(${PROJECT_NAME}
     src/app/main.cpp
     src/app/application.cpp
-    src/app/application_startup.cpp
     src/app/mcp_gui_tools.cpp
+    src/app/mcp_operator_schema.cpp
     src/app/mcp_operator_tools.cpp
     src/app/mcp_runtime_tools.cpp
     src/app/mcp_sequencer_tools.cpp
@@ -646,6 +682,10 @@ add_executable(${PROJECT_NAME}
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
 )
+
+# The binary only carries code for these architectures; the app refuses to start on anything
+# lower instead of dying inside the first kernel launch (#1540).
+target_compile_definitions(${PROJECT_NAME} PRIVATE LFS_MIN_SM=${LFS_RUNTIME_MIN_SM})
 
 foreach(_lfs_git_version_consumer IN ITEMS
         ${PROJECT_NAME}
@@ -1279,11 +1319,13 @@ endif()
 # =============================================================================
 # TESTING (Optional)
 # =============================================================================
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_LOCALIZATION_TESTS)
     enable_testing()
     add_subdirectory(tests)
     if(BUILD_UNICODE_TEST_ONLY)
         message(STATUS "Unicode path test enabled. Build with 'ninja unicode_path_test' and run with 'ctest -R UnicodePathTest'")
+    elseif(BUILD_LOCALIZATION_TESTS AND NOT BUILD_TESTS)
+        message(STATUS "Headless localization tests enabled. Build with 'ninja test_localization_contracts' and run with 'ctest -R LocalizationContracts'")
     elseif(NOT BUILD_TESTS)
         message(STATUS "Format tests enabled. Build with 'ninja lichtfeld_format_tests' and run with 'ctest -L format'")
     else()

@@ -27,6 +27,9 @@ namespace lfs::vis {
         // the viewport pass record/submit.
         VkImageView external_image_view = VK_NULL_HANDLE;
         std::uint64_t external_image_generation = 0;
+        // Valid-region UV for padded panel textures (default identity).
+        glm::vec2 uv_scale{1.0f, 1.0f};
+        glm::vec2 uv_clamp_max{1.0f, 1.0f};
     };
 
     struct VulkanSplitViewParams {

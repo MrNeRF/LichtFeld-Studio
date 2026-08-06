@@ -44,7 +44,7 @@ namespace device_fault_test {
                                        const bool trap_after_record,
                                        const int blocks,
                                        const int threads_per_block,
-                                       const cudaStream_t stream) {
+                                       cudaStream_t stream) {
         many_oob_record_kernel<<<blocks, threads_per_block, 0, stream>>>(
             fault, op_id, value, bound, trap_after_record);
         return cudaGetLastError();

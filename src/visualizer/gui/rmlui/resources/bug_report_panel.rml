@@ -1,0 +1,143 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="bug_report_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="bug_report">
+  <span class="panel-title">@tr:bugreport.title</span>
+  <div class="separator"></div>
+
+  <div class="bugreport-auth hidden" data-class-hidden="!show_auth_required">
+    <span class="description">{{ auth_description }}</span>
+    <button type="button" class="btn btn--primary" data-event-click="open_account">@tr:bugreport.open_account</button>
+  </div>
+
+  <div class="bugreport-success hidden" data-class-hidden="!show_success">
+    <span class="bugreport-heading">@tr:bugreport.success_title</span>
+    <span class="description">{{ success_status }}</span>
+    <span class="bugreport-url">{{ portal_url }}</span>
+    <button type="button" class="btn btn--primary hidden" data-class-hidden="!show_open_portal" data-event-click="open_portal">@tr:bugreport.open_portal</button>
+    <div class="bugreport-problems hidden" data-class-hidden="!show_completeness_problems">
+      <span class="bugreport-subheading">@tr:bugreport.completeness_title</span>
+      <span class="bugreport-problem" data-for="problem : completeness_problems">• {{ problem }}</span>
+    </div>
+  </div>
+
+  <div class="bugreport-form hidden" data-class-hidden="!show_form">
+    <div class="bugreport-category-group">
+      <span class="bugreport-field-label">@tr:bugreport.category</span>
+      <div class="bugreport-radio-group">
+        <label class="bugreport-radio-option" data-event-click="set_category('crash')">
+          <input type="radio" name="bug-category" value="crash" data-attrif-checked="category == 'crash'" />
+          <span>@tr:bugreport.category.crash</span>
+        </label>
+        <label class="bugreport-radio-option" data-event-click="set_category('training')">
+          <input type="radio" name="bug-category" value="training" data-attrif-checked="category == 'training'" />
+          <span>@tr:bugreport.category.training</span>
+        </label>
+        <label class="bugreport-radio-option" data-event-click="set_category('ui')">
+          <input type="radio" name="bug-category" value="ui" data-attrif-checked="category == 'ui'" />
+          <span>@tr:bugreport.category.ui</span>
+        </label>
+        <label class="bugreport-radio-option" data-event-click="set_category('performance')">
+          <input type="radio" name="bug-category" value="performance" data-attrif-checked="category == 'performance'" />
+          <span>@tr:bugreport.category.performance</span>
+        </label>
+        <label class="bugreport-radio-option" data-event-click="set_category('export')">
+          <input type="radio" name="bug-category" value="export" data-attrif-checked="category == 'export'" />
+          <span>@tr:bugreport.category.export</span>
+        </label>
+        <label class="bugreport-radio-option" data-event-click="set_category('other')">
+          <input type="radio" name="bug-category" value="other" data-attrif-checked="category == 'other'" />
+          <span>@tr:bugreport.category.other</span>
+        </label>
+      </div>
+    </div>
+
+    <label class="bugreport-field bugreport-description-field">
+        <span class="bugreport-field-label">@tr:bugreport.report_title</span>
+        <input type="text" data-value="title" maxlength="160"/>
+    </label>
+    <label class="bugreport-field bugreport-category-detail hidden" data-class-hidden="!show_category_detail">
+      <span class="bugreport-field-label">@tr:bugreport.category_detail</span>
+      <input type="text" data-value="category_detail" maxlength="120" />
+      <span class="bugreport-counter">{{ category_detail_counter }}</span>
+    </label>
+    <label class="bugreport-field bugreport-description-field">
+      <span class="bugreport-field-label">@tr:bugreport.expected</span>
+      <textarea data-value="expected" maxlength="1000" rows="3"></textarea>
+    </label>
+    <label class="bugreport-field">
+      <span class="bugreport-field-label">@tr:bugreport.actual</span>
+      <textarea data-value="actual" maxlength="1000" rows="3"></textarea>
+    </label>
+
+    <span class="bugreport-field-label">@tr:bugreport.steps</span>
+    <input type="text" data-value="step_1" maxlength="650" placeholder="@tr:bugreport.step_1"/>
+    <input type="text" data-value="step_2" maxlength="650" placeholder="@tr:bugreport.step_2"/>
+    <input type="text" data-value="step_3" maxlength="650" placeholder="@tr:bugreport.step_3"/>
+
+    <div class="bugreport-two-column">
+      <label class="bugreport-field">
+        <span class="bugreport-field-label">@tr:bugreport.frequency</span>
+        <select data-value="frequency">
+          <option value="always">@tr:bugreport.frequency.always</option>
+          <option value="sometimes">@tr:bugreport.frequency.sometimes</option>
+          <option value="once">@tr:bugreport.frequency.once</option>
+        </select>
+      </label>
+      <label class="bugreport-field">
+        <span class="bugreport-field-label">@tr:bugreport.stage</span>
+        <select data-value="stage">
+          <option value="startup">@tr:bugreport.stage.startup</option>
+          <option value="loading">@tr:bugreport.stage.loading</option>
+          <option value="training">@tr:bugreport.stage.training</option>
+          <option value="export">@tr:bugreport.stage.export</option>
+          <option value="viewer">@tr:bugreport.stage.viewer</option>
+          <option value="other">@tr:bugreport.stage.other</option>
+        </select>
+      </label>
+    </div>
+
+    <button type="button" class="bugreport-section-toggle" data-event-click="toggle_system">
+      <span data-if="!system_expanded">▶</span><span data-if="system_expanded">▼</span>
+      <span>@tr:bugreport.system_info</span>
+    </button>
+    <div class="bugreport-table hidden" data-class-hidden="!system_expanded">
+      <div class="bugreport-row" data-for="row : system_rows"><span>{{ row.name }}</span><span>{{ row.value }}</span></div>
+    </div>
+
+    <div class="hidden" data-class-hidden="!show_training">
+      <button type="button" class="bugreport-section-toggle" data-event-click="toggle_training">
+        <span data-if="!training_expanded">▶</span><span data-if="training_expanded">▼</span>
+        <span>@tr:bugreport.training_info</span>
+      </button>
+      <div class="bugreport-table hidden" data-class-hidden="!training_expanded">
+        <div class="bugreport-row" data-for="row : training_rows"><span>{{ row.name }}</span><span>{{ row.value }}</span></div>
+      </div>
+    </div>
+
+    <button type="button" class="bugreport-section-toggle" data-event-click="toggle_log">
+      <span data-if="!log_expanded">▶</span><span data-if="log_expanded">▼</span>
+      <span>@tr:bugreport.log</span>
+    </button>
+    <div class="bugreport-log-section hidden" data-class-hidden="!log_expanded">
+      <textarea data-value="log_text" rows="8"></textarea>
+      <span class="bugreport-counter" data-class-over-limit="log_over_limit">{{ log_counter }}</span>
+      <label class="bugreport-checkbox hidden" data-class-hidden="!show_previous_log">
+        <input type="checkbox" data-checked="include_previous_log"/>
+        <span>@tr:bugreport.include_previous_log</span>
+      </label>
+      <label class="bugreport-checkbox">
+        <input type="checkbox" data-checked="consent_to_logs"/>
+        <span>@tr:bugreport.log_consent</span>
+      </label>
+    </div>
+
+    <span class="bugreport-error hidden" data-class-hidden="!show_error">{{ error_message }}</span>
+    <span class="bugreport-error-detail hidden" data-class-hidden="!show_error_detail">{{ error_detail }}</span>
+    <span class="bugreport-hint">{{ validation_hint }}</span>
+    <button type="button" class="btn btn--primary bugreport-submit" data-attrif-disabled="!can_submit" data-event-click="submit_report">{{ submit_label }}</button>
+  </div>
+</body>
+</rml>

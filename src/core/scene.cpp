@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <exception>
@@ -2100,13 +2101,14 @@ namespace lfs::core {
                 point_cloud_selection_mask_ != nullptr;
             selection_group_counts_dirty_ = true;
         }
+        const int selection_count = static_cast<int>(
+            std::min(
+                count,
+                static_cast<size_t>(
+                    std::numeric_limits<int>::max())));
         events::state::SelectionChanged{
             .has_selection = count > 0,
-            .count = static_cast<int>(
-                std::min(
-                    count,
-                    static_cast<size_t>(
-                        std::numeric_limits<int>::max())))}
+            .count = selection_count}
             .emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
     }

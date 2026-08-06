@@ -54,8 +54,12 @@ sudo apt install \
   git curl unzip cmake gcc-14 g++-14 ccache ninja-build zip tar pkg-config python3 python3-dev \
   libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
   libwayland-dev libxkbcommon-dev libegl-dev libdecor-0-dev libibus-1.0-dev libdbus-1-dev \
-  libsystemd-dev nasm autoconf autoconf-archive automake libtool
+  libsystemd-dev libgtk-3-dev nasm autoconf autoconf-archive automake libtool
 ```
+
+`libgtk-3-dev` is required because `nativefiledialog-extended` is built from source on Linux
+against its GTK backend rather than taken from vcpkg; see `cmake/SetupNativeFileDialog.cmake`.
+Without it configure fails with `pkg-config could not locate `gtk+-3.0``.
 
 The configure step now fails early if neither a usable X11 stack nor a usable Wayland stack is present.
 If you intentionally want a headless or experimental build, pass `-DLFS_ENFORCE_LINUX_GUI_BACKENDS=OFF`.
@@ -92,6 +96,30 @@ cmake --install build --prefix ./dist
 
 ## Tests
 
+The tensor comparison tests validate the built-in tensor library against LibTorch as an
+oracle, so a LibTorch SDK is required to configure the test build. It is not needed for the
+application itself, which is LibTorch-free.
+
+Download the LibTorch C++ SDK matching your CUDA version from
+[pytorch.org](https://pytorch.org/get-started/locally/) (select **LibTorch** as the package
+and **C++/Java** as the language) and unpack it so `TorchConfig.cmake` resolves:
+
+| Platform | Expected location |
+|---|---|
+| Linux | `external/libtorch/` |
+| Windows (Release) | `external/release/libtorch/` |
+| Windows (Debug) | `external/debug/libtorch/` |
+
+```bash
+# Linux, from the repository root
+curl -L -o libtorch.zip "<libtorch-download-url>"
+unzip -q libtorch.zip -d external/
+```
+
+Configuring without it fails at `find_package(Torch REQUIRED)`. Some LibTorch builds link
+CUDA libraries they do not ship; if the test binaries then fail to start with a missing
+shared library, install the named library or use a build that bundles its CUDA dependencies.
+
 Tests are a separate opt-in build:
 
 ```bash
@@ -120,6 +148,29 @@ For example:
 ctest --test-dir build/tests --output-on-failure -L fast
 ctest --test-dir build/tests --output-on-failure -L slow
 ctest --test-dir build/tests --output-on-failure -L nightly
+```
+
+### Localization contracts
+
+The localization contracts are a small, headless validation suite. They validate
+locale key and placeholder parity, one-key-per-line JSON formatting, literal
+translation-key references, RML directives, count-sensitive plural-form rules,
+the hardcoded-UI-text audit, and localized cached UI state. They do not build
+or execute the GUI, LibTorch, or CUDA test targets. The contributor guide
+documents the locale conventions and language-specific grammar policy.
+
+Register the contracts in an existing build directory:
+
+```bash
+cmake -S . -B build -DBUILD_LOCALIZATION_TESTS=ON
+cmake --build build --target test_localization_contracts
+```
+
+The custom target runs the single CTest entry named `LocalizationContracts`.
+It can also be invoked directly after configuration:
+
+```bash
+ctest --test-dir build/tests --output-on-failure -R LocalizationContracts
 ```
 
 The repository intentionally ignores `data/`, but several fast, slow, nightly,
@@ -159,7 +210,9 @@ dist/
 | `BUILD_CUDA_PTX_ONLY` | OFF | PTX-only build (auto-enabled by PORTABLE) |
 | `BUILD_CUDA_MIN_SM` | 75 | Minimum GPU (75=Turing, 80=Ampere, 89=Ada) |
 | `BUILD_TESTS` | OFF | Build test suite |
+| `BUILD_LOCALIZATION_TESTS` | OFF | Register headless localization contract tests |
 | `LFS_ENFORCE_LINUX_GUI_BACKENDS` | ON | Linux only. Fail configure if SDL3 would be built without both X11 and Wayland |
+| `LFS_CUDA_COMPILER_CACHE` | *(empty)* | Compiler cache for CUDA only. Empty follows the auto-detected launcher; `OFF` disables CUDA caching; or name/path of a launcher such as `ccache`. Needed where nvcc cannot be wrapped by sccache |
 
 ONNX Runtime is consumed as a pinned prebuilt GPU SDK on x64 Windows and Linux
 instead of being built by vcpkg. The default SDK is controlled by

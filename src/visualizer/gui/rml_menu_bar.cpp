@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_menu_bar.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
@@ -18,6 +19,7 @@
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
+#include "visualizer/app_store.hpp"
 #include "window/window_manager.hpp"
 
 #include <RmlUi/Core.h>
@@ -388,6 +390,7 @@ namespace lfs::vis::gui {
         menu_window_maximize_ = document_->GetElementById("menu-window-maximize");
         body_el_ = document_->GetElementById("body");
         applied_toolbar_right_ = -1.0f;
+        toolbar_fits_ = true;
         last_window_split_view_ = false;
         last_ui_hidden_ = false;
         last_window_maximized_ = false;
@@ -716,24 +719,39 @@ namespace lfs::vis::gui {
             };
         };
 
+        const auto language_generation = lfs::vis::app_store().language_generation.get();
+        if (!has_navigation_tooltip_language_generation_ ||
+            language_generation != navigation_tooltip_language_generation_) {
+            auto& localization = lfs::event::LocalizationManager::getInstance();
+            navigation_tooltips_ = {
+                localization.get("toolbar.orbit_camera"),
+                localization.get("toolbar.free_orbit_camera"),
+                localization.get("toolbar.fly_camera"),
+                localization.get("toolbar.drone_camera"),
+            };
+            navigation_tooltip_language_generation_ = language_generation;
+            has_navigation_tooltip_language_generation_ = true;
+        }
+
         if (const auto* ic = lfs::vis::InputController::instance()) {
             using NavMode = lfs::vis::InputController::CameraNavigationMode;
             struct NavButtonSpec {
                 NavMode mode;
                 const char* icon;
-                const char* tooltip;
+                size_t tooltip_index;
             };
-            static constexpr NavButtonSpec kNavButtons[] = {
-                {NavMode::Orbit, "camera-orbit", "Orbit Camera"},
-                {NavMode::Trackball, "world", "Free Orbit Camera"},
-                {NavMode::FPV, "camera-fpv", "Fly Camera"},
-                {NavMode::Drone, "drone", "Drone Camera"},
+            const NavButtonSpec kNavButtons[] = {
+                {NavMode::Orbit, "camera-orbit", 0},
+                {NavMode::Trackball, "world", 1},
+                {NavMode::FPV, "camera-fpv", 2},
+                {NavMode::Drone, "drone", 3},
             };
             const auto mode = ic->cameraNavigationMode();
             for (const auto& spec : kNavButtons) {
                 const std::string name = lfs::vis::InputController::cameraNavigationModeName(spec.mode);
                 camera_buttons.push_back(make("menu-camera-" + name, "set_camera_navigation_mode", name,
-                                              spec.icon, "", spec.tooltip, mode == spec.mode));
+                                              spec.icon, "", navigation_tooltips_[spec.tooltip_index],
+                                              mode == spec.mode));
             }
         }
 
@@ -994,7 +1012,8 @@ namespace lfs::vis::gui {
             if (split_view != last_window_split_view_) {
                 menu_window_split_view_->SetClass("selected", split_view);
                 menu_window_split_view_->SetAttribute(
-                    "title", split_view ? "Exit Independent Split View" : "Independent Split View");
+                    "title", lfs::event::LocalizationManager::getInstance().get(
+                                 split_view ? "ui.exit_independent_split_view" : "ui.independent_split_view"));
                 last_window_split_view_ = split_view;
                 render_needed_ = true;
             }
@@ -1002,7 +1021,8 @@ namespace lfs::vis::gui {
 
         if (menu_window_toggle_ui_ && ui_hidden_ != last_ui_hidden_) {
             menu_window_toggle_ui_->SetClass("selected", ui_hidden_);
-            menu_window_toggle_ui_->SetAttribute("title", ui_hidden_ ? "Show UI" : "Hide UI");
+            menu_window_toggle_ui_->SetAttribute(
+                "title", lfs::event::LocalizationManager::getInstance().get(ui_hidden_ ? "ui.show_ui" : "ui.hide_ui"));
             last_ui_hidden_ = ui_hidden_;
             render_needed_ = true;
         }
@@ -1015,7 +1035,9 @@ namespace lfs::vis::gui {
             }();
             if (maximized != last_window_maximized_) {
                 menu_window_maximize_->SetClass("maximized", maximized);
-                menu_window_maximize_->SetAttribute("title", maximized ? "Restore Window" : "Maximize Window");
+                menu_window_maximize_->SetAttribute(
+                    "title", lfs::event::LocalizationManager::getInstance().get(
+                                 maximized ? "ui.restore_window" : "ui.maximize_window"));
                 last_window_maximized_ = maximized;
                 render_needed_ = true;
             }
@@ -1029,15 +1051,38 @@ namespace lfs::vis::gui {
         if (menu_toolbar_) {
             const float inset = 8.0f * dp_ratio;
             constexpr float kFallbackRightClusterReserveDp = 184.0f;
-            float right_px = kFallbackRightClusterReserveDp * dp_ratio;
+            float min_right_px = kFallbackRightClusterReserveDp * dp_ratio;
             if (menu_window_controls_) {
                 const auto offset = menu_window_controls_->GetAbsoluteOffset(Rml::BoxArea::Border);
                 if (offset.x > 0.0f)
-                    right_px = static_cast<float>(screen_w) - offset.x + 4.0f * dp_ratio;
+                    min_right_px = static_cast<float>(screen_w) - offset.x + 4.0f * dp_ratio;
             }
+            float right_px = min_right_px;
             if (viewport_right_edge_ > 0.0f)
                 right_px = std::max(right_px, static_cast<float>(screen_w) - viewport_right_edge_ + inset);
-            if (std::abs(right_px - applied_toolbar_right_) > 0.5f) {
+
+            // The toolbar is out of flow, so viewport alignment alone would let it slide over the
+            // menu labels. Cap how far left it may travel, and drop it once even the cap collides.
+            const float menus_right_px =
+                menu_items_ ? menu_items_->GetAbsoluteOffset(Rml::BoxArea::Border).x +
+                                  menu_items_->GetOffsetWidth()
+                            : 0.0f;
+            const float clear_of_menus_px = static_cast<float>(screen_w) -
+                                            menu_toolbar_->GetOffsetWidth() - menus_right_px -
+                                            12.0f * dp_ratio;
+            // Asymmetric threshold so a window parked on the boundary cannot flicker.
+            const float show_slack_px = toolbar_fits_ ? 0.0f : 8.0f * dp_ratio;
+            const bool toolbar_fits = clear_of_menus_px >= min_right_px + show_slack_px;
+            if (toolbar_fits)
+                right_px = std::min(right_px, clear_of_menus_px);
+
+            if (toolbar_fits != toolbar_fits_) {
+                menu_toolbar_->SetClass("hidden", !toolbar_fits);
+                toolbar_fits_ = toolbar_fits;
+                render_needed_ = true;
+                LOG_DEBUG("Menu toolbar {} at {} px", toolbar_fits ? "shown" : "hidden", screen_w);
+            }
+            if (toolbar_fits && std::abs(right_px - applied_toolbar_right_) > 0.5f) {
                 menu_toolbar_->SetProperty("right", std::format("{:.1f}px", right_px));
                 applied_toolbar_right_ = right_px;
                 render_needed_ = true;

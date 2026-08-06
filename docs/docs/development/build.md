@@ -4,23 +4,26 @@ sidebar_position: 4
 
 # Building LichtFeld Studio
 
-The `release` preset builds the complete application feature set into `build/`.
-It compiles for one native CUDA architecture and automatically uses `sccache`
-or `ccache` when either launcher is installed. Its build preset requests 16
-parallel jobs; see [Parallelism and vcpkg](#parallelism-and-vcpkg) before using
-that on a memory-constrained machine.
+Two presets are available, `build` and `debug`. Both build the complete
+application feature set, keep tests out of the normal app graph, compile for one
+native CUDA architecture, use at most six parallel jobs, and automatically use
+`sccache` or `ccache` when either launcher is installed.
 
 ```sh
-cmake --preset release
-cmake --build --preset release
+cmake --preset build
+cmake --build --preset build
 ```
 
-A matching `debug` preset builds into `debug/`. These are the only two presets;
-anything else is an explicit `-S`/`-B` invocation.
+`build` is a Release configuration in `build/`. `debug` is the same feature set
+compiled with debug information, in `build-debug/`:
 
-This is a full-featured build: it does not disable USD, FFmpeg, OpenImageIO,
-RmlUi, Python, MCP, or GUI support. The compiler cache can be disabled without
-changing the feature set:
+```sh
+cmake --preset debug
+cmake --build --preset debug
+```
+
+Neither preset disables USD, FFmpeg, OpenImageIO, RmlUi, Python, MCP, or GUI
+support. The compiler cache can be disabled without changing the feature set:
 
 ```sh
 cmake -S . -B build -DENABLE_COMPILER_CACHE=OFF
@@ -29,16 +32,16 @@ cmake --build build -j6
 
 ## Reproducible build measurements
 
-For compiler or dependency work, configure a throwaway tree with compiler
-caching disabled, so clean and incremental timings describe work performed by
-the compiler rather than cache hits.
+For compiler or dependency work, disable compiler caching so clean and
+incremental timings describe work performed by the compiler rather than cache
+hits:
 
 ```sh
-cmake -S . -B build-measure -G Ninja -DENABLE_COMPILER_CACHE=OFF -DBUILD_TESTS=OFF
+cmake -S . -B build-measure -DENABLE_COMPILER_CACHE=OFF -G Ninja -DCMAKE_BUILD_TYPE=Release
 /usr/bin/time -v cmake --build build-measure -j6
 ```
 
-Delete `build-measure` before measuring clean configure time. Keep
+Delete the build directory before measuring clean configure time. Keep
 `BUILD_TESTS=OFF`: tests are a separate opt-in graph and are not representative
 of the application build.
 

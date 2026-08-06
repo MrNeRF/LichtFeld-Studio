@@ -141,6 +141,9 @@ namespace lfs::io::project {
         OPAQUE_CHUNK_PRESERVATION = 5,
         RETAINED_JSON_FIELDS = 6,
         CLEAN_PROOF_REUSE = 7,
+        // Byte-plane (f32-word) prefilter + zstd. Distinct wire encoding from
+        // plain CHUNK_ZSTD_V1; readers without this bit refuse the generation.
+        CHUNK_BYTESHUFFLE_ZSTD_V1 = 8,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();
@@ -158,9 +161,15 @@ namespace lfs::io::project {
         Compaction = 4,
     };
 
+    // Chunk payload entropy encodings (wire u16 / index-row u8).
+    // Zstd: whole-chunk zstd (CHUNK_ZSTD_V1).
+    // ByteShuffleZstd: lossless f32-word byte-plane transpose then zstd
+    // (CHUNK_BYTESHUFFLE_ZSTD_V1). Writers require payload size % 4 == 0;
+    // otherwise they fall back to plain Zstd for that chunk (deterministic).
     enum class Compression : std::uint16_t {
         Stored = 0,
         Zstd = 1,
+        ByteShuffleZstd = 2,
     };
 
     enum class RowKind : std::uint8_t {
@@ -516,7 +525,6 @@ namespace lfs::io::project {
         lfs::core::Uuid snapshot_uuid;
         std::uint64_t creation_time_unix_ns = 0;
         std::uint64_t wallclock_unix_ns = 0;
-        bool keep_tombstones = false;
         std::uint64_t disk_reserve_bytes = 64ull * 1024 * 1024;
         CommitBoundaryObserver boundary_observer;
     };

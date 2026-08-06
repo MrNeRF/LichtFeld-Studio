@@ -20,7 +20,7 @@
         "snapshot_uuid": "000138e5-0000-4000-8000-0000000138e5",
         "wallclock_unix_ns": 1735689601000080100
       },
-      "sha256": "64a55bc70d3384d15f4248830f123b08e054fb329d13e67ae9671c4baf52b6a7",
+      "sha256": "7eb7d7c9653d50e57f33c2ebb5d2c4d49c44632228aceaecac31c8070a0b87e1",
       "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
     },
     {
@@ -42,7 +42,7 @@
         "snapshot_uuid": "00013949-0000-4000-8000-000000013949",
         "wallclock_unix_ns": 1785533976918336597
       },
-      "sha256": "cbcfc53191c2c3a8c6acc97036895bb3b4579e38112ebb620d376aa6bf4cc498",
+      "sha256": "949868a87d63660944871bb51066153adbb9e5518e3a2e3adaec336b1bfe8824",
       "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
     },
     {
@@ -64,7 +64,7 @@
         "snapshot_uuid": "000139ad-0000-4000-8000-0000000139ad",
         "wallclock_unix_ns": 1735689601000080300
       },
-      "sha256": "af5e017744b425ff5f1e0301eb0004391c95a18c0811a446de0bc6c547322f4f",
+      "sha256": "6313232b9f4d392143ee0a6df9d03d9eb8cf479883b2cfaec4406a08368296eb",
       "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
     },
     {
@@ -85,7 +85,7 @@
         "snapshot_uuid": "00013a12-0000-4000-8000-000000013a12",
         "wallclock_unix_ns": 1735689601000080400
       },
-      "sha256": "d0999a58f67404879c1e2c6dd3c5cbe6b90d7c61faa77771bcb7a7c00b92f509",
+      "sha256": "237db27ad75c5be7e0950116e04c00058fbf423607f2ea4b21f4d2cdadcd2e99",
       "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
     },
     {
@@ -108,7 +108,7 @@
         "snapshot_uuid": "00013949-0000-4000-8000-000000013949",
         "wallclock_unix_ns": 1735689601000080500
       },
-      "sha256": "afb4697064f5100b74506dade1b07913928e67b5e58be4ddf514d14f78f90f02",
+      "sha256": "72b8d01a3abac21333551c5fe411f1910cc61368743cd80e7c8d1d16322d9d89",
       "writer_sha": "2ee7deb31648dff1588dd15dcc03e57c08fff389"
     },
     {
@@ -144,15 +144,15 @@
         "snapshot_uuid": "00013ae3-0000-4000-8000-000000013ae3",
         "wallclock_unix_ns": 1735689601000080610
       },
-      "sha256": "0e412a2e15039b15a458566d80e3da207bf6cba95bbe0b5688b7ee566a03f8f0",
+      "sha256": "422085f793b1dd7de66f9a86bf1dee3d8579a4941787fe3f8d7dc44ac0edac7c",
       "writer_sha": "8ca8028e6214b1f424c373b24d479cd90ff2e918"
     },
     {
       "capabilities": {
         "min_reader": "1.0",
         "min_safe_writer": "1.0",
-        "required_reader": "0x00000000000000000000000000000003",
-        "required_writer": "0x00000000000000000000000000000000"
+        "required_reader": "0x00000000000000000000000000000103",
+        "required_writer": "0x00000000000000000000000000000040"
       },
       "identity_set": "slim-selm-raw-u8-v1",
       "path": "selection-raw-u8.licht",
@@ -166,10 +166,10 @@
         "snapshot_uuid": "00013b3d-0000-4000-8000-000000013b3d",
         "wallclock_unix_ns": 1735689601000080700
       },
-      "sha256": "e69cdfe457d52d4583ae3f5881788a587f350db048228556585a25bed3693ab1",
-      "writer_sha": "bcb183ad2d9ee92cfcecb3a6b41a37da4fdaf6fb"
+      "sha256": "7438c7fa56fbf3732bce9551a4bc6adff139887cd44ea089c3436e9904ea7f8e",
+      "writer_sha": "d2bab709751e226863fa038c36ec7bfe539d620f"
     }
   ],
-  "manifest_root_sha256": "43ef54b7c1a254905ac924a83f0f4026d0fde27e7d24de276591c0372d263fdb",
+  "manifest_root_sha256": "75ae8ccf0423796672c70f8fb8c681c868a5819fa28f70a3c40b106cd5e78ca8",
   "schema": 2
 }

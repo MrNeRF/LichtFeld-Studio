@@ -173,8 +173,8 @@ namespace {
             const ScopedXdgConfigHome xdg(root / "config");
             auto& manager = lfs::event::LocalizationManager::getInstance();
             ASSERT_TRUE(manager.initialize(locales.string()));
-            EXPECT_TRUE(manager.contains("test.value"));
-            EXPECT_FALSE(manager.contains("session.licht"));
+            EXPECT_TRUE(manager.hasKey("test.value"));
+            EXPECT_FALSE(manager.hasKey("session.licht"));
             ASSERT_TRUE(manager.setLanguage("de"));
             EXPECT_EQ(manager.getCurrentLanguage(), "de");
 

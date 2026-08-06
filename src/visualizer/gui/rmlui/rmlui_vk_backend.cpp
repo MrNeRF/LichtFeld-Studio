@@ -666,7 +666,7 @@ void RenderInterface_VK::CompositeLayers(Rml::LayerHandle source, Rml::LayerHand
     }
 
     EndActiveRendering();
-    TransitionImageLayout(source_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
+    TransitionImageLayout(source_layer->m_color.m_p_vk_image, source_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     source_layer->m_color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -758,6 +758,7 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
     (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
                                   (uint64_t)texture->m_p_vk_image,
                                   "rmlui.saved-layer.image");
+    texture->m_barrier_generation = ++m_image_barrier_generation;
     texture->m_vram_scope = "vulkan.rmlui.saved_layer_texture";
     texture->m_vram_label = TextureVramLabel("saved_layer",
                                              "clip",
@@ -791,11 +792,11 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
                                   "rmlui.saved-layer.view");
     texture->m_p_vk_sampler = m_p_sampler_linear;
 
-    TransitionImageLayout(source_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
+    TransitionImageLayout(source_layer->m_color.m_p_vk_image, source_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     source_layer->m_color_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
-    TransitionImageLayout(texture->m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    TransitionImageLayout(texture->m_p_vk_image, texture->m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     VkImageCopy copy_region{};
     copy_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -813,7 +814,7 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
     vkCmdCopyImage(m_p_current_command_buffer, source_layer->m_color.m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    texture->m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
 
-    TransitionImageLayout(texture->m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    TransitionImageLayout(texture->m_p_vk_image, texture->m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     BeginLayerRendering(static_cast<Rml::LayerHandle>(m_render_layer_stack_size), false);
@@ -1258,6 +1259,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
     p_texture->m_p_vk_image = p_image;
     p_texture->m_p_vma_allocation = p_allocation;
+    p_texture->m_barrier_generation = ++m_image_barrier_generation;
     const std::string image_debug_name = std::format("rmlui.texture.image[{}]", name);
     (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
                                   (uint64_t)p_texture->m_p_vk_image,
@@ -1351,8 +1353,9 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
         const bool uploaded = m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
             lfs::vis::VulkanImageBarrierTracker upload_barriers;
-            upload_barriers.registerImage(p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
-            upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            constexpr std::uint64_t kUploadGeneration = 1;
+            upload_barriers.registerImage(p_image, kUploadGeneration, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+            upload_barriers.transitionImage(p_cmd, p_image, kUploadGeneration, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
             VkBufferImageCopy region = {};
             region.bufferOffset = 0;
@@ -1367,7 +1370,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
             vkCmdCopyBufferToImage(p_cmd, cpu_buffer.m_p_vk_buffer, p_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-            upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            upload_barriers.transitionImage(p_cmd, p_image, kUploadGeneration, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         });
 
         DestroyResource_StagingBuffer(cpu_buffer);
@@ -1633,6 +1636,7 @@ void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer
     m_external_swapchain_image_view = swapchain_image_view;
     m_external_depth_stencil_image_view = depth_stencil_image_view;
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    m_external_swapchain_barrier_generation = ++m_image_barrier_generation;
     vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
     vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor_original);
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
@@ -2231,7 +2235,7 @@ void RenderInterface_VK::Destroy_Texture(const texture_data_t& texture) noexcept
     if (texture.m_p_vma_allocation) {
         if (!texture.m_vram_scope.empty() && !texture.m_vram_label.empty())
             RecordRmlUiVram(texture.m_vram_scope, texture.m_vram_label, 0);
-        m_image_barriers.forgetImage(texture.m_p_vk_image);
+        m_image_barriers.forgetImage(texture.m_p_vk_image, texture.m_barrier_generation);
         if (texture.m_p_vk_image_view)
             vkDestroyImageView(m_p_device, texture.m_p_vk_image_view, nullptr);
         vmaDestroyImage(m_p_allocator, texture.m_p_vk_image, texture.m_p_vma_allocation);
@@ -2341,6 +2345,7 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
                                   color_view_name.c_str());
     layer.m_color.m_p_vk_sampler = m_p_sampler_linear;
     layer.m_color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    layer.m_color.m_barrier_generation = ++m_image_barrier_generation;
 
     VkImageCreateInfo depth_info{};
     depth_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -2386,6 +2391,7 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
                                   (uint64_t)layer.m_depth_stencil.m_p_vk_image_view,
                                   depth_view_name.c_str());
     layer.m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    layer.m_depth_stencil.m_barrier_generation = ++m_image_barrier_generation;
     layer.width = m_width;
     layer.height = m_height;
 }
@@ -2404,12 +2410,12 @@ const RenderInterface_VK::render_layer_t* RenderInterface_VK::GetRenderLayer(Rml
     return index < m_render_layers.size() ? &m_render_layers[index] : nullptr;
 }
 
-void RenderInterface_VK::TransitionImageLayout(VkImage image, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout) {
+void RenderInterface_VK::TransitionImageLayout(VkImage image, std::uint64_t generation, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout) {
     if (!m_p_current_command_buffer || !image || old_layout == new_layout)
         return;
 
-    m_image_barriers.registerImage(image, aspect_mask, old_layout);
-    m_image_barriers.transitionImage(m_p_current_command_buffer, image, aspect_mask, new_layout);
+    m_image_barriers.registerImage(image, generation, aspect_mask, old_layout);
+    m_image_barriers.transitionImage(m_p_current_command_buffer, image, generation, aspect_mask, new_layout);
 }
 
 void RenderInterface_VK::ResetDynamicRenderState() {
@@ -2431,10 +2437,10 @@ void RenderInterface_VK::BeginLayerRendering(Rml::LayerHandle layer_handle, bool
     if (layer->width <= 0 || layer->height <= 0)
         return;
 
-    TransitionImageLayout(layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, layer->m_color_layout,
+    TransitionImageLayout(layer->m_color.m_p_vk_image, layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, layer->m_color_layout,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     layer->m_color_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    TransitionImageLayout(layer->m_depth_stencil.m_p_vk_image, DepthStencilAspectMask(), layer->m_depth_stencil_layout,
+    TransitionImageLayout(layer->m_depth_stencil.m_p_vk_image, layer->m_depth_stencil.m_barrier_generation, DepthStencilAspectMask(), layer->m_depth_stencil_layout,
                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
     layer->m_depth_stencil_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
@@ -2487,6 +2493,7 @@ void RenderInterface_VK::BeginSwapchainRendering(VkAttachmentLoadOp color_load_o
         depth_view = m_external_depth_stencil_image_view;
         if (m_external_swapchain_image != VK_NULL_HANDLE && m_external_swapchain_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
             TransitionImageLayout(m_external_swapchain_image,
+                                  m_external_swapchain_barrier_generation,
                                   VK_IMAGE_ASPECT_COLOR_BIT,
                                   m_external_swapchain_layout,
                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -2556,10 +2563,10 @@ bool RenderInterface_VK::CopySwapchainToLayer(Rml::LayerHandle destination) {
 
     EndActiveRendering();
 
-    TransitionImageLayout(m_external_swapchain_image, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
+    TransitionImageLayout(m_external_swapchain_image, m_external_swapchain_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    TransitionImageLayout(destination_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, destination_layer->m_color_layout,
+    TransitionImageLayout(destination_layer->m_color.m_p_vk_image, destination_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, destination_layer->m_color_layout,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     destination_layer->m_color_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
@@ -2576,10 +2583,10 @@ bool RenderInterface_VK::CopySwapchainToLayer(Rml::LayerHandle destination) {
     vkCmdCopyImage(m_p_current_command_buffer, m_external_swapchain_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    destination_layer->m_color.m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
 
-    TransitionImageLayout(m_external_swapchain_image, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
+    TransitionImageLayout(m_external_swapchain_image, m_external_swapchain_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    TransitionImageLayout(destination_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    TransitionImageLayout(destination_layer->m_color.m_p_vk_image, destination_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     destination_layer->m_color_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
