@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <format>
+#include <unordered_set>
 
 namespace lfs::io {
     namespace {
@@ -89,9 +91,9 @@ namespace lfs::io {
                 return item.type == item_type && resource.format == "model/gltf+json";
             });
         };
-        const opf::Resource* point_cloud_resource = gltf_resource_for_item_type("calibration");
-        if (!point_cloud_resource)
-            point_cloud_resource = gltf_resource_for_item_type("point_cloud");
+        const opf::Resource* preferred_point_cloud_resource = gltf_resource_for_item_type("calibration");
+        if (!preferred_point_cloud_resource)
+            preferred_point_cloud_resource = gltf_resource_for_item_type("point_cloud");
         if (!camera_list_resource || !input_resource || !calibrated_resource)
             return make_error(ErrorCode::MISSING_REQUIRED_FILES,
                               "OPF project requires camera_list, input_cameras, and calibrated cameras resources.",
@@ -124,10 +126,33 @@ namespace lfs::io {
             };
         }
 
-        std::shared_ptr<PointCloud> point_cloud;
-        if (point_cloud_resource) {
-            report(0.65f, "Loading OPF point cloud");
-            auto manifest = opf::read_point_cloud_manifest(*point_cloud_resource, project_path.parent_path());
+        std::vector<std::pair<const opf::Item*, const opf::Resource*>> point_cloud_resources;
+        std::unordered_set<std::string> seen_point_cloud_paths;
+        const auto append_point_cloud_resource = [&](const opf::Item& item, const opf::Resource& resource) {
+            const auto key = resource.resolved_path.lexically_normal().generic_string();
+            if (seen_point_cloud_paths.insert(key).second)
+                point_cloud_resources.emplace_back(&item, &resource);
+        };
+        if (preferred_point_cloud_resource) {
+            for (const auto& item : project->items)
+                for (const auto& resource : item.resources)
+                    if (&resource == preferred_point_cloud_resource)
+                        append_point_cloud_resource(item, resource);
+        }
+        for (const auto& item : project->items)
+            for (const auto& resource : item.resources)
+                if (resource.format == "model/gltf+json" &&
+                    (item.type == "calibration" || item.type == "point_cloud"))
+                    append_point_cloud_resource(item, resource);
+
+        LoadedScene scene;
+        std::unordered_set<std::string> point_cloud_names;
+        for (size_t index = 0; index < point_cloud_resources.size(); ++index) {
+            report(0.65f + 0.15f * static_cast<float>(index) /
+                               static_cast<float>(std::max<size_t>(1, point_cloud_resources.size())),
+                   "Loading OPF point clouds");
+            const auto& [item, resource] = point_cloud_resources[index];
+            auto manifest = opf::read_point_cloud_manifest(*resource, project_path.parent_path());
             if (!manifest)
                 return std::unexpected(manifest.error());
             // Calibrated cameras and OPF sparse coordinates are already in the
@@ -136,15 +161,33 @@ namespace lfs::io {
             auto parsed_point_cloud = opf::read_sparse_point_cloud(*manifest, nullptr);
             if (!parsed_point_cloud)
                 return std::unexpected(parsed_point_cloud.error());
-            for (auto& camera : *imported)
-                opf::apply_gltf_node_transform(camera, manifest->node_matrix);
-            point_cloud = std::make_shared<PointCloud>(std::move(*parsed_point_cloud));
+            if (resource == preferred_point_cloud_resource)
+                for (auto& camera : *imported)
+                    opf::apply_gltf_node_transform(camera, manifest->node_matrix);
+            auto point_cloud = std::make_shared<PointCloud>(std::move(*parsed_point_cloud));
+            if (!scene.point_cloud)
+                scene.point_cloud = point_cloud;
+            auto name = resource->resolved_path.stem().string();
+            if (name == "pcl" || name == "pointcloud" || name == "point_cloud")
+                name = resource->resolved_path.parent_path().filename().string();
+            if (name.empty())
+                name = item->id;
+            if (!point_cloud_names.insert(name).second) {
+                const auto base_name = name;
+                size_t suffix = 2;
+                do {
+                    name = std::format("{}_{}", base_name, suffix++);
+                } while (!point_cloud_names.insert(name).second);
+            }
+            scene.point_clouds.push_back({
+                .name = std::move(name),
+                .point_cloud = std::move(point_cloud),
+                .visible = index == 0,
+            });
         }
         for (auto& camera : *imported)
             opf::apply_lichtfeld_coordinate_convention(camera);
 
-        LoadedScene scene;
-        scene.point_cloud = std::move(point_cloud);
         if (!options.validate_only) {
             report(0.85f, "Creating LichtFeld cameras");
             for (const auto& camera : *imported) {

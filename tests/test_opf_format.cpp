@@ -329,6 +329,8 @@ TEST_F(OpfFormatTest, LoadsCompleteOpfProjectThroughLoader) {
     write(root / "calibrated.json", R"({"format":"application/opf-calibrated-cameras+json","version":"1.0","sensors":[{"id":7,"internals":{"type":"perspective"}}],"cameras":[{"id":42,"sensor_id":7,"position":[0,0,0],"orientation_deg":[0,0,0]}]})");
     write_floats(root / "positions.glbin", {1.0f, 2.0f, 3.0f});
     write(root / "calibratedTracks.gltf", R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"mode":0}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":1,"type":"VEC3"}],"bufferViews":[{"buffer":0,"byteLength":12}],"buffers":[{"uri":"positions.glbin","byteLength":12}]})");
+    write_floats(root / "dense" / "dense.glbin", {4.0f, 5.0f, 6.0f});
+    write(root / "dense" / "pcl.gltf", R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"mode":0}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":1,"type":"VEC3"}],"bufferViews":[{"buffer":0,"byteLength":12}],"buffers":[{"uri":"dense.glbin","byteLength":12}]})");
     write(root / "scene-reference.json", R"({"format":"application/opf-scene-reference-frame+json","version":"1.0","base_to_canonical":{"scale":[2,3,4],"shift":[10,20,30],"swap_xy":true},"crs":{"definition":"EPSG:25832"}})");
     write(root / "project.opf", R"({
         "format":"application/opf-project+json", "version":"1.0", "id":"project",
@@ -336,6 +338,7 @@ TEST_F(OpfFormatTest, LoadsCompleteOpfProjectThroughLoader) {
           {"id":"list", "type":"camera_list", "sources":[], "resources":[{"uri":"camera-list.json", "format":"application/opf-camera-list+json"}]},
           {"id":"input", "type":"input_cameras", "sources":[{"id":"list", "type":"camera_list"}], "resources":[{"uri":"input-cameras.json", "format":"application/opf-input-cameras+json"}]},
           {"id":"calibration", "type":"calibration", "sources":[{"id":"input", "type":"input_cameras"}], "resources":[{"uri":"calibrated.json", "format":"application/opf-calibrated-cameras+json"},{"uri":"calibratedTracks.gltf", "format":"model/gltf+json"},{"uri":"positions.glbin", "format":"application/gltf-buffer+bin"}]},
+          {"id":"dense", "type":"point_cloud", "sources":[{"id":"calibration", "type":"calibration"}], "resources":[{"uri":"dense/pcl.gltf", "format":"model/gltf+json"},{"uri":"dense/dense.glbin", "format":"application/gltf-buffer+bin"}]},
           {"id":"reference", "type":"scene_reference_frame", "sources":[], "resources":[{"uri":"scene-reference.json", "format":"application/opf-scene-reference-frame+json"}]}
         ]
     })");
@@ -348,6 +351,12 @@ TEST_F(OpfFormatTest, LoadsCompleteOpfProjectThroughLoader) {
     ASSERT_NE(scene.point_cloud, nullptr);
     EXPECT_EQ(scene.point_cloud->size(), 1);
     EXPECT_TRUE(scene.point_cloud->colors.is_valid());
+    ASSERT_EQ(scene.point_clouds.size(), 2u);
+    EXPECT_EQ(scene.point_clouds[0].name, "calibratedTracks");
+    EXPECT_TRUE(scene.point_clouds[0].visible);
+    EXPECT_EQ(scene.point_clouds[1].name, "dense");
+    EXPECT_FALSE(scene.point_clouds[1].visible);
+    EXPECT_EQ(scene.point_cloud, scene.point_clouds[0].point_cloud);
     ASSERT_TRUE(result->georeference.has_value());
     EXPECT_EQ(result->georeference->crs_definition, "EPSG:25832");
     EXPECT_TRUE(result->georeference->swap_xy);

@@ -62,6 +62,17 @@ body {
     margin-top: 4dp;
 }
 
+.pcd-source-row > .prop-label {
+    width: 32dp;
+    min-width: 32dp;
+}
+
+.pcd-import-button {
+    flex-shrink: 0;
+    padding-left: 5dp;
+    padding-right: 5dp;
+}
+
 .training-subsection {
     margin-top: 0;
 }

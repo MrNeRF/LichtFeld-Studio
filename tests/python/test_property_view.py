@@ -997,3 +997,24 @@ def test_training_rml_mounts_every_run_with_writable_records():
     assert 'data-event-click="pv_search_clear"' in rml
     assert 'id="sec-advanced-registry"' in rml
     assert rml.index('id="sec-save-steps"') < rml.index('id="sec-advanced-registry"')
+
+
+def test_training_rml_exposes_scene_point_cloud_selector():
+    rml = TRAINING_RML.read_text(encoding="utf-8")
+    assert 'data-for="item : point_cloud_options"' in rml
+    assert 'data-value="selected_point_cloud_node_id"' in rml
+    assert 'data-event-change="select_point_cloud(ev.value)"' in rml
+    assert "action('import_point_cloud')" in rml
+
+    required = {
+        "point_cloud_source.label",
+        "point_cloud_source.import",
+        "point_cloud_source.tooltip",
+        "point_cloud_source.no_scene",
+        "point_cloud_source.add_failed",
+        "point_cloud_source.import_failed_title",
+        "point_cloud_source.import_failed_message",
+    }
+    for locale_path in sorted(LOCALES.glob("*.json")):
+        training = json.loads(locale_path.read_text(encoding="utf-8"))["training"]
+        assert required <= training.keys(), locale_path.name

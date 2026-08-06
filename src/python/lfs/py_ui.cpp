@@ -3201,6 +3201,16 @@ namespace lfs::python {
             "Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.");
 
         m.def(
+            "open_ply_point_cloud_dialog",
+            [](const std::string& start_dir) -> std::string {
+                const auto start_path = start_dir.empty() ? std::filesystem::path{} : lfs::core::utf8_to_path(start_dir);
+                const auto result = lfs::vis::gui::OpenPlyPointCloudFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a PLY point cloud. Returns empty string if cancelled.");
+
+        m.def(
             "open_mesh_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;

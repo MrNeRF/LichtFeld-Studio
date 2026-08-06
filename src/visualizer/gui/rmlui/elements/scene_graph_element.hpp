@@ -68,6 +68,7 @@ namespace lfs::vis::gui {
             core::NodeType type = core::NodeType::GROUP;
             std::string name;
             bool visible = true;
+            bool training_initialization_selected = false;
             bool camera_frustum_container = false;
             bool has_children = false;
             bool training_enabled = true;
@@ -86,6 +87,7 @@ namespace lfs::vis::gui {
             core::NodeType type = core::NodeType::GROUP;
             int depth = 0;
             bool visible = true;
+            bool training_initialization_selected = false;
             bool has_children = false;
             bool collapsed = false;
             bool draggable = false;
@@ -107,6 +109,7 @@ namespace lfs::vis::gui {
             Rml::Element* root = nullptr;
             Rml::Element* content = nullptr;
             Rml::Element* vis_icon = nullptr;
+            Rml::Element* training_pc_selector = nullptr;
             Rml::Element* delete_icon = nullptr;
             Rml::Element* type_icon = nullptr;
             Rml::Element* unicode_icon = nullptr;

@@ -94,9 +94,18 @@ namespace lfs::io {
         }
     }
 
+    struct LoadedPointCloud {
+        std::string name;
+        std::shared_ptr<PointCloud> point_cloud;
+        bool visible = false;
+    };
+
     struct LoadedScene {
         std::vector<std::shared_ptr<lfs::core::Camera>> cameras;
+        // Preferred initialization cloud, retained for loader compatibility.
         std::shared_ptr<PointCloud> point_cloud;
+        // All point-cloud products exposed by formats that support them.
+        std::vector<LoadedPointCloud> point_clouds;
     };
 
     // Dataset georeference metadata preserved at the loader boundary. Loaders

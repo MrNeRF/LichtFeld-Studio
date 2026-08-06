@@ -218,6 +218,8 @@ class TrainingPanel(Panel):
         self._psnr_tick_min = ""
         self._last_panel_label = ""
         self._last_language_generation = -1
+        self._point_cloud_nodes = []
+        self._selected_point_cloud_node_id = ""
         self._reactive_binding = PanelStateBinding()
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
@@ -268,10 +270,16 @@ class TrainingPanel(Panel):
             for row in binding.rows
         }
         self._bind_events(model)
+        model.bind_record_list("point_cloud_options")
+        model.bind_func(
+            "selected_point_cloud_node_id",
+            lambda: self._selected_point_cloud_node_id,
+        )
         self._handle = model.get_handle()
         for binding in self._pv_bindings:
             binding.attach_handle(self._handle)
         self._sync_panel_label()
+        self._refresh_point_cloud_options()
 
         params = lf.optimization_params()
         if params and params.has_params() and params.enable_eval:
@@ -314,6 +322,14 @@ class TrainingPanel(Panel):
             "label_checkpoint_saved", lambda: tr("training_panel.checkpoint_saved")
         )
         model.bind_func("label_strategy", lambda: tr("training_params.strategy"))
+        model.bind_func(
+            "label_point_cloud_source",
+            lambda: tr("training.point_cloud_source.label"),
+        )
+        model.bind_func(
+            "label_import_point_cloud",
+            lambda: tr("training.point_cloud_source.import"),
+        )
         model.bind_func(
             "label_strategy_mrnf", lambda: tr("training.options.strategy.mrnf")
         )
@@ -1078,6 +1094,7 @@ class TrainingPanel(Panel):
         model.bind_event("color_click", self._on_color_click)
         model.bind_event("picker_change", self._on_picker_change)
         model.bind_event("action", self._on_action)
+        model.bind_event("select_point_cloud", self._on_select_point_cloud)
         model.bind_event("remove_step", self._on_remove_step_event)
         model.bind_event("num_step", self._on_num_step)
         model.bind_event("pv_step", self._on_num_step)
@@ -1393,6 +1410,7 @@ class TrainingPanel(Panel):
 
     def on_scene_changed(self, doc):
         self._sync_render_background_to_training()
+        self._refresh_point_cloud_options()
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
@@ -2136,6 +2154,67 @@ class TrainingPanel(Panel):
                 handle.dirty("picker_b")
             self._picker_click_handled = True
 
+    def _refresh_point_cloud_options(self):
+        scene = lf.get_scene()
+        nodes = []
+        if scene and scene.is_valid():
+            nodes = [
+                node
+                for node in scene.get_nodes(lf.scene.NodeType.POINTCLOUD)
+                if node.point_cloud() is not None
+            ]
+        self._point_cloud_nodes = nodes
+        valid_ids = {str(node.id) for node in nodes}
+        scene_selected_id = str(getattr(scene, "initial_point_cloud_node_id", -1)) if scene else ""
+        if scene_selected_id in valid_ids:
+            self._selected_point_cloud_node_id = scene_selected_id
+        elif self._selected_point_cloud_node_id not in valid_ids:
+            self._selected_point_cloud_node_id = str(nodes[0].id) if nodes else ""
+            if nodes:
+                scene.set_initial_point_cloud_node(nodes[0].id)
+        if self._handle:
+            self._handle.update_record_list(
+                "point_cloud_options",
+                [{"value": str(node.id), "label": node.name} for node in nodes],
+            )
+            self._handle.dirty("selected_point_cloud_node_id")
+
+    def _on_select_point_cloud(self, handle, event, args):
+        if not args:
+            return
+        node_id = str(args[0]).strip()
+        if not node_id:
+            return
+        scene = lf.get_scene()
+        if scene and scene.set_initial_point_cloud_node(int(node_id)):
+            self._selected_point_cloud_node_id = node_id
+            handle.dirty("selected_point_cloud_node_id")
+
+    def _import_point_cloud(self):
+        selected = lf.ui.open_ply_point_cloud_dialog("")
+        if not selected:
+            return
+        try:
+            points, colors = lf.io.load_point_cloud(selected)
+            scene = lf.get_scene()
+            if not scene or not scene.is_valid():
+                raise RuntimeError(tr("training.point_cloud_source.no_scene"))
+            node_id = scene.add_point_cloud(
+                os.path.splitext(os.path.basename(selected))[0], points, colors
+            )
+            if node_id < 0 or not scene.set_initial_point_cloud_node(node_id):
+                raise RuntimeError(tr("training.point_cloud_source.add_failed"))
+            self._selected_point_cloud_node_id = str(node_id)
+            self._refresh_point_cloud_options()
+        except Exception as error:
+            lf.ui.message_dialog(
+                tr("training.point_cloud_source.import_failed_title"),
+                tr("training.point_cloud_source.import_failed_message").format(
+                    error=error
+                ),
+                style="error",
+            )
+
     def _on_action(self, handle, event, args):
         if not args:
             return
@@ -2158,6 +2237,8 @@ class TrainingPanel(Panel):
         elif action == "save_checkpoint":
             lf.save_checkpoint()
             self._mark_checkpoint_saved()
+        elif action == "import_point_cloud":
+            self._import_point_cloud()
         elif action == "browse_bg":
             selected = lf.ui.open_image_dialog("")
             if selected:
@@ -2201,6 +2282,11 @@ class TrainingPanel(Panel):
                 self._refresh_save_steps_model(params)
 
     def _action_start(self):
+        selected_node_id = str(self._selected_point_cloud_node_id).strip()
+        if selected_node_id:
+            scene = lf.get_scene()
+            if scene:
+                scene.set_initial_point_cloud_node(int(selected_node_id))
         params = lf.optimization_params()
 
         if params and params.has_params() and params.enable_eval:

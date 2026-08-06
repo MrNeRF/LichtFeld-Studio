@@ -323,8 +323,9 @@ namespace lfs::core {
         const bool has_point_cloud_nodes = std::any_of(
             nodes_.begin(), nodes_.end(),
             [](const std::unique_ptr<SceneNode>& n) { return n->type == NodeType::POINTCLOUD && n->point_cloud; });
-        if (!has_point_cloud_nodes) {
+        if (id == initial_point_cloud_node_id_ || !has_point_cloud_nodes) {
             initial_point_cloud_.reset();
+            initial_point_cloud_node_id_ = NULL_NODE;
         }
 
         notifyMutation(MutationType::NODE_REMOVED);
@@ -442,6 +443,7 @@ namespace lfs::core {
         resetSelectionState();
 
         initial_point_cloud_.reset();
+        initial_point_cloud_node_id_ = NULL_NODE;
         scene_center_ = {};
         images_have_alpha_ = false;
         point_cloud_modified_ = false;
@@ -3328,8 +3330,19 @@ namespace lfs::core {
 
     void Scene::setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud) {
         initial_point_cloud_ = std::move(point_cloud);
+        initial_point_cloud_node_id_ = NULL_NODE;
         point_cloud_modified_ = false;
         LOG_DEBUG("Set initial point cloud ({})", initial_point_cloud_ ? "valid" : "null");
+    }
+
+    bool Scene::setInitialPointCloudFromNode(const NodeId node_id) {
+        const auto* node = getNodeById(node_id);
+        if (!node || node->type != NodeType::POINTCLOUD || !node->point_cloud)
+            return false;
+        setInitialPointCloud(node->point_cloud);
+        initial_point_cloud_node_id_ = node_id;
+        notifyMutation(MutationType::MODEL_CHANGED);
+        return true;
     }
 
     void Scene::setSceneCenter(lfs::core::Tensor scene_center) {

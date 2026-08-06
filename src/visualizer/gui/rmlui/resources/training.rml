@@ -74,6 +74,15 @@
           <option value="mcmc" data-tooltip="training.tooltip.opt.strategy.mcmc">{{label_strategy_mcmc}}</option>
         </select>
       </div>
+      <div class="setting-row pcd-source-row" data-tooltip="training.point_cloud_source.tooltip" data-if="!pv_search_active">
+        <span class="prop-label">{{label_point_cloud_source}}</span>
+        <select data-value="selected_point_cloud_node_id"
+                data-event-change="select_point_cloud(ev.value)">
+          <option data-for="item : point_cloud_options" data-attr-value="item.value">{{item.label}}</option>
+        </select>
+        <button type="button" class="btn btn--secondary pcd-import-button"
+                data-event-click="action('import_point_cloud')">{{label_import_point_cloud}}</button>
+      </div>
       <div class="setting-row"
            data-for="row : pv_basic_struct_rows"
            data-attr-data-tooltip="row.tooltip_key"

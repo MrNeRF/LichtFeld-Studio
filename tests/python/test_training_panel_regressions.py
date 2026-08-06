@@ -936,3 +936,11 @@ def test_training_panel_no_longer_uses_removed_image_dialog_alias():
     training_panel = project_root / "src" / "python" / "lfs_plugins" / "training_panel.py"
 
     assert "open_image_file_dialog" not in training_panel.read_text()
+
+
+def test_training_panel_imports_initialization_data_as_point_cloud():
+    project_root = Path(__file__).parent.parent.parent
+    source = (project_root / "src" / "python" / "lfs_plugins" / "training_panel.py").read_text()
+
+    assert "open_ply_point_cloud_dialog" in source
+    assert "scene.add_point_cloud" in source

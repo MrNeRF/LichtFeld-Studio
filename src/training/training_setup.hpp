@@ -42,7 +42,8 @@ namespace lfs::training {
      * Called when training starts. Creates SplatData from the POINTCLOUD node,
      * optionally filtering by any CropBox attached to the point cloud.
      *
-     * The POINTCLOUD node is replaced with a SPLAT node containing the initialized model.
+     * The selected POINTCLOUD node is retained but hidden while the initialized
+     * SPLAT model is rendered and trained.
      *
      * @param params Training parameters
      * @param scene Scene containing the POINTCLOUD node
