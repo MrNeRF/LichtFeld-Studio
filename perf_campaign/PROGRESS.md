@@ -447,4 +447,88 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   ```
 - **Note:** Bit-identical trajectories not required (new RNG stream). Quality
   check via dual-workload bench after 1.9.
-- **Commit:** (this commit)
+- **Commit:** `42184eea`
+
+
+## Task 1.9 — Stop full [2,N] densification_info memset every iteration
+
+- **Branch:** `lfs-elite`
+- **Change:** Fuse fold-of-`densification_info` into running stats with zero of
+  both rows in one kernel (no separate full `[2,N]` `zero_()` per step):
+  - MCMC / improved_gs_plus: `launch_max_error_and_zero_densification`
+    (max row1 into `_error_score_max`, zero rows 0+1)
+  - MRNF: `launch_fold_densification_and_zero`
+    (add row0 → `_vis_count`, max row1 → `_refine_weight_max`, zero both)
+  - Fallback `zero_()` only on shape mismatch; refine-time zero after grow kept.
+- **Fail evidence (TDD):**
+  ```
+  tests/test_densification_info_zero.cpp:56:24: error:
+    'launch_fold_densification_and_zero' is not a member of
+    'lfs::training::mrnf_strategy'
+  tests/test_densification_info_zero.cpp:109:15: error:
+    'launch_max_error_and_zero_densification' is not a member of
+    'lfs::training::mcmc'
+  ```
+- **Pass evidence:**
+  ```
+  [==========] Running 2 tests from 1 test suite.
+  [  PASSED  ] DensificationInfoZeroTest.MrnfFoldMatchesMultiStepReference
+  [  PASSED  ] DensificationInfoZeroTest.McmcMaxMatchesMultiStepReference
+  [  PASSED  ] 2 tests.
+  ```
+  Multi-step accumulate into max/vis matches old max/add + `zero_()` path;
+  densification_info fully zeroed after each fold.
+- **Commit:** `b046ea34`
+  Runs (quiet dual gate):
+  - bonsai: `perf_campaign/runs/20260806T195950Z_run{1,2,3}/`
+  - bicycle: `perf_campaign/runs/20260806T200227Z_run{1,2,3}/`
+
+---
+
+## Phase 1 dual-workload FINAL GATE (post-1.9, commit b046ea34)
+
+Quiet GPU (no concurrent train/build). Contaminated first bonsai trio
+(20260806T195825Z: 7.5 ms/iter, 1699 MiB) discarded — concurrent densify-worker
+GPU use inflated device-wide `cudaMemGetInfo` peak and ms/iter (see ISS-008).
+
+### Bonsai (2000 iters, images_4, max_cap 500k, mrnf) — medians
+
+| metric | Wave 1 (0d652d45) | after 1.4 | **Phase-1 final** | Δ vs Wave 1 |
+|---|---:|---:|---:|---:|
+| wall_s | 8.94 | 9.00 | **8.86** | −0.9% |
+| steady_ms/iter | 4.085 | 4.104 | **4.059** | **−0.6%** |
+| steady_allocs/iter | 0.05 | 0.05 | **0.05** | 0 |
+| peak VRAM MiB | 1152.6 | 1135.4 | **938.3** | −214 (device-wide free; quiet GPU) |
+| B/splat | 429.0 | 429.0 | 429.0 | 0 |
+| last_loss | ~0.03–0.04 | 0.029–0.040 | 0.029–0.060 | ok |
+
+### Bicycle canary (7000 iters, images_4, max_cap 500k, mrnf) — medians
+
+| metric | BASELINE.md (ba7c4497, +1.3) | **Phase-1 final** | Δ |
+|---|---:|---:|---:|
+| wall_s | 31.15 | **30.76** | −1.3% |
+| steady_ms/iter | 3.290 | **3.258** | −1.0% |
+| steady_allocs/iter | 0.04 | **0.04** | 0 |
+| peak VRAM MiB | 1038.5 | **1026.1** | −12.4 |
+| B/splat | 429.0 | 429.0 | 0 |
+| final loss (range) | 0.098–0.121 | **0.107–0.124** | within bicycle high variance |
+
+Loss-curve spot checks (run3 samples, every 1k iters): 1k=0.20, 2k=0.12,
+3k=0.15, 4k=0.10, 5k=0.10, 6k=0.20, 6.9k=0.12 — healthy densify growth to
+cap (54k→500k), no collapse/NaN, no floater runaway.
+
+### Phase-1 task rollup (six tasks + dual gate)
+
+| task | commit | fail | pass | bonsai note |
+|---|---|---|---|---|
+| 1.3 fused reg loss | `167300ff` | fused scalars=0 → relΔ=1 | FusedRegLossTest 2/2 | bench deferred |
+| 1.4 fused bg blend | `ff517550` | drop compose → max_abs≈bg | FusedBgBlendTest 2/2 | 4.104 ms / 0.05 |
+| 1.6 photometric hygiene | `654a92ee` | clone → alloc≥1 | PhotometricHygieneTest | deferred |
+| 1.7 persistent masks | `35759f68` | rebuild 10× / 8× | PersistentMasksTest 2/2 | deferred |
+| 1.8 fuse noise inject | `42184eea` | missing launch API | FusedNoiseInjectionTest 2/2 | quality via dual gate |
+| 1.9 densif fold+zero | `b046ea34` | missing launch API | DensificationInfoZeroTest 2/2 | **final dual gate** |
+
+**Gate status:** G2 allocs held at 0.05; G4 ms/iter improved vs Wave 1 on both
+workloads; bicycle quality canary clean (loss curve + final range OK).
+Phase 1 series **DONE**.
+
