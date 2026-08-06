@@ -12,6 +12,7 @@
 #include "core/tensor.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
+#include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -218,4 +219,35 @@ TEST_F(FastGSSortBufferTest, CapacityGrowthTakesFallbackSync) {
     }
 
     set_force_n_instances_sync_for_testing(false);
+}
+
+// ---------------------------------------------------------------------------
+// Task 1.5 — cudaPointerGetAttributes preflight is debug-only.
+// Release (NDEBUG) builds must not call it per-step; after N frames the
+// instrumented counter stays 0.
+// ---------------------------------------------------------------------------
+TEST_F(FastGSSortBufferTest, ReleasePreflightPointerAttrsAreSkipped) {
+    using fast_lfs::rasterization::preflight_pointer_attr_call_count;
+    using fast_lfs::rasterization::reset_preflight_pointer_attr_call_count;
+
+    reset_preflight_pointer_attr_call_count();
+    constexpr int kFrames = 8;
+    for (int i = 0; i < kFrames; ++i) {
+        auto r = fast_rasterize_forward(*camera_, *splat_, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
+        r->second.release_forward_context();
+    }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    const auto calls = preflight_pointer_attr_call_count();
+#ifdef NDEBUG
+    EXPECT_EQ(calls, 0u)
+        << "Release/NDEBUG builds must not call cudaPointerGetAttributes per "
+           "forward (observed "
+        << calls << " after " << kFrames << " frames)";
+#else
+    // Debug builds keep full preflight (~10 attrs × frames).
+    EXPECT_GE(calls, static_cast<std::uint64_t>(kFrames) * 8u)
+        << "Debug builds should still run pointer attribute preflight";
+#endif
 }

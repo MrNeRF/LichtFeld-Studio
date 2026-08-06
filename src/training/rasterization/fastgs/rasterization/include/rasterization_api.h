@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <tuple>
 
+// cstdint already provides std::uint64_t for preflight counters
+
 namespace fast_lfs::rasterization {
 
     struct FastGSSettings {
@@ -121,5 +123,9 @@ namespace fast_lfs::rasterization {
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();
+
+    /// Phase 1.5: cudaPointerGetAttributes preflight call count (0 in Release/NDEBUG).
+    [[nodiscard]] std::uint64_t preflight_pointer_attr_call_count() noexcept;
+    void reset_preflight_pointer_attr_call_count() noexcept;
 
 } // namespace fast_lfs::rasterization

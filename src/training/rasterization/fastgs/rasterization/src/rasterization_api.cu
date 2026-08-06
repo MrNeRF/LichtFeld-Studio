@@ -13,6 +13,7 @@
 #include "rasterization_api.h"
 #include "rasterization_config.h"
 #include "utils.h"
+#include <atomic>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <functional>
@@ -27,11 +28,16 @@ namespace fast_lfs::rasterization {
         thread_local std::string last_forward_error;
         thread_local std::string last_backward_error;
 
+        // Phase 1.5: count cudaPointerGetAttributes preflight calls (test/telemetry).
+        std::atomic<std::uint64_t> g_preflight_pointer_attr_calls{0};
+
         void free_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept {
             // Phase 1.1: persistent high-water sort buffers — no cudaFree.
             release_sorted_primitive_indices(ptr, stream);
         }
 
+#ifndef NDEBUG
+        // Debug-only preflight helpers (Phase 1.5: skipped entirely in Release).
         const char* cuda_memory_type_name(cudaMemoryType type) {
             switch (type) {
             case cudaMemoryTypeHost: return "host";
@@ -87,6 +93,7 @@ namespace fast_lfs::rasterization {
                            lfs::core::detail::format_cuda_safe(
                                "FastGS forward preflight: {} is null", name));
 
+            g_preflight_pointer_attr_calls.fetch_add(1, std::memory_order_relaxed);
             cudaPointerAttributes attrs{};
             const cudaError_t attr_err = cudaPointerGetAttributes(&attrs, ptr);
             if (attr_err != cudaSuccess) {
@@ -105,6 +112,7 @@ namespace fast_lfs::rasterization {
                     "but the current CUDA device is {}",
                     name, attrs.device, current_device));
         }
+#endif // !NDEBUG
 
         void validate_fastgs_forward_cuda_preflight(
             const float* means_ptr,
@@ -124,9 +132,7 @@ namespace fast_lfs::rasterization {
             int width,
             int height,
             int n_tiles) {
-            const int current_device = checked_current_cuda_device("FastGS forward preflight");
-            checked_no_pending_cuda_error("FastGS forward preflight");
-
+            // Cheap dimension checks always run (not host driver calls).
             if (n_primitives <= 0 || active_sh_bases <= 0 || active_sh_bases > 16 ||
                 sh_layout_bases <= 0 || sh_layout_bases > 16 ||
                 width <= 0 || height <= 0 || n_tiles <= 0) {
@@ -148,6 +154,11 @@ namespace fast_lfs::rasterization {
                     ", sh_layout_bases=" + std::to_string(sh_layout_bases) + ")");
             }
 
+#ifndef NDEBUG
+            // Full CUDA pointer attribute validation — debug builds only.
+            const int current_device = checked_current_cuda_device("FastGS forward preflight");
+            checked_no_pending_cuda_error("FastGS forward preflight");
+
             checked_device_pointer_on_current_device(means_ptr, "means_ptr", current_device);
             checked_device_pointer_on_current_device(scales_raw_ptr, "scales_raw_ptr", current_device);
             checked_device_pointer_on_current_device(rotations_raw_ptr, "rotations_raw_ptr", current_device);
@@ -161,8 +172,29 @@ namespace fast_lfs::rasterization {
             checked_device_pointer_on_current_device(image_ptr, "image_ptr", current_device);
             checked_device_pointer_on_current_device(alpha_ptr, "alpha_ptr", current_device);
             checked_device_pointer_on_current_device(depth_ptr, "depth_ptr", current_device);
+#else
+            (void)means_ptr;
+            (void)scales_raw_ptr;
+            (void)rotations_raw_ptr;
+            (void)opacities_raw_ptr;
+            (void)sh_coefficients_0_ptr;
+            (void)sh_coefficients_rest_ptr;
+            (void)w2c_ptr;
+            (void)cam_position_ptr;
+            (void)image_ptr;
+            (void)alpha_ptr;
+            (void)depth_ptr;
+#endif
         }
     } // namespace
+
+    std::uint64_t preflight_pointer_attr_call_count() noexcept {
+        return g_preflight_pointer_attr_calls.load(std::memory_order_relaxed);
+    }
+
+    void reset_preflight_pointer_attr_call_count() noexcept {
+        g_preflight_pointer_attr_calls.store(0, std::memory_order_relaxed);
+    }
 
     ForwardContext forward_raw(
         const float* means_ptr,
@@ -282,8 +314,10 @@ namespace fast_lfs::rasterization {
 
             float3* primitive_normals = nullptr;
             if (normal_ptr != nullptr) {
+#ifndef NDEBUG
                 checked_device_pointer_on_current_device(normal_ptr, "normal_ptr",
                                                          checked_current_cuda_device("FastGS forward preflight"));
+#endif
                 primitive_normals = reinterpret_cast<float3*>(
                     arena_allocator(static_cast<size_t>(n_primitives) * sizeof(float3)));
                 if (!primitive_normals) {

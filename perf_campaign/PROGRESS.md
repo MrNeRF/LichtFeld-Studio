@@ -133,4 +133,45 @@
   G3: zero mid-pipeline StreamSynchronize in steady state (fallback only at
   warmup/growth). G4: steady_ms improved vs 1.1 and baseline.
 
+- **Commit:** `5a509aa1`
+  Runs: `perf_campaign/runs/20260806T174524Z_run{1,2,3}/`
+
+## Task 1.5 — Preflight checks debug-only
+
+- **Change:** `cudaPointerGetAttributes` ×~10 per forward gated behind
+  `#ifndef NDEBUG` in `rasterization_api.cu`. Cheap dimension checks remain in
+  Release. Instrumented `preflight_pointer_attr_call_count()`.
+- **Fail evidence (TDD):** Before change, every forward called
+  `cudaPointerGetAttributes` ~10× (Release). Counter API did not exist.
+- **Pass evidence:**
+  ```
+  [  PASSED  ] FastGSSortBufferTest.ReleasePreflightPointerAttrsAreSkipped
+  # NDEBUG: calls == 0 after 8 frames
+  ```
+- **Bench (flock, 3-run final trio vs BASELINE):**
+
+  | metric | baseline | after 1.1 | after 1.2 | after 1.5 (trio) |
+  |---|---:|---:|---:|---:|
+  | wall_s | 9.00 | 9.02 | 9.03 | **9.06** |
+  | steady_ms/iter | 4.129 | 4.101 | 4.094 | **4.101** |
+  | steady_allocs/iter | **5.05** | 0.06 | 0.05 | **0.05** |
+  | peak VRAM MiB | 1156.3 | 1187.4 | 1176.6 | 1178.2 |
+  | B/splat | 429.0 | 429.0 | 429.0 | 429.0 |
+  | last_loss | ~0.039 | ~0.03–0.04 | ~0.03–0.04 | ~0.03–0.05 |
+
+  Net vs BASELINE: allocs 5.05→0.05 (G2), ms 4.129→4.101 (G4 no regression /
+  slight win), VRAM +~22 MiB high-water sort buffers (expected).
+
+## Phase 1 raster trio — summary table
+
+| task | fail evidence | pass evidence | wall_s | steady_ms | allocs/iter | peak MiB | last_loss |
+|---|---|---|---:|---:|---:|---:|---:|
+| baseline | — | BASELINE.md | 9.00 | 4.129 | 5.05 | 1156.3 | ~0.039 |
+| 1.1 sort buffers | delta2=5 | delta2=0 | 9.02 | 4.101 | 0.06 | 1187.4 | ~0.035 |
+| 1.2 n_instances sync | mid-pipeline StreamSync every step | fallback only warm/grow; pixel golden | 9.03 | 4.094 | 0.05 | 1176.6 | ~0.036 |
+| 1.5 preflight NDEBUG | ~10 attrs/forward | attrs calls=0 after N frames | 9.06 | 4.101 | 0.05 | 1178.2 | ~0.037 |
+
+- **Commit (1.5):** `a7f6dc94`
+  Final trio runs: `perf_campaign/runs/20260806T174846Z_run{1,2,3}/`
+
 
