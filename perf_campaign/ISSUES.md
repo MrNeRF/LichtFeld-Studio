@@ -113,3 +113,39 @@
 - **Action:** Sync RULES from main when merging tensor work; until then follow
   work-order dual-gate + flock discipline.
 - **Status:** open (docs).
+
+## ISS-2.1 — SH-rest 16-bit value quant: codec landed, full wiring pending
+- **Severity:** high (blocks G1 B/splat 409→~301; Phase 2.1 incomplete)
+- **Status:** infrastructure only (2026-08-06). **Default OFF.**
+- **Landed:**
+  - Host/device codec: `sh_value_codec.hpp` / `.cuh` / `.cpp` — endpoint-exact
+    16-bit linear min-max, float2 bounds per 256-splat block (FPBO layout).
+  - Runtime: `LFS_SH_VALUE_QUANT=1` opt-in; `LFS_SH_VALUE_FP32=1` force off;
+    `set_sh_value_quant_enabled_for_testing`.
+  - Unit tests: `ShValueCodecTest` (6/6) — endpoint exact, bounds, MSE, footprint constants.
+- **Remaining (required before default ON + dual gate):**
+  1. `SplatData`: store shN as `uint16` cells + `_shN_bounds` float2[⌈N/256⌉];
+     dequant helpers for PLY/checkpoint/viewer (`shN_canonical` must return fp32).
+  2. FastGS `load_shN_coeffs` / `convert_sh_to_color*`: decode-on-load with
+     bounds index = `primitive_idx / 256`.
+  3. Single writer: re-encode in fused Adam after SH param update (block min/max
+     reduction for bounds) — same site as joint Adam 2.2.
+  4. Densify: LAS gather/scatter, free-slot fill, compact, MCMC relocate — all
+     shN touchpoints (`grep shN_swizzled`, `shN.ptr<float>()`) must read/write
+     quantized form (or dequant-requant bridges).
+  5. gsplat path: dequant temp or native decode.
+  6. Ledger: params 248→152 B/splat at SH3; total ~409→~313 with joint Adam.
+  7. TDD: render PSNR >55 dB quantized vs fp32; densify roundtrip; full bicycle
+     7k A/B flag on vs off (curve + final loss).
+  8. If quality regresses: try bounds block 128 before conceding; else stay OFF.
+- **Expected save once wired:** ~96 B/splat shN (192→96 with LFS pad; spirulae 90
+  with 45 cells) → B/splat ~409→~313.
+- **Related:** Task 2.2 joint Adam is ON (commit 63aa08c6); B/splat already 409.4.
+
+## ISS-2.2-ms — preprocess_backward block size 128→256
+- **Severity:** low/medium (bonsai +~5% ms vs Wave-2; bicycle flat)
+- **File:** `rasterization_config.h` `block_size_preprocess_backward = 256`
+- **Why:** joint Adam quant block is 256; `blockIdx.x` indexes bounds.
+- **Symptom:** bonsai steady 4.287 vs Wave-2 4.065; bicycle 3.215 vs 3.208 (flat).
+- **Action:** optional — restore 128 with cross-block atomic bounds, or accept for quality wave.
+

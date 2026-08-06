@@ -647,10 +647,6 @@ Phase 1 series **DONE**.
 
 - **Commit:** `786fefb6`
 
-||||||| 42184eea
-- **Commit:** (this commit)
-- **Commit:** `42184eea`
-
 ## Task VRAM-audit (lfs-elite-vramfix) — ISS-007 + NVRM + TLS + RAM guard
 
 - **Branch:** `lfs-elite-vramfix`
@@ -817,4 +813,26 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 
 - **Env flag:** `LFS_ADAM_LEGACY_CODEC=1` forces legacy uint8+scales path.
 - **Default:** joint ON.
-- **Commit:** (this commit)
+- **Commit:** `63aa08c6`
+
+---
+## Task 2.1 — SH-rest 16-bit block quantization (infrastructure)
+
+- **Branch:** `lfs-elite`
+- **Change:** Spirulae-style 16-bit linear SH-rest value codec (host+device) +
+  unit tests + runtime flags. **Default OFF** — full FastGS/densify/export wiring
+  not complete (see ISS-2.1). Opt-in: `LFS_SH_VALUE_QUANT=1`.
+- **Fail evidence (TDD):**
+  ```
+  # Pre-impl:
+  tests/test_sh_value_codec.cpp: fatal error: lfs/training/sh_value_codec.hpp: No such file
+  ```
+- **Pass evidence:**
+  ```
+  [==========] Running 6 tests from 1 test suite.
+  [  PASSED  ] 6 tests.  (ShValueCodecTest.*)
+  ```
+- **Gate:** dual-workload **not run with quant ON** (storage not wired).
+  Task 2.2 gate remains the live B/splat number (409.4). Enabling 2.1 is expected
+  to drop ~409→~313 once wired.
+- **Commit:** `23f90234`
