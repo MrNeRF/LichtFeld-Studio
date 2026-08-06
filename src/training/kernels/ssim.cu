@@ -1782,7 +1782,9 @@ namespace lfs::training::kernels {
             N, C, H, W,
             apply_valid_padding,
             workspace.ssim_map.stream());
-        lfs::core::Tensor ssim_value_tensor = workspace.reduction_result.clone();
+        // Phase 1.6: return the workspace scalar view (no per-step clone alloc).
+        // Callers must consume the value before the next forward on this workspace.
+        lfs::core::Tensor ssim_value_tensor = workspace.reduction_result;
 
         // Save context for backward (reference workspace buffers, not copies!)
         SSIMContext ctx;
@@ -1913,7 +1915,8 @@ namespace lfs::training::kernels {
                 apply_valid_padding,
                 workspace.ssim_map.stream());
         });
-        lfs::core::Tensor loss_scalar = workspace.reduction_result.clone();
+        // Phase 1.6: no clone — persistent workspace scalar (see ssim_forward).
+        lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
         FusedL1SSIMContext ctx{
             .img1 = img1,
@@ -1953,7 +1956,9 @@ namespace lfs::training::kernels {
         const size_t numel = N * C * grad_h * grad_w;
         const float grad_per_pixel = 1.0f / static_cast<float>(numel);
 
-        workspace.grad_img.zero_();
+        // Phase 1.6: fusedL1SSIMBackwardCUDA assigns dL_dimg1[out_idx] for every
+        // in-bounds pixel (valid-padding only zeros the chain, not the write).
+        // zero_() is redundant.
 
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
@@ -2030,7 +2035,8 @@ namespace lfs::training::kernels {
                 apply_valid_padding,
                 workspace.ssim_map.stream());
         });
-        lfs::core::Tensor loss_scalar = workspace.reduction_result.clone();
+        // Phase 1.6: no clone — persistent workspace scalar.
+        lfs::core::Tensor loss_scalar = workspace.reduction_result;
 
         DecoupledFusedL1SSIMContext ctx{
             .corrected_img = corrected,
@@ -2075,9 +2081,9 @@ namespace lfs::training::kernels {
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
+        // Phase 1.6: skip zero_ — fusedL1SSIMBackwardCUDA overwrites every pixel.
         dispatch_target_ptr(ctx.gt_img, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
-            workspace.grad_corrected.zero_();
             fusedL1SSIMBackwardCUDA<TargetT, float><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                 grad_per_pixel, ctx.apply_valid_padding,
@@ -2088,7 +2094,6 @@ namespace lfs::training::kernels {
                 workspace.zero_terms.ptr<float>());
             LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.decoupled_fused_l1_backward");
 
-            workspace.grad_raw.zero_();
             fusedL1SSIMBackwardCUDA<TargetT, float><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                 1.0f, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                 grad_per_pixel, ctx.apply_valid_padding,
@@ -2162,7 +2167,8 @@ namespace lfs::training::kernels {
             });
         });
 
-        auto loss_scalar = workspace.masked_loss.clone();
+        // Phase 1.6: no clone — persistent workspace scalar.
+        auto loss_scalar = workspace.masked_loss;
         const float mask_sum = workspace.mask_sum.item<float>();
 
         MaskedFusedL1SSIMContext ctx{
@@ -2198,7 +2204,8 @@ namespace lfs::training::kernels {
         const size_t C = ctx.img1.shape()[1];
         const float inv_mask_sum = 1.0f / ctx.mask_sum_value;
 
-        workspace.grad_img.zero_();
+        // Phase 1.6: maskedFusedL1SSIMBackwardCUDA assigns every in-bounds pixel
+        // (mask=0 → write 0). zero_() is redundant.
 
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
@@ -2280,7 +2287,8 @@ namespace lfs::training::kernels {
             });
         });
 
-        auto loss_scalar = workspace.masked_loss.clone();
+        // Phase 1.6: no clone — persistent workspace scalar.
+        auto loss_scalar = workspace.masked_loss;
         const float mask_sum = workspace.mask_sum.item<float>();
 
         MaskedDecoupledFusedL1SSIMContext ctx{
@@ -2322,11 +2330,11 @@ namespace lfs::training::kernels {
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
         const dim3 block(BLOCK_X, BLOCK_Y);
 
+        // Phase 1.6: skip zero_ — masked kernel overwrites every in-bounds pixel.
         dispatch_target_ptr(ctx.gt_img, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
             dispatch_mask_ptr(mask, [&](auto* mask_ptr) {
                 using MaskT = std::remove_cv_t<std::remove_pointer_t<decltype(mask_ptr)>>;
-                workspace.grad_corrected.zero_();
                 maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                     ctx.ssim_weight, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                     ctx.corrected_img.ptr<float>(), gt_ptr, mask_ptr,
@@ -2336,7 +2344,6 @@ namespace lfs::training::kernels {
                     workspace.zero_terms.ptr<float>());
                 LFS_CUDA_LAUNCH_CHECK(lfs::core::getCurrentCUDAStream(), "training.ssim.masked_decoupled_fused_l1_backward");
 
-                workspace.grad_raw.zero_();
                 maskedFusedL1SSIMBackwardCUDA<TargetT, MaskT><<<grid, block, 0, lfs::core::getCurrentCUDAStream()>>>(
                     1.0f, inv_mask_sum, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                     ctx.raw_img.ptr<float>(), gt_ptr, mask_ptr,

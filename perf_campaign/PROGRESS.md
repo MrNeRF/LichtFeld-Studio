@@ -374,3 +374,28 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   Runs: `perf_campaign/runs/20260806T183749Z_run{1,2,3}/`
 - **Commit:** (this commit)
 
+
+## Task 1.6 — Photometric hygiene
+
+- **Branch:** `lfs-elite`
+- **Change:**
+  1. Drop `reduction_result.clone()` / `masked_loss.clone()` in ssim.cu —
+     return the persistent workspace scalar view (callers consume before next
+     forward on the same workspace).
+  2. Skip `grad_img.zero_()` / `grad_corrected.zero_()` / `grad_raw.zero_()`
+     on fused L1+SSIM bwd paths — kernels assign every in-bounds pixel
+     (valid-padding zeros the chain only; masked path writes 0 where mask=0).
+  3. Skip `corrected_image.clamp_(0,1)` when PPISP is active (CRF clamps).
+- **Fail evidence (TDD):** pre-change every fused forward cloned `{1}` → at
+  least 1 driver alloc on pool miss; zero_ was a full-image write every step.
+  ```
+  # conceptual: with clone restored, steady alloc delta ≥ 1
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] PhotometricHygieneTest.FusedLossValueStableAndNoCloneAlloc
+  # steady fused_l1_ssim_forward alloc delta=0; loss equal across steps;
+  # bwd grads finite without prior zero_
+  ```
+- **Commit:** (this commit)
+

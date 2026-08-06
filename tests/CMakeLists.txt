@@ -122,6 +122,7 @@ set(TEST_FILES
     test_fastgs_sort_buffers.cpp
     test_fused_reg_loss.cpp
     test_fused_bg_blend.cpp
+    test_photometric_hygiene.cpp
     test_training_state_ledger.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
