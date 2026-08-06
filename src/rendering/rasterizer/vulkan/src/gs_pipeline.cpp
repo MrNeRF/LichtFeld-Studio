@@ -483,13 +483,6 @@ void VulkanGSPipeline::cleanup() {
     HOST_GUARD;
     lfs::diagnostics::VramProfiler::instance().clearStaticScope(kSlangShaderRootScope);
 
-    if (stager.buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(allocator, stager.buffer, stager.allocation);
-        stager.buffer = VK_NULL_HANDLE;
-        stager.allocation = VK_NULL_HANDLE;
-        stager.allocSize = 0;
-    }
-
     if (device != VK_NULL_HANDLE) {
         const VkResult idle_result = vkDeviceWaitIdle(device);
         if (idle_result != VK_SUCCESS) {
@@ -1529,7 +1522,7 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     }
 }
 
-bool VulkanGSPipeline::writeTimestamp(int delta) {
+void VulkanGSPipeline::writeTimestamp(int delta) {
     if (!commandBatchInProgress) {
         lfs::rendering::throw_renderer_contract(
             std::format(
@@ -1580,7 +1573,6 @@ bool VulkanGSPipeline::writeTimestamp(int delta) {
         timestamp_query_pool, timestampNumWritten);
     timestampNumWritten += 1;
     timestampStackDepth += delta;
-    return true;
 }
 
 bool VulkanGSPipeline::writeTimestampNoExcept(int delta) {

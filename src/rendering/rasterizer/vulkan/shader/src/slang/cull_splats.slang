@@ -75,6 +75,9 @@ void main(
                     uniforms.fx, uniforms.fy, uniforms.cx, uniforms.cy,
                     base_camera_model(uniforms.camera_model), uniforms.dist_coeffs,
                     camera_height, camera_width);
+              // LFS_3DGUT_PROJECTION is never set on cull SPVs today (CMake only
+              // enables it on projection shaders). Kept for a future HiGS-cull +
+              // 3DGUT product combo so the center test matches GUT projection.
               #if LFS_3DGUT_PROJECTION
                 survives = splat_center_potentially_visible_gut(state.mean_ws, cam);
               #else

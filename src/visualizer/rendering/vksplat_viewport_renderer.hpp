@@ -227,8 +227,6 @@ namespace lfs::vis {
         void reset();
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
             const lfs::core::SplatData& splat_data);
-        [[nodiscard]] std::optional<LodPageCache::Snapshot> lodPageCacheSnapshot(
-            const lfs::core::SplatData& splat_data) const;
         // VRAM page-pool budget in splats for RAD-backed LoD streaming; 0 = full residency.
         void setLodPagePoolBudget(std::size_t splats) {
             lod_pool_sizing_dirty_ = lod_pool_sizing_dirty_ || lod_page_pool_splats_ != splats;

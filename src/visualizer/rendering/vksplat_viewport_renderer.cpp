@@ -666,7 +666,6 @@ namespace lfs::vis {
                 {"radix_sort/upsweep_indirect", (root / "radix_sort/upsweep_indirect.spv").string()},
                 {"radix_sort/spine_indirect", (root / "radix_sort/spine_indirect.spv").string()},
                 {"radix_sort/downsweep_indirect", (root / "radix_sort/downsweep_indirect.spv").string()},
-                {"seed_primitive_indices", (root / "generated/seed_primitive_indices.spv").string()},
                 {"apply_depth_ordering", (root / "generated/apply_depth_ordering.spv").string()},
                 {"visible_flags", (root / "generated/visible_flags.spv").string()},
                 {"prepare_visible_sort", (root / "generated/prepare_visible_sort.spv").string()},
@@ -2078,14 +2077,6 @@ namespace lfs::vis {
         gpu_lod_tree_ = {};
         initialized_ = false;
         context_ = nullptr;
-    }
-
-    std::optional<LodPageCache::Snapshot> VksplatViewportRenderer::lodPageCacheSnapshot(
-        const lfs::core::SplatData& splat_data) const {
-        if (lod_page_cache_model_ != &splat_data || !lod_page_cache_.configured()) {
-            return std::nullopt;
-        }
-        return lod_page_cache_.snapshot();
     }
 
     VksplatViewportRenderer::GpuLodSelectionStatus
@@ -3605,6 +3596,7 @@ namespace lfs::vis {
         release(gpu_lod_tree_.page_frames);
         release(gpu_lod_tree_.page_to_chunk);
         release(gpu_lod_tree_.chunk_to_page);
+        release(gpu_lod_tree_.page_age);
         gpu_lod_tree_ = {};
 
         if (lod_tree_meta_.buffer.buffer != VK_NULL_HANDLE) {

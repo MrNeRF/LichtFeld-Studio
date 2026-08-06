@@ -1,6 +1,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gs_renderer.h"
 #include <limits>
+#include <map>
 #include <string>
 
 size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
@@ -165,64 +166,6 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
 
 #undef ADD_OWNED
     return breakdown;
-}
-
-void VulkanGSPipeline::allocStagingBuffer(size_t size) {
-    if (size == 0) {
-        lfs::rendering::throw_renderer_contract(
-            std::format(
-                "allocStagingBuffer requires a non-zero allocation (requested_bytes={}, existing_buffer={:#x}, existing_bytes={})",
-                size,
-                lfs::rendering::vkHandleValue(stager.buffer),
-                stager.allocSize),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-    if (stager.buffer != VK_NULL_HANDLE && stager.allocSize >= size)
-        return;
-
-    std::lock_guard<std::mutex> lock(stager.mutex);
-
-    if (stager.allocSize < size) {
-        HOST_GUARD;
-        waitForPendingBatch();
-        if (stager.buffer != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(allocator, stager.buffer, stager.allocation);
-        }
-        stager.buffer = VK_NULL_HANDLE;
-        stager.allocation = VK_NULL_HANDLE;
-        stager.allocSize = 0;
-    }
-
-    VkBufferCreateInfo staging_info = {};
-    staging_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    staging_info.size = size;
-    staging_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    staging_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VmaAllocationCreateInfo aci = {};
-    aci.usage = VMA_MEMORY_USAGE_AUTO;
-    aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-
-    const VkResult result = vmaCreateBuffer(
-        allocator, &staging_info, &aci, &stager.buffer, &stager.allocation, nullptr);
-    if (result != VK_SUCCESS) {
-        stager.buffer = VK_NULL_HANDLE;
-        stager.allocation = VK_NULL_HANDLE;
-        lfs::rendering::throw_vk_result(
-            result,
-            "vmaCreateBuffer",
-            std::format(
-                "VkSplat staging-buffer allocation failed (requested_bytes={}, allocator={:#x}, usage={:#x}, result={}({}))",
-                size,
-                lfs::rendering::vkHandleValue(allocator),
-                static_cast<std::uint32_t>(staging_info.usage),
-                lfs::rendering::vkResultToString(result),
-                static_cast<int>(result)),
-            LFS_SOURCE_SITE_CURRENT());
-    }
-
-    stager.allocSize = size;
-    setDebugObjectName(VK_OBJECT_TYPE_BUFFER, stager.buffer, "vksplat.staging");
 }
 
 void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {

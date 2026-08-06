@@ -1,20 +1,16 @@
 #pragma once
 
-#include <algorithm> // std::sort
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstring> // memcpy
 #include <exception>
 #include <functional>
-#include <map>
 #include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
 #include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
@@ -101,7 +97,7 @@ public:
     VkCommandBuffer activeCommandBuffer() const {
         return command_buffer;
     }
-    bool writeTimestamp(int delta);
+    void writeTimestamp(int delta);
     bool writeTimestampNoExcept(int delta);
     void addTimerCallback(TimerCallback callback);
     void setCpuTimerCallback(CpuTimerCallback callback);
@@ -275,17 +271,6 @@ protected:
     std::vector<_ComputePipeline*> all_compute_pipelines;
 
     uint32_t queue_family_index;
-
-    // For CPU-GPU transfers
-    struct _Stager {
-        VkBuffer buffer = VK_NULL_HANDLE;
-        VmaAllocation allocation = VK_NULL_HANDLE;
-        size_t allocSize = 0;
-        std::mutex mutex;
-    };
-    _Stager stager;
-
-    void allocStagingBuffer(size_t size);
 
     void populateDeviceInfo(VkPhysicalDevice selected_physical_device);
     void createCommandPool();

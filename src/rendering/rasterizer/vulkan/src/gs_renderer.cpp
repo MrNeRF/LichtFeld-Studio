@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <csignal>
+#include <cstring>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -1008,7 +1009,6 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     createComputePipeline(pipeline_sorting_indirect_2.upsweep, spirv_paths.at("radix_sort/upsweep_indirect"));
     createComputePipeline(pipeline_sorting_indirect_2.spine, spirv_paths.at("radix_sort/spine_indirect"));
     createComputePipeline(pipeline_sorting_indirect_2.downsweep, spirv_paths.at("radix_sort/downsweep_indirect"));
-    createComputePipeline(pipeline_seed_primitive_indices, spirv_paths.at("seed_primitive_indices"));
     createComputePipeline(pipeline_apply_depth_ordering, spirv_paths.at("apply_depth_ordering"));
     createComputePipeline(pipeline_visible_flags, spirv_paths.at("visible_flags"));
     createComputePipeline(pipeline_prepare_visible_sort, spirv_paths.at("prepare_visible_sort"));
@@ -1495,7 +1495,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 std::vector<TaggedBinding>{
                     {buffers.sorted_keys().deviceBuffer, BufferUse::ComputeRead},
                     {tile_ranges, BufferUse::ComputeWrite},
-                    {count, BufferUse::ComputeWrite},
+                    {count, BufferUse::ComputeRead},
                     {batch_counts, BufferUse::ComputeWrite},
                 });
             executeCumsum(buffers,
@@ -1610,7 +1610,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
                 std::vector<TaggedBinding>{
                     {buffers.sorted_keys().deviceBuffer, BufferUse::ComputeRead},
                     {tile_ranges, BufferUse::ComputeWrite},
-                    {count, BufferUse::ComputeWrite},
+                    {count, BufferUse::ComputeRead},
                 });
         }
 
@@ -2907,7 +2907,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
             std::vector<TaggedBinding>{
                 {buffers.sorted_keys().deviceBuffer, BufferUse::ComputeRead},
                 {tile_ranges, BufferUse::ComputeWrite},
-                {count, BufferUse::ComputeWrite},
+                {count, BufferUse::ComputeRead},
                 {batch_counts, BufferUse::ComputeWrite},
             });
 

@@ -1,9 +1,6 @@
 #pragma once
 
-#include <cmath>
-#include <cstring> // memcpy
 #include <map>
-#include <mutex>
 #include <string>
 #include <vector>
 #include <vk_mem_alloc.h>
@@ -64,14 +61,6 @@ struct _VulkanBuffer {
         extra_usage = other.extra_usage;
         created_with_extra_usage = other.created_with_extra_usage;
         return *this;
-    }
-
-    // used to test if descriptor needs to be updated
-    bool operator==(const _VulkanBuffer& other) const {
-        return buffer == other.buffer && allocation == other.allocation &&
-               allocSize == other.allocSize && capacity == other.capacity &&
-               offset == other.offset && extra_usage == other.extra_usage &&
-               created_with_extra_usage == other.created_with_extra_usage;
     }
 
     // A view is described in two coordinate systems: offset is absolute in the

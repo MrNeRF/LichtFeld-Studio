@@ -1,4 +1,4 @@
-# Epic #1496 campaign findings (side discoveries)
+#Epic #1496 campaign findings(side discoveries)
 
 ## Pre-existing: VUID-vkCmdDispatch-storageBuffers-06936 in vksplat.cumsum (2026-08-06)
 GPU-assisted validation (scripts/run_vulkan_validation.sh) reports out-of-range storage buffer
@@ -11,7 +11,8 @@ RESOLVED 2026-08-06 after two investigation rounds (inv_cumsum_report.md, inv_r2
 the session scratchpad; verdicts mirrored here):
 - The app is correct. A `require_backing` contract added to `executeCumsum` (permanent) proves
   every classic scan's input/output/block-sum backings are large enough at record time; it never
-  fired while the VUID still appeared. SPIR-V artifacts clean; recording is single-threaded;
+  fired while the VUID still appeared. SPIR-V artifacts clean;
+recording is single - threaded;
   core+sync validation is clean on the same workloads.
 - The reports are GPU-assisted-validation false positives in the pinned layer
   (vulkan-validationlayers 1.4.341.0): GPU-AV pairs stale push-descriptor snapshots with
@@ -63,3 +64,54 @@ Disposition of verified findings from `sweep_a.md`, `sweep_b.md`, `sweep_c.md`.
 | C3 S3 compact_visible_primitives.slang | missing capacity clamp | **Fixed** — `if (compact_idx >= uniforms.num_splats) return;` before writes (lod_* style). |
 | C4 | missing sizeof asserts | **Fixed** — `static_assert` for LodCompact (16) and SelectionPolygonRasterize (32). |
 
+
+## Sweep round 2 resolution (2026-08-06)
+
+Reports: `sweep_d.md`, `sweep_e.md`, `sweep_f.md`, `sweep_g.md`.
+
+### Sweep G
+| ID | Disposition |
+|----|-------------|
+| G3-1/G3-2/G3-3 | **Fixed** — binding 2 (`count` / `tile_instance_count`) retagged `ComputeWrite` → `ComputeRead` on tile_ranges_and_batch_counts, tile_ranges, and macro_ranges host dispatches. |
+
+### Sweep F
+| ID | Disposition |
+|----|-------------|
+| F-F07 | **Fixed** — `release(gpu_lod_tree_.page_age)` before `gpu_lod_tree_ = {}`. |
+| F-F01 | **Fixed** — deleted `lodPageCacheSnapshot` decl+def. |
+| F-F02 | **Fixed** — deleted `ChannelPolicy::has_flip_y` + writes. |
+| F-F03–F06, §4 | **OK** (no change). |
+
+### Sweep D
+| ID | Disposition |
+|----|-------------|
+| F-D01 | **Fixed** — deleted `_Stager`, `stager`, `allocStagingBuffer`, cleanup arm. |
+| F-D08 | **Fixed** — `writeTimestamp` → `void`; callers no longer branch on bool. `writeTimestampNoExcept` remains `bool`. |
+| F-D09 | **Fixed** — `diagnosticStageScope` cases for `CullSplats` + `ProjectionSurvivors`. |
+| F-D10 | **Fixed** — removed unused includes from `gs_pipeline.h` (`algorithm`, `cstring`, `map`, `variant`) and `buffer.h` (`cmath`, `cstring`, `map`, `mutex`). |
+| F-D11 | **Fixed** — deleted unreferenced `_VulkanBuffer::operator==` + stale descriptor-cache comment. |
+| F-D02–D07, D12 | **OK / STALE retained** (not in mandatory list). |
+
+### Sweep E
+| ID | Disposition |
+|----|-------------|
+| E-E01 | **OK** — no change. |
+| E-E02 | **Fixed** — removed CMake rule, spirv map entry, pipeline member+create, and `seed_primitive_indices.slang`. |
+| E-E03 | **Fixed** — deleted dead `LFS_VISIBLE_BOUNDED` branches from `tile_shader.slang` (no CMake product; HiGS uses macro keygen). |
+| E-E04 | **Kept with contract comment** — `#if LFS_3DGUT_PROJECTION` in `cull_splats.slang` documents future HiGS-cull+3DGUT combo; still compiled as 0 today. |
+| E-E05–E09 | **Not in mandatory list** this packet. |
+
+
+## Performance A/B (2026-08-06, splat_30000.rad 1M-splat LOD scene, default view, 43 frames/run)
+
+App GPU timestamps (`vksplat.gpu.*`), identical 28s protocol per run:
+
+| Stage | master (2 runs) | branch (3 runs) |
+|---|---|---|
+| RasterizeForward | 2.463 / 2.439 ms | 0.977 / 1.246 / 1.184 ms |
+| all 14 other stages | — | identical within noise |
+
+The rasterize/compose wave stage runs ~2x faster: the deleted 24/18-entry mega-hoist barriers
+and per-wave exact masks remove GPU over-waiting exactly where the epic's premise predicted the
+serialization lived. Whole-frame gains are smaller (GUI/compose/CPU unchanged). Protocol and raw
+logs in the session scratchpad (perf_*_summary.txt).

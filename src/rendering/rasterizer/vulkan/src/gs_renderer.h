@@ -370,7 +370,6 @@ protected:
     _ComputePipeline pipeline_selection_mask = _ComputePipeline(11);
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
     _ComputePipeline pipeline_generate_keys_wave = _ComputePipeline(8);
-    _ComputePipeline pipeline_seed_primitive_indices = _ComputePipeline(1);
     _ComputePipeline pipeline_apply_depth_ordering = _ComputePipeline(4);
     _ComputePipeline pipeline_visible_flags = _ComputePipeline(2);
     _ComputePipeline pipeline_prepare_visible_sort = _ComputePipeline(3);

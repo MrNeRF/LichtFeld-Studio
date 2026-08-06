@@ -164,7 +164,6 @@ namespace lfs::vis {
             const char* failure_log_prefix = "Required Vulkan/CUDA viewport interop failed";
             bool external_handle_early_out = false;
             bool publishes_published = false;
-            bool has_flip_y = true;
             bool log_timer_perf = false;
         };
 

@@ -1,6 +1,6 @@
-# SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+#SPDX - FileCopyrightText : 2025 LichtFeld Studio Authors
 #
-# SPDX-License-Identifier: GPL-3.0-or-later
+#SPDX - License - Identifier : GPL - 3.0 - or -later
 
 add_library(lfs_vulkan_rasterizer STATIC
         src/barrier_planner.cpp
@@ -9,9 +9,9 @@ add_library(lfs_vulkan_rasterizer STATIC
         src/gs_renderer.cpp
         src/perf_timer.cpp
         src/vma_implementation.cpp
-        # Phase 7A: shared bounded-wait + SubmissionState + VulkanDispatch seam.
-        # Lives under src/rendering/ so visualizer and tests include it without
-        # depending on the visualizer module.
+#Phase 7A : shared bounded - wait + SubmissionState + VulkanDispatch seam.
+#Lives under src / rendering / so visualizer and tests include it without
+#depending on the visualizer module.
         ${CMAKE_SOURCE_DIR}/src/rendering/vulkan_wait.cpp
 )
 
@@ -48,9 +48,9 @@ target_compile_definitions(lfs_vulkan_rasterizer PUBLIC
         LFS_VULKAN_RASTERIZER_DEV_SPV_DIR="${LFS_VULKAN_RASTERIZER_SPV_DIR}/"
 )
 
-# ---------------------------------------------------------------------------
-# Shader compilation (Slang + GLSL → SPIR-V)
-# ---------------------------------------------------------------------------
+#-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
+#Shader compilation(Slang + GLSL → SPIR - V)
+#-- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -
 
 find_program(SLANGC
         NAMES slangc
@@ -194,7 +194,6 @@ _vulkan_add_slang_shader(compute_tile_ranges       tile_shader.slang EXPORT_MODE
 _vulkan_add_slang_shader(compute_tile_ranges_and_batch_counts tile_shader.slang EXPORT_MODE=0 ENTRY=3)
 
 # Two-stage sort helper shaders
-_vulkan_add_slang_shader(seed_primitive_indices    seed_primitive_indices.slang)
 _vulkan_add_slang_shader(apply_depth_ordering      apply_depth_ordering.slang)
 _vulkan_add_slang_shader(visible_flags             visible_flags.slang)
 _vulkan_add_slang_shader(prepare_visible_sort      prepare_visible_sort.slang)
