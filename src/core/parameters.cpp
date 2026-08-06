@@ -10,6 +10,7 @@
 #include <any>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 
 #include <expected>
 #include <filesystem>
@@ -617,9 +618,15 @@ namespace lfs::core {
                 json["optimization"] = opt_copy.to_json();
 
                 const auto now = std::chrono::system_clock::now();
-                const auto time_t = std::chrono::system_clock::to_time_t(now);
+                const auto time_t_val = std::chrono::system_clock::to_time_t(now);
+                std::tm tm{};
+#ifdef _WIN32
+                localtime_s(&tm, &time_t_val);
+#else
+                localtime_r(&time_t_val, &tm);
+#endif
                 std::stringstream ss;
-                ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
+                ss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
                 json["timestamp"] = ss.str();
 
                 const std::filesystem::path filepath = (output_path.extension() == ".json")

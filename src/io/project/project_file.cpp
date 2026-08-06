@@ -375,7 +375,7 @@ namespace lfs::io::project::detail {
         }
         return std::shared_ptr<NativeFile>(new NativeFile(path, handle));
 #else
-        const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+        const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
         if (fd < 0) {
             const int error = errno;
             return project_error(native_error_code(error, true),
@@ -701,7 +701,7 @@ namespace lfs::io::project::detail {
         }
         return result;
 #else
-        int fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+        int fd = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
         if (fd < 0 && errno == EEXIST) {
             fd = ::open(lock_path.c_str(), O_RDWR | O_CLOEXEC);
         }

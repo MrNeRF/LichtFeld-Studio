@@ -17,6 +17,8 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <ctime>
+#include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <stdexcept>
@@ -250,8 +252,14 @@ namespace lfs::training {
 
         // Get current time
         const auto now = std::chrono::system_clock::now();
-        const auto time_t = std::chrono::system_clock::to_time_t(now);
-        report_file << "Generated: " << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S") << "\n\n";
+        const auto time_t_val = std::chrono::system_clock::to_time_t(now);
+        std::tm tm{};
+#ifdef _WIN32
+        localtime_s(&tm, &time_t_val);
+#else
+        localtime_r(&time_t_val, &tm);
+#endif
+        report_file << "Generated: " << std::put_time(&tm, "%Y-%m-%d %H:%M:%S") << "\n\n";
 
         // Summary statistics
         if (!all_metrics_.empty()) {
