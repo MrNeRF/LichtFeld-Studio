@@ -836,5 +836,5 @@ Masking/nonzero suite (95 tests) = 95/95 PASSED
 
 Gate: no speed/quality regression; G2 allocs held; densify grew bicycle to 500k cleanly.
 
-- **Commit:** `d8acaf75`
+- **Commit:** `b961d6d8`
 
