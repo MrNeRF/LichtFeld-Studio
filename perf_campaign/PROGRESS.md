@@ -300,3 +300,15 @@
   4. Confirm viewport still renders live training splats without a full model copy.
 
 - **Commit:** `013f6e04`
+
+---
+## WAVE 1 COMBINED (post-merge, commit 0d652d45) — 3-run medians
+| Metric | Baseline | Wave 1 | Δ |
+|---|---:|---:|---|
+| wall_s | 9.00 | 8.94 | −0.7% |
+| steady_ms/iter | 4.129 | 4.085 | **−1.1%** |
+| steady_allocs/iter | 5.05 | **0.05** | **G2 met (−99%)** |
+| peak VRAM MiB | 1156.3 | 1152.6 | −3.7 (sort HWM +22 offset by densify fix) |
+| B/splat | 429.0 | 429.0 | Phase 2 pending |
+| GUI start exportable (5M cap) | 1182.6 MiB | 141.9 MiB | **−1040.6 MiB** (G7) |
+All 20 campaign tests green. ISS-007 open (manual GUI validation).
