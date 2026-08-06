@@ -754,3 +754,65 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+---
+
+## Task S — Mask-path fusion (worker S, branch lfs-elite-fS)
+
+- **Branch:** `lfs-elite-fS`
+- **Change:** Fuse trainer mask preprocess chains (`trainer.cpp` SegmentAndIgnore
+  `masked_fill` remap, opacity `1-mask`+`pow`, AlphaConsistent `abs/sign/mean`) into
+  single CUDA kernels. Grow-only `MaskPreprocessWorkspace` on Trainer for
+  allocation-free ROI/segment steady state. **Did not touch** SSIM workspaces.
+- **Files:**
+  - new: `src/training/kernels/mask_preprocess.{cu,hpp}`
+  - `src/training/losses/mask_loss.{hpp,cpp}` (helpers + workspace)
+  - `src/training/trainer.{hpp,cpp}` (call site + workspace member)
+  - `tests/test_mask_preprocess_fusion.cpp`
+- **Fail evidence (TDD):** before API, tests fail to compile:
+  ```
+  tests/test_mask_preprocess_fusion.cpp: fatal error:
+    'training/kernels/mask_preprocess.hpp' / MaskPreprocessWorkspace not found
+  # conceptual: multi-kernel masked_fill×2–3 + full + sub + pow + mean per step
+  ```
+- **Pass evidence:**
+  ```
+  [==========] Running 7 tests from 1 test suite.
+  [  PASSED  ] 7 tests.  (MaskPreprocessFusionTest.*)
+  SegmentAndIgnorePhotometricMatchesReference
+  SegmentOpacityPenaltyMatchesReference
+  SegmentAndIgnoreOpacityPenaltyMatchesReference
+  SoftFloatOpacityPenaltyMatchesReference
+  AlphaConsistentMatchesReference
+  SteadyStateRoiSegmentPathIsAllocationFree  (alloc_delta=0 after warm)
+  BinaryGt0PhotoWithRoiMatchesCompose
+  Also: MaskLossTest.* + PhotometricHygieneTest.* — 29/29 PASSED
+  ```
+- **Dual-workload gate (flock, 3-run medians vs Wave 2):**
+
+  **Bonsai** (2000 iters) — `perf_campaign/runs/mask_fusion_bonsai/`:
+
+  | metric | Wave 2 | after mask fusion | Δ |
+  |---|---:|---:|---|
+  | wall_s (med) | ~8.9 | **8.90** | flat |
+  | steady_ms/iter | 4.065 | **4.058** | −0.2% |
+  | steady_allocs/iter | 0.05 | **0.05** | 0 |
+  | peak VRAM MiB | 938.3 | **938.1** | flat |
+  | B/splat | 429.0 | 429.0 | 0 |
+  | last_loss range | ~0.03–0.04 | 0.028–0.033 | ok |
+
+  **Bicycle canary** (7000 iters) — `perf_campaign/runs/mask_fusion_bicycle/`:
+
+  | metric | Wave 2 | after mask fusion | Δ |
+  |---|---:|---:|---|
+  | wall_s (med) | — | **30.56** | — |
+  | steady_ms/iter | 3.208 | **3.209** | +0.0% flat |
+  | steady_allocs/iter | 0.04 | **0.04** | 0 |
+  | peak VRAM MiB | 1026.3 | **994.1** | −32 (quiet GPU variance) |
+  | last_loss range | 0.079–0.107 | **0.080–0.128** | high-variance OK |
+
+  Gate: no speed regression; G2 allocs held; quality canary healthy (densify to
+  500k, no NaN/collapse). Default bonsai/bicycle paths do not enable mask_mode;
+  correctness is covered by unit equivalence tests.
+
+- **Commit:** `a7d194f3`

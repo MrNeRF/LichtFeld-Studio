@@ -16,6 +16,7 @@
 #include "dataset.hpp"
 #include "kernels/depth_loss.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "losses/mask_loss.hpp"
 #include "losses/photometric_loss.hpp"
 #include "metrics/metrics.hpp"
 #include "optimizer/scheduler.hpp"
@@ -552,6 +553,10 @@ namespace lfs::training {
         lfs::training::kernels::MaskedFusedL1SSIMWorkspace masked_fused_workspace_;
         lfs::training::kernels::DecoupledFusedL1SSIMWorkspace decoupled_fused_workspace_;
         lfs::training::kernels::MaskedDecoupledFusedL1SSIMWorkspace masked_decoupled_fused_workspace_;
+
+        // Mask preprocess workspace: photometric weight / opacity penalty / alpha-consistent
+        // (fused kernels; grow-only for allocation-free steady state when masks/ROI on).
+        lfs::training::losses::MaskPreprocessWorkspace mask_preprocess_workspace_;
 
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;
