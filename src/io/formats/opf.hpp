@@ -78,7 +78,7 @@ namespace lfs::io::opf {
         std::filesystem::path colors_path;
         std::uint32_t point_count = 0;
         std::array<float, 16> node_matrix{1, 0, 0, 0, 0, 1, 0, 0,
-                                           0, 0, 1, 0, 0, 0, 0, 1};
+                                          0, 0, 1, 0, 0, 0, 0, 1};
     };
 
     struct SceneReferenceFrame;

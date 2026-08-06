@@ -69,12 +69,12 @@ namespace lfs::vis::gui {
 
     } // namespace
 
-    [[nodiscard]] const char* getDatasetTypeName(const std::filesystem::path& path) {
+    [[nodiscard]] std::string getDatasetTypeName(const std::filesystem::path& path) {
         switch (lfs::io::Loader::getDatasetType(path)) {
         case lfs::io::DatasetType::COLMAP: return "COLMAP";
         case lfs::io::DatasetType::Transforms: return "NeRF/Blender";
         case lfs::io::DatasetType::OPF: return "OPF";
-        default: return "Dataset";
+        default: return LOC(lichtfeld::Strings::Training::Section::DATASET);
         }
     }
 
@@ -1712,6 +1712,8 @@ namespace lfs::vis::gui {
                     {
                         const std::lock_guard lock(import_state_.mutex);
                         if (result) {
+                            for (const auto& warning : result->warnings)
+                                LOG_WARN("Dataset import warning: {}", warning);
                             import_state_.load_result = std::move(*result);
                             import_state_.success = true;
                             import_state_.stage = LOC(lichtfeld::Strings::Runtime::TASK_APPLYING);

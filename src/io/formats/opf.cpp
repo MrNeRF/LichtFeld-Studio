@@ -574,7 +574,9 @@ namespace lfs::io::opf {
                 for (size_t axis = 0; axis < 3; ++axis)
                     p[axis] = static_cast<float>(p[axis] * frame->scale[axis] + frame->shift[axis]);
             }
-            xyz[i * 3] = p[0]; xyz[i * 3 + 1] = p[1]; xyz[i * 3 + 2] = p[2];
+            xyz[i * 3] = p[0];
+            xyz[i * 3 + 1] = p[1];
+            xyz[i * 3 + 2] = p[2];
             rgb[i * 3] = static_cast<float>(rgba[i * 4]) / 255.0f;
             rgb[i * 3 + 1] = static_cast<float>(rgba[i * 4 + 1]) / 255.0f;
             rgb[i * 3 + 2] = static_cast<float>(rgba[i * 4 + 2]) / 255.0f;
@@ -599,7 +601,7 @@ namespace lfs::io::opf {
                               resource.resolved_path);
         }
         if (!root.is_object() || root.value("format", std::string{}) !=
-                                      "application/opf-scene-reference-frame+json")
+                                     "application/opf-scene-reference-frame+json")
             return invalid(resource.resolved_path, "Unsupported OPF scene reference frame format.");
         const auto it = root.find("base_to_canonical");
         if (it == root.end() || !it->is_object())
@@ -777,11 +779,11 @@ namespace lfs::io::opf {
                                     sensor.height,
                                     sensor.model,
                                     sensor.principal_point,
-                                     sensor.focal_length,
-                                     sensor.radial_distortion,
-                                     sensor.tangential_distortion,
-                                     to_calibrated_pose(calibrated),
-                                     image_it->second->resolved_path};
+                                    sensor.focal_length,
+                                    sensor.radial_distortion,
+                                    sensor.tangential_distortion,
+                                    to_calibrated_pose(calibrated),
+                                    image_it->second->resolved_path};
             result.push_back(std::move(imported));
         }
         return result;
@@ -831,7 +833,7 @@ namespace lfs::io::opf {
         data._center_y = static_cast<float>(camera.principal_point[1]);
         data._image_name = camera.uri;
         data._image_path = camera.resolved_image_path.empty() ? std::filesystem::path(camera.uri)
-                                                               : camera.resolved_image_path;
+                                                              : camera.resolved_image_path;
         data._camera_model_type = lfs::core::CameraModelType::PINHOLE;
         data._width = static_cast<int>(camera.width);
         data._height = static_cast<int>(camera.height);
