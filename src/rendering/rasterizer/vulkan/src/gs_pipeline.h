@@ -9,6 +9,7 @@
 #include <exception>
 #include <functional>
 #include <map>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -20,6 +21,7 @@
 
 #include <cassert>
 
+#include "barrier_planner.h"
 #include "buffer.h"
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -28,6 +30,12 @@ class VulkanGSPipeline {
 public:
     using TimerCallback = std::function<void(const std::vector<std::pair<size_t, double>>&)>;
     using CpuTimerCallback = std::function<void(std::string_view, double)>;
+
+    // Epic #1496: binding + usage tag for the planner-driven dispatch path.
+    struct TaggedBinding {
+        _VulkanBuffer buffer;
+        lfs::rendering::vulkan::BufferUse use = lfs::rendering::vulkan::BufferUse::ComputeRead;
+    };
 
     VulkanGSPipeline();
     ~VulkanGSPipeline() noexcept;
@@ -51,6 +59,18 @@ public:
     // (including rejected submit). Timeline publication bits must match
     // wasTimelineSignalSubmitted.
     [[nodiscard]] const lfs::rendering::SubmissionState& lastSubmissionState() const noexcept;
+
+    // Epic #1496: adopt/drop external parent VkBuffers for whole-buffer planner state
+    // (shared-scratch import path). Passthrough to BufferBarrierPlanner::track/forget.
+    void trackExternalParent(VkBuffer buffer);
+    void untrackExternalParent(VkBuffer buffer);
+    // Test / audit access to the host-side planner (not a render-path seam).
+    [[nodiscard]] lfs::rendering::vulkan::BufferBarrierPlanner& barrierPlanner() noexcept;
+    [[nodiscard]] const lfs::rendering::vulkan::BufferBarrierPlanner& barrierPlanner() const noexcept;
+
+    // Epic #1496 §3.2: plan transfer/fill/host accesses and emit ≤1 barrier2 when non-empty.
+    // Requires an active command batch. No trailing barrier after the transfer op itself.
+    void planTransfer(std::span<const lfs::rendering::vulkan::DeclaredAccess> accesses);
 
     void createBuffer(size_t size, _VulkanBuffer& buffer);
     void destroyBuffer(_VulkanBuffer& buffer);
@@ -188,6 +208,10 @@ protected:
     // authorizes replaceFenceSignaled — policy stays NoResetNoReplacement.
     std::atomic<bool> gpu_wait_quarantined_{false};
 
+    // Epic #1496: host-side buffer hazard planner. Reconstructed in
+    // initializeExternal with the real queue_family_index.
+    lfs::rendering::vulkan::BufferBarrierPlanner barrier_planner_{};
+
     // Vulkan objects
     VkInstance instance;
     VkPhysicalDevice physical_device;
@@ -308,8 +332,36 @@ protected:
         _ComputePipeline& pipeline,
         const std::vector<_VulkanBuffer>& buffers);
 
+    // Epic #1496 §3.1: planner-driven dispatch (plan once, emit ≤1 barrier2, shared bind path).
+    void executeCompute(
+        std::vector<std::pair<size_t, size_t>> dims,
+        const void* uniformsPtr, size_t uniformSize,
+        _ComputePipeline& pipeline,
+        const std::vector<TaggedBinding>& bindings);
+    void executeComputeIndirect(
+        const _VulkanBuffer& indirect_buffer,
+        VkDeviceSize indirect_offset,
+        const void* uniformsPtr, size_t uniformSize,
+        _ComputePipeline& pipeline,
+        const std::vector<TaggedBinding>& bindings);
+
 private:
     void destroyComputePipeline(_ComputePipeline& pipeline);
+
+    // Shared bind / push-descriptor / push-constants / dispatch recording (batch must be active).
+    void recordComputeDispatch(
+        std::vector<std::pair<size_t, size_t>> dims,
+        const void* uniformsPtr, size_t uniformSize,
+        _ComputePipeline& pipeline,
+        const std::vector<_VulkanBuffer>& buffers);
+    void recordComputeDispatchIndirect(
+        const _VulkanBuffer& indirect_buffer,
+        VkDeviceSize indirect_offset,
+        const void* uniformsPtr, size_t uniformSize,
+        _ComputePipeline& pipeline,
+        const std::vector<_VulkanBuffer>& buffers);
+    // Emit planned buffer barriers as a single vkCmdPipelineBarrier2 (0 or 1 call).
+    void emitPlannedBufferBarriers(const std::vector<VkBufferMemoryBarrier2>& barriers);
 };
 
 class [[nodiscard]] DeviceGuard {

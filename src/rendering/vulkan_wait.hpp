@@ -108,6 +108,14 @@ namespace lfs::rendering {
         PFN_vkQueueSubmit queue_submit = nullptr;
         PFN_vkQueueWaitIdle queue_wait_idle = nullptr;
 
+        // Compute dispatch / transfer recording (epic #1496 tagged path + untagged seam)
+        PFN_vkCmdBindPipeline cmd_bind_pipeline = nullptr;
+        PFN_vkCmdPushConstants cmd_push_constants = nullptr;
+        PFN_vkCmdDispatch cmd_dispatch = nullptr;
+        PFN_vkCmdDispatchIndirect cmd_dispatch_indirect = nullptr;
+        PFN_vkCmdFillBuffer cmd_fill_buffer = nullptr;
+        PFN_vkCmdCopyBuffer cmd_copy_buffer = nullptr;
+
         // Fence lifecycle (reset/pre-wait row + post-submit fence path)
         PFN_vkResetFences reset_fences = nullptr;
         PFN_vkCreateFence create_fence = nullptr;

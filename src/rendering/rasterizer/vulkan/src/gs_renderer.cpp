@@ -792,11 +792,19 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
         buffers.lod_compact_counts.deviceBuffer.buffer == VK_NULL_HANDLE)
         return;
 
-    bufferMemoryBarrier({{buffers.lod_gpu_counts.deviceBuffer, COMPUTE_SHADER_WRITE},
-                         {buffers.lod_compact_counts.deviceBuffer, COMPUTE_SHADER_WRITE},
-                         {buffers.lod_compact_protected.deviceBuffer, COMPUTE_SHADER_WRITE},
-                         {buffers.lod_compact_misses.deviceBuffer, COMPUTE_SHADER_WRITE}},
-                        TRANSFER_READ);
+    using lfs::rendering::vulkan::BufferUse;
+    using lfs::rendering::vulkan::DeclaredAccess;
+
+    // Epic #1496 §3.2: plan TransferRead sources + TransferWrite dst before copies.
+    // Readback buffer is untracked → conservative rows (expected).
+    const DeclaredAccess pre_copy[] = {
+        {.buffer = &buffers.lod_gpu_counts.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &buffers.lod_compact_counts.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &buffers.lod_compact_protected.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &buffers.lod_compact_misses.deviceBuffer, .use = BufferUse::TransferRead},
+        {.buffer = &lod_selection_readback_buffer_, .use = BufferUse::TransferWrite},
+    };
+    planTransfer(std::span{pre_copy});
 
     const auto copy_region = [&](const _VulkanBuffer& src, const size_t dst_word,
                                  const size_t words) {
@@ -809,16 +817,27 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
                             copy.dstOffset,
                             copy.size,
                             "LOD-selection readback destination");
-        vkCmdCopyBuffer(command_buffer, src.buffer,
-                        lod_selection_readback_buffer_.buffer, 1, &copy);
+        if (vulkan_dispatch_.cmd_copy_buffer == nullptr) {
+            lfs::rendering::throw_renderer_contract(
+                "recordLodSelectionReadback requires VulkanDispatch::cmd_copy_buffer",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        vulkan_dispatch_.cmd_copy_buffer(command_buffer, src.buffer,
+                                         lod_selection_readback_buffer_.buffer, 1, &copy);
     };
     copy_region(buffers.lod_gpu_counts.deviceBuffer, 0, 2);
     copy_region(buffers.lod_compact_counts.deviceBuffer, 2, 4);
     copy_region(buffers.lod_compact_protected.deviceBuffer, 6, kLodCompactProtectedCap);
     copy_region(buffers.lod_compact_misses.deviceBuffer, 6 + kLodCompactProtectedCap,
                 2 * kLodCompactMissCap);
-    bufferMemoryBarrier({{lod_selection_readback_buffer_, TRANSFER_WRITE}},
-                        HOST_READ);
+
+    // Host coherence still requires fence/timeline wait at endCommandBatch (§3.2 G3).
+    const DeclaredAccess host_read{
+        .buffer = &lod_selection_readback_buffer_,
+        .use = BufferUse::HostRead,
+    };
+    planTransfer(std::span{&host_read, 1});
+
     lod_selection_readback_pending_ = true;
     lod_selection_readback_signal_ = VK_NULL_HANDLE;
     lod_selection_readback_value_ = 0;
@@ -1020,25 +1039,20 @@ void VulkanGSRenderer::executeMapLodIndices(const std::uint32_t lod_count,
     } map_uniforms{lod_count, chunk_splats, invalid_page, 0u};
 
     auto& out_indices = resizeDeviceBuffer(buffers.lod_indices, lod_count);
-    bufferMemoryBarrier({
-                            {buffers.lod_logical_indices.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {chunk_to_page, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {out_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
 
+    // Tags from lod_map_indices.slang: logical/chunk_to_page StructuredBuffer (read),
+    // out_indices RWStructuredBuffer (write). No post-barrier: projection still has
+    // legacy pre-barriers on these outputs (§3.4.5).
+    using lfs::rendering::vulkan::BufferUse;
     executeCompute(
         {{lod_count, 64}},
         &map_uniforms, sizeof(map_uniforms),
         pipeline_lod_map_indices,
-        {
-            buffers.lod_logical_indices.deviceBuffer,
-            chunk_to_page,
-            out_indices,
+        std::vector<TaggedBinding>{
+            {buffers.lod_logical_indices.deviceBuffer, BufferUse::ComputeRead},
+            {chunk_to_page, BufferUse::ComputeRead},
+            {out_indices, BufferUse::ComputeWrite},
         });
-
-    bufferMemoryBarrier({{out_indices, COMPUTE_SHADER_WRITE}},
-                        COMPUTE_SHADER_READ);
 }
 
 void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms& uniforms,
@@ -1074,49 +1088,26 @@ void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms
     // No sentinel fill of out_indices/out_logical_indices: projection gates on
     // the appended count in lod_gpu_counts[0], so entries past the valid prefix
     // are never read.
-    bufferMemoryBarrier({
-                            {node_bounds, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {node_links, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {chunk_to_page, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {counts, TRANSFER_WRITE},
-                            {out_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {out_logical_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {out_weights, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {chunk_touch, TRANSFER_WRITE},
-                            {out_levels, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {page_age, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {page_frames, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {page_to_chunk, TRANSFER_COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
-
+    // Tags from lod_select_threshold.slang bindings 0–11.
+    using lfs::rendering::vulkan::BufferUse;
     executeCompute(
         {{uniforms.physical_node_count, 128}},
         &uniforms, sizeof(uniforms),
         pipeline_lod_select_threshold,
-        {
-            node_bounds,
-            node_links,
-            chunk_to_page,
-            counts,
-            out_indices,
-            out_logical_indices,
-            out_weights,
-            chunk_touch,
-            out_levels,
-            page_age,
-            page_frames,
-            page_to_chunk,
+        std::vector<TaggedBinding>{
+            {node_bounds, BufferUse::ComputeRead},
+            {node_links, BufferUse::ComputeRead},
+            {chunk_to_page, BufferUse::ComputeRead},
+            {counts, BufferUse::ComputeReadWrite},
+            {out_indices, BufferUse::ComputeWrite},
+            {out_logical_indices, BufferUse::ComputeWrite},
+            {out_weights, BufferUse::ComputeWrite},
+            {chunk_touch, BufferUse::ComputeReadWrite},
+            {out_levels, BufferUse::ComputeWrite},
+            {page_age, BufferUse::ComputeRead},
+            {page_frames, BufferUse::ComputeRead},
+            {page_to_chunk, BufferUse::ComputeRead},
         });
-
-    bufferMemoryBarrier({
-                            {counts, COMPUTE_SHADER_WRITE},
-                            {out_indices, COMPUTE_SHADER_WRITE},
-                            {out_logical_indices, COMPUTE_SHADER_WRITE},
-                            {out_weights, COMPUTE_SHADER_WRITE},
-                            {out_levels, COMPUTE_SHADER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ);
 
     // Phase D: compact chunk_touch on the GPU so the readback and the CPU
     // request pass scale with the working set, not the logical chunk count.
@@ -1131,18 +1122,16 @@ void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms
         .miss_capacity = kLodCompactMissCap,
         .pad0 = 0,
     };
-    bufferMemoryBarrier({{chunk_touch, COMPUTE_SHADER_WRITE},
-                         {compact_counts, TRANSFER_WRITE}},
-                        COMPUTE_SHADER_READ_WRITE);
+    // Tags from lod_compact_touch.slang: chunk_touch read; counts/protected/misses write.
     executeCompute(
         {{uniforms.logical_chunk_count, 256}},
         &compact_uniforms, sizeof(compact_uniforms),
         pipeline_lod_compact_touch,
-        {
-            chunk_touch,
-            compact_counts,
-            compact_protected,
-            compact_misses,
+        std::vector<TaggedBinding>{
+            {chunk_touch, BufferUse::ComputeRead},
+            {compact_counts, BufferUse::ComputeWrite},
+            {compact_protected, BufferUse::ComputeWrite},
+            {compact_misses, BufferUse::ComputeWrite},
         });
     recordLodSelectionReadback(buffers, uniforms.output_capacity);
 }

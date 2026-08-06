@@ -167,6 +167,12 @@ namespace lfs::rendering {
         d.cmd_write_timestamp = ::vkCmdWriteTimestamp;
         d.queue_submit = ::vkQueueSubmit;
         d.queue_wait_idle = ::vkQueueWaitIdle;
+        d.cmd_bind_pipeline = ::vkCmdBindPipeline;
+        d.cmd_push_constants = ::vkCmdPushConstants;
+        d.cmd_dispatch = ::vkCmdDispatch;
+        d.cmd_dispatch_indirect = ::vkCmdDispatchIndirect;
+        d.cmd_fill_buffer = ::vkCmdFillBuffer;
+        d.cmd_copy_buffer = ::vkCmdCopyBuffer;
         d.reset_fences = ::vkResetFences;
         d.create_fence = ::vkCreateFence;
         d.destroy_fence = ::vkDestroyFence;

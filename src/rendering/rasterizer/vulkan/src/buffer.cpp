@@ -288,6 +288,9 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     if (current_vram > peak_vram)
         peak_vram = current_vram;
 
+    // Epic #1496: owned allocations are tracked whole-buffer from create.
+    barrier_planner_.track(buffer.buffer);
+
     // Publish per-buffer live bytes so the HUD can split the Vulkan footprint into
     // named rows (xyz_ws / shN / sorting_keys / ...). nullptr label = no instrumentation.
     if (buffer.label) {
@@ -309,6 +312,8 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
             LFS_SOURCE_SITE_CURRENT());
     }
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
+        // Epic #1496: drop planner state before handle reuse can reappear.
+        barrier_planner_.forget(buffer.buffer);
         waitForPendingBatch();
         vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
         if (current_vram < buffer.allocSize) {
@@ -401,7 +406,19 @@ _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<T>& buffer, size_t new
     {
         DEVICE_GUARD;
         validateFillRange(deviceBuffer, 0, deviceBuffer.size, "clearDeviceBuffer");
-        vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, deviceBuffer.offset, deviceBuffer.size, 0);
+        // Epic #1496 §3.2 / §3.4.4: record TransferWrite before the fill.
+        const lfs::rendering::vulkan::DeclaredAccess fill_access{
+            .buffer = &deviceBuffer,
+            .use = lfs::rendering::vulkan::BufferUse::TransferWrite,
+        };
+        planTransfer(std::span{&fill_access, 1});
+        if (vulkan_dispatch_.cmd_fill_buffer == nullptr) {
+            lfs::rendering::throw_renderer_contract(
+                "clearDeviceBuffer requires VulkanDispatch::cmd_fill_buffer",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        vulkan_dispatch_.cmd_fill_buffer(
+            command_buffer, deviceBuffer.buffer, deviceBuffer.offset, deviceBuffer.size, 0);
     }
 
     return deviceBuffer;
@@ -441,7 +458,18 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
                 size -= prefix;
                 DEVICE_GUARD;
                 validateFillRange(deviceBuffer, offset, size, "resizeAndCopyDeviceBuffer tail clear");
-                vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, deviceBuffer.offset + offset, size, 0u);
+                const lfs::rendering::vulkan::DeclaredAccess fill_access{
+                    .buffer = &deviceBuffer,
+                    .use = lfs::rendering::vulkan::BufferUse::TransferWrite,
+                };
+                planTransfer(std::span{&fill_access, 1});
+                if (vulkan_dispatch_.cmd_fill_buffer == nullptr) {
+                    lfs::rendering::throw_renderer_contract(
+                        "resizeAndCopyDeviceBuffer requires VulkanDispatch::cmd_fill_buffer",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                vulkan_dispatch_.cmd_fill_buffer(
+                    command_buffer, deviceBuffer.buffer, deviceBuffer.offset + offset, size, 0u);
                 HOST_GUARD; // will apply fence
             }
         }
@@ -471,7 +499,18 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
             copyRegion.dstOffset = 0;
             copyRegion.size = old_byte_size;
 
-            vkCmdCopyBuffer(
+            const lfs::rendering::vulkan::DeclaredAccess copy_accesses[] = {
+                {.buffer = &deviceBuffer, .use = lfs::rendering::vulkan::BufferUse::TransferRead},
+                {.buffer = &newBuffer, .use = lfs::rendering::vulkan::BufferUse::TransferWrite},
+            };
+            planTransfer(std::span{copy_accesses});
+
+            if (vulkan_dispatch_.cmd_copy_buffer == nullptr) {
+                lfs::rendering::throw_renderer_contract(
+                    "resizeAndCopyDeviceBuffer requires VulkanDispatch::cmd_copy_buffer",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            vulkan_dispatch_.cmd_copy_buffer(
                 command_buffer,
                 deviceBuffer.buffer,
                 newBuffer.buffer,
@@ -490,7 +529,17 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
                 size -= prefix;
 
                 validateFillRange(newBuffer, offset, size, "resizeAndCopyDeviceBuffer new tail clear");
-                vkCmdFillBuffer(
+                const lfs::rendering::vulkan::DeclaredAccess fill_access{
+                    .buffer = &newBuffer,
+                    .use = lfs::rendering::vulkan::BufferUse::TransferWrite,
+                };
+                planTransfer(std::span{&fill_access, 1});
+                if (vulkan_dispatch_.cmd_fill_buffer == nullptr) {
+                    lfs::rendering::throw_renderer_contract(
+                        "resizeAndCopyDeviceBuffer requires VulkanDispatch::cmd_fill_buffer",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                vulkan_dispatch_.cmd_fill_buffer(
                     command_buffer,
                     newBuffer.buffer,
                     newBuffer.offset + offset,
