@@ -3433,6 +3433,10 @@ namespace lfs::vis {
         if (shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
             return;
         }
+        // All region views below collapse to this parent in the barrier planner;
+        // without adoption the whole shared-scratch path stays conservative
+        // (spec §2.2, sweep_d F-D03).
+        renderer_.trackExternalParent(shared_scratch_.imported_buffer.buffer);
 
         std::size_t cursor = 0;
         const auto bind_bytes = [&](auto& typed_buffer, const std::size_t bytes) {
@@ -3623,6 +3627,7 @@ namespace lfs::vis {
         if (shared_buffer == VK_NULL_HANDLE) {
             return;
         }
+        renderer_.untrackExternalParent(shared_buffer);
         const auto detach = [shared_buffer](_VulkanBuffer& dev) {
             if (dev.buffer != shared_buffer || dev.allocation != VK_NULL_HANDLE) {
                 return;
