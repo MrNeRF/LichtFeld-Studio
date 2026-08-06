@@ -18,6 +18,7 @@
 #include "io/formats/rad.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rasterizer/vulkan/src/indirect_layout.h"
+#include "rendering/rasterizer/vulkan/src/viewport_scratch_bucket.h"
 #include "rendering/vulkan_wait.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
@@ -3091,8 +3092,15 @@ namespace lfs::vis {
         const std::size_t visible_capacity,
         const bool macro_chain,
         const std::size_t sort_capacity,
-        const std::size_t num_pixels,
-        const std::size_t num_tiles) const {
+        const std::size_t image_width,
+        const std::size_t image_height) const {
+        // Callers pass logical extents; pixel/tile rows size from the 64-px bucket.
+        const auto scratch_bucket = lfs::rendering::vulkan::viewportScratchBucket(
+            static_cast<std::uint32_t>(image_width),
+            static_cast<std::uint32_t>(image_height));
+        const std::size_t alloc_pixels = scratch_bucket.alloc_pixels;
+        const std::size_t alloc_tiles = scratch_bucket.alloc_tiles;
+
         std::size_t cursor = 0;
         const auto add = [&](const std::size_t bytes) {
             cursor = alignUp(cursor, kRegionAlignment);
@@ -3102,14 +3110,14 @@ namespace lfs::vis {
             add(count * elem_size);
         };
         const std::size_t dense_batch_capacity =
-            denseTileBatchCapacity(HIGS_DEPTH_WAVE_INSTANCES, num_tiles);
+            denseTileBatchCapacity(HIGS_DEPTH_WAVE_INSTANCES, alloc_tiles);
         // CUDA training can require N-wide sort scratch while the Vulkan wave
         // chain is fixed at K. Both consumers share this arena layout.
         const std::size_t sort_region_elems = std::max(num_splats, sort_capacity);
         // Macro chain: per-splat outputs live at compact slots (visible
         // capacity), and the legacy-only buffers are not part of the frame.
         const std::size_t per_visible = macro_chain ? visible_capacity : num_splats;
-        const std::size_t cumsum_elements = std::max(per_visible, num_tiles);
+        const std::size_t cumsum_elements = std::max(per_visible, alloc_tiles);
 
         if (!macro_chain) {
             add_count(num_splats, sizeof(std::uint32_t)); // primitive_depth_keys
@@ -3138,17 +3146,17 @@ namespace lfs::vis {
         add_count(sort_region_elems, sizeof(std::int32_t));                                                           // sorting_gauss_idx_1
         add_count(sort_region_elems, sizeof(std::int32_t));                                                           // sorting_gauss_idx_2
         add_count(1, sizeof(std::uint32_t));                                                                          // tile_sort_count
-        add_count(num_tiles + 1, sizeof(std::int32_t));                                                               // tile_ranges
-        add_count(num_tiles, sizeof(std::int32_t));                                                                   // tile_batch_counts
-        add_count(num_tiles, sizeof(std::int32_t));                                                                   // tile_batch_offsets
+        add_count(alloc_tiles + 1, sizeof(std::int32_t));                                                             // tile_ranges
+        add_count(alloc_tiles, sizeof(std::int32_t));                                                                 // tile_batch_counts
+        add_count(alloc_tiles, sizeof(std::int32_t));                                                                 // tile_batch_offsets
         add_count(indirect::TileBatchDispatch::kLayout.word_count, sizeof(std::uint32_t));                            // tile_batch_dispatch_args
         add_count(4 * dense_batch_capacity, sizeof(std::uint32_t));                                                   // tile_batch_descriptors
         add_count(4 * dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(float));                                // tile_batch_pixel_state
         add_count(dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(std::int32_t));                             // tile_batch_n_contributors
-        add_count(4 * num_pixels, sizeof(float));                                                                     // pixel_state
-        add_count(num_pixels, sizeof(float));                                                                         // pixel_depth
-        add_count(num_pixels, sizeof(float));                                                                         // pixel_depth_weight
-        add_count(num_pixels, sizeof(std::int32_t));                                                                  // n_contributors
+        add_count(4 * alloc_pixels, sizeof(float));                                                                   // pixel_state
+        add_count(alloc_pixels, sizeof(float));                                                                       // pixel_depth
+        add_count(alloc_pixels, sizeof(float));                                                                       // pixel_depth_weight
+        add_count(alloc_pixels, sizeof(std::int32_t));                                                                // n_contributors
         add_count(_CEIL_DIV(cumsum_elements, std::size_t{1024}), sizeof(std::int32_t));                               // _cumsum_blockSums
         add_count(_CEIL_DIV(_CEIL_DIV(cumsum_elements, std::size_t{1024}), std::size_t{1024}), sizeof(std::int32_t)); // _cumsum_blockSums2
         add_count(8 * 256, sizeof(std::int32_t));                                                                     // _sorting_histogram
@@ -3279,6 +3287,10 @@ namespace lfs::vis {
             }
             shared_scratch_.installed_in_training_arena = true;
             publish_capacity();
+            LOG_DEBUG(
+                "vksplat.scratch.arena.grow bytes={}MiB generation={} (stable address)",
+                shared_scratch_.bytes >> 20,
+                shared_scratch_.generation);
             LOG_INFO("VkSplat shared scratch arena grew to {} MiB (stable address)",
                      shared_scratch_.bytes >> 20);
             return {};
@@ -3335,6 +3347,11 @@ namespace lfs::vis {
 
         publish_capacity();
 
+        LOG_DEBUG(
+            "vksplat.scratch.arena.alloc bytes={}MiB reserve={}MiB generation={}",
+            shared_scratch_.bytes >> 20,
+            reserve_bytes >> 20,
+            shared_scratch_.generation);
         LOG_INFO("VkSplat shared scratch arena: {} MiB committed, {} MiB reserved (grows in place)",
                  shared_scratch_.bytes >> 20,
                  reserve_bytes >> 20);
@@ -3373,6 +3390,10 @@ namespace lfs::vis {
         ++shared_scratch_.generation;
         lfs::diagnostics::VramProfiler::instance().setGauge(
             "vram.audit.shared_scratch.capacity", static_cast<double>(shared_scratch_.bytes));
+        LOG_DEBUG(
+            "vksplat.scratch.arena.reimport bytes={}MiB generation={}",
+            shared_scratch_.bytes >> 20,
+            shared_scratch_.generation);
         LOG_INFO("VkSplat shared scratch re-imported after in-place grow: {} MiB", shared_scratch_.bytes >> 20);
         return {};
     }
@@ -3393,13 +3414,7 @@ namespace lfs::vis {
         if (height != 0 && width > (std::numeric_limits<std::size_t>::max() / height)) {
             return std::unexpected("VkSplat training shared-scratch prime viewport size overflows size_t");
         }
-        const std::size_t num_pixels = width * height;
-        const std::size_t tiles_x = (width + TILE_WIDTH - 1) / TILE_WIDTH;
-        const std::size_t tiles_y = (height + TILE_HEIGHT - 1) / TILE_HEIGHT;
-        if (tiles_y != 0 && tiles_x > (std::numeric_limits<std::size_t>::max() / tiles_y)) {
-            return std::unexpected("VkSplat training shared-scratch prime tile count overflows size_t");
-        }
-        const std::size_t num_tiles = tiles_x * tiles_y;
+        // estimateSharedScratchBytes buckets pixel/tile rows from logical extents.
         const std::size_t sort_capacity =
             std::max(num_splats, std::size_t{HIGS_DEPTH_WAVE_INSTANCES});
         const std::size_t required_shared_scratch =
@@ -3407,8 +3422,8 @@ namespace lfs::vis {
                                        num_splats,
                                        false,
                                        sort_capacity,
-                                       num_pixels,
-                                       num_tiles);
+                                       width,
+                                       height);
 
         releasePrivateScratchBuffers();
         return ensureSharedScratchArena(context, required_shared_scratch);
@@ -3419,11 +3434,32 @@ namespace lfs::vis {
         const std::size_t visible_capacity,
         const bool macro_chain,
         const std::size_t sort_capacity,
-        const std::size_t num_pixels,
-        const std::size_t num_tiles) {
+        const std::size_t image_width,
+        const std::size_t image_height) {
         if (shared_scratch_.imported_buffer.buffer == VK_NULL_HANDLE) {
             return;
         }
+        // Callers pass logical extents; pixel/tile rows size from the 64-px bucket.
+        // Must mirror estimateSharedScratchBytes exactly.
+        const auto scratch_bucket = lfs::rendering::vulkan::viewportScratchBucket(
+            static_cast<std::uint32_t>(image_width),
+            static_cast<std::uint32_t>(image_height));
+        const std::size_t alloc_pixels = scratch_bucket.alloc_pixels;
+        const std::size_t alloc_tiles = scratch_bucket.alloc_tiles;
+        if (scratch_bucket.alloc_w != scratch_bucket_alloc_w_ ||
+            scratch_bucket.alloc_h != scratch_bucket_alloc_h_) {
+            LOG_DEBUG(
+                "vksplat.scratch.bucket logical={}x{} alloc={}x{} pixels_cap={} tiles_cap={}",
+                image_width,
+                image_height,
+                scratch_bucket.alloc_w,
+                scratch_bucket.alloc_h,
+                alloc_pixels,
+                alloc_tiles);
+            scratch_bucket_alloc_w_ = scratch_bucket.alloc_w;
+            scratch_bucket_alloc_h_ = scratch_bucket.alloc_h;
+        }
+
         // All region views below collapse to this parent in the barrier planner;
         // without adoption the whole shared-scratch path stays conservative
         // (spec §2.2, sweep_d F-D03).
@@ -3448,7 +3484,7 @@ namespace lfs::vis {
         // Mirror estimateSharedScratchBytes exactly; the two walk the same
         // cursor so every region lands at the estimated offset.
         const std::size_t per_visible = macro_chain ? visible_capacity : num_splats;
-        const std::size_t cumsum_elements = std::max(per_visible, num_tiles);
+        const std::size_t cumsum_elements = std::max(per_visible, alloc_tiles);
         if (!macro_chain) {
             bind_count(buffers_.primitive_depth_keys, num_splats);
             bind_count(buffers_.tiles_touched, num_splats);
@@ -3480,21 +3516,21 @@ namespace lfs::vis {
         bind_count(buffers_.sorting_gauss_idx_2, sort_region_elems);
         const std::size_t sort_end = cursor;
         bind_count(buffers_.tile_sort_count, 1);
-        bind_count(buffers_.tile_ranges, num_tiles + 1);
+        bind_count(buffers_.tile_ranges, alloc_tiles + 1);
         const std::size_t dense_batch_capacity =
-            denseTileBatchCapacity(HIGS_DEPTH_WAVE_INSTANCES, num_tiles);
-        bind_count(buffers_.tile_batch_counts, num_tiles);
-        bind_count(buffers_.tile_batch_offsets, num_tiles);
+            denseTileBatchCapacity(HIGS_DEPTH_WAVE_INSTANCES, alloc_tiles);
+        bind_count(buffers_.tile_batch_counts, alloc_tiles);
+        bind_count(buffers_.tile_batch_offsets, alloc_tiles);
         bind_count(buffers_.tile_batch_dispatch_args,
                    indirect::TileBatchDispatch::kLayout.word_count);
         bind_count(buffers_.tile_batch_descriptors, 4 * dense_batch_capacity);
         bind_count(buffers_.tile_batch_pixel_state, 4 * dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT);
         bind_count(buffers_.tile_batch_n_contributors, dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT);
         const std::size_t tiles_end = cursor;
-        bind_count(buffers_.pixel_state, 4 * num_pixels);
-        bind_count(buffers_.pixel_depth, num_pixels);
-        bind_count(buffers_.pixel_depth_weight, num_pixels);
-        bind_count(buffers_.n_contributors, num_pixels);
+        bind_count(buffers_.pixel_state, 4 * alloc_pixels);
+        bind_count(buffers_.pixel_depth, alloc_pixels);
+        bind_count(buffers_.pixel_depth_weight, alloc_pixels);
+        bind_count(buffers_.n_contributors, alloc_pixels);
         const std::size_t pixel_end = cursor;
         bind_count(buffers_._cumsum_blockSums, _CEIL_DIV(cumsum_elements, std::size_t{1024}));
         bind_count(buffers_._cumsum_blockSums2, _CEIL_DIV(_CEIL_DIV(cumsum_elements, std::size_t{1024}), std::size_t{1024}));
@@ -7861,12 +7897,16 @@ namespace lfs::vis {
             }
         }
 
+        // Logical tile count for sort-bit width (dispatch/indexing). Pixel/tile
+        // scratch capacity is bucketed inside estimate/bind, not here.
         const std::size_t num_tiles =
-            static_cast<std::size_t>(uniforms.grid_width) * static_cast<std::size_t>(uniforms.grid_height);
+            static_cast<std::size_t>(uniforms.grid_width) *
+            static_cast<std::size_t>(uniforms.grid_height);
         const std::size_t sort_region_elems =
             std::max(active_splat_count, std::size_t{HIGS_DEPTH_WAVE_INSTANCES});
-        const std::size_t num_pixels =
-            static_cast<std::size_t>(uniforms.image_width) * static_cast<std::size_t>(uniforms.image_height);
+        // Logical image extents for shared-scratch estimate/bind (bucketed inside).
+        const std::size_t image_width = static_cast<std::size_t>(uniforms.image_width);
+        const std::size_t image_height = static_cast<std::size_t>(uniforms.image_height);
         bool shared_scratch_bound = false;
         std::uint64_t shared_scratch_attempt_id = 0;
         const auto shared_scratch_context = [&]() {
@@ -7874,7 +7914,7 @@ namespace lfs::vis {
                 "attempt_id={}, required={}MiB, capacity={}MiB, generation={}, sort_region_elems={}, last_indices={}, splats={}, viewport={}x{}, grid={}x{}, ring={}, next_render_value={}",
                 shared_scratch_attempt_id,
                 estimateSharedScratchBytes(active_splat_count, visible_capacity, higs_active,
-                                           sort_region_elems, num_pixels, num_tiles) >>
+                                           sort_region_elems, image_width, image_height) >>
                     20,
                 shared_scratch_.bytes >> 20,
                 shared_scratch_.generation,
@@ -7895,7 +7935,7 @@ namespace lfs::vis {
             releasePrivateScratchBuffers();
             const std::size_t required_shared_scratch =
                 estimateSharedScratchBytes(active_splat_count, visible_capacity, higs_active,
-                                           sort_region_elems, num_pixels, num_tiles);
+                                           sort_region_elems, image_width, image_height);
             shared_scratch_attempt_id = ++shared_scratch_attempt_serial_;
             if (auto ok = ensureSharedScratchArena(context, required_shared_scratch); ok) {
                 try {
@@ -7910,7 +7950,7 @@ namespace lfs::vis {
                         return std::unexpected(rok.error());
                     }
                     bindSharedScratchBuffers(active_splat_count, visible_capacity, higs_active,
-                                             sort_region_elems, num_pixels, num_tiles);
+                                             sort_region_elems, image_width, image_height);
                     shared_scratch_bound = true;
                     LOG_PERF("vksplat.memory.shared_scratch required={}MiB capacity={}MiB sort_region_elems={} splats={}",
                              required_shared_scratch >> 20,

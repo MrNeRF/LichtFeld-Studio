@@ -409,18 +409,20 @@ namespace lfs::vis {
         // while the render owns the arena frame (training excluded) so the block is
         // stable, avoiding a cross-thread grow/re-import race.
         [[nodiscard]] std::expected<void, std::string> reimportSharedScratchIfGrown(VulkanContext& context);
+        // image_width/height are logical (valid) extents. Pixel/tile region
+        // capacities inside are bucketed to ceil64 (issue #1565).
         [[nodiscard]] std::size_t estimateSharedScratchBytes(std::size_t num_splats,
                                                              std::size_t visible_capacity,
                                                              bool macro_chain,
                                                              std::size_t sort_capacity,
-                                                             std::size_t num_pixels,
-                                                             std::size_t num_tiles) const;
+                                                             std::size_t image_width,
+                                                             std::size_t image_height) const;
         void bindSharedScratchBuffers(std::size_t num_splats,
                                       std::size_t visible_capacity,
                                       bool macro_chain,
                                       std::size_t sort_capacity,
-                                      std::size_t num_pixels,
-                                      std::size_t num_tiles);
+                                      std::size_t image_width,
+                                      std::size_t image_height);
         void releasePrivateScratchBuffers();
         void releaseGpuLodTreeStorage();
         void detachSharedScratchBuffers();
@@ -649,6 +651,9 @@ namespace lfs::vis {
         };
         SharedScratchArena shared_scratch_{};
         std::uint64_t shared_scratch_attempt_serial_ = 0;
+        // Last logged viewport scratch bucket (alloc extent); LOG_DEBUG only on change.
+        std::uint32_t scratch_bucket_alloc_w_ = 0;
+        std::uint32_t scratch_bucket_alloc_h_ = 0;
 
         // Old shared-scratch imports awaiting GPU retirement, keyed by the
         // render-complete timeline value at which they become safe to free.

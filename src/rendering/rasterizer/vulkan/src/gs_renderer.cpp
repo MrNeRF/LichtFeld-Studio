@@ -1,6 +1,7 @@
 #include "gs_renderer.h"
 
 #include "core/logger.hpp"
+#include "viewport_scratch_bucket.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1351,6 +1352,7 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     }
 
     const size_t capacity = HIGS_DEPTH_WAVE_INSTANCES;
+    // Logical counts: uniforms, dispatch bounds, heuristics, finalize push.
     const size_t num_tiles =
         static_cast<size_t>(uniforms.grid_height) * uniforms.grid_width;
     const size_t num_pixels =
@@ -1358,25 +1360,59 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     if (num_tiles == 0 || num_pixels == 0)
         return;
 
+    // Capacity for pixel/tile scratch: 64-px bucket (issue #1565). Indexing stays
+    // logical (y * image_width + x); only resizeDeviceBuffer element counts use
+    // alloc_*.
+    const auto scratch_bucket = lfs::rendering::vulkan::viewportScratchBucket(
+        uniforms.image_width, uniforms.image_height);
+    const size_t alloc_pixels = scratch_bucket.alloc_pixels;
+    const size_t alloc_tiles = scratch_bucket.alloc_tiles;
+    if (scratch_bucket.alloc_w != scratch_bucket_alloc_w_ ||
+        scratch_bucket.alloc_h != scratch_bucket_alloc_h_) {
+        LOG_DEBUG(
+            "vksplat.scratch.bucket logical={}x{} alloc={}x{} pixels_cap={} tiles_cap={}",
+            uniforms.image_width,
+            uniforms.image_height,
+            scratch_bucket.alloc_w,
+            scratch_bucket.alloc_h,
+            alloc_pixels,
+            alloc_tiles);
+        scratch_bucket_alloc_w_ = scratch_bucket.alloc_w;
+        scratch_bucket_alloc_h_ = scratch_bucket.alloc_h;
+    }
+    const auto resize_scratch = [this](auto& typed_buffer, const size_t elements) -> _VulkanBuffer& {
+        auto& dev = typed_buffer.deviceBuffer;
+        const size_t old_capacity = dev.capacity;
+        auto& result = resizeDeviceBuffer(typed_buffer, elements);
+        if (result.capacity != old_capacity) {
+            LOG_DEBUG(
+                "vksplat.scratch.realloc label={} old_bytes={} new_bytes={}",
+                result.label != nullptr ? result.label : "<unlabeled>",
+                old_capacity,
+                result.capacity);
+        }
+        return result;
+    };
+
     // This one-frame heuristic selects only the faster of two wave-correct
     // raster paths. It never sizes storage or changes the wave budget.
     const bool use_batched_raster =
         !use_gut_rasterization && !depth_capture_ &&
         buffers.num_indices >= kMinLoadBalancedRasterInstances &&
         buffers.num_indices / num_tiles >= kMinLoadBalancedAverageTileInstances;
-    const size_t batch_capacity = denseTileBatchCapacity(capacity, num_tiles);
+    const size_t batch_capacity = denseTileBatchCapacity(capacity, alloc_tiles);
 
     // K/viewport allocations are established before conditional blocks.
     resizeDeviceBuffer(buffers.sorting_keys_1, capacity);
     resizeDeviceBuffer(buffers.sorting_keys_2, capacity);
     resizeDeviceBuffer(buffers.sorting_gauss_idx_1, capacity);
     resizeDeviceBuffer(buffers.sorting_gauss_idx_2, capacity);
-    auto& tile_ranges = resizeDeviceBuffer(buffers.tile_ranges, num_tiles + 1u);
-    auto& pixel_state = resizeDeviceBuffer(buffers.pixel_state, 4u * num_pixels);
-    auto& pixel_depth = resizeDeviceBuffer(buffers.pixel_depth, num_pixels);
+    auto& tile_ranges = resize_scratch(buffers.tile_ranges, alloc_tiles + 1u);
+    auto& pixel_state = resize_scratch(buffers.pixel_state, 4u * alloc_pixels);
+    auto& pixel_depth = resize_scratch(buffers.pixel_depth, alloc_pixels);
     auto& pixel_depth_weight =
-        resizeDeviceBuffer(buffers.pixel_depth_weight, num_pixels);
-    auto& n_contributors = resizeDeviceBuffer(buffers.n_contributors, num_pixels);
+        resize_scratch(buffers.pixel_depth_weight, alloc_pixels);
+    auto& n_contributors = resize_scratch(buffers.n_contributors, alloc_pixels);
 
     constexpr size_t kRadix = 256u;
     constexpr size_t kPartitionSize = 512u * 8u;
@@ -1392,29 +1428,31 @@ void VulkanGSRenderer::executeLegacyDepthWaves(
     _VulkanBuffer batch_pixel_state{};
     _VulkanBuffer batch_n_contributors{};
     if (use_batched_raster) {
-        batch_counts = resizeDeviceBuffer(buffers.tile_batch_counts, num_tiles);
-        batch_offsets = resizeDeviceBuffer(buffers.tile_batch_offsets, num_tiles);
+        batch_counts = resize_scratch(buffers.tile_batch_counts, alloc_tiles);
+        batch_offsets = resize_scratch(buffers.tile_batch_offsets, alloc_tiles);
         batch_descriptors =
-            resizeDeviceBuffer(buffers.tile_batch_descriptors, 4u * batch_capacity);
+            resize_scratch(buffers.tile_batch_descriptors, 4u * batch_capacity);
         batch_dispatch = resizeDeviceBuffer(
             buffers.tile_batch_dispatch_args,
             indirect::TileBatchDispatch::kLayout.word_count);
         validateIndirectLayoutBuffer(batch_dispatch,
                                      indirect::TileBatchDispatch::kLayout,
                                      "legacy tile-batch descriptor producer");
-        batch_pixel_state = resizeDeviceBuffer(
+        batch_pixel_state = resize_scratch(
             buffers.tile_batch_pixel_state,
             4u * batch_capacity * TILE_WIDTH * TILE_HEIGHT);
-        batch_n_contributors = resizeDeviceBuffer(
+        batch_n_contributors = resize_scratch(
             buffers.tile_batch_n_contributors,
             batch_capacity * TILE_WIDTH * TILE_HEIGHT);
         constexpr size_t kCumsumBlock = 1024u;
+        // Cumsum spans the logical tile grid; capacity is still stable under
+        // alloc_tiles when the bucket holds (alloc_tiles >= num_tiles).
         resizeDeviceBuffer(buffers._cumsum_blockSums,
-                           std::max<size_t>(1u, _CEIL_DIV(num_tiles, kCumsumBlock)));
+                           std::max<size_t>(1u, _CEIL_DIV(alloc_tiles, kCumsumBlock)));
         resizeDeviceBuffer(
             buffers._cumsum_blockSums2,
             std::max<size_t>(1u,
-                             _CEIL_DIV(_CEIL_DIV(num_tiles, kCumsumBlock),
+                             _CEIL_DIV(_CEIL_DIV(alloc_tiles, kCumsumBlock),
                                        kCumsumBlock)));
     }
 
@@ -2760,6 +2798,7 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     }
 
     const size_t capacity = HIGS_DEPTH_WAVE_INSTANCES;
+    // Logical macro-grid and pixel counts (dispatch/uniforms/indexing).
     const size_t num_macro =
         _CEIL_DIV(static_cast<size_t>(uniforms.grid_width), size_t{HIGS_MACRO_T16_W}) *
         _CEIL_DIV(static_cast<size_t>(uniforms.grid_height), size_t{HIGS_MACRO_T16_H});
@@ -2768,8 +2807,51 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     if (num_macro == 0 || num_pixels == 0)
         return;
 
+    // Capacity for pixel/tile-derived scratch: 64-px bucket (issue #1565).
+    const auto scratch_bucket = lfs::rendering::vulkan::viewportScratchBucket(
+        uniforms.image_width, uniforms.image_height);
+    const size_t alloc_pixels = scratch_bucket.alloc_pixels;
+    const size_t alloc_tiles = scratch_bucket.alloc_tiles;
+    const size_t alloc_grid_w =
+        _CEIL_DIV(static_cast<size_t>(scratch_bucket.alloc_w), size_t{TILE_WIDTH});
+    const size_t alloc_grid_h =
+        _CEIL_DIV(static_cast<size_t>(scratch_bucket.alloc_h), size_t{TILE_HEIGHT});
+    const size_t alloc_macro_tiles =
+        _CEIL_DIV(alloc_grid_w, size_t{HIGS_MACRO_T16_W}) *
+        _CEIL_DIV(alloc_grid_h, size_t{HIGS_MACRO_T16_H});
+    if (scratch_bucket.alloc_w != scratch_bucket_alloc_w_ ||
+        scratch_bucket.alloc_h != scratch_bucket_alloc_h_) {
+        LOG_DEBUG(
+            "vksplat.scratch.bucket logical={}x{} alloc={}x{} pixels_cap={} tiles_cap={}",
+            uniforms.image_width,
+            uniforms.image_height,
+            scratch_bucket.alloc_w,
+            scratch_bucket.alloc_h,
+            alloc_pixels,
+            alloc_tiles);
+        scratch_bucket_alloc_w_ = scratch_bucket.alloc_w;
+        scratch_bucket_alloc_h_ = scratch_bucket.alloc_h;
+    }
+    const auto resize_scratch = [this](auto& typed_buffer, const size_t elements) -> _VulkanBuffer& {
+        auto& dev = typed_buffer.deviceBuffer;
+        const size_t old_capacity = dev.capacity;
+        auto& result = resizeDeviceBuffer(typed_buffer, elements);
+        if (result.capacity != old_capacity) {
+            LOG_DEBUG(
+                "vksplat.scratch.realloc label={} old_bytes={} new_bytes={}",
+                result.label != nullptr ? result.label : "<unlabeled>",
+                old_capacity,
+                result.capacity);
+        }
+        return result;
+    };
+
+    // Wave budget stays on the logical macro grid so padded capacity cannot
+    // false-trip HIGS_RASTER_MAX_WAVES. Buffer capacities use the bucketed grid.
     const size_t max_batches =
         _CEIL_DIV(capacity, size_t{RASTER_BATCH_SIZE}) + num_macro;
+    const size_t alloc_max_batches =
+        _CEIL_DIV(capacity, size_t{RASTER_BATCH_SIZE}) + alloc_macro_tiles;
     const size_t batch_waves =
         _CEIL_DIV(max_batches, size_t{HIGS_RASTER_WAVE_BATCHES});
     if (batch_waves > HIGS_RASTER_MAX_WAVES) {
@@ -2785,6 +2867,8 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     }
     const size_t pool_batches =
         std::min<size_t>(max_batches, HIGS_RASTER_WAVE_BATCHES);
+    const size_t alloc_pool_batches =
+        std::min<size_t>(alloc_max_batches, HIGS_RASTER_WAVE_BATCHES);
 
     // Every allocation below is content-independent: K, viewport geometry, or
     // a fixed indirect-layout size. Do this before opening conditional blocks.
@@ -2792,9 +2876,9 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     resizeDeviceBuffer(buffers.sorting_keys_2, capacity);
     resizeDeviceBuffer(buffers.sorting_gauss_idx_1, capacity);
     resizeDeviceBuffer(buffers.sorting_gauss_idx_2, capacity);
-    auto& tile_ranges = resizeDeviceBuffer(buffers.tile_ranges, num_macro + 1u);
-    auto& batch_counts = resizeDeviceBuffer(buffers.tile_batch_counts, num_macro);
-    auto& batch_offsets = resizeDeviceBuffer(buffers.tile_batch_offsets, num_macro);
+    auto& tile_ranges = resize_scratch(buffers.tile_ranges, alloc_macro_tiles + 1u);
+    auto& batch_counts = resize_scratch(buffers.tile_batch_counts, alloc_macro_tiles);
+    auto& batch_offsets = resize_scratch(buffers.tile_batch_offsets, alloc_macro_tiles);
     auto& macro_wave_args = resizeDeviceBuffer(
         buffers.macro_wave_args,
         indirect::MacroWaveDispatch::kLayout.word_count);
@@ -2803,11 +2887,11 @@ void VulkanGSRenderer::executeMacroDepthWaves(
                                  "macro_batch_prepare producer");
     auto& partials = resizeDeviceBuffer(
         buffers.macro_partials,
-        pool_batches * HIGS_MACRO_TILE_SIZE_TILES * HIGS_TILE_SIZE * 4u);
-    auto& active_mask = resizeDeviceBuffer(buffers.macro_active_mask, max_batches);
-    auto& pixel_state = resizeDeviceBuffer(buffers.pixel_state, 4u * num_pixels);
-    auto& pixel_depth = resizeDeviceBuffer(buffers.pixel_depth, num_pixels);
-    auto& n_contributors = resizeDeviceBuffer(buffers.n_contributors, num_pixels);
+        alloc_pool_batches * HIGS_MACRO_TILE_SIZE_TILES * HIGS_TILE_SIZE * 4u);
+    auto& active_mask = resize_scratch(buffers.macro_active_mask, alloc_max_batches);
+    auto& pixel_state = resize_scratch(buffers.pixel_state, 4u * alloc_pixels);
+    auto& pixel_depth = resize_scratch(buffers.pixel_depth, alloc_pixels);
+    auto& n_contributors = resize_scratch(buffers.n_contributors, alloc_pixels);
 
     constexpr size_t kRadix = 256u;
     constexpr size_t kPartitionSize = 512u * 8u;
@@ -2816,12 +2900,15 @@ void VulkanGSRenderer::executeMacroDepthWaves(
     resizeDeviceBuffer(buffers._sorting_histogram_cumsum,
                        _CEIL_DIV(capacity, kPartitionSize) * kRadix);
     constexpr size_t kCumsumBlock = 1024u;
+    // Cumsum capacity follows the bucketed macro-tile grid so resize-drag steps
+    // inside a 64-px bucket do not reallocate (logical work still uses num_macro).
     resizeDeviceBuffer(buffers._cumsum_blockSums,
-                       std::max<size_t>(1u, _CEIL_DIV(num_macro, kCumsumBlock)));
+                       std::max<size_t>(1u, _CEIL_DIV(alloc_macro_tiles, kCumsumBlock)));
     resizeDeviceBuffer(
         buffers._cumsum_blockSums2,
         std::max<size_t>(1u,
-                         _CEIL_DIV(_CEIL_DIV(num_macro, kCumsumBlock), kCumsumBlock)));
+                         _CEIL_DIV(_CEIL_DIV(alloc_macro_tiles, kCumsumBlock),
+                                   kCumsumBlock)));
 
     const bool use_fp32 = overlays_active || (uniforms.lod_enabled & 4u) != 0u;
     auto& raster_pipeline = overlays_active
