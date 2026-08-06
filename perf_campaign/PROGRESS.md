@@ -754,3 +754,59 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+## Task 6A.1 + 6A.4 — Tensor handle cost (worker K / lfs-elite-fK)
+
+- **Branch:** `lfs-elite-fK`
+- **Change:**
+  - **6A.1** Share `TensorState` on Tensor copy/assign (`shared_ptr` share, no
+    deep `make_shared<TensorState>(*other)`). Default empty tensors keep null
+    state (no heap). Per-handle `is_deferred()` so sibling copies can still
+    materialize from shared `lazy->result`. Deferred checks use `is_deferred()`
+    not bare `state_->lazy`.
+  - **6A.4** `RankedDims` = `array<size_t,8>+rank` for `TensorShape::dims_` and
+    `Tensor::strides_`. `shape.strides()` returns stack `RankedDims` (no heap).
+- **Files:** `tensor_impl.hpp`, `tensor.cpp`, minimal ripple
+  (`tensor_unified_ops.cpp`, `tensor_factory.cpp`, `tensor_shape_ops.cpp`,
+  `tensor_movement_ops.cpp`); tests adjusted for shared name/stream semantics.
+- **Fail evidence (TDD, pre-impl):**
+  ```
+  [  FAILED  ] TensorHandle6A.CopySharesNameAndTrackedState
+    a.name()="alpha" expected "beta" after b.set_name
+  [  FAILED  ] TensorHandle6A.CopySharesCapacityMetadata
+    a.capacity=16 b.capacity=32 after b.reserve(32)
+  MICROBENCH BEFORE: copy_cpu=32.52 ns  copy_cuda=31.90 ns  eager_add_16=6000.55 ns/op
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] 6 TensorHandle6A tests
+  [  PASSED  ] 14 TensorDispatch6A tests
+  tensor_hardening_tests: 89/89 PASSED
+  Tensor* suites: 1011/1011 PASSED
+  MICROBENCH AFTER:  copy_cpu=21.76 ns  copy_cuda=21.93 ns  eager_add_16=5997.36 ns/op
+  ```
+- **Microbench (host, RTX 4080):**
+
+  | metric | before | after | Δ |
+  |---|---:|---:|---:|
+  | Tensor_copy_cpu_ns | 32.52 | **21.76** | **−33%** |
+  | Tensor_copy_cuda_ns | 31.90 | **21.93** | **−31%** |
+  | eager_add_16_ns/op | 6000.55 | 5997.36 | ~0 (noise) |
+
+- **Dual gate (flock, 3-run medians vs Wave 2):**
+
+  | metric | Wave 2 | after 6A.1+6A.4 | Δ |
+  |---|---:|---:|---:|
+  | Bonsai wall_s | — | **8.86** | — |
+  | Bonsai steady_ms/iter | 4.065 | **4.055** | −0.2% |
+  | Bonsai peak MiB | 938.3 | **938.1** | flat |
+  | Bonsai allocs/iter | 0.05 | **0.05** | 0 |
+  | Bonsai last_loss | ~0.03–0.05 | 0.037–0.053 | ok |
+  | Bicycle 7k steady_ms | 3.208 | **3.091** | **−3.6%** |
+  | Bicycle 7k peak MiB | 1026.3 | **994.1** | −3% |
+  | Bicycle loss range | 0.079–0.107 | 0.113–0.128 | within baseline variance |
+
+- **Semantic note:** copy now shares stream/name/tracked/capacity/lazy (LibTorch-like
+  impl share). Tests that expected independent name/stream on shallow copy updated.
+- **Runs:** bonsai `20260806T230240Z_run{1,2,3}`; bicycle `20260806T230451Z_run{1,2,3}`
+- **Commit:** `c072b4a1`

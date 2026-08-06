@@ -436,6 +436,7 @@ namespace lfs::core {
         deferred.is_view_ = false;
         deferred.data_ = nullptr;
         deferred.data_owner_.reset();
+        deferred.ensure_state();
         deferred.state_->lazy = std::make_shared<LazyExprState>();
         deferred.state_->lazy->materializer = std::move(materializer);
         deferred.id_ = next_id_++;
@@ -542,6 +543,7 @@ namespace lfs::core {
             storage_bytes);
 
         const size_t preserved_id = id_;
+        ensure_state();
         const bool preserved_tracked = state_->tracked;
         const std::string preserved_name = state_->name;
         const cudaStream_t preserved_stream = state_->stream;
@@ -560,17 +562,29 @@ namespace lfs::core {
         view_generation_snapshot_ = published.view_generation_snapshot_;
 #endif
 
-        state_->capacity = published.state_->capacity;
-        state_->logical_size = published.state_->logical_size;
-        state_->tracked = published.state_->tracked || preserved_tracked;
-        if (preserved_name.empty()) {
-            state_->name = published.state_->name;
+        if (published.state_) {
+            state_->capacity = published.state_->capacity;
+            state_->logical_size = published.state_->logical_size;
+            state_->tracked = published.state_->tracked || preserved_tracked;
+            if (preserved_name.empty()) {
+                state_->name = published.state_->name;
+            } else {
+                state_->name = preserved_name;
+            }
+            const cudaStream_t materialized_stream = published.state_->stream;
+            state_->stream = materialized_stream != nullptr ? materialized_stream : preserved_stream;
         } else {
+            state_->tracked = preserved_tracked;
             state_->name = preserved_name;
+            state_->stream = preserved_stream;
         }
-        const cudaStream_t materialized_stream = published.state_->stream;
-        state_->stream = materialized_stream != nullptr ? materialized_stream : preserved_stream;
-        state_->lazy.reset();
+
+        // 6A.1: when TensorState is shared, keep lazy->result so sibling handles
+        // can still publish. is_deferred() is per-handle (storage on this handle).
+        // Drop lazy only when we exclusively own the state.
+        if (state_.use_count() <= 1) {
+            state_->lazy.reset();
+        }
 
         id_ = preserved_id;
         compute_alignment();
@@ -583,7 +597,7 @@ namespace lfs::core {
     // ============= Helper Functions =============
 
     // Check if strides represent contiguous memory layout (row-major)
-    static bool check_contiguous(const TensorShape& shape, const std::vector<size_t>& strides) {
+    static bool check_contiguous(const TensorShape& shape, std::span<const size_t> strides) {
         if (strides.empty())
             return true;
         if (strides.size() != shape.rank())
@@ -592,9 +606,9 @@ namespace lfs::core {
         // Check if strides match row-major contiguous layout
         size_t expected_stride = 1;
         for (int i = static_cast<int>(shape.rank()) - 1; i >= 0; --i) {
-            if (strides[i] != expected_stride)
+            if (strides[static_cast<size_t>(i)] != expected_stride)
                 return false;
-            expected_stride *= shape[i];
+            expected_stride *= shape[static_cast<size_t>(i)];
         }
         return true;
     }
@@ -606,8 +620,8 @@ namespace lfs::core {
         : data_(data),
           data_owner_(nullptr), // Non-owning
           state_(std::make_shared<TensorState>()),
-          shape_(shape),
-          strides_(shape.strides()),
+          shape_(std::move(shape)),
+          strides_(shape_.strides()),
           storage_offset_(0),
           is_contiguous_(true),
           device_(device),
@@ -633,10 +647,12 @@ namespace lfs::core {
     }
 
     // ============= Copy Constructor - SHALLOW COPY (LibTorch behavior) =============
+    // 6A.1: share TensorState (stream/name/lazy/capacity/tracked) via shared_ptr —
+    // previously deep-copied into a fresh make_shared on every copy.
     Tensor::Tensor(const Tensor& other)
         : data_(other.data_),
           data_owner_(other.data_owner_),
-          state_(std::make_shared<TensorState>(*other.state_)),
+          state_(other.state_),
           shape_(other.shape_),
           strides_(other.strides_),
           storage_offset_(other.storage_offset_),
@@ -700,7 +716,8 @@ namespace lfs::core {
             LOG_WARN("Tensor assignment reduced capacity: old_capacity={} -> new_capacity={}, old_data={}, new_data={}",
                      old_capacity, new_capacity, old_data, new_data);
         }
-        state_ = std::make_shared<TensorState>(*other.state_);
+        // 6A.1: share TensorState (do not deep-copy into a new cell).
+        state_ = other.state_;
         id_ = next_id_++;
 
         if (profiling_enabled_) {
@@ -731,13 +748,11 @@ namespace lfs::core {
           id_(std::exchange(other.id_, 0)),
           lazy_ir_registered_(std::exchange(other.lazy_ir_registered_, false)) {
 
-        if (!state_) {
-            state_ = std::make_shared<TensorState>();
-        }
-        if (!other.state_) {
-            other.state_ = std::make_shared<TensorState>();
-        }
-
+        // RankedDims/TensorShape move leaves source rank intact (trivial members).
+        // Clear so moved-from metadata is consistently empty (shape()[0] OOR).
+        other.shape_ = TensorShape{};
+        other.strides_.clear();
+        // 6A.1: moved-from stays empty (null state) — no heap TensorState.
         if (profiling_enabled_) {
             LOG_DEBUG("Move constructed: tensor #{} (moved-from is now invalid)", id_);
         }
@@ -775,12 +790,9 @@ namespace lfs::core {
 #endif
             id_ = std::exchange(other.id_, 0);
             lazy_ir_registered_ = std::exchange(other.lazy_ir_registered_, false);
-            if (!state_) {
-                state_ = std::make_shared<TensorState>();
-            }
-            if (!other.state_) {
-                other.state_ = std::make_shared<TensorState>();
-            }
+            other.shape_ = TensorShape{};
+            other.strides_.clear();
+            // 6A.1: moved-from stays empty (null state) — no heap TensorState.
 
             if (profiling_enabled_) {
                 LOG_DEBUG("Move assigned: tensor #{} (moved-from is now invalid)", id_);
@@ -829,6 +841,7 @@ namespace lfs::core {
     void Tensor::set_stream(cudaStream_t stream) {
         LFS_ASSERT_MSG(is_valid(),
                        "set_stream requires a valid tensor");
+        ensure_state();
         if (device_ == Device::CUDA) {
             if (!data_owner_) {
                 if (!state_->lazy && data_ != nullptr && state_->stream != stream) {
@@ -891,7 +904,7 @@ namespace lfs::core {
     }
 
     void Tensor::relabel_allocation_for_profiler() {
-        if (device_ != Device::CUDA || data_ == nullptr || state_->name.empty()) {
+        if (device_ != Device::CUDA || data_ == nullptr || !state_ || state_->name.empty()) {
             return;
         }
         try {
@@ -2321,7 +2334,7 @@ namespace lfs::core {
                        "broadcast_to requires a valid tensor");
         LFS_ASSERT_MSG(can_broadcast_to(target_shape),
                        std::format("cannot broadcast shape {} to {}", shape_.str(), target_shape.str()));
-        if (state_ && state_->lazy) {
+        if (is_deferred()) {
             const uint64_t source_id = lazy_expr_id();
             Tensor source = *this;
             TensorShape deferred_shape = target_shape;
@@ -2558,7 +2571,7 @@ namespace lfs::core {
         }
         std::ostringstream oss;
         oss << "[";
-        for (size_t i = 0; i < dims_.size(); ++i) {
+        for (size_t i = 0; i < dims_.rank; ++i) {
             if (i > 0)
                 oss << ", ";
             oss << dims_[i];
@@ -3291,6 +3304,7 @@ namespace lfs::core {
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid(),
                        "reserve requires a valid tensor");
+        ensure_state();
         preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_supported_device(device_),
                        "reserve encountered an invalid device");
@@ -3482,6 +3496,7 @@ namespace lfs::core {
             t.storage_offset_ = 0;
             t.device_ = device;
             t.dtype_ = dtype;
+            t.ensure_state();
             t.state_->capacity = capacity;
             t.state_->logical_size = current_size;
             t.id_ = next_id_++;
@@ -3527,6 +3542,7 @@ namespace lfs::core {
         t.storage_offset_ = 0;
         t.device_ = device;
         t.dtype_ = dtype;
+        t.ensure_state();
         t.state_->capacity = capacity;
         t.state_->logical_size = current_size;
         t.id_ = next_id_++;

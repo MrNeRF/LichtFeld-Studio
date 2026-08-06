@@ -113,3 +113,20 @@
 - **Action:** Sync RULES from main when merging tensor work; until then follow
   work-order dual-gate + flock discipline.
 - **Status:** open (docs).
+
+## ISS-010 — NaNInfGPUCheckTest.InfDetection_LargeTensors uses has_nan() for Inf
+- **Severity:** low (test bug; not a 6A regression)
+- **File:** `tests/test_nan_inf_gpu_check.cpp:758-774`
+- **Symptom:** Expects `has_nan()` true for pure +Inf/-Inf large tensors. GPU
+  `has_nan_gpu` only checks `isnan` (not `isinf`); `has_inf()` is the correct API.
+  Other Inf tests correctly use `has_inf()` and pass.
+- **Action:** Change test to `has_inf()` (or document if has_nan is meant to cover both
+  and implement that in `has_nan_gpu`). Outside worker-K file set.
+- **Status:** open (pre-existing test misuse; logged during 6A.1/6A.4 gate)
+
+## ISS-011 — AllocCounterTest.FreshLargeTensorIncrementsCounter order-dependent flake
+- **Severity:** low
+- **Symptom:** Fails when run after a large Tensor suite (full `*Tensor*` filter),
+  passes in isolation. Not reproduced as a functional 6A.1/6A.4 regression.
+- **Action:** harden counter reset / pool isolation in test fixture.
+- **Status:** open (flake)

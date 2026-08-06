@@ -206,9 +206,96 @@ namespace lfs::core {
         Multinomial = 10
     };
 
+    // Stack-resident ranked size list (rank ≤ MAX_TENSOR_RANK). Replaces heap
+    // std::vector for TensorShape dims and Tensor strides (6A.4).
+    struct RankedDims {
+        std::array<size_t, MAX_TENSOR_RANK> values{};
+        size_t rank = 0;
+
+        RankedDims() = default;
+        RankedDims(std::initializer_list<size_t> dims) { assign(dims); }
+        explicit RankedDims(const std::vector<size_t>& dims) { assign(dims); }
+        explicit RankedDims(std::span<const size_t> dims) { assign(dims); }
+
+        size_t size() const noexcept { return rank; }
+        bool empty() const noexcept { return rank == 0; }
+        size_t& operator[](size_t i) noexcept { return values[i]; }
+        size_t operator[](size_t i) const noexcept { return values[i]; }
+        size_t* data() noexcept { return values.data(); }
+        const size_t* data() const noexcept { return values.data(); }
+
+        size_t* begin() noexcept { return values.data(); }
+        size_t* end() noexcept { return values.data() + rank; }
+        const size_t* begin() const noexcept { return values.data(); }
+        const size_t* end() const noexcept { return values.data() + rank; }
+        const size_t* cbegin() const noexcept { return begin(); }
+        const size_t* cend() const noexcept { return end(); }
+
+        void clear() noexcept { rank = 0; }
+
+        void assign(std::span<const size_t> dims) {
+            LFS_ASSERT_MSG(dims.size() <= MAX_TENSOR_RANK,
+                           "Tensor rank exceeds MAX_TENSOR_RANK");
+            rank = dims.size();
+            if (rank > 0) {
+                std::copy_n(dims.begin(), rank, values.begin());
+            }
+        }
+        void assign(const std::vector<size_t>& dims) {
+            assign(std::span<const size_t>(dims.data(), dims.size()));
+        }
+        void assign(std::initializer_list<size_t> dims) {
+            assign(std::span<const size_t>(dims.begin(), dims.size()));
+        }
+
+        RankedDims& operator=(std::span<const size_t> dims) {
+            assign(dims);
+            return *this;
+        }
+        RankedDims& operator=(const std::vector<size_t>& dims) {
+            assign(dims);
+            return *this;
+        }
+        RankedDims& operator=(std::initializer_list<size_t> dims) {
+            assign(dims);
+            return *this;
+        }
+
+        operator std::span<const size_t>() const noexcept {
+            return {values.data(), rank};
+        }
+        // Enables `std::vector<size_t> v = shape.dims()` without a heap on the
+        // shape itself; only the destination vector allocates.
+        operator std::vector<size_t>() const {
+            return std::vector<size_t>(begin(), end());
+        }
+
+        bool operator==(const RankedDims& other) const noexcept {
+            return rank == other.rank &&
+                   std::equal(begin(), end(), other.begin());
+        }
+        bool operator!=(const RankedDims& other) const noexcept {
+            return !(*this == other);
+        }
+        bool operator==(const std::vector<size_t>& other) const noexcept {
+            return rank == other.size() &&
+                   std::equal(begin(), end(), other.begin());
+        }
+        bool operator!=(const std::vector<size_t>& other) const noexcept {
+            return !(*this == other);
+        }
+    };
+
+    inline bool operator==(const std::vector<size_t>& lhs, const RankedDims& rhs) noexcept {
+        return rhs == lhs;
+    }
+    inline bool operator!=(const std::vector<size_t>& lhs, const RankedDims& rhs) noexcept {
+        return rhs != lhs;
+    }
+
     class LFS_CORE_API TensorShape {
     private:
-        std::vector<size_t> dims_;
+        RankedDims dims_;
         size_t total_elements_ = 1;
 
     public:
@@ -219,30 +306,37 @@ namespace lfs::core {
         explicit TensorShape(const std::vector<size_t>& dims) : dims_(dims) {
             compute_total();
         }
-        explicit TensorShape(std::span<const size_t> dims) : dims_(dims.begin(), dims.end()) {
+        explicit TensorShape(std::span<const size_t> dims) : dims_(dims) {
+            compute_total();
+        }
+        explicit TensorShape(const RankedDims& dims) : dims_(dims) {
             compute_total();
         }
 
-        size_t rank() const { return dims_.size(); }
+        size_t rank() const { return dims_.rank; }
         size_t operator[](size_t i) const {
-            if (i >= dims_.size()) {
+            if (i >= dims_.rank) {
                 throw std::out_of_range(
-                    "Shape index " + std::to_string(i) + " out of range for rank " + std::to_string(dims_.size()));
+                    "Shape index " + std::to_string(i) + " out of range for rank " +
+                    std::to_string(dims_.rank));
             }
             return dims_[i];
         }
         size_t elements() const { return total_elements_; }
-        const std::vector<size_t>& dims() const { return dims_; }
+        // Span-compatible view into stack storage (no heap).
+        const RankedDims& dims() const { return dims_; }
 
-        // Calculate strides for row-major layout
-        std::vector<size_t> strides() const {
-            if (dims_.empty())
-                return {};
-
-            std::vector<size_t> result(dims_.size());
-            result.back() = 1;
-            for (int i = static_cast<int>(dims_.size()) - 2; i >= 0; --i) {
-                result[i] = result[i + 1] * dims_[i + 1];
+        // Row-major contiguous strides — stack only, no heap allocation (6A.4).
+        RankedDims strides() const {
+            RankedDims result;
+            if (dims_.empty()) {
+                return result;
+            }
+            result.rank = dims_.rank;
+            result[dims_.rank - 1] = 1;
+            for (int i = static_cast<int>(dims_.rank) - 2; i >= 0; --i) {
+                result[static_cast<size_t>(i)] =
+                    result[static_cast<size_t>(i + 1)] * dims_[static_cast<size_t>(i + 1)];
             }
             return result;
         }
@@ -254,13 +348,14 @@ namespace lfs::core {
 
     private:
         void compute_total() {
-            LFS_ASSERT_MSG(dims_.size() <= MAX_TENSOR_RANK,
+            LFS_ASSERT_MSG(dims_.rank <= MAX_TENSOR_RANK,
                            "Tensor rank exceeds MAX_TENSOR_RANK");
             if (dims_.empty()) {
                 total_elements_ = 1;
             } else {
                 total_elements_ = 1;
-                for (auto d : dims_) {
+                for (size_t i = 0; i < dims_.rank; ++i) {
+                    const size_t d = dims_[i];
                     LFS_ASSERT_MSG(d == 0 || total_elements_ <= std::numeric_limits<size_t>::max() / d,
                                    "TensorShape element count overflow");
                     total_elements_ *= d;
@@ -442,14 +537,22 @@ namespace lfs::core {
 
         void* data_ = nullptr;
         std::shared_ptr<void> data_owner_;
-        std::shared_ptr<TensorState> state_ = std::make_shared<TensorState>();
+        // 6A.1: shared handle state (stream/name/lazy/capacity). Default empty
+        // tensors keep a null state (no heap cell) until first mutation/use.
+        std::shared_ptr<TensorState> state_;
         TensorShape shape_;
-        std::vector<size_t> strides_; // Stride for each dimension (in elements)
-        size_t storage_offset_ = 0;   // Offset from data_ (in elements)
-        bool is_contiguous_ = true;   // True if memory layout is C-contiguous
+        RankedDims strides_;        // Stride per dim (stack; rank matches shape_)
+        size_t storage_offset_ = 0; // Offset from data_ (in elements)
+        bool is_contiguous_ = true; // True if memory layout is C-contiguous
         Device device_ = Device::CPU;
         DataType dtype_ = DataType::Float32;
         bool is_view_ = false;
+
+        void ensure_state() {
+            if (!state_) {
+                state_ = std::make_shared<TensorState>();
+            }
+        }
 
         enum class StorageAccountingKind : uint8_t {
             CudaDirect,
@@ -466,12 +569,14 @@ namespace lfs::core {
 
         void materialize_deferred_slow();
         void materialize_if_deferred() {
-            if (state_ && state_->lazy) [[unlikely]] {
+            // is_deferred() is per-handle: shared TensorState may still hold
+            // lazy->result for sibling copies after this handle materializes.
+            if (is_deferred()) [[unlikely]] {
                 materialize_deferred_slow();
             }
         }
         void materialize_if_deferred() const {
-            if (state_ && state_->lazy) [[unlikely]] {
+            if (is_deferred()) [[unlikely]] {
                 const_cast<Tensor*>(this)->materialize_deferred_slow();
             }
         }
@@ -488,6 +593,7 @@ namespace lfs::core {
 
         // Compute alignment flags for vectorization
         void compute_alignment() {
+            ensure_state();
             if (data_ != nullptr) {
                 auto addr = reinterpret_cast<uintptr_t>(data_);
                 state_->is_aligned_16 = (addr % 16) == 0;
@@ -560,7 +666,10 @@ namespace lfs::core {
         void propagate_view_meta(Tensor& view) const {
             const_cast<Tensor*>(this)->ensure_storage_meta();
             view.storage_meta_ = storage_meta_;
-            view.state_->stream = state_->stream;
+            view.ensure_state();
+            if (state_) {
+                view.state_->stream = state_->stream;
+            }
             view.view_generation_snapshot_ =
                 storage_meta_->generation.load(std::memory_order_relaxed);
         }
@@ -1050,7 +1159,9 @@ namespace lfs::core {
 
         // Helper to create view with shared ownership
         Tensor create_view(const TensorShape& new_shape) const {
-            if (state_ && state_->lazy) {
+            // Per-handle deferred (6A.1): do not key off shared lazy alone —
+            // a materialized sibling may still hold lazy->result for other handles.
+            if (is_deferred()) {
                 const uint64_t source_id = lazy_expr_id();
                 Tensor source = *this;
                 const cudaStream_t source_stream = source.stream();
@@ -1089,13 +1200,13 @@ namespace lfs::core {
         }
 
         Tensor create_strided_view(const TensorShape& new_shape,
-                                   std::vector<size_t> new_strides) const {
+                                   RankedDims new_strides) const {
             LFS_ASSERT_MSG(new_strides.size() == new_shape.rank(),
                            "strided view shape and stride ranks must match");
             LFS_ASSERT_MSG(new_shape.elements() == numel(),
                            "metadata-only view must preserve the logical element count");
 
-            if (state_ && state_->lazy) {
+            if (is_deferred()) {
                 const bool identity_shape = new_shape == shape_;
                 const bool identity_strides =
                     new_strides == strides_ || new_strides == new_shape.strides();
@@ -1120,14 +1231,21 @@ namespace lfs::core {
             view.is_contiguous_ = true;
             for (int dimension = static_cast<int>(new_shape.rank()) - 1;
                  dimension >= 0; --dimension) {
-                if (view.strides_[dimension] != expected_stride) {
+                if (view.strides_[static_cast<size_t>(dimension)] != expected_stride) {
                     view.is_contiguous_ = false;
                     break;
                 }
-                expected_stride *= new_shape[dimension];
+                expected_stride *= new_shape[static_cast<size_t>(dimension)];
             }
             propagate_view_meta(view);
             return view;
+        }
+
+        // Accept vector-built strides from older call sites without forcing heap
+        // storage on the resulting view.
+        Tensor create_strided_view(const TensorShape& new_shape,
+                                   const std::vector<size_t>& new_strides) const {
+            return create_strided_view(new_shape, RankedDims(new_strides));
         }
 
         std::vector<size_t> resolve_dims(std::span<const int> dims) const;
@@ -1472,10 +1590,13 @@ namespace lfs::core {
         bool is_empty() const { return !is_valid() || numel() == 0; }
         // Local deferred flag only — never takes the global IR mutex. Eager IR
         // nodes (debug map) are NOT reported here; use lazy_expr_id() / IR APIs.
-        bool has_lazy_expr() const {
-            return state_ && static_cast<bool>(state_->lazy);
+        // Per-handle: after materialize, this handle has storage so it is no
+        // longer deferred even if shared TensorState still retains lazy->result
+        // for sibling copies (6A.1).
+        bool has_lazy_expr() const { return is_deferred(); }
+        bool is_deferred() const {
+            return state_ && state_->lazy && data_ == nullptr && !data_owner_ && !is_view_;
         }
-        bool is_deferred() const { return state_ && state_->lazy; }
         uint64_t lazy_expr_id() const;
         std::optional<internal::LazyExprDebugInfo> lazy_expr_info() const {
             if (const uint64_t node_id = lazy_expr_id(); node_id != 0) {
@@ -1503,13 +1624,15 @@ namespace lfs::core {
         }
 
         // Alignment accessors (cached flags computed on allocation)
-        bool is_aligned_16() const { return state_->is_aligned_16; }
-        bool is_aligned_128() const { return state_->is_aligned_128; }
+        bool is_aligned_16() const { return state_ && state_->is_aligned_16; }
+        bool is_aligned_128() const { return state_ && state_->is_aligned_128; }
 
         // Home stream: where this tensor's pending writes are ordered. Frees route
         // here; reads from other streams must be recorded (record_stream) or
         // bridged + recorded (sync_to_stream).
-        cudaStream_t stream() const { return state_->stream; }
+        cudaStream_t stream() const {
+            return state_ ? static_cast<cudaStream_t>(state_->stream) : nullptr;
+        }
 
         // Declarative re-homing: future writes happen on `stream`. The old home
         // becomes a recorded use so the eventual free stays ordered after it.
@@ -1524,8 +1647,9 @@ namespace lfs::core {
         void sync_to_stream(cudaStream_t execution_stream) const;
 
         // Debug tracking - mark tensor to trace all operations it's involved in
-        bool is_tracked() const { return state_->tracked; }
+        bool is_tracked() const { return state_ && state_->tracked; }
         Tensor& set_tracked(bool tracked = true) {
+            ensure_state();
             state_->tracked = tracked;
             return *this;
         }
@@ -1534,8 +1658,12 @@ namespace lfs::core {
 
         // Optional name for identifying tensors in traces. Also forwarded to the
         // VRAM profiler so the underlying allocation is labelled with this name.
-        const std::string& name() const { return state_->name; }
+        const std::string& name() const {
+            static const std::string kEmpty;
+            return state_ ? state_->name : kEmpty;
+        }
         Tensor& set_name(std::string name) {
+            ensure_state();
             state_->name = std::move(name);
             relabel_allocation_for_profiler();
             return *this;
@@ -1558,11 +1686,12 @@ namespace lfs::core {
         // Capacity management (for in-place growth like std::vector)
         // capacity() returns the reserved capacity along dimension 0 (0 = no reservation)
         // logical_size() returns the logical size along dimension 0 (same as shape()[0])
-        size_t capacity() const { return state_->capacity; }
+        size_t capacity() const { return state_ ? state_->capacity : 0; }
         size_t logical_size() const {
-            return state_->capacity > 0
-                       ? state_->logical_size
-                       : (shape_.rank() > 0 ? shape_[0] : 0);
+            if (state_ && state_->capacity > 0) {
+                return state_->logical_size;
+            }
+            return shape_.rank() > 0 ? shape_[0] : 0;
         }
         std::string external_storage_kind() const {
             return storage_meta_ ? storage_meta_->external_kind : std::string{};
@@ -1585,8 +1714,8 @@ namespace lfs::core {
         Tensor to(DataType dtype) const;
         bool is_contiguous() const { return is_contiguous_; }
 
-        // Stride operations (Phase 4: Zero-copy views)
-        const std::vector<size_t>& strides() const { return strides_; }
+        // Stride operations (Phase 4: Zero-copy views) — stack RankedDims (6A.4)
+        const RankedDims& strides() const { return strides_; }
         size_t stride(size_t dim) const {
             LFS_ASSERT_MSG(is_valid(),
                            "stride() called on an invalid tensor");
@@ -2763,7 +2892,8 @@ namespace lfs::core {
     };
 
     inline uint64_t Tensor::lazy_expr_id() const {
-        if (state_ && state_->lazy && state_->lazy->node_id != 0) {
+        // Only the still-pending handle reports the deferred node id.
+        if (is_deferred() && state_->lazy->node_id != 0) {
             return state_->lazy->node_id;
         }
         return internal::tensor_lazy_expr_id(*this);
