@@ -175,3 +175,63 @@
   Final trio runs: `perf_campaign/runs/20260806T174846Z_run{1,2,3}/`
 
 
+||||||| f570d3b8
+
+## Task 4.1 — Kill the ~3× compact peak
+
+- **Branch:** `lfs-elite-densify`
+- **Change:** `MRNF::compact_splats` gathers via `zeros_direct(cap) + index_select_into + swap`
+  instead of `index_select → reserve(max_cap)` (3-buffer peak). Grad buffers use
+  `zeros_direct` too; free/deleted bookkeeping rebuilt without double-`reserve` on
+  `cuda.direct` storage (fixes max_cap=0 grow).
+- **Fail evidence (TDD, pre-fix for 4.2-related API wiring; pattern tests document 3×):**
+  ```
+  CompactSplatPeakPattern.OldPathExceedsTwoXBound  — concurrent = 2.5× tensor@cap (PASS documents bug)
+  Old concurrent = src@cap + exact@new + dest@cap
+  New concurrent = src@cap + dest@cap = 2×
+  ```
+  Pre-change production path matched the old algorithm (verified by code at
+  `mrnf.cpp` compact lambda: index_select + reserve).
+- **Pass evidence:**
+  ```
+  [==========] 6 tests (CompactSplatPeakPattern + CompactSplatsCorrect + AdamCapacity*)
+  [  PASSED  ] 6 tests.
+  MRNFStrategyTest.* + densify suite: 101 tests PASSED
+  ```
+- **Bench gate (flock, 3×2000 iters, bonsai/images_4, max_cap=500k):**
+
+  | metric | baseline | after 4.1+4.2 | Δ |
+  |---|---:|---:|---:|
+  | wall_s (med) | 9.00 | 9.11 | +1.2% noise |
+  | steady_ms/iter | 4.129 | 4.141 | +0.3% flat |
+  | steady_allocs/iter | 5.05 | 5.05 | 0 |
+  | peak_VRAM_MiB | 1156.3 | **1146.2** | **−10.1 MiB** |
+  | B/splat | 429.0 | 429.0 | 0 |
+  | last_loss | ~0.039 | ~0.030 | ok |
+
+- **Commit:** `e5f78be5`
+
+## Task 4.2 — Capacity invariant guard
+
+- **Branch:** `lfs-elite-densify`
+- **Change:** After any Adam slow-path grow (`extend_state_by_gather`,
+  `extend_state_for_new_params`, `add_new_params_gather(shN)`): re-`reserve` with
+  `growth_factor`, set `state.capacity`, `note_slow_path_grow` (LOG_WARN + counter).
+  `LFS_DEBUG_ASSERT(capacity >= size)` after grow entry points.
+  API: `AdamOptimizer::slow_path_grow_count()` / `reset_slow_path_grow_count()`.
+- **Fail evidence (TDD, before re-reserve):**
+  ```
+  AdamCapacityInvariant.SlowPathReReservesSoSecondGrowIsFast
+  Expected equality: slow_path_grow_count() Which is: 0  vs  1u
+  Expected: (state->capacity) >= (state->size), actual: 0 vs 20
+  Expected: (state->exp_avg.capacity()) > (0u), actual: 0 vs 0
+  [  FAILED  ] … (and SlowPathGatherAlsoRestoresCapacity similarly)
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] AdamCapacityInvariant.SlowPathReReservesSoSecondGrowIsFast
+  [  PASSED  ] AdamCapacityInvariant.SlowPathGatherAlsoRestoresCapacity
+  (slow path counter=1 after first grow; second grow fast, alloc_delta≤2)
+  ```
+- **Bench:** same gate table as 4.1 (measured together after both landed).
+- **Commit:** `a3bebc21`
