@@ -37,3 +37,14 @@ loss in Wave-2 band.
 - ncu hardware counters are currently admin-locked (RmProfilingAdminOnly=1). Until the
   modprobe unlock lands (or run ncu under sudo), treat the ncu metrics in MEASURE as
   optional confirmation, not blockers. Do NOT skip the nsys measurements.
+
+## MEASURED ATTRIBUTION (profiling harness, 2026-08-07) — READ FIRST
+- Regression is SH-DEGREE-GATED: preprocess_backward_cu bonsai iters 200-500 (SH deg 0):
+  parent 179.3us vs codec 140.3us (codec FASTER); iters 1600-1900 (SH>=1): 450.0us vs
+  906.3us (+101%). Confirms root cause #1 (shN register live range).
+- GATE PROTOCOL: measure with the harness LATE WINDOW:
+  LFS_PROF_START=1600 LFS_PROF_STOP=1900 LFS_PROF_ITERS=1920 ./perf_campaign/profile.sh ...
+  An early-window or whole-run-median check can FALSELY PASS. Harness + usage:
+  perf_campaign/profile.sh (merged from lfs-elite-prof), details in
+  perf_campaign/profiles/codec-pair-63aa08c6.md in the bench worktree.
+- ncu deep metrics: admin-locked; exact sudo command documented in the harness docs.
