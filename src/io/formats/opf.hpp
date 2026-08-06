@@ -97,6 +97,11 @@ namespace lfs::io::opf {
         CalibratedPose pose;
     };
 
+    struct CameraTransform {
+        std::array<float, 9> rotation_world_to_camera;
+        std::array<float, 3> translation_world_to_camera;
+    };
+
     // Parses and validates the OPF project graph. Resource files are resolved
     // relative to the directory containing the project file and must remain
     // inside that directory. Unknown extension items/resources are retained
@@ -117,5 +122,6 @@ namespace lfs::io::opf {
         const std::vector<CameraImage>& camera_list,
         const std::vector<InputSensor>& sensors,
         const std::vector<CalibratedCamera>& calibrated_cameras);
+    [[nodiscard]] CameraTransform to_camera_transform(const CalibratedPose& pose);
 
 } // namespace lfs::io::opf

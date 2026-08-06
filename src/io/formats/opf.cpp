@@ -616,4 +616,22 @@ namespace lfs::io::opf {
         }
         return result;
     }
+
+    CameraTransform to_camera_transform(const CalibratedPose& pose) {
+        const auto& r = pose.rotation;
+        const std::array<float, 9> transpose = {
+            r[0], r[3], r[6],
+            r[1], r[4], r[7],
+            r[2], r[5], r[8]};
+        return {transpose,
+                {-static_cast<float>(transpose[0] * pose.position[0] +
+                                     transpose[1] * pose.position[1] +
+                                     transpose[2] * pose.position[2]),
+                 -static_cast<float>(transpose[3] * pose.position[0] +
+                                     transpose[4] * pose.position[1] +
+                                     transpose[5] * pose.position[2]),
+                 -static_cast<float>(transpose[6] * pose.position[0] +
+                                     transpose[7] * pose.position[1] +
+                                     transpose[8] * pose.position[2])}};
+    }
 } // namespace lfs::io::opf

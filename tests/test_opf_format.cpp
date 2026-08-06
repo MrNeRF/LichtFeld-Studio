@@ -268,3 +268,13 @@ TEST_F(OpfFormatTest, AssemblesCameraCatalogsForImport) {
     EXPECT_EQ(result->front().width, 1920u);
     EXPECT_EQ(result->front().pose.position[1], 2.0f);
 }
+
+TEST_F(OpfFormatTest, ConvertsCameraCenterToWorldToCameraTransform) {
+    const lfs::io::opf::CalibratedCamera camera{42, 7, {1.0, 2.0, 3.0}, {0.0, 0.0, 0.0}};
+    const auto transform = lfs::io::opf::to_camera_transform(
+        lfs::io::opf::to_calibrated_pose(camera));
+    EXPECT_EQ(transform.rotation_world_to_camera,
+              (std::array<float, 9>{1, 0, 0, 0, 1, 0, 0, 0, 1}));
+    EXPECT_EQ(transform.translation_world_to_camera,
+              (std::array<float, 3>{-1, -2, -3}));
+}
