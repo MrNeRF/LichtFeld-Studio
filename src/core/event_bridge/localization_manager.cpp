@@ -115,8 +115,8 @@ namespace lfs::event {
                                            available_languages_.end(),
                                            DEFAULT_LANGUAGE) != available_languages_.end();
         const std::string initial_language = saved_available
-                                                ? saved
-                                                : (has_default ? DEFAULT_LANGUAGE : available_languages_[0]);
+                                                 ? saved
+                                                 : (has_default ? DEFAULT_LANGUAGE : available_languages_[0]);
         if (!loadLanguage(initial_language))
             return false;
 

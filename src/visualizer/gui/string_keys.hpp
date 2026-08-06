@@ -42,7 +42,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* MENU = "menu.help";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
-    }     // namespace Menu
+    } // namespace Menu
 
     namespace Window {
         inline constexpr const char* INPUT_SETTINGS = "window.input_settings";
@@ -68,7 +68,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* BUILD_TYPE = "about.build_info.build_type";
             inline constexpr const char* PLATFORM = "about.build_info.platform";
         } // namespace BuildInfo
-    }     // namespace About
+    } // namespace About
 
     namespace Training {
         namespace Section {
@@ -204,12 +204,11 @@ namespace lichtfeld::Strings {
             inline constexpr const char* PPISP_FREEZE_GAUSSIANS = "training.tooltip.ppisp_freeze_gaussians";
         } // namespace Tooltip
 
-
         namespace Button {
             inline constexpr const char* CLEAR = "training.button.clear";
             inline constexpr const char* SWITCH_EDIT_MODE = "training.button.switch_edit_mode";
         } // namespace Button
-    }     // namespace Training
+    } // namespace Training
 
     namespace Scene {
         inline constexpr const char* ADD_PLY = "scene.add_ply";
@@ -331,7 +330,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EMPTY = "mode.empty";
         inline constexpr const char* DATASET = "mode.dataset";
     } // namespace Mode
-
 
     namespace Controls {
         inline constexpr const char* WASD = "controls.wasd";

@@ -22,7 +22,6 @@
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
 #include "vulkan_external_tensor.hpp"
-#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_result.hpp"
 
 #include <algorithm>
