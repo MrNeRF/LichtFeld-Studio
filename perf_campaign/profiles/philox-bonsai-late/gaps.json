@@ -1,0 +1,36 @@
+{
+  "window_ms": 1282.025,
+  "gpu_busy_ms": 1185.223,
+  "gpu_idle_ms": 96.802,
+  "gpu_idle_pct": 7.55,
+  "n_kernels": 12010,
+  "n_memcpy": 1501,
+  "n_memset": 4680,
+  "n_busy_islands": 16708,
+  "gap_histogram": {
+    "lt_2us": {
+      "count": 12907,
+      "total_ms": 8.389
+    },
+    "2_10us": {
+      "count": 2283,
+      "total_ms": 12.532
+    },
+    "10_100us": {
+      "count": 1014,
+      "total_ms": 18.728
+    },
+    "gt_100us": {
+      "count": 503,
+      "total_ms": 57.153
+    }
+  },
+  "per_iteration": {
+    "n_iterations_attributed": 300,
+    "median_kernel_launches_per_iter": 29.0,
+    "median_span_us": 3996.0,
+    "median_busy_us": 3772.2,
+    "median_gap_us": 107.3,
+    "median_gap_pct_of_span": 2.7
+  }
+}

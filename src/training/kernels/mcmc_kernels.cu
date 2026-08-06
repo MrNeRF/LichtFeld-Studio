@@ -238,15 +238,14 @@ namespace lfs::training::mcmc {
         if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
             return;
 
-        curandState rng;
+        // Philox: free counter init vs XORWOW skip-ahead (Directive-2: 1149→6.5µs).
+        curandStatePhilox4_32_10_t rng;
         curand_init(seed, idx, 0, &rng);
-        const float nx = curand_normal(&rng);
-        const float ny = curand_normal(&rng);
-        const float nz = curand_normal(&rng);
+        const float4 n = curand_normal4(&rng);
 
         apply_noise_to_mean(
             raw_opacities, raw_scales, raw_quats, means, idx, current_lr,
-            nx, ny, nz);
+            n.x, n.y, n.z);
     }
 
     void launch_add_noise_kernel(
@@ -961,7 +960,7 @@ namespace lfs::training::mcmc {
             return;
         }
 
-        curandState state;
+        curandStatePhilox4_32_10_t state;
         curand_init(seed, idx, 0, &state);
 
         const float u = curand_uniform(&state) * prob_sum;
@@ -1080,7 +1079,7 @@ namespace lfs::training::mcmc {
             return;
         }
 
-        curandState state;
+        curandStatePhilox4_32_10_t state;
         curand_init(seed, idx, 0, &state);
 
         const float u = curand_uniform(&state) * prob_sum;

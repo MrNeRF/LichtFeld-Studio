@@ -70,11 +70,15 @@ namespace lfs::training::mrnf_strategy {
         if (weight < 1e-12f)
             return;
 
-        curandState rng;
+        // Philox: counter-setup only (no XORWOW skip-ahead). curand_normal4
+        // yields 3 usable normals + 1 discarded — matches Directive-2 microbench.
+        curandStatePhilox4_32_10_t rng;
         curand_init(seed, idx, 0, &rng);
+        const float4 n = curand_normal4(&rng);
+        const float noise_xyz[3] = {n.x, n.y, n.z};
 
         for (int d = 0; d < 3; ++d) {
-            const float noise = curand_normal(&rng) * weight;
+            const float noise = noise_xyz[d] * weight;
             const float clamped_noise = fminf(fmaxf(noise, -median_scale), median_scale);
             means[idx * 3 + d] += clamped_noise;
         }
@@ -317,7 +321,7 @@ namespace lfs::training::mrnf_strategy {
             return;
         }
 
-        curandState rng;
+        curandStatePhilox4_32_10_t rng;
         curand_init(seed, idx, 0, &rng);
         float u = curand_uniform(&rng);
         u = fmaxf(u, 1e-10f);
@@ -340,7 +344,7 @@ namespace lfs::training::mrnf_strategy {
         const int64_t src_idx = indices[idx];
         const float w = weights[src_idx];
 
-        curandState rng;
+        curandStatePhilox4_32_10_t rng;
         curand_init(seed, idx, 0, &rng);
         float u = curand_uniform(&rng);
         u = fmaxf(u, 1e-10f);

@@ -863,3 +863,95 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 - **ncu:** HW counters admin-locked, passwordless sudo unavailable; harness
   prints the exact `sudo ncu` command (see `profile.sh ncu`).
 - **Commits:** `3abe9997` (hooks), `6194c94e` (harness), summaries follow.
+
+---
+## Task WO-NOISE-PHILOX — Philox4_32_10 + curand_normal4 (Wave 5 rank-1)
+
+- **Branch:** `lfs-elite`
+- **Change:** Replace per-thread XORWOW `curandState` + `curand_init` with
+  `curandStatePhilox4_32_10_t` + `curand_normal4` (noise) / `curand_uniform`
+  (sample paths) in:
+  - `mrnf_kernels.cu` — `mrnf_noise_injection_kernel`, `gumbel_key_*`
+  - `mcmc_kernels.cu` — `inject_noise_kernel`, multinomial sample kernels
+  Philox init is counter-setup only (no XORWOW skip-ahead). Distribution is
+  statistically N(0,1)-equivalent; trajectories not bit-identical.
+  Out of scope (logged): `tensor_random_ops.cu` still uses XORWOW for generic
+  Tensor random fills — not on the training hot path measured here.
+
+### TDD evidence
+
+**Fail (pre-Philox, N=400k cudaEvent median, 21 reps):**
+```
+[PhiloxKernelTime] mcmc inject_noise N=400k median_us=1896.45
+Expected: (median_us) < (50.0), actual: 1896.45 vs 50  FAILED
+[PhiloxKernelTime] mrnf_noise_injection N=400k median_us=1888.48
+Expected: (median_us) < (50.0), actual: 1888.48 vs 50  FAILED
+```
+Distribution tests already green on XORWOW (mean/var/normality).
+
+**Pass (post-Philox):**
+```
+[PhiloxKernelTime] mcmc inject_noise N=400k median_us=11.264   (~168×)
+[PhiloxKernelTime] mrnf_noise_injection N=400k median_us=7.168 (~263×)
+[  PASSED  ] 6 tests from FusedNoiseInjectionTest
+[  PASSED  ] 28 tests (MRNFStrategy + McmcMultinomial + FusedNoise)
+```
+
+### Profile gate (bonsai late, iters 1600–1900)
+
+| kernel | before avg µs (63aa08c6-late) | after (philox-bonsai-late) | speedup |
+|---|---:|---:|---:|
+| `mrnf_noise_injection_kernel` | 1325.6 (25.2% GPU) | **5.9** (0.2% GPU) | **224×** |
+| `gumbel_key_for_indices_kernel` | 1476.2 | **3.2** | **461×** |
+| median GPU busy / iter | ~5080 µs (prior late notes) | **3772 µs** | **−25.7%** |
+| median span / iter | ~5180 µs | **3996 µs** | −22.9% |
+
+Matches Directive-2 expectation (~25% late GPU-busy drop from removing noise
+from the top-kernel table). Profile: `perf_campaign/profiles/philox-bonsai-late/`.
+
+### Dual-workload medians (3 runs each)
+
+**Bonsai 2k** (`20260806T223610Z_run{1,2,3}`):
+
+| metric | Wave-2.2 (63aa08c6) | after Philox | Δ |
+|---|---:|---:|---:|
+| wall_s (med) | 9.67 | **7.52** | **−22%** |
+| steady_ms/iter | 4.287 | **3.316** | **−22.6%** |
+| steady_allocs/iter | 0.08 | **0.08** | flat |
+| peak VRAM MiB | 930.1 | **930.1** | flat |
+| B/splat | 409.4 | **409.4** | flat |
+| last_loss | 0.030–0.035 | **0.028–0.033** | ok |
+
+Loss-curve overlay (every 200, run1/2/3): healthy monotone-ish decay, no
+collapse. run1: 200=0.16 → 1000=0.07 → 1900=0.03; run3: 200=0.15 → 1000=0.08
+→ 1900=0.028. Final losses in historical band.
+
+**Bicycle 7k canary** (`20260806T223757Z_run{1,2,3}`):
+
+| metric | Wave-2.2 | after Philox | Δ |
+|---|---:|---:|---:|
+| wall_s (med) | 41.07 | **26.00** | **−37%** |
+| steady_ms/iter | 3.215 | **1.882** | **−41%** |
+| steady_allocs/iter | 0.07 | **0.07** | flat |
+| peak VRAM MiB | 986–1018 | **986–1018** | flat |
+| B/splat | 409.4 | **409.4** | flat |
+| final loss range | 0.106–0.158 | **0.084–0.187** | high-variance OK |
+
+Loss curves (every 1k, not just final) — densify 54k→500k, no NaN/collapse:
+
+| iter | run1 | run2 | run3 |
+|---:|---:|---:|---:|
+| 1k | 0.15 | 0.19 | 0.16 |
+| 2k | 0.25 | 0.13 | 0.13 |
+| 3k | 0.12 | 0.17 | 0.12 |
+| 4k | 0.10 | 0.14 | 0.17 |
+| 5k | 0.10 | 0.11 | 0.14 |
+| 6k | 0.13 | 0.09 | 0.22 |
+| 6.9k | 0.12 | 0.13 | 0.21 |
+
+Wave-2.2 reference (run3): 1k=0.17 … 6.9k=0.11. Same qualitative shape and
+variance; quality gate PASS.
+
+### Commit
+
+- **Commit:** `acaadb8f`
