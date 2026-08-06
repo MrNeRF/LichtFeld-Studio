@@ -809,4 +809,4 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 - **Semantic note:** copy now shares stream/name/tracked/capacity/lazy (LibTorch-like
   impl share). Tests that expected independent name/stream on shallow copy updated.
 - **Runs:** bonsai `20260806T230240Z_run{1,2,3}`; bicycle `20260806T230451Z_run{1,2,3}`
-- **Commit:** `c072b4a1`
+- **Commit:** `e16e12ef`
