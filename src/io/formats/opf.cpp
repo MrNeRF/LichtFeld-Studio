@@ -672,4 +672,28 @@ namespace lfs::io::opf {
             {2}, lfs::core::Device::CPU);
         return data;
     }
+
+    Result<std::shared_ptr<lfs::core::Camera>> make_camera(const ImportedCamera& camera) {
+        auto data = to_camera_data(camera);
+        if (!data)
+            return std::unexpected(data.error());
+        auto result = std::make_shared<lfs::core::Camera>(
+            data->_R,
+            data->_T,
+            data->_focal_x,
+            data->_focal_y,
+            data->_center_x,
+            data->_center_y,
+            data->_radial_distortion,
+            data->_tangential_distortion,
+            data->_camera_model_type,
+            data->_image_name,
+            data->_image_path,
+            std::filesystem::path{},
+            data->_width,
+            data->_height,
+            static_cast<int>(camera.id),
+            static_cast<int>(camera.id));
+        return result;
+    }
 } // namespace lfs::io::opf
