@@ -64,3 +64,35 @@
   | last_loss | ~0.039 |
 
 - **Commit:** `e5506f39`
+
+## Task 1.1 — Persistent high-water sort buffers in FastGS forward
+
+- **Change:** Grow-only thread-local sort workspace in `forward.cu`
+  (keys×2, indices×2, CUB WS, ×1.2 on growth). Sorted indices stay in-cache
+  through backward; `release_sorted_primitive_indices` is a no-op free.
+- **Fail evidence (TDD):**
+  ```
+  FastGSSortBufferTest.SteadyStateSecondForwardHasZeroSortAllocs
+  Expected equality of these values:
+    delta2 Which is: 5
+    0u     Which is: 0
+  ```
+- **Pass evidence:**
+  ```
+  [  PASSED  ] FastGSSortBufferTest.SteadyStateSecondForwardHasZeroSortAllocs
+  ```
+- **Bench (flock, 3 runs, medians vs BASELINE):**
+
+  | metric | baseline | after 1.1 |
+  |---|---:|---:|
+  | wall_s | 9.00 | **9.02** |
+  | steady_ms/iter | 4.129 | **4.101** |
+  | steady_allocs/iter | **5.05** | **0.06** |
+  | peak VRAM MiB | 1156.3 | 1187.4 |
+  | B/splat | 429.0 | 429.0 |
+  | last_loss | ~0.039 | ~0.03–0.04 |
+
+  Gate G2: sort churn killed (5.05 → 0.06). G4: no ms/iter regression.
+  Residual ~0.06 allocs/iter are non-sort (densify growth / rare paths).
+  Peak VRAM +31 MiB is expected high-water residency of sort buffers.
+

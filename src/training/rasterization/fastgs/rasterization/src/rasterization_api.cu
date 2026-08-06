@@ -28,24 +28,8 @@ namespace fast_lfs::rasterization {
         thread_local std::string last_backward_error;
 
         void free_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept {
-            if (!ptr) {
-                return;
-            }
-            lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr);
-#if CUDART_VERSION >= 11020
-            const cudaError_t status = cudaFreeAsync(ptr, stream);
-#else
-            (void)stream;
-            const cudaError_t status = cudaFree(ptr);
-#endif
-            if (status != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
-                    status, "FastGS sorted-index buffer free",
-                    lfs::core::detail::format_cuda_safe(
-                        "ptr={}, stream={}", ptr, static_cast<void*>(stream)),
-                    LFS_SOURCE_SITE_CURRENT(),
-                    lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
-            }
+            // Phase 1.1: persistent high-water sort buffers — no cudaFree.
+            release_sorted_primitive_indices(ptr, stream);
         }
 
         const char* cuda_memory_type_name(cudaMemoryType type) {

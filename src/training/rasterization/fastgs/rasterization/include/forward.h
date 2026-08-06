@@ -19,6 +19,9 @@ namespace fast_lfs::rasterization {
         size_t per_instance_sort_total_size = 0;
     };
 
+    /// Phase 1.1: sorted indices live in grow-only thread-local cache — no free.
+    void release_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept;
+
     ForwardResult forward(
         std::function<char*(size_t)> per_primitive_buffers_func,
         std::function<char*(size_t)> per_tile_buffers_func,
