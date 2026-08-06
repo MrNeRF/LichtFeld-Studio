@@ -836,3 +836,30 @@ re-import; NVRM fix is densify/grow ordering for GUI.
   Task 2.2 gate remains the live B/splat number (409.4). Enabling 2.1 is expected
   to drop ~409→~313 once wired.
 - **Commit:** `514b2a49`
+
+## Task PROF-1 — nsys profiling harness + first steady-state profiles
+
+- **Branch:** `lfs-elite-prof` (bench worktree)
+- **Change:** `perf_campaign/profile.sh` (`timeline|kernels|ncu`) +
+  `launch_gaps.py`/`profile_summary.py`; env-gated trainer hooks
+  (`LFS_NVTX=1`, `LFS_PROFILE_START_ITER/STOP_ITER` → cudaProfilerStart/Stop),
+  zero-cost when off. nsys captures exactly the slice [start,stop) via
+  `--capture-range=cudaProfilerApi`; raw .nsys-rep gitignored, summaries committed.
+- **Captures (all under flock /tmp/lfs-bench.lock):**
+  `d81a5c2b-bonsai`, `d81a5c2b-bicycle` (iters 200-500);
+  codec pair `487d5c2b-bonsai` / `63aa08c6-bonsai` (200-500) and
+  `*-bonsai-late` (1600-1900). Summaries in `perf_campaign/profiles/*/summary.md`.
+- **Headline numbers (tip, bonsai 200-500):** 29 kernel launches/iter;
+  median iter busy 2.73 ms; blend_backward_cu 55.5% of GPU time;
+  mrnf_noise_injection 15%; memsets ~16/iter but only ~18 µs/iter total.
+  Late window (1600-1900): GPU busy 5.08 ms of 5.18 ms span (1.9% gap) —
+  GPU-bound at large N; CUDA-graph upside is small there, larger (0.2-0.8 ms)
+  at small N / bicycle where host dispatch dominates.
+- **Codec-pair delta (feeds WO-G2):** preprocess_backward_cu
+  200-500 (SH deg 0): 179.3→140.3 µs (codec FASTER);
+  1600-1900 (SH deg ≥1): 450.0→906.3 µs (**+101%**). Weighted ≈ +0.24 ms/iter,
+  matches the +0.222 ms steady regression. Regression is SH-degree gated →
+  WO-G2 must gate on a late window. Details: `profiles/codec-pair-63aa08c6.md`.
+- **ncu:** HW counters admin-locked, passwordless sudo unavailable; harness
+  prints the exact `sudo ncu` command (see `profile.sh ncu`).
+- **Commits:** `3abe9997` (hooks), `6194c94e` (harness), summaries follow.
