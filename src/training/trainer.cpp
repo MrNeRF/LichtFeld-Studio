@@ -66,6 +66,9 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cuda_profiler_api.h>
 #include <cuda_runtime.h>
 #include <expected>
 #include <format>
@@ -3773,6 +3776,41 @@ namespace lfs::training {
         return {};
     }
 
+    namespace {
+        // Profiling hooks for perf_campaign/profile.sh. Zero-cost unless enabled
+        // via environment:
+        //   LFS_NVTX=1                 -> per-iteration NVTX range "train_step:<iter>"
+        //   LFS_PROFILE_START_ITER=N   -> cudaProfilerStart() at iteration N
+        //   LFS_PROFILE_STOP_ITER=M    -> cudaProfilerStop() at iteration M
+        // Together with `nsys profile --capture-range=cudaProfilerApi` this captures
+        // exactly the steady-state slice [N, M) with no warmup pollution.
+        struct StepProfilingHooks {
+            bool nvtx = false;
+            int start_iter = -1;
+            int stop_iter = -1;
+            static const StepProfilingHooks& get() {
+                static const StepProfilingHooks hooks = [] {
+                    StepProfilingHooks h;
+                    if (const char* e = std::getenv("LFS_NVTX"))
+                        h.nvtx = (e[0] == '1');
+                    if (const char* e = std::getenv("LFS_PROFILE_START_ITER"))
+                        h.start_iter = std::atoi(e);
+                    if (const char* e = std::getenv("LFS_PROFILE_STOP_ITER"))
+                        h.stop_iter = std::atoi(e);
+                    return h;
+                }();
+                return hooks;
+            }
+        };
+        struct NvtxIterationGuard {
+            bool active = false;
+            ~NvtxIterationGuard() {
+                if (active)
+                    nvtxRangePop();
+            }
+        };
+    } // namespace
+
     lfs::Result<Trainer::StepDisposition> Trainer::train_step(
         int iter,
         lfs::core::Camera* cam,
@@ -3781,6 +3819,18 @@ namespace lfs::training {
         std::stop_token stop_token) {
         StepPhase current_phase = StepPhase::Forward;
         bool persistent_commit = false;
+        const auto& prof_hooks = StepProfilingHooks::get();
+        if (iter == prof_hooks.start_iter)
+            cudaProfilerStart();
+        if (iter == prof_hooks.stop_iter)
+            cudaProfilerStop();
+        NvtxIterationGuard nvtx_iter_guard;
+        if (prof_hooks.nvtx) {
+            char range_name[32];
+            std::snprintf(range_name, sizeof(range_name), "train_step:%d", iter);
+            nvtxRangePushA(range_name);
+            nvtx_iter_guard.active = true;
+        }
         auto result = [&]() -> lfs::Result<StepDisposition> {
             try {
                 LFS_VRAM_SCOPE("train.step");
