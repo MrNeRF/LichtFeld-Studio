@@ -29,3 +29,11 @@ attribution); ncu registers/occupancy/local-mem/barrier-stall/XU-pipe to rank; a
 each F-step re-measure. GATE: bonsai 3-run median steady_ms <= 4.065 (BICYCLE IS FLAT
 FOR THIS KERNEL — bonsai gates), B/splat stays 409.4, codec tests 6/6, ledger green,
 loss in Wave-2 band.
+
+## Profiler availability note (2026-08-06)
+- nsys (2026.1.3) works unprivileged NOW: use `nsys profile --stats=true -o /tmp/prof <bench cmd>`
+  and compare `preprocess_backward_cu` kernel-duration sums per F-step. This suffices for
+  attribution and step confirmation.
+- ncu hardware counters are currently admin-locked (RmProfilingAdminOnly=1). Until the
+  modprobe unlock lands (or run ncu under sudo), treat the ncu metrics in MEASURE as
+  optional confirmation, not blockers. Do NOT skip the nsys measurements.
