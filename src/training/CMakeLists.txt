@@ -105,6 +105,7 @@ set(TRAINING_NEW_SOURCES
         progress.cpp
         training_cropbox_mask.cpp
         trainer.cpp
+        vram_ledger.cpp
     training_setup.cpp
 )
 

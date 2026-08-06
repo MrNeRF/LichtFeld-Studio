@@ -98,6 +98,20 @@ namespace lfs::diagnostics {
         std::size_t live_bytes = 0;
     };
 
+    // Persistent training-state ledger (Phase 0.2 / gate G1).
+    // Buckets match docs/analysis/spirulae-comparison/footprint-compare.md §7
+    // and SPEED_VRAM_OPTIMIZATION_PLAN §0b (params / optim / grads / densify-aux).
+    // bytes_per_splat = total_bytes / live_splats (0 when N==0).
+    struct TrainingStateLedger {
+        std::size_t params_bytes = 0;
+        std::size_t optimizer_bytes = 0;
+        std::size_t gradients_or_helpers_bytes = 0;
+        std::size_t densify_aux_bytes = 0;
+        std::size_t total_bytes = 0;
+        std::size_t live_splats = 0;
+        double bytes_per_splat = 0.0;
+    };
+
     struct VramProcessSnapshot {
         std::size_t cuda_used = 0;
         std::size_t cuda_total = 0;
@@ -176,6 +190,7 @@ namespace lfs::diagnostics {
         std::vector<NamedCounter> total_counters;
         std::vector<NamedHistogram> histograms;
         std::vector<TopAlloc> top_live;
+        TrainingStateLedger training_state;
     };
 
     class LFS_DIAGNOSTICS_API VramScope {
@@ -314,6 +329,12 @@ namespace lfs::diagnostics {
                                  std::size_t total_used,
                                  std::size_t total,
                                  std::string device_name);
+
+        // Training-state bytes-per-splat ledger (Phase 0.2). Caller computes the
+        // ledger from SplatData + AdamOptimizer; profiler stores the last value
+        // for HUD / bench scripts.
+        void setTrainingStateLedger(const TrainingStateLedger& ledger);
+        [[nodiscard]] TrainingStateLedger trainingStateLedger() const;
 
         [[nodiscard]] VramProfilerSnapshot snapshot() const;
 

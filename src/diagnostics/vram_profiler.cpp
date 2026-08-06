@@ -306,6 +306,7 @@ namespace lfs::diagnostics {
         std::unordered_map<MetricKey, Metric, MetricKeyHash> static_metrics;
         std::unordered_map<void*, AllocationRecord> allocations;
         std::unordered_map<std::string, ScopeNodeStats> scope_nodes;
+        TrainingStateLedger training_state;
         VramProcessSnapshot process;
         std::size_t pinned_host_used = 0;
         std::size_t pinned_host_cached = 0;
@@ -1187,6 +1188,20 @@ namespace lfs::diagnostics {
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
+    void VramProfiler::setTrainingStateLedger(const TrainingStateLedger& ledger) {
+        if (!enabled()) {
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        impl_->training_state = ledger;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    TrainingStateLedger VramProfiler::trainingStateLedger() const {
+        std::lock_guard lock(impl_->mutex);
+        return impl_->training_state;
+    }
+
     VramProfilerSnapshot VramProfiler::snapshot() const {
         std::lock_guard lock(impl_->mutex);
         VramProfilerSnapshot out;
@@ -1245,6 +1260,7 @@ namespace lfs::diagnostics {
         out.accounted_peak_bytes = impl_->accounted_peak_bytes;
         out.accounted_live_history.assign(impl_->accounted_history.begin(),
                                           impl_->accounted_history.end());
+        out.training_state = impl_->training_state;
         out.process = impl_->process;
         out.rows.reserve(impl_->metrics.size() + impl_->static_metrics.size());
         std::unordered_map<std::string, VramTreeNodeSnapshot> tree_nodes;

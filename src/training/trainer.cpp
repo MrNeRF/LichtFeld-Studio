@@ -34,6 +34,7 @@
 #include "io/filesystem_utils.hpp"
 #include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "lfs/training/vram_ledger.hpp"
 #include "losses/losses.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "python/runner.hpp"
@@ -3855,6 +3856,8 @@ namespace lfs::training {
                 if (live_vram_profiler_enabled() && strategy_) {
                     record_splat_vram_breakdown(strategy_->get_model());
                     record_optimizer_vram_breakdown(strategy_->get_optimizer());
+                    publish_training_state_ledger(strategy_->get_model(),
+                                                  &strategy_->get_optimizer());
                     record_vram_tensor("train.persistent", "loss_accumulator", loss_accumulator_);
                     record_vram_tensor("train.persistent", "pipelined_mask", pipelined_mask_);
                     record_vram_tensor("train.persistent", "pipelined_depth", pipelined_depth_);
@@ -5530,6 +5533,8 @@ namespace lfs::training {
                 if (live_vram_profiler_enabled() && strategy_) {
                     record_splat_vram_breakdown(strategy_->get_model());
                     record_optimizer_vram_breakdown(strategy_->get_optimizer());
+                    publish_training_state_ledger(strategy_->get_model(),
+                                                  &strategy_->get_optimizer());
                     lfs::diagnostics::VramProfiler::instance().sampleCudaMemory();
                 }
 
