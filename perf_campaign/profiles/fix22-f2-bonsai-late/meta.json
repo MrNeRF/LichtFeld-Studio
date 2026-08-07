@@ -1,0 +1,14 @@
+{
+  "label": "fix22-f2-bonsai-late",
+  "commit": "a93cd668",
+  "branch": "lfs-elite",
+  "dataset": "/home/gauss/data/360_v2/bonsai",
+  "images": "images_4",
+  "strategy": "mrnf",
+  "max_cap": 500000,
+  "iters_total": 1920,
+  "profiled_slice": [1600, 1900],
+  "gpu": "NVIDIA GeForce RTX 4080",
+  "date_utc": "2026-08-07T00:09:37Z",
+  "tool": "nsys"
+}

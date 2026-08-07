@@ -1151,3 +1151,33 @@ Profile: `perf_campaign/profiles/fix22-f1-bonsai-late/summary.md`
 Runs: `perf_campaign/runs/fix22_f1_bonsai/`
 
 - **Commit:** (this)
+
+## FIX-2.2 F2 — fused block_reduce_min4 bounds
+
+- **Branch:** `lfs-elite`
+- **Change:**
+  - `warp_reduce.cuh`: `block_reduce_min4(float4)` via `__shfl_xor` butterfly +
+    one non-static shared float4 round (1 barrier).
+  - Joint Adam bounds pack `{u_min,-u_max,s_min,-s_max}` so one min4 replaces
+    four alternating min/max reduces (30→12 barriers across 6 sections; fixes
+    static-shared race between min/max).
+  - Wired in `adam_step_row_joint` + `apply_shN_grads_packed_joint`.
+
+### Kernel timing (bonsai late 1600–1900)
+
+| | preprocess_backward avg µs | Δ vs prev |
+|---|---:|---:|
+| after F1 | 622.0 | — |
+| after F2 (`fix22-f2-bonsai-late`) | **603.8** | **−18.2 (−2.9%)** |
+
+### Bonsai gate med×3
+
+| metric | after F1 | after F2 |
+|---|---:|---:|
+| steady_ms | 3.148 | **3.136** |
+| B/splat | 409.4 | **409.4** |
+| wall_s | 7.22 | **7.20** |
+
+Gate ≤4.065 still **PASS**.
+
+- **Commit:** (this)

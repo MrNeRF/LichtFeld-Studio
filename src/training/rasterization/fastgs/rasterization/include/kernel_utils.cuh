@@ -249,11 +249,15 @@ namespace fast_lfs::rasterization::kernels {
             }
         }
 
-        // Block-wide bounds for this 256-splat quant block (blockDim must be 256).
-        const float u_min = lfs::core::warp_ops::block_reduce_min(local_u_min);
-        const float u_max = lfs::core::warp_ops::block_reduce_max(local_u_max);
-        const float s_min = lfs::core::warp_ops::block_reduce_min(local_s_min);
-        const float s_max = lfs::core::warp_ops::block_reduce_max(local_s_max);
+        // FIX-2.2 F2: fused min4 on {u_min,-u_max,s_min,-s_max} → 1 barrier
+        // (plus the sm_bounds sync below = 2/section) instead of 4 separate
+        // min/max reduces that raced on static __shared__.
+        const float4 red = lfs::core::warp_ops::block_reduce_min4(
+            make_float4(local_u_min, -local_u_max, local_s_min, -local_s_max));
+        const float u_min = red.x;
+        const float u_max = -red.y;
+        const float s_min = red.z;
+        const float s_max = -red.w;
 
         __shared__ float4 sm_bounds;
         if (threadIdx.x == 0) {
@@ -528,10 +532,13 @@ namespace fast_lfs::rasterization::kernels {
             (void)n_cells_local;
         }
 
-        const float u_min = lfs::core::warp_ops::block_reduce_min(local_u_min);
-        const float u_max = lfs::core::warp_ops::block_reduce_max(local_u_max);
-        const float s_min = lfs::core::warp_ops::block_reduce_min(local_s_min);
-        const float s_max = lfs::core::warp_ops::block_reduce_max(local_s_max);
+        // FIX-2.2 F2: fused min4 bounds reduce (see adam_step_row_joint).
+        const float4 red = lfs::core::warp_ops::block_reduce_min4(
+            make_float4(local_u_min, -local_u_max, local_s_min, -local_s_max));
+        const float u_min = red.x;
+        const float u_max = -red.y;
+        const float s_min = red.z;
+        const float s_max = -red.w;
 
         __shared__ float4 sm_bounds;
         if (threadIdx.x == 0) {
