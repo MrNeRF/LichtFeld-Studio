@@ -123,6 +123,7 @@ set(TEST_FILES
     test_joint_bounds_grow_only.cpp
     test_steady_alloc_invariant.cpp
     test_allocator_hygiene.cpp
+    test_pinned_stream_teardown.cpp
     test_fastgs_sort_buffers.cpp
     test_warp_cull_blend.cpp
     test_warp_cull_bwd.cpp

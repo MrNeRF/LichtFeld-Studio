@@ -302,3 +302,18 @@ capacity-ensure abort. Tracked as ISS-024.
 - **Gates:** full suite 3418P/14F (same 14 pre-existing; +2 green); dual-workload
   bonsai med 2.614 / bicycle 2.649 ms/iter, 307.4 B/splat; GUI default-5M past densify
   clean through 2500 (`/tmp/lfs-iss025-gui.log`).
+
+## ISS-026 — GUI train-end SIGSEGV: pinned GT block event on destroyed stream
+- **Status:** FIXED — see commit below. Found by Fable Agent 1 (gui-vram-waste audit).
+- Crash: exit 139 ~1s after "Training finished" (GUI only, pinned GT tier populated):
+  clear_gt_cache -> PinnedMemoryAllocator::deallocate -> record_uses -> cudaEventRecord on the
+  destroyed training stream. Root cause: deallocate() unconditionally appended the CALLER
+  stream (the tensor deleter's stored handle) to the event list; release_stream() only scrubbed
+  extra_streams, and early-returned without severing when its sync failed.
+- Fix: severed-stream tombstone registry — release_stream always severs + tombstones;
+  record_stream un-tombstones recycled handles; deallocate filters all uses against the set
+  (severed streams were drained at sever time, so skipping the fence is safe).
+- Fail-first evidence: the production crash itself (log /tmp/lichtfeld-studio-crash-1725375.log)
+  + analytic red (old code records 1 event on severed stream; new test asserts 0).
+- Gate: PinnedStreamTeardownTest 3/3; GUI --train bonsai 1500 to completion with pinned tier
+  populated (237 entries / 4393 MiB): survived teardown window, exit 0, no failure reports.
