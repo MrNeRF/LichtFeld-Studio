@@ -72,6 +72,8 @@ public:
     void destroyBuffer(_VulkanBuffer& buffer);
     // Caller must prove via timeline wait that no submitted batch still references the buffer.
     void destroyBufferRetired(_VulkanBuffer& buffer);
+    // Non-blocking poll of growth-retired shells (force=true only after device/batch idle).
+    void drainRetiredBufferShells(bool force = false);
     void resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink = true);
     template <typename T>
     _VulkanBuffer& resizeDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool no_shrink = true);
@@ -194,6 +196,22 @@ protected:
     std::array<CommandBatchSlot, kCommandBatchSlotCount> command_batch_slots_{};
     std::uint32_t next_command_batch_slot_ = 0;
     std::uint32_t active_command_batch_slot_ = 0;
+
+    // #1576: pipeline-internal timeline for growth batch-splits (not the viewport render timeline).
+    VkSemaphore buffer_retire_timeline_ = VK_NULL_HANDLE;
+    std::uint64_t next_buffer_retire_value_ = 1;
+    struct BufferRetireKey {
+        VkSemaphore semaphore = VK_NULL_HANDLE;
+        std::uint64_t value = 0;
+    };
+    struct RetiredBufferShell {
+        _VulkanBuffer shell;
+        std::array<BufferRetireKey, kCommandBatchSlotCount> keys{};
+        std::uint32_t key_count = 0;
+    };
+    std::vector<RetiredBufferShell> retired_buffer_shells_;
+    // Scripted-test forge counter for createBuffer when allocator is null.
+    std::uintptr_t test_buffer_handle_counter_ = 0xB1000;
 
     // Phase 7A submission bookkeeping (no-reset / no-replacement row).
     lfs::rendering::VulkanDispatch vulkan_dispatch_{};
@@ -325,6 +343,10 @@ private:
     void destroyComputePipeline(_ComputePipeline& pipeline);
     // Shared destroy path for destroyBuffer (wait) / destroyBufferRetired (no wait).
     void destroyBufferImpl(_VulkanBuffer& buffer, bool wait_for_pending_batch, const char* caller_name);
+    void createBufferRetireTimeline();
+    void destroyBufferRetireTimeline();
+    // Move a live owned buffer into the retire queue (or free immediately if nothing is in flight).
+    void retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer);
 
     // Shared bind / push-descriptor / push-constants / dispatch recording (batch must be active).
     void recordComputeDispatch(
@@ -340,6 +362,20 @@ private:
         const std::vector<_VulkanBuffer>& buffers);
     // Emit planned buffer barriers as a single vkCmdPipelineBarrier2 (0 or 1 call).
     void emitPlannedBufferBarriers(const std::vector<VkBufferMemoryBarrier2>& barriers);
+
+    // #1576: mid-batch growth ends the open batch with the retire timeline (no fence wait),
+    // then reopens — same control flow as HostGuard, without the host stall.
+    class [[nodiscard]] GrowthBatchSplitGuard {
+        VulkanGSPipeline* pipeline_ = nullptr;
+        bool was_active_ = false;
+        int uncaught_exceptions_ = 0;
+
+    public:
+        explicit GrowthBatchSplitGuard(VulkanGSPipeline* pipeline);
+        ~GrowthBatchSplitGuard() noexcept(false);
+        GrowthBatchSplitGuard(const GrowthBatchSplitGuard&) = delete;
+        GrowthBatchSplitGuard& operator=(const GrowthBatchSplitGuard&) = delete;
+    };
 };
 
 class [[nodiscard]] DeviceGuard {

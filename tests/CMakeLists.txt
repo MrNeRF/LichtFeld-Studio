@@ -298,6 +298,7 @@ list(APPEND TEST_FILES test_vksplat_failed_submit_no_publish.cpp)
 # Epic #1496: computed barriers (GPU-free planner/tracker suites).
 list(APPEND TEST_FILES test_vksplat_barrier_planner.cpp)
 list(APPEND TEST_FILES test_vksplat_tagged_dispatch.cpp)
+list(APPEND TEST_FILES test_vksplat_buffer_retire.cpp)
 list(APPEND TEST_FILES test_vulkan_image_tracker.cpp)
 list(APPEND TEST_FILES test_vulkan_gpu_census.cpp)
 # Epic #1497: output image pool (GPU-free host bookkeeping).
