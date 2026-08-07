@@ -1291,3 +1291,64 @@ pre-existing Phase 5.1 path, not ISS-022): **no** `degraded mode`, **no**
 
 ### Status
 **ISS-022 CLOSED.**
+
+## ISS-023 / WO-FIX-CAPENSURE — exportable capacity-ensure densify abort (2026-08-07)
+
+### Problem
+GUI training past densification start aborted with
+`add_new_params: external storage capacity … capacity-ensure failed`.
+
+### Root cause
+1. `migrateTrainingModelToAllocator` required `capacity >= max_cap`. Phase 5.1 exportable
+   blocks commit live-N + headroom only (allocator clamps), so readiness always failed →
+   full `SplatData` rebuild every strategy step → wiped `_capacity_ensure`.
+2. GUI interop allocator tags the same clamped VMM block as `vulkan_external_buffer`
+   (CUDA-only views use `splat.exportable`). Live-N readiness must accept both when
+   committed capacity is below `max_cap`.
+3. Rebind must not `std::move` the running `capacity_ensure` std::function (trampoline
+   pattern: work in member fn / heap hook; reinstall after rebind).
+
+### TDD
+`tests/test_exportable_storage.cpp`:
+- `CapacityEnsureGrowsPastInitialCommit` — grow past initial live-N commit via hook
+- `MigratePreservesCapacityEnsureUnderMaxCap` — repeated migrate under max_cap=5M keeps hook
+
+Pre-fix (predecessor): densify abort without grow path.
+Post-fix:
+```
+[==========] 12 tests from 2 test suites
+[  PASSED  ] 12 tests.   # ISS-023 pair + VksplatInputPackerTest.*
+```
+
+### Implementation (`69e22bad`)
+- `SplatData::has_capacity_ensure` / `release_capacity_ensure`
+- migrate transfers hook across rebuild; live-N target for exportable + interop kinds
+- rebind comment: callers reinstall after rebind (TrainerManager trampoline)
+
+### Gate — full suite (predecessor, before OOM on bench rebuild)
+**3408 PASS / 42 SKIP / 14 FAIL** (+2 new green vs ISS-022's 3406; same 14 pre-existing reds).
+
+### Gate — dual-workload bench (this worker; build pre-current via `build.sh`, no unbounded rebuild)
+| workload | med steady_ms | B/splat | runs |
+|---|---:|---:|---|
+| bonsai ×3 (`20260807T202310Z`) | **2.651** | **307.4** | within noise of ~2.60–2.64 |
+| bicycle 7k ×3 (`20260807T202341Z`) | **2.649** | **307.4** | within ~2.63–2.67 |
+
+### Gate — GUI repro
+```
+./build/tests/LichtFeld-Studio -d ~/data/360_v2/bonsai -o /tmp/lfs-iss023-gui-out2 \
+  --images images_4 -i 2000 --train --max-cap 5000000 --strategy mrnf
+```
+- **zero-copy** exportable at start: `capacity=309919, reserve=5000000, block=74 MiB`
+- **migrate spam gone** after interop kind fix (0 `Migrated training…` mid-run)
+- **densify grow:** `Exportable splat storage grew for densify: capacity=495910 block=118 MiB gen=2`
+- **no** `capacity-ensure failed`, **no** VkSplat degraded mode
+- Residual: post-grow `vksplat.shared_scratch` grow OOM (~4003 MiB request) → training
+  ends at iter≈1408. Separate from ISS-023; filed as follow-up (instance-buffer/scratch
+  sizing after densify; interacts with WO-FIX-GTCACHE-GUI).
+
+### Commit
+- **`69e22bad`** — fix(iss023) preserve capacity_ensure + live-N readiness
+
+### Status
+**ISS-023 CLOSED** (capacity-ensure densify abort). Residual scratch OOM tracked separately.

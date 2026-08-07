@@ -225,13 +225,17 @@
   request uses `deleted_mask_version()` not positions revision.
 
 ## ISS-023 — GUI densify abort: exportable storage capacity-ensure failed (Phase 5.1)
-- **Status:** OPEN — fix worker dispatched (WO-FIX-CAPENSURE). Found by ISS-022 worker's GUI repro.
+- **Status:** CLOSED — fixed in `69e22bad` (WO-FIX-CAPENSURE). Found by ISS-022 GUI repro.
 - Repro: GUI training past densification start; abort with
   `add_new_params: external storage capacity ... capacity-ensure failed`.
-- Context: Phase 5.1 zero-copy viewer interop (training tensors in one CUDA-VMM exportable
-  block imported into Vulkan; live-N growth, reserve=5M). Suspects: composition of master
-  fa81f3eb resize-churn removal with campaign grow path, and/or MJ-12 detach-before-grow
-  ordering during in-place VMM commit growth. Likely the user-reported dataset-load crash.
+- **Root cause:** `migrateTrainingModelToAllocator` required capacity ≥ max_cap while Phase 5.1
+  exportable commits live-N only → per-step full-model rebuild wiped `_capacity_ensure`.
+  GUI interop kind is `vulkan_external_buffer` (not only `splat.exportable`).
+- **Fix:** preserve capacity_ensure across migrate/rebind (trampoline); live-N readiness for
+  both external kinds when capacity < max_cap. TDD in `test_exportable_storage.cpp`.
+- **Gate:** dual-workload med 2.651 / 2.649 ms/iter @ 307.4 B/splat; GUI densify
+  `Exportable splat storage grew for densify` with no capacity-ensure abort / no degraded mode.
+  Full suite (predecessor) 3408 PASS / 14 pre-existing FAIL. See PROGRESS.md ISS-023.
 
 ### ISS-023 addendum (owner's .100 machine log, 2026-08-07 22:23)
 - Confirmed in production: capacity 81412 < needed 87020 at iter=1400 RefinementCommit
@@ -250,3 +254,18 @@
   back to pre-commit state (no partial grow), not merely make capacity-ensure succeed.
 - Ops note: owner GUI runs at 22:24-22:29 overlapped the capensure2 bench gate; those bench
   numbers are contamination-suspect — supervisor must re-validate before accepting.
+
+### Residual after ISS-023 close (filed as ISS-024)
+Post-densify-grow GUI OOM on `vksplat.shared_scratch` (~4003 MiB request) is **not** the
+capacity-ensure abort. Tracked as ISS-024.
+
+## ISS-024 — GUI post-densify OOM: shared_scratch / instance buffers after exportable grow
+- **Status:** OPEN — residual after ISS-023 (`69e22bad`). Interacts with WO-FIX-GTCACHE-GUI.
+- Repro: GUI bonsai `-i 2000 --train` (max_cap 5M or 500k). After first densify
+  `Exportable splat storage grew for densify: capacity≈496k`, next steps fail:
+  `External rasterizer arena 'vksplat.shared_scratch' grow failed (need≈4003 MiB)` →
+  `OUT_OF_MEMORY: Failed to allocate instance buffers`. Training ends ~iter 1408.
+- Note: request ≈ max_cap×8 KiB for max_cap=500k suggests sizing may use max_cap not live N.
+- Severity: GUI training still cannot complete past densify on this machine; headless bench OK.
+- Do not re-open ISS-023: capacity-ensure grow path is proven (log line present, no
+  capacity-ensure failed).
