@@ -242,3 +242,11 @@
   after aborted add_new_params — ISS-022 family). VERIFY the landed ISS-022/023 fixes cover
   save-after-failed-step; if not, harden save_ply to reconcile/clamp the mask. Also flag UX:
   a failed run must not report "Training finished" as if successful.
+
+### ISS-023 addendum 2 (owner observation, local run 22:29)
+- Loss SPIKES to 0.456 at iter 1408 (healthy ~0.04) before terminal abort: capacity-ensure
+  fails MID-COMMIT at 1400, model left partially mutated, ~8 further steps run on torn state.
+- Fix verification must include COMMIT ATOMICITY: any add_new_params failure path must roll
+  back to pre-commit state (no partial grow), not merely make capacity-ensure succeed.
+- Ops note: owner GUI runs at 22:24-22:29 overlapped the capensure2 bench gate; those bench
+  numbers are contamination-suspect — supervisor must re-validate before accepting.
