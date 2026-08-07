@@ -631,3 +631,62 @@ Runs: bonsai `20260807T065803Z_run{1,2,3}`; bicycle `20260807T065831Z_run{1,2,3}
 
 ### Commits
 **Commit:** `5f667096`
+
+---
+
+## WO-G4 — red-batch fix (ISS-013 / ISS-014 / SogFormat)
+
+- **Branch:** `lfs-elite`
+- **Commits:**
+  - `9c531c94` fix(ISS-014): checkpoint resume for joint Adam + cold-load null optimizer
+  - `06e8830d` fix(ISS-018/SOG): dequant/reformat shN on export; unbreak SogFormatTest
+  - `961fd224` fix(ISS-013): GraphCaptureYieldsUnsupported teardown + stream bridge
+
+### FAIL → PASS evidence
+
+| Test | Before | After |
+|---|---|---|
+| CheckpointAllocatorRegressionTest.LoadCheckpointUsesAllocatorWithMaxCapacity | SIGSEGV in `AdamOptimizer::set_frozen_lr_scale` (this=null) | PASS |
+| CheckpointResumeRoundtripTest.JointCodecAndQ16ShN (new) | n/a | PASS (joint + legacy) |
+| DeviceFaultTest.GraphCaptureYieldsUnsupported | SIGSEGV in cuStreamWaitEvent / free_routed | PASS |
+| SogFormatTest.* | 13 FAILED (SetUp Permission denied /home/paja/...) | 8 PASS + 6 SKIP (no external fixtures) |
+
+### Root causes
+1. **ISS-014:** `load_checkpoint` always called `get_optimizer().set_frozen_lr_scale` even when cold strategy never `initialize()`d (`_optimizer==null`). Joint Adam v2 serialize wrote 2 tensors without a marker while deserialize expected 4 legacy tensors.
+2. **SOG:** `kmeans_sh_swizzled` requires float32 1D; q16 resident shN was passed through raw.
+3. **ISS-013:** tensors rehomed onto capture stream then stream destroyed before free → bridgeStreams on dead handle.
+
+### Full-suite note
+Excluded set (GraphCapture + CheckpointAllocator) is empty — both green.
+Independent reds still present (not WO-G4 scope): VideoFrameExtractor ×3, PythonIntegration ×3, TensorReserveInplaceCat overflow, ShValueStorage B/splat budget (WO-G6 concurrent).
+
+### tensor_hardening
+```
+[==========] 89 tests from 5 test suites ran.
+[  PASSED  ] 89 tests.
+```
+
+
+### Dual-workload gate (post WO-G4, clean binary @ 961fd224, no rebuild race)
+
+Bonsai 2000 iters ×3 (`20260807T080041Z_bonsai_run{1,2,3}`):
+| run | wall_s | steady_ms | B/splat | loss |
+|---:|---:|---:|---:|---:|
+| 1 | 3.01 | 2.594 | 303.1 | 0.047 |
+| 2 | 3.02 | 2.627 | 303.1 | 0.045 |
+| 3 | 3.04 | 2.626 | 303.1 | 0.080 |
+| **med** | **3.02** | **2.626** | **303.1** | |
+
+Bicycle 7000 iters ×3 (`20260807T080041Z_bicycle_run{1,2,3}`):
+| run | wall_s | steady_ms | B/splat | loss |
+|---:|---:|---:|---:|---:|
+| 1 | 21.34 | 2.765 | 306.8 | 0.124 |
+| 2 | 21.24 | 2.786 | 306.8 | 0.109 |
+| 3 | 21.11 | 2.768 | 306.8 | 0.132 |
+| **med** | **21.24** | **2.768** | **306.8** | |
+
+vs WO-G5 medians (bonsai 7.23/3.148, bicycle 21.12/2.817): dual-workload **unchanged-or-better** (no regression). First dirty bench failed with densify UAF due to concurrent WO-G6 WIP in tree — re-ran on clean committed tree only.
+
+### tensor_hardening
+89/89 PASSED.
+

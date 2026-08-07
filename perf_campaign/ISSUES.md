@@ -126,3 +126,15 @@
 - **Severity:** medium (Python API / visualizer)
 - **Attribution:** independent of ISS-015. Device-contract failures in tensor load during pose/view helpers.
 - **Repro:** `lichtfeld_tests --gtest_filter='PythonIntegrationTest.LookAt*:PythonIntegrationTest.GetCurrentView*:PythonIntegrationTest.RenderView*'`
+
+
+## ISS-013 — DeviceFaultTest.GraphCaptureYieldsUnsupported segfaults
+- **Status:** fixed (WO-G4) — test teardown rehomes tensors off capture stream; bridgeStreams skips unusable/capturing streams. Commit `961fd224`.
+- **Severity:** medium (crashed whole test binary)
+- **Repro (was):** `lichtfeld_tests --gtest_filter='DeviceFaultTest.GraphCaptureYieldsUnsupported'` → SIGSEGV
+
+## ISS-014 — checkpoint LOAD segfaults in AdamOptimizer::set_frozen_lr_scale
+- **Status:** fixed (WO-G4) — guard cold-load null optimizer; Adam state v3 joint ser/deser; reserve_capacity for zeros_direct/joint. Commit `9c531c94`.
+- **Severity:** HIGH (training resume)
+- **Repro (was):** CheckpointAllocatorRegressionTest → SIGSEGV in set_frozen_lr_scale
+
