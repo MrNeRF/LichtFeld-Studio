@@ -1349,4 +1349,4 @@ Heuristic picks argmin on every class above (default == winner).
 
 Gate: dual-workload **neutral+** (bicycle slightly better; no quality anomaly).
 
-- **Commit:** `0810e13e`
+- **Commit:** `652b9de2`
