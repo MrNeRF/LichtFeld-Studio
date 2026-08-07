@@ -183,3 +183,17 @@
 - **Why hooks first (not only liveness-aware deleters):** free while CUDA is healthy
   so VRAM is returned and TLS never calls into a dead context; deleters only prevent
   residual late-dtor crashes.
+
+## ISS-021 — fixcodec worker OOM-killed after landing commit (gate interrupted)
+- **Status:** dispositioned (supervisor, 2026-08-07 ~15:00).
+- lfs-w-fixcodec (WO-FIX-CODEC) hit unit MemoryMax=14G at 14:00 and was OOM-killed
+  ~22 min AFTER landing 2bf729c7 (dual-rep cluster, DualRepOptimizer 10/10, related 48/48).
+  No done-marker was written, so the chained WO-FIX-INTEG never dispatched; no uncommitted
+  work was lost (main tree clean).
+- **Gate coverage:** full suite + dual-workload bench were re-run green on top of 2bf729c7
+  by the warpbwd worker (landed 0f6660cd: bonsai 2.616 ms/iter, bicycle 2.650). The one
+  unverified piece — quant-ON MCMC 2k smoke with mid-run save/load/resume — is folded into
+  WO-FIX-INTEG as step 0.
+- **Actions:** fixcodec.done written post-hoc with provenance; fixinteg unit launched with
+  MemoryMax=16G (High=12G unchanged); watchdog glob extended to fix*/warp* output names
+  (previously only worker?/fleet? were stall-watched).
