@@ -1500,6 +1500,13 @@ namespace lfs::core::tensor_ops {
         }
     }
 
+    __global__ void column_scale_inplace_kernel(float* __restrict__ data, float scale, size_t n) {
+        const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
+        for (size_t i = tid; i < n; i += stride)
+            data[i] *= scale;
+    }
+
     void launch_column_reduce(const float* input, float* output,
                               size_t M, size_t N, ReduceOp op, cudaStream_t stream) {
         constexpr int BLOCK = 256;
@@ -1521,10 +1528,11 @@ namespace lfs::core::tensor_ops {
             column_reduce_sum_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.column_sum");
             if (op == ReduceOp::Mean) {
-                float inv_M = 1.0f / static_cast<float>(M);
-                thrust::transform(thrust::cuda::par.on(stream),
-                                  thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N),
-                                  thrust::device_ptr<float>(output), [inv_M] __device__(float x) { return x * inv_M; });
+                // Device-side scale (no Thrust transform)
+                const float inv_M = 1.0f / static_cast<float>(M);
+                const int scale_blocks = std::max(1, (static_cast<int>(N) + BLOCK - 1) / BLOCK);
+                column_scale_inplace_kernel<<<scale_blocks, BLOCK, 0, stream>>>(output, inv_M, N);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.column_mean_scale");
             }
             break;
         case ReduceOp::Max:

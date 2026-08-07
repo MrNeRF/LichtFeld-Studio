@@ -230,6 +230,8 @@ set(TEST_FILES
     test_tensor_lazy_ir.cpp
     test_tensor_dispatch_6a.cpp
     test_tensor_kernels_6c.cpp
+||||||| eec4b87b
+    test_tensor_kernels_6c_elem.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp
