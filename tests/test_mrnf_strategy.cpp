@@ -20,6 +20,7 @@ class CropDampingStrategyTest_MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale_
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/sh_value_codec.hpp"
 #include "training/strategies/mrnf.hpp"
 
 #include <cmath>
@@ -32,14 +33,17 @@ using namespace lfs::core;
 using namespace lfs::training;
 
 namespace {
-    // Phase 2.2: densify/serialize tests below still assert legacy uint8+scale
-    // layout. Force legacy for those cases; joint is covered by TrainingStateLedger
-    // + JointAdamCodec unit tests and the fused training path.
+    // Phase 2.2 / 2.1: densify/serialize tests below still assert legacy uint8+scale
+    // moment layout AND float4-swizzled shN sizes. Force both codecs OFF for those
+    // cases; joint + SH q16 are covered by TrainingStateLedger / ShValueStorage /
+    // JointAdamCodec unit tests and the fused training path (dual gate).
     struct LegacyAdamCodecGuard {
         LegacyAdamCodecGuard() {
             joint_adam::set_joint_codec_enabled_for_testing(false);
+            sh_value::set_sh_value_quant_enabled_for_testing(false);
         }
         ~LegacyAdamCodecGuard() {
+            sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
             joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
         }
     };

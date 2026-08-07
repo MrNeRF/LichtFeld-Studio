@@ -783,6 +783,17 @@ namespace lfs::training {
     void MRNF::grow_and_split(int iter, int pruned_count) {
         LOG_TIMER("MRNF::grow_and_split");
         using namespace lfs::core;
+        // Safe when called outside refine() (tests / free-slot fill): expand q16 → float.
+        // refine() already expands first so this is a no-op there; commit only if we expanded.
+        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        struct ShNCommitGuard {
+            lfs::core::SplatData* splat;
+            bool expanded;
+            ~ShNCommitGuard() {
+                if (expanded && splat)
+                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
+            }
+        } shn_guard{_splat_data, shN_expanded};
 
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t current_active = active_count();
