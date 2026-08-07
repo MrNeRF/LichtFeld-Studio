@@ -904,3 +904,103 @@ allocs/iter ≤ 0.11 (no regression of WO-X).
 
 ### Commit
 **`8e65a0b5`** fix(ISS-020): ordered GPU release before pool teardown (exit 139→0)
+
+---
+
+## WO-WARP-FWD — Warp-level culling for FastGS forward blend_cu
+
+- **Branch:** `lfs-elite` (never checkout)
+- **Citation (maintainer-approved):** Yang, Drettakis, Bernstein, "Warp-Level Culling
+  for Efficient Blending in 3D Gaussian Splatting", ACM CGIT 9(4):54, 2026,
+  doi:10.1145/3820019. Cited in kernel-head comment + landing commit message.
+
+### Change
+1. **Warp sub-tile culling (8×4):** 16×16 tile → 8 warps × 32 px; each warp ballots
+   splat×sub-tile AABB intersection 32-at-a-time; non-hits skip full conic/color/alpha.
+   `n_possible_contributions` still advances per splat index → last_contributor /
+   backward bit-identical.
+2. **128-bit layout:** `PackedMeanBBox{float2 mean2d; ushort4 pixel_bbox}` (16B);
+   `color` float3→float4 padded. Tile `screen_bounds` kept for create_instances.
+3. **Batch size:** `config::blend_batch_size = 192` (see sweep table). Runtime override
+   via `set_blend_batch_size_for_testing` / `LFS_BLEND_BATCH_SIZE`. Cull mode via
+   `set_warp_cull_mode_for_testing` / `LFS_WARP_CULL_MODE` (0=on, 1=off, 2=wrong).
+
+### TDD
+- **FAIL-first (wrong mask):** mode=2 empty ballot vs mode=1 reference → images differ
+  (test sensitivity).
+- **PASS:** mode=0 vs mode=1 bit-identical on synthetic (48) + dense (512) fixtures;
+  batch 32..256 step 32 bit-identical; deterministic re-render.
+```
+[  PASSED  ] WarpCullBlendTest.WrongMaskDiffersFromReference
+[  PASSED  ] WarpCullBlendTest.EnabledMatchesReference_Synthetic
+[  PASSED  ] WarpCullBlendTest.EnabledMatchesReference_Dense
+[  PASSED  ] WarpCullBlendTest.BatchSizeSweepBitIdentical
+[  PASSED  ] WarpCullBlendTest.EnabledIsDeterministic
+FastGSGradientTest.* 5/5 PASS; FastGSDenseTileGradientTest.* 4/4 PASS; FusedBgBlend 2/2
+```
+
+### Batch-size sweep (RTX 4080)
+
+**A. Synthetic microbench** (forward wall, 512², N=4096, 50 runs; noise ±~0.005 ms):
+
+| batch | mean_fwd_ms |
+|------:|------------:|
+| 32 | 0.198 |
+| 64 | 0.193 |
+| 96 | 0.192 |
+| 128 | 0.193 |
+| 160 | 0.195 |
+| 192 | 0.198 |
+| 224 | 0.191 |
+| 256 | 0.191 |
+
+**B. Late-window bonsai kern_sum** (blend_cu avg µs, slice [1600,1900), 300 frames):
+
+| batch | blend_cu avg_us | med_us |
+|------:|----------------:|-------:|
+| 128 | 373.3 | 362.1 |
+| **192** | **366.1** | **359.0** |
+| 256 | 370.1 | 362.2 |
+
+**Pick:** `blend_batch_size = 192` (real-scene kern_sum argmin; matches paper high-end).
+
+### Kernel-time A/B (profile.sh, bonsai late [1600,1900))
+
+| config | blend_cu avg_us | med_us | notes |
+|---|---:|---:|---|
+| Historical (pre-change, philox/bwd-a) | ~416 | ~410 | float3 color, batch=256, no cull |
+| Cull OFF (same binary, packing+192) | 455.3 | 443.5 | LFS_WARP_CULL_MODE=1 |
+| **Cull ON (production)** | **366.1** | **359.0** | batch=192 |
+
+- vs historical: **avg −12.0%**, **med −12.4%** (in −10..−17% target)
+- vs cull-off same binary: avg −18.5% (cull contribution)
+- Bicycle late same-binary: ON 191.7 vs OFF 207.7 µs (**−7.7%**; smaller tiles / denser)
+
+Profiles: `perf_campaign/profiles/warpcull-{bonsai,off-bonsai,bicycle,off-bicycle,batch*}-late/`
+
+### Dual-workload gate
+
+| workload | med steady_ms | B/splat | allocs/iter | vs prior (ISS-020) |
+|---|---:|---:|---:|---|
+| bonsai ×3 | **3.113** | **304.3** | 0.11 | was 3.159 → **improved** |
+| bicycle 7k ×3 | **2.737** | **306.8** | 0.10 | was 2.745 → **improved** |
+
+B/splat unchanged. Loss ranges healthy (bonsai ~0.03–0.07; bicycle 0.11–0.15).
+
+### Full-suite delta
+3313 PASS / 42 SKIP / 11 FAIL with documented reds excluded via gtest_filter.
+Failures are pre-existing env/fixture reds (PipelinedImageLoader fixtures, NaNInf large,
+Float16HostReduce, SceneValidity migrate, VramProfiler order, TensorReserve multi-dim,
+Python SceneCamera) — **not** FastGS blend/grad. All FastGS numerical gradients green.
+
+### Files
+- `kernels_forward.cuh` — blend_cu warp cull + packing; preprocess pixel AABB + float4 color
+- `buffer_utils.h` — `PackedMeanBBox`; color float4
+- `kernels_backward.cuh` — unpack mean2d / float4 color
+- `rasterization_config.h` — `blend_batch_size=192`, subtile 8×4
+- `forward.cu` / `forward.h` — test hooks + env A/B
+- `tests/test_warp_cull_blend.cpp` — TDD pixel identity + microbench
+
+### Commit
+**`b24c43ec`** perf(fastgs): warp-level sub-tile culling for forward blend_cu (WO-WARP-FWD)
+

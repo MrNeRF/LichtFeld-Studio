@@ -124,6 +124,7 @@ set(TEST_FILES
     test_steady_alloc_invariant.cpp
     test_allocator_hygiene.cpp
     test_fastgs_sort_buffers.cpp
+    test_warp_cull_blend.cpp
     test_fused_reg_loss.cpp
     test_fused_bg_blend.cpp
     test_photometric_hygiene.cpp

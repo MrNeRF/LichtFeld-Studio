@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 #include <functional>
@@ -256,6 +257,9 @@ namespace {
 
     // Phase 1.2: count mid-pipeline n_instances hard-sync fallbacks (warmup/growth only).
     std::atomic<std::uint64_t> g_n_instances_fallback_syncs{0};
+    // WO-WARP-FWD test hooks (host-side; passed as kernel args each launch).
+    std::atomic<int> g_warp_cull_mode{0};            // 0=on, 1=off, 2=wrong empty
+    std::atomic<int> g_blend_batch_size_override{0}; // 0 = use config::blend_batch_size
     std::atomic<bool> g_force_n_instances_sync{false};
 
 } // namespace
@@ -292,6 +296,22 @@ std::uint64_t fast_lfs::rasterization::n_instances_fallback_sync_count() noexcep
 
 void fast_lfs::rasterization::reset_n_instances_fallback_sync_count() noexcept {
     g_n_instances_fallback_syncs.store(0, std::memory_order_relaxed);
+}
+
+void fast_lfs::rasterization::set_warp_cull_mode_for_testing(int mode) noexcept {
+    g_warp_cull_mode.store(mode, std::memory_order_relaxed);
+}
+
+int fast_lfs::rasterization::warp_cull_mode_for_testing() noexcept {
+    return g_warp_cull_mode.load(std::memory_order_relaxed);
+}
+
+void fast_lfs::rasterization::set_blend_batch_size_for_testing(int batch_size) noexcept {
+    g_blend_batch_size_override.store(batch_size, std::memory_order_relaxed);
+}
+
+int fast_lfs::rasterization::blend_batch_size_for_testing() noexcept {
+    return g_blend_batch_size_override.load(std::memory_order_relaxed);
 }
 
 void fast_lfs::rasterization::set_force_n_instances_sync_for_testing(bool force) noexcept {
@@ -714,6 +734,19 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     }
 
     // Fallback path still needs blend.
+    // Prefer explicit test hooks; else honor env for A/B profiling without rebuild.
+    int warp_cull_mode = g_warp_cull_mode.load(std::memory_order_relaxed);
+    int blend_batch_override = g_blend_batch_size_override.load(std::memory_order_relaxed);
+    if (const char* env_mode = std::getenv("LFS_WARP_CULL_MODE")) {
+        // Only apply env when test hook is still default-enabled (0) unless forced.
+        // Modes: 0=on, 1=off, 2=wrong.
+        warp_cull_mode = std::atoi(env_mode);
+    }
+    if (blend_batch_override == 0) {
+        if (const char* env_batch = std::getenv("LFS_BLEND_BATCH_SIZE")) {
+            blend_batch_override = std::atoi(env_batch);
+        }
+    }
     auto launch_blend = [&]<bool RENDER_NORMAL>() {
         kernels::forward::blend_cu<RENDER_NORMAL><<<grid, block, 0, stream>>>(
             per_tile_buffers.instance_ranges,
@@ -733,7 +766,9 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             bg_image,
             width,
             height,
-            grid.x);
+            grid.x,
+            warp_cull_mode,
+            blend_batch_override);
         LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.blend");
     };
     if (normal != nullptr) {

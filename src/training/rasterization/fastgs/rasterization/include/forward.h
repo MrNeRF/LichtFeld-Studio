@@ -37,6 +37,15 @@ namespace fast_lfs::rasterization {
     /// Testing: drop high-water capacity so the next forward must grow+sync.
     void reset_sort_capacity_for_testing() noexcept;
 
+    /// Warp-cull mode for blend_cu (WO-WARP-FWD TDD):
+    /// 0 = enabled (production), 1 = disabled (all-1s mask, reference),
+    /// 2 = wrong empty mask (deliberately incorrect).
+    void set_warp_cull_mode_for_testing(int mode) noexcept;
+    [[nodiscard]] int warp_cull_mode_for_testing() noexcept;
+    /// Override forward blend fetch batch size (multiple of 32, 32..256). 0 = config default.
+    void set_blend_batch_size_for_testing(int batch_size) noexcept;
+    [[nodiscard]] int blend_batch_size_for_testing() noexcept;
+
     ForwardResult forward(
         std::function<char*(size_t)> per_primitive_buffers_func,
         std::function<char*(size_t)> per_tile_buffers_func,

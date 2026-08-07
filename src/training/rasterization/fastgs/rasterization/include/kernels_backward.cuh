@@ -515,9 +515,9 @@ namespace fast_lfs::rasterization::kernels::backward {
     __global__ void __launch_bounds__(config::block_size_blend_backward, 8) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
-        const float2* __restrict__ primitive_mean2d,
+        const PackedMeanBBox* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
-        const float3* __restrict__ primitive_color,
+        const float4* __restrict__ primitive_color,
         const float* __restrict__ primitive_depths,
         const float3* __restrict__ primitive_normals,
         const float* __restrict__ grad_image,
@@ -686,11 +686,11 @@ namespace fast_lfs::rasterization::kernels::backward {
                     valid_splat = false;
                 }
                 if (valid_splat) {
-                    mean2d = primitive_mean2d[primitive_idx];
+                    mean2d = primitive_mean2d[primitive_idx].mean2d;
                     const float4 conic_opacity = primitive_conic_opacity[primitive_idx];
                     conic = make_float3(conic_opacity);
                     compensated_opacity = conic_opacity.w;
-                    const float3 color_unclamped = primitive_color[primitive_idx];
+                    const float3 color_unclamped = make_float3(primitive_color[primitive_idx]);
                     color = fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
                     depth = primitive_depths[primitive_idx];
                     if constexpr (NORMAL_CHANNEL) {

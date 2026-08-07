@@ -34,6 +34,13 @@ namespace fast_lfs::rasterization::config {
     DEF int tile_height = 16;
     DEF int block_size_blend = tile_width * tile_height;
     DEF int block_size_blend_backward = 128;
+    // Forward blend fetch batch size (multiple of warp size 32, <= block_size_blend).
+    // RTX 4080: synthetic microbench argmin 128; late-window bonsai kern_sum argmin 192
+    // among {128,192,256}. Keep 192 (matches high-end paper finding). See PROGRESS.md.
+    DEF int blend_batch_size = 192;
+    // Warp sub-tile geometry for forward blend culling (32 threads = 1 warp).
+    DEF int warp_subtile_width = 8;
+    DEF int warp_subtile_height = 4;
 
     // SH coefficient swizzle (vksplat float4 layout): 32 primitives per block, 12 float4 slots
     // per primitive packing 15 float3 SH-rest coefficients with 3 floats of tail padding.
