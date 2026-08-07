@@ -392,7 +392,13 @@ namespace lfs::training {
                 throw std::runtime_error(
                     "Strategy does not support transactional checkpoint state adoption");
             }
-            loaded_strategy->get_optimizer().set_frozen_lr_scale(loaded_params.freeze_lr_scale);
+            // Cold load (model-only, no optimizer constructed) is valid: the regression
+            // allocator path and early resume scaffolding never call initialize(). Do not
+            // dereference get_optimizer() unless the loaded strategy actually owns one.
+            if (auto* loaded_adopter = dynamic_cast<ICheckpointStateAdopter*>(loaded_strategy.get());
+                loaded_adopter && loaded_adopter->has_checkpoint_runtime_state()) {
+                loaded_strategy->get_optimizer().set_frozen_lr_scale(loaded_params.freeze_lr_scale);
+            }
 
             std::unique_ptr<BilateralGrid> loaded_bilateral_grid;
             std::unique_ptr<PPISP> loaded_ppisp;

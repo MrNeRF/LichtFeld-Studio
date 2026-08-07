@@ -724,8 +724,15 @@ namespace lfs::training {
                 init_state(type, false);
             }
 
-            // Moments track float4-swizzled cell count. SH value quant stores pad-dropped
-            // u16 (different numel). After densify, heal undersized SH moment bookkeeping.
+            // Moments track float4-swizzled cell count even when SH value quant stores
+            // pad-dropped u16 params (different numel). After densify grow/relocate/compact
+            // or re-encode, heal undersized SH moment bookkeeping + joint_bounds.
+            //
+            // Heal-vs-rebuild (ISS-2.1):
+            //   HEAL  — moment capacity already covers float_layout(N): advance state.size;
+            //           grow joint_bounds logical rows (capacity-first, else realloc bounds).
+            //   REBUILD — capacity short: extend_state_for_new_params (growth_factor re-reserve).
+            // Moments stay on the float4-swizzle layout; never resize to u16 cell count.
             if (type != ParamType::ShN) {
                 if (param.shape()[0] != state.size) {
                     throw std::runtime_error("Optimizer state desync before fused Adam: " + name);
@@ -733,36 +740,82 @@ namespace lfs::training {
             } else {
                 const auto layout_rest =
                     static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
-                const size_t float_layout = lfs::core::sh_swizzled_float_count(
-                    static_cast<size_t>(splat_data_.size()), layout_rest);
-                if (state.size != float_layout && param.shape()[0] != state.size) {
-                    if (state.exp_avg.is_valid() && state.exp_avg.capacity() >= float_layout) {
-                        // Capacity reserved at max_cap: advance logical size (free slots
-                        // already zero-initialized under joint bounds).
+                const size_t n_live = static_cast<size_t>(splat_data_.size());
+                const size_t float_layout =
+                    lfs::core::sh_swizzled_float_count(n_live, layout_rest);
+                // q16 param numel ≠ float_layout; only compare state.size to float_layout.
+                if (state.size != float_layout) {
+                    if (state.exp_avg.is_valid() && state.exp_avg.capacity() >= float_layout &&
+                        state.size < float_layout) {
+                        // Capacity reserved at max_cap: advance logical size (new slots
+                        // already zero-initialized under joint bounds when pre-allocated).
                         state.size = float_layout;
                     } else if (state.size < float_layout) {
-                        const size_t n_live = static_cast<size_t>(splat_data_.size());
-                        const size_t floats_per =
-                            n_live > 0 ? float_layout / n_live : 0;
+                        // Pad-aware: derive n_new from prim count, not float/N (pad jumps).
+                        const size_t floats_per_approx =
+                            n_live > 0 ? (float_layout + n_live - 1) / n_live : 0;
                         const size_t n_prev =
-                            floats_per > 0 ? state.size / floats_per : 0;
-                        const size_t n_new = n_live > n_prev ? n_live - n_prev : 0;
+                            floats_per_approx > 0 ? state.size / floats_per_approx : 0;
+                        // Prefer exact pad inverse via binary search free: use means size
+                        // delta if means grew; else extend by remaining prims.
+                        size_t n_new = n_live > n_prev ? n_live - n_prev : 0;
+                        if (n_new == 0 && float_layout > state.size) {
+                            // Fallback: at least one prim of growth.
+                            n_new = 1;
+                        }
                         if (n_new > 0) {
                             extend_state_for_new_params(type, n_new);
                         }
-                        if (state.size != float_layout && param.shape()[0] != state.size) {
+                        if (state.size != float_layout) {
+                            // Last resort: if still short after extend, force size when
+                            // capacity allows (packed growth may overshoot with pad).
+                            if (state.exp_avg.is_valid() &&
+                                state.exp_avg.capacity() >= float_layout &&
+                                state.size < float_layout) {
+                                state.size = float_layout;
+                            }
+                        }
+                        if (state.size != float_layout) {
                             throw std::runtime_error(
                                 "Optimizer state desync before fused Adam: " + name +
-                                " param_n=" + std::to_string(param.shape()[0]) +
+                                " param_n=" + std::to_string(param.numel()) +
                                 " state=" + std::to_string(state.size) +
                                 " float_layout=" + std::to_string(float_layout));
                         }
-                    } else {
-                        throw std::runtime_error(
-                            "Optimizer state desync before fused Adam: " + name +
-                            " param_n=" + std::to_string(param.shape()[0]) +
-                            " state=" + std::to_string(state.size) +
-                            " float_layout=" + std::to_string(float_layout));
+                    } else if (state.size > float_layout) {
+                        // Compact path should rebuild; tolerate oversize (use live N).
+                        state.size = float_layout;
+                    }
+                }
+                // joint_bounds must cover ceil(N/256) blocks; capacity tracks max_cap.
+                if (state.is_joint() && n_live > 0) {
+                    const size_t nb = joint_adam::n_bounds_for_prims(n_live);
+                    const size_t prim_cap = std::max(
+                        n_live,
+                        config_.initial_capacity > 0 ? config_.initial_capacity : n_live);
+                    const size_t nb_cap = std::max(nb, joint_adam::n_bounds_for_prims(prim_cap));
+                    const size_t cur_nb =
+                        state.joint_bounds.is_valid() && state.joint_bounds.ndim() >= 1
+                            ? state.joint_bounds.shape()[0]
+                            : 0;
+                    const size_t cur_cap =
+                        state.joint_bounds.is_valid() ? state.joint_bounds.capacity() : 0;
+                    if (!state.joint_bounds.is_valid() || cur_nb < nb || cur_cap < nb_cap) {
+                        if (state.joint_bounds.is_valid() && cur_cap >= nb_cap && cur_nb < nb) {
+                            state.joint_bounds.append_zeros(nb - cur_nb);
+                        } else {
+                            auto new_bounds = lfs::core::Tensor::zeros_direct(
+                                lfs::core::TensorShape({nb, size_t{4}}), nb_cap, param.device());
+                            if (state.joint_bounds.is_valid() && state.joint_bounds.numel() > 0) {
+                                const size_t copy_n = std::min(state.joint_bounds.numel(),
+                                                               new_bounds.numel());
+                                LFS_CUDA_CHECK(cudaMemcpyAsync(
+                                    new_bounds.ptr<float>(), state.joint_bounds.ptr<float>(),
+                                    copy_n * sizeof(float), cudaMemcpyDeviceToDevice,
+                                    lfs::core::getCurrentCUDAStream()));
+                            }
+                            state.joint_bounds = std::move(new_bounds);
+                        }
                     }
                 }
             }
@@ -1681,8 +1734,10 @@ namespace lfs::training {
 
     namespace {
         constexpr uint32_t ADAM_STATE_MAGIC = 0x4C464144; // "LFAD"
-        // v1: fp32 moments (no scales). v2: uint8 quantised moments + per-primitive fp32 scales.
-        constexpr uint32_t ADAM_STATE_VERSION = 2;
+        // v1: fp32 moments (no scales).
+        // v2: uint8 quantised moments + per-primitive fp32 scales (legacy codec only).
+        // v3: per-state joint_bits marker; joint packs (exp_avg + joint_bounds), legacy keeps v2 tensors.
+        constexpr uint32_t ADAM_STATE_VERSION = 3;
     } // namespace
 
     void AdamOptimizer::serialize(std::ostream& os) const {
@@ -1730,10 +1785,10 @@ namespace lfs::training {
             os.write(reinterpret_cast<const char*>(&state.step_count), sizeof(state.step_count));
             os.write(reinterpret_cast<const char*>(&state.capacity), sizeof(state.capacity));
             os.write(reinterpret_cast<const char*>(&state.size), sizeof(state.size));
+            // v3: joint_bits discriminates packed joint moments from legacy u8+scales.
+            const int32_t joint_bits = state.joint_bits;
+            os.write(reinterpret_cast<const char*>(&joint_bits), sizeof(joint_bits));
             if (state.is_joint()) {
-                // v2 stream layout kept for legacy; joint writes packed + bounds
-                // after a joint_bits marker via empty legacy tensors + bounds.
-                // Full v3 schema deferred — joint checkpoints re-init moments.
                 os << state.exp_avg << state.joint_bounds;
             } else {
                 os << state.exp_avg << state.exp_avg_sq
@@ -1834,6 +1889,16 @@ namespace lfs::training {
             if (state.step_count < 0 || state.size > state.capacity)
                 throw std::runtime_error("Invalid AdamOptimizer checkpoint: inconsistent state bounds");
 
+            // v3 introduces per-state joint_bits; v1/v2 are always legacy (joint_bits=0).
+            int32_t joint_bits = 0;
+            if (version >= 3) {
+                lfs::core::serialization_detail::read_exact(
+                    is, &joint_bits, sizeof(joint_bits), "Adam joint_bits");
+                if (joint_bits != 0 && joint_bits != 8 && joint_bits != 16)
+                    throw std::runtime_error("Invalid AdamOptimizer checkpoint: unsupported joint_bits");
+            }
+            state.joint_bits = joint_bits;
+
             const bool is_shN = (name == "shN");
             const ParamType ptype = *maybe_type;
             const auto& parameter = get_param(ptype);
@@ -1875,7 +1940,48 @@ namespace lfs::training {
                     state.size = logical_floats;
                 }
                 quantize_float_moments(ptype, state, std::move(favg), std::move(favg_sq));
+            } else if (state.is_joint()) {
+                // v3 joint: packed (u,log_s) bytes + float4 bounds per 256-splat block.
+                is >> state.exp_avg >> state.joint_bounds;
+                const size_t primitive_rows = static_cast<size_t>(splat_data_.size());
+                const int bpc = joint_adam::bytes_per_cell(state.joint_bits);
+                if (bpc <= 0 ||
+                    state.exp_avg.dtype() != lfs::core::DataType::UInt8 ||
+                    !state.joint_bounds.is_valid() ||
+                    state.joint_bounds.dtype() != lfs::core::DataType::Float32 ||
+                    state.joint_bounds.ndim() != 2 || state.joint_bounds.shape()[1] != 4) {
+                    throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint moment schema mismatch");
+                }
+                const size_t expected_bounds = joint_adam::n_bounds_for_prims(primitive_rows);
+                if (state.joint_bounds.shape()[0] != expected_bounds) {
+                    throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint bounds size mismatch");
+                }
+                if (is_shN) {
+                    // Packed 1D: one cell per swizzled float, bpc bytes each.
+                    const size_t expected_bytes = parameter.shape()[0] * static_cast<size_t>(bpc);
+                    if (state.exp_avg.ndim() != 1 || state.exp_avg.numel() != expected_bytes ||
+                        state.joint_bits != 8) {
+                        throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint shN packed shape mismatch");
+                    }
+                } else {
+                    // Contiguous [N, C*bpc]; joint non-SH uses 16-bit cells.
+                    size_t row_elems = 1;
+                    for (size_t d = 1; d < parameter.shape().rank(); ++d)
+                        row_elems *= parameter.shape()[d];
+                    if (state.joint_bits != 16 ||
+                        state.exp_avg.ndim() != 2 ||
+                        state.exp_avg.shape()[0] != parameter.shape()[0] ||
+                        state.exp_avg.shape()[1] != row_elems * static_cast<size_t>(bpc)) {
+                        throw std::runtime_error("Invalid AdamOptimizer checkpoint: joint packed shape mismatch");
+                    }
+                }
+                state.exp_avg = state.exp_avg.cuda();
+                state.joint_bounds = state.joint_bounds.cuda();
+                state.exp_avg_sq = {};
+                state.exp_avg_scale = {};
+                state.exp_avg_sq_scale = {};
             } else {
+                // v2/v3 legacy: uint8 moments + per-primitive fp32 scales.
                 is >> state.exp_avg >> state.exp_avg_sq >> state.exp_avg_scale >> state.exp_avg_sq_scale;
                 const size_t primitive_rows = static_cast<size_t>(splat_data_.size());
                 if (state.exp_avg.dtype() != lfs::core::DataType::UInt8 ||
@@ -1892,12 +1998,19 @@ namespace lfs::training {
                 state.exp_avg_sq = state.exp_avg_sq.cuda();
                 state.exp_avg_scale = state.exp_avg_scale.cuda();
                 state.exp_avg_sq_scale = state.exp_avg_sq_scale.cuda();
+                state.joint_bounds = {};
+                state.joint_bits = 0;
             }
 
             // Serialized capacity is advisory and may be attacker-controlled.
             // The validated checkpoint max_cap is reserved by load_checkpoint
             // after all state has parsed successfully.
-            state.capacity = state.exp_avg.is_valid() ? state.exp_avg.shape()[0] : state.size;
+            // Joint packed buffers are not row-major param-shaped — keep size as capacity base.
+            if (state.is_joint()) {
+                state.capacity = state.size;
+            } else {
+                state.capacity = state.exp_avg.is_valid() ? state.exp_avg.shape()[0] : state.size;
+            }
             loaded_states.emplace(std::move(name), std::move(state));
         }
 
@@ -1917,26 +2030,76 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::reserve_capacity(const size_t capacity) {
+        using namespace joint_adam;
+
+        // Grow a 1D/2D tensor to `cap_rows` along dim0 (or total elems for 1D packed),
+        // preserving the live prefix. zeros_direct tensors reject Tensor::reserve, so
+        // rebuild via zeros_direct + D2D copy when capacity is insufficient.
+        const auto grow_tensor = [](lfs::core::Tensor& t, const size_t cap_rows) {
+            if (!t.is_valid() || cap_rows == 0)
+                return;
+            if (t.capacity() >= cap_rows)
+                return;
+            const auto shape = t.shape();
+            auto grown = lfs::core::Tensor::zeros_direct(shape, cap_rows, t.device(), t.dtype());
+            if (t.numel() > 0 && t.data_ptr() && grown.data_ptr()) {
+                const size_t elem_bytes = lfs::core::dtype_size(t.dtype());
+                if (elem_bytes > 0) {
+                    LFS_CUDA_CHECK(cudaMemcpy(
+                        grown.data_ptr(), t.data_ptr(),
+                        t.numel() * elem_bytes, cudaMemcpyDeviceToDevice));
+                }
+            }
+            if (!t.name().empty())
+                grown.set_name(t.name());
+            t = std::move(grown);
+        };
+
         for (auto& [name, state] : states_) {
+            const bool is_shN = (name == "shN");
             // Moments use float-count capacity for swizzled shN, primitive rows otherwise.
-            // Scales are always per-primitive.
+            // Scales / joint_bounds are always per-primitive (bounds table is ceil(N/256)).
             const size_t target_capacity =
-                name == "shN" ? lfs::core::sh_swizzled_float_count(
-                                    capacity,
-                                    static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest()))
-                              : capacity;
+                is_shN ? lfs::core::sh_swizzled_float_count(
+                             capacity,
+                             static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest()))
+                       : capacity;
+
             if (target_capacity > state.capacity) {
-                if (state.grad.is_valid())
-                    state.grad.reserve(target_capacity);
-                if (state.exp_avg.is_valid())
-                    state.exp_avg.reserve(target_capacity);
-                if (state.exp_avg_sq.is_valid())
-                    state.exp_avg_sq.reserve(target_capacity);
+                if (state.is_joint()) {
+                    const int bpc = bytes_per_cell(state.joint_bits);
+                    if (state.exp_avg.is_valid() && bpc > 0) {
+                        if (is_shN) {
+                            // Packed 1D: capacity is in packed bytes (floats * bpc).
+                            grow_tensor(state.exp_avg, target_capacity * static_cast<size_t>(bpc));
+                        } else {
+                            // Contiguous [N, C*bpc]: capacity is in rows.
+                            grow_tensor(state.exp_avg, target_capacity);
+                        }
+                    }
+                    if (state.joint_bounds.is_valid()) {
+                        const size_t bounds_cap = n_bounds_for_prims(capacity);
+                        grow_tensor(state.joint_bounds, bounds_cap);
+                    }
+                } else {
+                    if (state.grad.is_valid())
+                        grow_tensor(state.grad, target_capacity);
+                    if (state.exp_avg.is_valid())
+                        grow_tensor(state.exp_avg, target_capacity);
+                    if (state.exp_avg_sq.is_valid())
+                        grow_tensor(state.exp_avg_sq, target_capacity);
+                }
                 state.capacity = target_capacity;
             }
+
             if (state.exp_avg_scale.is_valid() && capacity > state.exp_avg_scale.capacity()) {
-                state.exp_avg_scale.reserve(capacity);
-                state.exp_avg_sq_scale.reserve(capacity);
+                grow_tensor(state.exp_avg_scale, capacity);
+                grow_tensor(state.exp_avg_sq_scale, capacity);
+            }
+            if (state.is_joint() && state.joint_bounds.is_valid()) {
+                const size_t bounds_cap = n_bounds_for_prims(capacity);
+                if (bounds_cap > state.joint_bounds.capacity())
+                    grow_tensor(state.joint_bounds, bounds_cap);
             }
         }
     }
