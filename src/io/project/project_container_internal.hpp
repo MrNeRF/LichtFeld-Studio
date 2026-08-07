@@ -6,6 +6,7 @@
 
 #include "core/error.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -96,6 +97,11 @@ namespace lfs::io::project::detail {
 
         [[nodiscard]] static lfs::Result<WriterLock>
         acquire(const std::filesystem::path& project_path);
+        // A nonzero wait retries a denied lock until the deadline so an
+        // in-process writer holding the master can drain.
+        [[nodiscard]] static lfs::Result<WriterLock>
+        acquire(const std::filesystem::path& project_path,
+                std::chrono::milliseconds wait);
         [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
 
     private:

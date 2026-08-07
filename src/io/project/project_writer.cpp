@@ -1562,7 +1562,9 @@ namespace lfs::io::project {
                 *options.writer_lock_lease;
         } else {
             auto lock_result =
-                detail::WriterLock::acquire(path);
+                detail::WriterLock::acquire(
+                    path,
+                    options.writer_lock_wait);
             if (!lock_result) {
                 return std::move(lock_result)
                     .error();

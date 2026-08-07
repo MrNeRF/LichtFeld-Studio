@@ -18,6 +18,7 @@
 #include <mutex>
 #include <new>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #ifdef _WIN32
@@ -723,6 +724,24 @@ namespace lfs::io::project::detail {
         }
         return WriterLock(lock_path, fd);
 #endif
+    }
+
+    lfs::Result<WriterLock> WriterLock::acquire(const std::filesystem::path& project_path,
+                                                const std::chrono::milliseconds wait) {
+        auto acquired = acquire(project_path);
+        if (acquired || wait <= std::chrono::milliseconds::zero() ||
+            acquired.error().code() != lfs::ErrorCode::Unavailable) {
+            return acquired;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + wait;
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            acquired = acquire(project_path);
+            if (acquired || acquired.error().code() != lfs::ErrorCode::Unavailable) {
+                return acquired;
+            }
+        }
+        return acquired;
     }
 
     std::filesystem::path

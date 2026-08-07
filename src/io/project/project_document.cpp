@@ -2606,13 +2606,12 @@ namespace lfs::io::project {
             if (!impl_->source_path ||
                 !impl_->source_reader ||
                 autosave->base_explicit_commit_uuid.is_nil() ||
-                autosave->autosave_sequence == 0 ||
-                autosave->snapshot_uuid.is_nil()) {
+                autosave->autosave_sequence == 0) {
                 return fail<ProjectDocumentSaveReport>(
                     lfs::ErrorCode::FailedPrecondition,
                     "The autosave has no durable explicit base.",
                     "sidecar publication requires an opened master, "
-                    "base commit UUID, positive sequence, and snapshot UUID",
+                    "base commit UUID, and positive sequence",
                     "autosave.binding");
             }
             auto expected_sidecar = *impl_->source_path;
@@ -2689,6 +2688,10 @@ namespace lfs::io::project {
                         snapshot_uuid.to_string()),
                     "commit.snapshot_uuid");
             }
+        }
+        if (is_autosave && commit.snapshot_uuid.is_nil()) {
+            commit.snapshot_uuid =
+                lfs::core::generate_uuid_v4();
         }
         auto staged_project =
             ProjectChapter::from_bytes(impl_->project.to_bytes());
@@ -2965,7 +2968,7 @@ namespace lfs::io::project {
                     .autosave_sequence =
                         autosave->autosave_sequence,
                     .sidecar_snapshot_uuid =
-                        autosave->snapshot_uuid,
+                        commit.snapshot_uuid,
                     .creation_time_unix_ns =
                         *created,
                     .index_compression =
@@ -2997,6 +3000,8 @@ namespace lfs::io::project {
                     .boundary_observer = {},
                     .writer_lock_lease =
                         options.writer_lock_lease,
+                    .writer_lock_wait =
+                        options.writer_lock_wait,
                 });
             if (!result) {
                 return std::move(result).error();

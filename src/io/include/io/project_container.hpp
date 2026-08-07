@@ -10,6 +10,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -497,6 +498,9 @@ namespace lfs::io::project {
         CommitBoundaryObserver boundary_observer;
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
+        // Writers that must not lose their generation to a transient
+        // in-process lock holder wait instead of failing immediately.
+        std::chrono::milliseconds writer_lock_wait{0};
     };
 
     struct ChunkWriteOptions {

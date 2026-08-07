@@ -2115,6 +2115,195 @@ namespace {
         EXPECT_FALSE(fs::exists(sidecar));
     }
 
+    LazyChunkValue make_autosave_checkpoint_payload(
+        const Uuid& checkpoint_uuid) {
+        auto model = make_splat(2);
+        lfs::training::MCMC strategy(*model);
+        lfs::core::param::TrainingParameters parameters;
+        parameters.optimization =
+            lfs::core::param::OptimizationParameters::
+                mcmc_defaults();
+        parameters.optimization.sh_degree = 0;
+        parameters.optimization.max_cap = 2;
+        strategy.initialize(parameters.optimization);
+        std::ostringstream stream(
+            std::ios::binary | std::ios::out);
+        (void)require_result(
+            lfs::training::serialize_checkpoint(
+                stream, 11, strategy, parameters,
+                nullptr, nullptr, nullptr, nullptr));
+        const auto encoded = stream.str();
+        std::vector<std::byte> bytes(encoded.size());
+        std::memcpy(
+            bytes.data(), encoded.data(), encoded.size());
+        auto payload = LazyChunkValue::from_owned(
+            std::move(bytes), checkpoint_uuid);
+        return require_result(std::move(payload));
+    }
+
+    void install_bound_autosave_checkpoint(
+        ProjectDocument& document,
+        const Uuid& training_uuid,
+        const Uuid& checkpoint_uuid) {
+        const Uuid root_uuid = fixed_uuid(951);
+        require_status(
+            document.edit_scene_graph().upsert_node(
+                SceneNodeRecord{
+                    .uuid = training_uuid,
+                    .type = "splat",
+                    .name = "Training",
+                    .parent_uuid = root_uuid,
+                    .child_order = 3,
+                    .payload =
+                        PayloadBinding{
+                            .fourcc = "CKPT",
+                            .instance_uuid =
+                                checkpoint_uuid,
+                            .source_kind = "training",
+                        },
+                }));
+        require_status(
+            document.edit_scene_graph()
+                .set_training_model_uuid(training_uuid));
+        require_status(document.set_checkpoint(
+            checkpoint_uuid,
+            make_autosave_checkpoint_payload(
+                checkpoint_uuid)));
+    }
+
+    TEST(ProjectDocumentTest,
+         AutosaveRejectsMismatchedSnapshotWhenCheckpointPresent) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "ckpt-mismatch.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+        ProjectReader base =
+            require_result(ProjectReader::open(master));
+        auto document =
+            require_result_ptr(ProjectDocument::open(master));
+        const Uuid checkpoint_uuid = fixed_uuid(9901);
+        install_bound_autosave_checkpoint(
+            *document, fixed_uuid(9900), checkpoint_uuid);
+        require_status(
+            document->edit_view().dom().set(
+                "ckpt_mismatch_marker",
+                std::string{"dirty"}));
+        auto saved = document->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9902),
+                .base_explicit_commit_uuid =
+                    base.commit().commit_uuid,
+                .autosave_sequence = 1,
+                .snapshot_uuid = fixed_uuid(9903),
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_FALSE(saved);
+        EXPECT_EQ(
+            saved.error().code(),
+            lfs::ErrorCode::FailedPrecondition);
+        const auto formatted =
+            lfs::format_for_developer(saved.error());
+        EXPECT_NE(
+            formatted.find("commit.snapshot_uuid"),
+            std::string::npos)
+            << formatted;
+    }
+
+    TEST(ProjectDocumentTest,
+         AutosaveAdoptsCheckpointSnapshotWhenSnapshotUuidNil) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "ckpt-adopt.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+        ProjectReader base =
+            require_result(ProjectReader::open(master));
+        auto document =
+            require_result_ptr(ProjectDocument::open(master));
+        const Uuid checkpoint_uuid = fixed_uuid(9911);
+        install_bound_autosave_checkpoint(
+            *document, fixed_uuid(9910), checkpoint_uuid);
+        require_status(
+            document->edit_view().dom().set(
+                "ckpt_adopt_marker",
+                std::string{"dirty"}));
+        auto saved = document->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9912),
+                .base_explicit_commit_uuid =
+                    base.commit().commit_uuid,
+                .autosave_sequence = 1,
+                .snapshot_uuid = {},
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        ProjectReader overlay =
+            require_result(ProjectReader::open(sidecar));
+        EXPECT_EQ(
+            overlay.commit().snapshot_uuid,
+            checkpoint_uuid);
+        EXPECT_EQ(
+            overlay.superblock().sidecar_snapshot_uuid,
+            checkpoint_uuid);
+        EXPECT_EQ(
+            saved->snapshot_uuid, checkpoint_uuid);
+    }
+
+    TEST(ProjectDocumentTest,
+         AutosaveMintsSnapshotWhenNoCheckpointAndSnapshotUuidNil) {
+        TemporaryDirectory temporary;
+        const fs::path master =
+            temporary.path / "mint-snapshot.licht";
+        const fs::path sidecar =
+            autosave_sidecar_path(master);
+        write_phase_a_fixture(master);
+        ProjectReader base =
+            require_result(ProjectReader::open(master));
+        auto document =
+            require_result_ptr(ProjectDocument::open(master));
+        require_status(
+            document->edit_view().dom().set(
+                "mint_snapshot_marker",
+                std::string{"dirty"}));
+        auto saved = document->save_autosave(
+            sidecar,
+            ProjectDocumentAutosaveOptions{
+                .file_uuid = fixed_uuid(9921),
+                .base_explicit_commit_uuid =
+                    base.commit().commit_uuid,
+                .autosave_sequence = 1,
+                .snapshot_uuid = {},
+                .index_compression =
+                    IndexCompression::
+                        StoredForDeterministicTests,
+                .disk_reserve_bytes = 0,
+            });
+        ASSERT_TRUE(saved)
+            << lfs::format_for_developer(saved.error());
+        ProjectReader overlay =
+            require_result(ProjectReader::open(sidecar));
+        EXPECT_FALSE(
+            overlay.commit().snapshot_uuid.is_nil());
+        EXPECT_EQ(
+            overlay.superblock().sidecar_snapshot_uuid,
+            overlay.commit().snapshot_uuid);
+        EXPECT_EQ(
+            saved->snapshot_uuid,
+            overlay.commit().snapshot_uuid);
+    }
+
     TEST(ProjectDocumentTest,
          AutosaveInheritsMasterCompatibilityFloorsAndRequiredCapabilities) {
         TemporaryDirectory temporary;

@@ -100,6 +100,9 @@ namespace lfs::io::project {
         // Recovery merge writers reuse the original master's retained lock.
         std::optional<WriterLockLease> writer_lock_lease =
             std::nullopt;
+        // Terminal training writes wait out a transient in-process lock
+        // holder instead of dropping the generation.
+        std::chrono::milliseconds writer_lock_wait{0};
     };
 
     struct ProjectDocumentAutosaveOptions {
