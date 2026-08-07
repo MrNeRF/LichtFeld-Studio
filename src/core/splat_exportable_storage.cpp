@@ -397,6 +397,12 @@ namespace lfs::core {
             rebound.set_active_sh_degree(active_sh);
             if (deleted.is_valid()) {
                 rebound.deleted() = std::move(deleted);
+                // Preserve soft-delete content across exportable rebind; force a
+                // version bump and reconcile if densify grew N under the old mask.
+                rebound.reconcile_deleted_mask();
+                if (rebound.has_deleted_mask()) {
+                    rebound.notify_deleted_mask_changed();
+                }
             }
             if (densification_info.is_valid()) {
                 rebound._densification_info = std::move(densification_info);

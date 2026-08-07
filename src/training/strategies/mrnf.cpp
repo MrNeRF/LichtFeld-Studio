@@ -222,6 +222,8 @@ namespace lfs::training {
                 } else {
                     deleted = lfs::core::Tensor::zeros_bool({current_size}, splat_data.means().device());
                 }
+                deleted.set_name("splat.deleted_mask");
+                splat_data.notify_deleted_mask_changed();
                 return;
             }
             if (deleted.capacity() >= desired_capacity) {
@@ -242,6 +244,7 @@ namespace lfs::training {
                     fresh.stream()));
             }
             deleted = std::move(fresh);
+            splat_data.notify_deleted_mask_changed();
         }
 
         void sync_deleted_mask_from_free_mask(
@@ -253,11 +256,13 @@ namespace lfs::training {
             if (!free_mask.is_valid()) {
                 splat_data.deleted() = lfs::core::Tensor::zeros_bool({current_size}, splat_data.means().device());
                 splat_data.deleted().reserve(desired_capacity);
+                splat_data.notify_deleted_mask_changed();
                 return;
             }
 
             splat_data.deleted() = free_mask.slice(0, 0, current_size).clone();
             splat_data.deleted().reserve(desired_capacity);
+            splat_data.notify_deleted_mask_changed();
         }
 
         void set_deleted_mask_rows(
@@ -274,49 +279,101 @@ namespace lfs::training {
                               ? lfs::core::Tensor::ones_bool({static_cast<size_t>(indices.numel())}, indices.device())
                               : lfs::core::Tensor::zeros_bool({static_cast<size_t>(indices.numel())}, indices.device());
             splat_data.deleted().index_put_(indices, values);
+            splat_data.notify_deleted_mask_changed();
         }
 
         void append_live_deleted_rows(
             lfs::core::SplatData& splat_data,
             const lfs::core::Tensor& free_mask,
             const size_t n_rows) {
-            if (n_rows == 0) {
+            // Keep deleted.numel() == size(). Safe to call before or after param
+            // growth (ISS-022): pad with live(false) rows, never leave a stale
+            // mask that violates the VkSplat packer contract.
+            if (n_rows == 0 && splat_data.deleted_mask_matches_size()) {
                 return;
             }
 
-            ensure_deleted_mask_size(splat_data, free_mask);
+            const size_t target_size = static_cast<size_t>(splat_data.size());
             auto& deleted = splat_data.deleted();
-            const size_t new_logical = static_cast<size_t>(deleted.numel()) + n_rows;
             const size_t desired_capacity = std::max(
                 deleted_mask_capacity(splat_data, free_mask),
-                new_logical);
+                target_size);
 
-            // zeros_direct / prior reserve() marks storage as cuda.direct, which cannot
-            // grow via reserve(). Rebuild with headroom when capacity is insufficient.
-            if (deleted.capacity() >= new_logical) {
-                deleted.append_zeros(n_rows);
-            } else {
+            if (!deleted.is_valid() || deleted.ndim() != 1) {
+                if (target_size == 0) {
+                    return;
+                }
+                if (desired_capacity > target_size) {
+                    deleted = lfs::core::Tensor::zeros_direct(
+                        lfs::core::TensorShape({target_size}),
+                        desired_capacity,
+                        splat_data.means().device(),
+                        lfs::core::DataType::Bool);
+                } else {
+                    deleted = lfs::core::Tensor::zeros_bool(
+                        {target_size}, splat_data.means().device());
+                }
+                deleted.set_name("splat.deleted_mask");
+                splat_data.notify_deleted_mask_changed();
+                return;
+            }
+
+            const size_t cur = static_cast<size_t>(deleted.numel());
+            if (cur == target_size) {
+                if (deleted.capacity() < desired_capacity &&
+                    !deleted.is_external_storage()) {
+                    // Capacity-only growth; rebuild with headroom.
+                    auto fresh = lfs::core::Tensor::zeros_direct(
+                        lfs::core::TensorShape({target_size}),
+                        desired_capacity,
+                        deleted.device(),
+                        lfs::core::DataType::Bool);
+                    if (target_size > 0) {
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(
+                            fresh.ptr<uint8_t>(),
+                            deleted.ptr<uint8_t>(),
+                            target_size * sizeof(uint8_t),
+                            cudaMemcpyDeviceToDevice,
+                            fresh.stream()));
+                    }
+                    deleted = std::move(fresh);
+                    splat_data.notify_deleted_mask_changed();
+                }
+                return;
+            }
+
+            if (cur < target_size) {
+                const size_t pad = target_size - cur;
                 const size_t grow_cap = std::max(
                     desired_capacity,
                     deleted.capacity() > 0
                         ? static_cast<size_t>(deleted.capacity() * 3 / 2)
-                        : new_logical);
-                auto fresh = lfs::core::Tensor::zeros_direct(
-                    lfs::core::TensorShape({static_cast<size_t>(deleted.numel())}),
-                    grow_cap,
-                    deleted.device(),
-                    lfs::core::DataType::Bool);
-                if (deleted.numel() > 0) {
-                    LFS_CUDA_CHECK(cudaMemcpyAsync(
-                        fresh.ptr<uint8_t>(),
-                        deleted.ptr<uint8_t>(),
-                        deleted.numel() * sizeof(uint8_t),
-                        cudaMemcpyDeviceToDevice,
-                        fresh.stream()));
+                        : target_size);
+                if (deleted.capacity() >= target_size) {
+                    deleted.append_zeros(pad);
+                } else {
+                    auto fresh = lfs::core::Tensor::zeros_direct(
+                        lfs::core::TensorShape({cur}),
+                        grow_cap,
+                        deleted.device(),
+                        lfs::core::DataType::Bool);
+                    if (cur > 0) {
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(
+                            fresh.ptr<uint8_t>(),
+                            deleted.ptr<uint8_t>(),
+                            cur * sizeof(uint8_t),
+                            cudaMemcpyDeviceToDevice,
+                            fresh.stream()));
+                    }
+                    fresh.append_zeros(pad);
+                    deleted = std::move(fresh);
                 }
-                fresh.append_zeros(n_rows);
-                deleted = std::move(fresh);
+                splat_data.notify_deleted_mask_changed();
+                return;
             }
+
+            // cur > target_size: oversized/stale mask after a shrink path.
+            splat_data.reconcile_deleted_mask();
         }
 
         struct CannyWorkspace {
@@ -1071,9 +1128,11 @@ namespace lfs::training {
         const size_t n_append = K - append_start;
         if (n_append > 0) {
             const size_t old_size = static_cast<size_t>(_splat_data->size());
-            append_live_deleted_rows(*_splat_data, _free_mask, n_append);
-            if (_free_mask.is_valid() && _free_mask.numel() < _splat_data->size() + n_append) {
-                _free_mask.reserve(_splat_data->size() + n_append);
+            // Grow free_mask bookkeeping first, then params (size()), then the
+            // deleted mask — never leave deleted.numel() != size() mid-grow
+            // (ISS-022: viewer packer rejects stale masks and freezes the viewport).
+            if (_free_mask.is_valid() && _free_mask.numel() < old_size + n_append) {
+                _free_mask.reserve(old_size + n_append);
                 _free_mask.append_zeros(n_append);
             }
 
@@ -1135,6 +1194,12 @@ namespace lfs::training {
             _optimizer->add_new_params(ParamType::Scaling, append_scaling, true);
             _optimizer->add_new_params(ParamType::Rotation, append_rotation, true);
             _optimizer->add_new_params(ParamType::Opacity, append_opacity, true);
+            // Append live (false) deleted rows now that size() has advanced.
+            append_live_deleted_rows(*_splat_data, _free_mask, n_append);
+            if (_splat_data->has_deleted_mask() &&
+                !_splat_data->deleted_mask_matches_size()) {
+                _splat_data->reconcile_deleted_mask();
+            }
             if (_splat_data->has_frozen_ranges()) {
                 apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
             }
@@ -1343,8 +1408,19 @@ namespace lfs::training {
             info.index_select_into(dest, 1, valid_indices, BoundaryMode::Assert);
             _splat_data->_densification_info = std::move(dest);
         }
-        if (_splat_data->has_deleted_mask() && _splat_data->deleted().numel() == old_size) {
-            compact(_splat_data->deleted());
+        // ISS-022: deleted mask must track the new live N for VkSplat. Compact
+        // when sized to the pre-compact N; otherwise rebuild/clear so a stale
+        // pre-compact mask cannot freeze the viewport after training.
+        if (_splat_data->has_deleted_mask()) {
+            if (_splat_data->deleted().numel() == old_size) {
+                compact(_splat_data->deleted());
+                _splat_data->notify_deleted_mask_changed();
+                _splat_data->refresh_deleted_count();
+            } else {
+                LOG_WARN("MRNF::compact_splats: deleted mask numel {} != old size {}; reconciling",
+                         _splat_data->deleted().numel(), old_size);
+                _splat_data->reconcile_deleted_mask();
+            }
         }
         if (_free_mask.is_valid() && old_size > 0) {
             // Compact the live prefix of free_mask, then extend to max_cap with free=false tail.

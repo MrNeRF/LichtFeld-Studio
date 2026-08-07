@@ -677,6 +677,27 @@ namespace lfs::core {
             }
         }
 
+        // ISS-022: keep deleted mask sized to the new N (or invalidate).
+        if (splat_data.has_deleted_mask()) {
+            if (static_cast<size_t>(splat_data.deleted().numel()) == static_cast<size_t>(num_points)) {
+                Tensor gathered = splat_data.deleted()
+                                      .index_select(0, indices_tensor)
+                                      .contiguous();
+                if (gathered.dtype() != DataType::Bool) {
+                    gathered = gathered.to(DataType::Bool);
+                }
+                if (gathered.device() != Device::CUDA) {
+                    gathered = gathered.cuda();
+                }
+                gathered.set_name("splat.deleted_mask");
+                splat_data.deleted() = std::move(gathered);
+                splat_data.refresh_deleted_count();
+                splat_data.notify_deleted_mask_changed();
+            } else {
+                splat_data.reconcile_deleted_mask();
+            }
+        }
+
         Tensor scene_center = splat_data._means.mean({0}, false);
         Tensor dists = splat_data._means.sub(scene_center).norm(2.0f, {1}, false);
 

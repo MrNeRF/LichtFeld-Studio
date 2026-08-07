@@ -58,19 +58,32 @@ namespace lfs::training {
                               ? lfs::core::Tensor::ones_bool({static_cast<size_t>(indices.numel())}, indices.device())
                               : lfs::core::Tensor::zeros_bool({static_cast<size_t>(indices.numel())}, indices.device());
             splat_data.deleted().index_put_(indices, values);
+            splat_data.notify_deleted_mask_changed();
         }
 
         void append_live_deleted_rows(lfs::core::SplatData& splat_data, const size_t n_rows) {
-            if (n_rows == 0 || !splat_data.has_deleted_mask()) {
+            // ISS-022: keep deleted.numel() == size() after densify grow.
+            if (!splat_data.has_deleted_mask()) {
                 return;
             }
-
+            const size_t target_size = static_cast<size_t>(splat_data.size());
             auto& deleted = splat_data.deleted();
-            const size_t desired_capacity = std::max(
-                deleted_mask_capacity(splat_data),
-                static_cast<size_t>(deleted.numel()) + n_rows);
-            deleted.reserve(desired_capacity);
-            deleted.append_zeros(n_rows);
+            const size_t cur = static_cast<size_t>(deleted.numel());
+            if (cur == target_size) {
+                return;
+            }
+            if (cur < target_size) {
+                const size_t pad = target_size - cur;
+                const size_t desired_capacity = std::max(
+                    deleted_mask_capacity(splat_data),
+                    target_size);
+                deleted.reserve(desired_capacity);
+                deleted.append_zeros(pad);
+                splat_data.notify_deleted_mask_changed();
+                return;
+            }
+            splat_data.reconcile_deleted_mask();
+            (void)n_rows;
         }
 
         void zero_optimizer_state(

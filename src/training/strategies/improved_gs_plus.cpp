@@ -162,19 +162,40 @@ namespace lfs::training {
                               ? lfs::core::Tensor::ones_bool({static_cast<size_t>(indices.numel())}, indices.device())
                               : lfs::core::Tensor::zeros_bool({static_cast<size_t>(indices.numel())}, indices.device());
             splat_data.deleted().index_put_(indices, values);
+            splat_data.notify_deleted_mask_changed();
         }
 
         void append_live_deleted_rows(lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask, size_t n_rows) {
-            if (n_rows == 0) {
+            // ISS-022: safe before or after param growth — pad to size() with live rows.
+            (void)n_rows;
+            const size_t target_size = static_cast<size_t>(splat_data.size());
+            auto& deleted = splat_data.deleted();
+            const size_t desired_capacity = std::max(
+                deleted_mask_capacity(splat_data, free_mask),
+                target_size);
+
+            if (!deleted.is_valid()) {
+                if (target_size == 0) {
+                    return;
+                }
+                deleted = lfs::core::Tensor::zeros_bool({target_size}, splat_data.means().device());
+                deleted.reserve(desired_capacity);
+                splat_data.notify_deleted_mask_changed();
                 return;
             }
 
-            auto& deleted = splat_data.deleted();
-            if (!deleted.is_valid()) {
-                deleted = lfs::core::Tensor::zeros_bool({static_cast<size_t>(splat_data.size())}, splat_data.means().device());
+            const size_t cur = static_cast<size_t>(deleted.numel());
+            if (cur == target_size) {
+                deleted.reserve(desired_capacity);
+                return;
             }
-            deleted.reserve(deleted_mask_capacity(splat_data, free_mask));
-            deleted.append_zeros(n_rows);
+            if (cur < target_size) {
+                deleted.reserve(desired_capacity);
+                deleted.append_zeros(target_size - cur);
+                splat_data.notify_deleted_mask_changed();
+                return;
+            }
+            splat_data.reconcile_deleted_mask();
         }
 
         struct SampledScaleSummary {
@@ -618,8 +639,7 @@ namespace lfs::training {
             const auto new_indices = lfs::core::Tensor::from_vector(
                 new_indices_vec, lfs::core::TensorShape({n_remaining}), device);
 
-            // Extend and write data
-            append_live_deleted_rows(*_splat_data, _free_mask, n_remaining);
+            // Grow params first, then pad deleted mask to the new size (ISS-022).
             _splat_data->means().append_zeros(n_remaining);
             _splat_data->means().index_put_(new_indices, append_positions);
 
@@ -636,6 +656,7 @@ namespace lfs::training {
 
             _splat_data->opacity_raw().append_zeros(n_remaining);
             _splat_data->opacity_raw().index_put_(new_indices, append_opacities);
+            append_live_deleted_rows(*_splat_data, _free_mask, n_remaining);
 
             if (use_shN) {
                 auto append_shN = second_shN.slice(0, num_filled, budget_for_alloc);

@@ -327,6 +327,22 @@ namespace lfs::core {
         void undelete(const Tensor& mask);
         void clear_deleted();
 
+        // VkSplat (and other consumers) require: if a deleted mask is present it
+        // must be a contiguous CUDA bool tensor of numel == size(). Call this
+        // after any N-mutating path (densify grow, compact, load, random_choose)
+        // that may have left the mask stale. Legal outcomes:
+        //   - mask matches the contract (possibly rebuilt / resized in place)
+        //   - mask cleared (has_deleted_mask()==false)
+        // Bumps deleted_mask_version() when the mask storage or content changes.
+        void reconcile_deleted_mask();
+
+        // True when has_deleted_mask() and the packer contract holds.
+        [[nodiscard]] bool deleted_mask_matches_size() const;
+
+        // Bump deleted_mask_version after external writers replace/mutate
+        // deleted() storage (strategies, compact gathers, exportable rebind).
+        void notify_deleted_mask_changed();
+
         // Permanently remove deleted gaussians (compacts data)
         // Returns number of gaussians removed
         size_t apply_deleted();

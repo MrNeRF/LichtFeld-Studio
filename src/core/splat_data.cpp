@@ -1019,6 +1019,68 @@ namespace lfs::core {
         }
     }
 
+    bool SplatData::deleted_mask_matches_size() const {
+        if (!_deleted.is_valid()) {
+            return false;
+        }
+        const size_t n = size();
+        return _deleted.dtype() == DataType::Bool &&
+               _deleted.device() == Device::CUDA &&
+               _deleted.is_contiguous() &&
+               _deleted.ndim() == 1 &&
+               static_cast<size_t>(_deleted.numel()) == n;
+    }
+
+    void SplatData::notify_deleted_mask_changed() {
+        _deleted_mask_version.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void SplatData::reconcile_deleted_mask() {
+        if (!_deleted.is_valid()) {
+            _deleted_count.store(0, std::memory_order_relaxed);
+            return;
+        }
+        if (deleted_mask_matches_size()) {
+            return;
+        }
+
+        const size_t n = size();
+        if (n == 0 || !_means.is_valid()) {
+            clear_deleted();
+            return;
+        }
+
+        // Rebuild to the live N. Preserve a prefix of previous truth values when
+        // the mask was simply grown/shrunk without a gather; free-slot writers
+        // re-sync on the next densify step if needed. has_deleted_mask()=false
+        // is also legal, but preserving prefix avoids a one-frame flash of
+        // previously soft-deleted rows after densify grow.
+        Tensor fresh = Tensor::zeros({n}, _means.device(), DataType::Bool);
+        fresh.set_name("splat.deleted_mask");
+        const size_t old_n = static_cast<size_t>(_deleted.numel());
+        if (old_n > 0 && _deleted.device() == Device::CUDA) {
+            Tensor src = _deleted;
+            if (src.dtype() != DataType::Bool) {
+                src = src.to(DataType::Bool);
+            }
+            if (!src.is_contiguous()) {
+                src = src.contiguous();
+            }
+            const size_t copy_n = std::min(old_n, n);
+            if (copy_n > 0 && src.device() == Device::CUDA) {
+                // Copy the leading copy_n bools into the fresh mask.
+                auto src_prefix = src.ndim() == 1 ? src.slice(0, 0, copy_n) : src;
+                auto dst_prefix = fresh.slice(0, 0, copy_n);
+                dst_prefix.copy_from(src_prefix.contiguous());
+            }
+        }
+        _deleted = std::move(fresh);
+        _deleted_mask_version.fetch_add(1, std::memory_order_relaxed);
+        // Count is trainer-owned; best-effort refresh when called from the
+        // writer thread. Render-thread callers only need the size contract.
+        refresh_deleted_count();
+    }
+
     size_t SplatData::apply_deleted() {
         if (!_deleted.is_valid() || !_means.is_valid()) {
             return 0;
@@ -1030,14 +1092,14 @@ namespace lfs::core {
         if (_deleted.size(0) != old_size) {
             LOG_ERROR("apply_deleted: mask size {} != data size {}, aborting",
                       _deleted.size(0), old_size);
-            _deleted = Tensor();
+            clear_deleted();
             return 0;
         }
 
         // Validate mask is boolean type
         if (_deleted.dtype() != DataType::Bool) {
             LOG_ERROR("apply_deleted: mask is not Bool type, aborting");
-            _deleted = Tensor();
+            clear_deleted();
             return 0;
         }
 
@@ -1045,7 +1107,7 @@ namespace lfs::core {
         if (_sh0.size(0) != old_size || _scaling.size(0) != old_size ||
             _rotation.size(0) != old_size || _opacity.size(0) != old_size) {
             LOG_ERROR("apply_deleted: tensor size mismatch, aborting");
-            _deleted = Tensor();
+            clear_deleted();
             return 0;
         }
 
@@ -1054,7 +1116,7 @@ namespace lfs::core {
 
         // Nothing to delete
         if (new_size == old_size) {
-            _deleted = Tensor();
+            clear_deleted();
             return 0;
         }
 
@@ -1129,8 +1191,9 @@ namespace lfs::core {
             remap_frozen_ranges_after_keep(old_size, kept_indices_host);
         }
 
-        // Clear deletion mask
-        _deleted = Tensor();
+        // Clear deletion mask (bumps deleted_mask_version so the viewport
+        // drops any soft-delete opacity bake for the old N).
+        clear_deleted();
 
         const size_t removed = old_size - new_size;
         LOG_INFO("apply_deleted: removed {} gaussians ({} -> {})", removed, old_size, new_size);
