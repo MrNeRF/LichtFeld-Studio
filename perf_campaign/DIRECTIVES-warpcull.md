@@ -19,6 +19,8 @@ Training port explicitly left open by the paper — that is OUR edge: apply the 
 warp-cull structure to blend_backward_cu (complementary to the landed T_eff clamp:
 clamp bounds the RANGE, warp-cull skips WITHIN range; also replaces block fences with
 warp-scoped sync = exactly Fable root-cause #2, 30 barriers).
-Note for commits (naming rule): describe techniques neutrally ("warp-level sub-tile
-culling"); the DOI citation lives here and in a code comment at the kernel head
-(academic citation is standard practice and CC-BY-appropriate — maintainer's call).
+Citation policy (maintainer-approved): commit messages and code comments MAY cite this
+paper explicitly: "Warp-Level Culling for Efficient Blending in 3D Gaussian Splatting,
+Yang, Drettakis, Bernstein — ACM CGIT 9(4):54, 2026, doi:10.1145/3820019". Cite it in the
+kernel-head comment and in the landing commits for WO-WARP-FWD / WO-WARP-BWD.
+(The no-external-names rule remains in force for everything else.)
