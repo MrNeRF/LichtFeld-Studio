@@ -135,6 +135,11 @@ namespace lfs::core {
     } // namespace
 
     // ============= Masking Operations =============
+    // Theme A (TENSOR_LIB_FINDINGS): kernels below scan data+mask as dense
+    // linear buffers. Non-contiguous inputs MUST go through contiguous_read /
+    // mutate_logical_view materialize firewalls before the linear path. Do not
+    // add a "fast" strided bypass without a matching stride-aware kernel and
+    // Theme A regression tests (tests/test_theme_a_strided_ops.cpp).
     Tensor Tensor::masked_select(const Tensor& mask) const {
         LFS_CUDA_BREADCRUMB_STREAM("tensor.masked_select", stream());
         tensor_contract::require_valid(
@@ -150,6 +155,9 @@ namespace lfs::core {
                        std::format("masked_select cannot broadcast mask shape {} to {}",
                                    mask.shape().str(), shape_.str()));
 
+        // Materialize firewall: dense input + dense (broadcast) mask, then recurse.
+        // Without this, linear kernels scan physical storage (Theme A fail evidence:
+        // transposed [[1,2,3],[4,5,6]] + mask T F T F F T → got [1,3,6] vs ref [1,2,6]).
         Tensor input_materialized;
         Tensor broadcast_mask;
         const Tensor* logical_mask = &mask;
@@ -250,6 +258,8 @@ namespace lfs::core {
         detail::require_scalar_representable(dtype_, value, "masked_fill_");
         const float stored_value = dtype_ == DataType::Bool && value != 0.0f ? 1.0f : value;
 
+        // Theme A: in-place linear fill would clobber sibling storage on a
+        // strided view. Stage densify → fill → strided copy_from writeback.
         if (!is_contiguous()) {
             return mutate_logical_view(
                 [&](Tensor& materialized) {
@@ -1430,6 +1440,9 @@ namespace lfs::core {
         LFS_ASSERT_MSG(is_integer_index_dtype(idx.dtype()),
                        "index_put_ indices must be Int32 or Int64");
 
+        // Theme A: non-contiguous destinations must not be written with a dense
+        // linear scatter (overwrites allocation base / wrong cells). Contiguous
+        // offset views are safe because data_ptr() already applies storage_offset_.
         if (!is_contiguous()) {
             return mutate_logical_view(
                 [&](Tensor& materialized) {
