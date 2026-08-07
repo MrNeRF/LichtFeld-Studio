@@ -1469,3 +1469,66 @@ GT cache: device=55/1019.5 MiB hits=273  pinned=237/4393.3 MiB hits=1140
 
 ### Status
 **DONE** for GT-cache policy + MJ-13 + densify preflight. ISS-024 re-scoped; ISS-025 open.
+
+---
+
+## ISS-025 — post-grow rebind destroys relocated splat data (2026-08-08)
+
+### Spec (do not re-derive)
+- Primary: `/home/gauss/lfs-campaign-out/analysis/postgrow-integrity-B.md` (conf 0.9)
+- Hardening: `/home/gauss/lfs-campaign-out/analysis/instance-explosion-A.md`
+
+### TDD
+- **Test first:** `SplatExportableStorageTest.RebindGrowRebindPreservesAllRegionPatterns`
+  (rebind → grow → rebind; all SoA regions + shN degree 3 patterns must survive).
+  Pre-fix failure mode (Analyst B): means@0 intact; scaling/rot/opacity destroyed after
+  post-grow copying rebind. Also `GrowSlackRowsAreNonRenderable`.
+- **PASS (after fix):**
+  ```
+  [  PASSED  ] SplatExportableStorageTest.RebindGrowRebindPreservesAllRegionPatterns
+  [  PASSED  ] SplatExportableStorageTest.GrowSlackRowsAreNonRenderable
+  (+ GrowPreservesData, TensorViewsValidAfterGrow, CapacityEnsure, FastGSOverflowGuards)
+  ```
+
+### Fix
+1. **Primary:** `rebindSplatData` installs views only when source already aliases the
+   ExportableBlock VA range (skip `copy_from`). grow() already relocated; copy from
+   stale offsets was the corruption. Cross-allocator migrations still copy.
+2. **Hardening A:** slack rows opacity=−∞, identity quat; pre/post stream fence in grow;
+   `SplatData::param_layout_generation` + `ensure_param_capacity(..., layout_changed*)`;
+   adam re-fetch debug asserts.
+3. **Soft-skip:** 32-bit instance overflow → FailedPrecondition → trainer skips step
+   (Continue) instead of Internal fatal.
+
+### Gate — full suite (red-provenance)
+`3474 ran → 3418 PASS / 14 FAIL / 42 SKIP` (~44 s). Same 14 pre-existing reds as prior
+gtcache gate (3416P/14F); +2 green = our two new tests. No new reds.
+
+### Gate — dual-workload (unchanged band)
+| workload | med steady_ms | dl_wait | gt_cache MiB | B/splat |
+|---|---:|---:|---:|---:|
+| bonsai ×3 (`20260807T215929Z`) | **2.614** | 0.004 | 338.8 | **307.4** |
+| bicycle 7k ×3 (`20260807T220846Z`) | **2.649** | 0.004 | 564.4 | **307.4** |
+
+Target ~2.60–2.65 ms/iter, 307.4 B/splat — met.
+
+### Gate — GUI repro DEFAULT 5M reserve (NOT max-cap 500000)
+```
+SplatExportableStorage: capacity=309919 reserve_capacity=5000000 sh_degree=3 block=74 MiB
+SplatExportableStorage grew: capacity=495852 generation=2 block=118 MiB
+Exportable splat storage grew for densify: capacity=495852 block=118 MiB gen=2
+GT cache: device=55/1019.5 MiB + pinned=237/4393.3 MiB
+Training finished: iter=2500, loss=0.039563, time=44.6s
+Checkpoint: 461367 Gaussians, iter 2500
+```
+- **No** instance explosion, **no** degraded mode, **no** forward-raster failure,
+  **no** shared_scratch ~4 GiB OOM (ISS-024 fingerprint).
+- Loss healthy through and past first grow. Log: `/tmp/lfs-iss025-gui.log`.
+
+### Commits
+- `69588766` test(iss025): pattern integrity across rebind→grow→rebind
+- `9111e563` fix(iss025): non-copying post-grow rebind (primary) + hardening
+- `41e9b2d8` fix(iss025): soft-skip FastGS 32-bit instance overflow
+
+### Status
+**DONE.** ISS-025 CLOSED. ISS-024 CLOSED (confirmed symptom; re-test clean).

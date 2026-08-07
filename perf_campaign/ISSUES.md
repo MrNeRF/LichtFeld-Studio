@@ -264,7 +264,7 @@ Post-densify-grow GUI OOM on `vksplat.shared_scratch` (~4003 MiB request) is **n
 capacity-ensure abort. Tracked as ISS-024.
 
 ## ISS-024 — GUI post-densify OOM: shared_scratch / instance buffers after exportable grow
-- **Status:** RE-SCOPED / effectively closed as VRAM-greed symptom — residual disease is ISS-025.
+- **Status:** CLOSED (2026-08-08) — duplicate/symptom of ISS-025; confirmed gone under ISS-025 fix.
 - Original repro: GUI bonsai after densify grow →
   `External rasterizer arena 'vksplat.shared_scratch' grow failed (need≈4003 MiB)` →
   `OUT_OF_MEMORY: Failed to allocate instance buffers` (~iter 1408).
@@ -279,14 +279,26 @@ capacity-ensure abort. Tracked as ISS-024.
   `estimateSharedScratchBytes(N≈500k)` is ~160–200 MiB; the 4003 MiB arena grow was the
   training arena attempting to satisfy a pathological n_instances (same root as ISS-025).
   Real ceiling for healthy frames remains live-N + tile-instance growth, not max_cap floor.
-- Do not re-open ISS-023. Track remaining GUI densify-after failure under ISS-025.
+- **Re-test after ISS-025 fix (2026-08-08, default 5M reserve):** GUI bonsai 2500 iters —
+  grow 309919→495852 succeeds; training completes loss≈0.040; **no** shared_scratch OOM,
+  **no** instance explosion. Analyst B: "~4 GiB instance-buffer OOM was 66–72 waves × K —
+  same disease." Closed with ISS-025.
 
 ## ISS-025 — GUI post-grow instance explosion: depth-wave budget + forward raster failure + loss regression
-- **Status:** OPEN — two Fable analysts dispatched (independent lenses), owner reproduces.
+- **Status:** CLOSED (2026-08-08) — primary fix + hardening shipped; GUI repro clean.
 - Repro (owner, 23:15 local): after successful densify grow (post-ISS-023), frame demands
   72 depth-waves x 4,194,304 instances (~300M) -> VkSplat degraded; then
   "FastGS forward rasterization failed" (CUDA Internal, async) kills training; loss regresses
   before death. GUI-only (interop path). ISS-024's ~4GiB instance buffer likely same disease.
-- Analyst A lens: instance pipeline forward (parameter garbage in grown rows -> huge ellipses).
-- Analyst B lens: structural desync after in-place grow (capacity-vs-liveN iteration, stale
-  sizes/strides in packer/preprocess/Vulkan re-import).
+- **Root cause (Analyst B, conf 0.9 — primary):** `rebindSplatData` after `grow()` did
+  `copy_from` of stale pre-grow views (same ExportableBlock, old offsets) into new offsets,
+  overwriting correctly relocated data. Means@0 survived; scaling/rot/opacity became garbage
+  → half-screen splats → 3.8e9 instances. "CUDA-only views" were still views into the same
+  block at current offsets, not a separate pool.
+- **Hardening (Analyst A):** slack opacity=−∞ + identity quat; grow stream fence;
+  `param_layout_generation` + `layout_changed` from `ensure_param_capacity`; soft-skip on
+  32-bit instance overflow (FailedPrecondition → step Continue, not run-fatal).
+- **Fix commits:** `69588766` (TDD), `9111e563` (primary+hardening), `41e9b2d8` (soft-skip).
+- **Gates:** full suite 3418P/14F (same 14 pre-existing; +2 green); dual-workload
+  bonsai med 2.614 / bicycle 2.649 ms/iter, 307.4 B/splat; GUI default-5M past densify
+  clean through 2500 (`/tmp/lfs-iss025-gui.log`).
