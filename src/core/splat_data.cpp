@@ -896,20 +896,58 @@ namespace lfs::core {
     }
 
     void SplatData::reserve_capacity(const size_t capacity) {
+        // zeros_direct / cuda.direct tensors reject Tensor::reserve when growth would
+        // reallocate — rebuild with zeros_direct + D2D copy instead (checkpoint resume
+        // with max_cap > N after q16 quant is the canary; ISS-014).
+        const auto grow_direct = [](Tensor& t, const size_t cap_rows) {
+            if (!t.is_valid() || cap_rows == 0)
+                return;
+            if (t.capacity() >= cap_rows)
+                return;
+            if (!t.is_external_storage()) {
+                t.reserve(cap_rows);
+                return;
+            }
+            auto grown = Tensor::zeros_direct(t.shape(), cap_rows, t.device(), t.dtype());
+            if (t.numel() > 0 && t.data_ptr() && grown.data_ptr()) {
+                const size_t elem_bytes = dtype_size(t.dtype());
+                if (elem_bytes > 0) {
+                    cudaMemcpy(grown.data_ptr(), t.data_ptr(),
+                               t.numel() * elem_bytes, cudaMemcpyDeviceToDevice);
+                }
+            }
+            if (!t.name().empty())
+                grown.set_name(t.name());
+            t = std::move(grown);
+        };
+
         if (_means.is_valid())
-            _means.reserve(capacity);
+            grow_direct(_means, capacity);
         if (_sh0.is_valid())
-            _sh0.reserve(capacity);
+            grow_direct(_sh0, capacity);
         if (_shN.is_valid()) {
-            // shN is 1D swizzled — reserve in float count.
-            _shN.reserve(sh_swizzled_float_count(capacity, static_cast<uint32_t>(max_sh_coeffs_rest())));
+            const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
+            // q16 (Float16 bit-pattern): capacity is pad-dropped uint16 cells.
+            // fp32: capacity is float4-swizzled float count.
+            if (_shN.dtype() == DataType::Float16) {
+                const size_t need = sh_value_quant::sh_value_u16_count(capacity, layout_rest);
+                if (need > 0)
+                    grow_direct(_shN, need);
+                if (_shN_value_bounds.is_valid()) {
+                    const size_t nb = sh_value_quant::n_bounds_for_prims(capacity) * 2;
+                    if (nb > 0)
+                        grow_direct(_shN_value_bounds, nb);
+                }
+            } else {
+                grow_direct(_shN, sh_swizzled_float_count(capacity, layout_rest));
+            }
         }
         if (_scaling.is_valid())
-            _scaling.reserve(capacity);
+            grow_direct(_scaling, capacity);
         if (_rotation.is_valid())
-            _rotation.reserve(capacity);
+            grow_direct(_rotation, capacity);
         if (_opacity.is_valid())
-            _opacity.reserve(capacity);
+            grow_direct(_opacity, capacity);
     }
 
     // ========== SOFT DELETION ==========
