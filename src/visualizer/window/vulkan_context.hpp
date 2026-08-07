@@ -289,9 +289,13 @@ namespace lfs::vis {
         [[nodiscard]] bool waitForRetiredFrameSubmitSerial(std::uint64_t serial);
         [[nodiscard]] bool waitForImmediateSubmits();
         [[nodiscard]] bool deviceWaitIdle();
-        void addFrameTimelineWait(VkSemaphore semaphore,
-                                  std::uint64_t value,
-                                  VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+        // Returns false if the wait was rejected (frame inactive / mono violation);
+        // endFrame will refuse submit when any wait fails. Callers that commit
+        // layout optimistically must not do so on false (F2-2).
+        [[nodiscard]] bool addFrameTimelineWait(
+            VkSemaphore semaphore,
+            std::uint64_t value,
+            VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
         [[nodiscard]] bool createExternalImage(VkExtent2D extent,
                                                VkFormat format,

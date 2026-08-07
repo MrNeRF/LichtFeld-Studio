@@ -241,6 +241,9 @@ namespace lfs::vis {
             std::uint64_t ticket) const;
         [[nodiscard]] std::expected<void, std::string> waitReadbackTicket(
             std::uint64_t ticket) const;
+        // Mark ticket Failed (if Outstanding) and clear meta.dest so the host may drop
+        // its storage without UAF. Pins stay until the timeline completes and freeCell runs.
+        void abandonReadbackTicket(std::uint64_t ticket) const;
         // Observability counters for LOG_PERF / GT compare cycles.
         [[nodiscard]] std::size_t outstandingReadbackTickets() const;
         [[nodiscard]] std::uint64_t readbackRingFullWaitCount() const;
@@ -476,7 +479,12 @@ namespace lfs::vis {
         // Drain/trim the viewport output-image pool. Predicates mirror scratch
         // retirement (producer timeline) plus graphics-frame submit serials.
         // force=true only after device idle; never destroys live acquisitions.
-        void drainOutputImagePool(bool force);
+        // When readback_mutex_held is true the caller already owns readback_mutex_
+        // (release* paths); the pin predicate must not re-lock (F3-1).
+        void drainOutputImagePool(bool force, bool readback_mutex_held = false);
+        // Free Failed ticket cells once the readback timeline reaches their ticket
+        // (non-blocking). Caller must hold readback_mutex_.
+        void reclaimCompletedFailedReadbackCells() const;
         void trimOutputImagePoolAged();
         void trimOutputImagePoolIdle();
         // Clamps input-storage retirements left keyed to a timeline value a

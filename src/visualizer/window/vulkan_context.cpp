@@ -1941,7 +1941,7 @@ namespace lfs::vis {
         return true;
     }
 
-    void VulkanContext::addFrameTimelineWait(const VkSemaphore semaphore,
+    bool VulkanContext::addFrameTimelineWait(const VkSemaphore semaphore,
                                              const std::uint64_t value,
                                              const VkPipelineStageFlags wait_stage) {
         if (!frame_active_ || semaphore == VK_NULL_HANDLE || value == 0 || wait_stage == 0) {
@@ -1953,7 +1953,7 @@ namespace lfs::vis {
                 value,
                 static_cast<std::uint64_t>(wait_stage),
                 frame_timeline_waits_.size()));
-            return;
+            return false;
         }
         const std::lock_guard lock(timeline_value_tracker_mutex_);
         const std::uint64_t previous = last_frame_timeline_wait_values_[semaphore];
@@ -1967,7 +1967,7 @@ namespace lfs::vis {
                 static_cast<std::uint64_t>(wait_stage),
                 active_frame_index_,
                 active_image_index_));
-            return;
+            return false;
         }
         last_frame_timeline_wait_values_[semaphore] = value;
         frame_timeline_waits_.push_back(FrameTimelineWait{
@@ -1975,6 +1975,7 @@ namespace lfs::vis {
             .value = value,
             .wait_stage = wait_stage,
         });
+        return true;
     }
 
     bool VulkanContext::createInstance() {

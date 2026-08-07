@@ -684,6 +684,13 @@ namespace lfs::vis {
         pending_layout_commits_.clear();
     }
 
+    void ViewportInteropService::syncUnsubmittedLayoutCommits(VulkanContext& context) {
+        teardown_context_ = &context;
+        // Prior frame: unrecorded barriers (beginFrame failed) leave layout GENERAL.
+        pending_frame_barriers_.clear();
+        rollbackUnsubmittedLayoutCommits(context);
+    }
+
     void ViewportInteropService::prepareFrame(VulkanContext& context, const bool resize_deferring) {
         teardown_context_ = &context;
         // Frame accounting starts here (prepare runs before beginFrame).
@@ -692,9 +699,7 @@ namespace lfs::vis {
         // Non-blocking drain once per prepareFrame (retired → free when safe).
         drainInteropPool(context, /*force=*/false);
 
-        // Prior frame: unrecorded barriers (beginFrame failed) leave layout GENERAL.
-        pending_frame_barriers_.clear();
-        rollbackUnsubmittedLayoutCommits(context);
+        syncUnsubmittedLayoutCommits(context);
 
         pending_uploads_.clear();
         prepareChannel(context, channels_->scene, resize_deferring);
@@ -870,15 +875,24 @@ namespace lfs::vis {
         }
 
         // Marker: last successful submit serial at record time. Next prepareFrame
-        // rolls back if no newer successful endFrame submit occurred.
+        // (or export-locked syncUnsubmittedLayoutCommits) rolls back if no newer
+        // successful endFrame submit occurred.
         const std::uint64_t commit_marker = context.lastSuccessfulFrameSubmitSerial();
         for (const auto& pending : pending_frame_barriers_) {
             if (pending.unit == nullptr || pending.target == nullptr || pending.channel == nullptr) {
                 continue;
             }
-            context.addFrameTimelineWait(pending.unit->semaphore.semaphore,
-                                         pending.cuda_signal_value,
-                                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            // F2-2: only commit layout/publish when the frame wait is accepted.
+            // A rejected wait marks the frame invalid for submit; leaving layout
+            // GENERAL keeps CacheHit/bind from sampling a still-GENERAL GPU image.
+            if (!context.addFrameTimelineWait(pending.unit->semaphore.semaphore,
+                                              pending.cuda_signal_value,
+                                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT)) {
+                LOG_ERROR(
+                    "recordFrameBarriers: addFrameTimelineWait failed; leaving layout GENERAL: {}",
+                    context.lastError());
+                continue;
+            }
             pending.unit->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             pending.target->uploaded_source_generation = pending.source_generation;
             ++pending.target->generation;

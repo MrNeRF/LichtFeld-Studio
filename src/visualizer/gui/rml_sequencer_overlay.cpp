@@ -718,11 +718,6 @@ namespace lfs::vis::gui {
         rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true);
     }
 
-    void RmlSequencerOverlay::compositeToScreen(const int screen_w, const int screen_h) const {
-        (void)screen_w;
-        (void)screen_h;
-    }
-
     void RmlSequencerOverlay::destroyGraphicsResources() {
         hidePreviewWindow();
     }

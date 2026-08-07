@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -1865,7 +1866,8 @@ namespace lfs::vis {
         releasePrivateScratchBuffers();
         releaseSharedScratchArena();
         drainRetiredScratchBuffers(false);
-        drainOutputImagePool(false);
+        reclaimCompletedFailedReadbackCells();
+        drainOutputImagePool(false, /*readback_mutex_held=*/true);
         trimOutputImagePoolAged();
         logVramBreakdownIfChanged("preview_release");
     }
@@ -1890,7 +1892,8 @@ namespace lfs::vis {
 
         releaseOutputSlot(OutputSlot::SplitLeft, /*evict=*/true);
         releaseOutputSlot(OutputSlot::SplitRight, /*evict=*/true);
-        drainOutputImagePool(false);
+        reclaimCompletedFailedReadbackCells();
+        drainOutputImagePool(false, /*readback_mutex_held=*/true);
         trimOutputImagePoolAged();
         logVramBreakdownIfChanged("split_output_release");
     }
@@ -1961,7 +1964,8 @@ namespace lfs::vis {
         releasePrivateScratchBuffers();
         releaseSharedScratchArena();
         drainRetiredScratchBuffers(false);
-        drainOutputImagePool(false);
+        reclaimCompletedFailedReadbackCells();
+        drainOutputImagePool(false, /*readback_mutex_held=*/true);
         trimOutputImagePoolIdle();
         logVramBreakdownIfChanged("scene_release");
     }
@@ -3867,22 +3871,55 @@ namespace lfs::vis {
         }
     }
 
-    void VksplatViewportRenderer::drainOutputImagePool(const bool force) {
+    void VksplatViewportRenderer::reclaimCompletedFailedReadbackCells() const {
+        if (context_ == nullptr || readback_timeline_ == VK_NULL_HANDLE) {
+            return;
+        }
+        std::uint64_t current = 0;
+        if (vkGetSemaphoreCounterValue(context_->device(), readback_timeline_, &current) !=
+            VK_SUCCESS) {
+            return;
+        }
+        struct Ctx {
+            std::uint64_t current = 0;
+        } ctx{current};
+        readback_ring_.reclaimFailedIf(
+            [](const std::uint64_t ticket, void* raw) -> bool {
+                const auto* c = static_cast<const Ctx*>(raw);
+                return ticket != 0 && c->current >= ticket;
+            },
+            &ctx);
+    }
+
+    void VksplatViewportRenderer::drainOutputImagePool(const bool force,
+                                                       const bool readback_mutex_held) {
         if (context_ == nullptr) {
             return;
+        }
+        if (!force) {
+            if (readback_mutex_held) {
+                reclaimCompletedFailedReadbackCells();
+            } else {
+                std::lock_guard<std::mutex> lock(readback_mutex_);
+                reclaimCompletedFailedReadbackCells();
+            }
         }
         const auto destroy_fn = [this](VulkanContext::ExternalImage& image) {
             context_->destroyExternalImage(image);
         };
-        // Pool pin (#1574): AND "no outstanding ticket sources this image".
+        // Pool pin (#1574): AND "no non-Free ticket sources this image".
         // Mapping (not a deviation): consumer_pred is called with the consumer
         // frame serial, not acquisition_serial, so we pin by VkImage handle —
         // which is 1:1 with an acquisition while the entry is Retired. Intent
         // remains "no pool free while a ticket references the image."
-        auto producer_pred = [this](const VulkanContext::ExternalImage& image,
-                                    const std::uint64_t value) {
+        // F3-1: never re-lock readback_mutex_ when the caller already holds it.
+        auto producer_pred = [this, readback_mutex_held](const VulkanContext::ExternalImage& image,
+                                                         const std::uint64_t value) {
             if (!renderTimelineValueRetired(value)) {
                 return false;
+            }
+            if (readback_mutex_held) {
+                return !readback_ring_.hasOutstandingForImage(image.image);
             }
             std::lock_guard<std::mutex> lock(readback_mutex_);
             return !readback_ring_.hasOutstandingForImage(image.image);
@@ -5858,20 +5895,39 @@ namespace lfs::vis {
     }
 
     std::expected<std::size_t, std::string> VksplatViewportRenderer::acquireReadbackCell() const {
+        // F3-2: reclaim Failed cells whose timeline is already complete before acquire.
+        reclaimCompletedFailedReadbackCells();
         if (auto free = readback_ring_.tryAcquireCell(); free.has_value()) {
             return *free;
         }
-        // Ring-full: bounded-wait the oldest outstanding ticket (steady state must never hit).
-        const auto oldest = readback_ring_.oldestOutstandingCell();
+        // Ring-full: bounded-wait the oldest active (Outstanding or Failed) ticket.
+        const auto oldest = readback_ring_.oldestActiveCell();
         if (!oldest.has_value()) {
-            return std::unexpected("VkSplat readback ring full with no outstanding tickets");
+            return std::unexpected("VkSplat readback ring full with no active tickets");
         }
         readback_ring_.noteRingFullWait();
         const std::uint64_t ticket = readback_ring_.cell(*oldest).ticket_value;
-        LOG_PERF("vksplat.readback.ring_full_wait ticket={} (must be 0 steady-state)", ticket);
-        if (const auto waited = waitReadbackTicketLocked(ticket); !waited) {
+        const auto state = readback_ring_.cell(*oldest).state;
+        LOG_PERF("vksplat.readback.ring_full_wait ticket={} state={} (must be 0 steady-state)",
+                 ticket,
+                 state == ReadbackTicketRing::State::Failed ? "Failed" : "Outstanding");
+        if (state == ReadbackTicketRing::State::Failed) {
+            // Wait timeline only — do not deliver; free once complete.
+            if (const auto waited =
+                    waitReadbackTimelineValue(ticket, "vksplat.readback.reclaim_failed");
+                !waited) {
+                return std::unexpected(waited.error());
+            }
+            readback_ring_.freeCell(*oldest);
+        } else if (const auto waited = waitReadbackTicketLocked(ticket); !waited) {
+            // Wait failed → markFailed left the cell pinned; try reclaim if timeline advanced.
+            reclaimCompletedFailedReadbackCells();
+            if (auto free = readback_ring_.tryAcquireCell(); free.has_value()) {
+                return *free;
+            }
             return std::unexpected(waited.error());
         }
+        reclaimCompletedFailedReadbackCells();
         if (auto free = readback_ring_.tryAcquireCell(); free.has_value()) {
             return *free;
         }
@@ -6011,14 +6067,14 @@ namespace lfs::vis {
         }
 
         using DeliveryKind = ReadbackTicketRing::DeliveryKind;
+        // F3-3: never memcpy into a cleared / abandoned dest.
         switch (meta.delivery) {
-        case DeliveryKind::StagingOnly:
-            break;
         case DeliveryKind::DepthSample: {
             if (meta.dest == nullptr || meta.byte_count < sizeof(float)) {
                 readback_ring_.markFailed(cell, "depth sample delivery missing destination");
                 return std::unexpected(readback_ring_.cell(cell).error);
             }
+            assert(meta.dest != nullptr && "deliver must not write a cleared dest");
             std::memcpy(meta.dest, src, sizeof(float));
             break;
         }
@@ -6027,6 +6083,7 @@ namespace lfs::vis {
                 readback_ring_.markFailed(cell, "depth plane delivery missing destination");
                 return std::unexpected(readback_ring_.cell(cell).error);
             }
+            assert(meta.dest != nullptr && "deliver must not write a cleared dest");
             std::memcpy(meta.dest, src, static_cast<std::size_t>(meta.byte_count));
             break;
         }
@@ -6035,6 +6092,7 @@ namespace lfs::vis {
                 readback_ring_.markFailed(cell, "color HWC delivery missing destination");
                 return std::unexpected(readback_ring_.cell(cell).error);
             }
+            assert(meta.dest != nullptr && "deliver must not write a cleared dest");
             const std::size_t src_row_pixels = static_cast<std::size_t>(meta.width);
             const std::size_t dst_row_pixels = static_cast<std::size_t>(meta.dest_width);
             const std::size_t dst_channels = static_cast<std::size_t>(meta.dest_channels);
@@ -6089,6 +6147,7 @@ namespace lfs::vis {
 
     std::expected<VksplatViewportRenderer::ReadbackTicketStatus, std::string>
     VksplatViewportRenderer::pollReadbackTicketLocked(const std::uint64_t ticket) const {
+        reclaimCompletedFailedReadbackCells();
         auto* meta = readback_ring_.findByTicket(ticket);
         if (meta == nullptr) {
             return ReadbackTicketStatus::Failed;
@@ -6099,15 +6158,7 @@ namespace lfs::vis {
         if (meta->state != ReadbackTicketRing::State::Outstanding) {
             return ReadbackTicketStatus::Failed;
         }
-        std::uint64_t current = 0;
-        if (vkGetSemaphoreCounterValue(context_->device(), readback_timeline_, &current) !=
-            VK_SUCCESS) {
-            return std::unexpected("vkGetSemaphoreCounterValue(readback timeline) failed");
-        }
-        if (current < ticket) {
-            return ReadbackTicketStatus::NotReady;
-        }
-        // Locate cell index for delivery.
+        // Locate cell index (needed for markFailed on poll error and for deliver).
         std::size_t cell = ReadbackTicketRing::kRingSize;
         for (std::size_t i = 0; i < ReadbackTicketRing::kRingSize; ++i) {
             if (readback_ring_.cell(i).ticket_value == ticket) {
@@ -6117,6 +6168,17 @@ namespace lfs::vis {
         }
         if (cell >= ReadbackTicketRing::kRingSize) {
             return std::unexpected("readback ticket cell lost");
+        }
+        std::uint64_t current = 0;
+        if (vkGetSemaphoreCounterValue(context_->device(), readback_timeline_, &current) !=
+            VK_SUCCESS) {
+            // F3-3: do not leave Outstanding with a host dest that may be cleared.
+            readback_ring_.markFailed(
+                cell, "vkGetSemaphoreCounterValue(readback timeline) failed");
+            return std::unexpected(readback_ring_.cell(cell).error);
+        }
+        if (current < ticket) {
+            return ReadbackTicketStatus::NotReady;
         }
         if (const auto delivered = deliverReadbackTicket(cell); !delivered) {
             return std::unexpected(delivered.error());
@@ -6169,6 +6231,33 @@ namespace lfs::vis {
         const std::uint64_t ticket) const {
         std::lock_guard<std::mutex> lock(readback_mutex_);
         return waitReadbackTicketLocked(ticket);
+    }
+
+    void VksplatViewportRenderer::abandonReadbackTicket(const std::uint64_t ticket) const {
+        if (ticket == 0) {
+            return;
+        }
+        std::lock_guard<std::mutex> lock(readback_mutex_);
+        auto* meta = readback_ring_.findByTicket(ticket);
+        if (meta == nullptr) {
+            return;
+        }
+        std::size_t cell = ReadbackTicketRing::kRingSize;
+        for (std::size_t i = 0; i < ReadbackTicketRing::kRingSize; ++i) {
+            if (readback_ring_.cell(i).ticket_value == ticket) {
+                cell = i;
+                break;
+            }
+        }
+        if (cell >= ReadbackTicketRing::kRingSize) {
+            return;
+        }
+        // F3-3: clear dest under the ring lock before the host drops storage.
+        meta->dest = nullptr;
+        if (meta->state == ReadbackTicketRing::State::Outstanding) {
+            readback_ring_.markFailed(cell, "readback ticket abandoned by host");
+        }
+        reclaimCompletedFailedReadbackCells();
     }
 
     std::size_t VksplatViewportRenderer::outstandingReadbackTickets() const {
@@ -6422,12 +6511,7 @@ namespace lfs::vis {
         }
 
         ReadbackTicketRing::TicketMeta meta{};
-        meta.logical_slot = outputSlotIndex(output_slot);
         meta.ring_cell = ring_.latestRingSlot(outputSlotIndex(output_slot));
-        meta.image_generation = output.image_generation;
-        meta.completion_value = completion_value;
-        meta.color_pool_serial = output.color_pool_serial;
-        meta.depth_pool_serial = output.depth_pool_serial;
         meta.byte_count = byte_count;
         meta.width = size->x;
         meta.height = size->y;
@@ -6579,12 +6663,7 @@ namespace lfs::vis {
         }
 
         ReadbackTicketRing::TicketMeta meta{};
-        meta.logical_slot = outputSlotIndex(output_slot);
         meta.ring_cell = ring_.latestRingSlot(outputSlotIndex(output_slot));
-        meta.image_generation = output.image_generation;
-        meta.completion_value = output.completion_value;
-        meta.color_pool_serial = output.color_pool_serial;
-        meta.depth_pool_serial = output.depth_pool_serial;
         meta.source_depth_image = output.depth_image.image;
         meta.byte_count = byte_count;
         meta.width = output.size.x;
@@ -6779,12 +6858,7 @@ namespace lfs::vis {
         }
 
         ReadbackTicketRing::TicketMeta meta{};
-        meta.logical_slot = outputSlotIndex(output_slot);
         meta.ring_cell = ring_.latestRingSlot(outputSlotIndex(output_slot));
-        meta.image_generation = output.image_generation;
-        meta.completion_value = output.completion_value;
-        meta.color_pool_serial = output.color_pool_serial;
-        meta.depth_pool_serial = output.depth_pool_serial;
         meta.source_image = output.image.image;
         meta.byte_count = byte_count;
         meta.width = output.size.x;
@@ -6792,7 +6866,6 @@ namespace lfs::vis {
         meta.dest_x = destination_x;
         meta.dest_y = destination_y;
         meta.dest_width = destination_width;
-        meta.dest_height = destination_height;
         meta.dest_channels = static_cast<int>(destination.size(2));
         meta.dest_is_float = destination.dtype() == lfs::core::DataType::Float32;
         meta.delivery = ReadbackTicketRing::DeliveryKind::ColorHwc;
@@ -6952,12 +7025,7 @@ namespace lfs::vis {
 
         float depth = -1.0f;
         ReadbackTicketRing::TicketMeta meta{};
-        meta.logical_slot = outputSlotIndex(request.output_slot);
         meta.ring_cell = ring_.latestRingSlot(outputSlotIndex(request.output_slot));
-        meta.image_generation = output.image_generation;
-        meta.completion_value = output.completion_value;
-        meta.color_pool_serial = output.color_pool_serial;
-        meta.depth_pool_serial = output.depth_pool_serial;
         meta.source_depth_image = output.depth_image.image;
         meta.byte_count = byte_count;
         meta.width = 1;

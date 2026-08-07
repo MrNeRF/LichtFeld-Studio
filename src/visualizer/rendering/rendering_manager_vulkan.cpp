@@ -1609,6 +1609,16 @@ namespace lfs::vis {
                     // stale handle. Re-installed after the handshake re-init below.
                     frame_stream_guard.reset();
                     vksplat_viewport_renderer_->reset();
+                    // F3-4: clear GT async ticket host state after ring teardown.
+                    gt_async_depth_ticket_ = 0;
+                    gt_async_depth_dest_ = {};
+                    gt_async_ticket_mode_ = GTComparisonMode::RGB;
+                    gt_async_ticket_intrinsics_.reset();
+                    gt_async_ticket_flip_y_ = false;
+                    gt_async_ticket_metadata_ = {};
+                    gt_async_held_display_.reset();
+                    gt_async_held_flip_y_ = false;
+                    gt_async_held_metadata_ = {};
                 }
             }
             viewport_artifact_service_.clearViewportOutput();
@@ -2422,6 +2432,12 @@ namespace lfs::vis {
                                 // display when Ready; submit at most one new ticket when free. The
                                 // panel keeps the previous display until the new one is ready.
                                 const auto clear_gt_async_ticket = [this]() {
+                                    // F3-3: detach dest under the ring lock before freeing host
+                                    // storage; markFailed keeps pins until timeline reclaim (F3-2).
+                                    if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
+                                        vksplat_viewport_renderer_->abandonReadbackTicket(
+                                            gt_async_depth_ticket_);
+                                    }
                                     gt_async_depth_ticket_ = 0;
                                     gt_async_depth_dest_ = {};
                                     gt_async_ticket_mode_ = GTComparisonMode::RGB;
@@ -2606,6 +2622,7 @@ namespace lfs::vis {
                                 // Leaving depth/normal: drain any outstanding async GT ticket.
                                 if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
                                     (void)vksplat_viewport_renderer_->waitReadbackTicket(gt_async_depth_ticket_);
+                                    vksplat_viewport_renderer_->abandonReadbackTicket(gt_async_depth_ticket_);
                                     gt_async_depth_ticket_ = 0;
                                     gt_async_depth_dest_ = {};
                                 }

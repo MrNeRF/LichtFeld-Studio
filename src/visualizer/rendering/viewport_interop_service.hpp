@@ -143,6 +143,11 @@ namespace lfs::vis {
         // GENERAL→READ_ONLY barriers to recordFrameBarriers.
         void prepareFrame(VulkanContext& context, bool resize_deferring);
 
+        // F2-1: run layout-commit rollback + discard unrecorded frame barriers on
+        // every GUI frame that may endFrame, including export-locked frames that
+        // skip prepareFrame Phases 1–2. prepareFrame calls this at its head.
+        void syncUnsubmittedLayoutCommits(VulkanContext& context);
+
         // Phase 3 of #1575: record GENERAL→SHADER_READ_ONLY barriers into the open
         // frame CB and attach CUDA S2 timeline waits to the frame submit. Call
         // immediately after beginFrame succeeds, before any sampling of interop images.

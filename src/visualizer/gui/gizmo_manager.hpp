@@ -220,13 +220,6 @@ namespace lfs::vis {
             [[nodiscard]] bool isVolumeGizmoToolActive() const;
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;
             [[nodiscard]] bool ensureCropToolState();
-            [[nodiscard]] bool computeCropToolTargetBounds(core::NodeId target_id,
-                                                           bool use_percentile,
-                                                           glm::vec3& bounds_min,
-                                                           glm::vec3& bounds_max) const;
-            void setCropToolBounds(core::NodeId target_id,
-                                   const glm::vec3& bounds_min,
-                                   const glm::vec3& bounds_max);
             [[nodiscard]] bool syncCropToolStateFromNode(core::NodeId target_id, core::NodeId volume_node_id, bool* changed = nullptr);
             [[nodiscard]] bool persistActiveCropToolToNode(bool enable);
             void updateCropToolOverlayState();

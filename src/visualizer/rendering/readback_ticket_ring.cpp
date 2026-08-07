@@ -39,6 +39,21 @@ namespace lfs::vis {
         return oldest;
     }
 
+    std::optional<std::size_t> ReadbackTicketRing::oldestActiveCell() const noexcept {
+        std::optional<std::size_t> oldest;
+        std::uint64_t oldest_ticket = 0;
+        for (std::size_t i = 0; i < kRingSize; ++i) {
+            if (!pinsActive(cells_[i].state)) {
+                continue;
+            }
+            if (!oldest.has_value() || cells_[i].ticket_value < oldest_ticket) {
+                oldest = i;
+                oldest_ticket = cells_[i].ticket_value;
+            }
+        }
+        return oldest;
+    }
+
     void ReadbackTicketRing::markSubmitted(const std::size_t cell, TicketMeta meta) {
         checkCell(cell, "markSubmitted");
         if (meta.ticket_value == 0) {
@@ -53,6 +68,7 @@ namespace lfs::vis {
 
     void ReadbackTicketRing::markFailed(const std::size_t cell, std::string error) {
         checkCell(cell, "markFailed");
+        // Keep pins (images / ring_cell) until freeCell — GPU copy may still be live.
         cells_[cell].state = State::Failed;
         cells_[cell].error = std::move(error);
     }
@@ -62,6 +78,26 @@ namespace lfs::vis {
             return;
         }
         cells_[cell] = TicketMeta{};
+    }
+
+    std::size_t ReadbackTicketRing::reclaimFailedIf(bool (*is_complete)(std::uint64_t ticket, void* ctx),
+                                                    void* ctx) noexcept {
+        if (is_complete == nullptr) {
+            return 0;
+        }
+        std::size_t freed = 0;
+        for (std::size_t i = 0; i < kRingSize; ++i) {
+            if (cells_[i].state != State::Failed) {
+                continue;
+            }
+            const std::uint64_t ticket = cells_[i].ticket_value;
+            if (ticket == 0 || !is_complete(ticket, ctx)) {
+                continue;
+            }
+            freeCell(i);
+            ++freed;
+        }
+        return freed;
     }
 
     std::size_t ReadbackTicketRing::failAllOutstanding(const std::string_view reason) {
@@ -107,7 +143,7 @@ namespace lfs::vis {
         const std::size_t ring_cell) const noexcept {
         std::uint64_t max_ticket = 0;
         for (const auto& cell : cells_) {
-            if (cell.state != State::Outstanding) {
+            if (!pinsActive(cell.state)) {
                 continue;
             }
             if (cell.ring_cell == ring_cell && cell.ticket_value > max_ticket) {
@@ -117,29 +153,12 @@ namespace lfs::vis {
         return max_ticket;
     }
 
-    bool ReadbackTicketRing::hasOutstandingForPoolSerial(
-        const std::uint64_t acquisition_serial) const noexcept {
-        if (acquisition_serial == 0) {
-            return false;
-        }
-        for (const auto& cell : cells_) {
-            if (cell.state != State::Outstanding) {
-                continue;
-            }
-            if (cell.color_pool_serial == acquisition_serial ||
-                cell.depth_pool_serial == acquisition_serial) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     bool ReadbackTicketRing::hasOutstandingForImage(const VkImage image) const noexcept {
         if (image == VK_NULL_HANDLE) {
             return false;
         }
         for (const auto& cell : cells_) {
-            if (cell.state != State::Outstanding) {
+            if (!pinsActive(cell.state)) {
                 continue;
             }
             if (cell.source_image == image || cell.source_depth_image == image) {
@@ -153,6 +172,16 @@ namespace lfs::vis {
         std::size_t count = 0;
         for (const auto& cell : cells_) {
             if (cell.state == State::Outstanding) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    std::size_t ReadbackTicketRing::failedCount() const noexcept {
+        std::size_t count = 0;
+        for (const auto& cell : cells_) {
+            if (cell.state == State::Failed) {
                 ++count;
             }
         }

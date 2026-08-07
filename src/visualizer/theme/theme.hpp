@@ -10,8 +10,6 @@
 
 namespace lfs::vis {
 
-    using ThemePackedColor = unsigned int;
-
     struct LFS_VIS_API ThemeVec2 {
         float x = 0.0f;
         float y = 0.0f;

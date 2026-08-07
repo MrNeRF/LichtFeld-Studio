@@ -406,6 +406,17 @@ namespace lfs::vis {
         if (vksplat_viewport_renderer_) {
             vksplat_viewport_renderer_->reset();
         }
+        // F3-4: renderer reset frees ring cells; clear manager GT ticket state so the
+        // next frame does not poll a stale ticket id against a fresh ring.
+        gt_async_depth_ticket_ = 0;
+        gt_async_depth_dest_ = {};
+        gt_async_ticket_mode_ = GTComparisonMode::RGB;
+        gt_async_ticket_intrinsics_.reset();
+        gt_async_ticket_flip_y_ = false;
+        gt_async_ticket_metadata_ = {};
+        gt_async_held_display_.reset();
+        gt_async_held_flip_y_ = false;
+        gt_async_held_metadata_ = {};
         if (point_cloud_vulkan_renderer_) {
             point_cloud_vulkan_renderer_->reset();
         }

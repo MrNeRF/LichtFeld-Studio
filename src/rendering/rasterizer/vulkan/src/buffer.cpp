@@ -407,6 +407,8 @@ void VulkanGSPipeline::retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer) 
     }
 
     if (entry.key_count == 0) {
+        // Immediate free: label policy depends on whether a live replacement with the
+        // same profiler label already exists (see call-site comments at resize*).
         destroyBufferRetired(entry.shell);
         return;
     }
@@ -456,6 +458,8 @@ void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t ne
     }
     if (deviceBuffer.capacity < new_byte_size || (!no_shrink && deviceBuffer.capacity > new_byte_size)) {
         GrowthBatchSplitGuard split(this);
+        // Retire-before-create: immediate free may keep shell.label so destroy zeros the
+        // retiring allocation only; create then re-records the live label (F1).
         retireDeviceBufferForGrowth(deviceBuffer);
         try {
             createBuffer(new_byte_size, deviceBuffer);
@@ -650,6 +654,11 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
 
     {
         GrowthBatchSplitGuard split(this);
+        // Create-before-retire (F1): newBuffer already recorded VramProfiler for
+        // deviceBuffer.label. Null the outgoing label before retire so both the
+        // immediate-free and deferred-free paths skip zeroing the live replacement.
+        // (resizeDeviceBuffer retires before create and intentionally keeps the label.)
+        deviceBuffer.label = nullptr;
         retireDeviceBufferForGrowth(deviceBuffer);
         deviceBuffer = newBuffer;
         deviceBuffer.size = new_byte_size;

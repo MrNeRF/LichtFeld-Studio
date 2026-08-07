@@ -110,10 +110,6 @@ namespace lfs::vis {
             return name;
         }
 
-        int colorByte(const float value) {
-            return static_cast<int>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
-        }
-
     } // namespace
 
     // Color utilities

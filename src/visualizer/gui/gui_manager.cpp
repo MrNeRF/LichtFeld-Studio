@@ -5521,19 +5521,26 @@ namespace lfs::vis::gui {
 
             bool interop_prepare_ok = true;
             auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
-            if (vulkan_context && !isViewportExportLocked()) {
-                LOG_TIMER_THRESHOLD("gui_render.prepareVulkanSceneInterop", 0.25);
-                try {
-                    if (rendering) {
-                        rendering->prepareViewportInterop(*vulkan_context);
+            if (vulkan_context) {
+                if (!isViewportExportLocked()) {
+                    LOG_TIMER_THRESHOLD("gui_render.prepareVulkanSceneInterop", 0.25);
+                    try {
+                        if (rendering) {
+                            rendering->prepareViewportInterop(*vulkan_context);
+                        }
+                    } catch (const std::exception& error) {
+                        interop_prepare_ok = false;
+                        LOG_ERROR("Skipping Vulkan GUI frame after CUDA/Vulkan interop failure: {}",
+                                  error.what());
+                    } catch (...) {
+                        interop_prepare_ok = false;
+                        LOG_ERROR(
+                            "Skipping Vulkan GUI frame after unknown CUDA/Vulkan interop failure");
                     }
-                } catch (const std::exception& error) {
-                    interop_prepare_ok = false;
-                    LOG_ERROR("Skipping Vulkan GUI frame after CUDA/Vulkan interop failure: {}",
-                              error.what());
-                } catch (...) {
-                    interop_prepare_ok = false;
-                    LOG_ERROR("Skipping Vulkan GUI frame after unknown CUDA/Vulkan interop failure");
+                } else if (rendering) {
+                    // F2-1: export-locked frames still run begin/endFrame, so layout-commit
+                    // markers must be evaluated every frame even when Phases 1–2 uploads skip.
+                    rendering->viewportInterop().syncUnsubmittedLayoutCommits(*vulkan_context);
                 }
             }
 

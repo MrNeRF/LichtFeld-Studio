@@ -20,11 +20,13 @@ namespace lfs::vis {
     // GPU-free: timeline complete/wait and Vulkan resources live on the renderer.
     //
     // Producer-side pins (the correctness core after removing the host fence wait):
-    // - Ring-cell pin: max outstanding ticket sourcing a frame-ring cell blocks reuse.
-    // - Pool pin: outstanding tickets hold source VkImage handles against drain
-    //   (and acquisition_serials for direct registry queries). Drain wiring uses
-    //   image handles because OutputImagePool::consumer_pred receives the consumer
-    //   *frame* serial, not the acquisition serial — see drainOutputImagePool.
+    // - Ring-cell pin: max outstanding/failed ticket sourcing a frame-ring cell blocks reuse.
+    // - Pool pin: non-Free tickets hold source VkImage handles against drain until freeCell.
+    //   Production drain pins by image handle (OutputImagePool::consumer_pred receives the
+    //   consumer *frame* serial, not the acquisition serial — see drainOutputImagePool).
+    //
+    // Failed lifecycle: markFailed keeps pins until the ticket timeline is observed complete,
+    // then freeCell reclaims the slot (see reclaimFailedIf). reset() fails + frees all.
     class LFS_VIS_API ReadbackTicketRing {
     public:
         static constexpr std::size_t kRingSize = 3;
@@ -36,7 +38,6 @@ namespace lfs::vis {
         };
 
         enum class DeliveryKind : std::uint8_t {
-            StagingOnly = 0,
             ColorHwc = 1,
             DepthFloatPlane = 2,
             DepthSample = 3,
@@ -51,12 +52,7 @@ namespace lfs::vis {
 
         struct TicketMeta {
             std::uint64_t ticket_value = 0;
-            std::size_t logical_slot = 0;
             std::size_t ring_cell = 0; // OutputSlotRing frame cell (0..2)
-            std::uint64_t image_generation = 0;
-            std::uint64_t completion_value = 0;
-            std::uint64_t color_pool_serial = 0;
-            std::uint64_t depth_pool_serial = 0;
             // Source VkImage(s) for pool-pin matching (1:1 with acquisition while retired).
             VkImage source_image = VK_NULL_HANDLE;
             VkImage source_depth_image = VK_NULL_HANDLE;
@@ -66,30 +62,38 @@ namespace lfs::vis {
             int dest_x = 0;
             int dest_y = 0;
             int dest_width = 0;
-            int dest_height = 0;
             int dest_channels = 0;
             bool dest_is_float = false;
-            DeliveryKind delivery = DeliveryKind::StagingOnly;
+            DeliveryKind delivery = DeliveryKind::ColorHwc;
             State state = State::Free;
             std::string error;
-            // Non-owning destination filled on Ready delivery (nullptr for StagingOnly).
+            // Non-owning destination filled on Ready delivery.
             void* dest = nullptr;
         };
 
         // First free cell, or nullopt when the ring is full.
         [[nodiscard]] std::optional<std::size_t> tryAcquireCell() const noexcept;
 
-        // Oldest outstanding cell by ticket_value (nullopt if none outstanding).
+        // Oldest Outstanding cell by ticket_value (nullopt if none outstanding).
         [[nodiscard]] std::optional<std::size_t> oldestOutstandingCell() const noexcept;
+
+        // Oldest non-Free cell (Outstanding or Failed) by ticket_value — for ring-full wait.
+        [[nodiscard]] std::optional<std::size_t> oldestActiveCell() const noexcept;
 
         // Mark cell as outstanding with the given meta (ticket_value must be > 0).
         void markSubmitted(std::size_t cell, TicketMeta meta);
 
-        // Mark cell Failed with a diagnostic (reset / wait failure). Leaves meta queryable.
+        // Mark cell Failed with a diagnostic (reset / wait failure). Leaves meta queryable
+        // and keeps producer pins until freeCell (GPU work may still be in flight).
         void markFailed(std::size_t cell, std::string error);
 
-        // Free a cell after successful delivery or abandon.
+        // Free a cell after successful delivery or safe abandon (timeline complete / idle).
         void freeCell(std::size_t cell) noexcept;
+
+        // Free every Failed cell whose ticket_value satisfies is_complete(ticket).
+        // Returns the number of cells freed.
+        std::size_t reclaimFailedIf(bool (*is_complete)(std::uint64_t ticket, void* ctx),
+                                    void* ctx) noexcept;
 
         // Fail every Outstanding cell (device idle / teardown). Returns count failed.
         std::size_t failAllOutstanding(std::string_view reason);
@@ -99,30 +103,28 @@ namespace lfs::vis {
         [[nodiscard]] TicketMeta& cell(std::size_t index);
         [[nodiscard]] const TicketMeta& cell(std::size_t index) const;
 
-        // Max outstanding ticket_value sourcing OutputSlotRing frame cell `ring_cell`.
-        // 0 means no pin.
+        // Max non-Free ticket_value sourcing OutputSlotRing frame cell `ring_cell`.
+        // 0 means no pin. Includes Failed so pins hold until freeCell.
         [[nodiscard]] std::uint64_t maxTicketForFrameRingCell(std::size_t ring_cell) const noexcept;
 
-        // True if any outstanding ticket holds this pool acquisition serial.
-        [[nodiscard]] bool hasOutstandingForPoolSerial(std::uint64_t acquisition_serial) const noexcept;
-        // True if any outstanding ticket sources this VkImage (pool drain pin).
+        // True if any non-Free ticket sources this VkImage (pool drain pin).
         [[nodiscard]] bool hasOutstandingForImage(VkImage image) const noexcept;
 
         [[nodiscard]] std::size_t outstandingCount() const noexcept;
+        [[nodiscard]] std::size_t failedCount() const noexcept;
         [[nodiscard]] std::uint64_t ringFullWaitCount() const noexcept { return ring_full_wait_count_; }
         [[nodiscard]] std::uint64_t cellPinWaitCount() const noexcept { return cell_pin_wait_count_; }
 
         void noteRingFullWait() noexcept { ++ring_full_wait_count_; }
         void noteCellPinWait() noexcept { ++cell_pin_wait_count_; }
-        void resetCounters() noexcept {
-            ring_full_wait_count_ = 0;
-            cell_pin_wait_count_ = 0;
-        }
 
         void reset() noexcept;
 
     private:
         void checkCell(std::size_t cell, std::string_view what) const;
+        [[nodiscard]] static bool pinsActive(State state) noexcept {
+            return state == State::Outstanding || state == State::Failed;
+        }
 
         std::array<TicketMeta, kRingSize> cells_{};
         std::uint64_t ring_full_wait_count_ = 0;
