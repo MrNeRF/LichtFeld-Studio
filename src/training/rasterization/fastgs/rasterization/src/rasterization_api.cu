@@ -223,7 +223,9 @@ namespace fast_lfs::rasterization {
         float near_plane,
         float far_plane,
         bool mip_filter,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        const float* sh_value_bounds_ptr,
+        unsigned int sh_value_n_cells) {
 
         if (stream == nullptr) {
             stream = lfs::core::getCurrentCUDAStream();
@@ -348,6 +350,8 @@ namespace fast_lfs::rasterization {
                                                    opacities_raw_ptr,
                                                    reinterpret_cast<const float3*>(sh_coefficients_0_ptr),
                                                    reinterpret_cast<const float4*>(sh_coefficients_rest_ptr),
+                                                   reinterpret_cast<const float2*>(sh_value_bounds_ptr),
+                                                   sh_value_n_cells,
                                                    reinterpret_cast<const float4*>(w2c_ptr),
                                                    reinterpret_cast<const float3*>(cam_position_ptr),
                                                    image_ptr,

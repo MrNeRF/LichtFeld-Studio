@@ -900,6 +900,9 @@ namespace lfs::training {
             }
         }
 
+        // Phase 2.1 / WO-G3: convert shN to pad-dropped u16 after float capacity reserve.
+        lfs::training::sh_value::apply_shN_value_quant(*_splat_data);
+
         _n_max = 51;
         mcmc::init_relocation_coefficients(_n_max);
 

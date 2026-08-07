@@ -70,36 +70,29 @@ namespace fast_lfs::rasterization::kernels {
             return;
 
         // ---- q16 decode-in-registers path (pad-dropped cell-linear) ----
-        // Explicit args win; else fall back to host-bound device constants (forward path).
-        {
-            const auto bind = lfs::training::sh_value::device_quant_binding();
-            const float2* bounds =
-                sh_value_bounds != nullptr ? sh_value_bounds : bind.bounds;
-            const uint n_cells =
-                sh_value_n_cells > 0u ? sh_value_n_cells : bind.n_cells;
-            if (bounds != nullptr && n_cells > 0u) {
-                using DC = lfs::training::sh_value::DeviceCodec16;
-                const uint16_t* sh_u16 = reinterpret_cast<const uint16_t*>(sh_f4);
-                const float2 mm = bounds[primitive_idx / 256u];
+        if (sh_value_bounds != nullptr && sh_value_n_cells > 0u) {
+            using DC = lfs::training::sh_value::DeviceCodec16;
+            const uint16_t* sh_u16 = reinterpret_cast<const uint16_t*>(sh_f4);
+            const float2 mm = sh_value_bounds[primitive_idx / 256u];
+            const uint n_cells = sh_value_n_cells;
 #pragma unroll
-                for (int i = 0; i < 15; ++i) {
-                    const uint base = static_cast<uint>(i) * 3u;
-                    if (base + 2u >= n_cells)
-                        break;
-                    if (i >= 3 && active_sh_bases <= 4)
-                        break;
-                    if (i >= 8 && active_sh_bases <= 9)
-                        break;
-                    c[i] = make_float3(
-                        DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 0, n_cells)],
-                                   mm.x, mm.y),
-                        DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 1, n_cells)],
-                                   mm.x, mm.y),
-                        DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 2, n_cells)],
-                                   mm.x, mm.y));
-                }
-                return;
-            } // quant path
+            for (int i = 0; i < 15; ++i) {
+                const uint base = static_cast<uint>(i) * 3u;
+                if (base + 2u >= n_cells)
+                    break;
+                if (i >= 3 && active_sh_bases <= 4)
+                    break;
+                if (i >= 8 && active_sh_bases <= 9)
+                    break;
+                c[i] = make_float3(
+                    DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 0, n_cells)],
+                               mm.x, mm.y),
+                    DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 1, n_cells)],
+                               mm.x, mm.y),
+                    DC::decode(sh_u16[lfs::training::sh_value::shAtU16(primitive_idx, base + 2, n_cells)],
+                               mm.x, mm.y));
+            }
+            return;
         }
 
         // ---- fp32 float4 path ----
@@ -667,7 +660,9 @@ namespace fast_lfs::rasterization::kernels {
                     const int64_t cell = static_cast<int64_t>(slot) * 4 + c;
                     C::encode_us(p.joint_packed, cell, us_u[ci], us_s[ci],
                                  new_mm.x, new_mm.z, inv_u_range, inv_s_range);
-                    if (value_q16 && apply_step) {
+                    // Always re-encode under new block bounds (frozen/crop-damped too),
+                    // matching joint-moment encode. apply_step only gates the Adam update.
+                    if (value_q16) {
                         const uint cell_lin = k * 4u + static_cast<uint>(c);
                         if (cell_lin < n_value_cells) {
                             param_u16[lfs::training::sh_value::shAtU16(

@@ -52,35 +52,16 @@ namespace lfs::training::sh_value {
         }
     };
 
+    // Cell-linear swizzle index for q16 values (pad-dropped layout).
+    // Layout [ceil(N/R), n_cells, R] of uint16, R=32.
+    __device__ __host__ __forceinline__ unsigned int shAtU16(
+        unsigned int primitive_idx,
+        unsigned int cell,
+        unsigned int n_cells) {
+        constexpr unsigned int R = 32u;
+        const unsigned int block = primitive_idx / R;
+        const unsigned int lane = primitive_idx % R;
+        return block * (n_cells * R) + cell * R + lane;
+    }
+
 } // namespace lfs::training::sh_value
-
-// Cell-linear swizzle index for q16 values (pad-dropped layout).
-// Layout [ceil(N/R), n_cells, R] of uint16, R=32.
-__device__ __host__ __forceinline__ unsigned int shAtU16(
-    unsigned int primitive_idx,
-    unsigned int cell,
-    unsigned int n_cells) {
-    constexpr unsigned int R = 32u;
-    const unsigned int block = primitive_idx / R;
-    const unsigned int lane = primitive_idx % R;
-    return block * (n_cells * R) + cell * R + lane;
-}
-
-// Device-side binding for FastGS forward (and any path without FusedAdam).
-// Host calls bind_sh_value_quant_device before kernels; load_shN_coeffs reads these
-// when explicit bounds args are null.
-struct DeviceQuantBinding {
-    const float2* bounds; // float2 per 256-prim block; null = fp32
-    unsigned int n_cells; // pad-dropped cells/prim; 0 = fp32
-};
-
-// Defined in sh_value_quant_kernels.cu (single TU owns the symbols).
-extern __constant__ const float2* c_sh_value_bounds;
-extern __constant__ unsigned int c_sh_value_n_cells;
-
-void bind_sh_value_quant_device(const float2* bounds, unsigned int n_cells);
-void clear_sh_value_quant_device();
-
-__device__ inline DeviceQuantBinding device_quant_binding() {
-    return DeviceQuantBinding{c_sh_value_bounds, c_sh_value_n_cells};
-}

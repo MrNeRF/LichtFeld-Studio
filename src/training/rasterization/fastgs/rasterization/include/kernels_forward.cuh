@@ -59,7 +59,9 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float4* __restrict__ raw_rotations,
         const float* __restrict__ raw_opacities,
         const float3* __restrict__ sh_coefficients_0,
-        const float4* __restrict__ sh_coefficients_rest, // compact float4-packed swizzled layout
+        const float4* __restrict__ sh_coefficients_rest, // float4 OR bitcast u16 when bounds set
+        const float2* __restrict__ sh_value_bounds,      // null = fp32
+        const uint sh_value_n_cells,
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         uint* __restrict__ primitive_depth_keys,
@@ -244,7 +246,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         primitive_color[primitive_idx] = convert_sh_to_color(
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],
-            primitive_idx, active_sh_bases, sh_layout_slots);
+            primitive_idx, active_sh_bases, sh_layout_slots,
+            sh_value_bounds, sh_value_n_cells);
         primitive_depth_keys[primitive_idx] = quantize_depth_key(depth, depth_bits);
         primitive_depths[primitive_idx] = depth;
 
