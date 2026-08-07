@@ -8,6 +8,7 @@
  * and render-equivalence PSNR > 55 dB (synthetic SH evaluation proxy).
  */
 
+#include "core/camera.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -17,10 +18,13 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "lfs/training/vram_ledger.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
+#include "training/rasterization/fast_rasterizer.hpp"
+#include "training/rasterization/fastgs/rasterization/include/rasterization_config.h"
 
 #include <cmath>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <filesystem>
 #include <gtest/gtest.h>
 #include <random>
 #include <vector>
@@ -221,6 +225,135 @@ TEST(ShValueStorageTest, LedgerBpsUnder307WithJoint) {
     EXPECT_LE(ledger.bytes_per_splat, 307.0) << "B/splat=" << ledger.bytes_per_splat;
     // params ~146, optim ~152, densify 8 → ~306
     EXPECT_GT(ledger.bytes_per_splat, 290.0);
+
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+    joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
+}
+
+// ISS-2.1 / WO-G6: G3 crash repro — grow N across 256-block boundary, re-encode, FastGS forward.
+TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
+    joint_adam::set_joint_codec_enabled_for_testing(true);
+    sh_value::set_sh_value_quant_enabled_for_testing(true);
+
+    constexpr size_t kCap = 2048;
+    constexpr size_t kN0 = 250;
+    constexpr size_t kAppend = 40; // → 290 crosses 256 bounds block
+
+    auto splat = make_random_sh3(kN0);
+    splat.means().reserve(kCap);
+    splat.sh0().reserve(kCap);
+    splat.scaling_raw().reserve(kCap);
+    splat.rotation_raw().reserve(kCap);
+    splat.opacity_raw().reserve(kCap);
+    {
+        const auto rest = static_cast<uint32_t>(splat.max_sh_coeffs_rest());
+        const auto cap_f = sh_swizzled_float_count(kCap, rest);
+        if (splat.shN().capacity() < cap_f) {
+            auto grown = Tensor::zeros_direct(splat.shN().shape(), cap_f, Device::CUDA);
+            if (splat.shN().numel() > 0) {
+                cudaMemcpy(grown.ptr<float>(), splat.shN().ptr<float>(),
+                           splat.shN().numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+            }
+            grown.set_name("splat.shN");
+            splat.shN() = std::move(grown);
+        }
+    }
+
+    ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
+    {
+        const auto rest = static_cast<uint32_t>(splat.max_sh_coeffs_rest());
+        EXPECT_GE(splat.shN().capacity(), sh_value::sh_value_u16_count(kCap, rest));
+        EXPECT_GE(splat.shN_value_bounds().capacity(),
+                  sh_value::n_bounds_for_prims(kCap) * 2);
+    }
+
+    AdamConfig cfg{};
+    cfg.initial_capacity = kCap;
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients(kCap);
+
+    std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    std::vector<float> T_data = {0, 0, 4};
+    auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    Camera camera(R, T, 100.f, 100.f, 32.f, 32.f, Tensor(), Tensor(), CameraModelType::PINHOLE,
+                  "test", "", std::filesystem::path{}, 64, 64, 0);
+    Tensor bg = Tensor::zeros({3}, Device::CUDA);
+
+    {
+        auto r = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
+    }
+
+    ASSERT_TRUE(sh_value::ensure_shN_fp32_for_mutation(splat));
+    const auto rest = static_cast<uint32_t>(splat.max_sh_coeffs_rest());
+    const size_t n1 = kN0 + kAppend;
+    {
+        auto append_means = Tensor::zeros({kAppend, size_t{3}}, Device::CUDA);
+        {
+            auto cpu = append_means.cpu();
+            auto* p = cpu.ptr<float>();
+            for (size_t i = 0; i < kAppend; ++i) {
+                p[i * 3 + 0] = static_cast<float>(i) * 0.05f - 0.5f;
+            }
+            append_means = cpu.to(Device::CUDA);
+        }
+        opt.add_new_params(ParamType::Means, append_means, true);
+        opt.add_new_params(ParamType::Sh0,
+                           Tensor::full({kAppend, size_t{1}, size_t{3}}, 0.25f, Device::CUDA), true);
+        opt.add_new_params(ParamType::Scaling,
+                           Tensor::full({kAppend, size_t{3}}, -2.0f, Device::CUDA), true);
+        std::vector<float> rot(kAppend * 4, 0.f);
+        for (size_t i = 0; i < kAppend; ++i)
+            rot[i * 4] = 1.f;
+        opt.add_new_params(
+            ParamType::Rotation,
+            Tensor::from_blob(rot.data(), {kAppend, size_t{4}}, Device::CPU, DataType::Float32)
+                .to(Device::CUDA),
+            true);
+        opt.add_new_params(ParamType::Opacity,
+                           Tensor::full({kAppend, size_t{1}}, 2.0f, Device::CUDA), true);
+    }
+    ASSERT_EQ(static_cast<size_t>(splat.size()), n1);
+    {
+        const size_t needed = sh_swizzled_float_count(n1, rest);
+        auto& shN = splat.shN();
+        if (shN.numel() < needed) {
+            if (shN.capacity() < needed) {
+                auto grown = Tensor::zeros_direct(
+                    shN.shape(), sh_swizzled_float_count(kCap, rest), Device::CUDA);
+                if (shN.numel() > 0) {
+                    cudaMemcpy(grown.ptr<float>(), shN.ptr<float>(),
+                               shN.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                }
+                grown.set_name("splat.shN");
+                shN = std::move(grown);
+            }
+            shN.append_zeros(needed - shN.numel());
+        }
+        opt.extend_state_for_new_params(ParamType::ShN, kAppend);
+    }
+
+    ASSERT_TRUE(sh_value::commit_shN_after_mutation(splat));
+    ASSERT_TRUE(splat.shN_value_quantized());
+    EXPECT_EQ(static_cast<size_t>(splat.shN().numel()), sh_value::sh_value_u16_count(n1, rest));
+    EXPECT_GE(splat.shN().capacity(), sh_value::sh_value_u16_count(kCap, rest));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    {
+        auto r = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value()) << lfs::format_for_developer(r.error());
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess)
+            << "illegal address after post-densify re-encode (ISS-2.1)";
+        opt.zero_grad(100);
+        auto grad_out = Tensor::ones_like(r->first.image).mul(0.01f);
+        ASSERT_NO_THROW(fast_rasterize_backward(r->second, grad_out, splat, opt, {}, {},
+                                                DensificationType::None, 100));
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        auto r2 = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r2.has_value()) << lfs::format_for_developer(r2.error());
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    }
 
     sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
     joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);

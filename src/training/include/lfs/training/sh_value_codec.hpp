@@ -11,10 +11,9 @@
  * Bounds layout: one float2 per 256-splat block (FPBO / per-splat-block).
  * All SH cells of a splat share that splat-block's bound.
  *
- * Runtime: default OFF until densify re-encode after N-growth passes dual gate.
- *   LFS_SH_VALUE_QUANT=1  → enable (opt-in)
- *   LFS_SH_VALUE_FP32=1   → force fp32
- *   LFS_SH_VALUE_QUANT=0  → force fp32
+ * Runtime: default ON after ISS-2.1 densify re-encode fix (WO-G6).
+ *   LFS_SH_VALUE_FP32=1 or LFS_SH_VALUE_QUANT=0 → force fp32
+ *   LFS_SH_VALUE_QUANT=1 → force quant on (redundant with default)
  *
  * Storage (pad-dropped, Phase 2.4): n_cells = coeffs_rest * 3 per primitive
  * (45 for SH3 — no float4 tail pad). Swizzle [ceil(N/R), n_cells, R] of uint16.

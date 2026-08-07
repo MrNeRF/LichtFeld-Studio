@@ -802,16 +802,20 @@ namespace lfs::training {
         reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
+
+        // Phase 4.6: MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
+        // Trim FIRST so pool recycling cannot free buffers still referenced by a
+        // just-completed densify kernel, then re-encode (device barrier inside).
+        lfs::core::Tensor::trim_memory_pool();
+
         // Re-encode after densify growth so B/splat prize is live before stop_refine.
-        // Adam prepare heals moment bookkeeping if sizes lag (free-slot densify).
+        // Heal-vs-rebuild: always rebuild codes+bounds from float (commit); Adam
+        // moments stay float-layout and are healed in prepare_fastgs_fused_adam.
         if (lfs::core::sh_value_quant::enabled() &&
             _splat_data->shN().is_valid() &&
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
-
-        // Phase 4.6: MRNF trim_memory_pool parity with MCMC/IGS+ after refine.
-        lfs::core::Tensor::trim_memory_pool();
     }
 
     void MRNF::grow_and_split(int iter, int pruned_count) {
@@ -1058,8 +1062,27 @@ namespace lfs::training {
             if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
                 const size_t new_size = old_size + n_append;
                 const size_t needed_floats = sh_swizzled_float_count(new_size, layout_rest);
-                if (_splat_data->shN().numel() < needed_floats) {
-                    _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
+                auto& shN_buf = _splat_data->shN();
+                // Grow capacity to means/max_cap headroom so post-densify re-encode is not exact-N.
+                const size_t means_cap = _splat_data->means().is_valid()
+                                             ? std::max(_splat_data->means().capacity(), new_size)
+                                             : new_size;
+                const size_t cap_floats = sh_swizzled_float_count(means_cap, layout_rest);
+                if (shN_buf.capacity() < needed_floats) {
+                    const size_t dest_cap = std::max(needed_floats, cap_floats);
+                    auto grown = Tensor::zeros_direct(
+                        TensorShape({static_cast<size_t>(shN_buf.numel())}), dest_cap,
+                        shN_buf.device(), shN_buf.dtype());
+                    if (shN_buf.numel() > 0) {
+                        // Sync copy before move-free of source (async UAF → illegal address).
+                        LFS_CUDA_CHECK(cudaMemcpy(grown.data_ptr(), shN_buf.data_ptr(),
+                                                  shN_buf.bytes(), cudaMemcpyDeviceToDevice));
+                    }
+                    grown.set_name(shN_buf.name().empty() ? "splat.shN" : shN_buf.name());
+                    shN_buf = std::move(grown);
+                }
+                if (shN_buf.numel() < needed_floats) {
+                    shN_buf.append_zeros(needed_floats - shN_buf.numel());
                 }
             }
 

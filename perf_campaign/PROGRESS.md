@@ -690,3 +690,29 @@ vs WO-G5 medians (bonsai 7.23/3.148, bicycle 21.12/2.817): dual-workload **uncha
 ### tensor_hardening
 89/89 PASSED.
 
+## WO-G6 — ISS-2.1 densify re-encode + SH quant default ON (−102 B/splat prize)
+
+- **Branch:** `lfs-elite`
+- **Precondition:** WO-G5 done (`workerG5.done`); gradients trusted.
+- **TDD fail-first:** `ShValueStorageTest.PostDensifyReencodeThenFastGSForward` — G3 crash repro (grow N across 256-block, re-encode, FastGS fwd+fused Adam).
+- **Pass:** 6/6 ShValueStorageTest including densify re-encode forward; FastGS gradients green under quant default.
+- **Fixes:**
+  1. `sh_value_storage`: encode/decode on current stream + **device barrier** before free; capacity from means cap.
+  2. `mrnf::refine`: **trim_memory_pool before re-encode** (was freeing pool while densify path still hot).
+  3. `AdamOptimizer`: moments always float-layout sized under q16; heal joint_bounds for ceil(N/256).
+  4. Default `LFS_SH_VALUE_QUANT` **ON**.
+- **Heal-vs-rebuild:** rebuild codes/bounds; heal Adam moments when capacity allows.
+- **Dual workload (3-run medians):**
+
+| metric | OFF | ON | gate |
+|---|---:|---:|---|
+| Bonsai steady_ms | ~3.15 (G5) | **3.15** | no worse |
+| Bonsai B/splat | 409.4 | **304.3** | ≤307 ✓ |
+| Bicycle steady_ms | 2.81 | **2.73** | faster |
+| Bicycle B/splat | 409.4 | **306.8** | ≤307 ✓ |
+| Bicycle loss | 0.10–0.16 | 0.10–0.14 | overlap ✓ |
+| Late-window ms (1600–1900) | 3.88 | **3.74** | ON ≤ OFF ✓ |
+
+- **Full suite:** only pre-existing ISS-016 VideoFrameExtractor×3, ISS-017 TensorReserve, ISS-019 Python×3 reds (not quant).
+- **tensor_hardening:** 89/89 PASS.
+- **Decision:** flag **default ON**.

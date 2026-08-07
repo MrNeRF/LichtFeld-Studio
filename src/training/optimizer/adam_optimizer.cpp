@@ -463,26 +463,42 @@ namespace lfs::training {
 
         auto& state = states_[name];
         const size_t param_size = param.shape()[0];
+        const auto layout_rest =
+            static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
+        // Moments track float layout even when param is q16 (u16 cells).
+        const size_t logical_size =
+            (type == ParamType::ShN)
+                ? lfs::core::sh_swizzled_float_count(
+                      static_cast<size_t>(splat_data_.size()), layout_rest)
+                : param_size;
         const size_t initial_cap = type == ParamType::ShN
                                        ? std::max(
-                                             param_size,
+                                             logical_size,
                                              lfs::core::sh_swizzled_float_count(
                                                  config_.initial_capacity,
-                                                 static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest())))
+                                                 layout_rest))
                                        : compute_new_capacity(0, param_size);
 
         if (allocate_grad && (!state.grad.is_valid() || state.grad.numel() == 0)) {
-            state.grad = (initial_cap > param_size)
-                             ? lfs::core::Tensor::zeros_direct(param.shape(), initial_cap)
-                             : lfs::core::Tensor::zeros(param.shape(), param.device());
+            // Grad for shN is float-layout sized (fused path rarely needs it).
+            if (type == ParamType::ShN) {
+                const auto gshape = lfs::core::TensorShape({logical_size});
+                state.grad = (initial_cap > logical_size)
+                                 ? lfs::core::Tensor::zeros_direct(gshape, initial_cap)
+                                 : lfs::core::Tensor::zeros(gshape, param.device());
+            } else {
+                state.grad = (initial_cap > param_size)
+                                 ? lfs::core::Tensor::zeros_direct(param.shape(), initial_cap)
+                                 : lfs::core::Tensor::zeros(param.shape(), param.device());
+            }
         }
 
         const size_t prim_capacity = (type == ParamType::ShN)
                                          ? std::max(static_cast<size_t>(splat_data_.size()), config_.initial_capacity)
                                          : std::max(initial_cap, param_size);
         alloc_quantized_state(type, state, param, initial_cap, prim_capacity);
-        state.capacity = std::max(initial_cap, param_size);
-        state.size = param_size;
+        state.capacity = std::max(initial_cap, logical_size);
+        state.size = logical_size;
         state.step_count = 0;
         if (type == ParamType::ShN) {
             const double mib = (2.0 * static_cast<double>(state.capacity) * sizeof(uint8_t) +
@@ -744,9 +760,20 @@ namespace lfs::training {
                 const size_t float_layout =
                     lfs::core::sh_swizzled_float_count(n_live, layout_rest);
                 // q16 param numel ≠ float_layout; only compare state.size to float_layout.
+                // state.capacity is float cells; joint exp_avg.capacity is packed bytes
+                // (float_cells * bpc) — never compare those units directly.
+                const size_t moment_cap_floats =
+                    state.capacity > 0
+                        ? state.capacity
+                        : (state.exp_avg.is_valid()
+                               ? (state.is_joint()
+                                      ? state.exp_avg.capacity() /
+                                            static_cast<size_t>(
+                                                joint_adam::bytes_per_cell(state.joint_bits))
+                                      : state.exp_avg.capacity())
+                               : 0);
                 if (state.size != float_layout) {
-                    if (state.exp_avg.is_valid() && state.exp_avg.capacity() >= float_layout &&
-                        state.size < float_layout) {
+                    if (moment_cap_floats >= float_layout && state.size < float_layout) {
                         // Capacity reserved at max_cap: advance logical size (new slots
                         // already zero-initialized under joint bounds when pre-allocated).
                         state.size = float_layout;
@@ -767,11 +794,19 @@ namespace lfs::training {
                             extend_state_for_new_params(type, n_new);
                         }
                         if (state.size != float_layout) {
-                            // Last resort: if still short after extend, force size when
-                            // capacity allows (packed growth may overshoot with pad).
-                            if (state.exp_avg.is_valid() &&
-                                state.exp_avg.capacity() >= float_layout &&
-                                state.size < float_layout) {
+                            // Last resort: force size when capacity allows after extend.
+                            const size_t cap2 =
+                                state.capacity > 0
+                                    ? state.capacity
+                                    : (state.exp_avg.is_valid()
+                                           ? (state.is_joint()
+                                                  ? state.exp_avg.capacity() /
+                                                        static_cast<size_t>(
+                                                            joint_adam::bytes_per_cell(
+                                                                state.joint_bits))
+                                                  : state.exp_avg.capacity())
+                                           : 0);
+                            if (cap2 >= float_layout && state.size < float_layout) {
                                 state.size = float_layout;
                             }
                         }
