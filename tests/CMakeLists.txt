@@ -235,3 +235,4 @@ set(TEST_FILES
     test_tensor_lazy_ir.cpp
     test_tensor_dispatch_6a.cpp
     test_tensor_kernels_6c.cpp
+)
