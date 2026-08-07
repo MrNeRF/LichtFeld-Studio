@@ -903,4 +903,4 @@ allocs/iter ≤ 0.11 (no regression of WO-X).
 `GpuTeardownOrderTest.*` 3/3 PASS.
 
 ### Commit
-**`4a803a80`** fix(ISS-020): ordered GPU release before pool teardown (exit 139→0)
+**`8e65a0b5`** fix(ISS-020): ordered GPU release before pool teardown (exit 139→0)
