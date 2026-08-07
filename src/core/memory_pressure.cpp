@@ -100,7 +100,7 @@ namespace lfs::core {
             const auto pre_call_state = sample_cuda_pre_call_state();
             const cudaError_t status = cudaMalloc(&ptr, bytes);
             if (status == cudaSuccess) {
-                alloc_counter::record();
+                alloc_counter::record_site(alloc_counter::Site::ZerosDirect);
                 return ptr;
             }
             if (failure_status) {

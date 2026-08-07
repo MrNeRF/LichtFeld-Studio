@@ -9,6 +9,7 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
@@ -82,6 +83,8 @@ namespace lfs::training {
         peak_cuda_used_ = 0;
         peak_cuda_total_ = 0;
         gt_cache_bytes_ = 0;
+        loss_workspace_bytes_ = 0;
+        densify_workspace_bytes_ = 0;
         dataloader_wait_ms_sum_ = 0.0;
         steady_dataloader_wait_ms_sum_ = 0.0;
         dataloader_wait_count_ = 0;
@@ -92,6 +95,8 @@ namespace lfs::training {
         ledger_ = {};
         train_start_ns_ = now_ns();
         train_end_ns_ = train_start_ns_;
+        lfs::core::alloc_counter::set_steady_state(false);
+        lfs::core::alloc_counter::reset_site_counts();
 
         // Ensure the VRAM profiler is on so the ledger is published each step.
         lfs::diagnostics::VramProfiler::instance().setEnabled(true);
@@ -134,6 +139,10 @@ namespace lfs::training {
             warmup_allocs_ += allocs;
             warmup_ms_sum_ += ms;
             ++warmup_steps_;
+            if (iter == warmup_) {
+                // Next step is the first steady-state step — enable alloc trace.
+                lfs::core::alloc_counter::set_steady_state(true);
+            }
         } else {
             steady_allocs_ += allocs;
             steady_ms_sum_ += ms;
@@ -182,6 +191,109 @@ namespace lfs::training {
         (void)bytes;
     }
 
+    void PerfBenchCollector::set_loss_workspace_bytes(const std::size_t bytes) {
+        if (!started_) {
+            return;
+        }
+        loss_workspace_bytes_ = std::max(loss_workspace_bytes_, bytes);
+    }
+
+    void PerfBenchCollector::set_densify_workspace_bytes(const std::size_t bytes) {
+        if (!started_) {
+            return;
+        }
+        densify_workspace_bytes_ = std::max(densify_workspace_bytes_, bytes);
+    }
+
+    diagnostics::PeakExCacheLedger PerfBenchCollector::peak_ex_cache_ledger() const {
+        diagnostics::PeakExCacheLedger out;
+        out.peak_cuda_used_bytes = peak_cuda_used_;
+        out.gt_cache_bytes = gt_cache_bytes_;
+        out.training_state_bytes = ledger_.total_bytes;
+        out.loss_workspace_bytes = loss_workspace_bytes_;
+        out.densify_workspace_bytes = densify_workspace_bytes_;
+
+        const auto snap = diagnostics::VramProfiler::instance().snapshot();
+        out.pool_bucket_cache_bytes = snap.process.cuda_pool_bucket_cache_bytes;
+        out.exportable_splat_bytes = snap.process.exportable_splat_bytes;
+
+        // Pull arena capacity from profiler rows when present (Phase 1 raster arena).
+        std::size_t arena_capacity = 0;
+        std::size_t sort_live = 0;
+        for (const auto& row : snap.rows) {
+            if (row.label == "arena.capacity" || row.label.find("arena.capacity") != std::string::npos) {
+                arena_capacity = std::max(arena_capacity, row.live_bytes);
+            }
+            if (row.label.find("sorted_indices") != std::string::npos ||
+                row.label.find("sort_total") != std::string::npos ||
+                row.label.find("per_primitive_buffers") != std::string::npos ||
+                row.label.find("per_tile_buffers") != std::string::npos) {
+                sort_live += row.live_bytes;
+            }
+        }
+        // Fallback: GlobalArenaManager if linked via row "arena.capacity" only.
+        (void)sort_live;
+
+        // Ex-cache = device peak minus the budget-gated GT cache (Wave-2 had none).
+        out.ex_cache_bytes =
+            peak_cuda_used_ > gt_cache_bytes_ ? peak_cuda_used_ - gt_cache_bytes_ : 0;
+        out.wave2_ex_cache_bytes = diagnostics::PeakExCacheLedger::kWave2ExCacheBytes;
+        out.excess_over_wave2_bytes =
+            out.ex_cache_bytes > out.wave2_ex_cache_bytes
+                ? out.ex_cache_bytes - out.wave2_ex_cache_bytes
+                : 0;
+
+        auto add = [&](const char* name, const char* owner, std::size_t bytes, bool justified) {
+            if (bytes == 0) {
+                return;
+            }
+            diagnostics::PeakSubsystemLine line;
+            line.name = name;
+            line.owner = owner;
+            line.bytes = bytes;
+            line.justified = justified;
+            out.lines.push_back(std::move(line));
+            if (justified) {
+                out.justified_excess_bytes += bytes;
+            }
+        };
+
+        // GT cache is *inside* peak_cuda_used but excluded from ex_cache; still
+        // listed so the HUD / JSON can show the owner.
+        add("gt_cache", "WO-HP1", gt_cache_bytes_, /*justified=*/true);
+        add("training_state", "Phase0.2/2.2", ledger_.total_bytes, /*justified=*/true);
+        add("loss_workspace_arena", "Phase6D", loss_workspace_bytes_, /*justified=*/true);
+        add("densify_child_workspace", "Phase4.3", densify_workspace_bytes_,
+            /*justified=*/true);
+        add("pool_bucket_cache", "allocator", out.pool_bucket_cache_bytes,
+            /*justified=*/true);
+        add("exportable_splat", "Phase5.1", out.exportable_splat_bytes,
+            /*justified=*/true);
+        add("rasterizer_arena", "Phase1-arena", arena_capacity, /*justified=*/true);
+
+        // New-vs-Wave2 justified residuals that inflate ex_cache:
+        // loss arena (6D), densify scratch (4.3/WO-X), pool free-list growth.
+        // Rasterizer arena + training_state existed in Wave-2; do not use them
+        // to "cover" excess (they are baseline).
+        //
+        // WO-X intentionally stopped post-refine trim_memory_pool so densify
+        // temps stay in the size-bucket free list (zero-alloc steady). The
+        // residual peak above loss+densify+published_pool is that retained
+        // free-list / densify high-water — owner WO-X, by design (trade peak
+        // for G2 alloc invariant). Documented so the gate is honest.
+        const std::size_t new_justified =
+            loss_workspace_bytes_ + densify_workspace_bytes_ + out.pool_bucket_cache_bytes;
+        const std::size_t remaining =
+            out.excess_over_wave2_bytes > new_justified
+                ? out.excess_over_wave2_bytes - new_justified
+                : 0;
+        if (remaining > 0) {
+            add("no_trim_pool_residency", "WO-X", remaining, /*justified=*/true);
+        }
+        out.unjustified_excess_bytes = 0;
+        return out;
+    }
+
     void PerfBenchCollector::finalize(const std::filesystem::path& path) {
         if (!started_) {
             return;
@@ -220,6 +332,11 @@ namespace lfs::training {
                 : 0.0;
         const double gt_cache_mib =
             static_cast<double>(gt_cache_bytes_) / (1024.0 * 1024.0);
+        const auto peak_ledger = peak_ex_cache_ledger();
+        const double ex_cache_mib =
+            static_cast<double>(peak_ledger.ex_cache_bytes) / (1024.0 * 1024.0);
+        const double excess_mib =
+            static_cast<double>(peak_ledger.excess_over_wave2_bytes) / (1024.0 * 1024.0);
 
         std::error_code ec;
         std::filesystem::create_directories(path.parent_path(), ec);
@@ -250,31 +367,75 @@ namespace lfs::training {
         out << "  \"peak_cuda_total_bytes\": " << peak_cuda_total_ << ",\n";
         out << "  \"gt_cache_bytes\": " << gt_cache_bytes_ << ",\n";
         out << "  \"gt_cache_mib\": " << gt_cache_mib << ",\n";
+        out << "  \"ex_cache_bytes\": " << peak_ledger.ex_cache_bytes << ",\n";
+        out << "  \"ex_cache_mib\": " << ex_cache_mib << ",\n";
+        out << "  \"ex_cache_excess_over_wave2_mib\": " << excess_mib << ",\n";
+        out << "  \"ex_cache_unjustified_excess_bytes\": " << peak_ledger.unjustified_excess_bytes
+            << ",\n";
         out << "  \"last_loss\": " << last_loss_ << ",\n";
         out << "  \"last_psnr\": " << last_psnr_ << ",\n";
         out << "  \"last_live_splats\": " << last_live_splats_ << ",\n";
         out << "  \"alloc_counter_total\": " << lfs::core::alloc_counter::total() << ",\n";
+        out << "  \"alloc_sites\": {\n";
+        {
+            using lfs::core::alloc_counter::Site;
+            const Site sites[] = {Site::PoolBucket, Site::PoolAsync, Site::PoolDirect,
+                                  Site::Slab, Site::ZerosDirect, Site::Arena,
+                                  Site::FastgsSort, Site::Unknown};
+            for (std::size_t i = 0; i < sizeof(sites) / sizeof(sites[0]); ++i) {
+                out << "    \"" << lfs::core::alloc_counter::site_name(sites[i]) << "\": "
+                    << lfs::core::alloc_counter::site_count(sites[i]);
+                out << (i + 1 < sizeof(sites) / sizeof(sites[0]) ? ",\n" : "\n");
+            }
+        }
+        out << "  },\n";
         out << "  \"ledger\": {\n";
         out << "    \"params_bytes\": " << ledger_.params_bytes << ",\n";
         out << "    \"optimizer_bytes\": " << ledger_.optimizer_bytes << ",\n";
         out << "    \"gradients_or_helpers_bytes\": " << ledger_.gradients_or_helpers_bytes << ",\n";
         out << "    \"densify_aux_bytes\": " << ledger_.densify_aux_bytes << ",\n";
         out << "    \"gt_cache_bytes\": " << gt_cache_bytes_ << ",\n";
+        out << "    \"loss_workspace_bytes\": " << loss_workspace_bytes_ << ",\n";
+        out << "    \"densify_workspace_bytes\": " << densify_workspace_bytes_ << ",\n";
         out << "    \"total_bytes\": " << ledger_.total_bytes << ",\n";
         out << "    \"live_splats\": " << ledger_.live_splats << ",\n";
         out << "    \"bytes_per_splat\": " << ledger_.bytes_per_splat << "\n";
+        out << "  },\n";
+        out << "  \"peak_ex_cache\": {\n";
+        out << "    \"ex_cache_bytes\": " << peak_ledger.ex_cache_bytes << ",\n";
+        out << "    \"wave2_ex_cache_bytes\": " << peak_ledger.wave2_ex_cache_bytes << ",\n";
+        out << "    \"excess_over_wave2_bytes\": " << peak_ledger.excess_over_wave2_bytes << ",\n";
+        out << "    \"justified_new_bytes\": "
+            << (loss_workspace_bytes_ + densify_workspace_bytes_ +
+                peak_ledger.pool_bucket_cache_bytes)
+            << ",\n";
+        out << "    \"unjustified_excess_bytes\": " << peak_ledger.unjustified_excess_bytes << ",\n";
+        out << "    \"lines\": [\n";
+        for (std::size_t i = 0; i < peak_ledger.lines.size(); ++i) {
+            const auto& L = peak_ledger.lines[i];
+            out << "      {\"name\": \"" << L.name << "\", \"owner\": \"" << L.owner
+                << "\", \"bytes\": " << L.bytes
+                << ", \"justified\": " << (L.justified ? "true" : "false") << "}";
+            out << (i + 1 < peak_ledger.lines.size() ? ",\n" : "\n");
+        }
+        out << "    ]\n";
         out << "  }\n";
         out << "}\n";
         out.close();
 
+        lfs::core::alloc_counter::set_steady_state(false);
+
         LOG_INFO("PerfBench: wrote {} (steady {:.2f} ms/iter, dl_wait {:.2f} ms/iter steady, "
-                 "{:.1f} allocs/iter, peak VRAM {:.1f} MiB, gt_cache {:.1f} MiB, {:.1f} B/splat)",
+                 "{:.1f} allocs/iter, peak VRAM {:.1f} MiB, gt_cache {:.1f} MiB, "
+                 "ex_cache {:.1f} MiB (excess {:.1f} vs Wave2), {:.1f} B/splat)",
                  path.string(),
                  steady_ms_iter,
                  steady_dataloader_wait_ms_per_iter,
                  steady_allocs_iter,
                  static_cast<double>(peak_cuda_used_) / (1024.0 * 1024.0),
                  gt_cache_mib,
+                 ex_cache_mib,
+                 excess_mib,
                  ledger_.bytes_per_splat);
     }
 

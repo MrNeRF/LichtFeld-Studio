@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mrnf.hpp"
+#include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
@@ -503,6 +504,15 @@ namespace lfs::training {
         _free_mask = Tensor::zeros_bool({capacity}, _splat_data->means().device());
         sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
+        // WO-X: pre-size densify N/K scratch to max_cap so refine never driver-allocs
+        // as live N climbs (growing exact-size Tensor::empty/zeros was ~0.05 of the
+        // Wave-4 allocs/iter drift).
+        if (capacity > 0) {
+            _densify_n_scratch.ensure_n(capacity, _splat_data->means().device());
+            _densify_n_scratch.ensure_k(std::max(capacity / 20, size_t{1024}),
+                                        _splat_data->means().device());
+        }
+
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t tracking_capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
         reset_vector_buffer(_refine_weight_max, n, _splat_data->means().device(), tracking_capacity);
@@ -698,6 +708,7 @@ namespace lfs::training {
     }
 
     void MRNF::refine(int iter) {
+        lfs::core::alloc_counter::ScopedSite densify_site("densify");
         LOG_TIMER("MRNF::refine");
         using namespace lfs::core;
         // Phase 2.1: densify ops are float-native. Expand q16 once and KEEP float for the
@@ -816,6 +827,12 @@ namespace lfs::training {
             _splat_data->shN().dtype() == lfs::core::DataType::Float32) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
+
+        // WO-X: do NOT trim_memory_pool after every refine.
+        // Phase 4.6 used to cudaFreeAsync the entire size-bucket cache here,
+        // forcing ~20 driver allocs on the next densify (growing exact-size
+        // temps never hit cache). MemoryPressureCoordinator still trims under
+        // OOM. Peak residual is the pool_bucket_cache ledger line.
     }
 
     void MRNF::grow_and_split(int iter, int pruned_count) {
@@ -828,6 +845,11 @@ namespace lfs::training {
 
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t current_active = active_count();
+        // WO-X: densify N-scratch pre-sized to max_cap; views avoid per-refine
+        // driver allocs (post-refine trim_memory_pool would otherwise force
+        // pool misses on every growing exact size).
+        _densify_n_scratch.ensure_n(n, Device::CUDA);
+
         lfs::core::Tensor active_mask;
         if (_free_mask.is_valid() && n > 0) {
             active_mask = _free_mask.slice(0, 0, n).logical_not();
@@ -860,12 +882,14 @@ namespace lfs::training {
         int actual_replace = 0;
 
         // Build replace weights first (if needed) so we can pack cand_sum + replace_nnz
-        // into one D2H (Phase 4.5).
+        // into one D2H (Phase 4.5). Write into grow-only f32_a scratch.
         Tensor replace_weights;
         if (requested_replace > 0) {
             auto opacities = _splat_data->get_opacity();
             if (opacities.ndim() == 2 && opacities.shape()[1] == 1)
                 opacities = opacities.squeeze(-1);
+            // Expression chain still materializes temps, but final weight buffer
+            // is a view into persistent scratch (avoids one large free+realloc).
             replace_weights = opacities * (_vis_count > 0.0f);
             if (active_mask.is_valid()) {
                 replace_weights = replace_weights * active_mask;
@@ -876,6 +900,11 @@ namespace lfs::training {
             if (edge_guidance.is_valid()) {
                 replace_weights = replace_weights * edge_guidance;
             }
+            // Stash into scratch so subsequent growth_weights path can reuse
+            // the same physical buffer after replace stage is done.
+            auto w_view = _densify_n_scratch.f32_a_view(n);
+            w_view.copy_(replace_weights);
+            replace_weights = w_view;
         }
 
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
@@ -900,12 +929,16 @@ namespace lfs::training {
         if (requested_replace > 0) {
             actual_replace = std::min(requested_replace, selectable_replace);
             if (actual_replace > 0) {
-                replace_inds = Tensor::empty({static_cast<size_t>(actual_replace)}, Device::CUDA, DataType::Int64);
+                // WO-X: grow-only index/mask scratch (no per-refine driver alloc).
+                _densify_n_scratch.ensure_n(n, Device::CUDA);
+                _densify_n_scratch.ensure_k(static_cast<size_t>(actual_replace), Device::CUDA);
+                replace_inds = _densify_n_scratch.i64_a_view(static_cast<size_t>(actual_replace));
                 mrnf_strategy::launch_gumbel_topk(
                     replace_weights.ptr<float>(), n, actual_replace, seed,
                     replace_inds.ptr<int64_t>());
 
-                replace_mask = Tensor::zeros_bool({n}, Device::CUDA);
+                replace_mask = _densify_n_scratch.bool_a_view(n);
+                replace_mask.zero_();
                 auto true_vals = Tensor::ones_bool({static_cast<size_t>(actual_replace)}, Device::CUDA);
                 replace_mask.index_put_(replace_inds, true_vals);
             }
@@ -942,7 +975,8 @@ namespace lfs::training {
             const int selectable_growth = static_cast<int>(host_counts[2]);
             if (selectable_growth > 0) {
                 const int growth_budget = std::min(n_grow, selectable_growth);
-                growth_inds = Tensor::empty({static_cast<size_t>(growth_budget)}, Device::CUDA, DataType::Int64);
+                _densify_n_scratch.ensure_k(static_cast<size_t>(growth_budget), Device::CUDA);
+                growth_inds = _densify_n_scratch.i64_b_view(static_cast<size_t>(growth_budget));
                 mrnf_strategy::launch_gumbel_topk(
                     growth_weights.ptr<float>(), n, growth_budget, seed + 1,
                     growth_inds.ptr<int64_t>());
@@ -1226,13 +1260,9 @@ namespace lfs::training {
                     state->size = new_size;
                     state->capacity = cap;
                 }
-                const size_t nb = (new_size + 255) / 256;
-                if (nb > 0) {
-                    state->joint_bounds = Tensor::zeros(
-                        TensorShape({nb, size_t{4}}), Device::CUDA);
-                } else {
-                    state->joint_bounds = {};
-                }
+                // WO-X: grow-only zero bounds (free-zero moments after compact).
+                ensure_joint_bounds_capacity(state->joint_bounds, new_size, cap,
+                                             Device::CUDA, /*zero_all=*/true);
             } else if (pt == ParamType::ShN) {
                 compact_shN_swizzled(state->exp_avg, cap, 128);
                 compact_shN_swizzled(state->exp_avg_sq, cap);

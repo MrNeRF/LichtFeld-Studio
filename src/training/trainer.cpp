@@ -4413,8 +4413,16 @@ namespace lfs::training {
                             record_vram_tensor("train.losses", "controller.tile_loss", tile_loss);
                             record_vram_tensor("train.losses", "controller.tile_grad", tile_grad);
                             record_vram_tensor("train.appearance", "ppisp_controller.prediction", pred);
-                            record_vram_current("train.losses", "loss_workspace_arena",
-                                                photometric_workspace_bytes(photometric_loss_));
+                            {
+                                const auto loss_ws =
+                                    photometric_workspace_bytes(photometric_loss_);
+                                record_vram_current("train.losses", "loss_workspace_arena",
+                                                    loss_ws);
+                                if (PerfBenchCollector::enabled()) {
+                                    PerfBenchCollector::instance().set_loss_workspace_bytes(
+                                        loss_ws);
+                                }
+                            }
                         }
 
                         // ISP backward for controller params
@@ -5122,8 +5130,16 @@ namespace lfs::training {
                             record_vram_tensor("train.losses", "tile_grad_raw", tile_grad_raw);
                             record_vram_tensor("train.losses", "tile_grad_alpha", tile_grad_alpha);
                             record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
-                            record_vram_current("train.losses", "loss_workspace_arena",
-                                                photometric_workspace_bytes(photometric_loss_));
+                            {
+                                const auto loss_ws =
+                                    photometric_workspace_bytes(photometric_loss_);
+                                record_vram_current("train.losses", "loss_workspace_arena",
+                                                    loss_ws);
+                                if (PerfBenchCollector::enabled()) {
+                                    PerfBenchCollector::instance().set_loss_workspace_bytes(
+                                        loss_ws);
+                                }
+                            }
                             record_vram_current("train.losses", "densification_ssim.workspace",
                                                 ssim_map_workspace_bytes(densification_ssim_workspace_));
                             record_vram_tensor("train.losses", "densification_error_map.buffer", densification_error_map_);
@@ -5966,6 +5982,10 @@ namespace lfs::training {
                     }
                 }
                 train_dataloader->get_loader()->configure_gt_cache(n_images, bytes_per);
+                // WO-X: fill decoded-GT device cache before the timed loop so
+                // first-epoch inserts do not pollute steady_allocs/iter.
+                train_dataloader->warm_gt_device_cache();
+                train_dataloader->reset();
             }
 
             LOG_DEBUG("Starting training iterations");

@@ -109,6 +109,31 @@ namespace lfs::training {
         const lfs::core::Tensor& rotations);
 
     /**
+     * WO-X / Phase 4.3 — grow-only N-row densify scratch (masks + weights).
+     * Sized once to max_cap so refine never re-driver-allocs as live N climbs.
+     */
+    struct DensifyNScratch {
+        lfs::core::Tensor f32_a; // weights / scores
+        lfs::core::Tensor f32_b;
+        lfs::core::Tensor bool_a; // masks
+        lfs::core::Tensor bool_b;
+        lfs::core::Tensor i64_a; // indices (K, grows with K high-water)
+        lfs::core::Tensor i64_b;
+        size_t n_capacity = 0;
+        size_t k_capacity = 0;
+
+        void ensure_n(size_t n, lfs::core::Device device);
+        void ensure_k(size_t k, lfs::core::Device device);
+
+        [[nodiscard]] lfs::core::Tensor f32_a_view(size_t n) const;
+        [[nodiscard]] lfs::core::Tensor f32_b_view(size_t n) const;
+        [[nodiscard]] lfs::core::Tensor bool_a_view(size_t n) const;
+        [[nodiscard]] lfs::core::Tensor bool_b_view(size_t n) const;
+        [[nodiscard]] lfs::core::Tensor i64_a_view(size_t k) const;
+        [[nodiscard]] lfs::core::Tensor i64_b_view(size_t k) const;
+    };
+
+    /**
      * Phase 4.3 — reusable densify child-buffer workspace.
      * Grow-only high-water for LAS second-child attribute buffers (K rows).
      * Avoids per-refine empty() allocs for means/rot/scale/sh0/shN/opacity.
