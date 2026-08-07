@@ -205,7 +205,8 @@
   (previously only worker?/fleet? were stall-watched).
 
 ## ISS-022 — post-merge viewport regression: VkSplat degraded mode on deleted-mask contract
-- **Status:** OPEN — fix worker dispatched (WO-FIX-VIEWER-MASK).
+- **Status:** CLOSED — fixed by WO-FIX-VIEWER-MASK (see PROGRESS.md;
+  commits e08ff532 + a59c966a on lfs-elite).
 - Repro: GUI + `-d bonsai`; at "Training finished" the viewport logs
   `VkSplat deleted mask must be a contiguous CUDA bool tensor of size N`
   (vksplat_input_packer.cpp:464) and enters degraded mode (frozen last image).
@@ -218,3 +219,7 @@
   clean start bare + with dataset; no LichtFeld-Studio segfault in kernel journal or
   coredumpctl (only known lichtfeld_tests teardown reds). Timing coincides with the
   merge-gate bench holding the GPU — contention suspected, awaiting owner re-test.
+- **Fix:** (1) `SplatData::reconcile_deleted_mask()` + N-mutating path atomicity (grow after
+  means, compact always reconcile, random_choose gather, exportable rebind); (2) packer
+  soft-skips a stale mask for one frame (no permanent degraded latch); (3) point-cloud
+  request uses `deleted_mask_version()` not positions revision.

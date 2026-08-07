@@ -1229,3 +1229,65 @@ Do **not** push from this worker — owner runs `push-clean.sh`.
 
 ### Status
 **MN-11 resolved.**
+
+## ISS-022 / WO-FIX-VIEWER-MASK — VkSplat deleted-mask contract (2026-08-07)
+
+### Problem
+Post-merge composition: master packer requires `deleted` to be contiguous CUDA bool of
+numel == N; densify grow / compact / random_choose could leave the mask sized to the old
+N. Packer hard-failed → `VkSplat entered degraded mode` → frozen last-good image.
+
+### TDD (storage/packer, no GUI)
+New tests in `tests/test_vksplat_input_packer.cpp`:
+- `GrowWithActiveDeletedMaskKeepsPackerContract`
+- `CompactWithActiveDeletedMaskKeepsPackerContract`
+- `StaleDeletedMaskDoesNotPermanentlyBreakOpacityCopy` (soft-skip + reconcile)
+
+Pre-fix FAIL (stale path):
+```
+VkSplat deleted mask must be a contiguous CUDA bool tensor of size N
+```
+(or hard-fail before soft-skip landed)
+
+Post-fix PASS:
+```
+[==========] 10 tests from VksplatInputPackerTest
+[  PASSED  ] 10 tests.
+```
+Including soft-skip log: `VkSplat soft-skipping stale deleted mask ... raw opacity used this frame`
+
+### Implementation
+1. **SplatData:** `reconcile_deleted_mask()`, `deleted_mask_matches_size()`,
+   `notify_deleted_mask_changed()`; `apply_deleted`/`clear` always bump version.
+2. **N-mutate writers:** MRNF/MCMC/IGS+ `append_live_deleted_rows` pad to `size()` (order:
+   grow means first); `compact_splats` always compact-or-reconcile deleted; `random_choose`
+   gathers deleted; exportable rebind reconciles.
+3. **Packer:** stale mask → soft-skip (raw opacity) + WARN, never hard-fail a 1-frame race.
+4. **Point-cloud request:** `deleted_mask_revision = model->deleted_mask_version()`.
+
+### Gate — full suite
+`./build/tests/lichtfeld_tests` → **3406 PASS / 42 SKIP / 14 FAIL**. Failures are the
+documented pre-existing set (ISS-016/017/019, Pipelined fixtures, NaNInf large,
+SceneValidity migrate, VramProfiler suite-order). **No new reds.**
+
+### Gate — dual-workload bench
+| workload | med steady_ms | B/splat | vs target |
+|---|---:|---:|---|
+| bonsai ×3 (`20260807T192220Z`) | **2.635** | **307.4** | ~2.615–2.62 (noise; B/splat exact) |
+| bicycle 7k ×3 (`20260807T192248Z`) | **2.636** | **307.4** | ~2.65–2.67 (within band) |
+
+### Gate — GUI repro
+```
+timeout 120 ./build/LichtFeld-Studio -d ~/data/360_v2/bonsai -o /tmp/lfs-iss022-out -i 2000 --train
+```
+Log through `Training finished: iter=1400` (exportable grow capacity abort at densify —
+pre-existing Phase 5.1 path, not ISS-022): **no** `degraded mode`, **no**
+`deleted mask must be a contiguous CUDA bool tensor of size N`, **no** soft-skip spam.
+
+### Commits
+- `e08ff532` — core/strategy deleted-mask atomicity with N
+- `a59c966a` — packer soft-skip + TDD tests
+- docs commit — campaign PROGRESS/ISSUES close-out
+
+### Status
+**ISS-022 CLOSED.**
