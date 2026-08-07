@@ -14,6 +14,8 @@
 #if defined(__linux__)
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <dlfcn.h>
+#include <unistd.h>
 #endif
 #include <algorithm>
 #include <cmath>
@@ -349,6 +351,76 @@ namespace lfs::vis {
             }
 #endif
         }
+
+#if defined(__linux__)
+        // Xlib handlers for external window destruction (e.g. xdotool windowclose / XDestroyWindow).
+        // Resolved via dlsym so we do not add a hard link requirement beyond what SDL already loads.
+        // Handlers run on the event-pump thread; plain stores match the should_close_ convention.
+        WindowManager* g_x11_error_owner = nullptr;
+        unsigned long g_x11_main_window_id = 0;
+        unsigned g_x11_error_main_count = 0;
+        unsigned g_x11_error_other_count = 0;
+        bool g_x11_io_error_logged = false;
+
+        using XErrorHandlerFn = int (*)(Display*, XErrorEvent*);
+        using XIOErrorHandlerFn = int (*)(Display*);
+        using XSetErrorHandlerFn = XErrorHandlerFn (*)(XErrorHandlerFn);
+        using XSetIOErrorHandlerFn = XIOErrorHandlerFn (*)(XIOErrorHandlerFn);
+
+        int x11ErrorHandler(Display* /*display*/, XErrorEvent* event) {
+            if (!event) {
+                return 0;
+            }
+
+            const unsigned long resource_id = static_cast<unsigned long>(event->resourceid);
+            const bool main_window_unknown = g_x11_main_window_id == 0;
+            const bool is_main_window = main_window_unknown || resource_id == g_x11_main_window_id;
+
+            if (is_main_window) {
+                ++g_x11_error_main_count;
+                if (g_x11_error_main_count == 1) {
+                    LOG_WARN(
+                        "X11 error on main window (error={}, request={}.{}, resourceid=0x{:x}, serial={}); "
+                        "requesting clean shutdown (further main-window X errors suppressed)",
+                        event->error_code,
+                        event->request_code,
+                        event->minor_code,
+                        resource_id,
+                        event->serial);
+                }
+                // Window is already gone: requestClose alone is cancelled by the exit-confirm UI.
+                // ForceExit is the census-clean path that skips confirmation (same as requestApplicationClose).
+                if (g_x11_error_owner) {
+                    g_x11_error_owner->requestClose();
+                }
+                lfs::core::events::cmd::ForceExit{}.emit();
+            } else {
+                ++g_x11_error_other_count;
+                if (g_x11_error_other_count == 1) {
+                    LOG_WARN(
+                        "X11 error on non-main resource (error={}, request={}.{}, resourceid=0x{:x}, "
+                        "serial={}, main_window=0x{:x}); swallowing (further non-main X errors suppressed)",
+                        event->error_code,
+                        event->request_code,
+                        event->minor_code,
+                        resource_id,
+                        event->serial,
+                        g_x11_main_window_id);
+                }
+            }
+            // Swallow: do not chain to the previous handler (_XDefaultError calls exit()).
+            return 0;
+        }
+
+        int x11IOErrorHandler(Display* /*display*/) {
+            // Teardown cannot run against a dead display and Python atexit finalization is unsafe here; _exit skips both.
+            if (!g_x11_io_error_logged) {
+                g_x11_io_error_logged = true;
+                LOG_ERROR("X11 IO error: display connection dead; aborting without teardown");
+            }
+            _exit(1);
+        }
+#endif
     } // namespace
 
     void* WindowManager::callback_handler_ = nullptr;
@@ -366,11 +438,46 @@ namespace lfs::vis {
     }
 
     WindowManager::~WindowManager() {
+#if defined(__linux__)
+        if (g_x11_error_owner == this) {
+            g_x11_error_owner = nullptr;
+        }
+#endif
         vulkan_context_.reset();
         if (window_) {
             SDL_DestroyWindow(window_);
         }
         SDL_Quit();
+    }
+
+    void WindowManager::installX11ErrorHandlers() {
+#if defined(__linux__)
+        const char* const video_driver = SDL_GetCurrentVideoDriver();
+        if (!video_driver || std::strcmp(video_driver, "x11") != 0) {
+            return;
+        }
+
+        const auto set_error_handler =
+            reinterpret_cast<XSetErrorHandlerFn>(::dlsym(RTLD_DEFAULT, "XSetErrorHandler"));
+        const auto set_io_error_handler =
+            reinterpret_cast<XSetIOErrorHandlerFn>(::dlsym(RTLD_DEFAULT, "XSetIOErrorHandler"));
+        if (!set_error_handler || !set_io_error_handler) {
+            LOG_DEBUG("X11 error handler symbols unavailable via dlsym; skipping install");
+            return;
+        }
+
+        g_x11_error_owner = this;
+        g_x11_main_window_id = 0;
+        Display* display = nullptr;
+        ::Window xwindow = 0;
+        if (getX11WindowHandle(window_, display, xwindow)) {
+            g_x11_main_window_id = static_cast<unsigned long>(xwindow);
+        }
+
+        set_error_handler(x11ErrorHandler);
+        set_io_error_handler(x11IOErrorHandler);
+        LOG_DEBUG("Installed X11 error handlers (main window id=0x{:x})", g_x11_main_window_id);
+#endif
     }
 
     void WindowManager::setInputController(InputController* ic) {
@@ -427,6 +534,10 @@ namespace lfs::vis {
         if (native_titlebar_move_available_) {
             LOG_DEBUG("Using X11 native titlebar move for borderless window drag");
         }
+
+        // After SDL video init + window create: swallow BadWindow when the WM destroys our X11
+        // window out from under SDL, and request a clean app shutdown instead of _XDefaultError/exit.
+        installX11ErrorHandlers();
 
         if (!SDL_SetWindowHitTest(window_, borderlessWindowHitTest, this)) {
             LOG_DEBUG("SDL window hit testing unavailable: {}", SDL_GetError());
