@@ -5547,6 +5547,10 @@ namespace lfs::vis::gui {
             }
             if (begin_ok) {
                 if (rendering) {
+                    // #1575 Phase 3: GENERAL→READ_ONLY barriers + CUDA S2 waits on the frame
+                    // submit, before any sampling of interop images (slot B).
+                    rendering->viewportInterop().recordFrameBarriers(frame.command_buffer,
+                                                                     *vulkan_context);
                     const auto completion = rendering->viewportInterop().frameCompletion();
                     if (completion.semaphore != VK_NULL_HANDLE && completion.value != 0) {
                         LOG_TIMER_THRESHOLD("gui_render.vksplat_completion_wait_submit", 0.25);
