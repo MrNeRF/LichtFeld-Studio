@@ -3,8 +3,12 @@
 
 #include "core/cuda_error.hpp"
 #include "core/exportable_storage.hpp"
+#include "core/parameters.hpp"
+#include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
+#include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "training/training_setup.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -446,6 +450,184 @@ TEST(SplatExportableStorageTest, GrowKeepsStableVaWhileImportersHoldBlock) {
     void* probe = nullptr;
     ASSERT_EQ(cudaMalloc(&probe, 4096), cudaSuccess);
     ASSERT_EQ(cudaFree(probe), cudaSuccess);
+}
+
+// ISS-023: densify past the initial live-N commit must grow the exportable
+// block via capacity_ensure (storage layer, no GUI). Mirrors
+// TrainerManager::growExportableForDensify: work lives outside the std::function
+// so rebind can replace SplatData mid-grow without destroying the active frame.
+TEST(SplatExportableStorageTest, CapacityEnsureGrowsPastInitialCommit) {
+    require_cuda();
+
+    constexpr std::size_t kInitialCap = 128;
+    constexpr std::size_t kLiveN = 64;
+    constexpr std::size_t kNeed = 200; // past initial commit
+    constexpr std::size_t kReserve = 4096;
+    constexpr int kShDegree = 0;
+
+    auto storage_result = SplatExportableStorage::create(kInitialCap, kShDegree, 0, kReserve);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    auto allocator = storage->make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitialCap, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitialCap, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitialCap, DataType::Float32, "SplatData.sh0");
+    Tensor shN;
+
+    SplatData model(/*max_sh_degree=*/kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    /*scene_scale=*/1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.set_tensor_allocator(storage->make_allocator());
+
+    const void* const stable_va = storage->block->device_ptr;
+    ASSERT_EQ(model.means_raw().capacity(), kInitialCap);
+    ASSERT_LT(model.means_raw().capacity(), kNeed);
+
+    struct GrowHook {
+        std::shared_ptr<SplatExportableStorage> storage;
+        SplatData* model = nullptr;
+        void install() {
+            model->set_capacity_ensure([this](std::size_t needed_rows) { return grow(needed_rows); });
+        }
+        bool grow(std::size_t needed_rows) {
+            if (storage->capacity() >= needed_rows &&
+                model->means_raw().capacity() >= needed_rows) {
+                return true;
+            }
+            const std::size_t want =
+                SplatExportableStorage::growthCapacity(needed_rows, storage->reservedCapacity());
+            auto grew = storage->grow(want);
+            if (!grew || storage->capacity() < needed_rows) {
+                return false;
+            }
+            // rebind assigns into *model and drops the trampoline; reinstall after.
+            if (auto ok = storage->rebindSplatData(*model, storage->make_allocator()); !ok) {
+                return false;
+            }
+            install();
+            return model->means_raw().capacity() >= needed_rows;
+        }
+    } hook{storage, &model};
+    hook.install();
+
+    ASSERT_TRUE(model.has_capacity_ensure());
+    ASSERT_TRUE(model.ensure_param_capacity(kNeed))
+        << "capacity_ensure must grow exportable block past initial commit";
+    EXPECT_GE(storage->capacity(), kNeed);
+    EXPECT_GE(model.means_raw().capacity(), kNeed);
+    EXPECT_EQ(storage->block->device_ptr, stable_va);
+    EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+    EXPECT_TRUE(model.has_capacity_ensure()) << "hook must be reinstalled after grow+rebind";
+}
+
+// ISS-023 regression: migrateTrainingModelToAllocator used to require capacity
+// >= max_cap. Phase 5.1 exportable commits live-N headroom only (clamped), so
+// the readiness check always failed → full SplatData rebuild every strategy
+// step → capacity_ensure wiped → densify abort.
+TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
+    require_cuda();
+
+    constexpr std::size_t kInitialCap = 128;
+    constexpr std::size_t kLiveN = 64;
+    constexpr std::size_t kMaxCap = 5'000'000; // GUI default
+    constexpr std::size_t kNeed = 200;
+    constexpr int kShDegree = 0;
+
+    auto storage_result = SplatExportableStorage::create(kInitialCap, kShDegree, 0, kMaxCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    auto allocator = storage->make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitialCap, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitialCap, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitialCap, DataType::Float32, "SplatData.sh0");
+    Tensor shN;
+
+    SplatData model(kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.set_tensor_allocator(storage->make_allocator());
+
+    int ensure_calls = 0;
+    struct GrowHook {
+        std::shared_ptr<SplatExportableStorage> storage;
+        SplatData* model = nullptr;
+        int* ensure_calls = nullptr;
+        void install() {
+            model->set_capacity_ensure([this](std::size_t needed_rows) { return grow(needed_rows); });
+        }
+        bool grow(std::size_t needed_rows) {
+            ++(*ensure_calls);
+            if (storage->capacity() >= needed_rows &&
+                model->means_raw().capacity() >= needed_rows) {
+                return true;
+            }
+            const std::size_t want =
+                SplatExportableStorage::growthCapacity(needed_rows, storage->reservedCapacity());
+            auto grew = storage->grow(want);
+            if (!grew || storage->capacity() < needed_rows) {
+                return false;
+            }
+            if (auto ok = storage->rebindSplatData(*model, storage->make_allocator()); !ok) {
+                return false;
+            }
+            install();
+            return model->means_raw().capacity() >= needed_rows;
+        }
+    } hook{storage, &model, &ensure_calls};
+    hook.install();
+
+    lfs::core::param::TrainingParameters params;
+    params.optimization.sh_degree = kShDegree;
+    params.optimization.max_cap = static_cast<int>(kMaxCap);
+
+    // Repeated migrates must be no-ops (ready under live-N commit) and must not
+    // drop the densify grow hook — this is the GUI strategy-step path.
+    for (int i = 0; i < 3; ++i) {
+        auto result = lfs::training::migrateTrainingModelToAllocator(
+            params, model, storage->make_allocator());
+        ASSERT_TRUE(result.has_value()) << result.error() << " iter=" << i;
+        ASSERT_TRUE(model.has_capacity_ensure())
+            << "migrate wiped capacity_ensure (ISS-023) iter=" << i;
+        EXPECT_EQ(model.means_raw().capacity(), kInitialCap);
+        EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+    }
+
+    // Force remigrate still preserves the hook.
+    {
+        auto result = lfs::training::migrateTrainingModelToAllocator(
+            params, model, storage->make_allocator(), /*force_reallocation=*/true);
+        ASSERT_TRUE(result.has_value()) << result.error();
+        ASSERT_TRUE(model.has_capacity_ensure())
+            << "force migrate wiped capacity_ensure (ISS-023)";
+    }
+
+    ASSERT_TRUE(model.ensure_param_capacity(kNeed))
+        << "after migrate, densify capacity_ensure must still grow the block";
+    EXPECT_GE(ensure_calls, 1);
+    EXPECT_GE(model.means_raw().capacity(), kNeed);
+    EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
 }
 
 // MJ-12 storage-layer contract: growExportableDeviceBlock must only run after

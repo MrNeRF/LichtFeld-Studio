@@ -377,6 +377,15 @@ namespace lfs::core {
         void set_capacity_ensure(CapacityEnsureFn fn) {
             _capacity_ensure = std::move(fn);
         }
+        // Full-model rebuilds (migrate/rebind) must transfer the hook: a fresh
+        // SplatData has none, and densify then aborts with capacity-ensure failed
+        // (ISS-023). Callers that replace the model object take + reinstall.
+        [[nodiscard]] bool has_capacity_ensure() const noexcept {
+            return static_cast<bool>(_capacity_ensure);
+        }
+        [[nodiscard]] CapacityEnsureFn release_capacity_ensure() {
+            return std::move(_capacity_ensure);
+        }
         [[nodiscard]] bool ensure_param_capacity(std::size_t needed_rows) {
             if (means_raw().is_valid() && means_raw().capacity() >= needed_rows) {
                 return true;

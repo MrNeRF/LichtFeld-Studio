@@ -409,8 +409,10 @@ namespace lfs::core {
             }
             rebound.set_frozen_ranges(std::move(frozen_ranges));
             rebound.set_tensor_allocator(allocator);
-            // Note: capacity_ensure is not preserved across rebind (private);
-            // TrainerManager re-installs it after grow+rebind.
+            // capacity_ensure cannot be transferred here: rebind is often called
+            // FROM inside the hook (growExportableForDensify), and moving the
+            // active std::function would destroy the running frame. Callers
+            // reinstall after rebind returns (TrainerManager, tests).
             model = std::move(rebound);
         } catch (const std::exception& e) {
             return std::unexpected(std::format(

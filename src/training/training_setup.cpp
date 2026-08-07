@@ -273,10 +273,36 @@ namespace lfs::training {
             }
 
             const size_t n = static_cast<size_t>(model.size());
-            const size_t target_capacity =
+
+            // Phase 5.1 exportable blocks commit live-N + headroom, not max_cap.
+            // Requiring capacity >= max_cap made readiness always fail (allocator
+            // clamps to the committed row budget), so every strategy step rebuilt
+            // SplatData and wiped capacity_ensure → densify abort (ISS-023).
+            //
+            // Kind note: CUDA-only views use "splat.exportable"; the GUI interop
+            // allocator tags the same clamped VMM block as "vulkan_external_buffer".
+            // Treat both as live-N when committed capacity is below max_cap.
+            const size_t configured_max =
                 params.optimization.max_cap > 0
                     ? std::max<size_t>(static_cast<size_t>(params.optimization.max_cap), n)
-                    : std::max<size_t>(model.means_raw().capacity(), n);
+                    : 0;
+            const auto means_kind =
+                model.means_raw().is_valid() ? model.means_raw().external_storage_kind()
+                                             : std::string{};
+            const bool exportable_or_interop =
+                means_kind == "splat.exportable" || means_kind == "vulkan_external_buffer";
+            const bool exportable_live_n =
+                model.means_raw().is_valid() && model.means_raw().is_external_storage() &&
+                exportable_or_interop && model.means_raw().capacity() > 0 &&
+                (configured_max == 0 || model.means_raw().capacity() < configured_max);
+            // For exportable live-N: stay on the current committed capacity (growth
+            // is capacity_ensure's job). For other external kinds: target max_cap.
+            const size_t target_capacity =
+                exportable_live_n
+                    ? std::max<size_t>(model.means_raw().capacity(), n)
+                    : (configured_max > 0
+                           ? configured_max
+                           : std::max<size_t>(model.means_raw().capacity(), n));
             const auto layout_rest = static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
             const size_t target_shN_capacity =
                 layout_rest > 0 ? lfs::core::sh_swizzled_float_count(target_capacity, layout_rest) : 0;
@@ -295,6 +321,9 @@ namespace lfs::training {
             }
 
             try {
+                // model = move(migrated) replaces private hooks; transfer densify grow.
+                auto capacity_ensure = model.release_capacity_ensure();
+
                 const int max_sh = model.get_max_sh_degree();
                 const int active_sh = model.get_active_sh_degree();
                 const float scene_scale = model.get_scene_scale();
@@ -359,12 +388,15 @@ namespace lfs::training {
                 migrated.set_frozen_ranges(std::move(frozen_ranges));
                 model = std::move(migrated);
                 model.set_tensor_allocator(tensor_allocator);
+                if (capacity_ensure) {
+                    model.set_capacity_ensure(std::move(capacity_ensure));
+                }
                 lfs::core::Tensor::trim_memory_pool();
 
                 LOG_INFO("Migrated training SplatData tensors to Vulkan-external storage "
                          "(gaussians={}, capacity={}, shN_capacity_floats={})",
                          n,
-                         target_capacity,
+                         model.means_raw().capacity(),
                          target_shN_capacity);
             } catch (const std::exception& e) {
                 return std::unexpected(std::format(
