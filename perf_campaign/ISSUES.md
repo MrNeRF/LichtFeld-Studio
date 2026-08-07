@@ -232,3 +232,13 @@
   block imported into Vulkan; live-N growth, reserve=5M). Suspects: composition of master
   fa81f3eb resize-churn removal with campaign grow path, and/or MJ-12 detach-before-grow
   ordering during in-place VMM commit growth. Likely the user-reported dataset-load crash.
+
+### ISS-023 addendum (owner's .100 machine log, 2026-08-07 22:23)
+- Confirmed in production: capacity 81412 < needed 87020 at iter=1400 RefinementCommit
+  (published branch, pre-fix). Perceived "quality trashing" explained: training silently dies
+  at first densify commit; UI then reports "Training finished: iter=1400" as success.
+- NEW secondary defect from same log: emergency save_ply during TerminalCleanup crashed with
+  `index_select boolean mask length must match the indexed dimension` (stale deleted mask vs N
+  after aborted add_new_params — ISS-022 family). VERIFY the landed ISS-022/023 fixes cover
+  save-after-failed-step; if not, harden save_ply to reconcile/clamp the mask. Also flag UX:
+  a failed run must not report "Training finished" as if successful.
