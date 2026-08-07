@@ -1578,3 +1578,42 @@ Hidden env toggles deleted. Perf/profile instruments become CLI.
 
 ### Commits
 See git log for this work (flag purge + CLI instruments).
+
+## GUI VRAM waste wave (Fable Agent 2) — 2026-08-08
+
+Spec: ~/lfs-campaign-out/analysis/gui-vram-waste.md (Agent 1). Protocol: bonsai --train -i 3000,
+per-second nvidia-smi, bench flock.
+
+### Landed
+- **ISS-026 fix** `d9496a18` — pinned GT blocks recorded cudaEventRecord on destroyed streams at
+  GUI train-end (exit 139 on the published tip). Severed-stream tombstones in
+  PinnedMemoryAllocator; PinnedStreamTeardownTest 3/3; GUI --train to completion with pinned
+  tier populated (237 entries/4.4 GiB) exits 0.
+- **Interactive pool trim + scratch floor** `05586f9c` — trim at topology-change commit
+  boundaries (interactive only; headless path untouched); VkSplat scratch floor 384→128 MiB
+  (measured 166 MiB committed), grow slack 50%.
+
+### VRAM before/after (GUI --train bonsai 3000)
+| | peak MiB |
+|---|---:|
+| Before wave (Agent 1) | 5,204 |
+| After wave | **4,878** |
+GATE MISS, reported honestly: target was ≤4,200 (≥1 GiB from trim). Scratch floor delivered
+~−218; trim only ~−100 at peak — the "unattributed ~2.8 GiB" is mostly LIVE working set at the
+peak moment (grads/moments/workspaces concurrent with densify spike), not idle pool slack.
+Trim still lowers the between-densify floor; peak needs the resident-SH work below.
+
+### Deferred with dispatch-ready directive
+- **WO-VIEWER-SH-F16** (~/lfs-campaign-out/work_orders/) — the owner's "~1 GB over headless at
+  5M gaussians": VkSplat resident fp32 SH (~180 B/splat @ deg3 ≈ 900 MiB @ 5M). fp16 tier
+  (~450 MiB) + timeboxed zero-copy q16 tier (~900 MiB). Deferred from this wave: 35 shN touch
+  points, dual host/device pack paths, split-shader/LOD interplay — not safe without the
+  visual-diff verification the directive specifies. Precedent exists (gs_renderer f16/s8 packed
+  format + feature gating at gs_renderer.cpp:1063).
+- Aux engine lazy-init: examined, SKIPPED — already lazy (built on first point-cloud frame,
+  rendering_manager_viewport.cpp:268); CPU-side engine, VRAM cost unconfirmed.
+
+### Gates
+Full suite: 3419 PASS / same 14 pre-existing FAIL (incl. 3 new PinnedStreamTeardownTest green).
+Headless bench: bonsai 2.627 ms/iter / 307.4 B/splat / dl_wait 0.004 (band 2.60-2.66 held).
+GUI: exit 0, no FAILURE/degraded lines, scratch 166 MiB committed.
