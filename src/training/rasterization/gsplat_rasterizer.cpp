@@ -48,8 +48,6 @@ namespace lfs::training {
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         uint64_t frame_id = arena.begin_frame(core::getCurrentCUDAStream());
         auto arena_allocator = arena.get_allocator(frame_id);
-        void* isect_ids_to_free = nullptr;
-        void* flatten_ids_to_free = nullptr;
         try {
 
             // Full image dimensions
@@ -379,8 +377,8 @@ namespace lfs::training {
                 thin_prism_ptr,
                 result,
                 fwd_stream);
-            isect_ids_to_free = result.isect_ids;
-            flatten_ids_to_free = result.flatten_ids;
+            // isect_ids / flatten_ids are borrowed from TLS high-water cache —
+            // never transfer ownership or free on error paths.
 
             // Build RenderOutput - wrap raw pointers in tensor views
             RenderOutput render_output;
@@ -511,7 +509,7 @@ namespace lfs::training {
             ctx.last_ids_ptr = last_ids_ptr_out;
             ctx.compensations_ptr = compensations_ptr_out;
 
-            // Store flatten_ids from result (allocated by gsplat, must be freed later)
+            // Borrowed TLS high-water pointers (valid through backward; do not free)
             ctx.isect_ids_ptr = result.isect_ids;
             ctx.flatten_ids_ptr = result.flatten_ids;
             ctx.n_isects = result.n_isects;
@@ -566,12 +564,7 @@ namespace lfs::training {
 
             return std::pair{render_output, ctx};
         } catch (...) {
-            if (isect_ids_to_free != nullptr) {
-                cudaFree(isect_ids_to_free);
-            }
-            if (flatten_ids_to_free != nullptr) {
-                cudaFree(flatten_ids_to_free);
-            }
+            // Isect buffers are TLS high-water — leave them; only unwind arena.
             // End on the same stream begin_frame used (same guard → same value),
             // not the streamless device-sync path, so the arena frame chain stays
             // intact for the next frame instead of falling back to a full sync.
@@ -877,25 +870,10 @@ namespace lfs::training {
                     stream);
             }
 
-            // Free internally allocated buffers from forward
-            if (ctx.isect_ids_ptr != nullptr) {
-                cudaFreeAsync(ctx.isect_ids_ptr, stream);
-            }
-            if (ctx.flatten_ids_ptr != nullptr) {
-                cudaFreeAsync(ctx.flatten_ids_ptr, stream);
-            }
-
-            // End arena frame to release memory from forward pass — on the
-            // backward's stream (where its kernels ran), not the re-derived
-            // current stream.
+            // Isect/flatten ids stay in the TLS high-water cache for the next
+            // forward (no per-step cudaFree). Arena still ends with the frame.
             arena.end_frame(ctx.frame_id, stream);
         } catch (...) {
-            if (ctx.isect_ids_ptr != nullptr) {
-                cudaFreeAsync(ctx.isect_ids_ptr, stream);
-            }
-            if (ctx.flatten_ids_ptr != nullptr) {
-                cudaFreeAsync(ctx.flatten_ids_ptr, stream);
-            }
             arena.end_frame(ctx.frame_id, stream);
             throw;
         }

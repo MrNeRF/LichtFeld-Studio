@@ -4244,17 +4244,12 @@ namespace lfs::training {
                             fast_ctx->release_forward_context();
                             fast_ctx.reset();
                         } else if (gsplat_ctx) {
+                            // Isect/flatten ids are TLS high-water (not owned by
+                            // the context) — do not cudaFree; only end the arena
+                            // frame that held the other forward scratch.
                             auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-                            if (gsplat_ctx->isect_ids_ptr != nullptr) {
-                                LFS_CUDA_LOG_TEARDOWN(cudaFree(gsplat_ctx->isect_ids_ptr), nullptr,
-                                                      "gsplat tile cleanup: free isect_ids");
-                                gsplat_ctx->isect_ids_ptr = nullptr;
-                            }
-                            if (gsplat_ctx->flatten_ids_ptr != nullptr) {
-                                LFS_CUDA_LOG_TEARDOWN(cudaFree(gsplat_ctx->flatten_ids_ptr), nullptr,
-                                                      "gsplat tile cleanup: free flatten_ids");
-                                gsplat_ctx->flatten_ids_ptr = nullptr;
-                            }
+                            gsplat_ctx->isect_ids_ptr = nullptr;
+                            gsplat_ctx->flatten_ids_ptr = nullptr;
                             arena.end_frame(gsplat_ctx->frame_id, lfs::core::getCurrentCUDAStream());
                             gsplat_ctx.reset();
                         }

@@ -28,9 +28,14 @@ namespace gsplat_lfs {
 
         struct IntersectBufferCache {
             DirectDeviceBuffer cum_tiles;
+            // Output isect/flatten ids: grow-only high-water (never transferred
+            // to caller — per-step cudaFree removed; see Ops.h).
+            DirectDeviceBuffer isect_ids;
+            DirectDeviceBuffer flatten_ids;
             DirectDeviceBuffer isect_ids_sort;
             DirectDeviceBuffer flatten_ids_sort;
             size_t cum_tiles_capacity = 0;
+            size_t isect_capacity = 0;
             size_t sort_capacity = 0;
             cudaEvent_t sort_reuse_event = nullptr;
             bool sort_reuse_event_recorded = false;
@@ -46,6 +51,27 @@ namespace gsplat_lfs {
                     cum_tiles = std::move(replacement);
                     cum_tiles_capacity = new_cap;
                 }
+            }
+
+            void ensure_isect_buffers(size_t n_isects) {
+                if (n_isects == 0) {
+                    return;
+                }
+                if (n_isects <= isect_capacity) {
+                    return;
+                }
+                const size_t new_cap = growth_capacity(n_isects, "gsplat isect buffers");
+                DirectDeviceBuffer replacement_isect_ids(
+                    checked_bytes(new_cap, sizeof(int64_t), "gsplat output intersection ids"),
+                    nullptr,
+                    "rasterizer.gsplat.intersection_ids");
+                DirectDeviceBuffer replacement_flatten_ids(
+                    checked_bytes(new_cap, sizeof(int32_t), "gsplat output flatten ids"),
+                    nullptr,
+                    "rasterizer.gsplat.flatten_ids");
+                isect_ids = std::move(replacement_isect_ids);
+                flatten_ids = std::move(replacement_flatten_ids);
+                isect_capacity = new_cap;
             }
 
             void ensure_sort_buffers(size_t n_isects, cudaStream_t stream) {
@@ -99,9 +125,12 @@ namespace gsplat_lfs {
 
             bool release() noexcept {
                 cum_tiles.reset();
+                isect_ids.reset();
+                flatten_ids.reset();
                 isect_ids_sort.reset();
                 flatten_ids_sort.reset();
                 cum_tiles_capacity = 0;
+                isect_capacity = 0;
                 sort_capacity = 0;
                 cudaEvent_t event = std::exchange(sort_reuse_event, nullptr);
                 sort_reuse_event_recorded = false;
@@ -114,8 +143,12 @@ namespace gsplat_lfs {
                             lfs::core::CudaFailureDisposition::LogOnlyNoLatch);
                     }
                 }
-                return !cum_tiles && !isect_ids_sort && !flatten_ids_sort &&
-                       sort_reuse_event == nullptr;
+                // Drop pooled gsplat temporaries so thread exit returns VRAM.
+                const bool cub_released = release_gsplat_cub_workspace();
+                const bool color_grad_released = release_gsplat_color_grad_workspace();
+                return !cum_tiles && !isect_ids && !flatten_ids && !isect_ids_sort &&
+                       !flatten_ids_sort && sort_reuse_event == nullptr && cub_released &&
+                       color_grad_released;
             }
 
             ~IntersectBufferCache() {
@@ -208,16 +241,11 @@ namespace gsplat_lfs {
             return result;
         }
 
-        DirectDeviceBuffer isect_ids(
-            checked_bytes(static_cast<size_t>(n_isects), sizeof(int64_t),
-                          "gsplat output intersection ids"),
-            nullptr,
-            "rasterizer.gsplat.intersection_ids");
-        DirectDeviceBuffer flatten_ids(
-            checked_bytes(static_cast<size_t>(n_isects), sizeof(int32_t),
-                          "gsplat output flatten ids"),
-            nullptr,
-            "rasterizer.gsplat.flatten_ids");
+        // Grow-only high-water buffers: ownership stays in the TLS cache.
+        // Callers must NOT cudaFree the returned pointers (release is a no-op).
+        cache.ensure_isect_buffers(static_cast<size_t>(n_isects));
+        int64_t* const isect_ids_ptr = cache.isect_ids.as<int64_t>();
+        int32_t* const flatten_ids_ptr = cache.flatten_ids.as<int32_t>();
 
         // Second pass: compute isect_ids and flatten_ids
         launch_intersect_tile_kernel(
@@ -227,7 +255,7 @@ namespace gsplat_lfs {
             tile_size, tile_width, tile_height,
             d_cum_tiles,
             nullptr, // tiles_per_gauss (not needed in second pass)
-            isect_ids.as<int64_t>(), flatten_ids.as<int32_t>(),
+            isect_ids_ptr, flatten_ids_ptr,
             stream);
 
         // Sort by isect_ids if requested
@@ -237,21 +265,21 @@ namespace gsplat_lfs {
             try {
                 radix_sort_double_buffer(
                     n_isects, tile_n_bits, cam_n_bits,
-                    isect_ids.as<int64_t>(), flatten_ids.as<int32_t>(),
+                    isect_ids_ptr, flatten_ids_ptr,
                     cache.isect_ids_sort.as<int64_t>(), cache.flatten_ids_sort.as<int32_t>(),
                     stream);
 
                 // Copy sorted results back (sort may have used either buffer)
                 LFS_CUDA_CHECK_MSG(
                     cudaMemcpyAsync(
-                        isect_ids.get(), cache.isect_ids_sort.get(),
+                        isect_ids_ptr, cache.isect_ids_sort.get(),
                         checked_bytes(static_cast<size_t>(n_isects), sizeof(int64_t),
                                       "gsplat sorted intersection output"),
                         cudaMemcpyDeviceToDevice, stream),
                     "gsplat sorted intersection output copy");
                 LFS_CUDA_CHECK_MSG(
                     cudaMemcpyAsync(
-                        flatten_ids.get(), cache.flatten_ids_sort.get(),
+                        flatten_ids_ptr, cache.flatten_ids_sort.get(),
                         checked_bytes(static_cast<size_t>(n_isects), sizeof(int32_t),
                                       "gsplat sorted flatten output"),
                         cudaMemcpyDeviceToDevice, stream),
@@ -263,8 +291,8 @@ namespace gsplat_lfs {
             cache.record_sort_use(stream);
         }
 
-        result.isect_ids = static_cast<int64_t*>(isect_ids.release());
-        result.flatten_ids = static_cast<int32_t*>(flatten_ids.release());
+        result.isect_ids = isect_ids_ptr;
+        result.flatten_ids = flatten_ids_ptr;
 
         return result;
     }
