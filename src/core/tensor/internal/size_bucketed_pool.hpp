@@ -220,7 +220,7 @@ namespace lfs::core {
                     return nullptr;
                 }
             }
-            alloc_counter::record();
+            alloc_counter::record_site(alloc_counter::Site::PoolBucket);
             stats_.alloc_count.fetch_add(1, std::memory_order_relaxed);
             stats_.bytes_wasted.fetch_add(bucket_size - bytes, std::memory_order_relaxed);
             return ptr;

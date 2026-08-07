@@ -453,6 +453,58 @@ namespace lfs::training {
         return near_zero_mask;
     }
 
+    void DensifyNScratch::ensure_n(const size_t n, const lfs::core::Device device) {
+        using namespace lfs::core;
+        if (n == 0) {
+            return;
+        }
+        if (n_capacity >= n) {
+            return;
+        }
+        // One-shot to max(n, 1.2×) so densify climb does not re-driver-alloc.
+        const size_t new_cap = std::max(
+            n, static_cast<size_t>(static_cast<double>(std::max(n_capacity, n)) * 1.2) + 1);
+        f32_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
+        f32_b = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Float32);
+        bool_a = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Bool);
+        bool_b = Tensor::zeros_direct(TensorShape({new_cap}), new_cap, device, DataType::Bool);
+        n_capacity = new_cap;
+    }
+
+    void DensifyNScratch::ensure_k(const size_t k, const lfs::core::Device device) {
+        using namespace lfs::core;
+        if (k == 0) {
+            return;
+        }
+        if (k_capacity >= k) {
+            return;
+        }
+        const size_t new_cap = std::max(
+            k, static_cast<size_t>(static_cast<double>(std::max(k_capacity, k)) * 1.2) + 1);
+        i64_a = Tensor::empty({new_cap}, device, DataType::Int64);
+        i64_b = Tensor::empty({new_cap}, device, DataType::Int64);
+        k_capacity = new_cap;
+    }
+
+    lfs::core::Tensor DensifyNScratch::f32_a_view(const size_t n) const {
+        return f32_a.slice(0, 0, n);
+    }
+    lfs::core::Tensor DensifyNScratch::f32_b_view(const size_t n) const {
+        return f32_b.slice(0, 0, n);
+    }
+    lfs::core::Tensor DensifyNScratch::bool_a_view(const size_t n) const {
+        return bool_a.slice(0, 0, n);
+    }
+    lfs::core::Tensor DensifyNScratch::bool_b_view(const size_t n) const {
+        return bool_b.slice(0, 0, n);
+    }
+    lfs::core::Tensor DensifyNScratch::i64_a_view(const size_t k) const {
+        return i64_a.slice(0, 0, k);
+    }
+    lfs::core::Tensor DensifyNScratch::i64_b_view(const size_t k) const {
+        return i64_b.slice(0, 0, k);
+    }
+
     void DensifyChildWorkspace::ensure(
         const size_t K,
         const size_t sh_rest_in,

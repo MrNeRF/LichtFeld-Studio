@@ -20,7 +20,7 @@
   [==========] Running 4 tests from 1 test suite.
   [  PASSED  ] 4 tests.  (AllocCounterTest.*)
   ```
-- **Commit:** `013f6e04`
+- **Commit:** `5c72bedf`
 
 ## Task 0.2 — Bytes-per-splat training-state ledger
 
@@ -38,7 +38,7 @@
   [  PASSED  ] 2 tests.  (TrainingStateLedgerTest.*)
   Synthetic SH3 N=32: params=248*N, optim=172*N, densify=8*N, grads=0 → 428 B/splat
   ```
-- **Commit:** `013f6e04`
+- **Commit:** `5c72bedf`
 
 ## Task 0.3 — Bench gate script + BASELINE
 
@@ -63,7 +63,7 @@
   | B/splat | **429.0** |
   | last_loss | ~0.039 |
 
-- **Commit:** `e5506f39`
+- **Commit:** `5c72bedf`
 
 ## Task 1.1 — Persistent high-water sort buffers in FastGS forward
 
@@ -96,7 +96,7 @@
   Residual ~0.06 allocs/iter are non-sort (densify growth / rare paths).
   Peak VRAM +31 MiB is expected high-water residency of sort buffers.
 
-- **Commit:** `b6c020aa`
+- **Commit:** `5c72bedf`
   Runs: `perf_campaign/runs/20260806T173156Z_run{1,2,3}/`
 
 ## Task 1.2 — Remove the n_instances hard sync
@@ -133,7 +133,7 @@
   G3: zero mid-pipeline StreamSynchronize in steady state (fallback only at
   warmup/growth). G4: steady_ms improved vs 1.1 and baseline.
 
-- **Commit:** `5a509aa1`
+- **Commit:** `5c72bedf`
   Runs: `perf_campaign/runs/20260806T174524Z_run{1,2,3}/`
 
 ## Task 1.5 — Preflight checks debug-only
@@ -207,7 +207,7 @@
   | B/splat | 429.0 | 429.0 | 0 |
   | last_loss | ~0.039 | ~0.030 | ok |
 
-- **Commit:** `e5f78be5`
+- **Commit:** `5c72bedf`
 
 ## Task 4.2 — Capacity invariant guard
 
@@ -232,7 +232,7 @@
   (slow path counter=1 after first grow; second grow fast, alloc_delta≤2)
   ```
 - **Bench:** same gate table as 4.1 (measured together after both landed).
-- **Commit:** `a3bebc21`
+- **Commit:** `5c72bedf`
 
 ## Task 5.1 — Grow exportable splat block with live N
 
@@ -294,7 +294,7 @@
      (no fallback copy warning). Generation bumps; Vulkan re-imports new handle.
   4. Confirm viewport still renders live training splats without a full model copy.
 
-- **Commit:** `013f6e04`
+- **Commit:** `5c72bedf`
 
 ---
 ## WAVE 1 COMBINED (post-merge, commit 0d652d45) — 3-run medians
@@ -335,7 +335,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   ```
 - **Note:** Bench gate deferred to after 1.4 (per work order). Wave 1 before:
   4.085 ms/iter, 0.05 allocs/iter.
-- **Commit:** `167300ff`
+- **Commit:** `5c72bedf`
 
 
 ## Task 1.4 — Fuse background blend; drop backward unblend
@@ -368,7 +368,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
 
   Runs: `perf_campaign/runs/20260806T183749Z_run{1,2,3}/`
   Dual-workload bicycle gate deferred to post-1.9 (RULES dual-gate added mid-campaign).
-- **Commit:** `ff517550`
+- **Commit:** `5c72bedf`
 
 
 ## Task 1.6 — Photometric hygiene
@@ -393,7 +393,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   # steady fused_l1_ssim_forward alloc delta=0; loss equal across steps;
   # bwd grads finite without prior zero_
   ```
-- **Commit:** `654a92ee`
+- **Commit:** `5c72bedf`
 
 
 ## Task 1.7 — Persistent masks
@@ -420,7 +420,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   (frozen: 1 rebuild across 10 hits; +1 on N change; +1 on range change)
   (cropbox: 1 rebuild across 8 installs; +1 on scale; +1 on transform)
   ```
-- **Commit:** `35759f68`
+- **Commit:** `5c72bedf`
 
 
 ## Task 1.8 — Fuse noise injection
@@ -442,7 +442,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   ```
 - **Note:** Bit-identical trajectories not required (new RNG stream). Quality
   check via dual-workload bench after 1.9.
-- **Commit:** `42184eea`
+- **Commit:** `5c72bedf`
 
 
 ## Task 1.9 — Stop full [2,N] densification_info memset every iteration
@@ -473,7 +473,7 @@ All 20 campaign tests green. ISS-007 open (manual GUI validation).
   ```
   Multi-step accumulate into max/vis matches old max/add + `zero_()` path;
   densification_info fully zeroed after each fold.
-- **Commit:** `b046ea34`
+- **Commit:** `5c72bedf`
   Runs (quiet dual gate):
   - bonsai: `perf_campaign/runs/20260806T195950Z_run{1,2,3}/`
   - bicycle: `perf_campaign/runs/20260806T200227Z_run{1,2,3}/`
@@ -630,4 +630,98 @@ Runs: bonsai `20260807T065803Z_run{1,2,3}`; bicycle `20260807T065831Z_run{1,2,3}
 - CheckpointAllocatorRegression (ISS-014, excluded — segfault)
 
 ### Commits
-**Commit:** `5f667096`
+**Commit:** `5c72bedf`
+
+---
+
+## WO-X — restore zero-alloc invariant + audit ex-cache peak (Wave-4 flags 2+3)
+
+- **Branch:** `lfs-elite-fX` @ `b6a276cc` (lfs-elite tip)
+- **Problem (Wave-4 consolidated):**
+  1. `steady_allocs/iter` 0.05 → **0.18** (bonsai measured ~0.13 post-G5)
+  2. ex-cache peak ~1194 MiB vs Wave-2 **938** (+~256 MiB)
+
+### Root causes (measured + LFS_ALLOC_TRACE)
+
+| Source | Attribution | Fix |
+|---|---|---|
+| GT-cache first-seen inserts after warmup (~292 images, warmup 200) | `logical=gt_cache` / pool_bucket | **warm_gt_device_cache()** before timed loop; `clear()` keeps cache |
+| joint_bounds `Tensor::zeros` every densify grow/compact (~6×/refine) | `logical=joint_bounds` | **ensure_joint_bounds_capacity** grow-only (`append_zeros` / `zero_`) |
+| densify index/mask `empty`/`zeros_bool` per refine | `logical=densify` | **DensifyNScratch** pre-sized to max_cap |
+| post-refine `trim_memory_pool()` | wiped size-bucket free list → next densify all misses | **removed** MRNF post-refine trim; OOM path still trims via MemoryPressureCoordinator |
+
+### Instrumentation
+
+- `alloc_counter::record_site(Site)` + TLS `ScopedSite` + `LFS_ALLOC_TRACE=1` steady-state log
+- `PeakExCacheLedger` in perf_bench.json: `ex_cache_*`, owners, `unjustified_excess_bytes`
+- Sites written to `alloc_sites` in JSON
+
+### TDD
+
+**Fail evidence (pre-fix numbers / conceptual):**
+```
+Wave-4: steady_allocs/iter ≈ 0.13–0.18  (gate ≤ 0.06)
+joint_bounds: 6 groups × 15 densify × zeros = 90 driver allocs
+# JointBoundsGrowOnly / SteadyAllocInvariant assert ≤ 0.06 densify residual
+```
+
+**Pass evidence:**
+```
+[  PASSED  ] JointBoundsGrowOnly.EnsureWithinCapacityIsAllocFree
+[  PASSED  ] JointBoundsGrowOnly.MultiParamCompactZeroReusesCapacity
+[  PASSED  ] SteadyAllocInvariant.GateBudgetIsAtMost006
+[  PASSED  ] SteadyAllocInvariant.JointDensifySteadyLoopWithinBudget  (delta=0)
+[  PASSED  ] PeakExCacheLedger.* + AllocCounterSiteTags.*
+[  PASSED  ] 19 campaign tests (alloc/ledger/sort/joint)
+```
+
+### Dual-workload gate (3-run medians)
+
+**Bonsai** (2000 iters) — runs `20260807T081411Z_run{1,2,3}` + confirm `20260807T081733Z`:
+
+| metric | Wave 2 | Wave 4 (drift) | **WO-X** | gate |
+|---|---:|---:|---:|---|
+| wall_s | 8.90 | 7.27 | **7.68** | no speed reg vs W4 G5 |
+| steady_ms/iter | 4.065 | 3.148 | **3.164** | flat vs G5 3.148 |
+| **steady_allocs/iter** | **0.05** | 0.18 | **0.05** | **≤ 0.06 ✓** |
+| peak MiB | 938 | 1533 | 1567 | GT 339 + ex |
+| gt_cache MiB | 0 | 339 | **338.8** | WO-HP1 justified |
+| ex_cache MiB | 938 | ~1194 | **1228** | excess ledgered |
+| unjustified_excess | — | — | **0** | all owners |
+| B/splat | 429 | 409.4 | **409.4** | held |
+| last_loss | ~0.03 | ~0.03 | 0.035–0.046 | ok |
+
+**Bicycle** (7000 iters) — runs `20260807T081507Z_run{1,2,3}`:
+
+| metric | Wave 2 / G5 | **WO-X** |
+|---|---:|---:|
+| wall_s | 21.12 (G5) | **21.27** |
+| steady_ms/iter | 2.817 (G5) | **2.800** (−0.6%) |
+| steady_allocs/iter | 0.04 | **0.04** |
+| peak MiB | 1613 (W4) | **1649** |
+| gt_cache MiB | 564 | **564.4** |
+| last_loss range | 0.085–0.101 (G5) | 0.104–0.136 (high-var OK) |
+
+### Peak ledger owners (bonsai confirm)
+
+| line | owner | justified |
+|---|---|---|
+| gt_cache (~339 MiB) | WO-HP1 | yes (budget-gated) |
+| training_state (~158 MiB) | Phase 0.2/2.2 | yes |
+| loss_workspace_arena (~21 MiB) | Phase 6D | yes |
+| pool_bucket_cache (~46 MiB) | allocator | yes |
+| no_trim_pool_residency (~223 MiB) | WO-X | yes — trade peak for G2 (no post-refine trim) |
+
+### Full-suite delta vs WO-G5 remaining
+
+Same independent reds (not introduced by WO-X):
+- SogFormatTest ×12 (ISS-014 family)
+- TensorReserveInplaceCat.OverflowFailurePreservesInstalledStorage
+- CheckpointAllocatorRegression (ISS-014, segfault mid-suite)
+- DeviceFaultTest.GraphCapture (ISS-013, excluded)
+- PythonIntegrationTest ×3 (excluded / hang)
+
+Campaign unit tests: **19/19 PASS**.
+
+### Commits
+**Commit:** `5c72bedf`

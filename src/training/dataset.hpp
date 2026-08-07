@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/alloc_counter.hpp"
 #include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
@@ -660,6 +661,91 @@ namespace lfs::training {
             sequence_to_camera_.clear();
             next_sequence_id_ = 0;
             prefetch_next_batch();
+        }
+
+        /// WO-X: decode every unique camera once so the GT device cache is full
+        /// before the timed training loop. clear() preserves the cache.
+        /// Call after configure_gt_cache(); then reset() for a clean sampler.
+        void warm_gt_device_cache() {
+            if (shutdown_ || !dataset_ || !loader_) {
+                return;
+            }
+            lfs::core::alloc_counter::ScopedSite site("gt_cache_warm");
+            // Drain any in-flight training prefetches first (preserve GT cache).
+            while (loader_->in_flight_count() > 0) {
+                try {
+                    auto ready = loader_->get();
+                    sequence_to_camera_.erase(ready.sequence_id);
+                    (void)ready;
+                } catch (...) {
+                    break;
+                }
+            }
+            sequence_to_camera_.clear();
+
+            const auto& cams = dataset_->get_cameras();
+            const size_t n = cams.size();
+            if (n == 0) {
+                return;
+            }
+            // Submit unique-path requests with high sequence ids to avoid clashing
+            // with the training sequence counter (reset afterward).
+            constexpr size_t kWarmSeqBase = 1'000'000'000ull;
+            std::vector<lfs::io::ImageRequest> batch;
+            batch.reserve(n);
+            for (size_t i = 0; i < n; ++i) {
+                auto& cam = cams[i];
+                if (!cam) {
+                    continue;
+                }
+                lfs::io::ImageRequest request;
+                request.sequence_id = kWarmSeqBase + i;
+                request.path = cam->image_path();
+                request.params.resize_factor = dataset_->get_resize_factor();
+                request.params.max_width = dataset_->get_max_width();
+                request.params.output_uint8 = !config_.use_16bit_color;
+                if (!cam->image_size_loaded() ||
+                    (dataset_->get_max_width() > 0 &&
+                     (cam->image_height() > dataset_->get_max_width() ||
+                      cam->image_width() > dataset_->get_max_width()))) {
+                    cam->load_image_size(dataset_->get_resize_factor(), dataset_->get_max_width());
+                }
+                batch.push_back(std::move(request));
+            }
+            if (batch.empty()) {
+                return;
+            }
+            // Prefetch in chunks so the pipeline stays bounded.
+            size_t submitted = 0;
+            size_t completed = 0;
+            const size_t total = batch.size();
+            const size_t chunk = std::max<size_t>(1, config_.prefetch_count);
+            while (completed < total) {
+                if (submitted < total && loader_->in_flight_count() < chunk) {
+                    const size_t end = std::min(submitted + chunk, total);
+                    std::vector<lfs::io::ImageRequest> slice(
+                        batch.begin() + static_cast<std::ptrdiff_t>(submitted),
+                        batch.begin() + static_cast<std::ptrdiff_t>(end));
+                    loader_->prefetch(slice);
+                    submitted = end;
+                }
+                try {
+                    auto ready = loader_->get();
+                    (void)ready; // tensor retained in GT cache by maybe_store
+                    ++completed;
+                } catch (const std::exception& e) {
+                    LOG_WARN("[PipelinedDataLoader] GT warm decode failed: {}", e.what());
+                    ++completed;
+                }
+            }
+            // Keep GT cache; drop queues / sequence map for a clean training start.
+            loader_->clear();
+            sequence_to_camera_.clear();
+            next_sequence_id_ = 0;
+            const auto stats = loader_->get_stats();
+            LOG_INFO("[PipelinedDataLoader] GT cache warm: {} device entries / {:.1f} MiB",
+                     stats.gt_device_cache_entries,
+                     stats.gt_device_cache_bytes / (1024.0 * 1024.0));
         }
 
         void shutdown() {

@@ -45,8 +45,17 @@ namespace lfs::training {
         /// Decoded-GT device cache footprint (bytes) for VRAM ledger line.
         void set_gt_cache_bytes(std::size_t bytes);
 
+        /// Loss-workspace arena footprint (Phase 6D) for peak attribution.
+        void set_loss_workspace_bytes(std::size_t bytes);
+
+        /// Densify child workspace high-water (Phase 4.3) for peak attribution.
+        void set_densify_workspace_bytes(std::size_t bytes);
+
         /// Write JSON report to @p path (parent dirs created as needed).
         void finalize(const std::filesystem::path& path);
+
+        /// Build the WO-X peak ex-cache ledger (owners + justified residuals).
+        [[nodiscard]] diagnostics::PeakExCacheLedger peak_ex_cache_ledger() const;
 
         [[nodiscard]] bool started() const noexcept { return started_; }
 
@@ -76,6 +85,8 @@ namespace lfs::training {
         std::size_t peak_cuda_used_ = 0;
         std::size_t peak_cuda_total_ = 0;
         std::size_t gt_cache_bytes_ = 0;
+        std::size_t loss_workspace_bytes_ = 0;
+        std::size_t densify_workspace_bytes_ = 0;
         float last_loss_ = 0.0f;
         std::size_t last_live_splats_ = 0;
         double last_psnr_ = -1.0;

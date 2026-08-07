@@ -60,6 +60,15 @@ namespace lfs::training {
         [[nodiscard]] bool is_joint() const noexcept { return joint_bits != 0; }
     };
 
+    /// WO-X: grow-only joint (u,log_s) bounds table. Reuses capacity via append_zeros
+    /// when possible; only driver-allocates when nb exceeds current capacity.
+    /// When @p zero_all is true (compact path), existing storage is zeroed in place.
+    void ensure_joint_bounds_capacity(lfs::core::Tensor& joint_bounds,
+                                      size_t n_prims,
+                                      size_t capacity_prims,
+                                      lfs::core::Device device,
+                                      bool zero_all = false);
+
     enum class ParamType {
         Means,
         Sh0,

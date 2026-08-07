@@ -4,6 +4,7 @@
 
 #include "adam_optimizer.hpp"
 #include "adam_api.h" // fast_lfs::optimizer::adam_step_raw
+#include "core/alloc_counter.hpp"
 #include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/sh_layout.cuh"
@@ -82,6 +83,49 @@ namespace lfs::training {
                 tensor.stream()));
         }
     } // namespace
+
+    void ensure_joint_bounds_capacity(lfs::core::Tensor& joint_bounds,
+                                      const size_t n_prims,
+                                      const size_t capacity_prims,
+                                      const lfs::core::Device device,
+                                      const bool zero_all) {
+        using namespace joint_adam;
+        const size_t nb = n_bounds_for_prims(n_prims);
+        const size_t nb_cap = n_bounds_for_prims(std::max(n_prims, capacity_prims));
+        if (nb == 0) {
+            joint_bounds = {};
+            return;
+        }
+        lfs::core::alloc_counter::ScopedSite site("joint_bounds");
+        if (joint_bounds.is_valid() && joint_bounds.ndim() == 2 &&
+            joint_bounds.capacity() >= nb) {
+            const size_t cur = joint_bounds.shape()[0];
+            if (cur < nb) {
+                joint_bounds.append_zeros(nb - cur);
+            }
+            if (zero_all) {
+                joint_bounds.zero_();
+            }
+            return;
+        }
+        // Fresh allocation with headroom. Preserve prior block bounds when growing
+        // (unless compact zero-init).
+        lfs::core::Tensor new_bounds;
+        const lfs::core::TensorShape shape({nb, size_t{4}});
+        if (nb_cap > nb && nb_cap > 0) {
+            new_bounds = lfs::core::Tensor::zeros_direct(shape, nb_cap, device);
+        } else {
+            new_bounds = lfs::core::Tensor::zeros(shape, device);
+        }
+        if (!zero_all && joint_bounds.is_valid() && joint_bounds.numel() > 0) {
+            const size_t copy_n = std::min(joint_bounds.numel(), new_bounds.numel());
+            LFS_CUDA_CHECK(cudaMemcpyAsync(
+                new_bounds.ptr<float>(), joint_bounds.ptr<float>(),
+                copy_n * sizeof(float), cudaMemcpyDeviceToDevice,
+                lfs::core::getCurrentCUDAStream()));
+        }
+        joint_bounds = std::move(new_bounds);
+    }
 
     uint64_t AdamOptimizer::slow_path_grow_count() noexcept {
         return g_adam_slow_path_grow_count.load(std::memory_order_relaxed);
@@ -366,17 +410,8 @@ namespace lfs::training {
             }
             // All-zero packed + bounds → free zero moments (no 128 zero-point).
 
-            const size_t n_bounds = n_bounds_for_prims(prim_rows);
-            const size_t bounds_cap = n_bounds_for_prims(prim_capacity);
-            const lfs::core::TensorShape bounds_shape({n_bounds, size_t{4}});
-            if (bounds_cap > n_bounds && bounds_cap > 0) {
-                state.joint_bounds = lfs::core::Tensor::zeros_direct(
-                    bounds_shape, bounds_cap, param.device());
-            } else if (n_bounds > 0) {
-                state.joint_bounds = lfs::core::Tensor::zeros(bounds_shape, param.device());
-            } else {
-                state.joint_bounds = {};
-            }
+            ensure_joint_bounds_capacity(state.joint_bounds, prim_rows, prim_capacity,
+                                         param.device(), /*zero_all=*/false);
             return;
         }
 
@@ -1026,20 +1061,12 @@ namespace lfs::training {
                 if (state.grad.is_valid())
                     state.grad.reserve(target_cap);
             }
-            // Bounds: reallocate to cover ceil(new_N/256) (zero-init new blocks).
-            const size_t nb = joint_adam::n_bounds_for_prims(new_size);
-            if (nb > 0) {
-                auto new_bounds = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({nb, size_t{4}}), param.device());
-                if (state.joint_bounds.is_valid() && state.joint_bounds.numel() > 0) {
-                    const size_t copy_n = std::min(state.joint_bounds.numel(), new_bounds.numel());
-                    LFS_CUDA_CHECK(cudaMemcpyAsync(
-                        new_bounds.ptr<float>(), state.joint_bounds.ptr<float>(),
-                        copy_n * sizeof(float), cudaMemcpyDeviceToDevice,
-                        lfs::core::getCurrentCUDAStream()));
-                }
-                state.joint_bounds = std::move(new_bounds);
-            }
+            // Bounds: grow-only to cover ceil(new_N/256); zero-init new blocks only.
+            const size_t prim_cap =
+                state.capacity > 0 ? state.capacity
+                                   : compute_new_capacity(new_size, new_size);
+            ensure_joint_bounds_capacity(state.joint_bounds, new_size, prim_cap,
+                                         param.device(), /*zero_all=*/false);
             state.size = new_size;
             state.capacity = state.exp_avg.capacity();
             return;
@@ -1189,25 +1216,11 @@ namespace lfs::training {
                 if (state.grad.is_valid())
                     state.grad.reserve(moment_cap);
             }
-            const size_t nb = joint_adam::n_bounds_for_prims(static_cast<size_t>(splat_data_.size()));
-            const size_t nb_cap = joint_adam::n_bounds_for_prims(
-                std::max(static_cast<size_t>(splat_data_.size()),
-                         state.capacity > 0 ? state.capacity : new_size));
-            if (nb > 0) {
-                auto new_bounds = (nb_cap > nb)
-                                      ? lfs::core::Tensor::zeros_direct(
-                                            lfs::core::TensorShape({nb, size_t{4}}), nb_cap, param.device())
-                                      : lfs::core::Tensor::zeros(
-                                            lfs::core::TensorShape({nb, size_t{4}}), param.device());
-                if (state.joint_bounds.is_valid() && state.joint_bounds.numel() > 0) {
-                    const size_t copy_n = std::min(state.joint_bounds.numel(), new_bounds.numel());
-                    LFS_CUDA_CHECK(cudaMemcpyAsync(
-                        new_bounds.ptr<float>(), state.joint_bounds.ptr<float>(),
-                        copy_n * sizeof(float), cudaMemcpyDeviceToDevice,
-                        lfs::core::getCurrentCUDAStream()));
-                }
-                state.joint_bounds = std::move(new_bounds);
-            }
+            const size_t prim_n = static_cast<size_t>(splat_data_.size());
+            const size_t prim_cap =
+                std::max(prim_n, state.capacity > 0 ? state.capacity : new_size);
+            ensure_joint_bounds_capacity(state.joint_bounds, prim_n, prim_cap,
+                                         param.device(), /*zero_all=*/false);
             state.size = new_size;
             state.capacity = state.exp_avg.is_valid() ? state.exp_avg.capacity() : new_size;
             LFS_DEBUG_ASSERT_MSG(state.capacity >= state.size,

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/pipelined_image_loader.hpp"
+#include "core/alloc_counter.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/environment.hpp"
@@ -797,6 +798,7 @@ namespace lfs::io {
 
     void PipelinedImageLoader::maybe_store_gt_tensor(const std::string& key,
                                                      const lfs::core::Tensor& tensor) {
+        lfs::core::alloc_counter::ScopedSite site("gt_cache");
         if (!tensor.is_valid() || tensor.numel() == 0 || key.empty()) {
             return;
         }

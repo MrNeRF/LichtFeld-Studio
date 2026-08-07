@@ -167,7 +167,7 @@ namespace lfs::core {
                 const auto pre_call_state = sample_cuda_pre_call_state(stream);
                 cudaError_t err = cudaMallocAsync(&ptr, bucket_size, stream);
                 if (err == cudaSuccess) {
-                    alloc_counter::record();
+                    alloc_counter::record_site(alloc_counter::Site::PoolBucket);
                     stats_.bucket_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.bucket_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     stats_.bucket_waste.fetch_add(bucket_size - bytes, std::memory_order_relaxed);
@@ -190,7 +190,7 @@ namespace lfs::core {
                 const auto pre_call_state = sample_cuda_pre_call_state(stream);
                 cudaError_t err = cudaMallocAsync(&ptr, bytes, stream);
                 if (err == cudaSuccess) {
-                    alloc_counter::record();
+                    alloc_counter::record_site(alloc_counter::Site::PoolAsync);
                     stats_.async_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.async_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Async, stream);
@@ -555,7 +555,7 @@ namespace lfs::core {
                 return nullptr;
             }
 
-            alloc_counter::record();
+            alloc_counter::record_site(alloc_counter::Site::PoolDirect);
             stats_.direct_allocs.fetch_add(1, std::memory_order_relaxed);
             stats_.direct_bytes.fetch_add(bytes, std::memory_order_relaxed);
             direct_alloc_count_.fetch_add(1, std::memory_order_release);

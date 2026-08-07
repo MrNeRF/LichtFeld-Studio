@@ -365,7 +365,7 @@ namespace lfs::core {
                                     CudaFailureDisposition::LogOnly);
                 return false;
             }
-            alloc_counter::record();
+            alloc_counter::record_site(alloc_counter::Site::Slab);
 
             const size_t num_blocks = slab_size / block_size;
             {
