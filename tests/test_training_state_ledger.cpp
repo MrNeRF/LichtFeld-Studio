@@ -99,6 +99,8 @@ namespace {
 TEST(TrainingStateLedgerTest, SyntheticSh3MatchesFootprintTable) {
     // Force joint codec path (Phase 2.2 default).
     joint_adam::set_joint_codec_enabled_for_testing(true);
+    // Keep SH values fp32 for this baseline footprint table (248 params).
+    sh_value::set_sh_value_quant_enabled_for_testing(false);
 
     auto splat = make_sh3_splat(kN);
     ASSERT_EQ(splat.size(), kN);
@@ -139,10 +141,12 @@ TEST(TrainingStateLedgerTest, SyntheticSh3MatchesFootprintTable) {
     // Must be strictly leaner than legacy 172 B/splat optimizer.
     EXPECT_LT(ledger.optimizer_bytes, kOptimBpsLegacy * kN);
     joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(TrainingStateLedgerTest, LegacyCodecStillReports172) {
     joint_adam::set_joint_codec_enabled_for_testing(false);
+    sh_value::set_sh_value_quant_enabled_for_testing(false);
     auto splat = make_sh3_splat(kN);
     AdamOptimizer optimizer(splat, AdamConfig{});
     optimizer.allocate_gradients();
@@ -150,10 +154,12 @@ TEST(TrainingStateLedgerTest, LegacyCodecStillReports172) {
     EXPECT_EQ(ledger.optimizer_bytes, kOptimBpsLegacy * kN);
     EXPECT_EQ(ledger.total_bytes, kTotalBpsLegacy * kN);
     joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 TEST(TrainingStateLedgerTest, PublishesIntoVramProfiler) {
     joint_adam::set_joint_codec_enabled_for_testing(true);
+    sh_value::set_sh_value_quant_enabled_for_testing(false);
     auto& profiler = VramProfiler::instance();
     profiler.setEnabled(true);
 
@@ -175,6 +181,7 @@ TEST(TrainingStateLedgerTest, PublishesIntoVramProfiler) {
 
     profiler.setEnabled(false);
     joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
+    sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
 }
 
 // Phase 2.1 / WO-G3: after apply_shN_value_quant, params drop shN 192→90 B/splat.
