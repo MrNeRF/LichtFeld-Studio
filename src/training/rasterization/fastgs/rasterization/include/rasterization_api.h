@@ -62,7 +62,7 @@ namespace fast_lfs::rasterization {
         const float* rotations_raw_ptr,        // Device pointer [N*4]
         const float* opacities_raw_ptr,        // Device pointer [N]
         const float* sh_coefficients_0_ptr,    // Device pointer [N*3]
-        const float* sh_coefficients_rest_ptr, // Device pointer to swizzled shN float buffer
+        const float* sh_coefficients_rest_ptr, // Device pointer to swizzled shN (float or u16 bitcast)
         const float* w2c_ptr,                  // Device pointer [4*4]
         const float* cam_position_ptr,         // Device pointer [3]
         float* image_ptr,                      // Device pointer [3*H*W]
@@ -83,7 +83,9 @@ namespace fast_lfs::rasterization {
         float near_plane,
         float far_plane,
         bool mip_filter = false,
-        cudaStream_t stream = nullptr); // nullptr → getCurrentCUDAStream()
+        cudaStream_t stream = nullptr,              // nullptr → getCurrentCUDAStream()
+        const float* sh_value_bounds_ptr = nullptr, // float2 per 256; null = fp32 shN
+        unsigned int sh_value_n_cells = 0);
 
     void release_forward_context(const ForwardContext& forward_ctx);
 

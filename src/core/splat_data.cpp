@@ -679,33 +679,35 @@ namespace lfs::core {
         // zero float swizzled buffer then leave dequant to higher layers when quant is on
         // without bounds (bounds required for correct decode).
         if (_shN.dtype() == DataType::Float16) {
-            // Prefer training-layer dequant when bounds present; for bit-compat export the
-            // trainer binds bounds. Without bounds, return zeros (safe empty rest).
-            Tensor float_sw = Tensor::zeros(
-                TensorShape({sh_swizzled_float_count(n, static_cast<uint32_t>(k))}),
-                dst_device, DataType::Float32);
-            if (_shN_value_bounds.is_valid() && _shN_value_bounds.numel() > 0) {
-                // Lazy include avoided: call through free function registered by training.
-                // Until linked, copy via host roundtrip is unacceptable. Training paths
-                // call decode_shN_u16_to_float4 then undo_reorder. For core-only callers
-                // (transforms), invoke the same CUDA entry via weak linkage.
-                extern void lfs_core_dequant_shN_u16_to_float4(
-                    const void* u16, const float* bounds, float* dst,
-                    std::size_t n_prims, std::uint32_t coeffs_rest);
-                lfs_core_dequant_shN_u16_to_float4(
-                    _shN.data_ptr(),
-                    _shN_value_bounds.ptr<float>(),
-                    float_sw.ptr<float>(),
-                    n,
-                    static_cast<uint32_t>(k));
+            // Host-side dequant (avoids core→training link). Fine for export/I/O paths.
+            Tensor out = Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+            if (!_shN_value_bounds.is_valid() || _shN_value_bounds.numel() == 0) {
+                return out.to(dst_device);
             }
-            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
-            undo_reorder_sh_from_swizzled(float_sw.ptr<float>(),
-                                          out.ptr<float>(),
-                                          n,
-                                          static_cast<uint32_t>(k),
-                                          static_cast<uint32_t>(k));
-            return out;
+            const Tensor codes_cpu = _shN.cpu().contiguous();
+            const Tensor bounds_cpu = _shN_value_bounds.cpu().contiguous();
+            const auto* codes = reinterpret_cast<const std::uint16_t*>(codes_cpu.data_ptr());
+            const auto* bounds = bounds_cpu.ptr<float>();
+            auto* dst = out.ptr<float>();
+            const std::uint32_t n_cells =
+                sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
+            constexpr float kInvQ = 1.0f / 65535.0f;
+            for (size_t p = 0; p < n; ++p) {
+                const size_t bidx = p / 256u;
+                const float lo = bounds[bidx * 2 + 0];
+                const float hi = bounds[bidx * 2 + 1];
+                float* row = dst + p * k * SH_CHANNELS;
+                for (std::uint32_t c = 0; c < n_cells && c < k * SH_CHANNELS; ++c) {
+                    // cell-linear swizzle: block * (n_cells * R) + c * R + lane
+                    const std::uint32_t block = static_cast<std::uint32_t>(p) / kShReorderSize;
+                    const std::uint32_t lane = static_cast<std::uint32_t>(p) % kShReorderSize;
+                    const size_t idx = static_cast<size_t>(block) * n_cells * kShReorderSize +
+                                       static_cast<size_t>(c) * kShReorderSize + lane;
+                    const auto q = codes[idx];
+                    row[c] = lo + (hi - lo) * (static_cast<float>(q) * kInvQ);
+                }
+            }
+            return out.to(dst_device);
         }
         Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
         undo_reorder_sh_from_swizzled(_shN.ptr<float>(),

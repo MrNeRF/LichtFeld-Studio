@@ -5,6 +5,7 @@
 #include "fast_rasterizer.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
@@ -381,11 +382,18 @@ namespace lfs::training {
                 bg_image_ptr != nullptr
                     ? nullptr
                     : (bg_color.is_valid() && bg_color.numel() >= 3 ? bg_color.ptr<float>() : nullptr);
-            // Phase 2.1: bind q16 bounds for decode-in-registers in preprocess.
-            lfs::training::sh_value::bind_shN_quant_for_raster(gaussian_model);
-            const float* shN_ptr = gaussian_model.shN_value_quantized()
-                                       ? static_cast<const float*>(shN.data_ptr())
-                                       : shN.ptr<float>();
+            const bool shN_q16 = gaussian_model.shN_value_quantized();
+            const float* shN_ptr = shN_q16 ? static_cast<const float*>(shN.data_ptr())
+                                           : shN.ptr<float>();
+            const float* shN_bounds_ptr =
+                shN_q16 && gaussian_model.shN_value_bounds().is_valid()
+                    ? gaussian_model.shN_value_bounds().ptr<float>()
+                    : nullptr;
+            const unsigned shN_n_cells =
+                shN_q16 ? static_cast<unsigned>(
+                              lfs::core::sh_value_quant::n_value_cells_per_prim(
+                                  static_cast<uint32_t>(gaussian_model.max_sh_coeffs_rest())))
+                        : 0u;
             forward_ctx = fast_lfs::rasterization::forward_raw(
                 means.ptr<float>(),
                 raw_scales.ptr<float>(),
@@ -413,7 +421,9 @@ namespace lfs::training {
                 near_plane,
                 far_plane,
                 mip_filter,
-                raster_stream);
+                raster_stream,
+                shN_bounds_ptr,
+                shN_n_cells);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(

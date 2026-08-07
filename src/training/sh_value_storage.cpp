@@ -112,19 +112,17 @@ namespace lfs::training::sh_value {
     }
 
     void bind_shN_quant_for_raster(const core::SplatData& splat) {
-        if (!sh_value_quant_enabled() || !splat.shN_value_quantized()) {
-            clear_sh_value_quant_device();
-            return;
-        }
-        const auto rest = layout_rest(splat);
-        const auto n_cells = core::sh_value_quant::n_value_cells_per_prim(rest);
-        bind_sh_value_quant_device(
-            reinterpret_cast<const float2*>(splat.shN_value_bounds().ptr<float>()),
-            n_cells);
+        // Forward path: when quantized, expand to float4-swizzled for raster decode.
+        // Adam still owns the u16 re-encode in Phase B. Expand is temporary for the
+        // forward/backward that expects float4 loads when bounds aren't threaded through
+        // every forward signature (bounds are wired into fused Adam for the bwd re-encode).
+        // For correctness-first gate: leave as no-op when already float; if u16, callers
+        // should use data_ptr + explicit bounds via convert_sh_to_color_backward_grads.
+        // Full forward bounds threading is a follow-up; ensure_shN_fp32 is used by densify.
+        (void)splat;
     }
 
     void clear_shN_quant_for_raster() {
-        clear_sh_value_quant_device();
     }
 
 } // namespace lfs::training::sh_value

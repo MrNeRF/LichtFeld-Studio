@@ -484,6 +484,9 @@ namespace lfs::training {
             ensure_capacity_direct(_splat_data->opacity_raw());
         }
 
+        // Phase 2.1 / WO-G3: convert shN to pad-dropped u16 after float capacity reserve.
+        lfs::training::sh_value::apply_shN_value_quant(*_splat_data);
+
         _optimizer = create_optimizer(*_splat_data, *_params);
         _optimizer->allocate_gradients(_params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
         _scheduler = create_scheduler(*_params, *_optimizer);
@@ -1077,6 +1080,16 @@ namespace lfs::training {
 
     void MRNF::compact_splats(const lfs::core::Tensor& keep_mask) {
         LOG_TIMER("MRNF::compact_splats");
+        // Float-native gather; expand q16 for this window and re-encode if we expanded.
+        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        struct ShNCommitGuard {
+            lfs::core::SplatData* splat;
+            bool expanded;
+            ~ShNCommitGuard() {
+                if (expanded && splat)
+                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
+            }
+        } shn_guard{_splat_data, shN_expanded};
         using namespace lfs::core;
 
         const size_t old_size = static_cast<size_t>(_splat_data->size());
