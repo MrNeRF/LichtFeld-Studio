@@ -113,3 +113,19 @@
 - **Action:** Sync RULES from main when merging tensor work; until then follow
   work-order dual-gate + flock discipline.
 - **Status:** open (docs).
+
+## ISS-010 — Checkpoint save/load IO lives outside `src/io/*` (Worker T scope)
+- **Severity:** medium (IO throughput campaign item blocked by file-set boundary)
+- **Files (actual hot path):**
+  - `src/training/checkpoint.cpp` — `save_checkpoint` uses unbuffered `std::ofstream`
+    + tensor serialize writes (default streambuf; no large `pubsetbuf` / bulk fwrite)
+  - `src/core/checkpoint_format.cpp` — `load_checkpoint_splat_data` / header / params
+    use default `std::ifstream` (no large read buffer, no mmap)
+  - `src/io/loaders/checkpoint_loader.cpp` — thin wrapper only (`load_checkpoint_splat_data`)
+- **Scope note:** Worker T work order is PLY + checkpoint IO, files declared as
+  `src/io/*` only. Real checkpoint binary packing/unpacking is core/training.
+- **Suggested fix (no format change):**
+  1. Large `pubsetbuf` (e.g. 8 MiB) on ofstream/ifstream in training/core paths
+  2. Or mmap + bulk D2H/H2D packing for model tensors (format unchanged)
+  3. Optional parallel attribute pack for the model blob section
+- **Status:** open — filed by Worker T (`lfs-elite-fT`); PLY path optimized in-scope.

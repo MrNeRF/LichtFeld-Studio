@@ -648,7 +648,7 @@ Phase 1 series **DONE**.
 - **Commit:** `786fefb6`
 
 ||||||| 42184eea
-- **Commit:** (this commit)
+- **Commit:** `fdff7181`
 - **Commit:** `42184eea`
 
 ## Task VRAM-audit (lfs-elite-vramfix) — ISS-007 + NVRM + TLS + RAM guard
@@ -754,3 +754,78 @@ re-import; NVRM fix is densify/grow ordering for GUI.
 | Bicycle loss range | 0.098–0.121 | — | 0.079–0.107 (healthy) |
 | B/splat | 429 | 429 | 429 (Phase 2 next) |
 36/36 campaign tests green. NVRM use-after-free ordering bug fixed; TLS release paths added.
+
+---
+
+## Worker T — PLY save/load IO throughput (branch `lfs-elite-fT`)
+
+- **Scope:** `src/io/*` only. Binary PLY format **unchanged**. Checkpoint save/load
+  hot path lives in `src/training/checkpoint.cpp` + `src/core/checkpoint_format.cpp`
+  (outside file set) — filed as **ISS-010**.
+- **Change (PLY write):**
+  1. Fast binary path: parallel SoA→AoS pack (TBB, up to 16 threads) + large
+     buffered `fwrite` (8 MiB `setvbuf`) instead of tinyply's per-property
+     per-vertex stream writes.
+  2. Streaming pack path when body > 512 MiB (chunked, still parallel).
+  3. Legacy tinyply path retained; force with `LFS_PLY_LEGACY_WRITE=1` for A/B.
+  4. Legacy path also gets 8 MiB `pubsetbuf`.
+  5. Load decode arena: `MAX_DECODE_THREADS` 6 → 16 (load already mmap+parallel).
+- **Test:** `tests/test_ply_io_throughput.cpp` — 1M synthetic SH3 splats;
+  save/load wall + MiB/s; means/opacity roundtrip.
+
+### TDD / A-B evidence (1M splat SH3, ~236.5 MiB file, 3 runs each)
+
+**LEGACY (tinyply write) — baseline:**
+
+| run | SAVE wall_s | SAVE MiB/s | LOAD wall_s | LOAD MiB/s |
+|---:|---:|---:|---:|---:|
+| 1 | 1.237 | 191.2 | 0.084 | 2817.9 |
+| 2 | 1.567 | 151.0 | 0.109 | 2164.3 |
+| 3 | 1.774 | 133.3 | 0.111 | 2138.1 |
+| **med** | **1.567** | **~151** | **0.109** | **~2164** |
+
+**FAST (parallel pack + buffered fwrite) — after:**
+
+| run | SAVE wall_s | SAVE MiB/s | LOAD wall_s | LOAD MiB/s |
+|---:|---:|---:|---:|---:|
+| 1 | 0.699 | 338.3 | 0.082 | 2887.4 |
+| 2 | 0.706 | 335.0 | 0.083 | 2855.4 |
+| 3 | 0.704 | 336.0 | 0.083 | 2840.5 |
+| **med** | **0.704** | **~336** | **0.083** | **~2855** |
+
+| metric | before (legacy) | after (fast) | Δ |
+|---|---:|---:|---|
+| SAVE wall | 1.567 s | **0.704 s** | **−55% (2.23×)** |
+| SAVE MiB/s | ~151 | **~336** | **+122%** |
+| LOAD wall | 0.109 s | **0.083 s** | −24% (already mmap-hot) |
+| LOAD MiB/s | ~2164 | **~2855** | +32% |
+| roundtrip max_abs means/opacity | — | ≤1e-5 | pass |
+
+Pass: `PlyIoThroughput.OneMillionSplatSaveLoadRoundtrip` + `PlyErrorTaxonomyTest` 16/16.
+
+### Dual-workload gate (flock, quiet GPU, dirty tree post-change)
+
+**Bonsai** (2000 iters, images_4, max_cap 500k) — runs `workerT_bonsai/20260807T103203Z_run{1,2,3}`:
+
+| metric | Wave 2 | Worker T | Δ |
+|---|---:|---:|---|
+| wall_s (med) | 8.94-ish | **8.96** | flat |
+| steady_ms/iter | 4.065 | **4.096** | +0.8% noise |
+| steady_allocs/iter | 0.05 | **0.05** | 0 |
+| peak VRAM MiB | 938.3 | 1054.7 | device-wide free variance |
+| B/splat | 429.0 | 429.0 | 0 |
+| last_loss | ~0.03–0.04 | 0.030–0.046 | ok |
+
+**Bicycle canary** (7000 iters) — runs `workerT_bicycle/20260807T103238Z_run{1,2,3}`:
+
+| metric | Wave 2 / BASELINE | Worker T | Δ |
+|---|---:|---:|---|
+| wall_s (med) | 31.15 / ~30.4 | **30.32** | ok |
+| steady_ms/iter | 3.208 / 3.290 | **3.226** | flat vs Wave 2 |
+| steady_allocs/iter | 0.04 | **0.04** | 0 |
+| peak VRAM MiB | ~1026–1038 | 1110.7 | variance ok |
+| last_loss range | 0.079–0.121 | **0.082–0.208** | high-variance OK; densify to 500k healthy |
+
+No training speed/quality regression (IO-only change). Checkpoint IO remains ISS-010.
+
+- **Commit:** `fdff7181`
