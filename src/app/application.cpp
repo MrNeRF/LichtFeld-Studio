@@ -8,6 +8,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/crash_handler.hpp"
 #include "core/cuda_version.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -612,9 +613,10 @@ namespace lfs::app {
         }
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-            python::set_user_plugin_loading_enabled(!params->safe_mode);
-            vis::gui::LayoutState::setPersistenceEnabled(!params->safe_mode);
-            vis::input::InputBindings::setPersistenceEnabled(!params->safe_mode);
+            const bool safe_mode = params->safe_mode || lfs::core::environment::flag("LFS_SAFE_MODE", false);
+            python::set_user_plugin_loading_enabled(!safe_mode);
+            vis::gui::LayoutState::setPersistenceEnabled(!safe_mode);
+            vis::input::InputBindings::setPersistenceEnabled(!safe_mode);
             if (const auto paths = lfs::core::UserPaths::resolve()) {
                 const auto reset_file = [&paths](const bool requested, const char* const label,
                                                  const auto& reset) {
@@ -639,11 +641,11 @@ namespace lfs::app {
                 LOG_WARN("Unable to resolve user settings path: {}", paths.error());
             }
 
-            if (params->safe_mode) {
+            if (safe_mode) {
                 LOG_WARN("Safe mode active: user plugin loading is disabled for this process");
             }
 
-            const std::string window_title = params->safe_mode
+            const std::string window_title = safe_mode
                                                  ? "LichtFeld Studio (Safe Mode)"
                                                  : "LichtFeld Studio";
 
