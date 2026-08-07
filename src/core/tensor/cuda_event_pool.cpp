@@ -80,6 +80,20 @@ namespace lfs::core {
         if (from == to) {
             return;
         }
+        // Null stream is the default stream — wait/record still valid, but a
+        // destroyed user stream handle can crash in the driver (ISS-013). Detect
+        // capture status first; any query failure means the stream is unusable.
+        if (from != nullptr) {
+            cudaStreamCaptureStatus capture = cudaStreamCaptureStatusNone;
+            if (cudaStreamIsCapturing(from, &capture) != cudaSuccess) {
+                (void)cudaGetLastError();
+                return; // unusable source stream — skip bridge
+            }
+            if (capture != cudaStreamCaptureStatusNone) {
+                // Cannot record events into an active capture without joining it.
+                return;
+            }
+        }
 
         if (cudaEvent_t edge = CudaEventPool::instance().acquire()) {
             const cudaError_t record_status = cudaEventRecord(edge, from);
@@ -106,6 +120,8 @@ namespace lfs::core {
             }
         }
 
+        if (from == nullptr)
+            return;
         const cudaError_t sync_status = cudaStreamSynchronize(from);
         if (sync_status != cudaSuccess) {
             ensure_cuda_success(

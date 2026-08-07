@@ -600,6 +600,11 @@ namespace lfs::core {
         // the edges — no host sync, no deferred retention.
         void free_routed(void* ptr, const AllocationInfo& info) {
             for (cudaStream_t extra : info.extra_streams) {
+                // Skip null / home-equal extras. Bridging a destroyed capture stream
+                // (ISS-013) can SIGSEGV inside the driver — callers should rehome first,
+                // but free must stay best-effort.
+                if (extra == nullptr || extra == info.home_stream)
+                    continue;
                 bridgeStreams(extra, info.home_stream);
             }
 
