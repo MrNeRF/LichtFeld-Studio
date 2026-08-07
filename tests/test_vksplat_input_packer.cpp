@@ -606,3 +606,141 @@ TEST(VksplatInputPackerTest, SoftDeleteAndUndeleteKeepDeletedMaskStorageStable) 
     EXPECT_EQ(splat->deleted().cpu().to_vector_bool(),
               (std::vector<bool>{false, false, true, false, false}));
 }
+
+// ISS-022: after any N-mutating path with an active deleted mask, the packer
+// contract must hold (contiguous CUDA bool of size N) OR the mask must be
+// invalidated (has_deleted_mask()==false is legal). A single stale frame must
+// not permanently break opacity baking.
+namespace {
+
+    void assertDeletedMaskPackerContract(const SplatData& splat) {
+        const auto n = static_cast<std::size_t>(splat.size());
+        Tensor opacity_dst = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+        auto status = copyRawOpacityToBuffer(splat, opacity_dst.ptr<float>(), opacity_dst.stream());
+        ASSERT_TRUE(status.has_value()) << status.error()
+                                        << " (N=" << n
+                                        << " has_deleted=" << splat.has_deleted_mask()
+                                        << " deleted_numel="
+                                        << (splat.has_deleted_mask() ? splat.deleted().numel() : 0)
+                                        << ")";
+        if (splat.has_deleted_mask()) {
+            const Tensor& deleted = splat.deleted();
+            EXPECT_EQ(deleted.dtype(), DataType::Bool);
+            EXPECT_EQ(deleted.device(), Device::CUDA);
+            EXPECT_TRUE(deleted.is_contiguous());
+            EXPECT_EQ(static_cast<std::size_t>(deleted.numel()), n);
+        }
+    }
+
+    // Grow all row-shaped parameter tensors by n_new rows (simulates densify grow).
+    // Uses cat so the path works even when factory tensors are cuda.direct.
+    void growSplatParamsBy(SplatData& splat, std::size_t n_new) {
+        ASSERT_GT(n_new, 0u);
+        auto grow_rows = [&](Tensor& t) {
+            if (!t.is_valid() || t.numel() == 0 || t.ndim() == 0) {
+                return;
+            }
+            auto dims = t.shape().dims();
+            dims[0] = n_new;
+            Tensor tail = Tensor::zeros(lfs::core::TensorShape(dims), t.device(), t.dtype());
+            t = Tensor::cat({t, tail}, 0);
+        };
+        grow_rows(splat.means());
+        grow_rows(splat.sh0());
+        grow_rows(splat.scaling_raw());
+        grow_rows(splat.rotation_raw());
+        grow_rows(splat.opacity_raw());
+        // shN is swizzled 1D — leave empty/unused in degree-1 synthetic models
+        // when the packer only needs means/opacity for the deleted-mask contract.
+        if (splat.shN().is_valid() && splat.shN().numel() > 0) {
+            // Best-effort: pad with zeros of matching trailing shape if rank>1.
+            if (splat.shN().ndim() >= 2) {
+                grow_rows(splat.shN());
+            }
+        }
+    }
+
+} // namespace
+
+TEST(VksplatInputPackerTest, GrowWithActiveDeletedMaskKeepsPackerContract) {
+    constexpr std::size_t n = 8;
+    constexpr std::size_t n_grow = 3;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/1, /*seed=*/0x1A022u);
+    auto splat = buildSplatData(in);
+
+    const auto mask = Tensor::from_vector(
+                          std::vector<int>{0, 1, 0, 0, 1, 0, 0, 0},
+                          {n},
+                          Device::CUDA)
+                          .to(DataType::Bool);
+    splat->soft_delete(mask);
+    ASSERT_TRUE(splat->has_deleted_mask());
+    assertDeletedMaskPackerContract(*splat);
+
+    // Densify grow of parameter tensors. Production paths must keep deleted()
+    // sized to the new N (or invalidate). Stale mask of old N is the ISS-022
+    // failure mode that freezes the VkSplat viewport.
+    growSplatParamsBy(*splat, n_grow);
+    ASSERT_EQ(static_cast<std::size_t>(splat->size()), n + n_grow);
+
+    // Production contract: writers either grow/rebuild the mask with N or clear it.
+    splat->reconcile_deleted_mask();
+    assertDeletedMaskPackerContract(*splat);
+}
+
+TEST(VksplatInputPackerTest, CompactWithActiveDeletedMaskKeepsPackerContract) {
+    constexpr std::size_t n = 10;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/1, /*seed=*/0x022C0u);
+    auto splat = buildSplatData(in);
+
+    const auto mask = Tensor::from_vector(
+                          std::vector<int>{0, 1, 0, 1, 0, 0, 1, 0, 0, 0},
+                          {n},
+                          Device::CUDA)
+                          .to(DataType::Bool);
+    splat->soft_delete(mask);
+    ASSERT_TRUE(splat->has_deleted_mask());
+    assertDeletedMaskPackerContract(*splat);
+
+    // Hard-compact via apply_deleted (N shrinks; mask must clear or resize).
+    const std::size_t removed = splat->apply_deleted();
+    EXPECT_GT(removed, 0u);
+    EXPECT_LT(static_cast<std::size_t>(splat->size()), n);
+    // apply_deleted permanently removes soft-deleted rows → mask must be gone
+    // or rebuilt to the new N.
+    assertDeletedMaskPackerContract(*splat);
+}
+
+TEST(VksplatInputPackerTest, StaleDeletedMaskDoesNotPermanentlyBreakOpacityCopy) {
+    // Emulates the campaign composition bug: N changed while deleted() stayed
+    // at the pre-mutation size. Packer must soft-skip a stale mask so a later
+    // valid frame can recover (no hard permanent failure / degraded latch).
+    constexpr std::size_t n = 6;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/0, /*seed=*/0x0DELu);
+    auto splat = buildSplatData(in);
+
+    const auto mask = Tensor::from_vector(
+                          std::vector<int>{0, 1, 0, 0, 1, 0},
+                          {n},
+                          Device::CUDA)
+                          .to(DataType::Bool);
+    splat->soft_delete(mask);
+
+    // Grow every row-shaped param so opacity/means stay consistent, but leave
+    // the deleted mask at the pre-growth N (the exact ISS-022 stale state).
+    growSplatParamsBy(*splat, 2);
+    ASSERT_EQ(static_cast<std::size_t>(splat->size()), n + 2);
+    ASSERT_TRUE(splat->has_deleted_mask());
+    ASSERT_NE(static_cast<std::size_t>(splat->deleted().numel()),
+              static_cast<std::size_t>(splat->size()));
+
+    Tensor opacity_dst = Tensor::empty({static_cast<std::size_t>(splat->size())},
+                                       Device::CUDA, DataType::Float32);
+    auto status = copyRawOpacityToBuffer(*splat, opacity_dst.ptr<float>(), opacity_dst.stream());
+    // Soft-skip path must succeed (stale mask treated as absent for this frame).
+    ASSERT_TRUE(status.has_value()) << status.error();
+
+    // After reconcile, the contract holds again (mask resized or cleared).
+    splat->reconcile_deleted_mask();
+    assertDeletedMaskPackerContract(*splat);
+}

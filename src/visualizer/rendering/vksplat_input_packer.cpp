@@ -4,6 +4,7 @@
 
 #include "vksplat_input_packer.hpp"
 
+#include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "rendering/rasterizer/vulkan/src/config.h"
@@ -456,26 +457,45 @@ namespace lfs::vis::vksplat {
 
         if (splat_data.has_deleted_mask()) {
             const Tensor& deleted = splat_data.deleted();
-            if (deleted.dtype() != DataType::Bool ||
-                deleted.device() != Device::CUDA ||
-                !deleted.is_contiguous() ||
-                static_cast<std::size_t>(deleted.numel()) != n) {
-                return std::unexpected(
-                    "VkSplat deleted mask must be a contiguous CUDA bool tensor of size N");
+            const bool contract_ok =
+                deleted.dtype() == DataType::Bool &&
+                deleted.device() == Device::CUDA &&
+                deleted.is_contiguous() &&
+                static_cast<std::size_t>(deleted.numel()) == n;
+            if (!contract_ok) {
+                // ISS-022: a single stale frame (N-mutating densify/compact race)
+                // must not hard-fail permanently. Soft-skip the bake and copy raw
+                // opacity; writers reconcile the mask so subsequent frames recover.
+                // has_deleted_mask() with a broken contract is treated like no mask
+                // for this upload only — never latch degraded mode on a 1-frame race.
+                static thread_local std::uint64_t last_stale_log_version = 0;
+                const auto ver = splat_data.deleted_mask_version();
+                if (ver != last_stale_log_version) {
+                    last_stale_log_version = ver;
+                    LOG_WARN(
+                        "VkSplat soft-skipping stale deleted mask (dtype={}, device={}, "
+                        "contiguous={}, numel={}, N={}); raw opacity used this frame",
+                        static_cast<int>(deleted.dtype()),
+                        deleted.device() == Device::CUDA ? "CUDA" : "CPU",
+                        deleted.is_contiguous(),
+                        deleted.numel(),
+                        n);
+                }
+            } else {
+                if (auto ok = synchronizeInputStream(stream, deleted, "deleted"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+                const cudaError_t status = detail::launchPackOpacityMaskingDeleted(
+                    opacity_raw.ptr<float>(),
+                    deleted.ptr<bool>(),
+                    static_cast<float*>(opacity_dst),
+                    n,
+                    stream);
+                if (status != cudaSuccess) {
+                    return std::unexpected(cudaErrorMessage("launchPackOpacityMaskingDeleted", status));
+                }
+                return {};
             }
-            if (auto ok = synchronizeInputStream(stream, deleted, "deleted"); !ok) {
-                return std::unexpected(ok.error());
-            }
-            const cudaError_t status = detail::launchPackOpacityMaskingDeleted(
-                opacity_raw.ptr<float>(),
-                deleted.ptr<bool>(),
-                static_cast<float*>(opacity_dst),
-                n,
-                stream);
-            if (status != cudaSuccess) {
-                return std::unexpected(cudaErrorMessage("launchPackOpacityMaskingDeleted", status));
-            }
-            return {};
         }
 
         const cudaError_t status = cudaMemcpyAsync(

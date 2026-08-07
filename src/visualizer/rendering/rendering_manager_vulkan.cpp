@@ -3009,9 +3009,12 @@ namespace lfs::vis {
                 vk_req.transform_indices = pc_request.scene.transform_indices.get();
                 vk_req.node_visibility_mask = &pc_request.scene.node_visibility_mask;
                 if (frame_settings.point_cloud_mode && has_visible_gaussian_model &&
-                    model->has_deleted_mask()) {
+                    model->has_deleted_mask() && model->deleted_mask_matches_size()) {
                     vk_req.deleted_mask = &model->deleted();
-                    vk_req.deleted_mask_revision = point_cloud_data_revision_;
+                    // Content revision for the soft-delete mask itself (not the
+                    // point-cloud positions revision). Stale wiring here caused
+                    // silent cache reuse after densify/compact (ISS-022).
+                    vk_req.deleted_mask_revision = model->deleted_mask_version();
                 }
                 vk_req.selection_mask = pc_request.overlay.selection_mask.get();
                 vk_req.preview_selection_mask = pc_request.overlay.transient_mask.mask;
