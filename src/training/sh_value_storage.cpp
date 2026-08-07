@@ -58,7 +58,10 @@ namespace lfs::training::sh_value {
 
         Tensor u16 = Tensor::zeros_direct(TensorShape({n_cells}), capacity_cells, Device::CUDA,
                                           DataType::Float16);
-        Tensor bounds = Tensor::zeros_direct(TensorShape({n_bounds * 2}), n_bounds * 2, Device::CUDA,
+        // Bounds capacity for max_cap so densify growth does not leave a short table.
+        const auto n_bounds_cap = core::sh_value_quant::n_bounds_for_prims(std::max(means_cap, n));
+        Tensor bounds = Tensor::zeros_direct(TensorShape({n_bounds * 2}),
+                                             std::max(n_bounds, n_bounds_cap) * 2, Device::CUDA,
                                              DataType::Float32);
         u16.set_name("splat.shN");
         bounds.set_name("splat.shN_value_bounds");
