@@ -20,6 +20,7 @@ worker outputs in `~/lfs-campaign-out/`.
 | Hard host syncs/iter | 1 | 0 | eliminated |
 | Dataloader wait (was invisible) | ~4.8 ms/img decode | ~0.005 ms | GT device cache |
 | Bicycle final-loss band | 0.098–0.121 | **0.085–0.101** | quality BETTER than baseline |
+| (Validity caveat: numbers verified on the DEFAULT path — FastGS+MRNF, quant ON. See §4 must-fix wave for non-default configs.) | | | |
 | GUI startup reservation (5M cap) | 1183 MiB | 142 MiB | −1.04 GB |
 | PLY save (1M splats) | 1.57 s | 0.70 s | 2.2× |
 
@@ -91,31 +92,44 @@ dequantizes correctly; graph-capture device-fault test fixed.
 
 ## 4. What remains
 
-**In flight right now**
-- WO-WARP-BWD: warp-culling port into `blend_backward` (est. −0.2–0.5 ms/iter further).
-- Adversarial review agent over the full diff → findings become fix orders / known-issues.
+**MUST-FIX WAVE (from the hostile final review, 2026-08-07 — full report:
+`~/lfs-campaign-out/ADVERSARIAL-REVIEW.md`).** The review found a systemic blind spot:
+strategy test suites forced quantization OFF, so the dual-representation state
+(q16 SH codes + joint Adam moments) was only ever exercised through the fused FastGS
+chokepoint. Outside it: 4 blockers + 5 majors of crash/silent-corruption on documented
+configs (legacy-codec fallback flag, gut/gsplat mode, improved_gs_plus strategy,
+checkpoint-after-real-steps), plus a PLY cancel-path UAF and a viewer-grow ordering bug
+(sibling of the fixed NVRM issue). Two fix orders are dispatched and chained:
+- WO-FIX-CODEC (in queue): BL-1/BL-2, MJ-1..MJ-4, bounds-family hardening + the missing
+  quant-ON strategy/checkpoint-after-step test suites.
+- WO-FIX-INTEG (chained): BL-3/BL-4, MJ-5/MJ-6/MJ-12, MJ-14/MJ-15 triage, MN-1/2/4.
+IMPORTANT until these land: the DEFAULT bench path (FastGS+MRNF, quant ON) is validated;
+gut mode, improved_gs_plus, and the LFS_ADAM_LEGACY_CODEC fallback are UNSAFE with
+quantization enabled.
+
+**In flight**
+- WO-WARP-BWD: warp-culling port into blend_backward (est. −0.2–0.5 ms/iter further).
 
 **Queued to review-ready**
-1. Triage adversarial findings (blockers fixed, rest documented).
+1. FIX-CODEC → FIX-INTEG (above) with their new test suites.
 2. Final full-suite + dual-workload bench → final numbers table.
-3. Rebase/merge onto current `origin/master` (small drift, ~1 commit behind at last check).
-4. Publish final rev: `./push-clean.sh <rev>` (owner-run; strips internal material,
-   cleans messages, force-pushes `origin/lfs-elite`).
+3. Rebase onto current origin/master (MN-11; one commit behind, textual overlap with
+   viewport work — do it deliberately).
+4. Publish final rev: `./push-clean.sh <rev>` (owner-run).
 
-**Open issues (documented, non-blocking)**
-- ISS-007: 10-min MANUAL GUI check — zero-copy viewport through a densify grow (owner).
-- ISS-016/017/019: pre-existing reds (video-extractor naming ×3, tensor-reserve overflow
-  edge, python-integration visualizer) — independent of campaign.
-- ncu hardware counters admin-locked; one-liner + reboot documented in profile.sh.
-- allocs/iter ~0.10 vs the pure 0.05 ideal; ex-cache peak audit trail in ISSUES.md.
+**Ship-as-documented (filed with repro recipes from the review)**
+- MJ-7 DLPack-of-expanded-view UAF (Python edge), MJ-8 RowProxy write-on-view,
+  MJ-9 render-thread TLS caches retained for session, MJ-10/MJ-11 gsplat stream/teardown
+  latents, MJ-13 GT cache invisible to OOM pressure, MN-1..MN-13 minors/nits.
+- ISS-007: 10-min MANUAL GUI check (owner). ISS-016/019 pre-existing reds (attribution
+  notes in the review). ncu counters admin-locked (one-liner + reboot in profile.sh docs).
 
-**Deferred backlog (analyst reports, ranked in `~/lfs-campaign-out/analysis/a-backlog.md`)**
-- CUDA graphs (measured ≤0.2 ms upside here; revisit after WARP-BWD shrinks the step,
-  and for Windows/WDDM where launch overhead is far higher).
-- HP-2 parallel host decode (for datasets exceeding the GT-cache budget).
-- Per-band SH bit budgets (16/12) — plan Phase 8, gate G6, worth ~−20 B/splat more.
-- Remaining tensor-lib hardening themes B–F fix-specs; bucket-pool size-class tuning;
-  Vulkan `Splat_2D_AlphaBlend` 128-bit packing audit; ellipse tile-intersect experiment (M).
+**Deferred backlog** (unchanged): graphs (Windows/WDDM case), HP-2 parallel decode,
+per-band SH bits, hardening themes B–F, bucket-pool tuning, Vulkan 128-bit packing audit.
+
+**Process addition:** RULES.md now carries a red-provenance clause — a failing test may be
+called "pre-existing" only with git-log or branch-point-run proof (a campaign-added
+fail-loud guard was misclassified once; MJ-14).
 
 ## 5. Ops runbook
 - Workers: grok CLI via systemd units in `lfs.slice` (MemoryHigh 14G), max 3 concurrent,
