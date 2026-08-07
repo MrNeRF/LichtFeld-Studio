@@ -624,6 +624,16 @@ namespace lfs::training {
             const size_t old_size = static_cast<size_t>(_splat_data->size());
             const size_t n_remaining = static_cast<size_t>(remaining);
 
+            // ISS-023 addendum 2: preflight before multi-param append so a
+            // capacity-ensure failure cannot leave partial row growth.
+            if (!_optimizer->preflight_grow_capacity(n_remaining)) {
+                LOG_ERROR(
+                    "ImprovedGS+ densify aborted: capacity-ensure failed for {} -> {} rows "
+                    "(no params mutated)",
+                    old_size, old_size + n_remaining);
+                return;
+            }
+
             // Get the remaining data
             const auto append_positions = second_positions.slice(0, num_filled, budget_for_alloc);
             const auto append_rotations = second_rotations.slice(0, num_filled, budget_for_alloc);

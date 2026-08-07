@@ -536,6 +536,16 @@ namespace lfs::training {
             }
         }
 
+        // ISS-023 addendum 2: preflight exportable capacity BEFORE parent-row
+        // relocate writes or multi-param gather grow (no torn model on failure).
+        if (!_optimizer->preflight_grow_capacity(static_cast<size_t>(n_new))) {
+            LOG_ERROR(
+                "MCMC densify aborted: capacity-ensure failed for +{} rows "
+                "(no params mutated)",
+                n_new);
+            return 0;
+        }
+
         // Update existing Gaussians first (before concatenation)
         {
             LOG_TIMER("add_new_update_original");
@@ -654,6 +664,13 @@ namespace lfs::training {
             if (_splat_data->opacity_raw().ndim() == 2) {
                 new_opacity_raw = new_opacity_raw.unsqueeze(-1);
             }
+        }
+
+        if (!_optimizer->preflight_grow_capacity(static_cast<size_t>(n_new))) {
+            LOG_ERROR(
+                "MCMC densify (test path) aborted: capacity-ensure failed for +{} rows",
+                n_new);
+            return 0;
         }
 
         // Update existing Gaussians first

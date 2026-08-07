@@ -8,6 +8,7 @@
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
 #include "training/training_setup.hpp"
 
 #include <cuda_runtime.h>
@@ -628,6 +629,80 @@ TEST(SplatExportableStorageTest, MigratePreservesCapacityEnsureUnderMaxCap) {
     EXPECT_GE(ensure_calls, 1);
     EXPECT_GE(model.means_raw().capacity(), kNeed);
     EXPECT_EQ(model.means_raw().external_storage_kind(), "splat.exportable");
+}
+
+// ISS-023 addendum 2: when capacity-ensure fails, densify must not leave a
+// partially-grown model (owner saw loss spike on torn Means vs Scaling).
+// preflight_grow_capacity + abort-before-mutation is the contract under test.
+TEST(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
+    require_cuda();
+
+    constexpr std::size_t kInitialCap = 64;
+    constexpr std::size_t kLiveN = 32;
+    constexpr std::size_t kNeed = 200; // past initial commit → ensure required
+    constexpr int kShDegree = 0;
+
+    auto storage_result = SplatExportableStorage::create(kInitialCap, kShDegree, 0, kInitialCap);
+    if (!storage_result) {
+        FAIL() << storage_result.error();
+    }
+    // reservedCapacity == kInitialCap: growth past initial commit cannot expand
+    // the virtual reservation, so ensure fails (pathological forced failure).
+    auto storage = std::make_shared<SplatExportableStorage>(std::move(*storage_result));
+    auto allocator = storage->make_allocator();
+
+    Tensor means = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.means");
+    Tensor scaling = allocator(TensorShape({kLiveN, 3}), kInitialCap, DataType::Float32, "SplatData.scaling");
+    Tensor rotation = allocator(TensorShape({kLiveN, 4}), kInitialCap, DataType::Float32, "SplatData.rotation");
+    Tensor opacity = allocator(TensorShape({kLiveN, 1}), kInitialCap, DataType::Float32, "SplatData.opacity");
+    Tensor sh0 = allocator(TensorShape({kLiveN, 1, 3}), kInitialCap, DataType::Float32, "SplatData.sh0");
+    Tensor shN;
+
+    SplatData model(kShDegree,
+                    std::move(means),
+                    std::move(sh0),
+                    std::move(shN),
+                    std::move(scaling),
+                    std::move(rotation),
+                    std::move(opacity),
+                    1.0f,
+                    SplatData::ShNLayout::Swizzled);
+    model.set_tensor_allocator(storage->make_allocator());
+
+    int ensure_calls = 0;
+    model.set_capacity_ensure([&](std::size_t needed_rows) {
+        ++ensure_calls;
+        // Force failure: never grow (simulates VRAM OOM / reservation ceiling).
+        return model.means_raw().capacity() >= needed_rows;
+    });
+
+    lfs::training::AdamOptimizer opt(model, lfs::training::AdamConfig{});
+    const std::size_t size_before = static_cast<std::size_t>(model.size());
+    const std::size_t means_cap_before = model.means_raw().capacity();
+    const std::size_t scaling_cap_before = model.scaling_raw().capacity();
+    const std::size_t means_rows_before = model.means_raw().shape()[0];
+    const std::size_t scaling_rows_before = model.scaling_raw().shape()[0];
+
+    const size_t n_new = kNeed - kLiveN;
+    ASSERT_FALSE(opt.preflight_grow_capacity(n_new))
+        << "forced failure must reject preflight";
+    EXPECT_GE(ensure_calls, 1);
+
+    // No param mutation: row counts and capacities unchanged.
+    EXPECT_EQ(static_cast<std::size_t>(model.size()), size_before);
+    EXPECT_EQ(model.means_raw().shape()[0], means_rows_before);
+    EXPECT_EQ(model.scaling_raw().shape()[0], scaling_rows_before);
+    EXPECT_EQ(model.means_raw().capacity(), means_cap_before);
+    EXPECT_EQ(model.scaling_raw().capacity(), scaling_cap_before);
+
+    // add_new_params must also throw without mutating when ensure fails.
+    auto new_means = Tensor::zeros({n_new, 3}, Device::CUDA);
+    EXPECT_THROW(
+        opt.add_new_params(lfs::training::ParamType::Means, new_means, true),
+        std::runtime_error);
+    EXPECT_EQ(model.means_raw().shape()[0], means_rows_before);
+    EXPECT_EQ(model.scaling_raw().shape()[0], scaling_rows_before);
+    EXPECT_EQ(static_cast<std::size_t>(model.size()), size_before);
 }
 
 // MJ-12 storage-layer contract: growExportableDeviceBlock must only run after

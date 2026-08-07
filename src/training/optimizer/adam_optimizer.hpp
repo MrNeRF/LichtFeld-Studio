@@ -168,6 +168,11 @@ namespace lfs::training {
         // MCMC operations (atomically update params + optimizer state)
         void add_new_params(ParamType type, const lfs::core::Tensor& new_values, bool validate = false);
         void add_new_params_gather(ParamType type, const lfs::core::Tensor& indices);
+
+        /// ISS-023 addendum 2: preflight exportable capacity for a densify grow of
+        /// `n_new` rows BEFORE any free_mask / param mutation. Returns false when
+        /// capacity-ensure fails so callers can abort with zero torn state.
+        [[nodiscard]] bool preflight_grow_capacity(size_t n_new);
         void relocate_params_at_indices_gpu(ParamType type, const int64_t* indices_device, size_t n_indices);
 
         // Low-level state manipulation

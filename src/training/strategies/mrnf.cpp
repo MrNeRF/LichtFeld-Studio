@@ -1128,81 +1128,92 @@ namespace lfs::training {
         const size_t n_append = K - append_start;
         if (n_append > 0) {
             const size_t old_size = static_cast<size_t>(_splat_data->size());
-            // Grow free_mask bookkeeping first, then params (size()), then the
-            // deleted mask — never leave deleted.numel() != size() mid-grow
-            // (ISS-022: viewer packer rejects stale masks and freezes the viewport).
-            if (_free_mask.is_valid() && _free_mask.numel() < old_size + n_append) {
-                _free_mask.reserve(old_size + n_append);
-                _free_mask.append_zeros(n_append);
-            }
-
-            auto append_means = child_means.slice(0, append_start, K);
-            auto append_sh0 = child_sh0.slice(0, append_start, K);
-            Tensor append_shN;
-            if (use_shN) {
-                append_shN = child_shN.slice(0, append_start, K);
-            }
-            auto append_scaling = child_log_scales.slice(0, append_start, K);
-            auto append_rotation = child_rotations.slice(0, append_start, K);
-            auto append_opacity = child_raw_opacities.slice(0, append_start, K);
-            if (_splat_data->opacity_raw().ndim() == 2) {
-                append_opacity = append_opacity.unsqueeze(-1);
-            }
-
-            _optimizer->add_new_params(ParamType::Means, append_means, true);
-            _optimizer->add_new_params(ParamType::Sh0, append_sh0, true);
-
-            if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
-                const size_t new_size = old_size + n_append;
-                const size_t needed_floats = sh_swizzled_float_count(new_size, layout_rest);
-                auto& shN_buf = _splat_data->shN();
-                // Grow capacity to means/max_cap headroom so post-densify re-encode is not exact-N.
-                const size_t means_cap = _splat_data->means().is_valid()
-                                             ? std::max(_splat_data->means().capacity(), new_size)
-                                             : new_size;
-                const size_t cap_floats = sh_swizzled_float_count(means_cap, layout_rest);
-                if (shN_buf.capacity() < needed_floats) {
-                    const size_t dest_cap = std::max(needed_floats, cap_floats);
-                    auto grown = Tensor::zeros_direct(
-                        TensorShape({static_cast<size_t>(shN_buf.numel())}), dest_cap,
-                        shN_buf.device(), shN_buf.dtype());
-                    if (shN_buf.numel() > 0) {
-                        // Sync copy before move-free of source (async UAF → illegal address).
-                        LFS_CUDA_CHECK(cudaMemcpy(grown.data_ptr(), shN_buf.data_ptr(),
-                                                  shN_buf.bytes(), cudaMemcpyDeviceToDevice));
-                    }
-                    grown.set_name(shN_buf.name().empty() ? "splat.shN" : shN_buf.name());
-                    shN_buf = std::move(grown);
-                }
-                if (shN_buf.numel() < needed_floats) {
-                    shN_buf.append_zeros(needed_floats - shN_buf.numel());
-                }
-            }
-
-            if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
-                shN_swizzled_gather_from_linear(
-                    _splat_data->shN().ptr<float>(),
-                    old_size,
-                    append_shN.ptr<float>(),
-                    n_append,
-                    layout_rest,
-                    layout_rest);
-                _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
+            // ISS-023 addendum 2: capacity-ensure MUST succeed before free_mask or
+            // any param mutates. A mid-commit throw left torn Means/Sh0 vs Scaling
+            // and free_mask past size() → loss spikes then abort.
+            if (!_optimizer->preflight_grow_capacity(n_append)) {
+                LOG_ERROR(
+                    "MRNF densify aborted: capacity-ensure failed for {} -> {} rows "
+                    "(no params mutated)",
+                    old_size, old_size + n_append);
+                // Skip append; free-slot fill above (if any) already wrote in place.
             } else {
-                _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
-            }
-            _optimizer->add_new_params(ParamType::Scaling, append_scaling, true);
-            _optimizer->add_new_params(ParamType::Rotation, append_rotation, true);
-            _optimizer->add_new_params(ParamType::Opacity, append_opacity, true);
-            // Append live (false) deleted rows now that size() has advanced.
-            append_live_deleted_rows(*_splat_data, _free_mask, n_append);
-            if (_splat_data->has_deleted_mask() &&
-                !_splat_data->deleted_mask_matches_size()) {
-                _splat_data->reconcile_deleted_mask();
-            }
-            if (_splat_data->has_frozen_ranges()) {
-                apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
-            }
+                // Grow free_mask bookkeeping first, then params (size()), then the
+                // deleted mask — never leave deleted.numel() != size() mid-grow
+                // (ISS-022: viewer packer rejects stale masks and freezes the viewport).
+                if (_free_mask.is_valid() && _free_mask.numel() < old_size + n_append) {
+                    _free_mask.reserve(old_size + n_append);
+                    _free_mask.append_zeros(n_append);
+                }
+
+                auto append_means = child_means.slice(0, append_start, K);
+                auto append_sh0 = child_sh0.slice(0, append_start, K);
+                Tensor append_shN;
+                if (use_shN) {
+                    append_shN = child_shN.slice(0, append_start, K);
+                }
+                auto append_scaling = child_log_scales.slice(0, append_start, K);
+                auto append_rotation = child_rotations.slice(0, append_start, K);
+                auto append_opacity = child_raw_opacities.slice(0, append_start, K);
+                if (_splat_data->opacity_raw().ndim() == 2) {
+                    append_opacity = append_opacity.unsqueeze(-1);
+                }
+
+                _optimizer->add_new_params(ParamType::Means, append_means, true);
+                _optimizer->add_new_params(ParamType::Sh0, append_sh0, true);
+
+                if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
+                    const size_t new_size = old_size + n_append;
+                    const size_t needed_floats = sh_swizzled_float_count(new_size, layout_rest);
+                    auto& shN_buf = _splat_data->shN();
+                    // Grow capacity to means/max_cap headroom so post-densify re-encode is not exact-N.
+                    const size_t means_cap = _splat_data->means().is_valid()
+                                                 ? std::max(_splat_data->means().capacity(), new_size)
+                                                 : new_size;
+                    const size_t cap_floats = sh_swizzled_float_count(means_cap, layout_rest);
+                    if (shN_buf.capacity() < needed_floats) {
+                        const size_t dest_cap = std::max(needed_floats, cap_floats);
+                        auto grown = Tensor::zeros_direct(
+                            TensorShape({static_cast<size_t>(shN_buf.numel())}), dest_cap,
+                            shN_buf.device(), shN_buf.dtype());
+                        if (shN_buf.numel() > 0) {
+                            // Sync copy before move-free of source (async UAF → illegal address).
+                            LFS_CUDA_CHECK(cudaMemcpy(grown.data_ptr(), shN_buf.data_ptr(),
+                                                      shN_buf.bytes(), cudaMemcpyDeviceToDevice));
+                        }
+                        grown.set_name(shN_buf.name().empty() ? "splat.shN" : shN_buf.name());
+                        shN_buf = std::move(grown);
+                    }
+                    if (shN_buf.numel() < needed_floats) {
+                        shN_buf.append_zeros(needed_floats - shN_buf.numel());
+                    }
+                }
+
+                if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
+                    shN_swizzled_gather_from_linear(
+                        _splat_data->shN().ptr<float>(),
+                        old_size,
+                        append_shN.ptr<float>(),
+                        n_append,
+                        layout_rest,
+                        layout_rest);
+                    _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
+                } else {
+                    _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
+                }
+                _optimizer->add_new_params(ParamType::Scaling, append_scaling, true);
+                _optimizer->add_new_params(ParamType::Rotation, append_rotation, true);
+                _optimizer->add_new_params(ParamType::Opacity, append_opacity, true);
+                // Append live (false) deleted rows now that size() has advanced.
+                append_live_deleted_rows(*_splat_data, _free_mask, n_append);
+                if (_splat_data->has_deleted_mask() &&
+                    !_splat_data->deleted_mask_matches_size()) {
+                    _splat_data->reconcile_deleted_mask();
+                }
+                if (_splat_data->has_frozen_ranges()) {
+                    apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
+                }
+            } // preflight_grow_capacity succeeded
         }
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",

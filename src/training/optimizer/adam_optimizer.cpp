@@ -1590,6 +1590,29 @@ namespace lfs::training {
         return (it != states_.end()) ? it->second.step_count : 0;
     }
 
+    bool AdamOptimizer::preflight_grow_capacity(const size_t n_new) {
+        if (n_new == 0) {
+            return true;
+        }
+        auto& means = get_param(ParamType::Means);
+        if (!means.is_valid()) {
+            return false;
+        }
+        const size_t old_size = means.shape()[0];
+        const size_t new_size = old_size + n_new;
+        if (means.capacity() >= new_size) {
+            return true;
+        }
+        if (!means.is_external_storage()) {
+            // Non-exportable paths fall back to Tensor::cat in add_new_params;
+            // no capacity-ensure gate to fail.
+            return true;
+        }
+        // Grow/rebind the shared exportable block once before any densify
+        // mutation. Failure must leave row counts untouched (ISS-023 addendum 2).
+        return splat_data_.ensure_param_capacity(new_size);
+    }
+
     void AdamOptimizer::add_new_params(ParamType type, const lfs::core::Tensor& new_values, const bool validate) {
         auto& param = get_param(type);
 
@@ -1616,7 +1639,9 @@ namespace lfs::training {
         const size_t new_size = old_size + n_new;
         if (param.capacity() < new_size && param.is_external_storage()) {
             // Phase 5.1: grow exportable block (and rebind) instead of cat, which
-            // would orphan the Vulkan zero-copy mapping.
+            // would orphan the Vulkan zero-copy mapping. Prefer preflight_grow_capacity
+            // at densify entry so this path is a last-resort safety net that still
+            // throws BEFORE mutating this param (no partial append on failure).
             if (!splat_data_.ensure_param_capacity(new_size)) {
                 throw std::runtime_error(std::format(
                     "add_new_params: external storage capacity {} < needed {} and "
