@@ -31,6 +31,15 @@ namespace lfs::training::sh_value {
             return false;
         if (shN.dtype() == DataType::Float16)
             return false; // already quantized
+        // Viewer/exportable interop is float4-layout sized; keep fp32 there.
+        // Headless training (zeros_direct / cuda.direct) is the VRAM prize path.
+        if (shN.is_external_storage()) {
+            const auto kind = shN.external_storage_kind();
+            if (kind == "vulkan_external_buffer" || kind == "splat.exportable") {
+                LOG_DEBUG("SH value quant skipped: shN is exportable/viewer-backed ({})", kind);
+                return false;
+            }
+        }
 
         const auto n = static_cast<std::size_t>(splat.size());
         const auto rest = layout_rest(splat);
@@ -112,13 +121,8 @@ namespace lfs::training::sh_value {
     }
 
     void bind_shN_quant_for_raster(const core::SplatData& splat) {
-        // Forward path: when quantized, expand to float4-swizzled for raster decode.
-        // Adam still owns the u16 re-encode in Phase B. Expand is temporary for the
-        // forward/backward that expects float4 loads when bounds aren't threaded through
-        // every forward signature (bounds are wired into fused Adam for the bwd re-encode).
-        // For correctness-first gate: leave as no-op when already float; if u16, callers
-        // should use data_ptr + explicit bounds via convert_sh_to_color_backward_grads.
-        // Full forward bounds threading is a follow-up; ensure_shN_fp32 is used by densify.
+        // Bounds are passed explicitly through forward_raw / fused Adam (no device
+        // constant table). Keep as no-op so densify bridges stay the only materialize path.
         (void)splat;
     }
 

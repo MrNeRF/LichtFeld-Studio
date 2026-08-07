@@ -413,6 +413,15 @@ namespace lfs::training {
         LOG_TIMER("MCMC::add_new_gs");
         LFS_TRACE("kernel.densify.duplicate");
         using namespace lfs::core;
+        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        struct ShNCommitGuard {
+            lfs::core::SplatData* splat;
+            bool expanded;
+            ~ShNCommitGuard() {
+                if (expanded && splat)
+                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
+            }
+        } shn_guard{_splat_data, shN_expanded};
 
         if (!_optimizer) {
             LOG_ERROR("MCMC::add_new_gs: optimizer not initialized");

@@ -725,6 +725,12 @@ namespace lfs::core {
             return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
         }
 
+        // Quantized path: host dequant to [N,K,3] on CPU (export/checkpoint bit-compat).
+        if (_shN.is_valid() && _shN.dtype() == DataType::Float16) {
+            Tensor t = shN_canonical();
+            return t.device() == Device::CPU ? t : t.cpu();
+        }
+
         Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
         if (!_shN.is_valid() || _shN.numel() == 0) {
             out.zero_();

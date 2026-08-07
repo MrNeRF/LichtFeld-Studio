@@ -4,10 +4,12 @@
 
 #include "gsplat_rasterizer.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "gsplat/Ops.h"
+#include "lfs/training/sh_value_quant_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <array>
 #include <cassert>
@@ -94,7 +96,7 @@ namespace lfs::training {
             auto scales = ensure_contiguous(gaussian_model.get_scaling());    // [N, 3] exp applied
             auto quats = ensure_contiguous(gaussian_model.get_rotation());    // [N, 4] normalized
             auto sh0 = ensure_contiguous(gaussian_model.sh0());               // [N, 1, 3]
-            auto shN = ensure_contiguous(gaussian_model.shN());               // swizzled 1D SH-rest buffer
+            auto shN = ensure_contiguous(gaussian_model.shN());               // swizzled 1D SH-rest (float or q16)
             const uint32_t sh_degree = static_cast<uint32_t>(gaussian_model.get_active_sh_degree());
 
             // Squeeze opacities if needed
@@ -141,7 +143,31 @@ namespace lfs::training {
             const float* scales_ptr = scales.ptr<float>();
             const float* quats_ptr = quats.ptr<float>();
             const float* sh0_ptr = sh0.ptr<float>();
-            const float* shN_ptr = (sh_degree > 0 && shN.is_valid() && shN.numel() > 0) ? shN.ptr<float>() : nullptr;
+            // Phase 2.1: gsplat is float-native — dequant q16 shN into a temporary float4
+            // buffer (does not mutate resident storage). FastGS path decodes in-registers.
+            core::Tensor shN_dequant_temp;
+            const float* shN_ptr = nullptr;
+            if (sh_degree > 0 && shN.is_valid() && shN.numel() > 0) {
+                if (gaussian_model.shN_value_quantized() &&
+                    gaussian_model.shN_value_bounds().is_valid()) {
+                    const auto n_prims = static_cast<std::size_t>(gaussian_model.size());
+                    const auto rest =
+                        static_cast<std::uint32_t>(gaussian_model.max_sh_coeffs_rest());
+                    const auto n_floats = core::sh_swizzled_float_count(n_prims, rest);
+                    shN_dequant_temp = core::Tensor::zeros(
+                        core::TensorShape({n_floats}), core::Device::CUDA, core::DataType::Float32);
+                    lfs::training::sh_value::decode_shN_u16_to_float4(
+                        reinterpret_cast<const std::uint16_t*>(shN.data_ptr()),
+                        gaussian_model.shN_value_bounds().ptr<float>(),
+                        shN_dequant_temp.ptr<float>(),
+                        n_prims,
+                        rest,
+                        fwd_stream);
+                    shN_ptr = shN_dequant_temp.ptr<float>();
+                } else {
+                    shN_ptr = shN.ptr<float>();
+                }
+            }
 
             // Background color and image pointers
             // bg_color and bg_image are mutually exclusive - use one or the other
