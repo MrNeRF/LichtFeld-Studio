@@ -1114,3 +1114,40 @@ Loader shutdown (bicycle run3): `device=194 entries/564.4 MiB hits=6809 inserts=
 - `perf_campaign/bench.sh`
 
 **Commit:** `353cdfb0`
+
+## FIX-2.2 F1 — SH Adam before geometry + launch_bounds(256,3)
+
+- **Branch:** `lfs-elite`
+- **Change:** In `preprocess_backward_cu`:
+  1. Close visible branch after `convert_sh_to_color_backward_grads` (fill
+     sh0/shN grads only; save `dL_dmean3d_from_color`).
+  2. Run sh0 + shN Adam for ALL threads (joint block-bounds) so
+     `shN_grads[15]×3` + joint `us_u/us_s[48]` die before covariance/EWA.
+  3. Reopen visible for geometry; Phase D Adam is means/rot/scale/opacity only.
+  4. `__launch_bounds__(block_size_preprocess_backward, 3)` (sweep 2..4; pick 3).
+- **Task 2.1 verify (worker G, default OFF):** ShValueCodecTest 6/6 PASS;
+  JointAdamCodecTest 6/6 PASS. No extension.
+
+### Kernel timing (bonsai late window iters 1600–1900, nsys)
+
+| | preprocess_backward_cu avg µs | Δ |
+|---|---:|---:|
+| before (63aa08c6-bonsai-late / tip-ish) | **906.3** | — |
+| after F1 (`fix22-f1-bonsai-late`) | **622.0** | **−284.3 (−31.4%)** |
+| parent no-codec (487d5c2b late) | 450.0 | residual +172 µs |
+
+Profile: `perf_campaign/profiles/fix22-f1-bonsai-late/summary.md`
+
+### Bonsai gate (3-run median, joint codec ON, GT-cache default ON)
+
+| metric | Wave-2.2 (63aa08c6) | after F1 | gate |
+|---|---:|---:|:---|
+| wall_s | 9.67 | **7.22** | — |
+| steady_ms/iter | 4.287 | **3.148** | ≤4.065 **PASS** |
+| B/splat | 409.4 | **409.4** | flat **PASS** |
+| last_loss | 0.030–0.035 | 0.028–0.039 | ok |
+| peak VRAM MiB | 930 | 1512 (GT cache) | n/a |
+
+Runs: `perf_campaign/runs/fix22_f1_bonsai/`
+
+- **Commit:** (this)

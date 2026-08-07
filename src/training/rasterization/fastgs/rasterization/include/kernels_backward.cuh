@@ -89,8 +89,10 @@ namespace fast_lfs::rasterization::kernels::backward {
         return make_float4(clamp_grad(g.x), clamp_grad(g.y), clamp_grad(g.z), clamp_grad(g.w));
     }
 
+    // FIX-2.2 F1: minBlocks=3 budgets registers so shN Adam no longer lives across
+    // the geometry backward (sweep 2..4; 3 is the measured default).
     template <bool MIP_FILTER, int ACTIVE_SH_BASES>
-    __global__ void preprocess_backward_cu(
+    __global__ void __launch_bounds__(config::block_size_preprocess_backward, 3) preprocess_backward_cu(
         const float3* __restrict__ means,
         const float3* __restrict__ raw_scales,
         const float4* __restrict__ raw_rotations,
@@ -160,8 +162,10 @@ namespace fast_lfs::rasterization::kernels::backward {
             }
         }
 
-        // Grad buffers for unified Adam (joint block-bounds needs all threads to
-        // hit the same adam_step_row sequence — no early returns before Adam).
+        // Grad buffers. Joint block-bounds needs all threads to hit the same
+        // adam_step_row sequence — no early returns before Adam sections.
+        // FIX-2.2 F1: sh0/shN Adam runs immediately after SH-grad fill so
+        // shN_grads[15]×3 + joint us_u/us_s do not live across covariance/EWA.
         float mean_grads[3] = {0.0f, 0.0f, 0.0f};
         float rotation_grads[4] = {0.0f, 0.0f, 0.0f, 0.0f};
         float sh0_grads[3] = {0.0f, 0.0f, 0.0f};
@@ -171,12 +175,14 @@ namespace fast_lfs::rasterization::kernels::backward {
 #pragma unroll
         for (int i = 0; i < 15; ++i)
             shN_grads[i] = make_float3(0.0f, 0.0f, 0.0f);
+        float3 dL_dmean3d_from_color = make_float3(0.0f, 0.0f, 0.0f);
 
         const bool invisible = in_range && primitive_n_touched_tiles[primitive_idx] == 0;
         const bool visible = in_range && !invisible;
 
+        // ---- Phase A: SH backward grads only (close branch before geometry) ----
         if (invisible) {
-            // Reg-only grads; geometry/SH get pure momentum decay (zero grads).
+            // Reg-only scale/opacity; SH/means/rot get pure momentum decay (zeros).
             const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
             scale_grads[0] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base);
             scale_grads[1] = scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1);
@@ -184,17 +190,28 @@ namespace fast_lfs::rasterization::kernels::backward {
             add_flatten_regularization_grads(fused_adam, fused_adam.scaling, scale_base, scale_grads);
             opacity_grads[0] = opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx));
         } else if (visible) {
-            // load 3d mean
             const float3 mean3d = means[primitive_idx];
-
-            // sh evaluation backward (grads only — Adam applied in unified section)
-            const float3 dL_dmean3d_from_color = convert_sh_to_color_backward_grads<ACTIVE_SH_BASES>(
+            dL_dmean3d_from_color = convert_sh_to_color_backward_grads<ACTIVE_SH_BASES>(
                 sh_coefficients_rest, grad_color_helper,
                 mean3d, cam_position[0],
                 primitive_idx,
                 sh_layout_slots,
                 sh0_grads,
                 shN_grads);
+        } // close visible — SH Adam next kills shN live range before geometry
+
+        // ---- Phase B: SH Adam (ALL threads — joint block-bounds reduction) ----
+        adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        if constexpr (ACTIVE_SH_BASES > 1) {
+            constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
+                                                                                         : 3u;
+            apply_shN_grads_packed(fused_adam, primitive_idx, shN_grads, N_SLOTS, sh_layout_slots);
+        }
+        // sh0_grads / shN_grads are dead from here on (compiler can free them).
+
+        // ---- Phase C: reopen visible for covariance / EWA / means-rot-scale-opa ----
+        if (visible) {
+            const float3 mean3d = means[primitive_idx];
 
             const float4 w2c_r3 = w2c[2];
             const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
@@ -362,7 +379,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 atomicAdd(&grad_w2c[2].z, dL_dmean3d_cam.z * mean3d.z);
             }
 
-            // 3d mean gradient from splatting
+            // 3d mean gradient from splatting + SH color path (saved from Phase A)
             const float3 dL_dmean3d_from_splatting = make_float3(
                 w2c_r1.x * dL_dmean3d_cam.x + w2c_r2.x * dL_dmean3d_cam.y + w2c_r3.x * dL_dmean3d_cam.z,
                 w2c_r1.y * dL_dmean3d_cam.x + w2c_r2.y * dL_dmean3d_cam.y + w2c_r3.y * dL_dmean3d_cam.z,
@@ -453,19 +470,13 @@ namespace fast_lfs::rasterization::kernels::backward {
                 densification_info[primitive_idx] += 1.0f;
                 densification_info[n_primitives + primitive_idx] += length(dL_dmean2d * make_float2(0.5f * w, 0.5f * h));
             }
-        } // visible
+        } // visible geometry
 
-        // Unified Adam — all threads participate (joint block-bounds reduction).
+        // ---- Phase D: geometry Adam only (sh0/shN already applied in Phase B) ----
         adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        if constexpr (ACTIVE_SH_BASES > 1) {
-            constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
-                                                                                         : 3u;
-            apply_shN_grads_packed(fused_adam, primitive_idx, shN_grads, N_SLOTS, sh_layout_slots);
-        }
     }
 
     struct BlendBackwardAccum {
