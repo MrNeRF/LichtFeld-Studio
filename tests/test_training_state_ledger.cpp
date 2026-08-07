@@ -4,8 +4,8 @@
 /**
  * Phase 0.2 / 2.2 — bytes-per-splat training-state ledger.
  *
- * Hand-computed sizes from docs/analysis/spirulae-comparison/footprint-compare.md §7
- * and SPEED_VRAM_OPTIMIZATION_PLAN §0b (SH degree 3, capacity = live N):
+ * Hand-computed sizes from SPEED_VRAM_OPTIMIZATION_PLAN §0b
+ * (SH degree 3, capacity = live N):
  *
  *   params:   means 12 + rot 16 + scale 12 + opac 4 + sh0 12 + shN 192 = 248 B/splat
  *   densify:   densification_info [2,N] fp32 = 8 B/splat
@@ -15,7 +15,7 @@
  *   non-SH: 14 cells × 4 B = 56 + 5 × ceil(N/256) × 16 bounds
  *   SH:     48 cells × 2 B = 96 + 1 × ceil(N/256) × 16 bounds
  *   At N=32: bounds = 6 × 16 = 96 total → optim = (56+96)*32 + 96 = 4960 (155 B/splat)
- *   Large-N limit ≈ 152 B/splat (swizzled SH pad); spirulae quotes 146 with 45 cells.
+ *   Large-N limit ≈ 152 B/splat (swizzled SH pad); unpadded K×3=45 cells → ~146.
  *
  * Legacy (LFS_ADAM_LEGACY_CODEC=1): 172 B/splat → total 428.
  */

@@ -5,7 +5,7 @@
 
 /**
  * @file sh_value_codec.hpp
- * @brief Spirulae-style 16-bit linear SH-rest value codec (Phase 2.1).
+ * @brief 16-bit linear SH-rest value codec (Phase 2.1).
  *
  * Per cell: endpoint-exact linear quant to uint16 over float2 (min,max) bounds.
  * Bounds layout: one float2 per 256-splat block (FPBO / per-splat-block).

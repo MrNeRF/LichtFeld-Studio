@@ -5,7 +5,7 @@
 
 /**
  * @file joint_adam_codec.hpp
- * @brief Spirulae-style joint (u, log_s) Adam moment codec (Phase 2.2).
+ * @brief Joint (u, log_s) Adam moment codec (Phase 2.2).
  *
  * Per cell stores two linearly-quantized primitives:
  *   u     = m / (sqrt(v) + eps)
@@ -163,7 +163,7 @@ namespace lfs::training::joint_adam {
 
     /// Hand-computed optimizer B/splat for SH3 joint codec (large-N limit, no pad waste):
     /// non-SH 14 cells × 4 B = 56; SH 48 swizzled cells × 2 B = 96; bounds ≪ 1 → ~152.
-    /// (Spirulae quotes 146 with unpadded K×3=45 SH cells.)
+    /// (Unpadded K×3=45 SH cells would be ~146.)
     inline constexpr std::size_t kOptimBpsJointSh3 = 152;
     /// Legacy uint8 + per-primitive scales.
     inline constexpr std::size_t kOptimBpsLegacySh3 = 172;

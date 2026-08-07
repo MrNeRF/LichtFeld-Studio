@@ -2674,7 +2674,7 @@ def get_languages() -> list[tuple[str, str]]:
     """Get available languages as list of (code, name) tuples"""
 
 def show_input_settings() -> None:
-    """Show input settings window"""
+    """No-op stub; open input settings via lfs.input_settings panel"""
 
 def show_python_console() -> None:
     """Show Python console"""

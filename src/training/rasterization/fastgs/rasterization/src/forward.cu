@@ -26,7 +26,7 @@ namespace {
     namespace raster = fast_lfs::rasterization;
 
     // Grow-only high-water sort scratch (Phase 1.1). Never shrinks; frees only
-    // on destruction / explicit reset. Matches spirulae slot-style semantics.
+    // on destruction / explicit reset (slot-style grow-only buffer semantics).
     // 1.5× headroom absorbs typical densify/view jumps without overflow re-runs.
     constexpr double kSortBufferGrowthFactor = 1.5;
 

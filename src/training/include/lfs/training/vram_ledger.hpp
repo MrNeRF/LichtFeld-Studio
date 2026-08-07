@@ -8,8 +8,7 @@
  * @brief Training-state bytes-per-splat ledger (Phase 0.2 / gate G1).
  *
  * Computes the persistent training footprint buckets from SplatData + Adam
- * state. Numbers align with docs/analysis/spirulae-comparison/footprint-compare.md
- * §7 and SPEED_VRAM_OPTIMIZATION_PLAN §0b:
+ * state. Numbers align with SPEED_VRAM_OPTIMIZATION_PLAN §0b:
  *   params ≈ 248 B/splat (SH3, fp32, swizzled shN)
  *   optimizer ≈ 172 B/splat (uint8 moments + per-primitive fp32 scales)
  *   densify-aux ≈ 8 B/splat (densification_info [2,N])

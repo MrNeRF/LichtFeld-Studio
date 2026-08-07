@@ -99,8 +99,7 @@ namespace lfs::diagnostics {
     };
 
     // Persistent training-state ledger (Phase 0.2 / gate G1).
-    // Buckets match docs/analysis/spirulae-comparison/footprint-compare.md §7
-    // and SPEED_VRAM_OPTIMIZATION_PLAN §0b (params / optim / grads / densify-aux).
+    // Buckets: params / optim / grads / densify-aux (SPEED_VRAM_OPTIMIZATION_PLAN §0b).
     // bytes_per_splat = total_bytes / live_splats (0 when N==0).
     struct TrainingStateLedger {
         std::size_t params_bytes = 0;
