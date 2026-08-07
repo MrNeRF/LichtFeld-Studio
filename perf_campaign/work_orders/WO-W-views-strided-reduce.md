@@ -14,3 +14,10 @@ TDD: correctness vs reference across shapes/dtypes incl. Float16 (now supported)
 Gate: no shape class regresses vs today; dual-workload bench neutral+.
 
 Commit per item with numbers. Summary table at end.
+
+TDD DISCIPLINE (non-negotiable, per RULES.md): for EVERY behavior above, the sequence is
+strictly: (1) write the test, (2) RUN it and record the FAILING output in PROGRESS.md
+(alloc-counter tests fail because expand still allocates; view-equivalence tests fail
+because the API doesn't exist; strided-reduce shape tests fail against the missing kernel;
+firewall canaries fail loudly), (3) implement, (4) record the PASSING run. A commit whose
+message lacks the fail evidence for its tests does not count as done.
