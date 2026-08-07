@@ -36,6 +36,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/camera_interaction_service.cpp
         rendering/output_image_pool.cpp
         rendering/output_slot_ring.cpp
+        rendering/readback_ticket_ring.cpp
         rendering/mesh_offscreen_renderer.cpp
         rendering/rendering_manager.cpp
         rendering/rendering_manager_events.cpp

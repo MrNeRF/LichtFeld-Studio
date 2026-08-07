@@ -220,6 +220,12 @@ namespace lfs::vis {
         [[nodiscard]] VkQueue computeQueue() const { return compute_queue_; }
         [[nodiscard]] uint32_t computeQueueFamily() const { return compute_queue_family_; }
         [[nodiscard]] bool hasDedicatedComputeQueue() const { return has_dedicated_compute_queue_; }
+        // Optional dedicated transfer/DMA queue for async image readbacks (#1574).
+        // Prefer pure TRANSFER, else TRANSFER|COMPUTE without GRAPHICS. When absent,
+        // transferQueue() is VK_NULL_HANDLE and readbacks fall back to graphics.
+        [[nodiscard]] VkQueue transferQueue() const { return transfer_queue_; }
+        [[nodiscard]] uint32_t transferQueueFamily() const { return transfer_queue_family_; }
+        [[nodiscard]] bool hasDedicatedTransferQueue() const { return has_dedicated_transfer_queue_; }
         [[nodiscard]] const std::array<std::uint8_t, VK_UUID_SIZE>& deviceUUID() const { return device_uuid_; }
         [[nodiscard]] bool externalMemoryDedicatedAllocationEnabled() const {
             return external_memory_dedicated_allocation_enabled_;
@@ -355,6 +361,9 @@ namespace lfs::vis {
             std::optional<uint32_t> graphics;
             std::optional<uint32_t> present;
             std::optional<uint32_t> async_compute; // optional dedicated compute family
+            // Optional transfer family: pure TRANSFER preferred, else TRANSFER|COMPUTE
+            // without GRAPHICS (#1574).
+            std::optional<uint32_t> transfer;
             [[nodiscard]] bool complete() const { return graphics.has_value() && present.has_value(); }
         };
 
@@ -445,6 +454,9 @@ namespace lfs::vis {
         VkQueue compute_queue_ = VK_NULL_HANDLE;
         uint32_t compute_queue_family_ = 0;
         bool has_dedicated_compute_queue_ = false;
+        VkQueue transfer_queue_ = VK_NULL_HANDLE;
+        uint32_t transfer_queue_family_ = 0;
+        bool has_dedicated_transfer_queue_ = false;
 
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
         VkFormat swapchain_format_ = VK_FORMAT_UNDEFINED;

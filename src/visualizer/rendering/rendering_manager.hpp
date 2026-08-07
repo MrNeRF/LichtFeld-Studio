@@ -815,6 +815,17 @@ namespace lfs::vis {
         uint64_t gt_comparison_image_request_generation_ = 0;
         std::condition_variable_any gt_comparison_image_cv_;
         std::jthread gt_comparison_image_worker_;
+        // #1574 GT depth/normal async hold-then-swap: at most one outstanding ticket.
+        // Panel keeps gt_async_held_display_ until the next ticket delivers (never blank).
+        std::uint64_t gt_async_depth_ticket_ = 0;
+        lfs::core::Tensor gt_async_depth_dest_{};
+        GTComparisonMode gt_async_ticket_mode_ = GTComparisonMode::RGB;
+        std::optional<lfs::rendering::CameraIntrinsics> gt_async_ticket_intrinsics_;
+        bool gt_async_ticket_flip_y_ = false;
+        lfs::rendering::FrameMetadata gt_async_ticket_metadata_{};
+        std::shared_ptr<lfs::core::Tensor> gt_async_held_display_;
+        bool gt_async_held_flip_y_ = false;
+        lfs::rendering::FrameMetadata gt_async_held_metadata_{};
         TrainerManager* resize_training_pause_trainer_ = nullptr;
         bool resize_training_pause_active_ = false;
 

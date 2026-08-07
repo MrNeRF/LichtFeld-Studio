@@ -2140,6 +2140,29 @@ namespace lfs::vis {
                 indices.async_compute = i;
             }
         }
+
+        // Transfer family (#1574): prefer pure DMA (TRANSFER without GRAPHICS/COMPUTE),
+        // else TRANSFER|COMPUTE without GRAPHICS. Never pick the graphics family.
+        std::optional<uint32_t> pure_transfer;
+        std::optional<uint32_t> transfer_compute;
+        for (uint32_t i = 0; i < count; ++i) {
+            const VkQueueFlags flags = families[i].queueFlags;
+            if ((flags & VK_QUEUE_TRANSFER_BIT) == 0 || (flags & VK_QUEUE_GRAPHICS_BIT) != 0) {
+                continue;
+            }
+            if ((flags & VK_QUEUE_COMPUTE_BIT) == 0) {
+                if (!pure_transfer.has_value()) {
+                    pure_transfer = i;
+                }
+            } else if (!transfer_compute.has_value()) {
+                transfer_compute = i;
+            }
+        }
+        if (pure_transfer.has_value()) {
+            indices.transfer = pure_transfer;
+        } else if (transfer_compute.has_value()) {
+            indices.transfer = transfer_compute;
+        }
         return indices;
     }
 
@@ -2368,6 +2391,15 @@ namespace lfs::vis {
         } else {
             compute_queue_family_ = graphics_queue_family_;
             has_dedicated_compute_queue_ = false;
+        }
+        if (families.transfer.has_value() &&
+            *families.transfer != graphics_queue_family_) {
+            unique_families.insert(*families.transfer);
+            transfer_queue_family_ = *families.transfer;
+            has_dedicated_transfer_queue_ = true;
+        } else {
+            transfer_queue_family_ = 0;
+            has_dedicated_transfer_queue_ = false;
         }
         std::vector<VkDeviceQueueCreateInfo> queue_infos;
         constexpr float queue_priority = 1.0f;
@@ -2663,6 +2695,16 @@ namespace lfs::vis {
             LOG_INFO("Vulkan: no dedicated async-compute family; sharing graphics queue family {}",
                      graphics_queue_family_);
         }
+        if (has_dedicated_transfer_queue_) {
+            vkGetDeviceQueue(device_, transfer_queue_family_, 0, &transfer_queue_);
+            LOG_INFO("Vulkan: dedicated transfer queue family {} (graphics family {})",
+                     transfer_queue_family_,
+                     graphics_queue_family_);
+        } else {
+            transfer_queue_ = VK_NULL_HANDLE;
+            LOG_INFO("Vulkan: no dedicated transfer family; image readbacks use graphics family {}",
+                     graphics_queue_family_);
+        }
         setDebugObjectName(VK_OBJECT_TYPE_DEVICE, device_, "lichtfeld.device");
         setDebugObjectName(VK_OBJECT_TYPE_QUEUE, graphics_queue_, "lichtfeld.queue.graphics");
         setDebugObjectName(VK_OBJECT_TYPE_QUEUE, present_queue_, "lichtfeld.queue.present");
@@ -2670,6 +2712,9 @@ namespace lfs::vis {
                            compute_queue_,
                            has_dedicated_compute_queue_ ? "lichtfeld.queue.compute"
                                                         : "lichtfeld.queue.graphics_compute");
+        if (has_dedicated_transfer_queue_) {
+            setDebugObjectName(VK_OBJECT_TYPE_QUEUE, transfer_queue_, "lichtfeld.queue.transfer");
+        }
         external_memory_interop_enabled_ = enable_external_memory;
         external_semaphore_interop_enabled_ = enable_external_semaphore;
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
@@ -3021,17 +3066,29 @@ namespace lfs::vis {
         image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         image_info.usage = usage;
         image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-        // External images written on the async-compute queue and sampled on the
-        // graphics queue need either SHARING_MODE_CONCURRENT or paired ownership-
-        // transfer barriers. CONCURRENT trades a tiny driver-side overhead for the
-        // ability to drop the transfer barriers entirely; the spec-mandated
-        // alternative is fragile when the producer/consumer queue choice can vary.
-        std::array<uint32_t, 2> external_image_families{
-            graphics_queue_family_,
-            has_dedicated_compute_queue_ ? compute_queue_family_ : graphics_queue_family_};
+        // External images may be produced on compute, sampled on graphics, and
+        // copied on a transfer queue. CONCURRENT with the full family set avoids
+        // QFOT (tracker has no ownership-transfer support; #1574 resolved choice).
+        std::array<uint32_t, 3> external_image_families{};
+        uint32_t external_image_family_count = 0;
+        const auto push_unique_family = [&](const uint32_t family) {
+            for (uint32_t i = 0; i < external_image_family_count; ++i) {
+                if (external_image_families[i] == family) {
+                    return;
+                }
+            }
+            external_image_families[external_image_family_count++] = family;
+        };
+        push_unique_family(graphics_queue_family_);
         if (has_dedicated_compute_queue_) {
+            push_unique_family(compute_queue_family_);
+        }
+        if (has_dedicated_transfer_queue_) {
+            push_unique_family(transfer_queue_family_);
+        }
+        if (external_image_family_count > 1u) {
             image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
-            image_info.queueFamilyIndexCount = static_cast<uint32_t>(external_image_families.size());
+            image_info.queueFamilyIndexCount = external_image_family_count;
             image_info.pQueueFamilyIndices = external_image_families.data();
         } else {
             image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
