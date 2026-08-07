@@ -420,9 +420,15 @@ namespace {
                                                 uint32_t layout_coeffs_rest) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
-        return shN.is_valid() &&
-               shN.ndim() == 1 &&
-               static_cast<size_t>(shN.shape()[0]) == sh_swizzled_float_count(n, layout_coeffs_rest) &&
+        if (!shN.is_valid() || shN.ndim() != 1)
+            return false;
+        // Phase 2.1: pad-dropped u16 (stored as Float16 bit-pattern).
+        if (shN.dtype() == DataType::Float16) {
+            const size_t need = sh_value_quant::sh_value_u16_count(n, layout_coeffs_rest);
+            const size_t need_cap = sh_value_quant::sh_value_u16_count(cap, layout_coeffs_rest);
+            return static_cast<size_t>(shN.shape()[0]) == need && shN.capacity() >= need_cap;
+        }
+        return static_cast<size_t>(shN.shape()[0]) == sh_swizzled_float_count(n, layout_coeffs_rest) &&
                shN.capacity() >= sh_swizzled_float_count(cap, layout_coeffs_rest);
     }
 
@@ -432,6 +438,34 @@ namespace {
                                             uint32_t layout_coeffs_rest) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
+
+        // Quantized storage is sized for max SH degree at apply_shN time. Growing
+        // the active degree must not float-reinterpret the u16 codes. Callers that
+        // need a layout change should dequant → resize float → requant via the
+        // training sh_value bridge; here we only grow/zero-pad u16 capacity.
+        if (shN.is_valid() && shN.dtype() == DataType::Float16) {
+            const size_t need = sh_value_quant::sh_value_u16_count(n, layout_coeffs_rest);
+            const size_t need_cap = sh_value_quant::sh_value_u16_count(cap, layout_coeffs_rest);
+            if (shN.capacity() >= need_cap) {
+                if (static_cast<size_t>(shN.numel()) < need) {
+                    shN.append_zeros(need - static_cast<size_t>(shN.numel()));
+                }
+                return;
+            }
+            // Capacity short: allocate larger u16 buffer and copy existing codes.
+            Tensor grown = Tensor::zeros_direct(TensorShape({need}), need_cap, Device::CUDA,
+                                                DataType::Float16);
+            if (shN.numel() > 0) {
+                const size_t copy_n = std::min(static_cast<size_t>(shN.numel()), need);
+                cudaMemcpyAsync(grown.data_ptr(), shN.data_ptr(),
+                                copy_n * sizeof(std::uint16_t),
+                                cudaMemcpyDeviceToDevice, shN.stream());
+            }
+            grown.set_name(shN.name().empty() ? "splat.shN" : shN.name());
+            shN = std::move(grown);
+            return;
+        }
+
         const uint32_t old_layout_rest =
             (shN.is_valid() && shN.ndim() == 1 && n > 0)
                 ? infer_swizzled_rest_coefficients(n, static_cast<size_t>(shN.numel()))
