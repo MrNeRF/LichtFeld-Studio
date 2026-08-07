@@ -171,3 +171,14 @@
   + fault-check interaction), possibly CUDA 13.3-specific.
 - **Action:** schedule a fix order; until then exclude from gate runs (documented here, not
   silently skipped).
+
+## ISS-014 — checkpoint LOAD segfaults in AdamOptimizer::set_frozen_lr_scale (REAL resume crash)
+- **Severity:** HIGH (training resume from checkpoint crashes; user-facing)
+- **Repro:** lichtfeld_tests --gtest_filter='CheckpointAllocatorRegressionTest.*' → SIGSEGV.
+  bt: load_checkpoint -> AdamOptimizer::set_frozen_lr_scale (via liblfs_mcp.so symbol) —
+  optimizer object likely invalid/uninitialized at that point in the load path.
+- **Attribution:** campaign-era (joint-codec restructured AdamOptimizer state/init);
+  NOT gated by LFS_SH_VALUE_QUANT (crashes with flag off). Present on both lfs-elite and
+  integration → not a merge blocker, but a ship blocker.
+- **Related:** SogFormatTest failures (6+, shN export path) and ISS-013 graph-capture
+  crasher — same fix order.
