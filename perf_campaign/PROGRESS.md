@@ -527,3 +527,24 @@ cap (54k→500k), no collapse/NaN, no floater runaway.
 workloads; bicycle quality canary clean (loss curve + final range OK).
 Phase 1 series **DONE**.
 
+
+---
+## WAVE 4 CONSOLIDATED (lfs-elite = 53dd6e84; all fleet branches + hot fixes merged; 3-run medians)
+| Metric | Baseline | Wave 2 | **Wave 4** | vs baseline |
+|---|---:|---:|---:|---|
+| Bonsai wall_s | 9.00 | 8.90 | **7.27** | **−19%** |
+| Bonsai steady_ms/iter | 4.129 | 4.065 | **3.168** | **−23%** |
+| Bonsai dataloader wait | (unmeasured) | — | **0.006 ms** | decode eliminated |
+| Bicycle 7k wall_s | 31.15 | 30.49 | **20.95** | **−33%** |
+| Bicycle steady_ms/iter | 3.290 | 3.208 | **2.799** | **−15%** |
+| B/splat | 429.0 | 429.0 | **409.4** | −4.6% (SH quant pending G6 → ≤307) |
+| allocs/iter | 5.05 | 0.05 | 0.18 | audit the +0.13 (new paths) |
+| Peak MiB bonsai | 1156 | 938 | 1533 (incl. **339 GT cache** by design) | ex-cache ~1194 — audit +256 |
+| Peak MiB bicycle | 1038 | 1026 | 1613 (incl. **564 GT cache**) | budget-gated, reversible |
+
+FLAGS (honest):
+1. Bicycle final-loss band shifted UP (0.116–0.152 vs baseline 0.098–0.121) — consistent with
+   the ISS-015 gradient divergence degrading convergence. WO-G5 (bisect+fix) is the critical
+   path; Wave-4 speed wins are provisional until gradients are proven correct.
+2. Ex-cache peak grew ~+256 MiB vs Wave 2 — audit which merged branch retains it (ledger).
+3. allocs/iter 0.05→0.18 — small, but the zero-alloc invariant must be restored.
