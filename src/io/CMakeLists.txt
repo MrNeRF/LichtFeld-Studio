@@ -235,6 +235,8 @@ add_library(lfs_io STATIC
         mesh/texture_loader.hpp
         mesh/texture_loader.cpp
         cache_image_loader.cpp
+        cube_face_projection.cpp
+        include/io/cube_face_projection.hpp
         nvcodec_image_loader.hpp
         nvcodec_image_loader.cpp
         pipelined_image_loader.cpp

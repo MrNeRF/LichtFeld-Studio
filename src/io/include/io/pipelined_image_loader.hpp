@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/cube_face_projection.hpp"
 #include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
@@ -28,6 +29,10 @@
 struct CUstream_st;
 using cudaStream_t = CUstream_st*;
 struct CUevent_st;
+
+namespace lfs::core {
+    class Camera;
+}
 
 namespace lfs::io {
 
@@ -122,6 +127,7 @@ namespace lfs::io {
         bool extract_alpha_as_mask = false;
         MaskParams alpha_mask_params;
         const lfs::core::UndistortParams* undistort = nullptr;
+        std::optional<lfs::core::CubeFaceProjection> cube_face_projection;
     };
 
     struct ReadyImage {
@@ -226,6 +232,17 @@ namespace lfs::io {
 
         lfs::core::Tensor load_image_immediate(
             const std::filesystem::path& path, const LoadParams& params);
+        lfs::core::Tensor load_camera_image_immediate(
+            const lfs::core::Camera& camera,
+            const LoadParams& params);
+        lfs::core::Tensor load_camera_image_immediate(
+            const lfs::core::Camera& camera,
+            const std::filesystem::path& path,
+            const LoadParams& params);
+        lfs::core::Tensor load_image_immediate(
+            const std::filesystem::path& path,
+            const LoadParams& params,
+            const std::optional<lfs::core::CubeFaceProjection>& cube_face_projection);
 
         size_t ready_count() const;
         size_t in_flight_count() const;
@@ -261,6 +278,7 @@ namespace lfs::io {
             bool alpha_as_mask = false;
             MaskParams alpha_mask_params;
             const lfs::core::UndistortParams* undistort = nullptr;
+            std::optional<lfs::core::CubeFaceProjection> cube_face_projection;
         };
 
         struct CachedJpegHit {
@@ -399,7 +417,10 @@ namespace lfs::io {
         void gpu_batch_decode_thread_func();
         void cold_process_thread_func(size_t worker_index);
 
-        std::string make_cache_key(const std::filesystem::path& path, const LoadParams& params) const;
+        std::string make_cache_key(
+            const std::filesystem::path& path,
+            const LoadParams& params,
+            const std::optional<lfs::core::CubeFaceProjection>& cube_face_projection = std::nullopt) const;
         std::filesystem::path get_fs_cache_path(const std::string& cache_key) const;
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
         std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
@@ -441,7 +462,8 @@ namespace lfs::io {
         // Auxiliary image pairing helpers
         std::string make_mask_cache_key(
             const std::filesystem::path& path,
-            const LoadParams& params) const;
+            const LoadParams& params,
+            const std::optional<lfs::core::CubeFaceProjection>& cube_face_projection = std::nullopt) const;
         void try_complete_pair(
             size_t sequence_id,
             std::uint64_t loader_generation,

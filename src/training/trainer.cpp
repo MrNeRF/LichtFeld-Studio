@@ -593,7 +593,8 @@ namespace lfs::training {
             const lfs::core::param::OptimizationParameters& opt_params,
             lfs::io::PipelinedImageLoader& image_loader) {
             try {
-                auto mask = image_loader.load_image_immediate(
+                auto mask = image_loader.load_camera_image_immediate(
+                    camera,
                     camera.mask_path(),
                     make_metrics_load_params(gt_config, camera, false, false));
                 mask = normalize_mask_tensor(std::move(mask));
@@ -630,64 +631,55 @@ namespace lfs::training {
             const Trainer::GTLoadConfigSnapshot& gt_config,
             const lfs::core::param::OptimizationParameters& opt_params) {
             try {
-                auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
-                    camera.image_path(), gt_config.resize_factor, gt_config.max_width);
+                lfs::io::PipelinedLoaderConfig loader_config;
+                loader_config.prefetch_count = 1;
+                loader_config.output_queue_size = 1;
+                loader_config.io_threads = 1;
+                loader_config.cold_process_threads = 1;
+                loader_config.use_filesystem_cache = false;
 
-                if (!img_data || channels != 4) {
-                    if (img_data) {
-                        lfs::core::free_image(img_data);
+                auto params = make_metrics_load_params(gt_config, camera, true, true);
+
+                lfs::io::ImageRequest request;
+                request.sequence_id = 0;
+                request.path = camera.image_path();
+                request.params = params;
+                request.extract_alpha_as_mask = true;
+                request.alpha_mask_params.invert = opt_params.invert_masks;
+                request.alpha_mask_params.threshold = opt_params.mask_threshold;
+                request.undistort = params.undistort;
+                request.cube_face_projection = camera.cube_face_projection();
+
+                lfs::io::PipelinedImageLoader loader(loader_config);
+                loader.prefetch({request});
+
+                while (loader.in_flight_count() > 0) {
+                    auto ready = loader.try_get_for(loader_config.output_wait_timeout);
+                    if (!ready)
+                        continue;
+
+                    if (!ready->tensor.is_valid()) {
+                        return std::unexpected("failed to decode RGBA image");
                     }
-                    return std::unexpected("failed to decode RGBA image");
+                    if (!ready->mask || !ready->mask->is_valid()) {
+                        return std::unexpected("failed to extract alpha mask");
+                    }
+
+                    auto mask = normalize_mask_tensor(std::move(*ready->mask));
+                    if (mask.dtype() == lfs::core::DataType::UInt8 ||
+                        mask.dtype() == lfs::core::DataType::Bool) {
+                        mask = opt_params.mask_threshold > 0.0f ? mask.gt(0) : mask.ge(128);
+                    } else {
+                        mask = mask.ge(0.5f);
+                    }
+                    mask = mask.to(lfs::core::DataType::UInt8).contiguous();
+
+                    return LoadedCameraMetricsInputs{
+                        .gt_image = std::move(ready->tensor),
+                        .mask = std::move(mask)};
                 }
 
-                const auto H = static_cast<size_t>(height);
-                const auto W = static_cast<size_t>(width);
-
-                auto cpu_tensor = lfs::core::Tensor::from_blob(
-                    img_data, lfs::core::TensorShape({H, W, 4}),
-                    lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-                lfs::core::free_image(img_data);
-
-                auto rgb = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({3, H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-                auto mask = lfs::core::Tensor::zeros(
-                    lfs::core::TensorShape({H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-                lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
-                    gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(), H, W, nullptr);
-
-                if (opt_params.invert_masks) {
-                    lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
-                }
-                if (opt_params.mask_threshold > 0.0f) {
-                    lfs::io::cuda::launch_mask_threshold(mask.ptr<float>(), H, W, opt_params.mask_threshold, nullptr);
-                }
-
-                if (camera.is_undistort_prepared()) {
-                    const auto scaled = lfs::core::scale_undistort_params(
-                        camera.undistort_params(),
-                        static_cast<int>(W),
-                        static_cast<int>(H));
-                    auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
-                    rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
-                    auto rgb_uint8 = lfs::core::Tensor::empty(
-                        rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-                    lfs::io::cuda::launch_float32_chw_to_uint8_chw(
-                        rgb_float.ptr<float>(),
-                        rgb_uint8.ptr<uint8_t>(),
-                        rgb_float.shape()[1],
-                        rgb_float.shape()[2],
-                        rgb_float.shape()[0],
-                        nullptr);
-                    rgb = std::move(rgb_uint8);
-                    mask = lfs::core::undistort_mask(mask, scaled, nullptr);
-                }
-
-                mask = mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
-                return LoadedCameraMetricsInputs{.gt_image = std::move(rgb), .mask = std::move(mask)};
+                return std::unexpected("failed to decode RGBA image");
             } catch (const std::exception& e) {
                 return std::unexpected(e.what());
             }
@@ -722,8 +714,8 @@ namespace lfs::training {
             LoadedCameraMetricsInputs inputs;
 
             try {
-                inputs.gt_image = loader->load_image_immediate(
-                    camera.image_path(),
+                inputs.gt_image = loader->load_camera_image_immediate(
+                    camera,
                     make_metrics_load_params(gt_config, camera, true, true));
             } catch (const std::exception& e) {
                 return std::unexpected(e.what());
@@ -1283,11 +1275,17 @@ namespace lfs::training {
             BilateralGrid::Config config;
             config.lr = params_.optimization.bilateral_grid_lr;
 
-            // BilateralGrid is indexed with cam->uid() in the training loop. Those UIDs stay
-            // in the original camera space even when train/val splits are enabled, so the grid
-            // must be sized for the full camera set rather than only the training subset.
+            int image_slots = 0;
+            for (const auto& cam : train_dataset_->get_cameras()) {
+                if (cam)
+                    image_slots = std::max(image_slots, cam->uid() + 1);
+            }
+            image_slots = std::max(image_slots, 1);
+
+            // BilateralGrid is indexed with cam->uid() in the training loop, so
+            // allocate by UID range rather than by camera count.
             bilateral_grid_ = std::make_unique<BilateralGrid>(
-                static_cast<int>(total_cameras_count_),
+                image_slots,
                 params_.optimization.bilateral_grid_X,
                 params_.optimization.bilateral_grid_Y,
                 params_.optimization.bilateral_grid_W,
@@ -1298,7 +1296,7 @@ namespace lfs::training {
                      params_.optimization.bilateral_grid_X,
                      params_.optimization.bilateral_grid_Y,
                      params_.optimization.bilateral_grid_W,
-                     total_cameras_count_,
+                     image_slots,
                      train_dataset_size_);
 
             return {};
@@ -2707,30 +2705,67 @@ namespace lfs::training {
                 if (source_cameras.empty()) {
                     return std::unexpected("Scene has no active cameras enabled for training");
                 }
-
-                if (params.optimization.enable_eval) {
-                    for (const auto& camera : source_cameras) {
-                        switch (camera->split()) {
-                        case lfs::core::CameraSplit::Train:
-                            train_cameras.push_back(camera);
-                            break;
-                        case lfs::core::CameraSplit::Eval:
-                            val_cameras.push_back(camera);
-                            break;
-                        default:
-                            assert(false && "Camera split must be Train or Eval");
-                            break;
-                        }
-                    }
-                    assert(train_cameras.size() + val_cameras.size() == source_cameras.size());
-                }
             } else if (base_dataset_) {
                 source_cameras = base_dataset_->get_cameras();
             } else {
                 return std::unexpected("No camera source available");
             }
 
+            if (scene_ && params.optimization.undistort) {
+                auto expanded_cameras = expandEquirectangularCamerasForUndistort(source_cameras);
+                if (!expanded_cameras)
+                    return std::unexpected(std::string(expanded_cameras.error().user_message()));
+                source_cameras = std::move(*expanded_cameras);
+            }
+
+            if (scene_ && params.optimization.enable_eval) {
+                for (const auto& camera : source_cameras) {
+                    switch (camera->split()) {
+                    case lfs::core::CameraSplit::Train:
+                        train_cameras.push_back(camera);
+                        break;
+                    case lfs::core::CameraSplit::Eval:
+                        val_cameras.push_back(camera);
+                        break;
+                    default:
+                        assert(false && "Camera split must be Train or Eval");
+                        break;
+                    }
+                }
+                assert(train_cameras.size() + val_cameras.size() == source_cameras.size());
+            }
+
             total_cameras_count_ = source_cameras.size();
+
+            if (params.optimization.gut) {
+                for (const auto& cam : source_cameras) {
+                    if (cam && cam->camera_model_type() == core::CameraModelType::ORTHO) {
+                        return std::unexpected("Training on cameras with ortho model is not supported yet.");
+                    }
+                }
+            } else if (params.optimization.undistort) {
+                for (const auto& cam : source_cameras) {
+                    if (!cam)
+                        continue;
+                    const auto model = cam->camera_model_type();
+                    if (model != core::CameraModelType::PINHOLE &&
+                        model != core::CameraModelType::EQUIRECTANGULAR) {
+                        return std::unexpected("Unsupported non-pinhole cameras detected. Use --gut for native non-pinhole training.");
+                    }
+                }
+            } else {
+                for (const auto& cam : source_cameras) {
+                    if (!cam)
+                        continue;
+                    if (cam->radial_distortion().numel() != 0 ||
+                        cam->tangential_distortion().numel() != 0) {
+                        return std::unexpected("Distorted images detected. Use --undistort or --gut to train on cameras with distortion.");
+                    }
+                    if (cam->camera_model_type() != core::CameraModelType::PINHOLE) {
+                        return std::unexpected("Spherical/non-pinhole cameras detected. Use --undistort for internal spherical tangent-view sampling or --gut for native non-pinhole training.");
+                    }
+                }
+            }
 
             if (auto result = initialize_camera_loss_heatmap(source_cameras); !result) {
                 return std::unexpected(result.error());

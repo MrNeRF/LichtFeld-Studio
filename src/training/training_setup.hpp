@@ -4,15 +4,19 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "io/loader.hpp"
 #include <expected>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace lfs::core {
+    class Camera;
     class Scene;
-}
+} // namespace lfs::core
 
 namespace lfs::training {
     /**
@@ -35,6 +39,17 @@ namespace lfs::training {
     std::expected<void, std::string> loadTrainingDataIntoScene(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene);
+
+    /**
+     * @brief Expand equirectangular cameras into internal spherical pinhole views.
+     *
+     * Non-equirectangular cameras are preserved. The returned virtual cameras keep
+     * the source image path and sample the requested tangent view through the native
+     * image loader cache.
+     */
+    [[nodiscard]] lfs::Result<std::vector<std::shared_ptr<lfs::core::Camera>>>
+    expandEquirectangularCamerasForUndistort(
+        const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
 
     /**
      * @brief Initialize training model from point cloud

@@ -2353,7 +2353,12 @@ class TrainingPanel(Panel):
         scene = lf.get_scene()
         if scene is None:
             return False
-        camera_count = scene.active_camera_count
+        try:
+            camera_count = scene.active_training_image_count(
+                bool(getattr(params, "undistort", False))
+            )
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            camera_count = scene.active_camera_count
         if camera_count == 0 or camera_count == self._auto_scaled_for_cameras:
             return False
         self._auto_scaled_for_cameras = camera_count

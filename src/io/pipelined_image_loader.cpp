@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/pipelined_image_loader.hpp"
+#include "core/camera.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/error_reporter.hpp"
@@ -12,16 +13,20 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "diagnostics/vram_profiler.hpp"
+#include "io/cube_face_projection.hpp"
 #include "io/nvcodec_image_loader.hpp"
 
 #include <cuda_runtime.h>
 #include <stb_image.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <exception>
 #include <fstream>
 #include <iomanip>
+#include <memory>
+#include <random>
 #include <semaphore>
 #include <sstream>
 
@@ -182,6 +187,21 @@ namespace lfs::io {
             return lfs::core::path_to_utf8(path);
         }
 
+        void append_cube_face_projection_key(
+            std::string& key,
+            const std::optional<lfs::core::CubeFaceProjection>& cube_face_projection) {
+            if (!cube_face_projection)
+                return;
+
+            key += "_cube" + std::to_string(cube_face_projection->face_size) +
+                   "_src" + std::to_string(cube_face_projection->source_width) +
+                   "x" + std::to_string(cube_face_projection->source_height) +
+                   "_fov" + std::to_string(static_cast<int>(std::lround(cube_face_projection->fov_degrees * 100.0f)));
+            for (const float value : cube_face_projection->pano_to_face) {
+                key += "_" + std::to_string(static_cast<int>(std::lround(value * 1000.0f)));
+            }
+        }
+
         void apply_requested_undistort(lfs::core::Tensor& tensor, const LoadParams& params) {
             if (!params.undistort)
                 return;
@@ -282,6 +302,97 @@ namespace lfs::io {
             int w, h, c;
             uint8_t* const data = stbi_load(lfs::core::path_to_utf8(path).c_str(), &w, &h, &c, 1);
             return {data, w, h};
+        }
+
+        struct FreeImageDeleter {
+            void operator()(uint8_t* data) const noexcept {
+                if (data)
+                    lfs::core::free_image(data);
+            }
+        };
+
+        struct StbiImageDeleter {
+            void operator()(uint8_t* data) const noexcept {
+                if (data)
+                    stbi_image_free(data);
+            }
+        };
+
+        using FreeImagePtr = std::unique_ptr<uint8_t, FreeImageDeleter>;
+        using StbiImagePtr = std::unique_ptr<uint8_t, StbiImageDeleter>;
+
+        [[nodiscard]] lfs::core::Tensor upload_hwc_uint8_to_chw(
+            const uint8_t* data,
+            const size_t height,
+            const size_t width,
+            const size_t channels,
+            const bool output_uint8,
+            cudaStream_t stream) {
+            auto cpu_tensor = lfs::core::Tensor::from_blob(
+                const_cast<uint8_t*>(data),
+                lfs::core::TensorShape({height, width, channels}),
+                lfs::core::Device::CPU,
+                lfs::core::DataType::UInt8);
+            auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+
+            if (output_uint8) {
+                auto decoded = lfs::core::Tensor::empty(
+                    lfs::core::TensorShape({channels, height, width}),
+                    lfs::core::Device::CUDA,
+                    lfs::core::DataType::UInt8);
+                cuda::launch_uint8_hwc_to_uint8_chw(
+                    gpu_uint8.ptr<uint8_t>(),
+                    decoded.ptr<uint8_t>(),
+                    height,
+                    width,
+                    channels,
+                    stream);
+                return decoded;
+            }
+
+            auto decoded = lfs::core::Tensor::zeros(
+                lfs::core::TensorShape({channels, height, width}),
+                lfs::core::Device::CUDA,
+                lfs::core::DataType::Float32);
+            cuda::launch_uint8_hwc_to_float32_chw(
+                gpu_uint8.ptr<uint8_t>(),
+                decoded.ptr<float>(),
+                height,
+                width,
+                channels,
+                stream);
+            return decoded;
+        }
+
+        [[nodiscard]] lfs::core::Tensor load_projected_cube_face_tensor(
+            const std::filesystem::path& path,
+            const LoadParams& params,
+            const lfs::core::CubeFaceProjection& projection) {
+            auto [img_data, width, height, channels] = lfs::core::load_image(path, 1, 0);
+            if (!img_data) {
+                throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
+            }
+            const FreeImagePtr image_guard(img_data);
+
+            const int output_size = projected_face_output_size(
+                projection,
+                params.resize_factor,
+                params.max_width);
+            auto projected = project_cube_face_hwc(
+                img_data,
+                width,
+                height,
+                channels,
+                projection,
+                output_size);
+
+            return upload_hwc_uint8_to_chw(
+                projected.data(),
+                static_cast<size_t>(output_size),
+                static_cast<size_t>(output_size),
+                static_cast<size_t>(channels),
+                params.output_uint8,
+                static_cast<cudaStream_t>(params.cuda_stream));
         }
 
         void synchronize_async_upload_before_free(cudaStream_t stream, const char* context) {
@@ -642,7 +753,27 @@ namespace lfs::io {
 
     lfs::core::Tensor PipelinedImageLoader::load_image_immediate(
         const std::filesystem::path& path, const LoadParams& params) {
-        const auto cache_key = make_cache_key(path, params);
+        return load_image_immediate(path, params, std::nullopt);
+    }
+
+    lfs::core::Tensor PipelinedImageLoader::load_camera_image_immediate(
+        const lfs::core::Camera& camera,
+        const LoadParams& params) {
+        return load_image_immediate(camera.image_path(), params, camera.cube_face_projection());
+    }
+
+    lfs::core::Tensor PipelinedImageLoader::load_camera_image_immediate(
+        const lfs::core::Camera& camera,
+        const std::filesystem::path& path,
+        const LoadParams& params) {
+        return load_image_immediate(path, params, camera.cube_face_projection());
+    }
+
+    lfs::core::Tensor PipelinedImageLoader::load_image_immediate(
+        const std::filesystem::path& path,
+        const LoadParams& params,
+        const std::optional<lfs::core::CubeFaceProjection>& cube_face_projection) {
+        const auto cache_key = make_cache_key(path, params, cube_face_projection);
         const auto base_key = make_base_cache_key(path);
         const bool is_original_jpeg = is_jpeg_file_signature(path);
         auto decode_cached_hit = [&](const std::shared_ptr<std::vector<uint8_t>>& jpeg_data,
@@ -664,6 +795,26 @@ namespace lfs::io {
                 tensor.is_valid() && tensor.numel() > 0) {
                 return tensor;
             }
+        }
+
+        if (cube_face_projection) {
+            auto decoded = load_projected_cube_face_tensor(path, params, *cube_face_projection);
+            apply_requested_undistort(decoded, params);
+
+            if (is_nvcodec_available()) {
+                try {
+                    auto nvcodec = acquire_nvcodec_loader(config_.decoder_pool_size);
+                    auto jpeg_bytes = nvcodec->encode_to_jpeg(decoded, config_.cache_jpeg_quality, params.cuda_stream);
+                    save_to_fs_cache(cache_key, jpeg_bytes);
+                    put_in_jpeg_cache(cache_key, std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
+                } catch (...) {
+                    LOG_DEBUG("[PipelinedImageLoader] Immediate spherical projection cache write skipped for {}: {}",
+                              lfs::core::path_to_utf8(path),
+                              describe_current_exception("non-standard nvImageCodec exception"));
+                }
+            }
+
+            return decoded;
         }
 
         // Base-key blobs of non-JPEG sources are 8-bit re-encodes; see find_cached_jpeg.
@@ -776,10 +927,14 @@ namespace lfs::io {
         return decoded;
     }
 
-    std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
+    std::string PipelinedImageLoader::make_cache_key(
+        const std::filesystem::path& path,
+        const LoadParams& params,
+        const std::optional<lfs::core::CubeFaceProjection>& cube_face_projection) const {
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
         if (params.undistort)
             key += "_ud";
+        append_cube_face_projection_key(key, cube_face_projection);
         if (config_.use_16bit_color)
             key += "_16b";
         return key;
@@ -787,12 +942,14 @@ namespace lfs::io {
 
     std::string PipelinedImageLoader::make_mask_cache_key(
         const std::filesystem::path& path,
-        const LoadParams& params) const {
+        const LoadParams& params,
+        const std::optional<lfs::core::CubeFaceProjection>& cube_face_projection) const {
         auto key = lfs::core::path_to_utf8(path) +
                    ":mask_rf" + std::to_string(params.resize_factor) +
                    "_mw" + std::to_string(params.max_width);
         if (params.undistort)
             key += "_ud";
+        append_cube_face_projection_key(key, cube_face_projection);
         return key;
     }
 
@@ -1108,6 +1265,12 @@ namespace lfs::io {
         const PrefetchedImage& item,
         const int src_w,
         const int src_h) const {
+        // A projected cube face is already final: projected_face_output_size()
+        // applied resize_factor when the face was built, and max_width caps the
+        // panorama, not the face. Re-applying either here would shrink it twice.
+        if (item.cube_face_projection) {
+            return {src_w, src_h};
+        }
         int target_w = src_w;
         int target_h = src_h;
         if (item.params.resize_factor > 1) {
@@ -1737,8 +1900,8 @@ namespace lfs::io {
             }
 
             if (request.extract_alpha_as_mask) {
-                const auto rgb_key = make_cache_key(request.path, request.params);
-                const auto alpha_key = make_mask_cache_key(request.path, request.params);
+                const auto rgb_key = make_cache_key(request.path, request.params, request.cube_face_projection);
+                const auto alpha_key = make_mask_cache_key(request.path, request.params, request.cube_face_projection);
                 auto cached_rgb = get_from_jpeg_cache(rgb_key);
                 auto cached_alpha = get_from_jpeg_cache(alpha_key);
 
@@ -1750,6 +1913,7 @@ namespace lfs::io {
                     img_item.cache_key = rgb_key;
                     img_item.jpeg_data = cached_rgb;
                     img_item.is_cache_hit = true;
+                    img_item.cube_face_projection = request.cube_face_projection;
                     hot_queue_.push(std::move(img_item));
 
                     PrefetchedImage mask_item;
@@ -1760,6 +1924,7 @@ namespace lfs::io {
                     mask_item.jpeg_data = cached_alpha;
                     mask_item.is_mask = true;
                     mask_item.is_cache_hit = true;
+                    mask_item.cube_face_projection = request.cube_face_projection;
                     hot_queue_.push(std::move(mask_item));
 
                     std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -1775,6 +1940,7 @@ namespace lfs::io {
                     result.alpha_mask_params = request.alpha_mask_params;
                     result.needs_processing = true;
                     result.undistort = request.undistort;
+                    result.cube_face_projection = request.cube_face_projection;
 
                     cold_queue_.push(std::move(result));
                     std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -1790,21 +1956,41 @@ namespace lfs::io {
             result.loader_generation = request.loader_generation;
             result.path = request.path;
             result.params = request.params;
-            result.cache_key = make_cache_key(request.path, request.params);
+            result.cache_key = make_cache_key(request.path, request.params, request.cube_face_projection);
             result.is_mask = false;
             result.undistort = request.undistort;
+            result.cube_face_projection = request.cube_face_projection;
 
             try {
                 const bool needs_requested_processing = load_params_need_processing(request.params);
+                const bool needs_cube_projection = request.cube_face_projection.has_value();
                 const auto base_key = make_base_cache_key(request.path);
 
-                if (auto cached = find_cached_jpeg(result.cache_key, base_key, request.path)) {
+                // A projected cube face cannot be derived from the resized base-key
+                // blob, so bypass the base-key lookup and only accept an exact hit.
+                std::optional<CachedJpegHit> cached =
+                    needs_cube_projection
+                        ? std::optional<CachedJpegHit>{}
+                        : find_cached_jpeg(result.cache_key, base_key, request.path);
+                if (needs_cube_projection) {
+                    if (auto projected = load_cached_jpeg_blob(result.cache_key)) {
+                        cached = CachedJpegHit{.data = std::move(projected), .from_base_key = false};
+                    }
+                }
+
+                if (cached) {
                     result.jpeg_data = std::move(cached->data);
                     result.is_cache_hit = true;
                     result.needs_processing = cached->from_base_key && needs_requested_processing;
                     hot_queue_.push(std::move(result));
                     std::lock_guard<std::mutex> lock(stats_mutex_);
                     ++stats_.hot_path_hits;
+                } else if (needs_cube_projection) {
+                    result.is_cache_hit = false;
+                    result.needs_processing = true;
+                    cold_queue_.push(std::move(result));
+                    std::lock_guard<std::mutex> lock(stats_mutex_);
+                    ++stats_.cold_path_misses;
                 } else {
                     result.raw_bytes = read_file(request.path);
                     result.is_original_jpeg = is_jpeg_data(result.raw_bytes);
@@ -1815,7 +2001,7 @@ namespace lfs::io {
                         stats_.total_bytes_read += result.raw_bytes.size();
                     }
 
-                    if (result.is_original_jpeg && !needs_requested_processing) {
+                    if (result.is_original_jpeg && !needs_requested_processing && !needs_cube_projection) {
                         auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
                         put_in_jpeg_cache(result.cache_key, data);
                         result.jpeg_data = data;
@@ -1849,10 +2035,11 @@ namespace lfs::io {
                     mask_result.loader_generation = request.loader_generation;
                     mask_result.path = *request.mask_path;
                     mask_result.params = request.params;
-                    mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
+                    mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params, request.cube_face_projection);
                     mask_result.is_mask = true;
                     mask_result.mask_params = request.mask_params;
                     mask_result.undistort = request.undistort;
+                    mask_result.cube_face_projection = request.cube_face_projection;
 
                     try {
                         if (auto cached = get_from_jpeg_cache(mask_result.cache_key)) {
@@ -1861,6 +2048,11 @@ namespace lfs::io {
                             hot_queue_.push(std::move(mask_result));
                             std::lock_guard<std::mutex> lock(stats_mutex_);
                             ++stats_.mask_cache_hits;
+                        } else if (request.cube_face_projection) {
+                            mask_result.needs_processing = true;
+                            cold_queue_.push(std::move(mask_result));
+                            std::lock_guard<std::mutex> lock(stats_mutex_);
+                            ++stats_.mask_cache_misses;
                         } else if (config_.use_filesystem_cache) {
                             const auto fs_path = get_fs_cache_path(mask_result.cache_key);
                             auto done_path = fs_path;
@@ -2200,19 +2392,40 @@ namespace lfs::io {
 
                 if (item.alpha_as_mask) {
                     auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
-                        item.path, item.params.resize_factor, item.params.max_width);
+                        item.path,
+                        item.cube_face_projection ? 1 : item.params.resize_factor,
+                        item.cube_face_projection ? 0 : item.params.max_width);
+                    const FreeImagePtr image_guard(img_data);
 
                     if (!img_data || channels != 4)
                         throw std::runtime_error("Failed to load RGBA image");
+
+                    std::vector<uint8_t> projected_rgba;
+                    const uint8_t* rgba_data = image_guard.get();
+                    if (item.cube_face_projection) {
+                        const int output_size = projected_face_output_size(
+                            *item.cube_face_projection,
+                            item.params.resize_factor,
+                            item.params.max_width);
+                        projected_rgba = project_cube_face_hwc(
+                            image_guard.get(),
+                            width,
+                            height,
+                            channels,
+                            *item.cube_face_projection,
+                            output_size);
+                        width = output_size;
+                        height = output_size;
+                        rgba_data = projected_rgba.data();
+                    }
 
                     const size_t H = static_cast<size_t>(height);
                     const size_t W = static_cast<size_t>(width);
 
                     auto cpu_tensor = lfs::core::Tensor::from_blob(
-                        img_data, lfs::core::TensorShape({H, W, 4}),
+                        const_cast<uint8_t*>(rgba_data), lfs::core::TensorShape({H, W, 4}),
                         lfs::core::Device::CPU, lfs::core::DataType::UInt8);
                     auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-                    lfs::core::free_image(img_data);
 
                     auto rgb = item.params.output_uint8
                                    ? lfs::core::Tensor::empty(
@@ -2271,7 +2484,10 @@ namespace lfs::io {
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(rgb_jpeg)));
 
-                            const auto alpha_key = make_mask_cache_key(item.path, item.params);
+                            const auto alpha_key = make_mask_cache_key(
+                                item.path,
+                                item.params,
+                                item.cube_face_projection);
                             auto alpha_jpeg = nvcodec->encode_grayscale_to_jpeg(
                                 alpha, config_.cache_jpeg_quality, nullptr);
                             save_to_fs_cache(alpha_key, alpha_jpeg);
@@ -2301,7 +2517,9 @@ namespace lfs::io {
 
                     // Depth sidecars keep their first-touch 16-bit PNG precision by
                     // decoding with stb before the processed tensor is transcoded.
-                    if (is_nvcodec_available() && !item.is_depth) {
+                    // Cube faces need the full-resolution panorama on the CPU to
+                    // project from, so they cannot take the nvcodec fast path either.
+                    if (is_nvcodec_available() && !item.is_depth && !item.cube_face_projection) {
                         try {
                             const NvcodecSlotGuard slot;
                             aux_tensor = nvcodec->load_image_gpu(
@@ -2316,7 +2534,50 @@ namespace lfs::io {
                         int src_w = 0;
                         int src_h = 0;
                         lfs::core::Tensor gpu_gray;
-                        if (depth_16bit) {
+                        if (item.is_depth && item.cube_face_projection) {
+                            // Depth needs nearest sampling and a radial-to-z
+                            // conversion, so it cannot share the colour path's
+                            // EWA resampling. The result is already normalised
+                            // float, which the sizing branch below passes through.
+                            const int output_size = projected_face_output_size(
+                                *item.cube_face_projection,
+                                item.params.resize_factor,
+                                item.params.max_width);
+
+                            std::vector<float> face_depth;
+                            if (depth_16bit) {
+                                int channels = 0;
+                                stbi_us* const gray16 = stbi_load_16(
+                                    lfs::core::path_to_utf8(item.path).c_str(),
+                                    &src_w, &src_h, &channels, 1);
+                                if (!gray16)
+                                    throw std::runtime_error("Failed to decode 16-bit depth");
+                                const StbiImagePtr gray_guard(reinterpret_cast<uint8_t*>(gray16));
+                                face_depth = project_cube_face_depth(
+                                    reinterpret_cast<const uint8_t*>(gray16), true,
+                                    src_w, src_h, *item.cube_face_projection, output_size);
+                            } else {
+                                const auto [gray_data, w, h] = load_grayscale_stb(item.path);
+                                if (!gray_data)
+                                    throw std::runtime_error("Failed to decode depth");
+                                const StbiImagePtr gray_guard(gray_data);
+                                src_w = w;
+                                src_h = h;
+                                face_depth = project_cube_face_depth(
+                                    gray_data, false, src_w, src_h,
+                                    *item.cube_face_projection, output_size);
+                            }
+
+                            src_w = output_size;
+                            src_h = output_size;
+                            auto cpu_tensor = lfs::core::Tensor::empty(
+                                lfs::core::TensorShape({static_cast<size_t>(src_h), static_cast<size_t>(src_w)}),
+                                lfs::core::Device::CPU,
+                                lfs::core::DataType::Float32);
+                            std::memcpy(cpu_tensor.data_ptr(), face_depth.data(), cpu_tensor.bytes());
+                            gpu_gray = cpu_tensor.to(lfs::core::Device::CUDA, aux_stream);
+                            synchronize_async_upload_before_free(aux_stream, "cube face depth");
+                        } else if (depth_16bit) {
                             int channels = 0;
                             stbi_us* const gray16 = stbi_load_16(
                                 lfs::core::path_to_utf8(item.path).c_str(),
@@ -2342,15 +2603,35 @@ namespace lfs::io {
                             const auto [gray_data, w, h] = load_grayscale_stb(item.path);
                             if (!gray_data)
                                 throw std::runtime_error(item.is_mask ? "Failed to decode mask" : "Failed to decode depth");
+                            const StbiImagePtr gray_guard(gray_data);
                             src_w = w;
                             src_h = h;
+
+                            // Masks reach here with a cube face projection; depth
+                            // is handled above because it needs nearest sampling.
+                            // Either way the projected face is already the final
+                            // size, since it comes from the full-resolution
+                            // panorama rather than a resized decode.
+                            std::vector<uint8_t> projected_gray;
+                            const uint8_t* gray_source = gray_data;
+                            if (item.cube_face_projection) {
+                                const int output_size = projected_face_output_size(
+                                    *item.cube_face_projection,
+                                    item.params.resize_factor,
+                                    item.params.max_width);
+                                projected_gray = project_cube_face_hwc(
+                                    gray_data, w, h, 1, *item.cube_face_projection, output_size);
+                                gray_source = projected_gray.data();
+                                src_w = output_size;
+                                src_h = output_size;
+                            }
+
                             auto cpu_tensor = lfs::core::Tensor::empty(
                                 lfs::core::TensorShape({static_cast<size_t>(src_h), static_cast<size_t>(src_w)}),
                                 lfs::core::Device::CPU,
                                 lfs::core::DataType::UInt8);
-                            std::memcpy(cpu_tensor.data_ptr(), gray_data, cpu_tensor.bytes());
+                            std::memcpy(cpu_tensor.data_ptr(), gray_source, cpu_tensor.bytes());
                             gpu_gray = cpu_tensor.to(lfs::core::Device::CUDA, aux_stream);
-                            stbi_image_free(gray_data);
                         }
 
                         const auto [target_w, target_h] = sidecar_target_size(item, src_w, src_h);
@@ -2555,7 +2836,7 @@ namespace lfs::io {
                     lfs::core::Tensor decoded;
                     bool used_gpu = false;
 
-                    if (is_nvcodec_available() && item.is_original_jpeg) {
+                    if (is_nvcodec_available() && item.is_original_jpeg && !item.cube_face_projection) {
                         try {
                             const NvcodecSlotGuard slot;
                             decoded = nvcodec->load_image_gpu(
@@ -2567,7 +2848,17 @@ namespace lfs::io {
                     }
 
                     if (!used_gpu) {
-                        decoded = decode_file_on_cpu(item.path, item.params);
+                        if (item.cube_face_projection) {
+                            // Faces are projected from the full-resolution panorama,
+                            // so they cannot go through the resize-on-decode path.
+                            decoded = load_projected_cube_face_tensor(
+                                item.path, item.params, *item.cube_face_projection);
+                            if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                                throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                            }
+                        } else {
+                            decoded = decode_file_on_cpu(item.path, item.params);
+                        }
                     }
 
                     if (item.undistort) {
@@ -2608,16 +2899,16 @@ namespace lfs::io {
                             item.path, item.params.resize_factor, item.params.max_width);
                         if (!img_data)
                             throw std::runtime_error("RGB fallback also failed");
+                        const FreeImagePtr image_guard(img_data);
 
                         const size_t H = static_cast<size_t>(height);
                         const size_t W = static_cast<size_t>(width);
                         const size_t C = static_cast<size_t>(channels);
 
                         auto cpu_tensor = lfs::core::Tensor::from_blob(
-                            img_data, lfs::core::TensorShape({H, W, C}),
+                            image_guard.get(), lfs::core::TensorShape({H, W, C}),
                             lfs::core::Device::CPU, lfs::core::DataType::UInt8);
                         auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-                        lfs::core::free_image(img_data);
 
                         auto decoded = item.params.output_uint8
                                            ? lfs::core::Tensor::empty(

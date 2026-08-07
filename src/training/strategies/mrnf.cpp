@@ -1431,7 +1431,7 @@ namespace lfs::training {
                 params.undistort = &cam->undistort_params();
             }
 
-            lfs::core::Tensor image = _image_loader->load_image_immediate(cam->image_path(), params);
+            lfs::core::Tensor image = _image_loader->load_camera_image_immediate(*cam, params);
             const int img_h = static_cast<int>(image.shape()[1]);
             const int img_w = static_cast<int>(image.shape()[2]);
 
