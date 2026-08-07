@@ -8,7 +8,7 @@ set -euo pipefail
 SLOTDIR=/tmp/lfs-build-slots; mkdir -p "$SLOTDIR"
 acquire() {
   while :; do
-    for s in 1 2 3; do
+    for s in 1 2; do
       exec {fd}>"$SLOTDIR/slot$s" || continue
       if flock -n "$fd"; then echo "$fd"; return; fi
       exec {fd}>&-
@@ -17,8 +17,8 @@ acquire() {
   done
 }
 FD=$(acquire)
-active() { c=0; for s in 1 2 3; do flock -n "$SLOTDIR/slot$s" -c true 2>/dev/null || c=$((c+1)); done; echo $c; }
-N=$(active); if [ "$N" -ge 3 ]; then J=4; elif [ "$N" -eq 2 ]; then J=8; else J=12; fi
+active() { c=0; for s in 1 2; do flock -n "$SLOTDIR/slot$s" -c true 2>/dev/null || c=$((c+1)); done; echo $c; }
+N=$(active); if [ "$N" -ge 2 ]; then J=6; else J=10; fi
 if [ "${1:-}" = "--configure" ]; then
   cd "$2"; echo "[build.sh] configure ($N active)"; exec cmake --preset build -DLFS_CUDA_COMPILER_CACHE=ccache -DENABLE_COMPILER_CACHE=ccache
 fi

@@ -4,6 +4,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/sh_value_codec.hpp"
 #include "training/strategies/improved_gs_plus.hpp"
 #include "training/strategies/mcmc.hpp"
 #include <algorithm>
@@ -16,8 +17,14 @@ using namespace lfs::training;
 namespace {
     // These tests assert legacy per-primitive scale reset semantics.
     struct LegacyAdamCodecGuard {
-        LegacyAdamCodecGuard() { joint_adam::set_joint_codec_enabled_for_testing(false); }
-        ~LegacyAdamCodecGuard() { joint_adam::set_joint_codec_enabled_for_testing(std::nullopt); }
+        LegacyAdamCodecGuard() {
+            joint_adam::set_joint_codec_enabled_for_testing(false);
+            sh_value::set_sh_value_quant_enabled_for_testing(false);
+        }
+        ~LegacyAdamCodecGuard() {
+            sh_value::set_sh_value_quant_enabled_for_testing(std::nullopt);
+            joint_adam::set_joint_codec_enabled_for_testing(std::nullopt);
+        }
     };
 
     SplatData create_test_splat_data(const int n_gaussians = 100) {

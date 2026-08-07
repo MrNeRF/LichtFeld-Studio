@@ -7,6 +7,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "edge_rasterizer.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -693,7 +694,13 @@ namespace lfs::training {
         LOG_TIMER("MRNF::refine");
         using namespace lfs::core;
         // Phase 2.1: densify ops are float-native — expand q16 shN for the window.
-        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        // Always re-commit when quant is on (even if already float from a nested expand)
+        // so bounds/codes match post-growth N. Nested grow_and_split skips re-commit when
+        // it did not expand.
+        (void)lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        const bool shN_need_commit = lfs::core::sh_value_quant::enabled() &&
+                                     _splat_data->shN().is_valid() &&
+                                     _splat_data->shN().dtype() == lfs::core::DataType::Float32;
 
         ++_refine_windows_since_bounds;
         if (!_bounds_valid || _refine_windows_since_bounds >= MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES) {
@@ -792,7 +799,7 @@ namespace lfs::training {
         reset_vector_buffer(_vis_count, new_n, _splat_data->means().device(), tracking_capacity);
         ensure_densification_info_shape();
         _splat_data->_densification_info.zero_();
-        if (shN_expanded) {
+        if (shN_need_commit) {
             lfs::training::sh_value::commit_shN_after_mutation(*_splat_data);
         }
 
@@ -803,6 +810,17 @@ namespace lfs::training {
     void MRNF::grow_and_split(int iter, int pruned_count) {
         LOG_TIMER("MRNF::grow_and_split");
         using namespace lfs::core;
+        // Safe when called outside refine() (tests / free-slot fill): expand q16 → float.
+        // refine() already expands first so this is a no-op there; commit only if we expanded.
+        const bool shN_expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        struct ShNCommitGuard {
+            lfs::core::SplatData* splat;
+            bool expanded;
+            ~ShNCommitGuard() {
+                if (expanded && splat)
+                    lfs::training::sh_value::commit_shN_after_mutation(*splat);
+            }
+        } shn_guard{_splat_data, shN_expanded};
 
         const size_t n = static_cast<size_t>(_splat_data->size());
         const size_t current_active = active_count();

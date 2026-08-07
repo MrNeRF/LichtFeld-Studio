@@ -28,6 +28,8 @@ namespace lfs::training {
         ledger.params_bytes += tensor_logical_bytes(splat.means());
         ledger.params_bytes += tensor_logical_bytes(splat.sh0());
         ledger.params_bytes += tensor_logical_bytes(splat.shN());
+        // Phase 2.1: float2 bounds per 256-splat block (≪1 B/splat large-N).
+        ledger.params_bytes += tensor_logical_bytes(splat.shN_value_bounds());
         ledger.params_bytes += tensor_logical_bytes(splat.scaling_raw());
         ledger.params_bytes += tensor_logical_bytes(splat.rotation_raw());
         ledger.params_bytes += tensor_logical_bytes(splat.opacity_raw());
