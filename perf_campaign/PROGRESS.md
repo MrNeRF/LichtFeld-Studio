@@ -648,7 +648,7 @@ Phase 1 series **DONE**.
 - **Commit:** `786fefb6`
 
 ||||||| 42184eea
-- **Commit:** `fdff7181`
+- **Commit:** `0d6862c2`
 - **Commit:** `42184eea`
 
 ## Task VRAM-audit (lfs-elite-vramfix) — ISS-007 + NVRM + TLS + RAM guard
@@ -828,4 +828,4 @@ Pass: `PlyIoThroughput.OneMillionSplatSaveLoadRoundtrip` + `PlyErrorTaxonomyTest
 
 No training speed/quality regression (IO-only change). Checkpoint IO remains ISS-010.
 
-- **Commit:** `fdff7181`
+- **Commit:** `0d6862c2`
